@@ -78,6 +78,8 @@ namespace {
 		std::optional<std::string> shown;
 		// Guarded: a person approved this call, so a missing `shown` is a record lost, not a call nobody was asked about.
 		bool approved = false;
+		// A person's create_pr: the dialog showed the repository, so a missing `shown` is denied as well.
+		bool person_shown = false;
 	};
 
 	struct target
@@ -137,7 +139,7 @@ namespace {
 	{
 		const std::stop_token stop = task.stop;
 		// Fail closed: without the repository the person was shown there is nothing to compare the one found with.
-		if (plan.guarded && plan.approved && !plan.shown) {
+		if (((plan.guarded && plan.approved) || plan.person_shown) && !plan.shown) {
 			return error_result("denied", "the repository shown for approval is no longer known: ask again");
 		}
 		if (plan.guarded && !plan.head.empty()) {
@@ -156,7 +158,7 @@ namespace {
 		if (!url.ok()) return error_result(url.code, url.error);
 		edt::forge::forge_remote parsed;
 		if (auto failure = judge_url(options, plan.guarded, name.text, url.text, parsed)) return error_result(failure->code, failure->message);
-		if (plan.guarded && plan.shown) {
+		if (plan.shown) {
 			const std::string found = target_text(parsed, name.text);
 			if (found != *plan.shown) {
 				return error_result("denied", std::format("the repository is not the one the request was allowed for (allowed for '{}', found '{}')",
@@ -301,6 +303,15 @@ void edt::forge_service::remember_shown(std::string key, std::string target)
 	m_shown.push_back({ std::move(key), std::move(target), now });
 }
 
+std::optional<std::string> edt::forge_service::peek_shown(const std::string& key)
+{
+	const auto now = this->now();
+	std::erase_if(m_shown, [&](const shown_target& shown) { return now - shown.at > k_shown_lifetime; });
+	const auto found = std::find_if(m_shown.begin(), m_shown.end(), [&](const shown_target& shown) { return shown.key == key; });
+	if (found == m_shown.end()) return std::nullopt;
+	return found->target;
+}
+
 std::optional<std::string> edt::forge_service::take_shown(const std::string& key)
 {
 	const auto now = this->now();
@@ -340,6 +351,32 @@ std::optional<std::string> edt::forge_service::describe(std::string before, cons
 	remember_shown(std::move(key), target);
 	const std::string text = refusal ? "This request will be refused: " + *refusal : before + target + after;
 	return forge::sanitize_text(text, 400);
+}
+
+edt::forge_service::target_description edt::forge_service::describe_target(const std::string& remote)
+{
+	target_description out;
+	const std::string key = call_key(cmd::origin::ui(), "create_pr_target", { remote });
+	const vcs_service::remote_snapshot snapshot = m_person_remote_reader ? m_person_remote_reader(remote) : m_vcs.read_remote_now(remote, true);
+	std::string target = "refused";
+	forge::forge_remote parsed;
+	if (snapshot.code == vcs_service::k_describe_timeout) {
+		out.text = "The repository could not be determined in time: the request will be refused.";
+	} else if (!snapshot.ok()) {
+		out.text = forge::sanitize_text("The request will be refused: " + snapshot.error, 400);
+	} else if (auto failure = judge_url(*m_options, false, snapshot.remote, snapshot.effective_url, parsed)) {
+		out.text = forge::sanitize_text("The request will be refused: " + failure->message, 400);
+	} else {
+		target = target_text(parsed, snapshot.remote);
+		out.ok = true;
+		out.text = forge::sanitize_text(target, 400);
+		out.written_url = forge::sanitize_text(snapshot.url, 200);
+		out.effective_url = forge::sanitize_text(snapshot.effective_url, 200);
+		out.push_url = forge::sanitize_text(snapshot.push_url, 200);
+		out.rewritten = snapshot.url != snapshot.effective_url || !snapshot.push_url.empty();
+	}
+	remember_shown(key, target);
+	return out;
 }
 
 std::optional<std::string> edt::forge_service::describe_create_pr(const create_request& request, const cmd::origin& caller)
@@ -413,6 +450,9 @@ edt::vcs_service::started edt::forge_service::start_create_pr(const create_reque
 		plan.head = request.head;
 		plan.approved = approved;
 		plan.shown = take_shown(call_key(caller, "create_pr", { request.remote, request.base, request.head, request.title, request.body }));
+	} else {
+		plan.person_shown = true;
+		plan.shown = peek_shown(call_key(caller, "create_pr_target", { request.remote }));
 	}
 	forge::create_pr_request wanted;
 	wanted.base = request.base;

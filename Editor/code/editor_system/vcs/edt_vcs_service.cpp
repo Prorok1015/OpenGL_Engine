@@ -2484,7 +2484,7 @@ edt::vcs_service::started edt::vcs_service::start_reader_job(std::string label, 
 	}, std::nullopt, {}, caller.kind);
 }
 
-edt::vcs_service::remote_snapshot edt::vcs_service::read_remote_now(const std::string& named)
+edt::vcs_service::remote_snapshot edt::vcs_service::read_remote_now(const std::string& named, bool person)
 {
 	remote_snapshot out;
 	const auto fail = [&out](std::string code, std::string error) {
@@ -2527,11 +2527,20 @@ edt::vcs_service::remote_snapshot edt::vcs_service::read_remote_now(const std::s
 					out.code = name.code;
 					out.error = name.error;
 				} else {
-					const auto url = reader.remote_raw_url(name.text, stop.get_token());
 					out.remote = name.text;
-					out.code = url.code;
-					out.error = url.error;
-					out.url = url.text;
+					if (person) {
+						const auto found = reader.remote_addresses(name.text, stop.get_token());
+						out.code = found.code;
+						out.error = found.error;
+						out.url = found.written;
+						out.effective_url = found.effective;
+						out.push_url = found.push;
+					} else {
+						const auto url = reader.remote_raw_url(name.text, stop.get_token());
+						out.code = url.code;
+						out.error = url.error;
+						out.url = url.text;
+					}
 				}
 			}
 		} catch (const ds::task_cancelled&) {
@@ -2644,6 +2653,38 @@ edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader:
 	answer found;
 	found.text = written.front();
 	return found;
+}
+
+edt::vcs_service::repository_reader::addresses edt::vcs_service::repository_reader::remote_addresses(const std::string& remote,
+	std::stop_token stop) const
+{
+	addresses out;
+	const auto failed = [&out](const answer& why) {
+		out.code = why.code;
+		out.error = why.error;
+		return out;
+	};
+	if (auto error = remote_error(remote)) return failed(reader_refusal(cmd::codes::invalid_args, std::move(*error)));
+	const auto broken = [](const git_output& result) {
+		return !result.refused_code.empty() || !result.process.error.empty() || result.truncated || result.process.exit_code > 1;
+	};
+	const git_output urls = run_git(m_impl->git, { "config", "-z", "--get-all", "remote." + remote + ".url" }, stop, k_read_cap);
+	if (broken(urls)) return failed(reader_failure(urls, stop));
+	const std::vector<std::string> written = split_nul(urls.out);
+	if (urls.process.exit_code != 0 || written.empty()) {
+		return failed(reader_refusal("git_failed", std::format("the remote '{}' has no URL", edt::vcs::valid_utf8(remote))));
+	}
+	out.written = written.front();
+	const answer effective = remote_url(remote, stop);
+	if (!effective.ok()) return failed(effective);
+	out.effective = effective.text;
+	const git_output push = run_git(m_impl->git, { "config", "-z", "--get-all", "remote." + remote + ".pushurl" }, stop, k_read_cap);
+	if (broken(push)) return failed(reader_failure(push, stop));
+	if (push.process.exit_code == 0) {
+		const std::vector<std::string> pushed = split_nul(push.out);
+		if (!pushed.empty()) out.push = pushed.front();
+	}
+	return out;
 }
 
 edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader::local_branch(const std::string& branch,

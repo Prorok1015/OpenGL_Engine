@@ -191,14 +191,15 @@ bool edt::forge_account_model::save_from_buffer(std::string_view host, char* buf
 {
 	std::size_t length = 0;
 	while (length < capacity && buffer[length] != '\0') ++length;
-	std::string value(buffer, length);
+	// Pasted tokens often carry a line break at the end. The secret is built straight from the buffer's range, so there is
+	// no intermediate copy of the untrimmed text to leave behind.
+	std::size_t first = 0;
+	while (first < length && std::isspace(static_cast<unsigned char>(buffer[first]))) ++first;
+	std::size_t last = length;
+	while (last > first && std::isspace(static_cast<unsigned char>(buffer[last - 1]))) --last;
+	platform::secret_text token{ std::string(buffer + first, last - first) };
 	wipe_buffer(buffer, capacity);
-	// Pasted tokens often carry a line break at the end.
-	while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
-	std::size_t lead = 0;
-	while (lead < value.size() && std::isspace(static_cast<unsigned char>(value[lead]))) ++lead;
-	if (lead > 0) value.erase(0, lead);
-	return save(host, platform::secret_text{ std::move(value) });
+	return save(host, std::move(token));
 }
 
 bool edt::forge_account_model::remove(std::string_view host)

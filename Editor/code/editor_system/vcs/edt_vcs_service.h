@@ -269,6 +269,20 @@ namespace edt
 			// pushInsteadOf would rewrite that URL: with either, the URL a push or `git remote get-url` uses is not the
 			// one written, and a person cannot be told where a request goes.
 			answer remote_raw_url(const std::string& remote, std::stop_token stop) const;
+			// What a person is shown about where a request to `remote` goes: the URL as written in the config, the one git
+			// uses (`get-url`, rewrites applied) and the pushurl when there is one. Nothing is refused here: the person
+			// decides about a rewrite.
+			struct addresses
+			{
+				std::string written;
+				std::string effective;
+				std::string push;
+				std::string code;
+				std::string error;
+
+				bool ok() const { return code.empty(); }
+			};
+			addresses remote_addresses(const std::string& remote, std::stop_token stop) const;
 			// The commit refs/heads/<branch> points to; `not_found` when there is no such local branch.
 			answer local_branch(const std::string& branch, std::stop_token stop) const;
 
@@ -282,6 +296,9 @@ namespace edt
 		{
 			std::string remote;
 			std::string url;
+			// Only for a person's read: what `git remote get-url` gives (rewrites applied) and the configured pushurl.
+			std::string effective_url;
+			std::string push_url;
 			std::string code;
 			std::string error;
 
@@ -291,7 +308,9 @@ namespace edt
 		// The same two reads, now, on the main thread, for what a person is shown before an agent's request is allowed.
 		// Git is stopped after vcs_options::describe_timeout (1 s): the code is then k_describe_timeout and the probe state is
 		// left alone. Always the protected read of an agent.
-		remote_snapshot read_remote_now(const std::string& named);
+		// `person`: a person's dialog is describing its own call, so a rewritten URL or a pushurl is reported
+		// (effective_url, push_url) and not refused.
+		remote_snapshot read_remote_now(const std::string& named, bool person = false);
 		inline static constexpr const char* k_describe_timeout = "describe_timeout";
 
 		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's

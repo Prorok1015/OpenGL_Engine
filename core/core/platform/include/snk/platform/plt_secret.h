@@ -110,12 +110,12 @@ namespace platform
 		std::map<secret_key, secret_text> m_values;
 	};
 
-	// The primary backend first; when it is `unavailable` or `failed` the value stays in RAM for the session. It is
-	// never written to a file. A RAM entry always wins over the primary on load(): it is the newer value, because a
-	// successful store() to the primary drops the RAM entry. Same blocking rules as the OS backend.
 	// Where a value is kept, as presence() found it.
 	enum class secret_presence { absent, in_memory, in_os_store, unknown };
 
+	// The primary backend first; when it is `unavailable` or `failed` the value stays in RAM for the session. It is
+	// never written to a file. A RAM entry always wins over the primary on load(): it is the newer value, because a
+	// successful store() to the primary drops the RAM entry. Same blocking rules as the OS backend.
 	class SNK_API secret_store
 	{
 	public:

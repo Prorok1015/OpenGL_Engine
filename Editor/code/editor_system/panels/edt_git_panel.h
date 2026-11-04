@@ -39,6 +39,11 @@ namespace edt
 		forge_pr_dialog_model& pr_dialog() { return m_pr; }
 		// What "Account..." (and the dialog's "no token" button) does: opens the Git Account window. Null: the buttons do nothing.
 		void set_open_account(std::function<void()> open) { m_open_account = std::move(open); }
+		// forge_service::describe_target, for the Create PR dialog; without it the dialog cannot create anything.
+		void set_describe_target(std::function<forge_service::target_description(const std::string&)> describe)
+		{
+			m_pr.set_describe_target(std::move(describe));
+		}
 
 	protected:
 		void on_render() override;
@@ -47,6 +52,7 @@ namespace edt
 	private:
 		void draw_header();
 		void draw_create_pr();
+		void draw_pr_target(bool running);
 		void draw_changes();
 		void draw_commit();
 		void draw_diff();

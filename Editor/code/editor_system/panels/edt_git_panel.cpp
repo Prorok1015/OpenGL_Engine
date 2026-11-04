@@ -191,9 +191,9 @@ void edt::git_panel::draw_header()
 		m_pr.reset(m_model.head());
 		ImGui::OpenPopup(k_pr_popup);
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
 	if (ImGui::Button("Account...") && m_open_account) m_open_account();
-	ImGui::EndDisabled();
 	draw_create_pr();
 	if (busy) {
 		ImGui::SameLine();
@@ -489,6 +489,39 @@ void edt::git_panel::draw_history_details()
 	ImGui::EndGroup();
 }
 
+// Where the request goes, as plain text; Create stays off until this is shown, and a rewritten address is ticked.
+void edt::git_panel::draw_pr_target(bool running)
+{
+	const auto& target = m_pr.target();
+	if (!target) {
+		ImGui::TextDisabled("The repository for this pull request is not read.");
+	} else if (!target->ok) {
+		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(target->text.c_str());
+		ImGui::PopTextWrapPos();
+		ImGui::PopStyleColor();
+	} else {
+		ImGui::TextUnformatted("The pull request goes to:");
+		ImGui::SameLine();
+		ImGui::TextUnformatted(target->text.c_str());
+		if (target->rewritten) {
+			ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextUnformatted("The address of this remote is rewritten by the git config (url.<base>.insteadOf or pushurl):");
+			ImGui::TextUnformatted(std::format("written in the config: {}", target->written_url).c_str());
+			ImGui::TextUnformatted(std::format("used: {}", target->effective_url).c_str());
+			if (!target->push_url.empty()) ImGui::TextUnformatted(std::format("pushurl: {}", target->push_url).c_str());
+			ImGui::PopTextWrapPos();
+			ImGui::PopStyleColor();
+			ImGui::BeginDisabled(running);
+			ImGui::Checkbox("I understand the address is rewritten", &m_pr.rewrite_accepted());
+			ImGui::EndDisabled();
+		}
+	}
+	if (!running && ImGui::SmallButton("Check again")) m_pr.refresh_target();
+}
+
 void edt::git_panel::draw_create_pr()
 {
 	ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 36.0f, 0.0f), ImGuiCond_Appearing);
@@ -507,6 +540,8 @@ void edt::git_panel::draw_create_pr()
 	}
 
 	const bool running = m_pr.running();
+	draw_pr_target(running);
+	ImGui::Separator();
 	ImGui::BeginDisabled(running);
 	const float width = ImGui::GetFontSize() * 28.0f;
 	ImGui::SetNextItemWidth(width);

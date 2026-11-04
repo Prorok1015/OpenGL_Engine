@@ -34,6 +34,8 @@ struct dialog_fixture
 	std::vector<std::uint64_t> cancelled;
 	std::uint64_t next_job = 1;
 	std::optional<cmd::result> next_answer;
+	int described = 0;
+	edt::forge_service::target_description next_target = shown_target();
 	edt::forge_pr_dialog_model model{ events, ports() };
 
 	edt::forge_pr_dialog_model::ports ports()
@@ -49,7 +51,28 @@ struct dialog_fixture
 			cancelled.push_back(job);
 			return true;
 		};
+		out.describe_target = [this](const std::string&) {
+			++described;
+			return next_target;
+		};
 		return out;
+	}
+
+	static edt::forge_service::target_description shown_target()
+	{
+		edt::forge_service::target_description target;
+		target.ok = true;
+		target.text = "github.com/octo/engine (remote origin)";
+		return target;
+	}
+
+	static edt::forge_service::target_description rewritten_target()
+	{
+		edt::forge_service::target_description target = shown_target();
+		target.rewritten = true;
+		target.written_url = "https://github.com/octo/engine.git";
+		target.effective_url = "https://github.com/someone/else.git";
+		return target;
 	}
 
 	void fill(const std::string& title = "Add the forge layer", const std::string& body = "Why and how.")
@@ -329,6 +352,79 @@ BOOST_AUTO_TEST_CASE(TheDialog_NeverOpensALink_ItOnlyCallsCreatePr)
 	finish(created());
 	for (const call& entry : calls) BOOST_TEST(entry.id == "forge.create_pr");
 	BOOST_TEST(calls.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(OpeningTheForm_ReadsTheTarget_AndShowsIt)
+{
+	fill();
+	BOOST_TEST(described == 1);
+	BOOST_REQUIRE(model.target().has_value());
+	BOOST_TEST(model.target()->text == "github.com/octo/engine (remote origin)");
+	BOOST_TEST(model.target_accepted());
+}
+
+BOOST_AUTO_TEST_CASE(CreateStaysOff_UntilTheTargetIsShownAndAllowed)
+{
+	next_target = edt::forge_service::target_description{};
+	next_target.text = "The request will be refused: the host 'evil.example' is not one pull requests are made on";
+	fill();
+	BOOST_TEST(!model.can_create());
+	BOOST_TEST(!model.target()->ok);
+	model.create();
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(model.error_code() == "denied");
+
+	next_target = shown_target();
+	model.refresh_target();
+	BOOST_TEST(model.can_create());
+}
+
+BOOST_AUTO_TEST_CASE(WithoutADescribePort_NothingCanBeCreated)
+{
+	edt::forge_pr_dialog_model::ports bare = ports();
+	bare.describe_target = nullptr;
+	edt::forge_pr_dialog_model blind{ events, std::move(bare) };
+	blind.reset("agent/forge");
+	blind.title() = "t";
+	BOOST_TEST(!blind.can_create());
+	blind.create();
+	BOOST_TEST(calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ARewrittenAddress_NeedsTheTick_BeforeCreate)
+{
+	next_target = rewritten_target();
+	fill();
+	BOOST_REQUIRE(model.target().has_value());
+	BOOST_TEST(model.target()->rewritten);
+	BOOST_TEST(!model.can_create());
+	model.create();
+	BOOST_TEST(calls.empty());
+	model.rewrite_accepted() = true;
+	BOOST_TEST(model.can_create());
+	model.create();
+	BOOST_TEST(calls.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ReadingTheTargetAgain_ForgetsTheTick)
+{
+	next_target = rewritten_target();
+	fill();
+	model.rewrite_accepted() = true;
+	model.refresh_target();
+	BOOST_TEST(!model.rewrite_accepted());
+	BOOST_TEST(!model.can_create());
+}
+
+BOOST_AUTO_TEST_CASE(ADeniedAnswer_ForgetsTheTarget_UntilItIsReadAgain)
+{
+	fill();
+	model.create();
+	finish(failure("denied", "the repository is not the one the request was allowed for"));
+	BOOST_TEST(!model.target().has_value());
+	BOOST_TEST(!model.can_create());
+	model.refresh_target();
+	BOOST_TEST(model.can_create());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

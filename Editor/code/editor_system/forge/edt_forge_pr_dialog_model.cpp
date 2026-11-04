@@ -52,6 +52,15 @@ void edt::forge_pr_dialog_model::reset(std::string_view head)
 	m_number.reset();
 	m_url.clear();
 	clear_error();
+	refresh_target();
+}
+
+void edt::forge_pr_dialog_model::refresh_target()
+{
+	if (m_phase == phase::running) return;
+	m_rewrite_accepted = false;
+	m_target.reset();
+	if (m_ports.describe_target) m_target = m_ports.describe_target(std::string{});
 }
 
 void edt::forge_pr_dialog_model::clear_error()
@@ -87,6 +96,10 @@ void edt::forge_pr_dialog_model::create()
 		fail("invalid_args", *error);
 		return;
 	}
+	if (!target_accepted()) {
+		fail("denied", "the repository this request goes to is not shown and accepted yet");
+		return;
+	}
 	if (!m_ports.invoke) {
 		fail("unavailable", "pull requests are not available in this editor");
 		return;
@@ -96,6 +109,7 @@ void edt::forge_pr_dialog_model::create()
 		{ "body", json::string(m_body) }, { "draft", m_draft } });
 	if (!started.ok) {
 		fail(started.code.empty() ? "failed" : started.code, started.error);
+		if (started.code == cmd::codes::denied) m_target.reset();
 		return;
 	}
 	const json::value* job = started.value.is_object() ? started.value.as_object().if_contains("job") : nullptr;
@@ -132,6 +146,8 @@ void edt::forge_pr_dialog_model::finished(std::uint64_t id, job_status status, c
 		const std::string code = string_of(failure->as_object(), "code");
 		const std::string message = string_of(failure->as_object(), "message");
 		fail(code.empty() ? "failed" : forge::sanitize_text(code, 40), message);
+		// The repository found is not the one shown (or none was remembered): show it again before anything is sent.
+		if (code == "denied") m_target.reset();
 		return;
 	}
 	const json::value* number = value.if_contains("number");

@@ -605,6 +605,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_forge_account_panel->focus();
 	};
 	m_git_panel->set_open_account(open_forge_account);
+	m_git_panel->set_describe_target([this](const std::string& remote) { return m_forge->describe_target(remote); });
 	m_registrations.push_back(register_forge_account_action(m_context->actions(), open_forge_account));
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.

@@ -264,6 +264,12 @@ struct forge_fixture
 			+ std::string(extra) + "}";
 	}
 
+	// What the dialog does before a person's forge.create_pr: reads and remembers the repository.
+	edt::forge_service::target_description show_target(const std::string& remote = {})
+	{
+		return forge->describe_target(remote);
+	}
+
 	bool git_asked(std::string_view word) const
 	{
 		return std::any_of(git_calls.begin(), git_calls.end(), [word](const std::vector<std::string>& args) { return has_arg(args, word); });
@@ -351,6 +357,7 @@ BOOST_AUTO_TEST_CASE(CreatePr_APersonMayOpenAReadyPullRequest_AndGetsADraftWhenS
 {
 	next_body = R"json({"number": 7, "title": "t", "state": "open", "draft": false, "html_url": "https://github.com/octo/engine/pull/7",
 		"head": { "ref": "feature/x" }, "base": { "ref": "main" }})json";
+	BOOST_REQUIRE(show_target().ok);
 	const json::value ready = run("forge.create_pr", create_args("feature/x", R"(,"draft":false)"), cmd::origin::ui());
 
 	BOOST_TEST(!ready.as_object().contains("error"));
@@ -384,6 +391,7 @@ BOOST_AUTO_TEST_CASE(CreatePr_TheHeadMustPassThePushRules_BeforeAnyRequest)
 	// A person is not held to the push rules.
 	policy.push_branches = { "agent/*" };
 	requests.clear();
+	BOOST_REQUIRE(show_target().ok);
 	BOOST_TEST(!run("forge.create_pr", create_args("feature/x"), cmd::origin::ui()).as_object().contains("error"));
 	BOOST_TEST(requests.size() == 1u);
 }
@@ -718,6 +726,7 @@ BOOST_AUTO_TEST_CASE(Remote_APersonMayUseAnyConfiguredRemote)
 {
 	remote_urls = { { "upstream", "https://github.com/octo/engine.git" } };
 
+	BOOST_REQUIRE(show_target().ok);
 	const json::value result = run("forge.create_pr", create_args(), cmd::origin::ui());
 
 	BOOST_TEST(!result.as_object().contains("error"));
@@ -742,6 +751,7 @@ BOOST_AUTO_TEST_CASE(RemoteUrl_ItsHostMustBeAllowed)
 
 	BOOST_TEST(is_error(run("forge.create_pr", create_args()), "denied"));
 	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "denied"));
+	BOOST_TEST(!show_target().ok);
 	BOOST_TEST(is_error(run("forge.create_pr", create_args(), cmd::origin::ui()), "host_not_allowed"));
 	BOOST_TEST(requests.empty());
 
@@ -982,6 +992,111 @@ BOOST_AUTO_TEST_CASE(TheTokenHasNoCommand_AndTheAgentSeesExactlyThreeForgeComman
 	const std::vector<std::string> expected{ "forge.create_pr", "forge.list_prs", "forge.pr_status" };
 	BOOST_TEST((visible == expected));
 	BOOST_TEST(commands.list().size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(DescribeTarget_NamesHostOwnerRepoAndRemote_ForTheDialog)
+{
+	const edt::forge_service::target_description shown = show_target();
+
+	BOOST_TEST(shown.ok);
+	BOOST_TEST(shown.text.find("github.com/octo/engine") != std::string::npos);
+	BOOST_TEST(shown.text.find("origin") != std::string::npos);
+	BOOST_TEST(!shown.rewritten);
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(DescribeTarget_ARefusedTarget_IsSaidAndCannotBeCreated)
+{
+	remote_urls = { { "origin", "https://evil.example/octo/engine.git" } };
+
+	const edt::forge_service::target_description shown = show_target();
+
+	BOOST_TEST(!shown.ok);
+	BOOST_TEST(shown.text.find("refused") != std::string::npos);
+	BOOST_TEST(shown.text.find("evil.example") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(DescribeTarget_APushurl_IsReportedAsARewrite_AndNotRefused)
+{
+	push_urls = { { "origin", "https://github.com/someone/else.git" } };
+
+	const edt::forge_service::target_description shown = show_target();
+
+	BOOST_TEST(shown.ok);
+	BOOST_TEST(shown.rewritten);
+	BOOST_TEST(shown.written_url == "https://github.com/octo/engine.git");
+	BOOST_TEST(shown.push_url == "https://github.com/someone/else.git");
+}
+
+BOOST_AUTO_TEST_CASE(DescribeTarget_AnInsteadOfRewrite_ShowsBothAddresses)
+{
+	forge->set_person_remote_reader([](const std::string&) {
+		edt::vcs_service::remote_snapshot snapshot;
+		snapshot.remote = "origin";
+		snapshot.url = "https://github.com/octo/engine.git";
+		snapshot.effective_url = "https://github.com/someone/else.git";
+		return snapshot;
+	});
+
+	const edt::forge_service::target_description shown = show_target();
+
+	BOOST_TEST(shown.ok);
+	BOOST_TEST(shown.rewritten);
+	BOOST_TEST(shown.text.find("someone/else") != std::string::npos);
+	BOOST_TEST(shown.written_url == "https://github.com/octo/engine.git");
+	BOOST_TEST(shown.effective_url == "https://github.com/someone/else.git");
+	forge->set_person_remote_reader({});
+}
+
+BOOST_AUTO_TEST_CASE(DescribeTarget_WhenGitDoesNotAnswerInTime_IsRefused)
+{
+	forge->set_person_remote_reader([](const std::string&) {
+		edt::vcs_service::remote_snapshot snapshot;
+		snapshot.code = edt::vcs_service::k_describe_timeout;
+		snapshot.error = "git did not answer in time";
+		return snapshot;
+	});
+
+	const edt::forge_service::target_description shown = show_target();
+
+	BOOST_TEST(!shown.ok);
+	BOOST_TEST(is_error(run("forge.create_pr", create_args(), cmd::origin::ui()), "denied"));
+	BOOST_TEST(requests.empty());
+	forge->set_person_remote_reader({});
+}
+
+BOOST_AUTO_TEST_CASE(PersonsCreatePr_WithNothingShown_IsDenied)
+{
+	BOOST_TEST(is_error(run("forge.create_pr", create_args(), cmd::origin::ui()), "denied"));
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(PersonsCreatePr_ToAnotherRepositoryThanShown_IsDenied)
+{
+	forge->set_person_remote_reader([](const std::string&) {
+		edt::vcs_service::remote_snapshot snapshot;
+		snapshot.remote = "origin";
+		snapshot.url = "https://github.com/octo/other.git";
+		snapshot.effective_url = "https://github.com/octo/other.git";
+		return snapshot;
+	});
+	BOOST_REQUIRE(show_target().ok);
+
+	// The config says octo/engine when the job reads it.
+	const json::value result = run("forge.create_pr", create_args(), cmd::origin::ui());
+
+	BOOST_TEST(is_error(result, "denied"));
+	BOOST_TEST(requests.empty());
+	forge->set_person_remote_reader({});
+}
+
+BOOST_AUTO_TEST_CASE(PersonsCreatePr_AfterTheConfigChangedSinceTheDialogOpened_IsDenied)
+{
+	BOOST_REQUIRE(show_target().ok);
+	remote_urls = { { "origin", "https://github.com/evil/engine.git" } };
+
+	BOOST_TEST(is_error(run("forge.create_pr", create_args(), cmd::origin::ui()), "denied"));
+	BOOST_TEST(requests.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
