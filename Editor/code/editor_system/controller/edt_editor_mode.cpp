@@ -58,6 +58,28 @@ void edt::editor_mode_controller::after_module_swap()
 	m_events.editor_mode_changed.emit(m_mode);
 }
 
+void edt::editor_mode_controller::begin_startup(std::string level_label)
+{
+	m_startup_label = std::move(level_label);
+	m_startup_pending = true;
+}
+
+void edt::editor_mode_controller::finish_startup(bool loaded, bool exiting)
+{
+	const std::string level = std::exchange(m_startup_label, std::string{});
+	m_startup_pending = false;
+	if (!loaded) {
+		egLOG_ERROR("editor", "game mode not entered: the start level '{}' did not load (failed or cancelled)", level);
+		return;
+	}
+	if (exiting) {
+		egLOG_INFO("editor", "game mode not entered: the editor exits after the level loaded");
+		return;
+	}
+	// A refusal is logged by set_mode; the editor stays in editor mode.
+	(void)set_mode(editor_mode::game);
+}
+
 std::string_view edt::editor_mode_controller::play_command_for(editor_mode mode) const
 {
 	if (mode == m_mode) return {};
