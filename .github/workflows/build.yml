@@ -640,6 +640,17 @@ jobs:
           tools/headless/check_smoke.sh headless_out/two_worlds/final.png headless_out/two_worlds/editor.log \
             320x360+980+180 0.03 tools/headless/reference/two_worlds.png
 
+      # #518: --game loads the start level behind a neutral loading screen and then enters game mode, which starts Play.
+      # No picture is compared (the shot is only kept in the artifact); the controller's INFO "game mode" must be logged.
+      # app/exit_after_frames is only a cap: run_headless.sh needs the editor alive for its shot and stops it itself.
+      - name: Smoke run (game mode)
+        run: |
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/game_mode/final.png \
+            -- --project projects/sandbox --game=res://levels/smoke_level.desc --set app/exit_after_frames 20000
+          if ! grep -qE "\[editor\] game mode$" headless_out/game_mode/editor.log; then
+            echo "::error::the editor did not enter game mode"; tail -20 headless_out/game_mode/editor.log; exit 1
+          fi
+
       # The same deterministic run, but the picture is taken inside the process: capture/on_settled makes the editor
       # run the command viewport.capture (rnd::driver::read_texture -> PNG) once the scene settled. It is the Scene
       # view alone (no panels, gizmos or overlays), so it has its own reference, made from this same path

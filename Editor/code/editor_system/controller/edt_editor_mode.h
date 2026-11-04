@@ -52,12 +52,24 @@ namespace edt
 		// Play is paused by this controller's switch to the editor, and nothing else changed Play since.
 		bool holds_pause() const { return m_paused_play; }
 
+		// The start level of --game (#518): from begin_startup until finish_startup the editor shows a loading screen
+		// with `level_label` (the start level's res:// tag) instead of its layout. Only when that load is scheduled.
+		void begin_startup(std::string level_label);
+		bool startup_pending() const { return m_startup_pending; }
+		const std::string& startup_level_label() const { return m_startup_label; }
+		// Every end of that load comes here, and it always ends the loading screen. `loaded` false (the load failed or
+		// was cancelled): ERROR, editor mode. `exiting` (editor/exit_after_level_loaded stops the loop): editor mode, Play
+		// would only be torn down. Otherwise set_mode(game); a refused start keeps the editor mode.
+		void finish_startup(bool loaded, bool exiting);
+
 	private:
 		play_session& m_play;
 		editor_events& m_events;
 		bool m_has_ui = true;
 		editor_mode m_mode = editor_mode::editor;
 		bool m_paused_play = false;
+		bool m_startup_pending = false;
+		std::string m_startup_label;
 		// The last change of Play was a reload's Stop while in game mode.
 		bool m_reload_stopped_game = false;
 		// Play's changes the controller makes itself are not someone else's.

@@ -4,17 +4,22 @@
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
 #include "edt_dockspace.h"
+#include "edt_editor_layer.h"
 #include "edt_editor_mode.h"
 #include "edt_input_binding.h"
 #include "edt_panel_base.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 // Game mode (#294) on a bare ImGui context: the dock layout outlives a stretch without the DockSpace, the full-window
-// Game view binds no input under a popup, and the start level of --game is only a res:// tag.
+// Game view binds no input under a popup, and the start level of --game is only a res:// tag. The loading screen of
+// --game (#518) through edt::draw_layouts, the layout pass of editor_layer::on_update (which needs a whole
+// editor_context): it replaces the dockspace and every shortcut, and the default layout is built after it.
 
 namespace {
 
@@ -41,6 +46,17 @@ struct ui_frames
 		ImGui::NewFrame();
 		body();
 		ImGui::EndFrame();
+	}
+
+	// A frame in which `key` goes down (and up again after it).
+	template<typename F>
+	void frame_with_key(ImGuiKey key, F&& body)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.AddKeyEvent(key, true);
+		frame(body);
+		io.AddKeyEvent(key, false);
+		frame([] {});
 	}
 
 	ImGuiContext* ctx = nullptr;
@@ -127,6 +143,65 @@ BOOST_AUTO_TEST_CASE(TheGameWindow_BindsNoInputUnderAPopupOrADialog)
 		BOOST_TEST(bind(false));
 	});
 	BOOST_TEST(router.binding_count() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheLoadingScreen_ReplacesTheDockspaceAndTheShortcuts_AndTheDefaultLayoutComesAfterIt)
+{
+	ui_frames ui;
+	edt::panel_registry panels;
+	edt::action_registry actions;
+	auto panel = std::make_shared<empty_panel>();
+	auto registration = panels.add({ .id = "docked", .title = "Docked", .slot = edt::dock_slot::left, .open_by_default = true, .panel = panel });
+	int toggles = 0;
+	edt::action_desc toggle;
+	toggle.id = "t.toggle";
+	toggle.label = "Toggle";
+	toggle.menu_path = "View";
+	toggle.shortcut = "F11";
+	toggle.execute = edt::no_args([&toggles] { ++toggles; });
+	auto toggle_registration = actions.add(std::move(toggle));
+	edt::dockspace dock;
+
+	const std::string text = edt::loading_screen_text("res://levels/main.desc");
+	BOOST_TEST(text == "Loading res://levels/main.desc...");
+	bool loading = true;
+	edt::editor_layouts layouts;
+	layouts.loading_active = [&loading] { return loading; };
+	layouts.draw_loading = [&text] { edt::draw_loading_screen(text); };
+	const auto draw = [&](edt::drawn_layout expected) {
+		BOOST_TEST((edt::draw_layouts(dock, panels, actions, layouts) == expected));
+	};
+
+	ui.frame([&] { draw(edt::drawn_layout::loading); });
+	ui.frame_with_key(ImGuiKey_F11, [&] { draw(edt::drawn_layout::loading); });
+	BOOST_TEST(toggles == 0);
+	ui.frame([&] { draw(edt::drawn_layout::loading); });
+	BOOST_TEST((ImGui::FindWindowByName("##dockspace_host") == nullptr)); // the menu bar is the host's
+	BOOST_TEST((ImGui::FindWindowByName("Docked") == nullptr));
+	ImGuiWindow* screen = ImGui::FindWindowByName(edt::loading_screen_window);
+	BOOST_REQUIRE(screen);
+	BOOST_TEST(screen->Active);
+	BOOST_TEST((screen->Flags & ImGuiWindowFlags_NoTitleBar) != 0);
+	BOOST_TEST((screen->Flags & ImGuiWindowFlags_NoBringToFrontOnFocus) != 0);
+	BOOST_TEST((screen->Flags & ImGuiWindowFlags_NoDocking) != 0);
+	BOOST_TEST(screen->Size.x == 1280.f);
+	BOOST_TEST(screen->Size.y == 720.f);
+
+	// The load ended: the editor layout with its default dock layout, built on the first render.
+	loading = false;
+	for (int i = 0; i < 3; ++i) ui.frame([&] { draw(edt::drawn_layout::editor); });
+	BOOST_TEST(!screen->Active);
+	BOOST_TEST((ImGui::FindWindowByName("##dockspace_host") != nullptr));
+	ImGuiWindow* window = ImGui::FindWindowByName("Docked");
+	BOOST_REQUIRE(window);
+	BOOST_TEST(window->DockId != 0u);
+	BOOST_TEST((window->DockNode != nullptr));
+	ui.frame_with_key(ImGuiKey_F11, [&] { draw(edt::drawn_layout::editor); });
+	BOOST_TEST(toggles == 1);
+
+	// No loading screen set (an editor without --game): the editor layout as before.
+	edt::editor_layouts plain;
+	ui.frame([&] { BOOST_TEST((edt::draw_layouts(dock, panels, actions, plain) == edt::drawn_layout::editor)); });
 }
 
 BOOST_AUTO_TEST_CASE(TheGameLevel_IsOnlyAPortableResTag)
