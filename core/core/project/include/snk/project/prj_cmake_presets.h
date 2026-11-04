@@ -136,7 +136,8 @@ namespace prj
 
 	// Reads CMakePresets.json and CMakeUserPresets.json from `code_dir` again, applies `edits` and writes the user file
 	// (atomically, through a temporary file; through `write` when it is set) only when its content changes. A missing or broken main file, or a broken
-	// user file, is an error and nothing is written.
+	// user file, is an error and nothing is written. Both files are read, and the user file written, without following
+	// a link at `code_dir` or at the file (prj::read_project_file / write_project_file, #527): a link there is an error.
 	SNK_API user_presets_save_result save_user_presets(const std::filesystem::path& code_dir,
 		const std::vector<user_presets_edit>& edits, const text_writer& write = {});
 }
