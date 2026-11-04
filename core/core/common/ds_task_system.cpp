@@ -54,7 +54,6 @@ namespace ds::detail {
 	struct main_item {
 		std::function<void()> fn;
 		std::weak_ptr<lifetime_state> origin;
-		std::weak_ptr<lifetime_state> group;
 		std::atomic<bool> taken{ false };
 
 		void run();
@@ -95,49 +94,7 @@ namespace ds::detail {
 		std::vector<std::weak_ptr<main_item>> main_items;
 		// Callbacks of this owner, or continuations of its tasks, running now (running_callbacks).
 		std::atomic<int> running{ 0 };
-		// Main-thread continuations of the tasks of this group (bind_group), held by some owner: ~lifetime drops them,
-		// so none runs once the group is gone.
-		std::vector<std::weak_ptr<held_slot>> group_slots;
 	};
-
-	namespace {
-		// The task (or main-thread continuation of a task) running on this thread: a task started from it for the
-		// same origin joins its group.
-		struct current_binding {
-			std::weak_ptr<lifetime_state> origin;
-			std::weak_ptr<lifetime_state> group;
-		};
-		thread_local const current_binding* g_binding = nullptr;
-
-		struct binding_scope {
-			current_binding binding;
-			const current_binding* previous;
-			binding_scope(std::weak_ptr<lifetime_state> origin, std::weak_ptr<lifetime_state> group)
-				: binding{ std::move(origin), std::move(group) }
-				, previous(std::exchange(g_binding, &binding))
-			{
-			}
-			~binding_scope() { g_binding = previous; }
-			binding_scope(const binding_scope&) = delete;
-			binding_scope& operator=(const binding_scope&) = delete;
-		};
-
-		void bind_to_group(const std::shared_ptr<lifetime_state>& group, const std::shared_ptr<task_state_base>& state)
-		{
-			state->set_group(group);
-			std::vector<std::shared_ptr<task_state_base>> released; // destructed after the unlock
-			std::lock_guard lock(group->mutex);
-			std::erase_if(group->tasks, [&released](const std::weak_ptr<task_state_base>& weak) {
-				auto alive = weak.lock();
-				const bool drop = !alive || alive->finalized();
-				if (alive) {
-					released.push_back(std::move(alive));
-				}
-				return drop;
-			});
-			group->tasks.push_back(state);
-		}
-	}
 
 	namespace {
 		struct running_scope {
@@ -166,7 +123,6 @@ namespace ds::detail {
 		if (!taken.exchange(true)) {
 			auto call = std::move(fn); // the captures go with it, right after the call
 			const running_scope running(origin.lock());
-			const binding_scope binding(origin, group);
 			run_guarded(call, "main-thread task");
 		}
 	}
@@ -468,14 +424,6 @@ namespace ds::detail {
 		task_context ctx;
 		ctx.stop = m_stop.get_token();
 		ctx.m_state = this;
-		std::weak_ptr<lifetime_state> origin;
-		std::weak_ptr<lifetime_state> group;
-		{
-			std::lock_guard lock(m_mutex);
-			origin = m_origin;
-			group = m_group;
-		}
-		const binding_scope binding(std::move(origin), std::move(group));
 
 		task_status outcome = task_status::ready;
 		try {
@@ -531,20 +479,12 @@ namespace ds::detail {
 		m_origin = std::move(origin);
 	}
 
-	void task_state_base::set_group(std::weak_ptr<lifetime_state> group)
-	{
-		std::lock_guard lock(m_mutex);
-		m_group = std::move(group);
-	}
-
 	std::function<void()> task_state_base::for_main(std::function<void()> fn)
 	{
 		std::weak_ptr<lifetime_state> origin;
-		std::weak_ptr<lifetime_state> group;
 		{
 			std::lock_guard lock(m_mutex);
 			origin = m_origin;
-			group = m_group;
 		}
 		const auto state = origin.lock();
 		if (!state) {
@@ -553,7 +493,6 @@ namespace ds::detail {
 		auto item = std::make_shared<main_item>();
 		item->fn = std::move(fn);
 		item->origin = origin;
-		item->group = std::move(group);
 		std::vector<std::shared_ptr<main_item>> released; // destructed after the unlock: they may hold user captures
 		{
 			std::lock_guard lock(state->mutex);
@@ -572,16 +511,6 @@ namespace ds::detail {
 
 	void task_state_base::continue_on_main(std::shared_ptr<held_slot> slot)
 	{
-		std::shared_ptr<lifetime_state> group;
-		{
-			std::lock_guard lock(m_mutex);
-			group = m_group.lock();
-		}
-		if (group) {
-			std::lock_guard lock(group->mutex);
-			std::erase_if(group->group_slots, [](const std::weak_ptr<held_slot>& weak) { return weak.expired(); });
-			group->group_slots.push_back(slot);
-		}
 		add_continuation(true, [slot = std::move(slot)] { call_held(slot, nullptr); });
 	}
 
@@ -714,18 +643,9 @@ namespace ds {
 			cancel_tasks();
 		}
 		decltype(m_state->held) released;
-		decltype(m_state->group_slots) group_slots;
 		{
 			std::lock_guard lock(m_state->mutex);
 			released.swap(m_state->held);
-			group_slots.swap(m_state->group_slots);
-		}
-		// Continuations of the group's tasks, held by their owner (a layer that outlives the group): they may capture
-		// what goes with the group.
-		for (const auto& weak : group_slots) {
-			if (const auto slot = weak.lock()) {
-				detail::drop_held(slot);
-			}
 		}
 		// Outside the lock, here and now, on this thread: the functors (a game module's code) go before anything
 		// that outlives this lifetime (a queue, a task, a block) could destroy them later. The slots stay, empty.
@@ -758,11 +678,6 @@ namespace ds {
 			return drop;
 		});
 		m_state->tasks.push_back(state);
-	}
-
-	void lifetime::bind_group(const std::shared_ptr<detail::task_state_base>& state) const
-	{
-		detail::bind_to_group(m_state, state);
 	}
 
 	std::vector<std::shared_ptr<detail::task_state_base>> lifetime::bound() const
@@ -861,22 +776,6 @@ namespace ds {
 		m_impl->register_live(state);
 		// Re-checked after registering: a shutdown that started in between has not seen this task.
 		m_impl->enqueue_task(where, state);
-	}
-
-	void task_system::bind_to(const lifetime& owner, const lifetime* group,
-		const std::shared_ptr<detail::task_state_base>& state)
-	{
-		if (group) {
-			group->bind_group(state);
-		} else if (const detail::current_binding* parent = detail::g_binding) {
-			// Only for the parent's own owner: a task of another owner (a resource load) is shared beyond the group.
-			if (parent->origin.lock() == owner.m_state) {
-				if (const auto parent_group = parent->group.lock()) {
-					detail::bind_to_group(parent_group, state);
-				}
-			}
-		}
-		owner.bind(state);
 	}
 
 	task_handle<void> task_system::when_all(std::span<const task_handle_base> inputs, lane where,

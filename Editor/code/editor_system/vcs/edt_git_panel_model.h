@@ -42,14 +42,6 @@ namespace edt
 		std::string text;
 	};
 
-	// The latest progress the running write's job reported (fetch, pull, push: git's network progress).
-	struct git_busy_progress
-	{
-		float fraction = 0.f;
-		// "Receiving objects 45%".
-		std::string text;
-	};
-
 	// A unified diff split into lines: the file headers (until the first hunk of each file) are meta, so a removed
 	// line that reads "-- x" is not taken for a "--- a/x" header. Pure.
 	std::vector<git_diff_line> diff_lines(std::string_view text);
@@ -126,10 +118,6 @@ namespace edt
 
 		// The write running now ("Push", "Commit" ...), empty when none.
 		const std::string& busy() const { return m_busy; }
-		// While the write runs and its job has reported progress; cleared when it ends.
-		const std::optional<git_busy_progress>& busy_progress() const { return m_busy_progress; }
-		// Writes that have ended, however: what HEAD and the refs point at may have moved (the History tab reloads).
-		std::uint64_t writes_finished() const { return m_writes_finished; }
 		// The last failure, as git or the command said it; also logged under "vcs".
 		const std::string& error() const { return m_error; }
 
@@ -186,11 +174,8 @@ namespace edt
 
 		std::string m_message;
 		std::string m_busy;
-		std::optional<git_busy_progress> m_busy_progress;
-		std::uint64_t m_writes_finished = 0;
 		std::string m_error;
-		// Last: gone before the state their slots touch.
+		// Last: gone before the state its slot touches.
 		connection m_finished;
-		connection m_progress;
 	};
 }

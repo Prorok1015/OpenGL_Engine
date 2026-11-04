@@ -39,8 +39,6 @@ namespace edt
 		void set_on_asset_dropped(std::function<void(const std::string&)> cb) { m_on_asset_dropped = std::move(cb); }
 
 		void set_on_transform_committed(std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
-		// True while the document must not change (Play): no gizmo, no asset drop, a hint instead.
-		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
 
 		// The texture the editor camera renders to; the "scene" view of viewport.capture.
 		static const res::tag& render_target_tag();
@@ -70,7 +68,6 @@ namespace edt
 		gui::gui_system&    m_gui;
 
 		std::function<entt::registry*()> m_get_registry;
-		std::function<bool()> m_edits_locked;
 		inp::input_router* m_router = nullptr;
 		input_target_getter m_input_target;
 		ecs::entity m_selected = entt::null;

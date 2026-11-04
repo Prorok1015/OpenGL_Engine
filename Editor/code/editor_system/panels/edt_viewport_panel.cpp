@@ -38,13 +38,8 @@ namespace edt
 	void viewport_panel::on_render()
 	{
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
-		const bool locked = m_edits_locked && m_edits_locked();
 
 		render_toolbar();
-		if (locked) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Playing: stop Play to edit");
-		}
 
 		// Capture the exact image start position (after toolbar) for gizmo projection
 		ImVec2 image_pos = ImGui::GetCursorScreenPos();
@@ -81,7 +76,7 @@ namespace edt
 			ImGui::Image(tex_id, size, ImVec2(0, 1), ImVec2(1, 0));
 
 			// Drop target: accept asset paths dragged from the Asset Browser
-			if (!locked && ImGui::BeginDragDropTarget()) {
+			if (ImGui::BeginDragDropTarget()) {
 				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
 					std::string path(static_cast<const char*>(payload->Data),
 					                 static_cast<size_t>(payload->DataSize) - 1);
@@ -99,7 +94,7 @@ namespace edt
 			bind_item_input(m_router, m_input_target());
 
 		// Interactive transform gizmo (drawn on top of scene image)
-		if (!locked && reg && m_selected != entt::null && reg->valid(m_selected))
+		if (reg && m_selected != entt::null && reg->valid(m_selected))
 			render_transform_gizmo(*reg, cam_view, cam_proj);
 
 		// Re-fetch: on_transform_committed inside the gizmo may have triggered

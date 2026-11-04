@@ -73,9 +73,6 @@ namespace inp
 		}
 		void set_hold(std::string_view set, mouse_hold hold) { m_holds.insert_or_assign(std::string{ set }, std::move(hold)); }
 		void clear_holds() { m_holds.clear(); }
-		std::size_t hold_count() const { return m_holds.size(); }
-		// The set went away (Play stopped): its bindings and its mouse hold are dropped, the default target stays.
-		void forget_set(std::string_view set);
 
 		// Buttons released, deltas zero, the cursor where it last was.
 		static inp::input_state neutral(const inp::input_state& raw);

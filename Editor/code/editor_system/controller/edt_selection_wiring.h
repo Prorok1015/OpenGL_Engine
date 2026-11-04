@@ -18,7 +18,7 @@ namespace edt
 	// world_controller::on_world_switched and the hierarchy's node-selected callback. The returned
 	// connections keep the subscriptions alive; subscription order is the order the old callbacks ran in.
 	// The hierarchy panel still draws and edits its own selection; a selection made elsewhere is not mirrored
-	// into it, only a cleared one is. Play's Stop restores one through scene_hierarchy_panel::select_path.
+	// into it yet (nothing makes one today), only a cleared one is.
 	[[nodiscard]] std::vector<connection> wire_selection(
 		editor_events& events,
 		selection_service& service,

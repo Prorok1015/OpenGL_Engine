@@ -354,15 +354,11 @@ BOOST_AUTO_TEST_CASE(Cli_AbbreviatedOptionIsRefused)
 	BOOST_TEST(!static_cast<bool>(headless));
 }
 
-BOOST_AUTO_TEST_CASE(Cli_McpStdioTurnsOnTheStdioTransportOnly)
+BOOST_AUTO_TEST_CASE(Cli_McpStdioIsAcceptedAndSetsNothingYet)
 {
 	cfg::variable<bool> headless{ "editor/headless", false };
-	cfg::variable<bool> mcp_stdio{ "editor/mcp_stdio", false };
 	BOOST_TEST(run_cli({ "--mcp-stdio" }) == 1);
-	BOOST_TEST(static_cast<bool>(mcp_stdio));
 	BOOST_TEST(!static_cast<bool>(headless));
-	run_cli({ "-s", "editor/mcp_stdio", "false" });
-	BOOST_TEST(!static_cast<bool>(mcp_stdio));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -67,12 +67,7 @@ namespace edt
 		// that changed no desc still rebuilds the active world) and tells document_changed. The generation grows by exactly one per commit (the pusher must not bump it again).
 		// `label` names the edit in the log and the Edit menu. A push that finds nothing to push to (no level loaded) does
 		// not announce; commit_mode::state_only never does, and is a boundary of the history (the world list changed).
-		// While edits are locked (Play, edits_locked()) a commit is refused: logged, nothing changes.
 		void commit(std::string_view label, commit_mode mode = commit_mode::push);
-		// Set by play_session for the time Play runs. Every edit path (panels, gizmo, scene_editor, world_controller,
-		// scene.* and agent.session.* commands, Edit > Undo/Redo) checks edits_locked() before it touches the descs.
-		void set_edits_locked(bool locked) { m_edits_locked = locked; }
-		bool edits_locked() const override { return m_edits_locked; }
 		// Announces document_changed for the current generation; commit does it after the push.
 		void notify_changed();
 		// The document is as saved: undo or redo back to here makes it clean again (#144).
@@ -81,7 +76,6 @@ namespace edt
 		// The undo history (#141): commits record into it, undo/redo/rollback below apply it and push like a commit.
 		document_history& history() { return m_history; }
 		const document_history& history() const { return m_history; }
-		// False while edits are locked.
 		bool undo() override;
 		bool redo() override;
 		std::optional<history_entry> next_undo_entry() const override;
@@ -142,7 +136,6 @@ namespace edt
 
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
 		bool m_unrecorded = false;
-		bool m_edits_locked = false;
 		document_history m_history;
 		scene_history_index m_index;
 		scene_commit_stats m_last_stats;

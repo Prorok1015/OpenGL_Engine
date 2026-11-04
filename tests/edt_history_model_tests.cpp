@@ -140,22 +140,6 @@ BOOST_AUTO_TEST_CASE(AHiddenTab_AsksForNothing_UntilItIsShown)
 	BOOST_TEST(model.loading());
 }
 
-BOOST_AUTO_TEST_CASE(ShownAgainAfterBeingHidden_ReloadsFromTheTop)
-{
-	open_and_load();
-	model.show_rows(150, 190);
-	answer_log();
-	BOOST_REQUIRE_EQUAL(model.commits().size(), 400u);
-
-	model.set_visible(false);
-	model.set_visible(true);
-	BOOST_TEST(count("vcs.log") == 3u);
-	BOOST_TEST(!last("vcs.log")->args.contains("cursor"));
-	BOOST_TEST(model.commits().empty());
-	model.set_visible(true);
-	BOOST_TEST(count("vcs.log") == 3u);
-}
-
 BOOST_AUTO_TEST_CASE(APage_BecomesRows_AndTheirGraph)
 {
 	open_and_load();
@@ -328,23 +312,6 @@ BOOST_AUTO_TEST_CASE(SelectingACommit_ReadsItsFiles_ThenAFilesDiff)
 	BOOST_TEST(model.diff_text() == "@@ -1 +1 @@\n-a\n+b\n");
 	BOOST_TEST(model.diff_truncated());
 	BOOST_TEST((model.selected_row() == std::optional<std::size_t>{ 4 }));
-}
-
-BOOST_AUTO_TEST_CASE(TheDiffVersion_ChangesWhenTheDiffTextDoes)
-{
-	open_and_load();
-	model.select(4);
-	finish(*last("vcs.show_files"), json::parse(R"({"files":[{"path":"a.cpp","status":"M"}]})"));
-	const std::uint64_t before = model.diff_version();
-	model.select_file("a.cpp");
-	const std::uint64_t cleared = model.diff_version();
-	BOOST_TEST(cleared != before);
-	finish(*last("vcs.diff"), json::parse(R"({"text":"+x\n"})"));
-	const std::uint64_t read = model.diff_version();
-	BOOST_TEST(read != cleared);
-	model.select(5);
-	BOOST_TEST(model.diff_version() != read);
-	BOOST_TEST(model.diff_text().empty());
 }
 
 BOOST_AUTO_TEST_CASE(AnotherCommit_DropsTheFilesOfTheFirst)

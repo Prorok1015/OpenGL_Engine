@@ -38,8 +38,6 @@ namespace edt
 		void invalidate_view();
 		// Nodes (by id) an agent changed since the last save or accept: the header says so.
 		void set_agent_marks(std::function<bool(uint64_t node_id)> marked) { m_agent_marked = std::move(marked); }
-		// True while the document must not change (Play): the panel is drawn disabled with a hint.
-		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
 		// An edit made in the panel waits for its widget to let go before it is committed.
 		bool has_pending_commit() const { return m_pending_commit; }
 		component_ui ui_of(const std::string& component_key) const;
@@ -48,7 +46,6 @@ namespace edt
 		void on_render() override;
 
 	private:
-		void render_selected();
 		void rebuild_parent_cache();
 		bool render_generic_json(boost::json::object& obj);
 		bool render_generic_json_value(const std::string& key, boost::json::value& val);
@@ -76,7 +73,6 @@ namespace edt
 		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
 		bool                           m_pending_commit = false;
 		std::function<bool(uint64_t)>  m_agent_marked;
-		std::function<bool()>          m_edits_locked;
 
 		// Cached serialized parent_desc data — built once on selection change for read-only display
 		std::unordered_map<std::string, boost::json::object> m_parent_cache;

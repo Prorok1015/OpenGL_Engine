@@ -80,7 +80,6 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 	out.push_back(actions.add_menu("Edit"));
 	out.push_back(actions.add_menu(std::string(view_menu_name)));
 	out.push_back(actions.add_menu("Build"));
-	out.push_back(actions.add_menu("Play"));
 	out.push_back(actions.add_menu("Help"));
 	out.push_back(actions.add({ .id = "help.about", .label = "About", .menu_path = "Help", .execute = no_args([] {}), .expose_as_tool = false }));
 	return out;

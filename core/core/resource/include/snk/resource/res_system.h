@@ -68,11 +68,6 @@ namespace res
 		// Mounts one more protocol after construction (the editor's edt://), like a mount of the constructor: logged,
 		// changes signalled. Main thread, before the protocol is used; not on a layer (it shares its root's resolvers).
 		void add_mount(mount added);
-		// Serves a table mount of `protocol` from other `roots` (Play swaps user:// for its own profile). Main thread, while
-		// nothing loads from the protocol. Every resource cached from the protocol (here and in the layers) is signalled
-		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
-		// its watchers reload; a handle held from before keeps what it has. False (logged) when it is not mounted.
-		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
 		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
 		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
 		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a
@@ -501,8 +496,6 @@ namespace res
 		bool needed_by_layers(const res::tag& tag) const;
 		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
-		// The tags of `protocol` cached here or in a layer, appended to `out` (may repeat).
-		void collect_cached_tags(std::string_view protocol, std::vector<res::tag>& out);
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
 		// In the .cpp: the block (its control block and vtable) is made by the engine, never by the code of a game module
 		// that requested it (#416).

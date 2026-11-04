@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
-#include <functional>
 #include <initializer_list>
 #include <ios>
 #include <iterator>
@@ -75,12 +74,6 @@ namespace {
 		bool check_repo_config = false;
 		// Guarded, with allow_any_repo_config, on git before 2.45 (no GIT_NO_LAZY_FETCH): a partial clone still refuses.
 		bool refuse_partial_clone = false;
-		// A call not from a person (origin agent, test, game), read or write: no lazy fetch; a read closes every
-		// transport (harden_read). A person's call (ui) is plain git, as in a terminal (owner decision, #455).
-		bool agent_call = false;
-		// An agent's read on git before 2.45 (GIT_NO_LAZY_FETCH may be ignored): a partial clone refuses
-		// (partial_clone_read_refusal).
-		bool refuse_partial_clone_read = false;
 		bool allow_hooks = false;
 		// Guarded write that can run filter drivers, without allow_filters: refused when a configured driver applies
 		// to a file it touches.
@@ -96,8 +89,6 @@ namespace {
 		fs::path policy_file;
 		// git 2.30+: rev-parse takes --end-of-options.
 		bool rev_parse_end_of_options = false;
-		// fetch, pull, push: each progress update git prints (--progress), on the job's thread.
-		std::function<void(const edt::vcs::git_progress&)> on_progress;
 	};
 
 	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
@@ -123,7 +114,7 @@ namespace {
 
 	// A repository's own config (a project unzipped with its .git) must never run a program on a read: every key that
 	// names a program git could start during status, diff, log, for-each-ref or rev-parse is overridden here, hooks
-	// and filter drivers per read (harden_read). Every call, writes included, gets these.
+	// and filter drivers per read (run_read). Every call, writes included, gets these.
 	std::vector<std::string> safe_base_args()
 	{
 		return { "--no-pager",
@@ -216,22 +207,8 @@ namespace {
 		options.environment = git.environment;
 		// Bytes as git wrote them: -z output holds NULs, a diff its own line breaks.
 		options.raw_output = true;
-		// A run of updates of one progress phase keeps only its latest line: hundreds of them would push the real
-		// "fatal:" out of stderr_tail.
-		std::size_t progress_start = std::string::npos;
-		std::string progress_phase;
-		options.on_stderr_line = [&out, &git, &progress_start, &progress_phase](std::string_view line) {
-			const std::optional<edt::vcs::git_progress> progress = edt::vcs::parse_progress(line);
-			if (progress && git.on_progress) git.on_progress(*progress);
-			if (progress && progress_start != std::string::npos && progress->phase == progress_phase) {
-				out.err.resize(progress_start);
-			}
-			progress_start = std::string::npos;
+		options.on_stderr_line = [&out](std::string_view line) {
 			if (out.err.size() >= k_stderr_cap) return;
-			if (progress) {
-				progress_start = out.err.size();
-				progress_phase = progress->phase;
-			}
 			out.err.append(line);
 			out.err.push_back('\n');
 		};
@@ -302,6 +279,26 @@ namespace {
 			}
 		}
 		return std::nullopt;
+	}
+
+	// Makes `git` a read's context: no hooks, filters off. Nullopt when done; otherwise what to report instead.
+	std::optional<git_output> harden_read(git_context& git, std::stop_token stop)
+	{
+#ifdef _WIN32
+		constexpr const char* no_hooks = "core.hooksPath=NUL";
+#else
+		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
+#endif
+		git.config_args.insert(git.config_args.begin(), { "-c", no_hooks });
+		return switch_off_filters(git, stop);
+	}
+
+	// Every read: no hooks, filters off first, then git.
+	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
+		std::size_t cap = k_read_cap)
+	{
+		if (auto refused = harden_read(git, stop)) return std::move(*refused);
+		return run_git(git, args, stop, cap);
 	}
 
 	// A write's git. Output is not capped: stopping a write half way is worse than its text.
@@ -744,15 +741,6 @@ namespace {
 		return true;
 	}
 
-	// A partial clone, which lazily fetches a missing object from its promisor remote: extensions.partialClone, or a
-	// true remote.<name>.promisor (git 2.43 `clone --filter` writes only that, and partialclonefilter).
-	bool is_partial_clone_key(const scoped_entry& entry)
-	{
-		const std::string lower = lower_case(entry.key);
-		if (lower == "extensions.partialclone") return true;
-		return lower.starts_with("remote.") && lower.ends_with(".promisor") && config_bool(entry.value, entry.has_value);
-	}
-
 	// A guarded call without allow_any_repo_config: refused (unsafe_repository) when the repository's own config
 	// (.git/config and the worktree's config.worktree; includes not followed, include.* itself is no allowed key) sets
 	// a key outside the allowlist. Read before anything else of the call.
@@ -804,10 +792,18 @@ namespace {
 					"hook, which a git write not made by a person runs only when hooks are allowed for it",
 					edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
 			}
-			if (git.refuse_partial_clone && is_partial_clone_key(entry)) {
-				return refused("unsafe_repository", std::format("the repository is a partial clone ('{}', {}): lazy fetch "
-					"can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
+			// git 2.43 `clone --filter` writes only remote.<name>.promisor (and partialclonefilter), no extension.
+			const bool promisor = lower.starts_with("remote.") && lower.ends_with(".promisor")
+				&& config_bool(entry.value, entry.has_value);
+			if (git.refuse_partial_clone && promisor) {
+				return refused("unsafe_repository", std::format("the repository is a partial clone ('{}' is true, {}): lazy "
+					"fetch can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
 					"project allows any repository config", edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
+			}
+			if (git.refuse_partial_clone && lower == "extensions.partialclone") {
+				return refused("unsafe_repository", std::format("the repository is a partial clone ({}): lazy fetch "
+					"can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
+					"project allows any repository config", edt::vcs::valid_utf8(entry.scope)));
 			}
 			if (!git.check_repo_config) continue;
 			if (!repo_key_allowed(entry.key, git.allow_hooks)) {
@@ -817,53 +813,6 @@ namespace {
 			}
 		}
 		return std::nullopt;
-	}
-
-	// A read on a git that may ignore GIT_NO_LAZY_FETCH: refused (unsafe_repository) in a partial clone, whose lazy
-	// fetch would run whatever transport program the repository's config names. All scopes, includes followed.
-	std::optional<git_output> partial_clone_read_refusal(const git_context& git, std::stop_token stop)
-	{
-		if (!git.refuse_partial_clone_read) return std::nullopt;
-		git_output listed = run_git(git, { "config", "-z", "--show-origin", "--get-regexp",
-			"^(extensions\\.partialclone|remote\\..*\\.promisor)$" }, stop, k_read_cap);
-		if (listing_failed(listed)) return listed;
-		if (listed.truncated) return refused("unsafe_repository", "the repository's git config is too large to check");
-		for (const auto& entry : scoped_entries_of(listed.out)) {
-			if (!is_partial_clone_key(entry)) continue;
-			return refused("unsafe_repository", std::format("the repository is a partial clone ('{}', {}): lazy fetch "
-				"can't be disabled before git 2.45, so version control does not read it with this git",
-				edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
-		}
-		return std::nullopt;
-	}
-
-	// What every read's git gets, whatever runs it next: no hooks, filters off; an agent's read (git.agent_call) also
-	// no transport and, on a git that would lazily fetch, no partial clone. Nullopt when done; otherwise what to
-	// report instead of running git.
-	std::optional<git_output> harden_read(git_context& git, std::stop_token stop)
-	{
-#ifdef _WIN32
-		constexpr const char* no_hooks = "core.hooksPath=NUL";
-#else
-		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
-#endif
-		git.config_args.insert(git.config_args.begin(), { "-c", no_hooks });
-		if (git.agent_call) {
-			// A read never needs the network. The repository's protocol.<name>.allow beats protocol.allow, so each
-			// transport git knows is closed by name as well.
-			git.config_args.insert(git.config_args.begin() + 2, { "-c", "protocol.allow=never",
-				"-c", "protocol.file.allow=never", "-c", "protocol.git.allow=never", "-c", "protocol.ssh.allow=never",
-				"-c", "protocol.http.allow=never", "-c", "protocol.https.allow=never", "-c", "protocol.ext.allow=never" });
-		}
-		if (auto refusal = partial_clone_read_refusal(git, stop)) return refusal;
-		return switch_off_filters(git, stop);
-	}
-
-	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
-		std::size_t cap = k_read_cap)
-	{
-		if (auto refusal = harden_read(git, stop)) return std::move(*refusal);
-		return run_git(git, args, stop, cap);
 	}
 
 	// A capped output ends inside a record: only the records up to the last `separator` are whole.
@@ -911,10 +860,7 @@ namespace {
 		for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
 			if (it->starts_with("fatal:") || it->starts_with("error:")) return std::string(*it);
 		}
-		// A progress update ("Receiving objects: 45%") says nothing about why git stopped.
-		for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
-			if (!edt::vcs::parse_progress(*it)) return std::string(*it);
-		}
+		if (!lines.empty()) return std::string(lines.back());
 		return std::format("git exited with code {}", exit_code);
 	}
 
@@ -987,27 +933,6 @@ namespace {
 		if (!text.empty() && !out.err.empty()) text.push_back('\n');
 		text += out.err;
 		return json::object{ { "output", json::string(stderr_tail(text)) } };
-	}
-
-	// git's network progress as the job's: "<phase> <percent>%", the fraction never going back within the job
-	// (`state` lives as long as the job's work).
-	struct progress_state
-	{
-		float reached = 0.f;
-		std::string phase;
-		int percent = -1;
-	};
-
-	void report_progress(git_context& git, ds::task_context& task, progress_state& state)
-	{
-		git.on_progress = [&task, &state](const edt::vcs::git_progress& progress) {
-			if (!progress.percent) return;
-			if (*progress.percent == state.percent && progress.phase == state.phase) return;
-			state.percent = *progress.percent;
-			state.phase = progress.phase;
-			state.reached = std::max(state.reached, edt::vcs::progress_fraction(progress));
-			task.set_progress(state.reached, std::format("{} {}%", progress.phase, *progress.percent));
-		};
 	}
 
 	// A path, a ref or a remote as an argument: git must never read it as an option, and a NUL would cut it short.
@@ -1620,8 +1545,7 @@ struct edt::vcs_service::log_snapshots
 };
 
 template<class F>
-edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, std::optional<write_mode> write, const hard_rule& rule,
-	cmd::origin_kind reader)
+edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, std::optional<write_mode> write, const hard_rule& rule)
 {
 	// Only "no git" and "no project" refuse at once; whatever git itself reports (not a repository, ...) is the job's
 	// result, so every command answers the same way.
@@ -1629,22 +1553,8 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
 	git_context context = make_context(m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run);
 	context.rev_parse_end_of_options = version_at_least(m_state.git_version, 2, 30);
-	// Everything not from a person (agent, test, game) takes the protected path; a person's call is plain git.
-	context.agent_call = (write ? write->caller : reader) != cmd::origin_kind::ui;
-	// GIT_NO_LAZY_FETCH is honoured by git 2.45+ and by maintenance releases back to 2.39.4 (distro 2.43 too); the
-	// version alone cannot tell those apart, so before 2.45 a partial clone is refused instead.
-	const bool lazy_fetch_may_run = !version_at_least(m_state.git_version, 2, 45);
-	if (context.agent_call) {
-		// A partial clone fetches a missing object from its promisor remote on demand, through whatever transport
-		// program the repository's config names, past network_refusal and on a read too.
-		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
-		context.refuse_partial_clone_read = !write && lazy_fetch_may_run;
-		// GIT_ALLOW_PROTOCOL beats every protocol.*.allow, so the repository's config cannot reopen a transport the -c
-		// overrides do not name (ftp, ftps, fd, <helper>::). git allows exactly the names listed: "_none" is no URL
-		// scheme and no <helper>:: name (those never hold '_'), so it allows nothing.
-		set_variable(context.environment, "GIT_ALLOW_PROTOCOL", write && write->network ? "https:ssh" : "_none");
-	}
-	const bool guarded = write && context.agent_call;
+	// Everything not from a person (agent, test, game) takes the guarded path.
+	const bool guarded = write && write->caller != cmd::origin_kind::ui;
 	// The network checks read the config with --show-scope (git 2.26).
 	if (guarded && write->network && !version_at_least(m_state.git_version, 2, 26)) {
 		return { 0, "vcs_unavailable", std::format("git 2.26 or newer is required for agent network operations (found {})",
@@ -1683,6 +1593,9 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		// The first core.gitProxy git reads wins, so the repository's would come before the -c one; an empty
 		// GIT_PROXY_COMMAND is read before any config and means no proxy.
 		set_variable(context.environment, "GIT_PROXY_COMMAND", "");
+		// A partial clone fetches a missing object from its promisor remote on demand, past network_refusal. Honoured
+		// by git 2.45+ and by maintenance releases back to 2.39.4 (distro 2.43 too); config_refusal covers the rest.
+		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
 		context.attr_source = version_at_least(m_state.git_version, 2, 40);
 		if (!permissions.allow_hooks) {
 			if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
@@ -1691,7 +1604,8 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		}
 		context.guarded = true;
 		context.check_repo_config = !permissions.allow_any_repo_config;
-		context.refuse_partial_clone = permissions.allow_any_repo_config && lazy_fetch_may_run;
+		context.refuse_partial_clone = permissions.allow_any_repo_config
+			&& !version_at_least(m_state.git_version, 2, 45);
 		context.allow_hooks = permissions.allow_hooks;
 		context.refuse_filters = write->runs_filters && !permissions.allow_filters;
 		context.guard_network = write->network;
@@ -1816,7 +1730,7 @@ edt::vcs_service::started edt::vcs_service::unavailable() const
 	return { 0, m_state.code.empty() ? std::string("vcs_unavailable") : m_state.code, m_state.reason };
 }
 
-edt::vcs_service::started edt::vcs_service::start_status(const cmd::origin& caller)
+edt::vcs_service::started edt::vcs_service::start_status()
 {
 	return run_job("git status", [](const git_context& git, ds::task_context& task) -> json::value {
 		// Submodules are not entered: a submodule's config is as untrusted as the repository's.
@@ -1826,10 +1740,10 @@ edt::vcs_service::started edt::vcs_service::start_status(const cmd::origin& call
 		json::value result = vcs::to_json(vcs::parse_status(whole_records(out, '\0')));
 		result.as_object()["truncated"] = out.truncated;
 		return result;
-	}, std::nullopt, {}, caller.kind);
+	});
 }
 
-edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, bool staged, const cmd::origin& caller)
+edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, bool staged)
 {
 	if (auto error = path_error(path)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	std::vector<std::string> args{ "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all" };
@@ -1842,11 +1756,10 @@ edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, 
 		const git_output out = run_read(git, args, task.stop, k_diff_cap);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
 		return diff_json(out);
-	}, std::nullopt, {}, caller.kind);
+	});
 }
 
-edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string& commit, const std::string& path,
-	const cmd::origin& caller)
+edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string& commit, const std::string& path)
 {
 	if (auto error = commit_error(commit)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (auto error = path_error(path)) return { 0, cmd::codes::invalid_args, std::move(*error) };
@@ -1866,11 +1779,11 @@ edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string&
 		const git_output out = run_git(read, args, task.stop, k_diff_cap);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
 		return diff_json(out);
-	}, std::nullopt, {}, caller.kind);
+	});
 }
 
 edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, const std::string& path, int limit,
-	const std::string& cursor, const log_filter& filter, const cmd::origin& caller)
+	const std::string& cursor, const log_filter& filter)
 {
 	if (auto error = ref_error(ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (auto error = path_error(path)) return { 0, cmd::codes::invalid_args, std::move(*error) };
@@ -1936,10 +1849,10 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 			result["next_cursor"] = json::string(std::format("s{}:{}", id, page.skip + static_cast<std::int64_t>(commits.size())));
 		}
 		return result;
-	}, std::nullopt, {}, caller.kind);
+	});
 }
 
-edt::vcs_service::started edt::vcs_service::start_show_files(const std::string& commit, const cmd::origin& caller)
+edt::vcs_service::started edt::vcs_service::start_show_files(const std::string& commit)
 {
 	if (auto error = commit_error(commit)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	return run_job("git show files", [commit](const git_context& git, ds::task_context& task) -> json::value {
@@ -1959,10 +1872,10 @@ edt::vcs_service::started edt::vcs_service::start_show_files(const std::string& 
 		json::array files;
 		for (const auto& file : vcs::parse_name_status(whole_records(out, '\0'))) files.push_back(vcs::to_json(file));
 		return json::object{ { "files", std::move(files) }, { "truncated", out.truncated } };
-	}, std::nullopt, {}, caller.kind);
+	});
 }
 
-edt::vcs_service::started edt::vcs_service::start_branches(const cmd::origin& caller)
+edt::vcs_service::started edt::vcs_service::start_branches()
 {
 	return run_job("git branches", [](const git_context& git, ds::task_context& task) -> json::value {
 		const git_output out = run_read(git, { "for-each-ref", std::string(vcs::k_ref_format), "refs/heads", "refs/remotes" },
@@ -1976,7 +1889,7 @@ edt::vcs_service::started edt::vcs_service::start_branches(const cmd::origin& ca
 		}
 		result["branches"] = std::move(branches);
 		return result;
-	}, std::nullopt, {}, caller.kind);
+	});
 }
 
 edt::vcs_service::scratch_dir::~scratch_dir()
@@ -2217,10 +2130,7 @@ edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remot
 	}
 	return run_job("git fetch", [remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		progress_state progress;
-		report_progress(git, task, progress);
-		// --progress: git prints it to stderr only on a terminal otherwise.
-		std::vector<std::string> args{ "fetch", "--progress", "--no-recurse-submodules", "--end-of-options" };
+		std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
 		std::string target = remote;
 		if (git.guarded) {
 			// Resolved once and named to git: the remote checked is the remote fetched from.
@@ -2252,9 +2162,7 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
 	return run_job("git pull", [remote, branch](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		progress_state progress;
-		report_progress(git, task, progress);
-		std::vector<std::string> args{ "fetch", "--progress", "--no-recurse-submodules", "--end-of-options" };
+		std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
 		std::string target = remote;
 		std::string wanted = branch;
 		network_target resolved;
@@ -2343,7 +2251,7 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 		if (auto error = branch_name_error("branch", branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
 	// Never --force, --force-with-lease, --mirror or a +refspec: a push that is not a fast-forward is rejected.
-	std::vector<std::string> args{ "push", "--progress", "--recurse-submodules=no" };
+	std::vector<std::string> args{ "push", "--recurse-submodules=no" };
 	// No tags, and the destination spelled out: push.default, remote.*.push and branch.*.merge cannot send a guarded
 	// push anywhere but the branch the hard rule checked.
 	if (guarded) args.emplace_back("--no-follow-tags");
@@ -2369,8 +2277,6 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 	};
 	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		progress_state progress;
-		report_progress(git, task, progress);
 		if (git.guarded) {
 			if (auto refusal = remote_refusal(git, remote)) return std::move(*refusal);
 		}
@@ -2476,7 +2382,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	status.category = cmd::agent_category::vcs_read;
 	status.summary = "Start reading git status (branch, upstream, ahead/behind, changed files); the result arrives in job.get";
 	status.result_schema = json::parse(JOB_RESULT_SCHEMA);
-	status.invoke = [&service](const cmd::call& request) { return job_answer(service.start_status(request.from)); };
+	status.invoke = [&service](const cmd::call&) { return job_answer(service.start_status()); };
 	keep(out, commands.add(std::move(status)));
 
 	cmd::command_desc diff;
@@ -2501,10 +2407,9 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		if (const json::value* value = args.if_contains("staged")) staged = value->as_bool();
 		if (args.contains("commit")) {
 			if (staged) return cmd::result::failure(cmd::codes::invalid_args, "commit and staged cannot be given together");
-			return job_answer(service.start_commit_diff(string_arg(args, "commit"), string_arg(args, "path"),
-				request.from));
+			return job_answer(service.start_commit_diff(string_arg(args, "commit"), string_arg(args, "path")));
 		}
-		return job_answer(service.start_diff(string_arg(args, "path"), staged, request.from));
+		return job_answer(service.start_diff(string_arg(args, "path"), staged));
 	};
 	keep(out, commands.add(std::move(diff)));
 
@@ -2539,7 +2444,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		filter.author = string_arg(args, "author");
 		filter.grep = string_arg(args, "grep");
 		return job_answer(service.start_log(string_arg(args, "ref"), string_arg(args, "path"), limit, string_arg(args, "cursor"),
-			filter, request.from));
+			filter));
 	};
 	keep(out, commands.add(std::move(log)));
 
@@ -2551,14 +2456,14 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	show_files.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
-			"commit": { "type": "string", "minLength": 1, "description": "A commit hash: 4 to 64 hex digits" }
+			"commit": { "type": "string", "minLength": 1, "description": "A commit hash (4 to 64 hex digits)" }
 		},
 		"required": ["commit"],
 		"additionalProperties": false
 	})");
 	show_files.result_schema = json::parse(JOB_RESULT_SCHEMA);
 	show_files.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_show_files(string_arg(request.args.as_object(), "commit"), request.from));
+		return job_answer(service.start_show_files(string_arg(request.args.as_object(), "commit")));
 	};
 	keep(out, commands.add(std::move(show_files)));
 
@@ -2567,7 +2472,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	branches.category = cmd::agent_category::vcs_read;
 	branches.summary = "Start listing the local and remote-tracking branches; the result arrives in job.get";
 	branches.result_schema = json::parse(JOB_RESULT_SCHEMA);
-	branches.invoke = [&service](const cmd::call& request) { return job_answer(service.start_branches(request.from)); };
+	branches.invoke = [&service](const cmd::call&) { return job_answer(service.start_branches()); };
 	keep(out, commands.add(std::move(branches)));
 
 	cmd::command_desc stage = write_command("vcs.stage", cmd::agent_category::vcs_commit, "Start staging paths (git add); the result arrives in job.get",

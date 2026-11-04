@@ -4,7 +4,6 @@
 #include <boost/json/object.hpp>
 #include <boost/json/string.hpp>
 #include <algorithm>
-#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -412,84 +411,6 @@ BOOST_AUTO_TEST_CASE(ParseVersion)
 	BOOST_TEST(edt::vcs::parse_version("git version 2.43.0\n") == "2.43.0");
 	BOOST_TEST(edt::vcs::parse_version("git version 2.45.1.windows.1\r\n") == "2.45.1.windows.1");
 	BOOST_TEST(edt::vcs::parse_version("  odd  ") == "odd");
-}
-
-BOOST_AUTO_TEST_CASE(ParseProgress_ReadsGitsProgressLines)
-{
-	const auto receiving = edt::vcs::parse_progress("Receiving objects:  45% (450/1000), 1.2 MiB | 3 MiB/s");
-	BOOST_REQUIRE(receiving.has_value());
-	BOOST_TEST(receiving->phase == "Receiving objects");
-	BOOST_TEST(receiving->percent.value_or(-1) == 45);
-
-	const auto resolved = edt::vcs::parse_progress("Resolving deltas: 100% (10/10), done.");
-	BOOST_REQUIRE(resolved.has_value());
-	BOOST_TEST(resolved->phase == "Resolving deltas");
-	BOOST_TEST(resolved->percent.value_or(-1) == 100);
-
-	const auto zero = edt::vcs::parse_progress("Writing objects:   0% (0/3)");
-	BOOST_REQUIRE(zero.has_value());
-	BOOST_TEST(zero->phase == "Writing objects");
-	BOOST_TEST(zero->percent.value_or(-1) == 0);
-
-	const auto compressing = edt::vcs::parse_progress("Compressing objects:  66% (2/3)");
-	BOOST_REQUIRE(compressing.has_value());
-	BOOST_TEST(compressing->phase == "Compressing objects");
-	BOOST_TEST(compressing->percent.value_or(-1) == 66);
-}
-
-BOOST_AUTO_TEST_CASE(ParseProgress_StripsTheRemotePrefixAndItsLineEnd)
-{
-	// Without a terminal, git pads a remote's line with spaces; with one, it ends it with an ANSI clear.
-	const auto padded = edt::vcs::parse_progress("remote: Counting objects:  50% (5/10)        ");
-	BOOST_REQUIRE(padded.has_value());
-	BOOST_TEST(padded->phase == "Counting objects");
-	BOOST_TEST(padded->percent.value_or(-1) == 50);
-
-	const auto cleared = edt::vcs::parse_progress("remote: Compressing objects: 100% (4/4), done.\x1b[K");
-	BOOST_REQUIRE(cleared.has_value());
-	BOOST_TEST(cleared->phase == "Compressing objects");
-	BOOST_TEST(cleared->percent.value_or(-1) == 100);
-}
-
-BOOST_AUTO_TEST_CASE(ParseProgress_ACounterWithoutATotal_HasNoPercent)
-{
-	const auto enumerating = edt::vcs::parse_progress("remote: Enumerating objects: 5, done.");
-	BOOST_REQUIRE(enumerating.has_value());
-	BOOST_TEST(enumerating->phase == "Enumerating objects");
-	BOOST_TEST(!enumerating->percent.has_value());
-
-	const auto counting = edt::vcs::parse_progress("Counting objects: 1234");
-	BOOST_REQUIRE(counting.has_value());
-	BOOST_TEST(!counting->percent.has_value());
-}
-
-BOOST_AUTO_TEST_CASE(ParseProgress_OtherLinesAreNotProgress)
-{
-	for (const std::string_view line : { "", "   ", "fatal: unable to access 'https://example.com/': Could not resolve host",
-			"error: failed to push some refs to 'origin'", "hint: Updates were rejected", "From https://example.com/x",
-			"To github.com:me/x.git", " * [new branch]      main       -> origin/main", "remote: Total 3 (delta 0), reused 0",
-			"Delta compression using up to 8 threads", "Receiving objects: 145% (1/1)", "Receiving objects: 45%",
-			"Receiving objects: 45% (x/10)", "Receiving objects: abc", "Receiving objects:45% (1/2)", ": 45% (1/2)",
-			"Receiving objects: 45% (1/2) trailing", "\xFF\xFE: 1" }) {
-		BOOST_TEST_CONTEXT("line: " << line) {
-			BOOST_TEST(!edt::vcs::parse_progress(line).has_value());
-		}
-	}
-}
-
-BOOST_AUTO_TEST_CASE(ProgressFraction_PlacesEachPhaseInItsShareOfTheWhole)
-{
-	const auto fraction = [](std::string phase, std::optional<int> percent) {
-		return edt::vcs::progress_fraction(edt::vcs::git_progress{ std::move(phase), percent });
-	};
-	const auto close_to = [](float a, float b) { return std::abs(a - b) < 1e-5f; };
-	BOOST_TEST(close_to(fraction("Counting objects", 100), 0.1f));
-	BOOST_TEST(close_to(fraction("Receiving objects", 0), 0.1f));
-	BOOST_TEST(close_to(fraction("Receiving objects", 100), 0.9f));
-	BOOST_TEST(close_to(fraction("Writing objects", 50), 0.5f));
-	BOOST_TEST(close_to(fraction("Resolving deltas", 100), 1.0f));
-	BOOST_TEST(close_to(fraction("Something new", 50), 0.0f));
-	BOOST_TEST(close_to(fraction("Receiving objects", std::nullopt), 0.0f));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -5,11 +5,6 @@
 
 void edt::scene_document::commit(std::string_view label, commit_mode mode)
 {
-	if (m_edits_locked) {
-		// Every edit path checks edits_locked() before it touches the descs; one that reaches here is a missed check.
-		egLOG_WARN("play", "edit '{}' refused: stop Play to edit", label);
-		return;
-	}
 	egLOG_TRACE("Editor/Commit", "{}", label);
 	touch_descs();
 	if (mode == commit_mode::state_only) {
@@ -109,7 +104,7 @@ const std::set<std::pair<std::size_t, std::uint64_t>>& edt::scene_document::agen
 
 bool edt::scene_document::undo()
 {
-	if (m_edits_locked || !m_history.can_undo()) {
+	if (!m_history.can_undo()) {
 		return false;
 	}
 	apply_history("Undo", [this] { m_history.undo(); });
@@ -118,7 +113,7 @@ bool edt::scene_document::undo()
 
 bool edt::scene_document::redo()
 {
-	if (m_edits_locked || !m_history.can_redo()) {
+	if (!m_history.can_redo()) {
 		return false;
 	}
 	apply_history("Redo", [this] { m_history.redo(); });
@@ -148,10 +143,6 @@ std::optional<edt::history_entry> edt::scene_document::next_redo_entry() const
 edt::rollback_result edt::scene_document::rollback_group(std::uint64_t group)
 {
 	rollback_result result;
-	if (m_edits_locked) {
-		egLOG_WARN("play", "rollback refused: stop Play to edit");
-		return result;
-	}
 	// Rolls nothing back (no group, a conflict at its newest edit): nobody is told the worlds change.
 	auto before = m_before_apply;
 	m_before_apply = nullptr;

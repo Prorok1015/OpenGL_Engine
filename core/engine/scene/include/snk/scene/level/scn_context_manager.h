@@ -69,12 +69,6 @@ namespace scn
 		// desc for changes. False (and the current level kept) when the desc cannot be loaded.
 		bool load_level(const res::tag& level_tag);
 
-		// A change of the level desc that arrives while the set "level" is inactive (Play) is not applied: the newest
-		// one waits here until apply_pending_level_reload() (Stop, after the level is active again). A level load or a
-		// change of the game layer drops it.
-		bool has_pending_level_reload() const { return m_pending_level_reload.is_valid(); }
-		void apply_pending_level_reload();
-
 		// Called after every successful hot reload of the level (world list or only the systems
 		// changed), so owners of per-world data (the editor) can resync. Contexts that are not
 		// `kind::level` survive the reload.
@@ -142,8 +136,6 @@ namespace scn
 		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
 
 	private:
-		// The set "level" again from the changed level desc (only the level contexts), then m_on_reload.
-		void reload_level(const res::tag& changed_tag);
 		std::unique_ptr<scn::context_set> make_set(std::string_view name, scn::scene_layer* layer, scn::set_options options = {});
 		// The services that build the worlds of `set`: its layer's, or the base's.
 		ecs::system_factory& systems_of(const scn::context_set& set) { return set.layer() ? set.layer()->systems() : m_system_factory; }
@@ -167,7 +159,6 @@ namespace scn
 		std::vector<std::unique_ptr<scn::context_set>> m_sets;
 		scn::context_set* m_level_set = nullptr;
 		std::function<void()> m_on_reload;
-		res::tag m_pending_level_reload;
 		std::function<void(game_layer_change)> m_on_game_layer_change;
 	};
 }
