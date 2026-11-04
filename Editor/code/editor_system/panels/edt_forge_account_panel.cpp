@@ -1,6 +1,11 @@
 #include "edt_forge_account_panel.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+// imgui_internal.h only forward-declares ImStb::STB_TexteditState; the undo stack is read and wiped here, as imgui_widgets.cpp includes it.
+namespace ImStb
+{
+#include <imstb_textedit.h>
+}
 #include <cstddef>
 #include <string>
 #include <type_traits>
@@ -33,7 +38,7 @@ void edt::wipe_imgui_token_state(unsigned int field_id)
 	if (g.InputTextState.ID != field_id && g.InputTextDeactivatedState.ID != field_id) return;
 
 	// First: dropping the active item may make ImGui copy the text into the deactivated state, which is wiped below.
-	if (g.ActiveId == field_id || g.InputTextState.ID == field_id) ImGui::ClearActiveID();
+	if (g.ActiveId == field_id) ImGui::ClearActiveID();
 	wipe_vector(g.InputTextState.TextA);
 	wipe_vector(g.InputTextState.TextToRevertTo);
 	if (auto* edit = edit_state_of(g.InputTextState)) {

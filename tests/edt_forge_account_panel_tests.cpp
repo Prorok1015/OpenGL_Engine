@@ -2,6 +2,11 @@
 #include "edt_forge_account_panel.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+// imgui_internal.h only forward-declares ImStb::STB_TexteditState; the undo stack is read and wiped here, as imgui_widgets.cpp includes it.
+namespace ImStb
+{
+#include <imstb_textedit.h>
+}
 #include <array>
 #include <cstddef>
 #include <cstring>
