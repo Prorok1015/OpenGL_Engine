@@ -269,17 +269,30 @@ struct agent_editor_fixture : scratch_dirs, test_util::null_engine_fixture
 	snapshot take_snapshot()
 	{
 		snapshot out;
+		// Entries as themselves (#523): a link, dangling or not, is recorded with its target, never followed, so one an agent
+		// planted at a policy path changes the snapshot.
 		const auto collect = [&out](const fs::path& root, const std::string& label) {
 			std::error_code ec;
-			if (!fs::exists(root, ec)) return;
-			for (const auto& entry : fs::recursive_directory_iterator(root, ec)) {
-				const std::string key = label + "/" + fs::relative(entry.path(), root).generic_string();
-				if (entry.is_directory()) {
+			if (fs::symlink_status(root, ec).type() == fs::file_type::not_found) return;
+			fs::recursive_directory_iterator it(root, ec);
+			BOOST_TEST_REQUIRE(!ec, "cannot list " << root.string() << ": " << ec.message());
+			for (; it != fs::recursive_directory_iterator(); it.increment(ec)) {
+				BOOST_TEST_REQUIRE(!ec, "cannot list " << root.string() << ": " << ec.message());
+				const fs::path& path = it->path();
+				const std::string key = label + "/" + path.lexically_relative(root).generic_string();
+				const fs::file_status status = it->symlink_status(ec);
+				BOOST_TEST_REQUIRE(!ec, "cannot examine " << path.string() << ": " << ec.message());
+				if (fs::is_symlink(status)) {
+					out.files[key] = "<link> " + fs::read_symlink(path, ec).generic_string();
+				} else if (fs::is_directory(status)) {
 					out.files[key + "/"] = "<dir>";
-				} else if (entry.is_regular_file()) {
-					out.files[key] = read_bytes(entry.path());
+				} else if (fs::is_regular_file(status)) {
+					out.files[key] = read_bytes(path);
+				} else {
+					out.files[key] = "<other>";
 				}
 			}
+			BOOST_TEST_REQUIRE(!ec, "cannot list " << root.string() << ": " << ec.message());
 		};
 		collect(project.path(), "project");
 		collect(user.path(), "user");
@@ -393,10 +406,15 @@ struct agent_editor_fixture : scratch_dirs, test_util::null_engine_fixture
 
 	void expect_agent_files_absent()
 	{
-		BOOST_TEST(!fs::exists(project_policy_file()));
-		BOOST_TEST(!fs::exists(settings_dir() / "agent_policy.json"));
-		BOOST_TEST(!fs::exists(settings_dir() / "agent_server.json"));
-		BOOST_TEST(!fs::exists(settings_dir() / "agent_policy_approved"));
+		// symlink_status: a dangling link at one of these names is something an agent left behind too.
+		const auto absent = [](const fs::path& path) {
+			std::error_code ec;
+			return fs::symlink_status(path, ec).type() == fs::file_type::not_found;
+		};
+		BOOST_TEST(absent(project_policy_file()));
+		BOOST_TEST(absent(settings_dir() / "agent_policy.json"));
+		BOOST_TEST(absent(settings_dir() / "agent_server.json"));
+		BOOST_TEST(absent(settings_dir() / "agent_policy_approved"));
 	}
 };
 
