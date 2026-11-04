@@ -239,7 +239,7 @@ BOOST_FIXTURE_TEST_CASE(CommandsThatNameThePolicy_AreNotForAgentsOrReadOnly, age
 {
 	const cmd::command_desc* settings = registry().find("agent.settings.open");
 	BOOST_REQUIRE(settings != nullptr);
-	BOOST_TEST(settings->category == cmd::agent_category::not_for_agents);
+	BOOST_TEST((settings->category == cmd::agent_category::not_for_agents));
 	BOOST_TEST(!edt::agent_may_use(*settings, access().policy()));
 
 	for (const cmd::command_desc* desc : registry().list()) {
