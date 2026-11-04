@@ -545,6 +545,7 @@ BOOST_AUTO_TEST_CASE(UrlRewrite_ThatAppliesToTheRemote_IsRefusedWithNoRequest)
 	BOOST_REQUIRE(text.has_value());
 	BOOST_TEST(text->starts_with("This request will be refused"));
 	BOOST_TEST(text->find("rewrites") != std::string::npos);
+	BOOST_TEST(text->find("global") != std::string::npos);
 
 	BOOST_TEST(is_error(run("forge.create_pr", create_args()), "denied"));
 	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "denied"));
@@ -627,6 +628,72 @@ BOOST_AUTO_TEST_CASE(TheRepositoryShown_IsForThatSessionAndThoseArgumentsOnly)
 	BOOST_TEST(!run("forge.pr_status", R"({"number":1})", cmd::origin::agent("ffff0000")).as_object().contains("error"));
 	BOOST_TEST(!run("forge.pr_status", R"({"number":2})").as_object().contains("error"));
 	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "denied"));
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedCall_WhoseShownRepositoryWasEvicted_IsDenied_WithNoRequest)
+{
+	const cmd::origin agent = cmd::origin::agent("0123abcd");
+	BOOST_REQUIRE(forge->describe_create_pr(create_request_for_the_tests(), agent).has_value());
+	for (std::int64_t number = 1; number <= 40; ++number) BOOST_REQUIRE(forge->describe_pr_status(number, "", agent).has_value());
+
+	const edt::vcs_service::started started = forge->start_create_pr(create_request_for_the_tests(), agent, true);
+	BOOST_REQUIRE(started.code.empty());
+	const json::value result = finish(started.job);
+
+	BOOST_TEST(is_error(result, "denied"));
+	BOOST_TEST(text_of(result.as_object().at("error").as_object().at("message")).find("no longer known") != std::string::npos);
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedCall_WhoseShownRepositoryExpired_IsDenied_WithNoRequest)
+{
+	auto now = std::chrono::steady_clock::now();
+	forge->set_clock([&now] { return now; });
+	const cmd::origin agent = cmd::origin::agent("0123abcd");
+	BOOST_REQUIRE(forge->describe_create_pr(create_request_for_the_tests(), agent).has_value());
+	now += std::chrono::minutes(6);
+
+	const edt::vcs_service::started started = forge->start_create_pr(create_request_for_the_tests(), agent, true);
+	BOOST_REQUIRE(started.code.empty());
+
+	BOOST_TEST(is_error(finish(started.job), "denied"));
+	BOOST_TEST(requests.empty());
+	forge->set_clock({});
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedCall_WithTheShownRepository_Runs_AndACallNobodyWasAskedAbout_Runs)
+{
+	const cmd::origin agent = cmd::origin::agent("0123abcd");
+	BOOST_REQUIRE(forge->describe_create_pr(create_request_for_the_tests(), agent).has_value());
+	const edt::vcs_service::started approved = forge->start_create_pr(create_request_for_the_tests(), agent, true);
+	BOOST_REQUIRE(approved.code.empty());
+	BOOST_TEST(!finish(approved.job).as_object().contains("error"));
+
+	const edt::vcs_service::started unasked = forge->start_create_pr(create_request_for_the_tests(), agent, false);
+	BOOST_REQUIRE(unasked.code.empty());
+	BOOST_TEST(!finish(unasked.job).as_object().contains("error"));
+	BOOST_TEST(requests.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(Describe_WhenTheRemoteCouldNotBeReadInTime_SaysSo_AndTheApprovedCallIsDenied)
+{
+	forge->set_remote_reader([](const std::string&) {
+		edt::vcs_service::remote_snapshot snapshot;
+		snapshot.code = edt::vcs_service::k_describe_timeout;
+		snapshot.error = "git did not answer in time";
+		return snapshot;
+	});
+	const cmd::origin agent = cmd::origin::agent("0123abcd");
+
+	const std::optional<std::string> text = forge->describe_create_pr(create_request_for_the_tests(), agent);
+
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST((*text == "repository could not be determined, will be refused"));
+	const edt::vcs_service::started started = forge->start_create_pr(create_request_for_the_tests(), agent, true);
+	BOOST_REQUIRE(started.code.empty());
+	BOOST_TEST(is_error(finish(started.job), "denied"));
+	BOOST_TEST(requests.empty());
+	forge->set_remote_reader({});
 }
 
 BOOST_AUTO_TEST_CASE(Describe_ThroughTheRegistry_IsBoundToTheTicket)

@@ -44,6 +44,9 @@ namespace edt
 		// The probes (git --version, git rev-parse) run on the main thread: git is stopped after this long and version
 		// control is off ("git did not answer within 5 s").
 		std::chrono::milliseconds probe_timeout{ 5000 };
+		// read_remote_now runs on the main thread too, but a timeout there only refuses the one request: it must not
+		// switch version control off for everyone.
+		std::chrono::milliseconds describe_timeout{ 1000 };
 	};
 
 	// Git for the editor and its agents (#454): reads (status, diff, log, show_files, branches), writes (stage, unstage, commit,
@@ -286,8 +289,10 @@ namespace edt
 		};
 
 		// The same two reads, now, on the main thread, for what a person is shown before an agent's request is allowed.
-		// Git is stopped after vcs_options::probe_timeout (5 s). Always the protected read of an agent.
+		// Git is stopped after vcs_options::describe_timeout (1 s): the code is then k_describe_timeout and the probe state is
+		// left alone. Always the protected read of an agent.
 		remote_snapshot read_remote_now(const std::string& named);
+		inline static constexpr const char* k_describe_timeout = "describe_timeout";
 
 		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's
 		// (ui) means the protected read. The work may throw ds::task_cancelled.
