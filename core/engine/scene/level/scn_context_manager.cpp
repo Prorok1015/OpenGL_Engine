@@ -237,6 +237,11 @@ void scn::context_manager::apply_pending_level_reload()
 
 void scn::context_manager::reload_level(const res::tag& changed_tag)
 {
+	if (!resources_of(get_set(level_set_name)).exists(changed_tag)) {
+		// Deleted or moved away: the level stays as it is.
+		egLOG_DEBUG("Level Manager", "level reload '{}' skipped: the file is gone", changed_tag.view());
+		return;
+	}
 	auto level_res = resources_of(get_set(level_set_name)).require_sync<scn::level_desc>(changed_tag);
 	if (!level_res.is_ready()) {
 		egLOG("Level Manager", "Failed to reload level '{0}'", changed_tag.view());

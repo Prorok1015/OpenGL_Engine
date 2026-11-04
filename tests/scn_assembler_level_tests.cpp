@@ -3,7 +3,12 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/ecs/ecs_system.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
+#include <format>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -334,6 +339,33 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ReloadsEntitiesUsingAChangedComponentDesc)
 	BOOST_TEST(reg.get<stat_component>(e).label == "v2");
 }
 
+// A file deleted or moved away (a branch switch, a save that renames a backup) is no failed reload: no ERROR, the
+// registry keeps what it has (#515).
+BOOST_AUTO_TEST_CASE(HotReloadManager_ADeletedComponentDesc_KeepsTheRegistryWithoutAnError)
+{
+	auto tag = put("gone.desc", R"({"__type":"stat_desc","hp":4,"label":"kept"})");
+	entt::registry reg;
+	scn::hot_reload_manager mgr(*assembler, *rs);
+	mgr.attach_registry(reg);
+	auto e = reg.create();
+	assembler->assemble_and_apply(reg, e, "", handle(tag), {}, "stat");
+	BOOST_REQUIRE(reg.get<stat_component>(e).label == "kept");
+
+	std::vector<std::string> errors;
+	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.push_back(std::format("{}: {}", category, message));
+	});
+	BOOST_REQUIRE(ram->erase(tag));
+	rs->signal_changed(tag);
+	pump();
+	mgr.tick();
+
+	for (const auto& error : errors) BOOST_TEST_MESSAGE(error);
+	BOOST_TEST(errors.empty());
+	BOOST_TEST(reg.get<stat_component>(e).hp == 4);
+	BOOST_TEST(reg.get<stat_component>(e).label == "kept");
+}
+
 BOOST_AUTO_TEST_CASE(HotReloadManager_DestructionUnhooksRegistryAndWatchers)
 {
 	auto tag = put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})");
@@ -348,6 +380,122 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_DestructionUnhooksRegistryAndWatchers)
 	BOOST_CHECK_NO_THROW(rs->signal_changed(tag));
 	BOOST_CHECK_NO_THROW(pump());
 	BOOST_CHECK_NO_THROW(reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{ tag, {} }));
+}
+
+BOOST_AUTO_TEST_CASE(HotReloadManager_ATagSharedByTwoRegistriesStaysWatchedUntilBothAreDetached)
+{
+	auto tag = put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})");
+	const auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry first, second;
+	scn::hot_reload_manager mgr(*assembler, *rs);
+	BOOST_TEST(mgr.watched_count() == 0u);
+	const std::size_t system_watched = rs->watched_tag_count();
+	mgr.attach_registry(first);
+	mgr.attach_registry(second);
+	const auto e_first = first.create();
+	const auto e_second = second.create();
+	scn::assemble_prefab(*assembler, first, e_first, *prefab, "i", tag);
+	const std::size_t watched = mgr.watched_count();
+	BOOST_TEST(watched >= 1u);
+	scn::assemble_prefab(*assembler, second, e_second, *prefab, "i", tag);
+	BOOST_TEST(mgr.watched_count() == watched); // the same tags, watched once
+
+	mgr.detach_registry(first);
+	BOOST_TEST(mgr.watched_count() == watched); // still used by the second registry
+	mgr.detach_registry(second);
+	BOOST_TEST(mgr.watched_count() == 0u);
+	BOOST_TEST(rs->watched_tag_count() == system_watched);
+	mgr.detach_registry(second); // not attached: nothing to release twice
+	BOOST_TEST(mgr.watched_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(HotReloadManager_ATagWithACallbackAndARegistryStaysWatchedUntilBothLeave)
+{
+	auto tag = put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})");
+	const auto prefab = load<scn::prefab_desc>(tag);
+	for (const bool callback_leaves_first : { true, false }) {
+		BOOST_TEST_CONTEXT("callback leaves first: " << callback_leaves_first) {
+			entt::registry reg;
+			scn::hot_reload_manager mgr(*assembler, *rs);
+			mgr.attach_registry(reg);
+			const auto e = reg.create();
+			scn::assemble_prefab(*assembler, reg, e, *prefab, "i", tag);
+			const std::size_t with_registry = mgr.watched_count();
+			int calls = 0;
+			mgr.watch_resource(tag, [&calls](const res::tag&) { ++calls; });
+			BOOST_TEST(mgr.watched_count() == with_registry); // the registry already watches this tag
+
+			if (callback_leaves_first) {
+				mgr.unwatch_resource(tag);
+			} else {
+				mgr.detach_registry(reg);
+			}
+			BOOST_TEST(mgr.watched_count() == with_registry);
+
+			rs->signal_changed(tag);
+			pump();
+			mgr.tick();
+			BOOST_TEST(calls == (callback_leaves_first ? 0 : 1)); // the one left still hears the change
+
+			if (callback_leaves_first) {
+				mgr.detach_registry(reg);
+			} else {
+				mgr.unwatch_resource(tag);
+			}
+			BOOST_TEST(mgr.watched_count() == 0u);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(HotReloadManager_UnwatchResourceStopsWatchingAnExternalTag)
+{
+	auto tag = put("ext3.desc", R"({"__type":"stat_desc","hp":1})");
+	entt::registry reg;
+	scn::hot_reload_manager mgr(*assembler, *rs);
+	mgr.attach_registry(reg);
+	const std::size_t baseline = mgr.watched_count();
+
+	mgr.watch_resource(tag, [](const res::tag&) {});
+	BOOST_TEST(mgr.watched_count() == baseline + 1);
+	int calls = 0;
+	mgr.watch_resource(tag, [&calls](const res::tag&) { ++calls; }); // replaces the callback, the tag counts once
+	BOOST_TEST(mgr.watched_count() == baseline + 1);
+
+	mgr.unwatch_resource(tag);
+	BOOST_TEST(mgr.watched_count() == baseline);
+	mgr.unwatch_resource(tag); // twice: nothing left to release
+	BOOST_TEST(mgr.watched_count() == baseline);
+
+	rs->signal_changed(tag);
+	pump();
+	mgr.tick();
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(HotReloadManager_AChangeQueuedBeforeTheLastWatcherLeftIsNotReloaded)
+{
+	auto tag = put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})");
+	const auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry tracked, untracked;
+	scn::hot_reload_manager mgr(*assembler, *rs);
+	// Assembled before it is attached: the manager never sees its tag, but would reload it with any queued change.
+	const auto e_untracked = untracked.create();
+	scn::assemble_prefab(*assembler, untracked, e_untracked, *prefab, "i", tag);
+	mgr.attach_registry(tracked);
+	mgr.attach_registry(untracked);
+	const auto e_tracked = tracked.create();
+	scn::assemble_prefab(*assembler, tracked, e_tracked, *prefab, "i", tag);
+	BOOST_REQUIRE(mgr.watched_count() >= 1u);
+
+	put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":5}}})");
+	rs->signal_changed(tag);
+	pump(); // queued in the manager
+	mgr.detach_registry(tracked);
+	BOOST_TEST(mgr.watched_count() == 0u);
+	mgr.tick();
+
+	BOOST_TEST(untracked.get<stat_component>(e_untracked).hp == 1);
+	BOOST_TEST(tracked.get<stat_component>(e_tracked).hp == 1);
 }
 
 // ---------------------------------------------------------------- world_desc / level_desc / level

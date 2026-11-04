@@ -147,8 +147,6 @@ namespace edt {
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
-		// editor/start_mode=game (#294): the start level loaded (or did not), now switch to the game, which starts Play.
-		void enter_startup_game_mode(bool level_loaded);
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();

@@ -353,15 +353,28 @@ jobs:
         run: ccache -s
 
       - name: Run unit tests under sanitizer
-        # TSan runs the null-backend scene tests ~10x slower (about 25 s each); the limit only guards against hangs.
-        timeout-minutes: 25
+        # TSan runs the null-backend scene tests ~10x slower (about 30-60 s each) and the whole run took 23 of the former
+        # 25 minutes, so a runner 10% slower timed out (#524); the limit only guards against hangs.
+        timeout-minutes: 40
         working-directory: build/${{ matrix.preset }}
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/sanitizers/lsan.supp:print_suppressions=0
           TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1 suppressions=${{ github.workspace }}/.github/sanitizers/tsan.supp
-        run: ./unit_tests --log_level=test_suite
+        run: |
+          set -o pipefail
+          ./unit_tests --log_level=test_suite --color_output=no 2>&1 | tee unit_tests.log
+
+      # Where the budget goes: also after a failure or a timeout (the log holds the suites that finished).
+      - name: Slowest test suites
+        if: always()
+        working-directory: build/${{ matrix.preset }}
+        run: |
+          [ -f unit_tests.log ] || exit 0
+          sed -nE 's/.*Leaving test suite "([^"]+)"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p' unit_tests.log \
+            | awk '$1 != "Master" { t = $2; if ($3 == "us") t /= 1e6; else if ($3 == "ms") t /= 1e3; printf "%9.1f s  %s\n", t, $1 }' \
+            | sort -rn | head -n 10
 
   coverage:
     name: Coverage (Linux GCC Debug)
@@ -639,6 +652,25 @@ jobs:
             -- --project projects/sandbox --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/two_worlds/final.png headless_out/two_worlds/editor.log \
             320x360+980+180 0.03 tools/headless/reference/two_worlds.png
+
+      # #518: --game loads the start level behind a neutral loading screen and then enters game mode, which starts Play.
+      # No picture is compared (the shot is only kept in the artifact). run_headless.sh --frames waits for "deterministic
+      # scene settled" (no pending loads or main-thread tasks; Play adds none that stay), then --wait-for-log for the
+      # controller's INFO "game mode". app/exit_after_frames is only a cap: run_headless.sh needs
+      # the editor alive for its shot and stops it itself.
+      - name: Smoke run (game mode)
+        run: |
+          log=headless_out/game_mode/editor.log
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/game_mode/final.png \
+            --wait-for-log '\[editor\] game mode$' \
+            -- --project projects/sandbox --game=res://levels/smoke_level.desc --set app/exit_after_frames 20000
+          if ! grep -q "level loaded: .*smoke_level.desc" "$log"; then
+            echo "::error::the start level did not load"; tail -20 "$log"; exit 1
+          fi
+          if ! grep -qE "\[editor\] game mode$" "$log"; then
+            echo "::error::the editor did not enter game mode"; tail -20 "$log"; exit 1
+          fi
+          if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game mode log"; exit 1; fi
 
       # The same deterministic run, but the picture is taken inside the process: capture/on_settled makes the editor
       # run the command viewport.capture (rnd::driver::read_texture -> PNG) once the scene settled. It is the Scene

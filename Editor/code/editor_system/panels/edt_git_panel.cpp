@@ -108,8 +108,10 @@ edt::git_panel::git_panel(editor_events& events, git_panel_model::ports ports, d
 	: panel_base("git", "Git"), m_model(events, ports), m_history(events, history_ports_of(ports)), m_dialogs(dialogs),
 	  m_resources(resources)
 {
-	// Whether or not code/ is mounted yet: a project that comes later still refreshes the panel.
+	// Whether or not code/ is mounted yet: a project that comes later still refreshes the panel. Both subscriptions are
+	// under `this`: unsubscribe_changes(this) ends them together.
 	m_resources.subscribe_changes(prj::k_code_protocol, this, [this](std::span<const res::file_change>) { m_model.files_changed(); });
+	m_resources.subscribe_changes(res::tag::default_protocol(), this, [this](std::span<const res::file_change>) { m_model.files_changed(); });
 }
 
 edt::git_panel::~git_panel()

@@ -388,4 +388,27 @@ BOOST_AUTO_TEST_CASE(LevelReload_ALevelWorldWithThePreviewNameDoesNotCollide)
 	BOOST_TEST(editor->get_registry() == &preview->state());
 }
 
+BOOST_AUTO_TEST_CASE(OpenClose_TenDifferentPrefabsLeaveNoWatchedTagsBehind)
+{
+	BOOST_REQUIRE(mgr->load_level(put("lv.desc", LEVEL_TWO_WORLDS)));
+	const std::size_t watched = hot->watched_count();
+	const std::size_t attached = hot->attached_count();
+	const std::size_t system_watched = rs->watched_tag_count();
+
+	for (int cycle = 0; cycle < 10; ++cycle) {
+		BOOST_TEST_CONTEXT("cycle " << cycle) {
+			const auto prefab_tag = put("p" + std::to_string(cycle) + ".prefab.desc", PREFAB);
+			editor->open(prefab_tag);
+			BOOST_REQUIRE(editor->is_open());
+			BOOST_TEST(hot->attached_count() == attached + 1);
+			BOOST_TEST(hot->watched_count() > watched); // the prefab, at least
+
+			editor->close();
+			BOOST_TEST(hot->watched_count() == watched);
+			BOOST_TEST(rs->watched_tag_count() == system_watched); // no empty watcher map left behind per tag
+			BOOST_TEST(hot->attached_count() == attached);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

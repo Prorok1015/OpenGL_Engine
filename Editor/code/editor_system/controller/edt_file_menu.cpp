@@ -285,8 +285,15 @@ void edt::file_menu::register_actions()
 		m_registrations.push_back(m_actions.add(std::move(desc)));
 	};
 
+	const auto level_change_busy = [this]() -> std::optional<action_result> {
+		if (!m_hooks.level_change_blocker) return std::nullopt;
+		if (std::optional<std::string> why = m_hooks.level_change_blocker()) return action_result::failure(cmd::codes::busy, *why);
+		return std::nullopt;
+	};
+
 	add({ .id = "file.new", .label = "New Level", .menu_path = "File",
-		.execute = [this](const json::value& args) {
+		.execute = [this, level_change_busy](const json::value& args) {
+			if (auto busy = level_change_busy()) return *busy;
 			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			if (m_hooks.is_dirty()) m_hooks.discard_changes();
 			m_hooks.new_level();
@@ -296,7 +303,8 @@ void edt::file_menu::register_actions()
 		.activate = [this] { new_level(); } });
 
 	add({ .id = "file.open", .label = "Open Level...", .menu_path = "File",
-		.execute = [this](const json::value& args) {
+		.execute = [this, level_change_busy](const json::value& args) {
+			if (auto busy = level_change_busy()) return *busy;
 			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
 			return action_result::success();

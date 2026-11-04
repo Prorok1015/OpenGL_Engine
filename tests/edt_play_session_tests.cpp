@@ -1286,6 +1286,68 @@ BOOST_AUTO_TEST_CASE(a_step_in_editor_mode_keeps_the_note)
 	BOOST_TEST((play.state() == edt::play_state::playing));
 }
 
+// The start level of --game (#518): the loading screen lasts from begin_startup to finish_startup, whatever the outcome.
+BOOST_AUTO_TEST_CASE(without_begin_startup_nothing_is_pending)
+{
+	BOOST_TEST(!modes.startup_pending());
+	BOOST_TEST(modes.startup_level_label().empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_loaded_start_level_enters_the_game_and_ends_the_loading_screen)
+{
+	modes.begin_startup("res://levels/main.desc");
+	BOOST_TEST(modes.startup_pending());
+	BOOST_TEST(modes.startup_level_label() == "res://levels/main.desc");
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+
+	open_level();
+	modes.finish_startup(true, false);
+	BOOST_TEST(!modes.startup_pending());
+	BOOST_TEST(modes.startup_level_label().empty());
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+}
+
+BOOST_AUTO_TEST_CASE(a_failed_or_cancelled_load_stays_in_the_editor_with_an_error)
+{
+	std::vector<std::string> errors;
+	const engine::log_sink_handle sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.emplace_back(message);
+	});
+	modes.begin_startup("res://levels/main.desc");
+	open_level();
+	modes.finish_startup(false, false);
+	BOOST_TEST(!modes.startup_pending());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST(!play.active());
+	BOOST_TEST(modes_seen.empty());
+	BOOST_TEST(std::any_of(errors.begin(), errors.end(), [](const std::string& e) {
+		return e.find("game mode not entered") != std::string::npos && e.find("res://levels/main.desc") != std::string::npos;
+	}));
+}
+
+BOOST_AUTO_TEST_CASE(an_editor_that_exits_after_the_level_loaded_stays_in_the_editor)
+{
+	modes.begin_startup("res://levels/main.desc");
+	open_level();
+	modes.finish_startup(true, true);
+	BOOST_TEST(!modes.startup_pending());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST(!play.active());
+}
+
+BOOST_AUTO_TEST_CASE(a_refused_start_after_the_load_stays_in_the_editor_and_ends_the_loading_screen)
+{
+	modes.begin_startup("res://levels/main.desc");
+	open_level();
+	start_blocked = "an asset is being added to the scene";
+	modes.finish_startup(true, false);
+	BOOST_TEST(!modes.startup_pending());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST(!play.active());
+	BOOST_TEST(modes_seen.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {

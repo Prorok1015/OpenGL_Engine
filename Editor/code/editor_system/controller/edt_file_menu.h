@@ -24,6 +24,9 @@ namespace edt
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
+		// Why the level may not be replaced now (the start level of --game is loading, #518): file.new and file.open
+		// answer `busy` with it, whoever calls. Null or nullopt: they run.
+		std::function<std::optional<std::string>()> level_change_blocker;
 		std::function<void(const std::filesystem::path&)> import_model;
 		std::function<void()> exit;
 		std::filesystem::path resources_path;  // where "Open Level" starts
