@@ -94,7 +94,7 @@ BOOST_AUTO_TEST_CASE(MemoryBackend_RoundTrip)
 
 BOOST_AUTO_TEST_CASE(SecretText_FormatsAsRedacted)
 {
-	const secret_text token(canary);
+	const secret_text token{std::string(canary)};
 	const std::string text = std::format("token={}", token);
 	BOOST_TEST(text == "token=<redacted>");
 	BOOST_TEST(text.find(canary) == std::string::npos);
@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(SecretText_FormatsAsRedacted)
 
 BOOST_AUTO_TEST_CASE(SecretText_MoveLeavesSourceEmpty)
 {
-	secret_text a(canary);
+	secret_text a{std::string(canary)};
 	secret_text b(std::move(a));
 	BOOST_TEST(b.reveal() == canary);
 	BOOST_TEST(a.empty());
