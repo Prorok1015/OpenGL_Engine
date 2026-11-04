@@ -19,7 +19,8 @@ namespace platform
 	{
 	public:
 		secret_text() = default;
-		explicit secret_text(std::string value) : m_value(std::move(value)) {}
+		// Takes the caller's buffer without a copy. The caller is responsible for wiping its own buffer if it keeps one.
+		explicit secret_text(std::string&& value) : m_value(std::move(value)) {}
 		secret_text(const secret_text&) = delete;
 		secret_text& operator=(const secret_text&) = delete;
 		secret_text(secret_text&& other) noexcept;
@@ -30,7 +31,7 @@ namespace platform
 		const std::string& reveal() const { return m_value; }
 		bool empty() const { return m_value.empty(); }
 		std::size_t size() const { return m_value.size(); }
-		secret_text clone() const { return secret_text(m_value); }
+		secret_text clone() const { return secret_text(std::string(m_value)); }
 		// Overwrites the buffer and empties the value.
 		void wipe() noexcept;
 
@@ -61,6 +62,25 @@ namespace platform
 		std::string message;
 	};
 
+	// Internal: exposed only so the unit tests can check what the OS backends hand to the system store.
+	namespace detail
+	{
+		// Every name the OS store sees starts with this, so an engine entry can never address another application's
+		// credential (e.g. Git Credential Manager's `git:https://github.com`).
+		inline constexpr std::string_view os_name_prefix = "snk-engine:";
+
+		struct os_target
+		{
+			std::string name;    // Windows TargetName, libsecret label: "snk-engine:<service>:<account>"
+			std::string service; // Keychain service, libsecret attribute: "snk-engine:<service>"
+			std::string account; // Keychain account, libsecret attribute: "snk-engine:<account>"
+		};
+
+		// `failed` (message without the key's text) when service or account is empty, longer than 255 bytes, or has
+		// '/', ':' or a control character; `ok` otherwise. Neither part can contain ':', so the name is unambiguous.
+		SNK_API secret_result make_os_target(const secret_key& key, os_target& out);
+	}
+
 	class SNK_API secret_backend
 	{
 	public:
@@ -73,6 +93,8 @@ namespace platform
 
 	// The operating system's store: Windows Credential Manager, macOS Keychain, Linux libsecret (loaded with dlopen, so
 	// there is no build dependency). Without libsecret or its daemon every call answers `unavailable`.
+	// store/load/erase can BLOCK (keyring unlock prompt, D-Bus round trips): never call them on the UI thread, run
+	// them from a job.
 	SNK_API std::unique_ptr<secret_backend> make_os_secret_backend();
 
 	// Secrets in RAM only; gone with the process.
@@ -89,7 +111,8 @@ namespace platform
 	};
 
 	// The primary backend first; when it is `unavailable` or `failed` the value stays in RAM for the session. It is
-	// never written to a file.
+	// never written to a file. A RAM entry always wins over the primary on load(): it is the newer value, because a
+	// successful store() to the primary drops the RAM entry. Same blocking rules as the OS backend.
 	class SNK_API secret_store
 	{
 	public:
@@ -98,6 +121,8 @@ namespace platform
 		// `ok` also when only RAM took it; `persisted(key)` tells which.
 		secret_result store(const secret_key& key, const secret_text& value);
 		secret_result load(const secret_key& key, secret_text& out);
+		// Removes the RAM entry and asks the primary to forget it. If the primary was `unavailable` or `failed`, that
+		// status is returned: a persisted copy may remain and come back after a restart.
 		secret_result erase(const secret_key& key);
 
 		// True when the primary backend holds the value (it survives a restart).

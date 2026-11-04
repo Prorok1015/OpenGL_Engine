@@ -53,11 +53,6 @@ namespace platform
 			return out;
 		}
 
-		std::wstring target_of(const secret_key& key)
-		{
-			return wide_of(key.service + "/" + key.account);
-		}
-
 		secret_result from_last_error(const char* what)
 		{
 			const DWORD err = GetLastError();
@@ -77,8 +72,12 @@ namespace platform
 				if (value.size() > CRED_MAX_CREDENTIAL_BLOB_SIZE) {
 					return make_result(secret_status::failed, "the value is too long for Credential Manager");
 				}
-				std::wstring target = target_of(key);
-				std::wstring user = wide_of(key.account);
+				detail::os_target os_name;
+				if (const secret_result checked = detail::make_os_target(key, os_name); checked.status != secret_status::ok) {
+					return checked;
+				}
+				std::wstring target = wide_of(os_name.name);
+				std::wstring user = wide_of(os_name.account);
 				CREDENTIALW cred{};
 				cred.Type = CRED_TYPE_GENERIC;
 				cred.TargetName = target.data();
@@ -95,7 +94,11 @@ namespace platform
 			secret_result load(const secret_key& key, secret_text& out) override
 			{
 				PCREDENTIALW cred = nullptr;
-				const std::wstring target = target_of(key);
+				detail::os_target os_name;
+				if (const secret_result checked = detail::make_os_target(key, os_name); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const std::wstring target = wide_of(os_name.name);
 				if (!CredReadW(target.c_str(), CRED_TYPE_GENERIC, 0, &cred)) {
 					return from_last_error("CredRead");
 				}
@@ -107,7 +110,11 @@ namespace platform
 
 			secret_result erase(const secret_key& key) override
 			{
-				const std::wstring target = target_of(key);
+				detail::os_target os_name;
+				if (const secret_result checked = detail::make_os_target(key, os_name); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const std::wstring target = wide_of(os_name.name);
 				if (!CredDeleteW(target.c_str(), CRED_TYPE_GENERIC, 0)) {
 					return from_last_error("CredDelete");
 				}
@@ -133,6 +140,35 @@ namespace platform
 			T* out() { return &m_ref; }
 		private:
 			T m_ref = nullptr;
+		};
+
+		// CFData that holds a secret: the bytes are zeroed before the object is released.
+		class cf_secret_data
+		{
+		public:
+			explicit cf_secret_data(const std::string& bytes)
+				: m_ref(CFDataCreateMutable(kCFAllocatorDefault, static_cast<CFIndex>(bytes.size())))
+			{
+				if (m_ref) {
+					CFDataAppendBytes(m_ref, reinterpret_cast<const UInt8*>(bytes.data()), static_cast<CFIndex>(bytes.size()));
+				}
+			}
+			cf_secret_data(const cf_secret_data&) = delete;
+			cf_secret_data& operator=(const cf_secret_data&) = delete;
+			~cf_secret_data()
+			{
+				if (!m_ref) {
+					return;
+				}
+				volatile UInt8* p = CFDataGetMutableBytePtr(m_ref);
+				for (CFIndex i = 0, n = CFDataGetLength(m_ref); i < n; ++i) {
+					p[i] = 0;
+				}
+				CFRelease(m_ref);
+			}
+			CFDataRef get() const { return m_ref; }
+		private:
+			CFMutableDataRef m_ref = nullptr;
 		};
 
 		cf_ref<CFStringRef> cf_string(const std::string& utf8)
@@ -171,11 +207,14 @@ namespace platform
 		public:
 			secret_result store(const secret_key& key, const secret_text& value) override
 			{
-				const auto service = cf_string(key.service);
-				const auto account = cf_string(key.account);
+				detail::os_target os_name;
+				if (const secret_result checked = detail::make_os_target(key, os_name); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const auto service = cf_string(os_name.service);
+				const auto account = cf_string(os_name.account);
 				const auto query = base_query(service, account);
-				cf_ref<CFDataRef> data(CFDataCreate(kCFAllocatorDefault,
-					reinterpret_cast<const UInt8*>(value.reveal().data()), static_cast<CFIndex>(value.size())));
+				const cf_secret_data data(value.reveal());
 				if (!service.get() || !account.get() || !query.get() || !data.get()) {
 					return make_result(secret_status::failed, "cannot build the Keychain query");
 				}
@@ -196,8 +235,12 @@ namespace platform
 
 			secret_result load(const secret_key& key, secret_text& out) override
 			{
-				const auto service = cf_string(key.service);
-				const auto account = cf_string(key.account);
+				detail::os_target os_name;
+				if (const secret_result checked = detail::make_os_target(key, os_name); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const auto service = cf_string(os_name.service);
+				const auto account = cf_string(os_name.account);
 				const auto query = base_query(service, account);
 				if (!service.get() || !account.get() || !query.get()) {
 					return make_result(secret_status::failed, "cannot build the Keychain query");
@@ -215,13 +258,19 @@ namespace platform
 				const auto data = static_cast<CFDataRef>(result.get());
 				out = secret_text(std::string(reinterpret_cast<const char*>(CFDataGetBytePtr(data)),
 					static_cast<std::size_t>(CFDataGetLength(data))));
+				// The returned CFData is immutable and owned by Security (it may be shared): writing into it is
+				// undefined, and zeroing a mutable copy would not clear this one, so it is only released.
 				return make_result(secret_status::ok);
 			}
 
 			secret_result erase(const secret_key& key) override
 			{
-				const auto service = cf_string(key.service);
-				const auto account = cf_string(key.account);
+				detail::os_target os_name;
+				if (const secret_result checked = detail::make_os_target(key, os_name); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const auto service = cf_string(os_name.service);
+				const auto account = cf_string(os_name.account);
 				const auto query = base_query(service, account);
 				if (!service.get() || !account.get() || !query.get()) {
 					return make_result(secret_status::failed, "cannot build the Keychain query");
@@ -287,82 +336,112 @@ namespace platform
 			return schema;
 		}
 
+		// The libraries are opened once per process and never closed: libsecret/glib register GTypes, start a GDBus
+		// worker thread and cache a proxy, none of which survives dlclose. RTLD_NODELETE keeps them mapped regardless.
+		struct libsecret_api
+		{
+			store_fn store = nullptr;
+			lookup_fn lookup = nullptr;
+			clear_fn clear = nullptr;
+			free_fn free = nullptr;
+			error_free_fn error_free = nullptr;
+
+			bool usable() const { return store && lookup && clear && free; }
+
+			static const libsecret_api& get()
+			{
+				static const libsecret_api api = load();
+				return api;
+			}
+
+		private:
+			static libsecret_api load()
+			{
+				libsecret_api api;
+				constexpr int flags = RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE;
+				void* lib = dlopen("libsecret-1.so.0", flags);
+				if (!lib) {
+					return api;
+				}
+				api.store = reinterpret_cast<store_fn>(dlsym(lib, "secret_password_store_sync"));
+				api.lookup = reinterpret_cast<lookup_fn>(dlsym(lib, "secret_password_lookup_sync"));
+				api.clear = reinterpret_cast<clear_fn>(dlsym(lib, "secret_password_clear_sync"));
+				api.free = reinterpret_cast<free_fn>(dlsym(lib, "secret_password_free"));
+				// dlsym on a handle also searches its dependencies, which normally include glib.
+				api.error_free = reinterpret_cast<error_free_fn>(dlsym(lib, "g_error_free"));
+				if (!api.error_free) {
+					if (void* glib = dlopen("libglib-2.0.so.0", flags)) {
+						api.error_free = reinterpret_cast<error_free_fn>(dlsym(glib, "g_error_free"));
+					}
+				}
+				return api;
+			}
+		};
+
 		class os_secret_backend final : public secret_backend
 		{
 		public:
-			os_secret_backend()
-			{
-				m_lib = dlopen("libsecret-1.so.0", RTLD_LAZY | RTLD_LOCAL);
-				if (!m_lib) {
-					return;
-				}
-				m_store = reinterpret_cast<store_fn>(dlsym(m_lib, "secret_password_store_sync"));
-				m_lookup = reinterpret_cast<lookup_fn>(dlsym(m_lib, "secret_password_lookup_sync"));
-				m_clear = reinterpret_cast<clear_fn>(dlsym(m_lib, "secret_password_clear_sync"));
-				m_free = reinterpret_cast<free_fn>(dlsym(m_lib, "secret_password_free"));
-				m_glib = dlopen("libglib-2.0.so.0", RTLD_LAZY | RTLD_LOCAL);
-				if (m_glib) {
-					m_error_free = reinterpret_cast<error_free_fn>(dlsym(m_glib, "g_error_free"));
-				}
-			}
-
-			~os_secret_backend() override
-			{
-				if (m_glib) {
-					dlclose(m_glib);
-				}
-				if (m_lib) {
-					dlclose(m_lib);
-				}
-			}
-
 			secret_result store(const secret_key& key, const secret_text& value) override
 			{
-				if (!usable()) {
+				detail::os_target target;
+				if (const secret_result checked = detail::make_os_target(key, target); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const libsecret_api& api = libsecret_api::get();
+				if (!api.usable()) {
 					return unavailable();
 				}
 				glib_error* error = nullptr;
-				const std::string label = key.service + "/" + key.account;
-				const int ok = m_store(&snk_schema(), "default", label.c_str(), value.reveal().c_str(), nullptr, &error,
-					"service", key.service.c_str(), "account", key.account.c_str(), static_cast<const char*>(nullptr));
+				const int ok = api.store(&snk_schema(), "default", target.name.c_str(), value.reveal().c_str(), nullptr, &error,
+					"service", target.service.c_str(), "account", target.account.c_str(), static_cast<const char*>(nullptr));
 				if (!ok || error) {
-					return from_error(error, "secret_password_store_sync");
+					return from_error(api, error, "secret_password_store_sync");
 				}
 				return make_result(secret_status::ok);
 			}
 
 			secret_result load(const secret_key& key, secret_text& out) override
 			{
-				if (!usable()) {
+				detail::os_target target;
+				if (const secret_result checked = detail::make_os_target(key, target); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const libsecret_api& api = libsecret_api::get();
+				if (!api.usable()) {
 					return unavailable();
 				}
 				glib_error* error = nullptr;
-				char* found = m_lookup(&snk_schema(), nullptr, &error,
-					"service", key.service.c_str(), "account", key.account.c_str(), static_cast<const char*>(nullptr));
+				char* found = api.lookup(&snk_schema(), nullptr, &error,
+					"service", target.service.c_str(), "account", target.account.c_str(), static_cast<const char*>(nullptr));
 				if (error) {
 					if (found) {
-						m_free(found);
+						api.free(found);
 					}
-					return from_error(error, "secret_password_lookup_sync");
+					return from_error(api, error, "secret_password_lookup_sync");
 				}
 				if (!found) {
 					return make_result(secret_status::not_found);
 				}
 				out = secret_text(std::string(found));
-				m_free(found);
+				api.free(found);
 				return make_result(secret_status::ok);
 			}
 
 			secret_result erase(const secret_key& key) override
 			{
-				if (!usable()) {
+				detail::os_target target;
+				if (const secret_result checked = detail::make_os_target(key, target); checked.status != secret_status::ok) {
+					return checked;
+				}
+				const libsecret_api& api = libsecret_api::get();
+				if (!api.usable()) {
 					return unavailable();
 				}
 				glib_error* error = nullptr;
-				const int removed = m_clear(&snk_schema(), nullptr, &error,
-					"service", key.service.c_str(), "account", key.account.c_str(), static_cast<const char*>(nullptr));
+				const int removed = api.clear(&snk_schema(), nullptr, &error,
+					"service", target.service.c_str(), "account", target.account.c_str(), static_cast<const char*>(nullptr));
 				if (error) {
-					return from_error(error, "secret_password_clear_sync");
+					return from_error(api, error, "secret_password_clear_sync");
 				}
 				return make_result(removed ? secret_status::ok : secret_status::not_found);
 			}
@@ -370,33 +449,56 @@ namespace platform
 			const char* name() const override { return "libsecret"; }
 
 		private:
-			bool usable() const { return m_lib && m_store && m_lookup && m_clear && m_free; }
-
 			static secret_result unavailable()
 			{
 				return make_result(secret_status::unavailable, "libsecret is not installed");
 			}
 
 			// No D-Bus session or no keyring daemon shows up as a GError: the caller keeps the value in RAM.
-			secret_result from_error(glib_error* error, const char* what)
+			static secret_result from_error(const libsecret_api& api, glib_error* error, const char* what)
 			{
-				std::string detail = error && error->message ? error->message : "unknown error";
-				if (error && m_error_free) {
-					m_error_free(error);
+				std::string text = error && error->message ? error->message : "unknown error";
+				if (error && api.error_free) {
+					api.error_free(error);
 				}
-				return make_result(secret_status::unavailable, std::format("{} failed: {}", what, detail));
+				return make_result(secret_status::unavailable, std::format("{} failed: {}", what, text));
 			}
-
-			void* m_lib = nullptr;
-			void* m_glib = nullptr;
-			store_fn m_store = nullptr;
-			lookup_fn m_lookup = nullptr;
-			clear_fn m_clear = nullptr;
-			free_fn m_free = nullptr;
-			error_free_fn m_error_free = nullptr;
 		};
 
 #endif
+	}
+
+	namespace detail {
+
+		namespace {
+
+			bool is_valid_key_part(const std::string& part)
+			{
+				if (part.empty() || part.size() > 255) {
+					return false;
+				}
+				for (const char c : part) {
+					const auto u = static_cast<unsigned char>(c);
+					if (c == '/' || c == ':' || u < 0x20 || u == 0x7f) {
+						return false;
+					}
+				}
+				return true;
+			}
+		}
+
+		secret_result make_os_target(const secret_key& key, os_target& out)
+		{
+			if (!is_valid_key_part(key.service) || !is_valid_key_part(key.account)) {
+				return make_result(secret_status::failed,
+					"invalid secret key: service and account must be 1..255 bytes without '/', ':' or control characters");
+			}
+			const std::string prefix(os_name_prefix);
+			out.service = prefix + key.service;
+			out.account = prefix + key.account;
+			out.name = prefix + key.service + ":" + key.account;
+			return make_result(secret_status::ok);
+		}
 	}
 
 	secret_text::secret_text(secret_text&& other) noexcept : m_value(std::move(other.m_value))
@@ -478,15 +580,13 @@ namespace platform
 	secret_result secret_store::load(const secret_key& key, secret_text& out)
 	{
 		std::lock_guard lock(m_mutex);
-		secret_result primary = make_result(secret_status::not_found);
-		if (m_primary) {
-			primary = m_primary->load(key, out);
-			if (primary.status == secret_status::ok) {
-				return primary;
-			}
-		}
+		// A RAM entry exists only while the primary refused the latest store(), so it is newer than anything the
+		// primary may hold (e.g. an old, possibly revoked token in a keyring that unlocked later).
 		const secret_result ram = m_ram.load(key, out);
-		return ram.status == secret_status::ok ? ram : primary;
+		if (ram.status == secret_status::ok) {
+			return ram;
+		}
+		return m_primary ? m_primary->load(key, out) : make_result(secret_status::not_found);
 	}
 
 	secret_result secret_store::erase(const secret_key& key)
@@ -498,10 +598,15 @@ namespace platform
 		}
 		const secret_result ram = m_ram.erase(key);
 		m_persisted.erase(key);
+		if (primary.status == secret_status::unavailable || primary.status == secret_status::failed) {
+			// Not a success: the OS store may still hold a copy that comes back after a restart.
+			return make_result(primary.status,
+				"the OS secret store could not be reached, a saved copy of the secret may remain: " + primary.message);
+		}
 		if (primary.status == secret_status::ok || ram.status == secret_status::ok) {
 			return make_result(secret_status::ok);
 		}
-		return primary;
+		return make_result(secret_status::not_found);
 	}
 
 	bool secret_store::persisted(const secret_key& key) const
