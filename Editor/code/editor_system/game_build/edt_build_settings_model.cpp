@@ -73,7 +73,8 @@ std::string edt::preset_for_configuration(const fs::path& code_dir, std::string_
 {
 	const prj::user_presets_read_result read = prj::read_user_presets(code_dir);
 	if (!read.error.empty()) {
-		egLOG_WARN("editor/build", "{}: the team preset '{}' is built", read.error, configuration);
+		egLOG_WARN("editor/build", "{}; CMakeUserPresets.json cannot be used, so the team preset '{}' is built instead of '{}'",
+			read.error, configuration, prj::user_preset_name(configuration));
 		return std::string(configuration);
 	}
 	return prj::has_user_preset(read.doc, configuration) ? prj::user_preset_name(configuration) : std::string(configuration);
