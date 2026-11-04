@@ -9,8 +9,6 @@
 #include <boost/json/value.hpp>
 #include <algorithm>
 #include <format>
-#include <fstream>
-#include <iterator>
 #include <system_error>
 
 namespace json = boost::json;
@@ -56,29 +54,14 @@ namespace {
 		}
 	}
 
-	struct file_read
-	{
-		bool exists = false;
-		std::string text;
-		std::string error;
-	};
+	using file_read = prj::project_file_text;
 
+	// <project>/.snk/build.json without following a link at .snk or at the file (#526): a link there is an error, so
+	// the file is treated as broken (defaults, never overwritten).
 	file_read read_settings_file(const fs::path& file)
 	{
-		file_read out;
-		std::error_code ec;
-		if (!fs::exists(file, ec)) {
-			if (ec) out.error = std::format("'{}' cannot be read: {}", utf8_of(file), ec.message());
-			return out;
-		}
-		out.exists = true;
-		std::ifstream stream(file, std::ios::binary);
-		if (!stream) {
-			out.error = std::format("'{}' cannot be read", utf8_of(file));
-			return out;
-		}
-		out.text.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
-		return out;
+		const prj::project_file_location at = prj::project_file_location_of(file);
+		return prj::read_project_file(at.root, at.relative);
 	}
 
 	// The document of an existing file; an error for text that is not a JSON object.
@@ -224,16 +207,13 @@ void edt::merge_build_settings(json::value& doc, const build_settings& settings)
 edt::build_settings edt::load_build_settings(const fs::path& snk_dir)
 {
 	const fs::path file = snk_dir / k_build_settings_file;
-	std::error_code ec;
-	if (!fs::exists(file, ec)) return {};
-
-	std::ifstream stream(file, std::ios::binary);
-	if (!stream) {
-		egLOG_WARN("editor/build", "'{}' cannot be read: the default build settings are used", utf8_of(file));
+	const file_read read = read_settings_file(file);
+	if (!read.error.empty()) {
+		egLOG_WARN("editor/build", "{}: the default build settings are used", read.error);
 		return {};
 	}
-	const std::string text{ std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
-	parsed_build_settings parsed = parse_build_settings(text);
+	if (!read.exists) return {};
+	parsed_build_settings parsed = parse_build_settings(read.text);
 	for (const auto& warning : parsed.warnings) {
 		egLOG_WARN("editor/build", "'{}': {}", utf8_of(file), warning);
 	}
@@ -261,12 +241,13 @@ std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, c
 	if (after == before) return std::nullopt;
 
 	merge_build_settings(doc, after);
-	std::error_code ec;
-	fs::create_directories(snk_dir, ec);
-	if (ec) return std::format("'{}' cannot be created: {}", utf8_of(snk_dir), ec.message());
 	const std::string text = prj::to_indented_json(doc);
-	if (auto problem = write ? write(file, text) : prj::write_text_atomically(file, text)) return problem;
-	return std::nullopt;
+	if (write) return write(file, text);
+	// The root is the project's, so .snk itself is opened without following a link (#523).
+	fs::path dir = snk_dir.lexically_normal();
+	if (!dir.has_filename()) dir = dir.parent_path();
+	const fs::path root = dir.has_parent_path() ? dir.parent_path() : fs::path{ "." };
+	return prj::write_project_file(root, dir.filename() / k_build_settings_file, text);
 }
 
 std::optional<std::string> edt::clear_fresh_configure(const fs::path& snk_dir, std::string_view configuration,

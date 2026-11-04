@@ -3,6 +3,7 @@
 #include <boost/json/parse.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -224,7 +225,74 @@ BOOST_AUTO_TEST_CASE(Write_RefusesAProjectAnotherRunningEditorServes)
 	BOOST_REQUIRE(read.has_value());
 	BOOST_TEST(read->token == "theirs");
 }
+#else
+// #523: a junction at .snk (no privilege needed to make one) is refused and nothing lands in its target.
+BOOST_AUTO_TEST_CASE(Write_RefusesADirectoryThatIsAJunction)
+{
+	temp_directory dir;
+	const fs::path elsewhere = dir.path / "elsewhere";
+	fs::create_directories(elsewhere);
+	const fs::path snk_dir = dir.path / ".snk";
+	const std::string command = "cmd /c mklink /J \"" + snk_dir.string() + "\" \"" + elsewhere.string() + "\" >nul";
+	BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && fs::exists(snk_dir), "mklink /J failed for " + snk_dir.string());
+
+	const std::string failure = mcp::write_connection_file(snk_dir, make_info(1, "secret", mcp::current_process_id()));
+	BOOST_TEST(!failure.empty());
+	BOOST_TEST(fs::is_empty(elsewhere));
+}
+
+// A directory symlink at .snk, when the system lets this user make one.
+BOOST_AUTO_TEST_CASE(Write_RefusesADirectoryThatIsASymlink)
+{
+	temp_directory dir;
+	const fs::path elsewhere = dir.path / "elsewhere";
+	fs::create_directories(elsewhere);
+	const fs::path snk_dir = dir.path / ".snk";
+	std::error_code ec;
+	fs::create_directory_symlink(elsewhere, snk_dir, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("directory symlink not created (" + ec.message() + "): no developer mode or symlink privilege; that case is not run");
+		return;
+	}
+	const std::string failure = mcp::write_connection_file(snk_dir, make_info(1, "secret", mcp::current_process_id()));
+	BOOST_TEST(!failure.empty());
+	BOOST_TEST(fs::is_empty(elsewhere));
+}
 #endif
+
+// #523: past every check by path, the directory is swapped for a link (a junction on Windows) right before it is opened
+// for the write: the open itself refuses it (POSIX O_NOFOLLOW, Windows a handle opened as the reparse point) and nothing
+// lands in the link's target.
+BOOST_AUTO_TEST_CASE(Write_RefusesADirectorySwappedForALinkAfterTheChecks)
+{
+	temp_directory dir;
+	const fs::path elsewhere = dir.path / "elsewhere";
+	fs::create_directories(elsewhere);
+	const fs::path snk_dir = dir.path / ".snk";
+	fs::create_directories(snk_dir);
+	struct clear_hook
+	{
+		~clear_hook() { mcp::detail::set_before_directory_open(nullptr); }
+	} clear;
+	bool swapped = false;
+	mcp::detail::set_before_directory_open([&](const fs::path& directory) {
+		std::error_code ec;
+		fs::rename(directory, dir.path / ".snk_moved", ec);
+		BOOST_REQUIRE_MESSAGE(!ec, "cannot move .snk away: " + ec.message());
+#ifdef _WIN32
+		const std::string command = "cmd /c mklink /J \"" + directory.string() + "\" \"" + elsewhere.string() + "\" >nul";
+		BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && fs::exists(directory), "mklink /J failed");
+#else
+		fs::create_directory_symlink(elsewhere, directory);
+#endif
+		swapped = true;
+	});
+
+	const std::string failure = mcp::write_connection_file(snk_dir, make_info(1, "secret", mcp::current_process_id()));
+	BOOST_TEST(swapped);
+	BOOST_TEST(!failure.empty());
+	BOOST_TEST(fs::is_empty(elsewhere));
+}
 
 BOOST_AUTO_TEST_CASE(Write_ReplacesTheFileOfADeadEditorAndOfAnUnreadableOne)
 {

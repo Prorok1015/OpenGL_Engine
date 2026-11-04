@@ -3,11 +3,13 @@
 #include <snk/command/cmd_types.h>
 #include <snk/project/prj_json_text.h>
 #include "edt_vcs_policy.h"
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -63,6 +65,8 @@ namespace edt
 
 	// The categories that can be set (not `unset` and `not_for_agents`).
 	std::optional<cmd::agent_category> parse_settable_category(std::string_view name);
+	// Every category a file can set, in the order the policy window lists them.
+	std::span<const cmd::agent_category> settable_categories();
 	std::optional<cmd::policy_mode> parse_policy_mode(std::string_view name);
 
 	// The "vcs" section of one layer (#455); a key the file does not set stays nullopt. How the two layers combine is
@@ -79,6 +83,15 @@ namespace edt
 
 		bool operator==(const vcs_policy_layer&) const = default;
 	};
+
+	// What a git list entry (push_branches, remotes, protected_branches) may be: a person reads it in the agents window and the
+	// window joins entries with ", ", so no control or invisible character (bidi marks, zero-width, C1), no comma, valid UTF-8,
+	// at most k_max_vcs_entry_bytes. "" = fine; else why, without the entry itself.
+	constexpr std::size_t k_max_vcs_entry_bytes = 256;
+	std::string vcs_entry_problem(std::string_view entry);
+	// Text that came from a file, safe to draw: control (newlines and tabs become a space), C1, zero-width and bidi code points
+	// and malformed UTF-8 are dropped. The same set as vcs_entry_problem.
+	std::string display_safe(std::string_view text);
 
 	// One layer: a mode per category and per command. A command's own entry beats its category's.
 	struct policy_layer
@@ -195,10 +208,13 @@ namespace edt
 		// command, tool or agent can write into edt://settings; one that could would approve its own loosenings.
 		agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file, approved_snapshot_location approved = {});
 
-		// Re-reads a file that changed; cheap otherwise.
+		// Re-reads a file that changed and judges the project file again when the commands changed; cheap otherwise.
 		void refresh();
 		// Main thread only (as the registry that calls the gate).
 		effective_policy effective(const cmd::command_desc& command);
+		// The same from what the last refresh() read, touching no file: a window that draws many rows in one frame refreshes
+		// once at its top, so everything it shows (and what a person approves from it) comes from one state.
+		effective_policy effective_as_loaded(const cmd::command_desc& command);
 		// The rules of the "vcs" sections, read again like effective(). Main thread only.
 		vcs_policy effective_vcs();
 		// One call judged by `category` (cmd::category_of_call).
@@ -232,7 +248,9 @@ namespace edt
 		const policy_layer& approved_project() const { return m_approved; }
 		// The person approves the project file, which must still be the `reviewed` layer they were shown: a file that changed
 		// in between (a checkout, an agent's tool) is refused and has to be looked at again. The error, nullopt on success.
-		std::optional<std::string> approve_project_layer(const policy_layer& reviewed);
+		// `displayed`: the loosenings the person saw (default: all that wait now); of the command entries other than `deny` only those
+		// they name are approved, the others wait like any change of a file.
+		std::optional<std::string> approve_project_layer(const policy_layer& reviewed, const std::vector<policy_loosening>* displayed = nullptr);
 
 		// Called (main thread) after a layer that was already loaded is read again, because its file changed or a person saved it:
 		// what an agent may see can have changed, so the MCP clients are told to ask for the tool list again.
@@ -252,7 +270,13 @@ namespace edt
 		// window therefore builds `layer` from approved_project() plus the person's edits, never from the file as it is while
 		// loosenings wait: whatever pending loosening is in `layer` is approved with it, and one that is not is dropped from
 		// the file. The error, nullopt on success.
-		std::optional<std::string> save_project(const policy_layer& layer, const prj::text_writer& write = {});
+		// Refused without a person to approve (set_approval_allowed), and when the file or its folder is a link (or resolves
+		// outside the project folder): the project's file is never written through one. Of the command entries other than
+		// `deny` only those that differ from `edited_from` (the layer the person's edit began with) are approved with the save;
+		// the file's own stay unapproved and wait like any change of a file.
+		// `write` is for tests only: with it the project file is written by path, not through prj::write_project_file (#523).
+		std::optional<std::string> save_project(const policy_layer& layer, const policy_layer& edited_from,
+			const prj::text_writer& write = {});
 		std::optional<std::string> save_personal(const policy_layer& layer, const prj::text_writer& write = {});
 
 	private:
@@ -281,7 +305,9 @@ namespace edt
 		// The commands changed since the project file was last judged: judges it again.
 		void rejudge_if_commands_changed();
 		std::vector<const cmd::command_desc*> commands() const;
-		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write, bool approve = false);
+		// `record`: the layer to keep as approved with the save (null: nothing is approved).
+		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write, const policy_layer* record = nullptr);
+		effective_policy decide(const cmd::command_desc& command, cmd::agent_category category);
 		void warn_unknown_commands(source& what) const;
 
 		source m_project;

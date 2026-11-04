@@ -101,6 +101,11 @@ namespace platform
 	class SNK_API memory_secret_backend : public secret_backend
 	{
 	public:
+		memory_secret_backend() = default;
+		// A dllexport class would otherwise instantiate the implicit copy, which a map of secret_text cannot have.
+		memory_secret_backend(const memory_secret_backend&) = delete;
+		memory_secret_backend& operator=(const memory_secret_backend&) = delete;
+
 		secret_result store(const secret_key& key, const secret_text& value) override;
 		secret_result load(const secret_key& key, secret_text& out) override;
 		secret_result erase(const secret_key& key) override;
@@ -120,6 +125,8 @@ namespace platform
 	{
 	public:
 		explicit secret_store(std::unique_ptr<secret_backend> primary);
+		secret_store(const secret_store&) = delete;
+		secret_store& operator=(const secret_store&) = delete;
 
 		// `ok` also when only RAM took it; `persisted(key)` tells which.
 		secret_result store(const secret_key& key, const secret_text& value);

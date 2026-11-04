@@ -19,19 +19,17 @@
 #include <memory>
 #include <utility>
 #include <snk/common/snk_api.h>
+#include <snk/platform/plt_beneath.h>
 
 namespace res
 {
 	namespace detail {
-		class pinned_root;
 		struct write_hook_access;
 		struct read_hook_access;
-		// Where a store's write may be paused by a test hook (res_vfs_test_hook.h, base only): after the path was checked
-		// again on the io thread, and with the temp file written, before the rename.
-		enum class write_stage : int { after_check, folders_held, before_rename };
-		// Where a read may be paused the same way (#484): on the io thread before the folders are opened, and with them held
-		// before the file is opened.
-		enum class read_stage : int { before_walk, folders_held };
+		// Where a store's write or a read may be paused by a test hook (res_vfs_test_hook.h, base only); the stages live
+		// with the no-follow file primitives in platform::beneath since #523.
+		using write_stage = ::platform::beneath::write_stage;
+		using read_stage = ::platform::beneath::read_stage;
 	}
 
 	namespace io = boost::asio;
@@ -91,7 +89,7 @@ namespace res
 		// dropped, so resolve() does not serve bytes that never reached the disk.
 		bool write_pending(const res::tag& tag, const fs::path& target_path, const res::tag& tmp_tag, const fs::path& tmp_path,
 			const core::res::res_resolver_interface::async_raw_data& data, bool replace);
-		// On the io thread: the file at `path` below the layer `root`, through detail::read_beneath (#484).
+		// On the io thread: the file at `path` below the layer `root`, through platform::beneath::read_beneath (#484).
 		void read_from_disk(core::res::res_resolver_interface::async_raw_data data_sp, fs::path root, fs::path path) const;
 
 	private:
@@ -112,7 +110,7 @@ namespace res
 		// Set first in the destructor: a watcher poll still queued must not signal a resource_system being destroyed.
 		std::atomic<bool> m_closing{ false };
 		// The top root, where stores write (#414): opened on the io thread at the first write, used only there.
-		std::unique_ptr<detail::pinned_root> m_write_root;
+		std::unique_ptr<::platform::beneath::pinned_root> m_write_root;
 		// Tests only (detail::write_hook_access): set and cleared while no store is in flight, read on the io thread.
 		std::function<void(detail::write_stage, const fs::path& tmp_path)> m_write_hook;
 		// Stores queued and not finished: the hook may change only while none is.

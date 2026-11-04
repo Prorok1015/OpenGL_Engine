@@ -530,19 +530,20 @@ BOOST_AUTO_TEST_CASE(SetDefine_RefusesWhatWouldBreakThePresets)
 }
 
 #ifndef _WIN32
-BOOST_AUTO_TEST_CASE(Save_LinkedUserFile_WritesTheTarget)
+BOOST_AUTO_TEST_CASE(Save_LinkedUserFile_IsRefused_AndItsTargetIsLeftAlone)
 {
 	test_util::temp_dir dir("prj_presets_link");
 	dir.write("CMakePresets.json", k_main);
-	const fs::path target = dir.write("shared/presets.json", "{ \"version\": 3 }\n");
+	const std::string shared = "{ \"version\": 3 }\n";
+	const fs::path target = dir.write("shared/presets.json", shared);
 	const fs::path link = dir.path() / "CMakeUserPresets.json";
 	fs::create_symlink(target, link);
 
 	const auto saved = prj::save_user_presets(dir.path(), { prj::ensure_user_preset{ "debuggame" } });
-	BOOST_REQUIRE_MESSAGE(saved.error.empty(), saved.error);
-	BOOST_TEST(saved.written);
+	BOOST_TEST(!saved.error.empty());
+	BOOST_TEST(!saved.written);
 	BOOST_TEST(fs::is_symlink(link));
-	BOOST_TEST(read_text(target).find("user-debuggame") != std::string::npos);
+	BOOST_TEST(read_text(target) == shared);
 }
 #endif
 

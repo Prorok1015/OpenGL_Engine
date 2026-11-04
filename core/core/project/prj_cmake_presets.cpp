@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
-#include <fstream>
 #include <iterator>
 #include <system_error>
 #include <utility>
@@ -67,34 +66,13 @@ namespace
 		return text.find_first_not_of(" \t\r\n") == std::string_view::npos;
 	}
 
-	struct file_text
-	{
-		bool exists = false;
-		std::string text;
-		std::string error;
-	};
+	using file_text = prj::project_file_text;
 
+	// The presets live in <project>/code: read without following a link at code/ or at the file (#527).
 	file_text read_file(const fs::path& file)
 	{
-		file_text result;
-		std::error_code ec;
-		if (!fs::exists(file, ec)) {
-			if (ec) {
-				result.error = std::format("cannot read '{}': {}", utf8_of(file), ec.message());
-			}
-			return result;
-		}
-		result.exists = true;
-		std::ifstream in(file, std::ios::binary);
-		if (!in) {
-			result.error = std::format("cannot read '{}'", utf8_of(file));
-			return result;
-		}
-		result.text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-		if (in.bad()) {
-			result.error = std::format("cannot read '{}'", utf8_of(file));
-		}
-		return result;
+		const prj::project_file_location at = prj::project_file_location_of(file);
+		return prj::read_project_file(at.root, at.relative);
 	}
 
 	std::vector<std::string> inherits_of(const json::object& preset)
@@ -546,7 +524,7 @@ prj::main_presets_result prj::load_cmake_presets(const fs::path& file)
 	const file_text read = read_file(file);
 	if (!read.error.empty() || !read.exists) {
 		main_presets_result result;
-		result.error = read.exists ? read.error : std::format("'{}' does not exist", utf8_of(file));
+		result.error = !read.error.empty() ? read.error : std::format("'{}' does not exist", utf8_of(file));
 		return result;
 	}
 	main_presets_result result = parse_cmake_presets(read.text);
@@ -752,7 +730,11 @@ prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, c
 	if (original.exists && text == original.text) {
 		return result;
 	}
-	if (auto problem = write ? write(file, text) : write_text_atomically(file, text)) {
+	const auto write_without_links = [](const fs::path& target, std::string_view content) {
+		const project_file_location at = project_file_location_of(target);
+		return write_project_file(at.root, at.relative, content);
+	};
+	if (auto problem = write ? write(file, text) : write_without_links(file, text)) {
 		result.error = std::move(*problem);
 		return result;
 	}

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -27,7 +28,7 @@ namespace mcp
 	// <directory>/mcp.json
 	std::filesystem::path connection_file_path(const std::filesystem::path& directory);
 
-	// The file as it is now; nullopt if it is missing or unreadable.
+	// The file as it is now; nullopt if it is missing or unreadable, or <directory> is a link (#526).
 	std::optional<connection_info> read_connection_file(const std::filesystem::path& directory);
 
 	// Writes <directory>/mcp.json, {"url", "port", "token", "pid"}, creating the directory.
@@ -42,6 +43,18 @@ namespace mcp
 	// Returns the reason when it could not be written, an empty string on success.
 	std::string write_connection_file(const std::filesystem::path& directory, const connection_info& info);
 
+	// Why <directory> is not used for the token file: a symbolic link (on Windows also a junction or a reparse point
+	// other than a OneDrive/deduplication folder, #529); empty when it is fine or missing.
+	std::string connection_directory_problem(const std::filesystem::path& directory);
+
 	// Removes <directory>/mcp.json if it still holds the token and pid of `mine`; a file of another editor is left alone.
-	void remove_connection_file(const std::filesystem::path& directory, const connection_info& mine);
+	// The reason when <directory> is a link and nothing was looked at (#526), else empty.
+	std::string remove_connection_file(const std::filesystem::path& directory, const connection_info& mine);
+
+	namespace detail
+	{
+		// Tests only: called by write_connection_file after its checks by path, right before the directory is opened for
+		// the write, so a test can swap the directory for a link there (#523). Not thread-safe; empty to clear.
+		void set_before_directory_open(std::function<void(const std::filesystem::path& directory)> hook);
+	}
 }

@@ -1,3 +1,4 @@
 # ThreadSanitizer suppressions for unit_tests (TSAN_OPTIONS=suppressions=<this file>).
-# Intentionally empty: the TSan run is clean. Third-party code is not instrumented, so
-# races reported only inside it (e.g. "race:libassimp") may be listed here with a reason.
+# Intentionally empty: the TSan run is clean. The TSan build instruments third-party code too
+# (ci-linux-tsan, #532); a race reported only inside it gets its own issue first, and only then
+# may a narrow entry (e.g. "race:libassimp") be listed here with a reason.

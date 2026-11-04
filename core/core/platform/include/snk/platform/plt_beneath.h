@@ -1,20 +1,29 @@
 #pragma once
-#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
+#include <snk/common/snk_api.h>
 
-// How vfs_resolver writes, removes and reads files under a mounted root without a race between the path check and the file
-// operation (#414): every folder below the root is opened relative to the one above it without following a link
-// (POSIX: openat with O_NOFOLLOW from a root descriptor kept open; Windows: NtCreateFile relative to the parent's handle
-// with FILE_OPEN_REPARSE_POINT, each refusing a reparse point and held without FILE_SHARE_DELETE), the temp file is
-// created relative to the last folder only if nothing is there yet, and the rename happens inside that folder. Internal
-// to the resolver.
-namespace res::detail {
+// How files are written, removed and read under a root folder without a race between the path check and the file
+// operation (#414, #484; moved here from the resource system for #523): every folder below the root is opened relative
+// to the one above it without following a link (POSIX: openat with O_NOFOLLOW from a root descriptor kept open;
+// Windows: NtCreateFile relative to the parent's handle with FILE_OPEN_REPARSE_POINT, each refusing a link or a junction,
+// a folder a filter keeps in place such as a OneDrive placeholder entered through the filter (folder_entry_of in
+// plt_reparse_tag.h, #523), and held without FILE_SHARE_DELETE), the temp file is created relative to the last folder only if nothing is there yet,
+// and the rename happens inside that folder.
+namespace platform::beneath {
+
+	// Where a write may be paused by a test hook: after the path was checked again on the io thread, and with the temp
+	// file written, before the rename.
+	enum class write_stage : int { after_check, folders_held, before_rename };
+	// Where a read may be paused the same way (#484): on the io thread before the folders are opened, and with them held
+	// before the file is opened.
+	enum class read_stage : int { before_walk, folders_held };
 
 	using write_hook = std::function<void(write_stage, const std::filesystem::path& tmp_path)>;
 
@@ -22,7 +31,7 @@ namespace res::detail {
 	// is mounted) and opened again when the folder at the root's path is no longer the one it holds (removed, or renamed
 	// and replaced). Windows: nothing kept, the chain of handles is opened per write, so the root's folder stays movable
 	// while the editor runs. Only the io thread uses it.
-	class pinned_root
+	class SNK_API pinned_root
 	{
 	public:
 		explicit pinned_root(std::filesystem::path root) : m_root(std::move(root)) {}
@@ -61,10 +70,10 @@ namespace res::detail {
 	};
 
 	// Empty on success, else why it failed; on failure the target is as it was and the temp file is gone.
-	std::string write_beneath(pinned_root& root, const write_request& request);
+	SNK_API std::string write_beneath(pinned_root& root, const write_request& request);
 	// Empty on success (also when there is nothing to remove), else why it failed. An empty folder is removed too,
 	// unless `files_only`: then a folder (or anything but a file) is an error and stays.
-	std::string remove_beneath(pinned_root& root, const std::filesystem::path& folder, const std::filesystem::path& leaf,
+	SNK_API std::string remove_beneath(pinned_root& root, const std::filesystem::path& folder, const std::filesystem::path& leaf,
 		bool files_only = false);
 
 	struct rename_request {
@@ -83,7 +92,7 @@ namespace res::detail {
 	// the file system lacks it a check first; macOS: renameatx_np RENAME_EXCL; Windows: a rename without ReplaceIfExists).
 	// The source is checked first and the target's folders must exist: nothing is made. Empty on success, else why it
 	// failed; on failure the file stays where it was.
-	std::string rename_beneath(pinned_root& root, const rename_request& request);
+	SNK_API std::string rename_beneath(pinned_root& root, const rename_request& request);
 
 	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
 
@@ -106,10 +115,10 @@ namespace res::detail {
 	};
 
 	// Reads a regular file below the root like the writes reach theirs (#484): every folder opened from the one above it
-	// without following a link (Windows: none may be a reparse point), the file opened from the last folder without
+	// without following a link (Windows: no link or junction), the file opened from the last folder without
 	// following a link and without blocking (POSIX: O_NONBLOCK, so a FIFO cannot hold the io thread), then checked to be
 	// a regular file through that same descriptor or handle and read from it. A link, a folder, a FIFO or a device at
 	// the name is `not_regular`.
-	read_result read_beneath(const read_request& request, std::vector<std::byte>& out);
+	SNK_API read_result read_beneath(const read_request& request, std::vector<std::byte>& out);
 
 }
