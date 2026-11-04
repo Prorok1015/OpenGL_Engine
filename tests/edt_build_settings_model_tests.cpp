@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <variant>
 #include <vector>
 
@@ -98,11 +99,14 @@ struct model_fixture
 	void with_settings(std::string_view text) { dir.write(".snk/build.json", text); }
 	void load() { model.load(root()); }
 
-	// Writes through prj::write_text_atomically, except `failing`, which fails.
+	// Writes through prj::write_text_atomically (making the file's folder, as the real build.json writer does), except
+	// `failing`, which fails.
 	void fail_writes_of(fs::path failing)
 	{
 		model.set_writer([failing = std::move(failing)](const fs::path& file, std::string_view text) -> std::optional<std::string> {
 			if (file == failing) return "disk full";
+			std::error_code ec;
+			fs::create_directories(file.parent_path(), ec);
 			return prj::write_text_atomically(file, text);
 		});
 	}
