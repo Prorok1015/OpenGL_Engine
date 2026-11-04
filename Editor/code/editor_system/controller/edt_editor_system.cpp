@@ -40,6 +40,8 @@
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
 #include "edt_vcs_service.h"
+#include "edt_forge_account_model.h"
+#include "edt_forge_account_panel.h"
 #include "edt_forge_service.h"
 #include "edt_github_provider.h"
 #include "edt_curl_transport.h"
@@ -583,10 +585,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	forge_setup.provider = std::make_shared<forge::github_provider>(forge::make_curl_transport(forge::configured_curl_options()));
 	m_secrets = std::make_shared<platform::secret_store>(platform::make_os_secret_backend());
 	forge_setup.secrets = m_secrets;
+	const std::vector<std::string> forge_hosts = forge_setup.allowed_hosts;
 	m_forge = std::make_unique<forge_service>(*m_vcs, std::move(forge_setup));
 	for (auto& command : register_forge_commands(m_context->actions().commands(), *m_forge)) {
 		m_registrations.push_back(std::move(command));
 	}
+	// #458 PR-4: where a person sets the token of each host. The secret store's calls can block on an OS prompt, so they
+	// run as jobs on the io lane; the job holds its own copies, nothing of it touches the panel.
+	forge_account_model::ports account_ports;
+	account_ports.secrets = m_secrets;
+	account_ports.start_job = [this](std::string label, std::function<boost::json::value()> work) -> std::optional<std::uint64_t> {
+		return m_context->jobs().start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "forge" }, m_lifetime,
+			[work = std::move(work)](ds::task_context&) -> boost::json::value { return work(); });
+	};
+	m_forge_account_panel = std::make_shared<forge_account_panel>(m_context->events(), forge_hosts, std::move(account_ports));
+	add_panel(m_forge_account_panel, dock_slot::floating, false);
+	const auto open_forge_account = [this] {
+		m_context->panels().set_open(m_forge_account_panel->get_id(), true);
+		m_forge_account_panel->focus();
+	};
+	m_git_panel->set_open_account(open_forge_account);
+	m_registrations.push_back(register_forge_account_action(m_context->actions(), open_forge_account));
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();

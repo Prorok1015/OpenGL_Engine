@@ -84,6 +84,10 @@ namespace edt
 			std::string remote;
 		};
 
+		// Why a create request cannot be sent (base/head valid branch names, title 1..k_max_title bytes, body at most
+		// k_max_body bytes, both plain text), else nullopt. What the service checks before any job; the PR dialog asks it too.
+		static std::optional<std::string> check_create_request(const create_request& request);
+
 		// What a person is told before an agent's call is allowed: the repository it would go to (host/owner/repo and the
 		// remote), read now from the config on the main thread (bounded by vcs_options::probe_timeout), or why the call
 		// will be refused. Remembers the repository, so that the job started for the same call (same session and

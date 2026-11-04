@@ -613,6 +613,24 @@ namespace platform
 		return make_result(secret_status::not_found);
 	}
 
+	secret_presence secret_store::presence(const secret_key& key)
+	{
+		std::lock_guard lock(m_mutex);
+		secret_text probe;
+		if (m_ram.load(key, probe).status == secret_status::ok) {
+			return secret_presence::in_memory;
+		}
+		if (!m_primary) {
+			return secret_presence::absent;
+		}
+		const secret_result loaded = m_primary->load(key, probe);
+		if (loaded.status == secret_status::ok) {
+			m_persisted.insert(key);
+			return secret_presence::in_os_store;
+		}
+		return loaded.status == secret_status::not_found ? secret_presence::absent : secret_presence::unknown;
+	}
+
 	bool secret_store::persisted(const secret_key& key) const
 	{
 		std::lock_guard lock(m_mutex);

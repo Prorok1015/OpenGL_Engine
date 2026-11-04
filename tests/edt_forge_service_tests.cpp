@@ -904,6 +904,12 @@ BOOST_AUTO_TEST_CASE(TheTokenHasNoCommand_AndTheAgentSeesExactlyThreeForgeComman
 		if (agent_visible && id.starts_with("forge.")) visible.push_back(id);
 		// Not even a description or a schema names a token as an argument.
 		if (id.starts_with("forge.")) BOOST_TEST(json::serialize(desc->args_schema).find("token") == std::string::npos, id);
+		// No command takes or returns a secret: neither schema nor the summary names one.
+		for (const std::string& text : { json::serialize(desc->args_schema), json::serialize(desc->result_schema), desc->summary }) {
+			BOOST_TEST(text.find("token") == std::string::npos, id);
+			BOOST_TEST(text.find("secret") == std::string::npos, id);
+			BOOST_TEST(text.find("password") == std::string::npos, id);
+		}
 	}
 	std::sort(visible.begin(), visible.end());
 	const std::vector<std::string> expected{ "forge.create_pr", "forge.list_prs", "forge.pr_status" };
