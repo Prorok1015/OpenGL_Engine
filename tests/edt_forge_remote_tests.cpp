@@ -108,7 +108,7 @@ BOOST_AUTO_TEST_CASE(Parse_ErrorsNeverEchoTheUrl)
 {
 	const auto result = parse_forge_remote("https://user:hunter2@github.com/octo/engine");
 	BOOST_REQUIRE(!result.ok());
-	BOOST_TEST(result.error().message.find("hunter2") == std::string::npos);
+	BOOST_TEST((result.error().message.find("hunter2") == std::string::npos));
 }
 
 BOOST_AUTO_TEST_CASE(Names_AreChecked)
@@ -175,8 +175,8 @@ BOOST_AUTO_TEST_CASE(SanitizeText_DropsControlBidiAndInvisibleCharacters)
 
 BOOST_AUTO_TEST_CASE(SanitizeText_ReplacesInvalidUtf8)
 {
-	BOOST_TEST(edt::forge::sanitize_text("a\xFF" "b\xC3", 100) == "a\xEF\xBF\xBD" "b\xEF\xBF\xBD");
-	BOOST_TEST(edt::forge::sanitize_text("\xED\xA0\x80", 100) == "\xEF\xBF\xBD" "\xEF\xBF\xBD" "\xEF\xBF\xBD");
+	BOOST_TEST((edt::forge::sanitize_text("a\xFF" "b\xC3", 100) == "a\xEF\xBF\xBD" "b\xEF\xBF\xBD"));
+	BOOST_TEST((edt::forge::sanitize_text("\xED\xA0\x80", 100) == "\xEF\xBF\xBD" "\xEF\xBF\xBD" "\xEF\xBF\xBD"));
 	BOOST_TEST(edt::forge::is_valid_utf8("\xC3\xBC"));
 	BOOST_TEST(!edt::forge::is_valid_utf8("\xC3"));
 }

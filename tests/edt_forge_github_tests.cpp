@@ -153,10 +153,10 @@ BOOST_AUTO_TEST_CASE(CreatePr_Success_SendsTheDocumentedRequest)
 	BOOST_TEST(header(request, "User-Agent") == "snk-editor");
 	BOOST_TEST(header(request, "Content-Type") == "application/json");
 	const json::object payload = json::parse(request.body).as_object();
-	BOOST_TEST(std::string(payload.at("title").as_string()) == "Add the forge layer");
-	BOOST_TEST(std::string(payload.at("head").as_string()) == "feature/forge");
-	BOOST_TEST(std::string(payload.at("base").as_string()) == "main");
-	BOOST_TEST(std::string(payload.at("body").as_string()) == "Details\nsecond line");
+	BOOST_TEST((std::string(payload.at("title").as_string()) == "Add the forge layer"));
+	BOOST_TEST((std::string(payload.at("head").as_string()) == "feature/forge"));
+	BOOST_TEST((std::string(payload.at("base").as_string()) == "main"));
+	BOOST_TEST((std::string(payload.at("body").as_string()) == "Details\nsecond line"));
 	BOOST_TEST(payload.at("draft").as_bool());
 	check_request_carries_token_only_as_bearer(fake, token);
 }
@@ -184,7 +184,7 @@ BOOST_AUTO_TEST_CASE(CreatePr_AlreadyExists_IsValidationWithGithubsMessage)
 
 	BOOST_REQUIRE(!result.ok());
 	BOOST_TEST((result.error().code == forge_error_code::validation));
-	BOOST_TEST(result.error().message.find("A pull request already exists") != std::string::npos);
+	BOOST_TEST((result.error().message.find("A pull request already exists") != std::string::npos));
 	check_clean(result.error());
 }
 
@@ -235,10 +235,10 @@ BOOST_AUTO_TEST_CASE(Errors_ScrubTheTokenAndTheServersControlCharacters)
 
 	BOOST_REQUIRE(!result.ok());
 	check_clean(result.error());
-	BOOST_TEST(result.error().message.find('\x07') == std::string::npos);
-	BOOST_TEST(result.error().message.find("\xE2\x80\xAE") == std::string::npos);
-	BOOST_TEST(result.error().message.find("\xE2\x80\x8B") == std::string::npos);
-	BOOST_TEST(result.error().message.find("Bad credentials") != std::string::npos);
+	BOOST_TEST((result.error().message.find('\x07') == std::string::npos));
+	BOOST_TEST((result.error().message.find("\xE2\x80\xAE") == std::string::npos));
+	BOOST_TEST((result.error().message.find("\xE2\x80\x8B") == std::string::npos));
+	BOOST_TEST((result.error().message.find("Bad credentials") != std::string::npos));
 }
 
 BOOST_AUTO_TEST_CASE(Errors_CapAHugeServerMessage)
@@ -498,9 +498,9 @@ BOOST_AUTO_TEST_CASE(Fields_FromTheServer_AreSanitized)
 	const auto result = provider.pr_status(octo(), 1, token);
 	BOOST_REQUIRE(result.ok());
 	check_clean(result.value());
-	BOOST_TEST(result.value().title.find("\xE2\x80\xAE") == std::string::npos);
-	BOOST_TEST(result.value().title.find('\x07') == std::string::npos);
-	BOOST_TEST(result.value().head.find('\n') == std::string::npos);
+	BOOST_TEST((result.value().title.find("\xE2\x80\xAE") == std::string::npos));
+	BOOST_TEST((result.value().title.find('\x07') == std::string::npos));
+	BOOST_TEST((result.value().head.find('\n') == std::string::npos));
 }
 
 BOOST_AUTO_TEST_CASE(Hosts_OnlyGithubCom_UnlessEnterpriseIsConfigured)

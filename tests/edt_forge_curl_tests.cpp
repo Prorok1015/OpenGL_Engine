@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(Get_RunsCurlWithTheHardenedArguments_AndReturnsTheBody)
 	const http_response response = transport(a_get(token), {});
 
 	BOOST_TEST(response.error_text == "");
-	BOOST_TEST(response.status == 200);
+	BOOST_TEST((response.status == 200));
 	BOOST_TEST(response.body == "{\"ok\":true}");
 	BOOST_REQUIRE(curl.calls == 1);
 	BOOST_TEST(curl.program.string() == "curl-under-test");
@@ -194,7 +194,7 @@ BOOST_AUTO_TEST_CASE(Get_RunsCurlWithTheHardenedArguments_AndReturnsTheBody)
 	BOOST_TEST(after_flag(curl.args, "--max-time") == "30");
 	BOOST_TEST(has_flag(curl.args, "--silent"));
 	BOOST_TEST(has_flag(curl.args, "--show-error"));
-	BOOST_TEST(after_flag(curl.args, "--max-filesize") == std::to_string(1024 * 1024));
+	BOOST_TEST((after_flag(curl.args, "--max-filesize") == std::to_string(1024 * 1024)));
 	BOOST_TEST(!has_flag(curl.args, "--fail-with-body"));
 	BOOST_TEST(!has_flag(curl.args, "--location"));
 	BOOST_TEST(!has_flag(curl.args, "-L"));
@@ -231,7 +231,7 @@ BOOST_AUTO_TEST_CASE(TheConfigFile_IsPrivate)
 	const auto token = make_token();
 	BOOST_REQUIRE(transport(a_get(token), {}).error_text.empty());
 #ifndef _WIN32
-	BOOST_TEST((curl.config_perms & fs::perms::all) == (fs::perms::owner_read | fs::perms::owner_write));
+	BOOST_TEST(((curl.config_perms & fs::perms::all) == (fs::perms::owner_read | fs::perms::owner_write)));
 	BOOST_TEST(curl.config_path.parent_path() == folder.dir);
 #else
 	BOOST_TEST_MESSAGE("POSIX permissions are not checked on Windows; the file lives in the private temp folder");
@@ -247,8 +247,8 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_KeepsTheProxy_AndDropsCurlHome)
 	BOOST_REQUIRE(transport(a_get(token), {}).error_text.empty());
 	BOOST_REQUIRE(curl.environment.has_value());
 	const auto& env = *curl.environment;
-	BOOST_TEST(std::find(env.begin(), env.end(), "HTTPS_PROXY=http://proxy.example:3128") != env.end());
-	BOOST_TEST(std::find(env.begin(), env.end(), "PATH=/usr/bin") != env.end());
+	BOOST_TEST((std::find(env.begin(), env.end(), "HTTPS_PROXY=http://proxy.example:3128") != env.end()));
+	BOOST_TEST((std::find(env.begin(), env.end(), "PATH=/usr/bin") != env.end()));
 	BOOST_TEST(std::none_of(env.begin(), env.end(), [](const std::string& entry) { return entry.starts_with("CURL_HOME="); }));
 }
 
@@ -278,7 +278,7 @@ BOOST_AUTO_TEST_CASE(Post_SendsTheBodyThroughAFile_AndRemovesBothFiles)
 	const http_response response = transport(request, {});
 
 	BOOST_TEST(response.error_text == "");
-	BOOST_TEST(response.status == 201);
+	BOOST_TEST((response.status == 201));
 	BOOST_TEST(curl.body_text == request.body);
 	BOOST_TEST(contains(curl.config_text, "request = \"POST\""));
 	BOOST_TEST(!curl.body_path.empty());
@@ -482,7 +482,7 @@ BOOST_AUTO_TEST_CASE(ARedirect_IsAnError_WithoutTheLocation)
 		const http_response response = transport(a_get(token), {});
 		BOOST_TEST_CONTEXT(status) {
 			BOOST_TEST(!response.error_text.empty());
-			BOOST_TEST(response.status == 0);
+			BOOST_TEST((response.status == 0));
 			BOOST_TEST(response.body.empty());
 			BOOST_TEST(contains(response.error_text, "redirect"));
 		}
@@ -498,7 +498,7 @@ BOOST_AUTO_TEST_CASE(ErrorStatuses_AreHandedOnWithTheirBody)
 	const auto token = make_token();
 	const http_response response = transport(a_get(token), {});
 	BOOST_TEST(response.error_text == "");
-	BOOST_TEST(response.status == 404);
+	BOOST_TEST((response.status == 404));
 	BOOST_TEST(response.body == "{\"message\":\"Not Found\"}");
 }
 
@@ -510,7 +510,7 @@ BOOST_AUTO_TEST_CASE(ABodyThatLooksLikeTheMarker_DoesNotForgeTheStatus)
 	const auto transport = edt::forge::make_curl_transport(options_for(curl, folder));
 	const auto token = make_token();
 	const http_response response = transport(a_get(token), {});
-	BOOST_TEST(response.status == 500);
+	BOOST_TEST((response.status == 500));
 }
 
 BOOST_AUTO_TEST_CASE(MissingCurl_IsUnavailable_WithAClearMessage)
@@ -652,7 +652,7 @@ BOOST_AUTO_TEST_CASE(WithoutAScratchFolder_TheTransportMakesItsOwn_AndLeavesNoth
 		BOOST_TEST(!curl.program.empty());
 #ifndef _WIN32
 		BOOST_TEST(curl.program.string() == "curl");
-		BOOST_TEST((curl.folder_perms & fs::perms::all) == fs::perms::owner_all);
+		BOOST_TEST(((curl.folder_perms & fs::perms::all) == fs::perms::owner_all));
 #endif
 	}
 	BOOST_TEST(!fs::exists(folder));
