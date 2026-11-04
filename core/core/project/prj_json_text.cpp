@@ -128,7 +128,8 @@ std::optional<std::string> prj::write_project_file(const fs::path& project_root,
 	case platform::beneath::read_status::missing:
 		break;
 	case platform::beneath::read_status::not_regular:
-		return std::format("'{}' is a link or not a regular file; it is not written", utf8_of(shown));
+		return std::format("'{}' is a symbolic link, a junction or not a regular file: the editor does not write project files "
+			"through a link (#523, #527); replace it with a regular file", utf8_of(shown));
 	case platform::beneath::read_status::failed:
 		return std::format("cannot write '{}': {}", utf8_of(shown), found.error);
 	}
@@ -148,4 +149,65 @@ std::optional<std::string> prj::write_project_file(const fs::path& project_root,
 		return std::format("cannot write '{}': {}", utf8_of(shown), error);
 	}
 	return std::nullopt;
+}
+
+prj::project_file_text prj::read_project_file(const fs::path& project_root, const fs::path& relative, std::uint64_t max_bytes)
+{
+	project_file_text result;
+	const fs::path shown = project_root / relative;
+	const fs::path leaf = relative.filename();
+	if (relative.has_root_path() || leaf.empty() || leaf == "." || leaf == "..") {
+		result.error = std::format("'{}' is not a file below the project root", utf8_of(shown));
+		return result;
+	}
+	std::error_code ec;
+	const fs::path root = fs::canonical(project_root, ec);
+	if (ec) {
+		if (ec != std::errc::no_such_file_or_directory) {
+			result.error = std::format("the project root '{}' cannot be opened: {}", utf8_of(project_root), ec.message());
+		}
+		return result;
+	}
+
+	platform::beneath::read_request request;
+	request.root = root;
+	request.folder = relative.parent_path();
+	request.leaf = leaf;
+	request.max_bytes = max_bytes;
+	std::vector<std::byte> bytes;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, bytes);
+	switch (read.status) {
+	case platform::beneath::read_status::missing:
+		return result;
+	case platform::beneath::read_status::ok:
+		result.exists = true;
+		result.text.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		return result;
+	case platform::beneath::read_status::not_regular:
+		result.exists = true;
+		result.error = std::format("'{}' is a symbolic link, a junction or not a regular file: the editor neither reads nor writes "
+			"project files through a link (#526, #527); replace it with a regular file", utf8_of(shown));
+		return result;
+	case platform::beneath::read_status::too_large:
+		result.exists = true;
+		result.error = std::format("'{}' is larger than {} bytes; it is not read", utf8_of(shown), max_bytes);
+		return result;
+	case platform::beneath::read_status::failed:
+		break;
+	}
+	result.exists = true;
+	result.error = std::format("cannot read '{}': {}", utf8_of(shown), read.error);
+	return result;
+}
+
+prj::project_file_location prj::project_file_location_of(const fs::path& file)
+{
+	std::error_code ec;
+	fs::path absolute = fs::absolute(file, ec);
+	if (ec) {
+		absolute = file;
+	}
+	absolute = absolute.lexically_normal();
+	const fs::path folder = absolute.parent_path();
+	return { folder.parent_path(), folder.filename() / absolute.filename() };
 }
