@@ -20,6 +20,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/input"
 	"${CMAKE_CURRENT_SOURCE_DIR}/game_build"
 	"${CMAKE_CURRENT_SOURCE_DIR}/vcs"
+	"${CMAKE_CURRENT_SOURCE_DIR}/forge"
 )
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface
@@ -38,6 +39,10 @@ if(SNK_WITH_ASSIMP AND SNK_ENGINE_SHARED AND MSVC)
 endif()
 # snk::mcp_server: the agent server of the editor (edt_agent_server, edt_mcp_bridge_host). Nothing under core/ links it.
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp} PRIVATE snk::mcp_server)
+# forge/curl: the owner-only access list of the request files (Windows security API).
+if(WIN32)
+	target_link_libraries(${PROJECT_NAME} PRIVATE advapi32)
+endif()
 # Build > Build Game: the SDK of this build tree (snake_sdkConfig.cmake, exported there) when the editor is not installed.
 # A u8 literal: the build path may hold non-ASCII characters, and MSVC without /utf-8 would recode a narrow one.
 target_compile_definitions(${PROJECT_NAME} PRIVATE "SNK_BUILD_TREE_SDK_DIR=u8\"${CMAKE_BINARY_DIR}/snake_sdk\"")
