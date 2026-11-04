@@ -199,7 +199,7 @@ BOOST_AUTO_TEST_CASE(TheAddress_IsKeptOnlyAsAnHttpsLink_AndPlain)
 {
 	fill();
 	model.create();
-	finish(json::parse(R"({"number":7,"url":"javascript:alert(1)"})"));
+	finish(json::parse(R"json({"number":7,"url":"javascript:alert(1)"})json"));
 	BOOST_TEST(model.number().value_or(0) == 7);
 	BOOST_TEST(model.url().empty());
 
