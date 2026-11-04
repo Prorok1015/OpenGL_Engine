@@ -120,9 +120,24 @@ namespace {
 		return entry == mcp::detail::folder_entry::refused;
 	}
 
+	HANDLE open_real_directory(const fs::path& directory);
+	bool read_file_in(const fs::path& directory, std::string& out);
+
 	// The file as it is, if it is a plain file: opened without following a link, and a pipe, a device or a directory is
-	// not read (reading one could block for ever).
+	// not read (reading one could block for ever). The directory is judged and held like the write's (#526), so a
+	// junction at .snk reads as no file.
 	bool read_small_file(const fs::path& directory, std::string& out)
+	{
+		const HANDLE held_directory = open_real_directory(directory);
+		if (held_directory == INVALID_HANDLE_VALUE) {
+			return false;
+		}
+		const bool read = read_file_in(directory, out);
+		CloseHandle(held_directory);
+		return read;
+	}
+
+	bool read_file_in(const fs::path& directory, std::string& out)
 	{
 		const fs::path path = directory / file_name;
 		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,

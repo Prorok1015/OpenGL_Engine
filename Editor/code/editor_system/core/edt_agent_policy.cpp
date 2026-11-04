@@ -3,6 +3,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_json_text.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/basic_parser.hpp>
@@ -222,6 +223,16 @@ namespace edt
 			std::ifstream in(file, std::ios::binary);
 			if (!in) return std::nullopt;
 			return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+
+		// <project>/.snk/agent_policy.json, read without following a link at .snk or at the file (#526): nullopt for a
+		// link there, which fails the layer closed like an unreadable file.
+		std::optional<std::string> read_project_layer(const std::filesystem::path& file)
+		{
+			const prj::project_file_location at = prj::project_file_location_of(file);
+			prj::project_file_text read = prj::read_project_file(at.root, at.relative);
+			if (!read.exists || !read.error.empty()) return std::nullopt;
+			return std::move(read.text);
 		}
 
 	}
@@ -879,12 +890,16 @@ namespace edt
 			std::string error;
 		};
 
-		file_probe probe_file(const std::filesystem::path& file)
+		constexpr std::string_view k_not_regular = "it is not a regular file";
+
+		// `no_follow`: a link at the file is itself what is probed (the project layer, #526), so a dangling one is not
+		// mistaken for a project without a policy.
+		file_probe probe_file(const std::filesystem::path& file, bool no_follow)
 		{
 			file_probe out;
 			if (file.empty()) return out;
 			std::error_code ec;
-			const std::filesystem::file_status status = std::filesystem::status(file, ec);
+			const std::filesystem::file_status status = no_follow ? std::filesystem::symlink_status(file, ec) : std::filesystem::status(file, ec);
 			// A missing file is the normal case of a project with no policy of its own. Some standard libraries report it as
 			// an error code besides file_type::not_found, so that comes first.
 			if (status.type() == std::filesystem::file_type::not_found || ec == std::errc::no_such_file_or_directory
@@ -897,7 +912,7 @@ namespace edt
 			}
 			if (!std::filesystem::exists(status)) return out;
 			if (!std::filesystem::is_regular_file(status)) {
-				out.error = "it is not a regular file";
+				out.error = k_not_regular;
 				return out;
 			}
 			out.exists = true;
@@ -916,7 +931,7 @@ namespace edt
 	bool agent_policy::changed_on_disk(const source& what)
 	{
 		if (!what.loaded) return true;
-		const file_probe now = probe_file(what.file);
+		const file_probe now = probe_file(what.file, what.kind == policy_layer_kind::project);
 		return now.exists != what.existed || now.modified != what.modified || now.size != what.size || now.error != what.stat_error;
 	}
 
@@ -926,7 +941,10 @@ namespace edt
 		what.loaded = true;
 		what.layer = {};
 		what.error.clear();
-		const file_probe now = probe_file(what.file);
+		const bool project_layer = what.kind == policy_layer_kind::project;
+		const file_probe now = probe_file(what.file, project_layer);
+		// A link at the project file or at .snk (#526): the layer fails closed and the person is told loudly.
+		bool refused_link = project_layer && now.error == k_not_regular;
 		what.existed = now.exists;
 		what.modified = now.modified;
 		what.size = now.size;
@@ -945,9 +963,10 @@ namespace edt
 			what.error = std::move(misplaced);
 		}
 		else if (now.exists) {
-			const std::optional<std::string> text = read_text(what.file);
+			const std::optional<std::string> text = project_layer ? read_project_layer(what.file) : read_text(what.file);
 			if (!text) {
-				what.error = "the file cannot be read";
+				what.error = project_layer ? "the file cannot be read, or it or .snk is a link" : "the file cannot be read";
+				refused_link = project_layer;
 			}
 			else {
 				policy_parse_result parsed = parse_policy_layer(*text, what.kind);
@@ -959,6 +978,9 @@ namespace edt
 			if (what.kind == policy_layer_kind::preanswers) {
 				egLOG_ERROR("editor/agent_policy", "--agent-policy {}: {}; every agent request of a headless run is denied",
 					fs_paths::utf8_of(what.file), what.error);
+			}
+			else if (refused_link) {
+				egLOG_ERROR("editor/agent_policy", "{}: {}; every agent request is denied", fs_paths::utf8_of(what.file), what.error);
 			}
 			else {
 				egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
