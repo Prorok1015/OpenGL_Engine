@@ -3,8 +3,11 @@
 #include <format>
 #include <fstream>
 #include <random>
+#include <span>
 #include <system_error>
+#include <vector>
 #include <boost/json/serialize.hpp>
+#include <snk/platform/plt_beneath.h>
 
 namespace fs = std::filesystem;
 namespace json = boost::json;
@@ -92,6 +95,57 @@ std::optional<std::string> prj::write_text_atomically(const fs::path& link_or_fi
 	if (ec) {
 		fs::remove(temp, ignored);
 		return std::format("cannot replace '{}': {}", utf8_of(file), ec.message());
+	}
+	return std::nullopt;
+}
+
+std::optional<std::string> prj::write_project_file(const fs::path& project_root, const fs::path& relative, std::string_view text)
+{
+	const fs::path shown = project_root / relative;
+	const fs::path folder = relative.parent_path();
+	const fs::path leaf = relative.filename();
+	if (relative.has_root_path() || leaf.empty() || leaf == "." || leaf == "..") {
+		return std::format("'{}' is not a file below the project root", utf8_of(shown));
+	}
+	// The root by its path, links resolved: only what lies below it is opened without following one.
+	std::error_code ec;
+	const fs::path root = fs::canonical(project_root, ec);
+	if (ec) {
+		return std::format("the project root '{}' cannot be opened: {}", utf8_of(project_root), ec.message());
+	}
+
+	// renameat replaces a link at the file's name instead of following it; looked at first so that a link there is an
+	// error, not silently turned into a plain file.
+	platform::beneath::read_request look;
+	look.root = root;
+	look.folder = folder;
+	look.leaf = leaf;
+	std::vector<std::byte> ignored;
+	const platform::beneath::read_result found = platform::beneath::read_beneath(look, ignored);
+	switch (found.status) {
+	case platform::beneath::read_status::ok:
+	case platform::beneath::read_status::too_large:
+	case platform::beneath::read_status::missing:
+		break;
+	case platform::beneath::read_status::not_regular:
+		return std::format("'{}' is a link or not a regular file; it is not written", utf8_of(shown));
+	case platform::beneath::read_status::failed:
+		return std::format("cannot write '{}': {}", utf8_of(shown), found.error);
+	}
+
+	std::random_device random;
+	fs::path temp_leaf{ "." };
+	temp_leaf += leaf;
+	temp_leaf += std::format(".{:08x}.tmp", random());
+	platform::beneath::pinned_root pinned{ root };
+	platform::beneath::write_request request;
+	request.folder = folder;
+	request.leaf = leaf;
+	request.tmp_leaf = temp_leaf;
+	request.data = std::as_bytes(std::span<const char>(text.data(), text.size()));
+	request.tmp_path = root / folder / temp_leaf;
+	if (const std::string error = platform::beneath::write_beneath(pinned, request); !error.empty()) {
+		return std::format("cannot write '{}': {}", utf8_of(shown), error);
 	}
 	return std::nullopt;
 }
