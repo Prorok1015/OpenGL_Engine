@@ -353,15 +353,28 @@ jobs:
         run: ccache -s
 
       - name: Run unit tests under sanitizer
-        # TSan runs the null-backend scene tests ~10x slower (about 25 s each); the limit only guards against hangs.
-        timeout-minutes: 25
+        # TSan runs the null-backend scene tests ~10x slower (about 30-60 s each) and the whole run took 23 of the former
+        # 25 minutes, so a runner 10% slower timed out (#524); the limit only guards against hangs.
+        timeout-minutes: 40
         working-directory: build/${{ matrix.preset }}
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/sanitizers/lsan.supp:print_suppressions=0
           TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1 suppressions=${{ github.workspace }}/.github/sanitizers/tsan.supp
-        run: ./unit_tests --log_level=test_suite
+        run: |
+          set -o pipefail
+          ./unit_tests --log_level=test_suite --color_output=no 2>&1 | tee unit_tests.log
+
+      # Where the budget goes: also after a failure or a timeout (the log holds the suites that finished).
+      - name: Slowest test suites
+        if: always()
+        working-directory: build/${{ matrix.preset }}
+        run: |
+          [ -f unit_tests.log ] || exit 0
+          sed -nE 's/.*Leaving test suite "([^"]+)"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p' unit_tests.log \
+            | awk '$1 != "Master" { t = $2; if ($3 == "us") t /= 1e6; else if ($3 == "ms") t /= 1e3; printf "%9.1f s  %s\n", t, $1 }' \
+            | sort -rn | head -n 10
 
   coverage:
     name: Coverage (Linux GCC Debug)
