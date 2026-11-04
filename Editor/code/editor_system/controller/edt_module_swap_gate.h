@@ -16,14 +16,6 @@ namespace edt {
 		// `follow(before)`: the editor's own handling of a change of the game layer (detach before, attach after).
 		explicit module_swap_gate(std::function<void(bool before)> follow) : m_follow(std::move(follow)) {}
 
-		// Play around a swap (play_session::before_module_swap / after_module_swap): `before` runs first, while the old
-		// layer and its set "play" are still there; `after` runs last, once the level is attached to the new layer.
-		void set_play_hooks(std::function<void()> before, std::function<void()> after)
-		{
-			m_before_swap = std::move(before);
-			m_after_swap = std::move(after);
-		}
-
 		void on_game_layer_change(bool before)
 		{
 			if (pass(before)) {
@@ -35,17 +27,13 @@ namespace edt {
 		core::reload_hooks hooks()
 		{
 			core::reload_hooks hooks;
-			hooks.before_swap = [this] {
-				// destroy_layer would take the set "play" with it: Play stops first and starts again after the swap.
-				if (m_before_swap) m_before_swap();
-				m_swapping = true;
-			};
+			// There is no Play in the editor yet; play_session (#39) is stopped here once it exists.
+			hooks.before_swap = [this] { m_swapping = true; };
 			hooks.after_swap = [this](const core::reload_report&) {
 				m_swapping = false;
 				if (std::exchange(m_detached, false)) {
 					m_follow(false);
 				}
-				if (m_after_swap) m_after_swap();
 			};
 			return hooks;
 		}
@@ -64,8 +52,6 @@ namespace edt {
 		}
 
 		std::function<void(bool before)> m_follow;
-		std::function<void()> m_before_swap;
-		std::function<void()> m_after_swap;
 		bool m_swapping = false;
 		bool m_detached = false;
 	};

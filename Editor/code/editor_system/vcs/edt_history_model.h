@@ -100,8 +100,7 @@ namespace edt::vcs
 		history_model(const history_model&) = delete;
 		history_model& operator=(const history_model&) = delete;
 
-		// The tab's frame (shown) or its hidden frames. Shown for the first time or again after being hidden, it loads
-		// from the top.
+		// The tab's frame (shown) or its hidden frames. Shown for the first time, it loads.
 		void set_visible(bool visible);
 		// Runs a filter change once it is due.
 		void tick();
@@ -134,8 +133,6 @@ namespace edt::vcs
 		const std::string& diff_text() const { return m_diff_text; }
 		bool diff_truncated() const { return m_diff_truncated; }
 		bool diff_loading() const { return m_diff_job.has_value(); }
-		// Changes whenever diff_text() does.
-		std::uint64_t diff_version() const { return m_diff_version; }
 
 		// The last failure, as git or the command said it; also logged under "vcs".
 		const std::string& error() const { return m_error; }
@@ -182,7 +179,6 @@ namespace edt::vcs
 		std::string m_selected_file;
 		std::string m_diff_text;
 		bool m_diff_truncated = false;
-		std::uint64_t m_diff_version = 0;
 
 		std::string m_error;
 		// Last: gone before the state its slot touches.

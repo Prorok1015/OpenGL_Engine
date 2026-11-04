@@ -147,21 +147,4 @@ namespace edt::vcs
 
 	// `git version 2.43.0` -> "2.43.0"; the trimmed text when it does not look like that.
 	std::string parse_version(std::string_view output);
-
-	// One update of what `--progress` prints on stderr: "Receiving objects:  45% (450/1000), 1.2 MiB | 3 MiB/s",
-	// "remote: Resolving deltas: 100% (10/10), done.", a counter without a total "Enumerating objects: 5, done.".
-	struct git_progress
-	{
-		// "Receiving objects", without the "remote: " prefix.
-		std::string phase;
-		// 0..100; none for a counter without a total.
-		std::optional<int> percent;
-	};
-
-	// Nullopt for a line that is not a progress update (git's other messages, garbage, empty).
-	std::optional<git_progress> parse_progress(std::string_view line);
-	// Where an update stands in a whole fetch or push, in [0, 1]: counting and compressing take [0, 0.1], the
-	// transfer (receiving, unpacking, writing objects) [0.1, 0.9], resolving deltas and checks [0.9, 1]; another
-	// phase or one without a percent counts 0.
-	float progress_fraction(const git_progress& progress);
 }

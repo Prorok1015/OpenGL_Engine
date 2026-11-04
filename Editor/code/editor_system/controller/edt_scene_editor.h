@@ -67,9 +67,6 @@ namespace edt
 		std::function<void(entt::registry&)> on_inject_camera;
 
 	private:
-		// Play runs: the edit is refused (logged) before it touches the desc.
-		bool edits_locked() const;
-
 		scene_document& m_state;
 		editor_services& m_services;
 	};

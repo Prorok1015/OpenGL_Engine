@@ -91,10 +91,8 @@ edt::vcs::history_model::~history_model()
 
 void edt::vcs::history_model::set_visible(bool visible)
 {
-	const bool shown_again = visible && !m_visible;
 	m_visible = visible;
-	// What it read before it was hidden may be old by now.
-	if (shown_again || (m_visible && !m_loaded_once)) reload();
+	if (m_visible && !m_loaded_once) reload();
 }
 
 void edt::vcs::history_model::tick()
@@ -149,7 +147,6 @@ void edt::vcs::history_model::clear_selection()
 	m_selected_file.clear();
 	m_diff_text.clear();
 	m_diff_truncated = false;
-	++m_diff_version;
 }
 
 void edt::vcs::history_model::select_file(const std::string& path)
@@ -159,7 +156,6 @@ void edt::vcs::history_model::select_file(const std::string& path)
 	m_selected_file = path;
 	m_diff_text.clear();
 	m_diff_truncated = false;
-	++m_diff_version;
 	m_diff_job = start("vcs.diff", json::object{ { "commit", m_selected }, { "path", path } }, job_kind::diff);
 }
 
@@ -257,7 +253,6 @@ void edt::vcs::history_model::finished(std::uint64_t id, job_status status, cons
 	case job_kind::diff:
 		m_diff_text = string_of(value, "text");
 		m_diff_truncated = bool_of(value, "truncated");
-		++m_diff_version;
 		break;
 	}
 }

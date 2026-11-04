@@ -1,6 +1,4 @@
 #include <boost/test/unit_test.hpp>
-#include <chrono>
-#include <optional>
 #include <string>
 #include <vector>
 #include <snk/application/app_frame_stage.h>
@@ -146,61 +144,6 @@ BOOST_AUTO_TEST_CASE(ExitAfterZeroFramesNeverStops) {
 	loop.init(storage);
 	for (int i = 0; i < 10; ++i) loop.on_step(storage);
 	BOOST_TEST(!loop.should_stop());
-}
-
-BOOST_AUTO_TEST_CASE(FrameDeadline_IsOneFramePeriodAfterTheStart) {
-	using namespace std::chrono;
-	const steady_clock::time_point start{ seconds(100) };
-	const auto at_60 = app::frame_deadline(start, 60);
-	BOOST_REQUIRE(at_60.has_value());
-	BOOST_TEST(duration_cast<nanoseconds>(*at_60 - start).count() == 16666666);
-	const auto at_1 = app::frame_deadline(start, 1);
-	BOOST_REQUIRE(at_1.has_value());
-	BOOST_TEST((*at_1 - start == seconds(1)));
-	BOOST_TEST(!app::frame_deadline(start, 0).has_value());
-	BOOST_TEST(!app::frame_deadline(start, -5).has_value());
-}
-
-BOOST_AUTO_TEST_CASE(HeadlessFrameLimit_AppliesOnlyWithoutAWindow) {
-	BOOST_TEST(app::headless_frame_limit(60, true) == 60);
-	BOOST_TEST(app::headless_frame_limit(60, false) == 0);
-	BOOST_TEST(app::headless_frame_limit(0, true) == 0);
-	BOOST_TEST(app::headless_frame_limit(-1, true) == 0);
-}
-
-BOOST_AUTO_TEST_CASE(FrameLimit_SleepsUntilTheDeadlineOfEachFrame) {
-	app::frame_stage_registry stages;
-	ds::app_data_storage storage;
-	app::loop_service loop(stages);
-	std::vector<std::chrono::steady_clock::time_point> deadlines;
-	loop.set_sleep_until([&deadlines](std::chrono::steady_clock::time_point t) { deadlines.push_back(t); });
-	loop.set_frame_limit(50);
-	loop.init(storage);
-	const auto before = std::chrono::steady_clock::now();
-	loop.on_step(storage);
-	const auto after = std::chrono::steady_clock::now();
-	BOOST_REQUIRE(deadlines.size() == 1u);
-	// The frame started between `before` and `after`; the deadline is 20 ms after its start.
-	BOOST_TEST((deadlines[0] >= before + std::chrono::milliseconds(20)));
-	BOOST_TEST((deadlines[0] <= after + std::chrono::milliseconds(20)));
-}
-
-BOOST_AUTO_TEST_CASE(FrameLimit_ZeroOrAStoppingLoop_NeverSleeps) {
-	app::frame_stage_registry stages;
-	ds::app_data_storage storage;
-	app::loop_service loop(stages);
-	int sleeps = 0;
-	loop.set_sleep_until([&sleeps](std::chrono::steady_clock::time_point) { ++sleeps; });
-	loop.init(storage);
-	loop.on_step(storage);
-	BOOST_TEST(sleeps == 0);
-
-	// The last frame ends at once: the run is over.
-	loop.set_frame_limit(30);
-	loop.set_exit_after_frames(2);
-	loop.on_step(storage);
-	BOOST_TEST(sleeps == 0);
-	BOOST_TEST(loop.should_stop());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

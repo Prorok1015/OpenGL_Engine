@@ -162,46 +162,6 @@ namespace edt
 		bool background = false;
 	};
 
-	// Where the editor's Play session is (play_session, #39).
-	enum class play_state : std::uint8_t { stopped, playing, paused };
-
-	// Why it changed: a person (menu, shortcut, the editor's own UI), an agent's command, the game module was reloaded
-	// (Play started again after the swap) or is about to be (Play stopped for the swap).
-	enum class play_reason : std::uint8_t { user, agent, module_reloaded, stopped_for_reload };
-
-	inline const char* play_state_name(play_state state)
-	{
-		switch (state) {
-		case play_state::stopped: return "stopped";
-		case play_state::playing: return "playing";
-		case play_state::paused: return "paused";
-		}
-		return "stopped";
-	}
-
-	inline const char* play_reason_name(play_reason reason)
-	{
-		switch (reason) {
-		case play_reason::user: return "user";
-		case play_reason::agent: return "agent";
-		case play_reason::module_reloaded: return "module_reloaded";
-		case play_reason::stopped_for_reload: return "stopped_for_reload";
-		}
-		return "user";
-	}
-
-	// What an agent changed outside the scene (A7 #451: a code file written, created, deleted, renamed), for the agent's
-	// status bar (#449).
-	struct agent_action_info
-	{
-		std::string command;
-		// What it acted on: a code:// path ("src/game.cpp"); "from -> to" for a rename.
-		std::string target;
-		std::size_t bytes = 0;
-		// The MCP session of the agent.
-		std::string session;
-	};
-
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
 	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
@@ -228,10 +188,6 @@ namespace edt
 		signal<const game_module_build_result&> game_module_built;
 		// The problems of one source were replaced or cleared (problem_list).
 		signal<const std::string&> problems_changed; // (source)
-		// Every change of the Play session's state, after it took effect (play_session).
-		signal<play_state, play_reason> play_state_changed;
-		// An agent's call changed something outside the scene (code.write/create/delete/rename), after it happened.
-		signal<const agent_action_info&> agent_action;
 		// An MCP session of an agent ended (disconnect, idle timeout, an explicit close; not the editor stopping the
 		// server): what is kept for it goes (its open agent session, its "allow until the end of the session",
 		// the questions it still has waiting). Raised by the agent server's bridge on the main thread.

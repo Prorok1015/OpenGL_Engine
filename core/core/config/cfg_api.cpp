@@ -183,9 +183,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 			"asking; an older one still opens with --allow-engine-version-mismatch")
 		("headless", "run the editor without a display: no window, no GPU, no ImGui panels; needs --project and "
 			"implies --non-interactive. The log goes to stderr")
-		("mcp-stdio", "serve MCP to an agent over stdin/stdout (newline-delimited JSON-RPC, one client). stdout carries "
-			"the protocol only: the log and everything else go to stderr. Closing stdin ends the session; with --headless "
-			"it also ends the editor (unsaved changes are dropped)");
+		("mcp-stdio", "reserved for the MCP stdio transport (#452); today it only moves the log to stderr");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
@@ -220,9 +218,6 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	}
 	if (vm.count("non-interactive") || vm.count("headless")) {
 		set_registered("app/non_interactive", "true");
-	}
-	if (vm.count("mcp-stdio")) {
-		set_registered("editor/mcp_stdio", "true");
 	}
 	if (vm.count("headless")) {
 		set_registered("editor/headless", "true");
