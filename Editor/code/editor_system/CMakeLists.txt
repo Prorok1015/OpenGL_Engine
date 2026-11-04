@@ -41,7 +41,7 @@ endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp} PRIVATE snk::mcp_server)
 # forge/curl: the owner-only access list of the request files (Windows security API).
 if(WIN32)
-	target_link_libraries(${PROJECT_NAME} PUBLIC advapi32)
+	target_link_libraries(${PROJECT_NAME} PRIVATE advapi32)
 endif()
 # Build > Build Game: the SDK of this build tree (snake_sdkConfig.cmake, exported there) when the editor is not installed.
 # A u8 literal: the build path may hold non-ASCII characters, and MSVC without /utf-8 would recode a narrow one.
