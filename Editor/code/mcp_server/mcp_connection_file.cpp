@@ -9,6 +9,7 @@
 #endif
 
 #include <snk/mcp/mcp_connection_file.h>
+#include <snk/mcp/mcp_reparse_rule.h>
 
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -86,54 +87,135 @@ namespace {
 		return std::string(what) + " (error " + std::to_string(static_cast<unsigned long>(GetLastError())) + ")";
 	}
 
-	bool is_reparse_point(const fs::path& path)
+	bool same_file(const BY_HANDLE_FILE_INFORMATION& a, const BY_HANDLE_FILE_INFORMATION& b)
 	{
-		const DWORD attributes = GetFileAttributesW(path.c_str());
-		return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+		return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh
+			&& a.nFileIndexLow == b.nFileIndexLow;
+	}
+
+	// A folder opened as itself (FILE_FLAG_OPEN_REPARSE_POINT), judged by the rule of platform::beneath (#529).
+	mcp::detail::folder_entry entry_of(HANDLE handle, BY_HANDLE_FILE_INFORMATION& information)
+	{
+		if (!GetFileInformationByHandle(handle, &information)) {
+			return mcp::detail::folder_entry::refused;
+		}
+		FILE_ATTRIBUTE_TAG_INFO tag{};
+		const bool tag_known = (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0
+			|| GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) != 0;
+		return mcp::detail::folder_entry_of(information.dwFileAttributes, tag_known, tag.ReparseTag);
+	}
+
+	// Checked by path before the folder is made: an existing one the rule refuses (a link, a junction, a reparse point
+	// of an unknown filter). One that cannot be opened is left to the open of the write.
+	bool refused_by_path(const fs::path& directory)
+	{
+		const HANDLE handle = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return false;
+		}
+		BY_HANDLE_FILE_INFORMATION information{};
+		const mcp::detail::folder_entry entry = entry_of(handle, information);
+		CloseHandle(handle);
+		return entry == mcp::detail::folder_entry::refused;
+	}
+
+	HANDLE open_token_file(const fs::path& path, DWORD flags)
+	{
+		return CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | flags, nullptr);
 	}
 
 	// The file as it is, if it is a plain file: opened without following a link, and a pipe, a device or a directory is
-	// not read (reading one could block for ever).
+	// not read (reading one could block for ever). A file OneDrive or deduplication keeps in place is read through its
+	// filter if it is still the same file there (#529), as platform::beneath::read_beneath does.
 	bool read_small_file(const fs::path& directory, std::string& out)
 	{
 		const fs::path path = directory / file_name;
-		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		HANDLE file = open_token_file(path, FILE_FLAG_OPEN_REPARSE_POINT);
 		if (file == INVALID_HANDLE_VALUE) {
 			return false;
 		}
-		BY_HANDLE_FILE_INFORMATION information;
-		bool ok = GetFileType(file) == FILE_TYPE_DISK && GetFileInformationByHandle(file, &information)
-			&& (information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
+		BY_HANDLE_FILE_INFORMATION information{};
+		bool ok = GetFileInformationByHandle(file, &information) != 0;
+		if (ok) {
+			FILE_ATTRIBUTE_TAG_INFO tag{};
+			const bool tag_known = (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0
+				|| GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tag, sizeof(tag)) != 0;
+			switch (mcp::detail::file_entry_of(information.dwFileAttributes, tag_known, tag.ReparseTag)) {
+			case mcp::detail::file_entry::plain:
+				break;
+			case mcp::detail::file_entry::refused:
+				ok = false;
+				break;
+			case mcp::detail::file_entry::through_filter: {
+				const HANDLE followed = open_token_file(path, 0);
+				BY_HANDLE_FILE_INFORMATION after{};
+				ok = followed != INVALID_HANDLE_VALUE && GetFileInformationByHandle(followed, &after) && same_file(information, after)
+					&& (after.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+				CloseHandle(file);
+				file = followed;
+				break;
+			}
+			}
+		}
+		ok = ok && GetFileType(file) == FILE_TYPE_DISK;
 		if (ok) {
 			out.assign(max_file_bytes, '\0');
 			DWORD got = 0;
 			ok = ReadFile(file, out.data(), static_cast<DWORD>(max_file_bytes), &got, nullptr) != 0;
 			out.resize(ok ? static_cast<std::size_t>(got) : 0);
 		}
-		CloseHandle(file);
+		if (file != INVALID_HANDLE_VALUE) {
+			CloseHandle(file);
+		}
 		return ok;
 	}
 
-	// The directory itself, opened without following a link and checked to be a real directory, not a reparse point.
-	// Held without FILE_SHARE_DELETE until the token file is in place, so meanwhile nobody can rename or replace it with a
-	// junction (#523, as the resource writes of #484). FILE_LIST_DIRECTORY: a handle with only attribute access does not
-	// take part in sharing. INVALID_HANDLE_VALUE when refused.
+	// FILE_LIST_DIRECTORY: a handle with only attribute access does not take part in sharing; no FILE_SHARE_DELETE.
+	HANDLE open_directory(const fs::path& directory, DWORD flags)
+	{
+		return CreateFileW(directory.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | flags, nullptr);
+	}
+
+	// The directory itself, opened without following a link: a plain directory, or one OneDrive/Cloud Files or
+	// deduplication keeps in place, opened again through its filter and kept only if it is the same directory (#529);
+	// a link, a junction or another reparse point is refused. Held without delete sharing until the token file is in
+	// place, so meanwhile nobody can rename or replace it with a junction (#523, as the resource writes of #484).
+	// INVALID_HANDLE_VALUE when refused.
 	HANDLE open_real_directory(const fs::path& directory)
 	{
-		HANDLE handle = CreateFileW(directory.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-			FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		const HANDLE handle = open_directory(directory, FILE_FLAG_OPEN_REPARSE_POINT);
 		if (handle == INVALID_HANDLE_VALUE) {
 			return INVALID_HANDLE_VALUE;
 		}
-		BY_HANDLE_FILE_INFORMATION information;
-		if (!GetFileInformationByHandle(handle, &information) || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0
-			|| (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+		BY_HANDLE_FILE_INFORMATION information{};
+		switch (entry_of(handle, information)) {
+		case mcp::detail::folder_entry::enter:
+			return handle;
+		case mcp::detail::folder_entry::through_filter:
+			break;
+		case mcp::detail::folder_entry::not_a_folder:
+		case mcp::detail::folder_entry::refused:
 			CloseHandle(handle);
 			SetLastError(ERROR_CANT_ACCESS_FILE);
 			return INVALID_HANDLE_VALUE;
 		}
-		return handle;
+		// The first handle stays open meanwhile, so the folder cannot be swapped between the two opens.
+		const HANDLE followed = open_directory(directory, 0);
+		BY_HANDLE_FILE_INFORMATION after{};
+		const bool same = followed != INVALID_HANDLE_VALUE && GetFileInformationByHandle(followed, &after)
+			&& same_file(information, after) && (after.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		CloseHandle(handle);
+		if (!same) {
+			if (followed != INVALID_HANDLE_VALUE) {
+				CloseHandle(followed);
+			}
+			SetLastError(ERROR_CANT_ACCESS_FILE);
+			return INVALID_HANDLE_VALUE;
+		}
+		return followed;
 	}
 
 	// NtSetInformationFile (wdm.h), looked up rather than declared or linked: winternl.h does not have it.
@@ -434,8 +516,8 @@ std::string mcp::write_connection_file(const fs::path& directory, const connecti
 		return "refusing to write the token into " + utf8_of(directory) + ": it is a symbolic link";
 	}
 #ifdef _WIN32
-	if (is_reparse_point(directory)) {
-		return "refusing to write the token into " + utf8_of(directory) + ": it is a link";
+	if (refused_by_path(directory)) {
+		return "refusing to write the token into " + utf8_of(directory) + ": it is a link or a reparse point";
 	}
 #endif
 	ec.clear();
