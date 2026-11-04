@@ -76,7 +76,7 @@ namespace {
 	{
 		std::string stdout_text = "{\"ok\":true}" + marker + "200\n";
 		std::string stderr_text;
-		platform::process_result result;
+		platform::process_result result{ 0, false, {} };
 		bool throws = false;
 		std::stop_source* stop_inside = nullptr;
 
