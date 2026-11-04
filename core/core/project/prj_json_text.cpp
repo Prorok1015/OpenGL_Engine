@@ -128,7 +128,8 @@ std::optional<std::string> prj::write_project_file(const fs::path& project_root,
 	case platform::beneath::read_status::missing:
 		break;
 	case platform::beneath::read_status::not_regular:
-		return std::format("'{}' is a link or not a regular file; it is not written", utf8_of(shown));
+		return std::format("'{}' is a symbolic link, a junction or not a regular file: the editor does not write project files "
+			"through a link (#523, #527); replace it with a regular file", utf8_of(shown));
 	case platform::beneath::read_status::failed:
 		return std::format("cannot write '{}': {}", utf8_of(shown), found.error);
 	}
@@ -184,7 +185,8 @@ prj::project_file_text prj::read_project_file(const fs::path& project_root, cons
 		return result;
 	case platform::beneath::read_status::not_regular:
 		result.exists = true;
-		result.error = std::format("'{}' is a link or not a regular file; it is not read", utf8_of(shown));
+		result.error = std::format("'{}' is a symbolic link, a junction or not a regular file: the editor neither reads nor writes "
+			"project files through a link (#526, #527); replace it with a regular file", utf8_of(shown));
 		return result;
 	case platform::beneath::read_status::too_large:
 		result.exists = true;

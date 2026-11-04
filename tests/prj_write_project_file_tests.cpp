@@ -16,6 +16,9 @@
 #include <system_error>
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_reparse_tag.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 // Files under <project>/.snk are written (#523), the CMake presets of <project>/code read and written (#527), without
 // following a link below the project root.
@@ -355,5 +358,21 @@ BOOST_AUTO_TEST_CASE(Presets_PlainFiles_AreSavedThroughTheRealWriter)
 	BOOST_TEST(prj::read_user_presets(code).error.empty());
 	BOOST_TEST(read_text(code / prj::k_cmake_user_presets_file_name).find("user-debuggame") != std::string::npos);
 }
+
+#ifndef _WIN32
+// A FIFO at the name: opened without blocking and refused, so the call returns (#527).
+BOOST_AUTO_TEST_CASE(Read_RefusesAFifo_AndReturns)
+{
+	test_util::temp_dir dir("prj_read_project_file_fifo");
+	fs::create_directories(dir.path() / "code");
+	const fs::path fifo = dir.path() / "code" / prj::k_cmake_user_presets_file_name;
+	BOOST_REQUIRE(::mkfifo(fifo.c_str(), 0600) == 0);
+
+	const prj::project_file_text read = prj::read_project_file(dir.path(), fs::path("code") / prj::k_cmake_user_presets_file_name);
+	BOOST_TEST(read.exists);
+	BOOST_TEST(!read.error.empty());
+	BOOST_TEST(!prj::read_user_presets(dir.path() / "code").error.empty());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
