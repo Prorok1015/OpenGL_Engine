@@ -3,6 +3,7 @@
 #include <snk/platform/plt_secret.h>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -15,6 +16,18 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#endif
 
 // The curl transport with a fake process runner (#458): what curl is given, where the token travels, what is left behind.
 
@@ -78,6 +91,10 @@ namespace {
 		std::string stderr_text;
 		platform::process_result result{ 0, false, {} };
 		bool throws = false;
+		// Plays a curl that hangs: returns only once it is stopped.
+		bool block_until_stop = false;
+		// Called with the config file and its folder while curl "runs".
+		std::function<void(const fs::path&, const fs::path&)> inspect;
 		std::stop_source* stop_inside = nullptr;
 
 		int calls = 0;
@@ -96,7 +113,7 @@ namespace {
 		edt::process_runner runner()
 		{
 			return [this](const fs::path& exe, const std::vector<std::string>& argv, const platform::process_options& options,
-				const std::function<void(std::string_view)>& on_line, std::stop_token) {
+				const std::function<void(std::string_view)>& on_line, std::stop_token token) {
 				++calls;
 				program = exe;
 				args = argv;
@@ -118,7 +135,15 @@ namespace {
 						body_text = slurp(body_path);
 					}
 				}
+				if (inspect && !config_path.empty()) inspect(config_path, config_path.parent_path());
 				if (throws) throw std::runtime_error("the runner failed");
+				if (block_until_stop) {
+					// A cap, so a broken watchdog fails the test instead of hanging it.
+					const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+					while (!token.stop_requested() && std::chrono::steady_clock::now() < give_up) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					}
+				}
 				if (!stderr_text.empty() && options.on_stderr_line) options.on_stderr_line(stderr_text);
 				if (stop_inside != nullptr) stop_inside->request_stop();
 				if (!stdout_text.empty()) {
@@ -137,7 +162,7 @@ namespace {
 		options.allowed_hosts = { "api.github.com" };
 		options.run = curl.runner();
 		options.scratch_dir = [dir = folder.dir] { return dir; };
-		options.environment = std::vector<std::string>{ "PATH=/usr/bin", "HTTPS_PROXY=http://proxy.example:3128", "CURL_HOME=/somewhere" };
+		options.environment = std::vector<std::string>{ "PATH=/usr/bin", "HTTPS_PROXY=http://proxy.example:3128", "CURL_HOME=/somewhere", "SSLKEYLOGFILE=/tmp/keys", "curl_home=/lower" };
 		return options;
 	}
 
@@ -238,7 +263,7 @@ BOOST_AUTO_TEST_CASE(TheConfigFile_IsPrivate)
 #endif
 }
 
-BOOST_AUTO_TEST_CASE(TheEnvironment_KeepsTheProxy_AndDropsCurlHome)
+BOOST_AUTO_TEST_CASE(TheEnvironment_KeepsTheProxy_AndDropsCurlHomeAndTheKeyLog)
 {
 	private_folder folder;
 	fake_curl curl;
@@ -249,7 +274,9 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_KeepsTheProxy_AndDropsCurlHome)
 	const auto& env = *curl.environment;
 	BOOST_TEST((std::find(env.begin(), env.end(), "HTTPS_PROXY=http://proxy.example:3128") != env.end()));
 	BOOST_TEST((std::find(env.begin(), env.end(), "PATH=/usr/bin") != env.end()));
-	BOOST_TEST(std::none_of(env.begin(), env.end(), [](const std::string& entry) { return entry.starts_with("CURL_HOME="); }));
+	BOOST_TEST(std::none_of(env.begin(), env.end(), [](const std::string& entry) {
+		return entry.starts_with("CURL_HOME=") || entry.starts_with("curl_home=") || entry.starts_with("SSLKEYLOGFILE=");
+	}));
 }
 
 BOOST_AUTO_TEST_CASE(TheFiles_AreGoneAfterTheCall)
@@ -419,6 +446,22 @@ BOOST_AUTO_TEST_CASE(UnsafeUrls_AreRefusedBeforeCurlRuns)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(OnlyGetAndPost_AreAllowed)
+{
+	for (const char* method : { "PATCH", "PUT", "DELETE", "HEAD", "get", "" }) {
+		private_folder folder;
+		fake_curl curl;
+		const auto transport = edt::forge::make_curl_transport(options_for(curl, folder));
+		const auto token = make_token();
+		http_request request = a_get(token);
+		request.method = method;
+		BOOST_TEST_CONTEXT(method) {
+			BOOST_TEST((transport(request, {}).error_code == forge_error_code::validation));
+			BOOST_TEST(curl.calls == 0);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(UnsafeHeadersAndTokens_AreRefusedBeforeCurlRuns)
 {
 	const auto token = make_token();
@@ -519,12 +562,49 @@ BOOST_AUTO_TEST_CASE(MissingCurl_IsUnavailable_WithAClearMessage)
 	fake_curl curl;
 	curl.stdout_text.clear();
 	curl.result.exit_code = -1;
-	curl.result.error = "cannot start 'curl-under-test'";
+	curl.result.error = "cannot find 'curl-under-test' in PATH";
 	const auto transport = edt::forge::make_curl_transport(options_for(curl, folder));
 	const auto token = make_token();
 	const http_response response = transport(a_get(token), {});
 	BOOST_TEST((response.error_code == forge_error_code::unavailable));
 	BOOST_TEST(response.error_text == "curl was not found (install curl or set forge/curl)");
+	BOOST_TEST(folder.is_empty());
+}
+
+BOOST_AUTO_TEST_CASE(ASpawnFailureWithNoSuchFile_IsReportedAsMissingCurl)
+{
+	const std::vector<std::string> errors = {
+		"cannot start '/opt/curl': No such file or directory",
+		"cannot start 'C:\\tools\\curl.exe': The system cannot find the file specified.",
+	};
+	for (const std::string& error : errors) {
+		private_folder folder;
+		fake_curl curl;
+		curl.stdout_text.clear();
+		curl.result.exit_code = -1;
+		curl.result.error = error;
+		const auto transport = edt::forge::make_curl_transport(options_for(curl, folder));
+		const auto token = make_token();
+		const http_response response = transport(a_get(token), {});
+		BOOST_TEST_CONTEXT(error) {
+			BOOST_TEST(response.error_text == "curl was not found (install curl or set forge/curl)");
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AnotherSpawnFailure_GivesTheSystemText_NotMissingCurl)
+{
+	private_folder folder;
+	fake_curl curl;
+	curl.stdout_text.clear();
+	curl.result.exit_code = -1;
+	curl.result.error = "cannot start '/opt/curl': Permission denied";
+	const auto transport = edt::forge::make_curl_transport(options_for(curl, folder));
+	const auto token = make_token();
+	const http_response response = transport(a_get(token), {});
+	BOOST_TEST((response.error_code == forge_error_code::unavailable));
+	BOOST_TEST(contains(response.error_text, "Permission denied"));
+	BOOST_TEST(!contains(response.error_text, "was not found"));
 	BOOST_TEST(folder.is_empty());
 }
 
@@ -576,6 +656,27 @@ BOOST_AUTO_TEST_CASE(ATimeout_IsReportedAsOne)
 	const http_response response = transport(a_get(token), {});
 	BOOST_TEST(contains(response.error_text, "timed out"));
 	BOOST_TEST(after_flag(curl.args, "--max-time") == "5");
+}
+
+BOOST_AUTO_TEST_CASE(ACurlThatHangsPastMaxTime_IsStoppedByTheDeadline)
+{
+	private_folder folder;
+	fake_curl curl;
+	curl.stdout_text.clear();
+	curl.block_until_stop = true;
+	curl.result.cancelled = true;
+	auto options = options_for(curl, folder);
+	options.max_time_seconds = 1;
+	options.deadline_grace = std::chrono::seconds(0);
+	const auto transport = edt::forge::make_curl_transport(options);
+	const auto token = make_token();
+	const auto started = std::chrono::steady_clock::now();
+	const http_response response = transport(a_get(token), {});
+	const auto waited = std::chrono::steady_clock::now() - started;
+	BOOST_TEST((response.error_code == forge_error_code::network));
+	BOOST_TEST(contains(response.error_text, "timed out"));
+	BOOST_TEST((waited < std::chrono::seconds(8)));
+	BOOST_TEST(folder.is_empty());
 }
 
 BOOST_AUTO_TEST_CASE(AResponseOverTheLimit_IsAnError)
@@ -633,29 +734,102 @@ BOOST_AUTO_TEST_CASE(NoToken_SendsNoAuthorizationHeader)
 	BOOST_TEST(!contains(curl.config_text, "Authorization"));
 }
 
-BOOST_AUTO_TEST_CASE(WithoutAScratchFolder_TheTransportMakesItsOwn_AndLeavesNothingBehind)
+BOOST_AUTO_TEST_CASE(WithoutAScratchFolder_EachRequestMakesItsOwn_AndLeavesNothingBehind)
 {
 	fake_curl curl;
 	edt::forge::curl_options options;
 	options.allowed_hosts = { "api.github.com" };
 	options.run = curl.runner();
 	options.environment = std::vector<std::string>{ "PATH=/usr/bin" };
-	fs::path folder;
-	{
-		const auto transport = edt::forge::make_curl_transport(options);
-		const auto token = make_token();
+	const auto transport = edt::forge::make_curl_transport(options);
+	const auto token = make_token();
+	fs::path first;
+	for (int i = 0; i < 2; ++i) {
 		const http_response response = transport(a_get(token), {});
 		BOOST_REQUIRE(response.error_text.empty());
-		folder = curl.config_path.parent_path();
-		BOOST_TEST(fs::is_directory(folder));
+		const fs::path folder = curl.config_path.parent_path();
+		BOOST_TEST(!fs::exists(folder));
 		BOOST_TEST(!fs::exists(curl.config_path));
 		BOOST_TEST(!curl.program.empty());
 #ifndef _WIN32
 		BOOST_TEST(curl.program.string() == "curl");
 		BOOST_TEST(((curl.folder_perms & fs::perms::all) == fs::perms::owner_all));
 #endif
+		if (i == 0) first = folder;
+		else BOOST_TEST((folder != first));
 	}
-	BOOST_TEST(!fs::exists(folder));
 }
+
+#ifdef _WIN32
+namespace {
+
+	// Empty: the object has a protected DACL with exactly one allowed ACE, of the current user. Else what is wrong.
+	std::string acl_problem(const fs::path& path)
+	{
+		HANDLE token = nullptr;
+		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return "no process token";
+		DWORD size = 0;
+		GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+		std::vector<unsigned char> user(size);
+		const bool got_user = size > 0 && GetTokenInformation(token, TokenUser, user.data(), size, &size);
+		CloseHandle(token);
+		if (!got_user) return "no token user";
+
+		PACL dacl = nullptr;
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+		const std::wstring native = path.wstring();
+		if (GetNamedSecurityInfoW(native.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS) {
+			return "cannot read the DACL";
+		}
+		std::string problem;
+		SECURITY_DESCRIPTOR_CONTROL control = 0;
+		DWORD revision = 0;
+		if (dacl == nullptr) {
+			problem = "no DACL (everyone has access)";
+		} else if (!GetSecurityDescriptorControl(descriptor, &control, &revision) || (control & SE_DACL_PROTECTED) == 0) {
+			problem = "the DACL is not protected (inherits)";
+		} else if (dacl->AceCount != 1) {
+			problem = "the DACL has " + std::to_string(dacl->AceCount) + " entries";
+		} else {
+			void* ace = nullptr;
+			if (!GetAce(dacl, 0, &ace)) {
+				problem = "cannot read the entry";
+			} else if (static_cast<ACE_HEADER*>(ace)->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+				problem = "the entry is not an allow entry";
+			} else if (!EqualSid(reinterpret_cast<PSID>(&static_cast<ACCESS_ALLOWED_ACE*>(ace)->SidStart), reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid)) {
+				problem = "the entry is not for the current user";
+			}
+		}
+		LocalFree(descriptor);
+		return problem;
+	}
+
+}
+
+BOOST_AUTO_TEST_CASE(OnWindows_TheFolderAndTheConfigFile_AreOwnerOnlyWithAProtectedDacl)
+{
+	fake_curl curl;
+	std::string folder_problem = "not inspected";
+	std::string file_problem = "not inspected";
+	curl.inspect = [&](const fs::path& file, const fs::path& folder) {
+		file_problem = acl_problem(file);
+		folder_problem = acl_problem(folder);
+	};
+	edt::forge::curl_options options;
+	options.allowed_hosts = { "api.github.com" };
+	options.run = curl.runner();
+	options.environment = std::vector<std::string>{ "PATH=C:\\Windows" };
+	const auto transport = edt::forge::make_curl_transport(options);
+	const auto token = make_token();
+	BOOST_REQUIRE(transport(a_get(token), {}).error_text.empty());
+	BOOST_TEST(folder_problem == "");
+	BOOST_TEST(file_problem == "");
+}
+#else
+BOOST_AUTO_TEST_CASE(OnWindows_TheFolderAndTheConfigFile_AreOwnerOnlyWithAProtectedDacl)
+{
+	BOOST_TEST_MESSAGE("Windows only: the DACL of the request folder and of the config file is checked there");
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
