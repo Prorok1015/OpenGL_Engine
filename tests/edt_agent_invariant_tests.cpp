@@ -133,8 +133,8 @@ boost::json::value minimal_value(const boost::json::value& schema, std::string_v
 
 boost::json::value path_value(const boost::json::value& schema, const std::string& path)
 {
-	if (has_schema_type(schema, "array")) return boost::json::array{ boost::json::value(path) };
-	return path;
+	if (has_schema_type(schema, "array")) return boost::json::array{ boost::json::string(path) };
+	return boost::json::string(path);
 }
 
 // `target` empty: every path-like argument gets `value`; else only that one, the others a harmless file name.
