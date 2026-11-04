@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(OsTarget_RejectsAmbiguousOrForeignKeys)
 		const secret_result result = platform::detail::make_os_target(bad, target);
 		BOOST_TEST((result.status == secret_status::failed));
 		BOOST_TEST(!result.message.empty());
-		BOOST_TEST(result.message.find(bad.account) == std::string::npos || bad.account.empty());
+		BOOST_TEST((result.message.find(bad.account) == std::string::npos || bad.account.empty()));
 	}
 	platform::detail::os_target longest;
 	BOOST_TEST((platform::detail::make_os_target({ std::string(255, 's'), std::string(255, 'a') }, longest).status == secret_status::ok));
