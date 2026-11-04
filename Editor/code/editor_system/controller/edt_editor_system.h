@@ -1,5 +1,7 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -33,6 +35,8 @@ namespace inp  { class input_router; }
 namespace edt {
 	class agent_server;
 	class agent_access;
+	class agent_policy_model;
+	class agents_panel;
 	class file_menu;
 	class agent_sessions;
 	class game_builder;
@@ -150,6 +154,10 @@ namespace edt {
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
+		// The agents window (#449): the status bar slot, the notice and opening the window.
+		void draw_agent_status();
+		void draw_agent_policy_notice();
+		void open_agents_panel();
 
 	public:
 		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
@@ -158,6 +166,8 @@ namespace edt {
 		// port cannot be bound. Main thread.
 		bool set_agent_server(bool enabled, std::uint16_t port);
 		agent_server* agent_server_object() { return m_agent_server.get(); }
+		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
+		agent_access* agent_access_object() { return m_agent_access.get(); }
 
 	private:
 		// Editor layer & panels
@@ -239,6 +249,21 @@ namespace edt {
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		std::filesystem::path m_agent_server_settings_file;
+		// The policy part of the agents window (#449); after the access it reads, so it is destroyed first.
+		std::unique_ptr<agent_policy_model> m_agent_policy_model;
+		std::shared_ptr<agents_panel> m_agents_panel;
+		// The last actions an agent made (editor_events::agent_action), for the status bar slot.
+		struct recent_agent_action
+		{
+			std::string command;
+			std::string target;
+			std::string session;
+			std::chrono::steady_clock::time_point at;
+		};
+		std::deque<recent_agent_action> m_recent_agent_actions;
+		// The pending loosenings (as text) the person sent away with "Later"; empty = not dismissed. A different set shows the notice again.
+		std::string m_policy_notice_dismissed_key;
+		std::chrono::steady_clock::time_point m_policy_refreshed{};
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
 	};
