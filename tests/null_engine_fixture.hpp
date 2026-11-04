@@ -69,10 +69,14 @@ inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::s
 {
 	for (const auto& entry : fs::recursive_directory_iterator(root)) {
 		if (!entry.is_regular_file()) continue;
+		// One read per file: a byte at a time took 2 s of every case under TSan's -O0 build (#524). A file that
+		// cannot be opened or sized stays empty, as before.
+		std::error_code size_error;
+		const std::uintmax_t size = entry.file_size(size_error);
+		std::vector<std::byte> bytes(size_error ? 0 : static_cast<std::size_t>(size));
 		std::ifstream in(entry.path(), std::ios::binary);
-		const std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-		std::vector<std::byte> bytes(text.size());
-		std::memcpy(bytes.data(), text.data(), text.size());
+		in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		bytes.resize(static_cast<std::size_t>(in.gcount()));
 		ram.files[res::tag{ protocol, fs::relative(entry.path(), root).generic_string() }] = std::move(bytes);
 	}
 }
