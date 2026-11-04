@@ -243,6 +243,19 @@ BOOST_AUTO_TEST_CASE(OsTarget_RejectsAmbiguousOrForeignKeys)
 	BOOST_TEST((platform::detail::make_os_target({ std::string(255, 's'), std::string(255, 'a') }, longest).status == secret_status::ok));
 }
 
+BOOST_AUTO_TEST_CASE(Store_RefusesAnInvalidKey_AndKeepsNothingInRam)
+{
+	harness h(secret_status::unavailable);
+	const secret_key bad{ "forge", "git:https://github.com" };
+	const secret_result stored = h.store.store(bad, secret_text(std::string(canary)));
+	BOOST_TEST((stored.status == secret_status::failed));
+	BOOST_TEST(stored.message.find(canary) == std::string::npos);
+	BOOST_TEST(h.fake->m_calls.empty());
+	secret_text out;
+	BOOST_TEST((h.store.load(bad, out).status != secret_status::ok));
+	BOOST_TEST(out.empty());
+}
+
 BOOST_AUTO_TEST_CASE(Messages_NeverContainTheSecret)
 {
 	for (const secret_status status : { secret_status::not_found, secret_status::unavailable, secret_status::failed }) {

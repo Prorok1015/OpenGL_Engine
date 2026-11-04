@@ -559,6 +559,10 @@ namespace platform
 	secret_result secret_store::store(const secret_key& key, const secret_text& value)
 	{
 		std::lock_guard lock(m_mutex);
+		detail::os_target target;
+		if (const secret_result invalid = detail::make_os_target(key, target); invalid.status != secret_status::ok) {
+			return invalid;
+		}
 		secret_result primary = make_result(secret_status::unavailable, "no OS secret store");
 		if (m_primary) {
 			primary = m_primary->store(key, value);
