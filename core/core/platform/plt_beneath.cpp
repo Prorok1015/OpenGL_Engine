@@ -1,5 +1,5 @@
-#include "res_vfs_write.h"
-#include <snk/resource/res_reparse_tag.h>
+#include <snk/platform/plt_beneath.h>
+#include <snk/platform/plt_reparse_tag.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/fs_paths.h>
 #include <algorithm>
@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <optional>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -220,14 +221,14 @@ namespace {
 
 }
 
-res::detail::pinned_root::~pinned_root()
+platform::beneath::pinned_root::~pinned_root()
 {
 	if (m_fd >= 0) {
 		::close(m_fd);
 	}
 }
 
-int res::detail::pinned_root::descriptor(std::string& error)
+int platform::beneath::pinned_root::descriptor(std::string& error)
 {
 	if (m_fd >= 0) {
 		struct stat held;
@@ -251,7 +252,7 @@ int res::detail::pinned_root::descriptor(std::string& error)
 	return m_fd;
 }
 
-std::string res::detail::write_beneath(pinned_root& root, const write_request& request)
+std::string platform::beneath::write_beneath(pinned_root& root, const write_request& request)
 {
 	const auto parts = folder_parts(request.folder);
 	if (!parts || !is_plain_name(request.leaf) || !is_plain_name(request.tmp_leaf)) {
@@ -305,7 +306,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	return {};
 }
 
-std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf, bool files_only)
+std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf, bool files_only)
 {
 	const auto parts = folder_parts(folder);
 	if (!parts || !is_plain_name(leaf)) {
@@ -351,7 +352,7 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 	return errno_text("cannot remove", reached / leaf);
 }
 
-std::string res::detail::rename_beneath(pinned_root& root, const rename_request& request)
+std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)
 {
 	const auto from_parts = folder_parts(request.from_folder);
 	const auto to_parts = folder_parts(request.to_folder);
@@ -391,7 +392,7 @@ std::string res::detail::rename_beneath(pinned_root& root, const rename_request&
 	return {};
 }
 
-res::detail::read_result res::detail::read_beneath(const read_request& request, std::vector<std::byte>& out)
+platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, std::vector<std::byte>& out)
 {
 	out.clear();
 	const auto parts = folder_parts(request.folder);
@@ -589,7 +590,7 @@ namespace {
 		if (!::GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag))) {
 			return reparse_kind::unknown;
 		}
-		return res::detail::reparse_tag_redirects(tag.ReparseTag) ? reparse_kind::redirect : reparse_kind::filter;
+		return platform::beneath::reparse_tag_redirects(tag.ReparseTag) ? reparse_kind::redirect : reparse_kind::filter;
 	}
 
 	// A read's folder (#484): `held` was opened as the reparse point itself. A folder a filter keeps in place is opened
@@ -786,9 +787,9 @@ namespace {
 
 }
 
-res::detail::pinned_root::~pinned_root() = default;
+platform::beneath::pinned_root::~pinned_root() = default;
 
-std::string res::detail::write_beneath(pinned_root& root, const write_request& request)
+std::string platform::beneath::write_beneath(pinned_root& root, const write_request& request)
 {
 	const auto parts = folder_parts(request.folder);
 	if (!parts || !is_plain_name(request.leaf) || !is_plain_name(request.tmp_leaf)) {
@@ -848,7 +849,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	return {};
 }
 
-std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf, bool files_only)
+std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf, bool files_only)
 {
 	const auto parts = folder_parts(folder);
 	if (!parts || !is_plain_name(leaf)) {
@@ -885,7 +886,7 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 	return {};
 }
 
-std::string res::detail::rename_beneath(pinned_root& root, const rename_request& request)
+std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)
 {
 	const auto from_parts = folder_parts(request.from_folder);
 	const auto to_parts = folder_parts(request.to_folder);
@@ -926,7 +927,7 @@ std::string res::detail::rename_beneath(pinned_root& root, const rename_request&
 	return {};
 }
 
-res::detail::read_result res::detail::read_beneath(const read_request& request, std::vector<std::byte>& out)
+platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, std::vector<std::byte>& out)
 {
 	out.clear();
 	const auto parts = folder_parts(request.folder);
