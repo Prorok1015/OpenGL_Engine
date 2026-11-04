@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -16,8 +17,12 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <stop_token>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -27,9 +32,12 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <sddl.h>
 #else
+#include <cstdlib>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 extern char** environ;
 #endif
@@ -61,23 +69,35 @@ namespace {
 		});
 	}
 
-	// Inside the double quotes of a curl config value.
-	std::string config_escape(std::string_view text)
+	// volatile, so the compiler cannot drop the stores of a buffer that is about to be freed.
+	void wipe_string(std::string& value) noexcept
 	{
-		std::string out;
-		out.reserve(text.size() + 8);
-		for (const char c : text) {
-			if (c == '\\' || c == '"') out += '\\';
-			out += c;
+		volatile char* p = value.data();
+		for (std::size_t i = 0; i < value.capacity(); ++i) {
+			p[i] = 0;
 		}
-		return out;
+		value.clear();
 	}
 
+	struct wipe_on_exit
+	{
+		std::string& text;
+		explicit wipe_on_exit(std::string& value) : text(value) {}
+		wipe_on_exit(const wipe_on_exit&) = delete;
+		wipe_on_exit& operator=(const wipe_on_exit&) = delete;
+		~wipe_on_exit() { wipe_string(text); }
+	};
+
+	// Appends the value inside the double quotes of a curl config option; no temporary copy of the value is made, so a
+	// token never lives in a buffer that is not wiped.
 	void add_option(std::string& config, std::string_view name, std::string_view value)
 	{
 		config += name;
 		config += " = \"";
-		config += config_escape(value);
+		for (const char c : value) {
+			if (c == '\\' || c == '"') config += '\\';
+			config += c;
+		}
 		config += "\"\n";
 	}
 
@@ -101,7 +121,7 @@ namespace {
 		const std::vector<std::string>& allowed_hosts)
 	{
 		using edt::forge::forge_error_code;
-		static constexpr std::string_view methods[] = { "GET", "POST", "PATCH", "PUT", "DELETE", "HEAD" };
+		static constexpr std::string_view methods[] = { "GET", "POST" };
 		if (std::find(std::begin(methods), std::end(methods), request.method) == std::end(methods)) {
 			return failure(forge_error_code::validation, "unsupported HTTP method");
 		}
@@ -128,14 +148,81 @@ namespace {
 		return std::nullopt;
 	}
 
+#ifdef _WIN32
+	std::wstring current_user_sid()
+	{
+		HANDLE token = nullptr;
+		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return {};
+		DWORD size = 0;
+		GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+		std::wstring out;
+		if (size > 0) {
+			std::vector<unsigned char> buffer(size);
+			if (GetTokenInformation(token, TokenUser, buffer.data(), size, &size)) {
+				wchar_t* text = nullptr;
+				if (ConvertSidToStringSidW(reinterpret_cast<const TOKEN_USER*>(buffer.data())->User.Sid, &text)) {
+					out = text;
+					LocalFree(text);
+				}
+			}
+		}
+		CloseHandle(token);
+		return out;
+	}
+
+	// A security descriptor with one ACE (full control for the current user) and a protected DACL: nothing is inherited
+	// from a shared temp folder, nobody else (not even other members of the user's groups) gets in.
+	class owner_only_access
+	{
+	public:
+		explicit owner_only_access(bool inherit_to_children)
+		{
+			const std::wstring sid = current_user_sid();
+			if (sid.empty()) return;
+			const std::wstring sddl = std::format(L"D:P(A;{};FA;;;{})", inherit_to_children ? L"OICI" : L"", sid);
+			if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &m_descriptor, nullptr)) {
+				m_descriptor = nullptr;
+				return;
+			}
+			m_attributes.nLength = sizeof(m_attributes);
+			m_attributes.lpSecurityDescriptor = m_descriptor;
+			m_attributes.bInheritHandle = FALSE;
+		}
+		owner_only_access(const owner_only_access&) = delete;
+		owner_only_access& operator=(const owner_only_access&) = delete;
+		~owner_only_access()
+		{
+			if (m_descriptor != nullptr) LocalFree(m_descriptor);
+		}
+
+		bool ok() const { return m_descriptor != nullptr; }
+		SECURITY_ATTRIBUTES* attributes() { return &m_attributes; }
+
+	private:
+		PSECURITY_DESCRIPTOR m_descriptor = nullptr;
+		SECURITY_ATTRIBUTES m_attributes{};
+	};
+#endif
+
 	std::string write_private_file(const fs::path& path, std::string_view content)
 	{
 #ifdef _WIN32
-		// The folder is private to the user (a fresh one under the user's temp folder).
-		std::ofstream file(path, std::ios::binary | std::ios::trunc);
-		file.write(content.data(), static_cast<std::streamsize>(content.size()));
-		file.flush();
-		if (!file) return "cannot write a private file for curl";
+		owner_only_access access{ false };
+		if (!access.ok()) return "cannot make an owner-only access list for a private file for curl";
+		// Not shared and never opened over an existing file; written through the handle, so no stream buffer keeps a copy.
+		const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, access.attributes(), CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (file == INVALID_HANDLE_VALUE) return "cannot create a private file for curl";
+		bool good = true;
+		std::size_t done = 0;
+		while (good && done < content.size()) {
+			DWORD written = 0;
+			const auto chunk = static_cast<DWORD>(std::min<std::size_t>(content.size() - done, 1u << 20));
+			good = WriteFile(file, content.data() + done, chunk, &written, nullptr) != FALSE && written > 0;
+			done += written;
+		}
+		good = FlushFileBuffers(file) != FALSE && good;
+		CloseHandle(file);
+		if (!good) return "cannot write a private file for curl";
 		return {};
 #else
 		const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -195,54 +282,69 @@ namespace {
 		}
 	};
 
-	// The private folder under the OS temp folder, made on first use.
-	class scratch_folder
+	// A folder only the current user can enter, made for one request and removed with it (when owned). A folder from
+	// curl_options::scratch_dir is the caller's: never removed here.
+	struct request_folder
 	{
-	public:
-		scratch_folder() = default;
-		scratch_folder(const scratch_folder&) = delete;
-		scratch_folder& operator=(const scratch_folder&) = delete;
-		~scratch_folder()
-		{
-			if (m_root.empty()) return;
-			std::error_code ec;
-			fs::remove_all(m_root, ec);
-		}
+		fs::path path;
+		bool owned = false;
 
-		fs::path get()
+		request_folder() = default;
+		request_folder(const request_folder&) = delete;
+		request_folder& operator=(const request_folder&) = delete;
+		~request_folder()
 		{
-			const std::scoped_lock lock{ m_mutex };
+			if (!owned || path.empty()) return;
 			std::error_code ec;
-			if (!m_root.empty() && fs::is_directory(m_root, ec)) return m_root;
-			const fs::path temp = fs::temp_directory_path(ec);
-			if (ec) return {};
-			std::random_device entropy;
-			for (int attempt = 0; attempt < 16; ++attempt) {
-				const std::uint64_t tag = (std::uint64_t{ entropy() } << 32) ^ std::uint64_t{ entropy() }
-					^ static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-				const fs::path root = temp / std::format("snk_editor_forge_{:016x}", tag);
-				// Fails on a folder that exists: this one is ours alone.
-				if (!fs::create_directory(root, ec)) {
-					if (ec) return {};
-					continue;
-				}
-#ifndef _WIN32
-				fs::permissions(root, fs::perms::owner_all, fs::perm_options::replace, ec);
-				if (ec) {
-					fs::remove_all(root, ec);
-					return {};
-				}
-#endif
-				m_root = root;
-				return m_root;
-			}
-			return {};
+			fs::remove_all(path, ec);
 		}
-
-	private:
-		std::mutex m_mutex;
-		fs::path m_root;
 	};
+
+#ifndef _WIN32
+	// $XDG_RUNTIME_DIR when it is a directory of ours that nobody else can write into; else the OS temp folder.
+	fs::path posix_scratch_base()
+	{
+		const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+		if (runtime != nullptr && runtime[0] == '/') {
+			struct stat info{};
+			if (::stat(runtime, &info) == 0 && S_ISDIR(info.st_mode) && info.st_uid == ::geteuid()
+				&& (info.st_mode & 0022) == 0 && ::access(runtime, W_OK | X_OK) == 0) {
+				return runtime;
+			}
+		}
+		std::error_code ec;
+		const fs::path temp = fs::temp_directory_path(ec);
+		return ec ? fs::path{} : temp;
+	}
+#endif
+
+	// Empty: it cannot be made. mkdtemp always gives 0700 and never reuses a name, so nothing planted in a shared
+	// /tmp can be picked up.
+	fs::path make_request_folder()
+	{
+#ifdef _WIN32
+		std::error_code ec;
+		const fs::path temp = fs::temp_directory_path(ec);
+		if (ec) return {};
+		owner_only_access access{ true };
+		if (!access.ok()) return {};
+		std::random_device entropy;
+		for (int attempt = 0; attempt < 16; ++attempt) {
+			const std::uint64_t tag = (std::uint64_t{ entropy() } << 32) ^ std::uint64_t{ entropy() }
+				^ static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+			const fs::path root = temp / std::format("snk_editor_forge_{:016x}", tag);
+			if (CreateDirectoryW(root.c_str(), access.attributes())) return root;
+			if (GetLastError() != ERROR_ALREADY_EXISTS) return {};
+		}
+		return {};
+#else
+		const fs::path base = posix_scratch_base();
+		if (base.empty()) return {};
+		std::string pattern = (base / "snk_forge_XXXXXX").string();
+		if (::mkdtemp(pattern.data()) == nullptr) return {};
+		return fs::path{ pattern };
+#endif
+	}
 
 	std::vector<std::string> own_environment()
 	{
@@ -260,10 +362,23 @@ namespace {
 		return out;
 	}
 
-	bool is_curl_home(const std::string& entry)
+	// Compared without case on every OS, like the environment of Windows.
+	bool is_dropped_variable(const std::string& entry)
 	{
-		constexpr std::string_view name = "curl_home=";
-		return entry.size() >= name.size() && lower(std::string_view(entry).substr(0, name.size())) == name;
+		constexpr std::string_view names[] = { "curl_home=", "sslkeylogfile=" };
+		return std::any_of(std::begin(names), std::end(names), [&](std::string_view name) {
+			return entry.size() >= name.size() && lower(std::string_view(entry).substr(0, name.size())) == name;
+		});
+	}
+
+	// plt_process words a spawn failure as "cannot find '<program>' in PATH" (the search found nothing) or as
+	// "cannot start '<program>': <system message>"; only "no such file" messages of the system count as not found.
+	bool is_not_found_error(std::string_view error)
+	{
+		if (error.starts_with("cannot find '")) return true;
+		return error.find("No such file or directory") != std::string_view::npos
+			|| error.find("cannot find the file specified") != std::string_view::npos
+			|| error.find("cannot find the path specified") != std::string_view::npos;
 	}
 
 	std::string file_name_in(const char* prefix)
@@ -276,7 +391,6 @@ namespace {
 	struct curl_state
 	{
 		edt::forge::curl_options options;
-		std::shared_ptr<scratch_folder> own_scratch;
 	};
 
 	edt::forge::http_response perform(const curl_state& state, const edt::forge::http_request& request, std::stop_token stop)
@@ -287,7 +401,19 @@ namespace {
 		if (auto refused = refuse(request, options.allowed_hosts)) return std::move(*refused);
 		if (stop.stop_requested()) return failure(forge_error_code::network, "the request was cancelled");
 
-		const fs::path scratch = options.scratch_dir ? options.scratch_dir() : state.own_scratch->get();
+		request_folder folder;
+		if (options.scratch_dir) {
+			folder.path = options.scratch_dir();
+#ifndef _WIN32
+			// Only what can be told cheaply: a link or a file in its place is refused. Its rights are the caller's.
+			struct stat info{};
+			if (!folder.path.empty() && (::lstat(folder.path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode))) folder.path.clear();
+#endif
+		} else {
+			folder.path = make_request_folder();
+			folder.owned = !folder.path.empty();
+		}
+		const fs::path& scratch = folder.path;
 		if (scratch.empty()) return failure(forge_error_code::unavailable, "no private temp folder for the request files");
 
 		file_guard config_file;
@@ -295,11 +421,25 @@ namespace {
 		config_file.path = scratch / file_name_in("curl_cfg");
 		config_file.wipe = true;
 
+		// Reserved for the worst case (every character escaped), so the buffer is never reallocated and no stale copy of
+		// the token is left behind; wiped on every path.
+		std::size_t estimate = 1024 + 2 * (request.url.size() + request.method.size());
+		for (const auto& [name, value] : request.headers) estimate += 2 * (name.size() + value.size()) + 32;
+		if (request.bearer_token != nullptr) estimate += 2 * request.bearer_token->reveal().size() + 64;
 		std::string config;
+		config.reserve(estimate);
+		const wipe_on_exit config_wipe{ config };
 		add_option(config, "url", request.url);
 		add_option(config, "request", request.method);
 		for (const auto& [name, value] : request.headers) add_option(config, "header", name + ": " + value);
-		if (request.bearer_token != nullptr) add_option(config, "header", "Authorization: Bearer " + request.bearer_token->reveal());
+		if (request.bearer_token != nullptr) {
+			std::string authorization;
+			authorization.reserve(request.bearer_token->reveal().size() + 32);
+			const wipe_on_exit authorization_wipe{ authorization };
+			authorization += "Authorization: Bearer ";
+			authorization += request.bearer_token->reveal();
+			add_option(config, "header", authorization);
+		}
 		if (!request.body.empty()) {
 			body_file.path = scratch / file_name_in("curl_body");
 			if (auto error = write_private_file(body_file.path, request.body); !error.empty()) {
@@ -310,7 +450,7 @@ namespace {
 		if (auto error = write_private_file(config_file.path, config); !error.empty()) {
 			return failure(forge_error_code::unavailable, error);
 		}
-		config.assign(config.size(), '\0');
+		wipe_string(config);
 
 		const std::vector<std::string> args = {
 			"-q",
@@ -330,7 +470,7 @@ namespace {
 		process.working_dir = scratch;
 		process.raw_output = true;
 		std::vector<std::string> environment = options.environment ? *options.environment : own_environment();
-		std::erase_if(environment, is_curl_home);
+		std::erase_if(environment, is_dropped_variable);
 		process.environment = std::move(environment);
 		std::string error_tail;
 		process.on_stderr_line = [&error_tail](std::string_view line) {
@@ -341,6 +481,11 @@ namespace {
 
 		std::stop_source own_stop;
 		const std::stop_callback forward{ stop, [&own_stop] { own_stop.request_stop(); } };
+		// The outer deadline: --max-time bounds curl itself, this bounds a curl that hangs past it.
+		const auto deadline = std::chrono::seconds(std::max(1, options.max_time_seconds)) + std::max(options.deadline_grace, std::chrono::seconds(0));
+		std::atomic<bool> timed_out{ false };
+		std::mutex watchdog_mutex;
+		std::condition_variable_any watchdog_wake;
 		std::string output;
 		bool too_large = false;
 		const auto on_output = [&](std::string_view chunk) {
@@ -361,6 +506,13 @@ namespace {
 			: options.curl;
 
 		platform::process_result result;
+		std::jthread watchdog{ [&](std::stop_token done) {
+			std::unique_lock lock{ watchdog_mutex };
+			watchdog_wake.wait_for(lock, done, deadline, [] { return false; });
+			if (done.stop_requested()) return;
+			timed_out = true;
+			own_stop.request_stop();
+		} };
 		try {
 			result = options.run(program, args, process, on_output, own_stop.get_token());
 		} catch (const std::exception& e) {
@@ -369,9 +521,18 @@ namespace {
 			return failure(forge_error_code::network, "curl could not be run");
 		}
 
+		watchdog.request_stop();
+		watchdog.join();
+
 		if (too_large) return failure(forge_error_code::invalid_response, "the response is too large");
+		if (timed_out) {
+			return failure(forge_error_code::network, std::format("the request timed out after {} s (curl did not end)", options.max_time_seconds));
+		}
 		if (!result.error.empty()) {
-			return failure(forge_error_code::unavailable, "curl was not found (install curl or set forge/curl)");
+			if (is_not_found_error(result.error)) {
+				return failure(forge_error_code::unavailable, "curl was not found (install curl or set forge/curl)");
+			}
+			return failure(forge_error_code::unavailable, std::format("curl could not be started: {}", edt::forge::sanitize_text(result.error, 200)));
 		}
 		if (result.cancelled) return failure(forge_error_code::network, "the request was cancelled");
 
@@ -422,7 +583,6 @@ edt::forge::http_transport edt::forge::make_curl_transport(curl_options options)
 {
 	auto state = std::make_shared<curl_state>();
 	state->options = std::move(options);
-	state->own_scratch = std::make_shared<scratch_folder>();
 	return [state](const http_request& request, std::stop_token stop) {
 		return perform(*state, request, std::move(stop));
 	};
