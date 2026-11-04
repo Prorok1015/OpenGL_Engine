@@ -81,12 +81,12 @@ BOOST_AUTO_TEST_CASE(MemoryBackend_RoundTrip)
 {
 	platform::memory_secret_backend backend;
 	secret_text out;
-	BOOST_TEST(backend.load(key, out).status == secret_status::not_found);
-	BOOST_TEST(backend.store(key, secret_text(canary)).status == secret_status::ok);
-	BOOST_TEST(backend.load(key, out).status == secret_status::ok);
+	BOOST_TEST((backend.load(key, out).status == secret_status::not_found));
+	BOOST_TEST((backend.store(key, secret_text(canary)).status == secret_status::ok));
+	BOOST_TEST((backend.load(key, out).status == secret_status::ok));
 	BOOST_TEST(out.reveal() == canary);
-	BOOST_TEST(backend.erase(key).status == secret_status::ok);
-	BOOST_TEST(backend.erase(key).status == secret_status::not_found);
+	BOOST_TEST((backend.erase(key).status == secret_status::ok));
+	BOOST_TEST((backend.erase(key).status == secret_status::not_found));
 }
 
 BOOST_AUTO_TEST_CASE(SecretText_FormatsAsRedacted)
@@ -113,13 +113,13 @@ BOOST_AUTO_TEST_CASE(Store_FallsBackToRamWhenPrimaryUnavailable)
 	for (const secret_status status : { secret_status::unavailable, secret_status::failed }) {
 		harness h(status);
 		const secret_result stored = h.store.store(key, secret_text(canary));
-		BOOST_TEST(stored.status == secret_status::ok);
+		BOOST_TEST((stored.status == secret_status::ok));
 		BOOST_TEST(!h.store.persisted(key));
 		BOOST_TEST(h.store.last_backend_name() == "memory");
 		BOOST_TEST(stored.message.find(canary) == std::string::npos);
 
 		secret_text out;
-		BOOST_TEST(h.store.load(key, out).status == secret_status::ok);
+		BOOST_TEST((h.store.load(key, out).status == secret_status::ok));
 		BOOST_TEST(out.reveal() == canary);
 		BOOST_TEST(h.fake->m_calls.size() == 2u);
 	}
@@ -128,40 +128,40 @@ BOOST_AUTO_TEST_CASE(Store_FallsBackToRamWhenPrimaryUnavailable)
 BOOST_AUTO_TEST_CASE(Store_UsesPrimaryWhenItWorks)
 {
 	harness h(secret_status::ok);
-	BOOST_TEST(h.store.store(key, secret_text(canary)).status == secret_status::ok);
+	BOOST_TEST((h.store.store(key, secret_text(canary)).status == secret_status::ok));
 	BOOST_TEST(h.store.persisted(key));
 	BOOST_TEST(h.store.last_backend_name() == "fake");
 	secret_text out;
-	BOOST_TEST(h.store.load(key, out).status == secret_status::ok);
+	BOOST_TEST((h.store.load(key, out).status == secret_status::ok));
 	BOOST_TEST(out.reveal() == canary);
 }
 
 BOOST_AUTO_TEST_CASE(Store_WithoutPrimaryKeepsRamOnly)
 {
 	platform::secret_store store(nullptr);
-	BOOST_TEST(store.store(key, secret_text(canary)).status == secret_status::ok);
+	BOOST_TEST((store.store(key, secret_text(canary)).status == secret_status::ok));
 	BOOST_TEST(!store.persisted(key));
 	secret_text out;
-	BOOST_TEST(store.load(key, out).status == secret_status::ok);
-	BOOST_TEST(store.erase(key).status == secret_status::ok);
-	BOOST_TEST(store.load(key, out).status == secret_status::not_found);
+	BOOST_TEST((store.load(key, out).status == secret_status::ok));
+	BOOST_TEST((store.erase(key).status == secret_status::ok));
+	BOOST_TEST((store.load(key, out).status == secret_status::not_found));
 }
 
 BOOST_AUTO_TEST_CASE(Erase_RemovesFromBothPlaces)
 {
 	harness h(secret_status::unavailable);
 	h.store.store(key, secret_text(canary));
-	BOOST_TEST(h.store.erase(key).status == secret_status::ok);
+	BOOST_TEST((h.store.erase(key).status == secret_status::ok));
 	secret_text out;
-	BOOST_TEST(h.store.load(key, out).status != secret_status::ok);
+	BOOST_TEST((h.store.load(key, out).status != secret_status::ok));
 	BOOST_TEST(out.empty());
 
 	harness working_h(secret_status::ok);
 	platform::secret_store& working = working_h.store;
 	working.store(key, secret_text(canary));
-	BOOST_TEST(working.erase(key).status == secret_status::ok);
+	BOOST_TEST((working.erase(key).status == secret_status::ok));
 	BOOST_TEST(!working.persisted(key));
-	BOOST_TEST(working.load(key, out).status == secret_status::not_found);
+	BOOST_TEST((working.load(key, out).status == secret_status::not_found));
 }
 
 BOOST_AUTO_TEST_CASE(Messages_NeverContainTheSecret)
@@ -188,7 +188,7 @@ BOOST_AUTO_TEST_CASE(OsBackend_LoadOfUnknownKeyNeverSucceeds)
 	BOOST_REQUIRE(backend != nullptr);
 	secret_text out;
 	const secret_result result = backend->load({ "snk-test-never-stored", "no-such-account-7f3a91c2" }, out);
-	BOOST_TEST(result.status != secret_status::ok);
+	BOOST_TEST((result.status != secret_status::ok));
 	BOOST_TEST(out.empty());
 }
 
