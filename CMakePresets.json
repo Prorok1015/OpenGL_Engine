@@ -116,7 +116,15 @@
       "name": "ci-linux-tsan",
       "inherits": "ci-linux",
       "displayName": "CI Linux TSan",
-      "cacheVariables": { "SNK_SANITIZE": "thread" }
+      "description": "Debug (asserts on) at -O1, as TSan recommends (#524). Every target is instrumented, third-party included: at -O1 an uninstrumented COMDAT copy of an inline libstdc++ function (shared_ptr's _M_release) can win the link and hide an atomic from TSan, a false race (#532).",
+      "cacheVariables": {
+        "SNK_SANITIZE": "thread",
+        "CMAKE_C_FLAGS": "-O1 -fsanitize=thread",
+        "CMAKE_CXX_FLAGS": "-O1 -fsanitize=thread",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=thread"
+      }
     },
     {
       "name": "ci-linux-coverage",
