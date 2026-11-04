@@ -595,7 +595,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	forge_account_model::ports account_ports;
 	account_ports.secrets = m_secrets;
 	account_ports.start_job = [this](std::string label, std::function<boost::json::value()> work) -> std::optional<std::uint64_t> {
-		return m_context->jobs().start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "forge" }, m_lifetime,
+		return m_context->jobs().start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "forge" }, m_forge_lifetime,
 			[work = std::move(work)](ds::task_context&) -> boost::json::value { return work(); });
 	};
 	m_forge_account_panel = std::make_shared<forge_account_panel>(m_context->events(), forge_hosts, std::move(account_ports));
