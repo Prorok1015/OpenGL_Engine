@@ -123,9 +123,16 @@ namespace {
 	HANDLE open_real_directory(const fs::path& directory);
 	bool read_file_in(const fs::path& directory, std::string& out);
 
+	HANDLE open_token_file(const fs::path& path, DWORD flags)
+	{
+		return CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | flags, nullptr);
+	}
+
 	// The file as it is, if it is a plain file: opened without following a link, and a pipe, a device or a directory is
 	// not read (reading one could block for ever). The directory is judged and held like the write's (#526), so a
-	// junction at .snk reads as no file.
+	// junction at .snk reads as no file; a file OneDrive or deduplication keeps in place is read through its filter if
+	// it is still the same file there (#529), as platform::beneath::read_beneath does.
 	bool read_small_file(const fs::path& directory, std::string& out)
 	{
 		const HANDLE held_directory = open_real_directory(directory);
@@ -140,21 +147,43 @@ namespace {
 	bool read_file_in(const fs::path& directory, std::string& out)
 	{
 		const fs::path path = directory / file_name;
-		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		HANDLE file = open_token_file(path, FILE_FLAG_OPEN_REPARSE_POINT);
 		if (file == INVALID_HANDLE_VALUE) {
 			return false;
 		}
-		BY_HANDLE_FILE_INFORMATION information;
-		bool ok = GetFileType(file) == FILE_TYPE_DISK && GetFileInformationByHandle(file, &information)
-			&& (information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
+		BY_HANDLE_FILE_INFORMATION information{};
+		bool ok = GetFileInformationByHandle(file, &information) != 0;
+		if (ok) {
+			FILE_ATTRIBUTE_TAG_INFO tag{};
+			const bool tag_known = (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0
+				|| GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tag, sizeof(tag)) != 0;
+			switch (mcp::detail::file_entry_of(information.dwFileAttributes, tag_known, tag.ReparseTag)) {
+			case mcp::detail::file_entry::plain:
+				break;
+			case mcp::detail::file_entry::refused:
+				ok = false;
+				break;
+			case mcp::detail::file_entry::through_filter: {
+				const HANDLE followed = open_token_file(path, 0);
+				BY_HANDLE_FILE_INFORMATION after{};
+				ok = followed != INVALID_HANDLE_VALUE && GetFileInformationByHandle(followed, &after) && same_file(information, after)
+					&& (after.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+				CloseHandle(file);
+				file = followed;
+				break;
+			}
+			}
+		}
+		ok = ok && GetFileType(file) == FILE_TYPE_DISK;
 		if (ok) {
 			out.assign(max_file_bytes, '\0');
 			DWORD got = 0;
 			ok = ReadFile(file, out.data(), static_cast<DWORD>(max_file_bytes), &got, nullptr) != 0;
 			out.resize(ok ? static_cast<std::size_t>(got) : 0);
 		}
-		CloseHandle(file);
+		if (file != INVALID_HANDLE_VALUE) {
+			CloseHandle(file);
+		}
 		return ok;
 	}
 

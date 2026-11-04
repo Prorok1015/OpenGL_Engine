@@ -28,7 +28,20 @@ std::vector<std::uint32_t> tags_to_compare()
 		0x8000001Bu, // APPEXECLINK
 		0x00000000u,
 		0xFFFFFFFFu,
+		0x9000011Au, // CLOUD with a bit outside the cloud mask
+		0x8000001Au, // CLOUD without the high-latency bit
+		0x90000013u, // DEDUP with the high-latency bit
 	});
+	// Random values almost never land on the cloud family, so its neighbours are generated: every one-bit flip and
+	// every low-nibble variation of each tag the rule singles out.
+	for (const std::uint32_t base : { 0x9000001Au, 0x80000013u, 0x9000101Bu }) {
+		for (std::uint32_t bit = 0; bit < 32; ++bit) {
+			tags.push_back(base ^ (1u << bit));
+		}
+		for (std::uint32_t nibble = 0; nibble <= 0xFu; ++nibble) {
+			tags.push_back((base & ~0xFu) | nibble);
+		}
+	}
 	std::mt19937 random(529);
 	for (int i = 0; i < 1000; ++i) {
 		tags.push_back(static_cast<std::uint32_t>(random()));
@@ -73,6 +86,24 @@ BOOST_AUTO_TEST_CASE(McpReparseRule_EntersOneDriveAndDedup_RefusesLinksAndOtherF
 	BOOST_TEST((folder_entry_of(reparse_folder, true, 0x90001018u) == folder_entry::refused));       // WCI_1
 	BOOST_TEST((folder_entry_of(reparse_folder, true, 0x9000101Bu) == folder_entry::refused));
 	BOOST_TEST((folder_entry_of(mcp::detail::k_attribute_reparse_point, true, 0x9000001Au) == folder_entry::not_a_folder));
+}
+
+BOOST_AUTO_TEST_CASE(McpReparseRule_ReadsAFilterFileThroughItsFilter_RefusesLinksAndFolders)
+{
+	using mcp::detail::file_entry;
+	using mcp::detail::file_entry_of;
+	constexpr std::uint32_t reparse_file = mcp::detail::k_attribute_reparse_point;
+	BOOST_TEST((file_entry_of(0u, true, 0) == file_entry::plain));
+	BOOST_TEST((file_entry_of(reparse_file, true, 0x9000001Au) == file_entry::through_filter)); // a OneDrive placeholder
+	BOOST_TEST((file_entry_of(reparse_file, true, 0x9000601Au) == file_entry::through_filter)); // CLOUD_6
+	BOOST_TEST((file_entry_of(reparse_file, true, 0x80000013u) == file_entry::through_filter)); // DEDUP
+	BOOST_TEST((file_entry_of(reparse_file, true, 0x80000017u) == file_entry::through_filter)); // WOF, as read_beneath
+	BOOST_TEST((file_entry_of(reparse_file, true, 0xA000000Cu) == file_entry::refused));        // symlink
+	BOOST_TEST((file_entry_of(reparse_file, true, 0xA0000003u) == file_entry::refused));        // mount point
+	BOOST_TEST((file_entry_of(reparse_file, true, 0xA000001Du) == file_entry::refused));        // LX_SYMLINK
+	BOOST_TEST((file_entry_of(reparse_file, false, 0x9000001Au) == file_entry::refused));       // tag unreadable
+	BOOST_TEST((file_entry_of(mcp::detail::k_attribute_directory, true, 0) == file_entry::refused));
+	BOOST_TEST((file_entry_of(mcp::detail::k_attribute_directory | reparse_file, true, 0x9000001Au) == file_entry::refused));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
