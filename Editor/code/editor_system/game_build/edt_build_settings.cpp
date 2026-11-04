@@ -261,12 +261,19 @@ std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, c
 	if (after == before) return std::nullopt;
 
 	merge_build_settings(doc, after);
-	std::error_code ec;
-	fs::create_directories(snk_dir, ec);
-	if (ec) return std::format("'{}' cannot be created: {}", utf8_of(snk_dir), ec.message());
 	const std::string text = prj::to_indented_json(doc);
-	if (auto problem = write ? write(file, text) : prj::write_text_atomically(file, text)) return problem;
-	return std::nullopt;
+	if (write) {
+		// A test's writer gets the folder made by path, as before #523.
+		std::error_code ec;
+		fs::create_directories(snk_dir, ec);
+		if (ec) return std::format("'{}' cannot be created: {}", utf8_of(snk_dir), ec.message());
+		return write(file, text);
+	}
+	// The root is the project's, so .snk itself is opened without following a link (#523).
+	fs::path dir = snk_dir.lexically_normal();
+	if (!dir.has_filename()) dir = dir.parent_path();
+	const fs::path root = dir.has_parent_path() ? dir.parent_path() : fs::path{ "." };
+	return prj::write_project_file(root, dir.filename() / k_build_settings_file, text);
 }
 
 std::optional<std::string> edt::clear_fresh_configure(const fs::path& snk_dir, std::string_view configuration,

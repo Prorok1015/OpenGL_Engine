@@ -75,9 +75,10 @@ namespace edt
 	build_settings load_build_settings(const std::filesystem::path& snk_dir);
 
 	// Reads <snk_dir>/build.json, lets `change` edit the settings parsed from it, merges them back (unknown keys kept)
-	// and writes the file atomically (prj::write_text_atomically), creating <snk_dir>, unless `change` changed nothing.
+	// and writes the file atomically unless `change` changed nothing: prj::write_project_file below the project root
+	// (snk_dir's parent), so <snk_dir> is made if missing and a link at <snk_dir> or at build.json is an error (#523).
 	// A file that cannot be read or is not a JSON object is an error and is never overwritten. nullopt on success.
-	// `write` set: the file is written through it (tests).
+	// `write` set: <snk_dir> is made by path and the file is written through it (tests).
 	std::optional<std::string> update_build_settings(const std::filesystem::path& snk_dir,
 		const std::function<void(build_settings&)>& change, const prj::text_writer& write = {});
 	// Why update_build_settings would refuse <snk_dir>/build.json; nullopt when it is missing or a JSON object.

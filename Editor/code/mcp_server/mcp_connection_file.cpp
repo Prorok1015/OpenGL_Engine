@@ -97,9 +97,30 @@ namespace {
 		return ok;
 	}
 
+	// The directory itself, opened without following a link and checked to be a real directory, not a reparse point.
+	// Held without FILE_SHARE_DELETE until the token file is in place, so meanwhile nobody can rename or replace it with a
+	// junction (#523, as the resource writes of #484). FILE_LIST_DIRECTORY: a handle with only attribute access does not
+	// take part in sharing. INVALID_HANDLE_VALUE when refused.
+	HANDLE open_real_directory(const fs::path& directory)
+	{
+		HANDLE handle = CreateFileW(directory.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return INVALID_HANDLE_VALUE;
+		}
+		BY_HANDLE_FILE_INFORMATION information;
+		if (!GetFileInformationByHandle(handle, &information) || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0
+			|| (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+			CloseHandle(handle);
+			SetLastError(ERROR_CANT_ACCESS_FILE);
+			return INVALID_HANDLE_VALUE;
+		}
+		return handle;
+	}
+
 	// Creates a file only the current user can open: the DACL is part of the creation, so the token is never in a
 	// file that others could read, and SE_DACL_PROTECTED keeps the folder's inheritable entries out.
-	std::string write_atomic(const fs::path& directory, const std::string& text)
+	std::string write_token_file(const fs::path& directory, const std::string& text)
 	{
 		HANDLE process_token = nullptr;
 		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &process_token)) {
@@ -160,6 +181,18 @@ namespace {
 			}
 		}
 		LocalFree(acl);
+		return failure;
+	}
+
+	// The token file, with the directory held from before the temp file is made until after the rename (#523).
+	std::string write_atomic(const fs::path& directory, const std::string& text)
+	{
+		const HANDLE held_directory = open_real_directory(directory);
+		if (held_directory == INVALID_HANDLE_VALUE) {
+			return last_error_text(("cannot use " + directory.string() + " (it is a link, a junction or not a directory)").c_str());
+		}
+		const std::string failure = write_token_file(directory, text);
+		CloseHandle(held_directory);
 		return failure;
 	}
 #else

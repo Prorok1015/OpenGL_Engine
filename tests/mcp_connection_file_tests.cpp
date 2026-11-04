@@ -3,6 +3,7 @@
 #include <boost/json/parse.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -223,6 +224,39 @@ BOOST_AUTO_TEST_CASE(Write_RefusesAProjectAnotherRunningEditorServes)
 	const auto read = mcp::read_connection_file(dir.path);
 	BOOST_REQUIRE(read.has_value());
 	BOOST_TEST(read->token == "theirs");
+}
+#else
+// #523: a junction at .snk (no privilege needed to make one) is refused and nothing lands in its target.
+BOOST_AUTO_TEST_CASE(Write_RefusesADirectoryThatIsAJunction)
+{
+	temp_directory dir;
+	const fs::path elsewhere = dir.path / "elsewhere";
+	fs::create_directories(elsewhere);
+	const fs::path snk_dir = dir.path / ".snk";
+	const std::string command = "cmd /c mklink /J \"" + snk_dir.string() + "\" \"" + elsewhere.string() + "\" >nul";
+	BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && fs::exists(snk_dir), "mklink /J failed for " + snk_dir.string());
+
+	const std::string failure = mcp::write_connection_file(snk_dir, make_info(1, "secret", mcp::current_process_id()));
+	BOOST_TEST(!failure.empty());
+	BOOST_TEST(fs::is_empty(elsewhere));
+}
+
+// A directory symlink at .snk, when the system lets this user make one.
+BOOST_AUTO_TEST_CASE(Write_RefusesADirectoryThatIsASymlink)
+{
+	temp_directory dir;
+	const fs::path elsewhere = dir.path / "elsewhere";
+	fs::create_directories(elsewhere);
+	const fs::path snk_dir = dir.path / ".snk";
+	std::error_code ec;
+	fs::create_directory_symlink(elsewhere, snk_dir, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("directory symlink not created (" + ec.message() + "): no developer mode or symlink privilege; that case is not run");
+		return;
+	}
+	const std::string failure = mcp::write_connection_file(snk_dir, make_info(1, "secret", mcp::current_process_id()));
+	BOOST_TEST(!failure.empty());
+	BOOST_TEST(fs::is_empty(elsewhere));
 }
 #endif
 
