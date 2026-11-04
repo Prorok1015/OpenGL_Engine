@@ -227,7 +227,7 @@ BOOST_AUTO_TEST_CASE(Errors_ScrubTheTokenAndTheServersControlCharacters)
 {
 	fake_transport fake;
 	// The server echoes the token, rings the bell and flips the text direction.
-	fake.answer(401, R"json({"message":"Bad credentials ghp_CANARYCANARYCANARYCANARY0123456789 \u0007 ‮ evil ​"})json");
+	fake.answer(401, R"json({"message":"Bad credentials ghp_CANARYCANARYCANARYCANARY0123456789 \u0007 \u202e evil \u200b"})json");
 	edt::forge::github_provider provider(fake.transport());
 	const auto token = make_token();
 
@@ -355,7 +355,7 @@ BOOST_AUTO_TEST_CASE(ListPrs_HeadWithAnOwner_KeepsIt_AndTheLimitIsClamped)
 BOOST_AUTO_TEST_CASE(ListPrs_RefusesAFilterThatCouldChangeTheQuery)
 {
 	const auto token = make_token();
-	for (const std::string value : { std::string("a b"), std::string("a\nb"), std::string("..") }) {
+	for (const std::string& value : { std::string("a b"), std::string("a\nb"), std::string("..") }) {
 		fake_transport fake;
 		fake.answer(200, "[]");
 		edt::forge::github_provider provider(fake.transport());
@@ -391,7 +391,7 @@ BOOST_AUTO_TEST_CASE(ListPrs_PercentEncodesQueryValues)
 BOOST_AUTO_TEST_CASE(Responses_MalformedJson_IsInvalidResponse)
 {
 	const auto token = make_token();
-	for (const std::string body : { std::string("{\"number\":"), std::string(""), std::string("not json"), std::string("{} trailing") }) {
+	for (const std::string& body : { std::string("{\"number\":"), std::string(""), std::string("not json"), std::string("{} trailing") }) {
 		fake_transport fake;
 		fake.answer(200, body);
 		edt::forge::github_provider provider(fake.transport());
@@ -406,7 +406,7 @@ BOOST_AUTO_TEST_CASE(Responses_MalformedJson_IsInvalidResponse)
 BOOST_AUTO_TEST_CASE(Responses_NotAnObject_IsInvalidResponse)
 {
 	const auto token = make_token();
-	for (const std::string body : { std::string("[1,2]"), std::string("42"), std::string("\"text\""), std::string("null") }) {
+	for (const std::string& body : { std::string("[1,2]"), std::string("42"), std::string("\"text\""), std::string("null") }) {
 		fake_transport fake;
 		fake.answer(201, body);
 		edt::forge::github_provider provider(fake.transport());
@@ -432,7 +432,7 @@ BOOST_AUTO_TEST_CASE(Responses_AnObjectWhereAListIsExpected_IsInvalidResponse)
 BOOST_AUTO_TEST_CASE(Responses_MissingFields_AreInvalidResponse)
 {
 	const auto token = make_token();
-	for (const std::string body : {
+	for (const std::string& body : {
 			std::string(R"json({"title":"x","state":"open","head":{"ref":"a"},"base":{"ref":"b"}})json"),
 			std::string(R"json({"number":1,"state":"open","head":{"ref":"a"},"base":{"ref":"b"}})json"),
 			std::string(R"json({"number":1,"title":"x","state":"weird","head":{"ref":"a"},"base":{"ref":"b"}})json"),
@@ -475,7 +475,7 @@ BOOST_AUTO_TEST_CASE(Responses_Oversized_IsInvalidResponse)
 BOOST_AUTO_TEST_CASE(HtmlUrl_OfAnotherHost_IsDropped)
 {
 	const auto token = make_token();
-	for (const std::string url : { std::string("https://evil.example.com/octo/engine/pull/1"), std::string("http://github.com/octo/engine/pull/1"),
+	for (const std::string& url : { std::string("https://evil.example.com/octo/engine/pull/1"), std::string("http://github.com/octo/engine/pull/1"),
 			std::string("https://github.com.evil.example/x"), std::string("https://user@github.com/x"), std::string("javascript:alert(1)") }) {
 		fake_transport fake;
 		fake.answer(200, R"json({"number":1,"title":"x","state":"open","html_url":")json" + url + R"json(","head":{"ref":"a"},"base":{"ref":"b"}})json");
@@ -492,7 +492,7 @@ BOOST_AUTO_TEST_CASE(HtmlUrl_OfAnotherHost_IsDropped)
 BOOST_AUTO_TEST_CASE(Fields_FromTheServer_AreSanitized)
 {
 	fake_transport fake;
-	fake.answer(200, R"json({"number":1,"title":"Fix‮ txt.exe\u0007 ​ ghp_CANARYCANARYCANARYCANARY0123456789","state":"open","head":{"ref":"a\nb"},"base":{"ref":"main"}})json");
+	fake.answer(200, R"json({"number":1,"title":"Fix\u202e txt.exe\u0007 \u200b ghp_CANARYCANARYCANARYCANARY0123456789","state":"open","head":{"ref":"a\nb"},"base":{"ref":"main"}})json");
 	edt::forge::github_provider provider(fake.transport());
 	const auto token = make_token();
 	const auto result = provider.pr_status(octo(), 1, token);
