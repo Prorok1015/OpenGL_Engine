@@ -40,6 +40,9 @@
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
 #include "edt_vcs_service.h"
+#include "edt_forge_service.h"
+#include "edt_github_provider.h"
+#include "edt_curl_transport.h"
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_play_commands.h"
@@ -66,6 +69,7 @@
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_project.h>
 #include <snk/platform/plt_process.h>
+#include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/render/rnd_capture_service.h>
@@ -577,6 +581,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
+	forge_options forge_setup;
+	forge_setup.provider = std::make_shared<forge::github_provider>(forge::make_curl_transport(forge::configured_curl_options()));
+	m_secrets = std::make_shared<platform::secret_store>(platform::make_os_secret_backend());
+	forge_setup.secrets = m_secrets;
+	m_forge = std::make_unique<forge_service>(*m_vcs, std::move(forge_setup));
+	for (auto& command : register_forge_commands(m_context->actions().commands(), *m_forge)) {
+		m_registrations.push_back(std::move(command));
+	}
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
@@ -668,6 +680,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->set_policy_file(project_policy);
 		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
+		m_forge->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
 		m_agent_access->policy().set_on_changed([this] {
 			if (m_agent_server) m_agent_server->notify_tools_changed();
 		});

@@ -22,3 +22,11 @@ else()
 	# plt_secret loads libsecret with dlopen.
 	target_link_libraries(platform_system PRIVATE ${CMAKE_DL_LIBS})
 endif()
+if(WIN32)
+	target_link_libraries(platform_system PRIVATE advapi32)
+elseif(APPLE)
+	target_link_libraries(platform_system PRIVATE "-framework Security" "-framework CoreFoundation")
+else()
+	# plt_secret loads libsecret with dlopen.
+	target_link_libraries(platform_system PRIVATE ${CMAKE_DL_LIBS})
+endif()

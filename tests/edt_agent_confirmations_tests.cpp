@@ -45,6 +45,9 @@ struct confirmations_fixture
 		add("code.create", agent_category::code_files);
 		add("cmake.edit", agent_category::cmake_presets);
 		add("build.run", agent_category::build);
+		add("code.delete", agent_category::code_files, cmd::danger::confirm);
+		add("forge.list", agent_category::vcs_forge);
+		add("forge.create", agent_category::vcs_forge, cmd::danger::confirm);
 		gate->set_can_ask(true);
 		gate->set_session_grants(&grants);
 		commands.set_policy_gate(gate);
@@ -66,11 +69,12 @@ struct confirmations_fixture
 		BOOST_REQUIRE(!policy.approve_project_layer(policy.project()).has_value());
 	}
 
-	void add(std::string id, agent_category category)
+	void add(std::string id, agent_category category, cmd::danger risk = cmd::danger::none)
 	{
 		cmd::command_desc desc;
 		desc.id = std::move(id);
 		desc.category = category;
+		desc.risk = risk;
 		desc.summary = "does " + desc.id;
 		// Any arguments: the tests send {"n":1}, {"path":...} and so on, and the default schema allows none.
 		desc.args_schema = boost::json::value{ { "type", "object" } };
@@ -206,6 +210,127 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_CoversThatCategoryOfThatSessionOnly)
 
 	run("cmake.edit", "s1");
 	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverCoversACommandWithARisk_ListThenCreate)
+{
+	run("forge.list", "s1");
+	BOOST_TEST(confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session));
+	BOOST_TEST(grants.has("s1", agent_category::vcs_forge));
+	BOOST_TEST(runs == 1);
+
+	// Same category, same session: the harmless one is covered, the one with a risk asks again.
+	run("forge.list", "s1");
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(runs == 2);
+	run("forge.create", "s1");
+	BOOST_TEST(finished.size() == 2u);
+	BOOST_TEST(runs == 2);
+	BOOST_TEST(confirmations->pending().size() == 1u);
+	BOOST_TEST(confirmations->pending().front().command == "forge.create");
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverCoversACommandWithARisk_CreateThenDelete)
+{
+	run("code.create", "s1");
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
+	BOOST_TEST(grants.has("s1", agent_category::code_files));
+
+	run("code.delete", "s1");
+
+	BOOST_TEST(finished.size() == 1u);
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AGrantAddedDirectly_StillDoesNotCoverACommandWithARisk_TheGateAsksForIt)
+{
+	grants.add("s1", agent_category::code_files);
+
+	run("code.delete", "s1");
+
+	BOOST_TEST(finished.empty());
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ARequestWithARisk_IsNotOfferedTheSessionGrant_AndAnswerSessionIsOnlyOnce)
+{
+	run("code.delete", "s1");
+	run("code.create", "s1");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+	BOOST_TEST(asked[0].command == "code.delete");
+	BOOST_TEST(!asked[0].can_grant_session);
+	BOOST_TEST(asked[1].command == "code.create");
+	BOOST_TEST(asked[1].can_grant_session);
+
+	BOOST_TEST(confirmations->answer(asked[0].id, edt::confirmation_answer::allow_session));
+
+	BOOST_TEST(!grants.has("s1", agent_category::code_files));
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].ok);
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_DoesNotSettleAWaitingRequestWithARisk)
+{
+	run("code.delete", "s1");
+	run("code.create", "s1");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+
+	BOOST_TEST(confirmations->answer(asked[1].id, edt::confirmation_answer::allow_session));
+
+	BOOST_TEST(grants.has("s1", agent_category::code_files));
+	BOOST_TEST(runs == 1);
+	BOOST_REQUIRE(confirmations->pending().size() == 1u);
+	BOOST_TEST(confirmations->pending().front().command == "code.delete");
+	BOOST_TEST(finished.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_IsShownSanitized_AndBoundToTheQuestion)
+{
+	cmd::command_desc desc;
+	desc.id = "forge.described";
+	desc.category = agent_category::vcs_forge;
+	desc.summary = "does forge.described";
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.describe = [](const cmd::call&) -> std::optional<std::string> { return std::string("in github.com/o/r\x07 \xE2\x80\xAE" "end"); };
+	desc.invoke = [this](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	registrations.push_back(commands.add(std::move(desc)));
+
+	run("forge.described", "s1");
+
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].detail == "in github.com/o/r   end");
+}
+
+BOOST_AUTO_TEST_CASE(ADescriptionThatThrows_RefusesTheCall_WithNobodyAsked)
+{
+	cmd::command_desc desc;
+	desc.id = "forge.broken";
+	desc.category = agent_category::vcs_forge;
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.describe = [](const cmd::call&) -> std::optional<std::string> { throw std::runtime_error("broken"); };
+	desc.invoke = [this](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	registrations.push_back(commands.add(std::move(desc)));
+
+	run("forge.broken", "s1");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+	BOOST_TEST(runs == 0);
 }
 
 namespace {

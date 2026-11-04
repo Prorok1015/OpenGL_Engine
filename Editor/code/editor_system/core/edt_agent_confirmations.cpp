@@ -1,4 +1,5 @@
 #include "edt_agent_confirmations.h"
+#include "edt_forge_types.h"
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
@@ -163,6 +164,9 @@ namespace edt
 		entry.request.session = bound->session;
 		// The category the gate asked for (cmake_presets for a CMake file), so "allow for this session" grants that one.
 		entry.request.category = bound->category;
+		// Text a command made up (and, via the repository's files, text a stranger may have influenced): shown as plain text.
+		entry.request.detail = edt::forge::sanitize_text(bound->detail, k_max_detail);
+		entry.request.can_grant_session = command != nullptr && command->risk == cmd::danger::none;
 		entry.request.asked_at = now();
 		entry.request.deadline = entry.request.asked_at + timeout;
 		m_waiting.push_back(std::move(entry));
@@ -200,9 +204,9 @@ namespace edt
 			entry.done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the confirmation expired", entry.command_id)));
 			return;
 		}
-		// Only an approved ticket earns the session its grant.
-		const bool grant = *what == confirmation_answer::allow_session && !entry.request.session.empty()
-			&& entry.request.category != cmd::agent_category::unset;
+		// Only an approved ticket earns the session its grant, and never one for a command with a risk.
+		const bool grant = *what == confirmation_answer::allow_session && entry.request.can_grant_session
+			&& !entry.request.session.empty() && entry.request.category != cmd::agent_category::unset;
 		if (grant) {
 			m_grants.add(entry.request.session, entry.request.category);
 		}
@@ -218,7 +222,8 @@ namespace edt
 			// "Allow once" would, so the person is not asked about each of them again.
 			std::vector<std::uint64_t> covered;
 			for (const waiting& other : m_waiting) {
-				if (other.request.session == entry.request.session && other.request.category == entry.request.category) {
+				if (other.request.can_grant_session && other.request.session == entry.request.session
+					&& other.request.category == entry.request.category) {
 					covered.push_back(other.request.id);
 				}
 			}
@@ -389,6 +394,7 @@ namespace edt
 				ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(request.id)));
 				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "An agent wants to run %s", request.command.c_str());
 				if (!request.summary.empty()) ImGui::TextWrapped("%s", request.summary.c_str());
+				if (!request.detail.empty()) ImGui::TextUnformatted(request.detail.c_str(), request.detail.c_str() + request.detail.size());
 				ImGui::TextDisabled("session %s, %s", request.session.empty() ? "?" : request.session.c_str(), cmd::to_string(request.category));
 				// The arguments in full, as the registry bound them: what is approved is what is shown, however long.
 				if (ImGui::BeginChild("arguments", ImVec2(0.f, 140.f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
@@ -398,9 +404,11 @@ namespace edt
 				if (ImGui::Button(utf8(label_allow_once))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_once);
 				}
-				ImGui::SameLine();
-				if (ImGui::Button(utf8(label_allow_session))) {
-					chosen.emplace_back(request.id, confirmation_answer::allow_session);
+				if (request.can_grant_session) {
+					ImGui::SameLine();
+					if (ImGui::Button(utf8(label_allow_session))) {
+						chosen.emplace_back(request.id, confirmation_answer::allow_session);
+					}
 				}
 				ImGui::SameLine();
 				if (ImGui::Button(utf8(label_deny))) {

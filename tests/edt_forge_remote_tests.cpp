@@ -218,4 +218,21 @@ BOOST_AUTO_TEST_CASE(ScrubSecret_ReplacesEveryOccurrence)
 	BOOST_TEST(untouched == "abc");
 }
 
+BOOST_AUTO_TEST_CASE(IsPlainText_RefusesWhatSanitizeTextWouldChange)
+{
+	using edt::forge::is_plain_text;
+	BOOST_TEST(is_plain_text("ok \xC3\xBC", false));
+	BOOST_TEST(!is_plain_text("a\tb", false));
+	BOOST_TEST(!is_plain_text("a\nb", false));
+	BOOST_TEST(is_plain_text("a\tb\r\nc\n", true));
+	for (const char* bad : { "a\x01" "b", "a\x07" "b", "a\x1B" "b", "a\x7F" "b", "a\xC2\x85" "b", "a\xE2\x80\xAE" "b",
+			"a\xE2\x80\x8B" "b", "a\xE2\x80\xA8" "b", "a\xEF\xBB\xBF" "b", "a\xFF" "b", "a\xC3" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			BOOST_TEST(!is_plain_text(bad, false));
+			BOOST_TEST(!is_plain_text(bad, true));
+		}
+	}
+	BOOST_TEST(!is_plain_text(std::string("a\0b", 3), true));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

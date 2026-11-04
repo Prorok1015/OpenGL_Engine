@@ -2,6 +2,7 @@
 #include <snk/command/cmd_registry.h>
 #include <boost/json/value.hpp>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -22,7 +23,9 @@ namespace edt
 		// Until this agent session ends: the same category is not asked about again for this session id, and what already waits
 		// for that session and category is allowed with it (also a request whose command had its own `ask` entry). Kept in
 		// memory only (never written to a file), dropped with the session (drop_session), and it can only turn an ask
-		// into an allow, never lift a deny.
+		// into an allow, never lift a deny. Never for a command whose `risk` is not none: such a request is offered only
+		// "once" (confirmation_request::can_grant_session), the answer given anyway is "once", and the grant covers
+		// and settles only commands without a risk.
 		allow_session,
 		deny,
 	};
@@ -51,6 +54,10 @@ namespace edt
 		std::string args;
 		std::string session;
 		cmd::agent_category category = cmd::agent_category::unset;
+		// command_desc::describe of the call (the registry bound it to the ticket), sanitized; empty: none.
+		std::string detail;
+		// false: the command has a risk, so the window offers no "until the end of this agent session".
+		bool can_grant_session = false;
 		std::chrono::steady_clock::time_point asked_at{};
 		std::chrono::steady_clock::time_point deadline{};
 	};
@@ -67,6 +74,8 @@ namespace edt
 		using finish = std::function<void(cmd::result)>;
 
 		static constexpr std::chrono::seconds timeout{ 60 };
+		// The longest description of a call a question shows.
+		static constexpr std::size_t k_max_detail = 512;
 		// How long a call that finds a person in the middle of a gesture (`busy`) is tried again, once per tick(), before
 		// the agent is told. Also for a call a person has just allowed: that answer belongs to this very call, so it is
 		// not asked again, and the command itself still checks the state it finds (expected_generation, refs).

@@ -6,6 +6,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_registration.h>
+#include <boost/json/value.hpp>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -14,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,9 @@ namespace edt
 		// The probes (git --version, git rev-parse) run on the main thread: git is stopped after this long and version
 		// control is off ("git did not answer within 5 s").
 		std::chrono::milliseconds probe_timeout{ 5000 };
+		// read_remote_now runs on the main thread too, but a timeout there only refuses the one request: it must not
+		// switch version control off for everyone.
+		std::chrono::milliseconds describe_timeout{ 1000 };
 	};
 
 	// Git for the editor and its agents (#454): reads (status, diff, log, show_files, branches), writes (stage, unstage, commit,
@@ -232,6 +237,67 @@ namespace edt
 		{
 			return start_push(remote, branch, set_upstream, cmd::origin{ caller, {} });
 		}
+
+		// git's local answers for a job of someone else's that goes on to the network (the forge's pull request calls,
+		// #458): the same hardened read as every vcs read (no hooks, filter drivers off, no transport for an agent), and
+		// nothing here talks to a remote. Used on the job's thread only.
+		class repository_reader
+		{
+		public:
+			struct impl;
+
+			// `text` when `code` is empty; otherwise a vcs code (invalid_args, git_failed, not_found, vcs_unavailable, ...)
+			// and a message safe to show.
+			struct answer
+			{
+				std::string text;
+				std::string code;
+				std::string error;
+
+				bool ok() const { return code.empty(); }
+			};
+
+			explicit repository_reader(std::shared_ptr<const impl> state) : m_impl(std::move(state)) {}
+
+			// The remote as named, else the current branch's, else the only configured one, else origin (what git would
+			// pick); resolved once here, so the caller checks and uses one name.
+			answer remote_name(const std::string& named, std::stop_token stop) const;
+			// `git remote get-url <remote>`: the first URL, with the repository's url.<base>.insteadOf applied.
+			answer remote_url(const std::string& remote, std::stop_token stop) const;
+			// The first `remote.<remote>.url` as written in the config, which no insteadOf has touched (what `git config
+			// --get` prints). Refused (`denied`) when the remote has a pushurl or when a url.<base>.insteadOf /
+			// pushInsteadOf would rewrite that URL: with either, the URL a push or `git remote get-url` uses is not the
+			// one written, and a person cannot be told where a request goes.
+			answer remote_raw_url(const std::string& remote, std::stop_token stop) const;
+			// The commit refs/heads/<branch> points to; `not_found` when there is no such local branch.
+			answer local_branch(const std::string& branch, std::stop_token stop) const;
+
+		private:
+			std::shared_ptr<const impl> m_impl;
+		};
+
+		// What read_remote_now found: the remote's name (as remote_name resolves it) and its raw URL (remote_raw_url), or
+		// why not (a vcs code, `denied` for a rewrite or pushurl, `vcs_unavailable` when git did not answer in time).
+		struct remote_snapshot
+		{
+			std::string remote;
+			std::string url;
+			std::string code;
+			std::string error;
+
+			bool ok() const { return code.empty(); }
+		};
+
+		// The same two reads, now, on the main thread, for what a person is shown before an agent's request is allowed.
+		// Git is stopped after vcs_options::describe_timeout (1 s): the code is then k_describe_timeout and the probe state is
+		// left alone. Always the protected read of an agent.
+		remote_snapshot read_remote_now(const std::string& named);
+		inline static constexpr const char* k_describe_timeout = "describe_timeout";
+
+		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's
+		// (ui) means the protected read. The work may throw ds::task_cancelled.
+		using reader_work = std::function<boost::json::value(const repository_reader&, ds::task_context&)>;
+		started start_reader_job(std::string label, reader_work work, const cmd::origin& caller);
 
 	private:
 		// A folder in the OS temp dir that only this editor writes to: the empty hooks folder of agent writes and the
