@@ -937,6 +937,16 @@ void edt::editor_system::draw_agent_policy_notice()
 		m_policy_notice_dismissed = false;
 		return;
 	}
+	// agent_access::frame reads the files every frame while the server is active; a waiting policy must also notice, about once
+	// a second, that its file was fixed or changed again. Nothing is done while no policy waits (the idle editor).
+	if (m_agent_server == nullptr || !m_agent_server->active()) {
+		const auto now = std::chrono::steady_clock::now();
+		if (now - m_policy_refreshed >= std::chrono::seconds(1)) {
+			m_policy_refreshed = now;
+			m_agent_access->policy().refresh();
+			if (!m_agent_access->policy().project_pending_approval()) return;
+		}
+	}
 	if (m_policy_notice_dismissed) return;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 12.f),

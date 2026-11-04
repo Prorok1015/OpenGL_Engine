@@ -42,6 +42,7 @@ namespace edt
 
 	private:
 		void draw_banner();
+		void draw_review_popup();
 		void draw_server();
 		void draw_sessions();
 		void draw_policy();

@@ -5,6 +5,7 @@
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_registry.h>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -47,6 +48,8 @@ struct model_fixture
 	cmd::command_desc hidden = command_of("dialog.answer", agent_category::not_for_agents);
 	std::unique_ptr<edt::agent_policy> policy;
 	std::unique_ptr<edt::agent_policy_model> model;
+	// The clock of the approval's arming delay: the tests move it.
+	std::chrono::steady_clock::time_point fake_now{ std::chrono::seconds(100) };
 
 	model_fixture()
 	{
@@ -56,8 +59,16 @@ struct model_fixture
 		policy->set_command_source([this] { return std::vector<const cmd::command_desc*>{ &create, &write, &query, &hidden }; });
 		model = std::make_unique<edt::agent_policy_model>(*policy, [this] {
 			return std::vector<const cmd::command_desc*>{ &create, &write, &query, &hidden };
-		});
+		}, [this] { return fake_now; });
 		model->refresh();
+	}
+
+	void advance(std::chrono::milliseconds by) { fake_now += by; }
+	// What a person does before Approve works: the window is used, and the copy stays on screen for a second.
+	void arm()
+	{
+		model->note_interaction();
+		advance(edt::agent_policy_model::k_approve_arm_delay);
 	}
 
 	void write_project(const std::string& text) { dir.write(".snk/agent_policy.json", text); }
@@ -193,15 +204,19 @@ BOOST_AUTO_TEST_CASE(AFileThatLoosensSomething_WaitsAndIsApprovedOnlyAsShown)
 	model->mark_displayed();
 	BOOST_TEST(model->pending());
 	BOOST_REQUIRE(!model->loosenings().empty());
+	BOOST_TEST(model->displayed_loosenings().size() == model->loosenings().size());
 	BOOST_TEST((row_of(model->category_rows(edt::policy_scope::project), agent_category::code_files).effective.mode == policy_mode::ask));
 
 	// The file changes after the person looked at it: the approval is refused, and the next look shows the new file.
+	arm();
 	write_project(R"({"categories":{"code_files":"allow","build":"ask","code_edit":"allow"}})");
 	BOOST_TEST(model->approve().has_value());
 	BOOST_TEST(model->pending());
 
 	model->refresh();
 	model->mark_displayed();
+	BOOST_TEST(model->approve().has_value());
+	arm();
 	BOOST_TEST(!model->approve().has_value());
 	BOOST_TEST(!model->pending());
 	BOOST_TEST((row_of(model->category_rows(edt::policy_scope::project), agent_category::code_files).effective.mode == policy_mode::allow));
@@ -250,6 +265,153 @@ BOOST_AUTO_TEST_CASE(AnEditWhoseFileChangedUnderIt_IsKeptAndFlagged_AnUneditedLa
 	model->refresh();
 	BOOST_TEST(!model->base_changed(edt::policy_scope::project));
 	BOOST_TEST(model->layer(edt::policy_scope::project).categories.contains(agent_category::scene_edit));
+}
+
+BOOST_AUTO_TEST_CASE(AFileThatFlipsAfterTheBannerWasDrawn_IsNeverApprovedUnseen)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	arm();
+	BOOST_REQUIRE(model->pending());
+	const std::size_t shown = model->displayed_loosenings().size();
+
+	// The file becomes another one (a checkout in between) and is read again later in the frame, as a stray refresh would.
+	write_project(R"({"categories":{"code_files":"allow","build":"ask"}})");
+	policy->refresh();
+	BOOST_TEST(model->displayed_loosenings().size() == shown);
+	BOOST_TEST(model->loosenings().size() > shown);
+
+	const auto refused = model->approve();
+	BOOST_REQUIRE(refused.has_value());
+	BOOST_TEST(model->pending());
+	BOOST_TEST(!policy->approved_project().categories.contains(agent_category::build));
+	BOOST_TEST(!policy->approved_project().categories.contains(agent_category::code_files));
+}
+
+BOOST_AUTO_TEST_CASE(TheRowsOfTheWindow_ReadNoFile)
+{
+	write_project(R"({"categories":{"build":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	BOOST_REQUIRE(model->pending());
+
+	write_project(R"({"categories":{"build":"allow","code_files":"allow","scene_edit":"deny"}})");
+	const auto rows = model->category_rows(edt::policy_scope::project);
+	BOOST_TEST((row_of(rows, agent_category::scene_edit).effective.mode == policy_mode::allow));
+	BOOST_TEST(!policy->project().categories.contains(agent_category::scene_edit));
+	BOOST_TEST(model->command_rows(edt::policy_scope::project, agent_category::code_files).size() == 1u);
+	BOOST_TEST(!policy->project().categories.contains(agent_category::scene_edit));
+}
+
+BOOST_AUTO_TEST_CASE(Approve_NeedsTheCopyOnScreenForASecond_AndTheWindowUsed)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	BOOST_TEST(!model->approve_armed());
+	model->note_interaction();
+	BOOST_TEST(!model->approve_armed());
+	advance(std::chrono::milliseconds(999));
+	BOOST_TEST(!model->approve_armed());
+	BOOST_TEST(model->approve().has_value());
+	BOOST_TEST(model->pending());
+	advance(std::chrono::milliseconds(1));
+	BOOST_TEST(model->approve_armed());
+	// Drawn again every frame: the same copy does not restart the delay.
+	model->mark_displayed();
+	BOOST_TEST(model->approve_armed());
+	BOOST_TEST(!model->approve().has_value());
+	BOOST_TEST(!model->pending());
+	BOOST_TEST(!model->approve_armed());
+}
+
+BOOST_AUTO_TEST_CASE(Approve_IsNotArmedWithoutTheWindowBeingUsed)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	advance(std::chrono::seconds(30));
+	BOOST_TEST(!model->approve_armed());
+	BOOST_TEST(model->approve().has_value());
+	BOOST_TEST(model->pending());
+	model->note_interaction();
+	BOOST_TEST(model->approve_armed());
+}
+
+BOOST_AUTO_TEST_CASE(Approve_IsDisarmedAgainWhenTheDisplayedLayerChanges)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	arm();
+	BOOST_REQUIRE(model->approve_armed());
+
+	write_project(R"({"categories":{"code_files":"allow","build":"ask"}})");
+	model->refresh();
+	model->mark_displayed();
+	BOOST_TEST(!model->approve_armed());
+	BOOST_TEST(model->approve().has_value());
+	// Used and waited again, for the new copy.
+	arm();
+	BOOST_TEST(model->approve_armed());
+	BOOST_TEST(!model->approve().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(NothingToApprove_ForgetsTheCopy)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	arm();
+	model->forget_displayed();
+	BOOST_TEST(!model->approve_armed());
+	BOOST_TEST(model->approve().has_value());
+	BOOST_TEST(model->displayed_loosenings().empty());
+}
+
+BOOST_AUTO_TEST_CASE(Apply_SavesOnlyTheCommandEntriesThePersonChanged)
+{
+	write_project(R"({"commands":{"scene.query":"ask"}})");
+	model->refresh();
+	BOOST_TEST(!model->pending());
+
+	BOOST_TEST(model->set_category(edt::policy_scope::project, agent_category::build, policy_mode::ask));
+	BOOST_TEST(model->set_command(edt::policy_scope::project, "code.write", policy_mode::allow));
+	BOOST_TEST(!model->apply().has_value());
+
+	const edt::policy_layer& approved = policy->approved_project();
+	BOOST_TEST((approved.categories.at(agent_category::build) == policy_mode::ask));
+	BOOST_TEST((approved.commands.at("code.write") == policy_mode::allow));
+	BOOST_TEST(!approved.commands.contains("scene.query"));
+	BOOST_TEST(read_file(project_file).find("scene.query") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Apply_IsRefusedWhileTheFileMovedUnderTheEdit)
+{
+	write_project(R"({"categories":{"code_edit":"deny"}})");
+	model->refresh();
+	BOOST_TEST(model->set_category(edt::policy_scope::project, agent_category::build, policy_mode::ask));
+	write_project(R"({"categories":{"code_edit":"deny","scene_edit":"ask"}})");
+	model->refresh();
+	BOOST_REQUIRE(model->base_changed(edt::policy_scope::project));
+
+	BOOST_TEST(model->apply().has_value());
+	BOOST_TEST(read_file(project_file).find("build") == std::string::npos);
+	BOOST_TEST(model->dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AGitListEntry_WithACommaOrControlCharacters_IsRefusedByTheModel)
+{
+	using edt::policy_scope;
+	using edt::vcs_list_key;
+	BOOST_TEST(!model->set_vcs_list(policy_scope::project, vcs_list_key::push_branches, std::vector<std::string>{ "a,b" }));
+	BOOST_TEST(!model->set_vcs_list(policy_scope::project, vcs_list_key::remotes, std::vector<std::string>{ "o\x07k" }));
+	BOOST_TEST(!model->set_vcs_list(policy_scope::project, vcs_list_key::protected_branches, std::vector<std::string>{ "x\xe2\x80\xae" }));
+	BOOST_TEST(!model->set_vcs_list(policy_scope::project, vcs_list_key::push_branches, std::vector<std::string>{ std::string(257, 'a') }));
+	BOOST_TEST(!model->dirty());
+	BOOST_TEST(model->set_vcs_list(policy_scope::project, vcs_list_key::push_branches, std::vector<std::string>{ "agent/*", "bot/*" }));
+	BOOST_TEST(model->dirty());
 }
 
 BOOST_AUTO_TEST_CASE(NoCommandOfTheWindowIsOfferedToAgents)

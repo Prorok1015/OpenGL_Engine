@@ -119,6 +119,38 @@ namespace edt
 			return parser.handler().duplicate;
 		}
 
+		// A code point a person must not be shown from a file's own words: controls, C1 controls, and the invisible formatting
+		// that hides or reorders text. The same set as the client names of the MCP endpoint (kept apart: mcp_server may not
+		// depend on the editor).
+		bool hidden_code_point(std::uint32_t cp)
+		{
+			return cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp <= 0x9f) || cp == 0xad || cp == 0x61c || cp == 0x180e
+				|| (cp >= 0x200b && cp <= 0x200f) || (cp >= 0x2028 && cp <= 0x202e) || (cp >= 0x2060 && cp <= 0x206f) || cp == 0xfeff;
+		}
+
+		// The next code point of well-formed UTF-8 at `at` and its length; 0 for anything else.
+		std::size_t decode_code_point(std::string_view text, std::size_t at, std::uint32_t& cp)
+		{
+			const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+			const unsigned char lead = byte(at);
+			std::size_t length = 0;
+			std::uint32_t value = 0;
+			std::uint32_t minimum = 0;
+			if (lead < 0x80) { cp = lead; return 1; }
+			else if ((lead & 0xe0) == 0xc0) { length = 2; value = lead & 0x1f; minimum = 0x80; }
+			else if ((lead & 0xf0) == 0xe0) { length = 3; value = lead & 0x0f; minimum = 0x800; }
+			else if ((lead & 0xf8) == 0xf0) { length = 4; value = lead & 0x07; minimum = 0x10000; }
+			else return 0;
+			if (at + length > text.size()) return 0;
+			for (std::size_t i = 1; i < length; ++i) {
+				if ((byte(at + i) & 0xc0) != 0x80) return 0;
+				value = (value << 6) | (byte(at + i) & 0x3f);
+			}
+			if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return 0;
+			cp = value;
+			return length;
+		}
+
 		// The "vcs" section of a layer; the error text, empty when it reads.
 		std::string parse_vcs_section(const json::value& value, policy_layer_kind kind, vcs_policy_layer& out)
 		{
@@ -217,6 +249,49 @@ namespace edt
 			return {};
 		}
 
+		// "": nothing there or it is what `wanted` says, as the entry itself (a link, a junction or any other reparse point is
+		// none of them, whatever it points to); else why not.
+		std::string plain_entry_problem(const std::filesystem::path& entry, std::filesystem::file_type wanted)
+		{
+			std::error_code ec;
+			const std::filesystem::file_status status = std::filesystem::symlink_status(entry, ec);
+			if (status.type() == std::filesystem::file_type::not_found || ec == std::errc::no_such_file_or_directory
+				|| ec == std::errc::not_a_directory) {
+				return {};
+			}
+			if (ec) return "cannot be examined: " + ec.message();
+			if (status.type() != wanted) return "is a link or not a plain file or folder";
+			return {};
+		}
+
+		// The project's policy decides what an agent may do and a commit can plant a link in the work tree: neither the file nor
+		// its folder (.snk) may be one, and the folder has to be what its place under the project folder says. Conservative
+		// check by path (lstat of each, then canonical), not a no-follow open: the resolver's primitives of #484 are internal
+		// to core/resource. "" means fine (also: nothing there yet).
+		std::string project_policy_link_error(const std::filesystem::path& file)
+		{
+			const std::filesystem::path folder = file.parent_path();
+			if (!folder.empty()) {
+				if (std::string why = plain_entry_problem(folder, std::filesystem::file_type::directory); !why.empty()) {
+					return "'" + fs_paths::utf8_of(folder) + "' " + why;
+				}
+			}
+			if (std::string why = plain_entry_problem(file, std::filesystem::file_type::regular); !why.empty()) {
+				return "'" + fs_paths::utf8_of(file) + "' " + why;
+			}
+			std::error_code ec;
+			if (folder.empty() || !std::filesystem::exists(folder, ec)) return {};
+			const std::filesystem::path root = folder.parent_path().empty() ? std::filesystem::path(".") : folder.parent_path();
+			const std::filesystem::path real_root = std::filesystem::canonical(root, ec);
+			if (ec) return "the project folder cannot be resolved: " + ec.message();
+			const std::filesystem::path real_folder = std::filesystem::canonical(folder, ec);
+			if (ec) return "'" + fs_paths::utf8_of(folder) + "' cannot be resolved: " + ec.message();
+			if (real_folder != real_root / folder.filename()) {
+				return "'" + fs_paths::utf8_of(folder) + "' resolves outside the project folder";
+			}
+			return {};
+		}
+
 		std::optional<std::string> read_text(const std::filesystem::path& file)
 		{
 			std::ifstream in(file, std::ios::binary);
@@ -224,6 +299,20 @@ namespace edt
 			return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 		}
 
+	}
+
+	std::string vcs_entry_problem(std::string_view entry)
+	{
+		if (entry.size() > k_max_vcs_entry_bytes) return "an entry is longer than " + std::to_string(k_max_vcs_entry_bytes) + " bytes";
+		for (std::size_t at = 0; at < entry.size();) {
+			std::uint32_t cp = 0;
+			const std::size_t length = decode_code_point(entry, at, cp);
+			if (length == 0) return "an entry is not valid UTF-8";
+			if (hidden_code_point(cp)) return "an entry holds a control or invisible character";
+			if (cp == ',') return "an entry holds a comma (the window writes the lists comma-separated)";
+			at += length;
+		}
+		return {};
 	}
 
 	cmd::policy_mode default_mode(const cmd::command_desc& command)
@@ -884,10 +973,17 @@ namespace edt
 			std::string error;
 		};
 
-		file_probe probe_file(const std::filesystem::path& file)
+		file_probe probe_file(const std::filesystem::path& file, bool refuse_links)
 		{
 			file_probe out;
 			if (file.empty()) return out;
+			// Before status(), which follows a link: a dangling one would read as "no file" and open the defaults.
+			if (refuse_links) {
+				if (std::string why = project_policy_link_error(file); !why.empty()) {
+					out.error = std::move(why);
+					return out;
+				}
+			}
 			std::error_code ec;
 			const std::filesystem::file_status status = std::filesystem::status(file, ec);
 			// A missing file is the normal case of a project with no policy of its own. Some standard libraries report it as
@@ -921,7 +1017,7 @@ namespace edt
 	bool agent_policy::changed_on_disk(const source& what)
 	{
 		if (!what.loaded) return true;
-		const file_probe now = probe_file(what.file);
+		const file_probe now = probe_file(what.file, what.kind == policy_layer_kind::project);
 		return now.exists != what.existed || now.modified != what.modified || now.size != what.size || now.error != what.stat_error;
 	}
 
@@ -931,7 +1027,7 @@ namespace edt
 		what.loaded = true;
 		what.layer = {};
 		what.error.clear();
-		const file_probe now = probe_file(what.file);
+		const file_probe now = probe_file(what.file, what.kind == policy_layer_kind::project);
 		what.existed = now.exists;
 		what.modified = now.modified;
 		what.size = now.size;
@@ -998,6 +1094,7 @@ namespace edt
 		for (source* what : { &m_project, &m_personal }) {
 			if (changed_on_disk(*what)) reload(*what);
 		}
+		rejudge_if_commands_changed();
 		// Read once: answers a running editor took in must not change under it (nor be swapped in by what it runs).
 		if (has_preanswers() && !m_warned_preanswers_change && changed_on_disk(m_preanswers)) {
 			m_warned_preanswers_change = true;
@@ -1015,8 +1112,17 @@ namespace edt
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective: main thread only");
 		refresh();
-		// A command registered after the file was judged (a module loaded later) may carry a risk floor an entry lifts.
-		rejudge_if_commands_changed();
+		return decide(command, category);
+	}
+
+	effective_policy agent_policy::effective_as_loaded(const cmd::command_desc& command)
+	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective_as_loaded: main thread only");
+		return decide(command, command.category);
+	}
+
+	effective_policy agent_policy::decide(const cmd::command_desc& command, cmd::agent_category category)
+	{
 		const bool live_on = m_live_on && m_live_on();
 		effective_policy decided = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error,
 			m_personal.error, live_on);
@@ -1042,18 +1148,26 @@ namespace edt
 		return stricter_vcs(now, edt::effective_vcs(m_approved, m_personal.layer, {}, m_personal.error));
 	}
 
-	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write, bool approve)
+	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write, const policy_layer* record)
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::save: main thread only");
 		const std::string text = serialize_policy_layer(layer);
 		std::error_code ec;
 		if (!what.file.has_parent_path()) return "no place to write the policy";
+		const bool refuse_links = what.kind == policy_layer_kind::project;
+		if (refuse_links) {
+			if (const std::string why = project_policy_link_error(what.file); !why.empty()) return "not written: " + why;
+		}
 		std::filesystem::create_directories(what.file.parent_path(), ec);
+		// Again right before the write: the folder may have just been made, and the write goes to the real folder it names.
+		if (refuse_links) {
+			if (const std::string why = project_policy_link_error(what.file); !why.empty()) return "not written: " + why;
+		}
 		const std::optional<std::string> error = write ? write(what.file, text) : prj::write_text_atomically(what.file, text);
 		if (error) return error;
-		// A person's own edit is the approval of it.
-		if (approve) {
-			if (const std::optional<std::string> kept = keep_approved(layer)) {
+		// A person's own edit is the approval of what they changed.
+		if (record != nullptr) {
+			if (const std::optional<std::string> kept = keep_approved(*record)) {
 				reload(what);
 				return "saved, but the approval could not be kept: " + *kept;
 			}
@@ -1062,9 +1176,18 @@ namespace edt
 		return what.error.empty() ? std::nullopt : std::optional<std::string>{ what.error };
 	}
 
-	std::optional<std::string> agent_policy::save_project(const policy_layer& layer, const prj::text_writer& write)
+	std::optional<std::string> agent_policy::save_project(const policy_layer& layer, const prj::text_writer& write,
+		const policy_layer& edited_from)
 	{
-		return save(m_project, layer, write, true);
+		if (!m_approval_allowed) return "no person is here to save the project policy";
+		// Entries of commands other than `deny` are recorded only when the person changed them in this edit: one the file
+		// brought along could lift the risk floor of a command registered later, and nobody looked at it.
+		policy_layer record = silently_recordable(m_approved, layer);
+		for (const auto& [id, mode] : layer.commands) {
+			const auto before = edited_from.commands.find(id);
+			if (before == edited_from.commands.end() || before->second != mode) record.commands[id] = mode;
+		}
+		return save(m_project, layer, write, &record);
 	}
 
 	std::optional<std::string> agent_policy::save_personal(const policy_layer& layer, const prj::text_writer& write)

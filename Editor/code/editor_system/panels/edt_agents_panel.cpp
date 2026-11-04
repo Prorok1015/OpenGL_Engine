@@ -10,6 +10,8 @@ namespace {
 	const ImVec4 k_error_color{ 1.f, 0.3f, 0.3f, 1.f };
 	const ImVec4 k_warning_color{ 1.f, 0.8f, 0.f, 1.f };
 	const ImVec4 k_ok_color{ 0.4f, 0.9f, 0.4f, 1.f };
+	constexpr std::size_t k_banner_line_bytes = 120;
+	constexpr const char* k_review_popup = "agent_policy_review";
 
 	const char* label_of(cmd::agent_category category)
 	{
@@ -47,6 +49,15 @@ namespace {
 		if (total < 60) return std::format("{} s", total);
 		if (total < 3600) return std::format("{} min", total / 60);
 		return std::format("{} h {} min", total / 3600, (total % 3600) / 60);
+	}
+
+	// `text` cut to `limit` bytes on a code point boundary, with "..." when something was left out.
+	std::string ellipsized(const std::string& text, std::size_t limit)
+	{
+		if (text.size() <= limit) return text;
+		std::size_t cut = limit;
+		while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xc0) == 0x80) --cut;
+		return text.substr(0, cut) + "...";
 	}
 
 	std::string trimmed(std::string text)
@@ -100,27 +111,66 @@ void edt::agents_panel::on_before_begin()
 
 void edt::agents_panel::on_render()
 {
+	// The only refresh of the frame: the banner, the rows and the copy an approval refers to all come from this state.
 	m_model.refresh();
+	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+		m_model.note_interaction();
+	}
 	draw_banner();
 	draw_server();
 	draw_sessions();
 	draw_policy();
 	draw_footer();
-	// What the person has seen: the approval is for exactly this.
-	m_model.mark_displayed();
 }
 
 void edt::agents_panel::draw_banner()
 {
-	if (!m_model.pending()) return;
-	ImGui::PushStyleColor(ImGuiCol_Text, k_warning_color);
-	ImGui::TextWrapped("The project's agent_policy.json lets agents do more than you approved. Until you approve it, the approved version applies "
-		"(whatever is stricter in the file already does).");
-	ImGui::PopStyleColor();
-	for (const policy_loosening& change : m_model.loosenings()) {
-		const std::string line = std::format("{}: {} -> {}", change.what, cmd::to_string(change.from), cmd::to_string(change.to));
-		ImGui::BulletText("%s", line.c_str());
+	const bool pending = m_model.pending();
+	// The copy is taken here, right before it is drawn: what Approve approves is what is on screen.
+	if (pending) {
+		m_model.mark_displayed();
 	}
+	else {
+		m_model.forget_displayed();
+	}
+	// A fixed height whether or not anything waits, so the widgets below never shift under the mouse when it appears.
+	if (ImGui::BeginChild("##approval_banner", ImVec2(0.f, ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_None,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		if (pending) {
+			ImGui::PushStyleColor(ImGuiCol_Text, k_warning_color);
+			ImGui::TextUnformatted("The project's agent policy lets agents do more than you approved.");
+			ImGui::PopStyleColor();
+			ImGui::SameLine();
+			if (ImGui::Button("Review...")) ImGui::OpenPopup(k_review_popup);
+			draw_review_popup();
+		}
+	}
+	ImGui::EndChild();
+}
+
+void edt::agents_panel::draw_review_popup()
+{
+	if (!ImGui::BeginPopup(k_review_popup)) return;
+	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.f);
+	ImGui::TextUnformatted("agent_policy.json lets agents do more than you approved. Until you approve it, the approved version applies "
+		"(whatever is stricter in the file already does). Saving your own edits in this window drops these changes from the file.");
+	ImGui::PopTextWrapPos();
+	for (const policy_loosening& change : m_model.displayed_loosenings()) {
+		// The text of a file: shortened, the whole of it in the tooltip, never a format string.
+		const std::string line = std::format("{}: {} -> {}", change.what, cmd::to_string(change.from), cmd::to_string(change.to));
+		ImGui::Bullet();
+		ImGui::SameLine();
+		ImGui::TextUnformatted(ellipsized(line, k_banner_line_bytes).c_str());
+		if (line.size() > k_banner_line_bytes && ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.f);
+			ImGui::TextUnformatted(line.c_str());
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+	}
+	ImGui::Separator();
+	const bool armed = m_model.approve_armed();
+	ImGui::BeginDisabled(!armed);
 	if (ImGui::Button("Approve this version")) {
 		if (const std::optional<std::string> error = m_model.approve()) {
 			m_message = *error;
@@ -129,11 +179,17 @@ void edt::agents_panel::draw_banner()
 		else {
 			m_message = "Approved.";
 			m_message_is_error = false;
+			ImGui::CloseCurrentPopup();
 		}
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
-	ImGui::TextDisabled("Saving your own edits below drops these changes from the file.");
-	ImGui::Separator();
+	if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+	if (!armed) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("available a moment after these changes appeared");
+	}
+	ImGui::EndPopup();
 }
 
 void edt::agents_panel::draw_server()
@@ -367,7 +423,9 @@ void edt::agents_panel::draw_footer()
 {
 	ImGui::Separator();
 	const bool dirty = m_model.dirty();
+	const bool moved = m_model.base_changed(policy_scope::project) || m_model.base_changed(policy_scope::personal);
 	ImGui::BeginDisabled(!dirty);
+	ImGui::BeginDisabled(moved);
 	if (ImGui::Button("Apply")) {
 		if (const std::optional<std::string> error = m_model.apply()) {
 			m_message = *error;
@@ -378,6 +436,7 @@ void edt::agents_panel::draw_footer()
 			m_message_is_error = false;
 		}
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
 	if (ImGui::Button("Revert")) {
 		m_model.revert();

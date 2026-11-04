@@ -22,9 +22,10 @@ namespace edt
 
 	}
 
-	agent_policy_model::agent_policy_model(agent_policy& policy, command_source commands)
+	agent_policy_model::agent_policy_model(agent_policy& policy, command_source commands, clock_fn now)
 		: m_policy(policy)
 		, m_commands(std::move(commands))
+		, m_now(now ? std::move(now) : clock_fn([] { return std::chrono::steady_clock::now(); }))
 	{
 	}
 
@@ -80,7 +81,36 @@ namespace edt
 	void agent_policy_model::mark_displayed()
 	{
 		m_displayed = m_policy.project();
+		m_displayed_loosenings = m_policy.pending_loosenings();
+		std::string key = serialize_policy_layer(m_displayed);
+		for (const policy_loosening& change : m_displayed_loosenings) {
+			key += '\n' + change.what + '|' + cmd::to_string(change.from) + '|' + cmd::to_string(change.to);
+		}
+		if (!m_has_displayed || key != m_displayed_key) {
+			m_displayed_key = std::move(key);
+			m_displayed_since = m_now();
+			m_interacted = false;
+		}
 		m_has_displayed = true;
+	}
+
+	void agent_policy_model::forget_displayed()
+	{
+		m_displayed = {};
+		m_displayed_loosenings.clear();
+		m_displayed_key.clear();
+		m_has_displayed = false;
+		m_interacted = false;
+	}
+
+	void agent_policy_model::note_interaction()
+	{
+		if (m_has_displayed) m_interacted = true;
+	}
+
+	bool agent_policy_model::approve_armed() const
+	{
+		return m_has_displayed && m_interacted && m_now() - m_displayed_since >= k_approve_arm_delay;
 	}
 
 	bool agent_policy_model::pending() const
@@ -96,7 +126,17 @@ namespace edt
 	std::optional<std::string> agent_policy_model::approve()
 	{
 		if (!m_has_displayed) return "the policy has not been shown yet";
-		return m_policy.approve_project_layer(m_displayed);
+		if (!approve_armed()) return "look at the changes for a moment first: approving is possible once they have been on screen for a second";
+		m_policy.refresh();
+		const std::vector<policy_loosening>& now = m_policy.pending_loosenings();
+		const bool same = now.size() == m_displayed_loosenings.size()
+			&& std::equal(now.begin(), now.end(), m_displayed_loosenings.begin(), [](const policy_loosening& a, const policy_loosening& b) {
+				return a.what == b.what && a.from == b.from && a.to == b.to;
+			});
+		if (!same) return "what the policy loosens changed since it was shown; review it again";
+		std::optional<std::string> error = m_policy.approve_project_layer(m_displayed);
+		if (!error) forget_displayed();
+		return error;
 	}
 
 	bool agent_policy_model::dirty(policy_scope scope) const
@@ -134,7 +174,7 @@ namespace edt
 			policy_category_row row;
 			row.category = category;
 			if (const auto found = shown.categories.find(category); found != shown.categories.end()) row.entry = found->second;
-			row.effective = m_policy.effective(probe_of(category));
+			row.effective = m_policy.effective_as_loaded(probe_of(category));
 			row.loosest = scope == policy_scope::personal ? loosest_of(category) : cmd::policy_mode::allow;
 			rows.push_back(std::move(row));
 		}
@@ -152,7 +192,7 @@ namespace edt
 			row.id = command->id;
 			row.summary = command->summary;
 			if (const auto found = shown.commands.find(command->id); found != shown.commands.end()) row.entry = found->second;
-			row.effective = m_policy.effective(*command);
+			row.effective = m_policy.effective_as_loaded(*command);
 			rows.push_back(std::move(row));
 		}
 		std::ranges::sort(rows, [](const policy_command_row& a, const policy_command_row& b) { return a.id < b.id; });
@@ -199,6 +239,12 @@ namespace edt
 
 	bool agent_policy_model::set_vcs_list(policy_scope scope, vcs_list_key key, std::optional<std::vector<std::string>> value)
 	{
+		// What parse_policy_layer would refuse on the way back (control or invisible characters, a comma, too long).
+		if (value) {
+			for (const std::string& entry : *value) {
+				if (entry.empty() || !vcs_entry_problem(entry).empty()) return false;
+			}
+		}
 		policy_layer& edited = edit_of(scope);
 		if (!edited.vcs) edited.vcs = vcs_policy_layer{};
 		switch (key) {
@@ -242,6 +288,13 @@ namespace edt
 
 	std::optional<std::string> agent_policy_model::apply()
 	{
+		// Saving would replace what the file says now with an edit made on top of what it said before.
+		for (const policy_scope scope : { policy_scope::project, policy_scope::personal }) {
+			if (dirty(scope) && base_changed(scope)) {
+				return std::string(scope == policy_scope::project ? "the project policy" : "your policy")
+					+ " changed on disk while you were editing; revert to read it again";
+			}
+		}
 		for (const policy_scope scope : { policy_scope::project, policy_scope::personal }) {
 			if (!dirty(scope)) continue;
 			const side& s = m_side[index_of(scope)];
@@ -254,7 +307,10 @@ namespace edt
 		for (const policy_scope scope : { policy_scope::project, policy_scope::personal }) {
 			if (!dirty(scope)) continue;
 			side& s = m_side[index_of(scope)];
-			const std::optional<std::string> error = scope == policy_scope::project ? m_policy.save_project(*s.edit) : m_policy.save_personal(*s.edit);
+			// The project's save approves the command entries the person changed, not the ones the file brought along.
+			const std::optional<std::string> error = scope == policy_scope::project
+				? m_policy.save_project(*s.edit, {}, parse_policy_layer(s.base_text).layer)
+				: m_policy.save_personal(*s.edit);
 			if (error) return error;
 			s.edit.reset();
 			s.base_moved = false;

@@ -2,6 +2,7 @@
 #include "edt_agent_policy.h"
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_types.h>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -39,7 +40,7 @@ namespace edt
 	// from the files as saved, and the approval of a project file that loosens something (#483).
 	//
 	// Edits to the project layer are made on top of `approved_project()`, never on top of a file whose loosenings wait:
-	// `save_project` approves all of what it writes, so a base that holds the file's pending loosenings would approve them
+	// `save_project` approves what it writes, so a base that holds the file's pending loosenings would approve them
 	// unseen. Applying while some wait therefore drops them from the file (the window says so).
 	//
 	// There is no command behind any of this, and none may be added: only a person at the window changes the policy.
@@ -48,18 +49,35 @@ namespace edt
 	public:
 		using command_source = std::function<std::vector<const cmd::command_desc*>()>;
 
-		explicit agent_policy_model(agent_policy& policy, command_source commands = {});
+		using clock_fn = std::function<std::chrono::steady_clock::time_point()>;
+		// How long the same layer has to be on screen, with the window used, before it can be approved: a button that appears
+		// under the mouse (a layout shift, an agent's checkout changing the file) must not be clicked by accident.
+		static constexpr std::chrono::milliseconds k_approve_arm_delay{ 1000 };
 
-		// Once per frame before drawing: reads the files again when they changed. An edit whose base changed on disk meanwhile
-		// is kept and flagged (`base_changed`); a layer without edits simply follows the file.
+		// `now`: the clock of the arming delay (steady_clock by default).
+		explicit agent_policy_model(agent_policy& policy, command_source commands = {}, clock_fn now = {});
+
+		// Once per frame at the top of the window, and nowhere else while it draws (the rows read what this loaded): reads the
+		// files again when they changed. An edit whose base changed on disk meanwhile is kept and flagged (`base_changed`); a
+		// layer without edits simply follows the file.
 		void refresh();
-		// After the pending changes were drawn: that is what the person has seen, and what `approve()` approves.
+		// Takes a copy of the project layer and of its loosenings as they are now. The window calls it immediately before it
+		// draws them and draws the copy (`displayed_loosenings`), so what `approve()` approves is exactly what was on screen.
+		// A copy that differs from the last one restarts the arming.
 		void mark_displayed();
+		// Nothing waits any more: no copy, nothing to approve.
+		void forget_displayed();
 
 		// ---- the approval of a project file that loosens something
 		bool pending() const;
 		const std::vector<policy_loosening>& loosenings() const;
-		// Approves the layer shown at the last mark_displayed(); refused when the file is another by now. The error, nullopt on success.
+		const std::vector<policy_loosening>& displayed_loosenings() const { return m_displayed_loosenings; }
+		// The person used the window (hovered or focused it) while the displayed copy was on screen.
+		void note_interaction();
+		// The same copy has been displayed for k_approve_arm_delay and the window was used since it appeared.
+		bool approve_armed() const;
+		// Approves the layer of the last mark_displayed(); refused when it is not armed, or when the file or its loosenings are
+		// other by now. The error, nullopt on success.
 		std::optional<std::string> approve();
 
 		// ---- reading
@@ -107,7 +125,12 @@ namespace edt
 		agent_policy& m_policy;
 		command_source m_commands;
 		side m_side[2];
+		clock_fn m_now;
 		policy_layer m_displayed;
+		std::vector<policy_loosening> m_displayed_loosenings;
+		std::string m_displayed_key;
+		std::chrono::steady_clock::time_point m_displayed_since{};
 		bool m_has_displayed = false;
+		bool m_interacted = false;
 	};
 }
