@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <cstdint>
 #include <vector>
@@ -45,6 +46,11 @@ namespace edt
 		// The texture the editor camera renders to; the "scene" view of viewport.capture.
 		static const res::tag& render_target_tag();
 
+		// Game mode (#294): every frame the panel is not drawn, the editor camera gets a zero viewport, which the render
+		// data extractor skips, so it renders nothing. resume_camera() gives it back the size it had.
+		void suspend_camera();
+		void resume_camera();
+
 		glm::vec2 get_viewport_pos() const { return m_image_pos; }
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }
 		bool is_focused() const { return m_focused; }
@@ -78,6 +84,7 @@ namespace edt
 		glm::vec2 m_viewport_size = {800.f, 600.f};
 		bool m_focused = false;
 		bool m_wireframe = false;
+		std::optional<glm::ivec2> m_suspended_size;
 		int            m_gizmo_op     = 0;            // 0=translate, 1=rotate, 2=scale
 		entt::entity   m_rotate_ent   = entt::null;   // gizmo rotate ring state
 		int            m_active_ring  = -1;

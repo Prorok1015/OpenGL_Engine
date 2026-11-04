@@ -195,6 +195,14 @@ namespace edt
 	// status and the history may differ).
 	enum class repository_change : std::uint8_t { index, refs };
 
+	// The editor's layout (#294): `editor` is the dockspace with its panels, `game` the Game view alone filling the window.
+	enum class editor_mode : std::uint8_t { editor, game };
+
+	inline const char* editor_mode_name(editor_mode mode)
+	{
+		return mode == editor_mode::game ? "game" : "editor";
+	}
+
 	// What an agent changed outside the scene (A7 #451: a code file written, created, deleted, renamed), for the agent's
 	// status bar (#449).
 	struct agent_action_info
@@ -235,6 +243,8 @@ namespace edt
 		signal<const std::string&> problems_changed; // (source)
 		// Every change of the Play session's state, after it took effect (play_session).
 		signal<play_state, play_reason> play_state_changed;
+		// The editor switched between its layouts (editor_mode_controller), after the switch and its Play change.
+		signal<editor_mode> editor_mode_changed;
 		// An agent's call changed something outside the scene (code.write/create/delete/rename), after it happened.
 		signal<const agent_action_info&> agent_action;
 		// An MCP session of an agent ended (disconnect, idle timeout, an explicit close; not the editor stopping the
