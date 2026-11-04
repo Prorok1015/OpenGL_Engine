@@ -4,10 +4,37 @@
 #include "edt_dockspace.h"
 #include <chrono>
 #include <functional>
+#include <string>
 #include <string_view>
 
 namespace edt {
 	class editor_context;
+
+	// What editor_layer draws before the implicit callbacks of a frame. Every function may be null.
+	struct editor_layouts
+	{
+		// #518: while `loading_active` says so (the start level of --game loads), `draw_loading` is drawn instead of
+		// either layout and no shortcut fires.
+		std::function<bool()> loading_active{};
+		std::function<void()> draw_loading{};
+		// Game mode (#294): see editor_layer::set_game_layout.
+		std::function<bool()> game_active{};
+		std::function<void()> draw_game{};
+		std::function<bool(std::string_view)> game_shortcuts{};
+	};
+
+	enum class drawn_layout { editor, game, loading };
+
+	// One frame of the layouts: the shortcut pass, then the loading screen, the game layout or the dockspace with its
+	// menu bar and panels. Without the loading screen it makes the same ImGui calls as before #518.
+	drawn_layout draw_layouts(dockspace& dock, panel_registry& panels, action_registry& actions, const editor_layouts& layouts);
+
+	inline constexpr const char* loading_screen_window = "##loading_screen";
+	// "Loading <level>..." for the start level's tag.
+	std::string loading_screen_text(std::string_view level);
+	// One undecorated black window over the main viewport with `text` in its centre. It never comes to the front, so
+	// the implicit callbacks' modals (the load's progress, dialogs) stay over it.
+	void draw_loading_screen(std::string_view text);
 
 	class editor_layer : public gui::layer_interface {
 	public:
@@ -43,19 +70,23 @@ namespace edt {
 		// `after_implicit` runs after the implicit callbacks of a frame `draw` drew (they may open a popup).
 		void set_game_layout(std::function<bool()> active, std::function<void()> draw,
 			std::function<bool(std::string_view)> shortcuts, std::function<void()> after_implicit) {
-			m_game_active = std::move(active);
-			m_draw_game = std::move(draw);
-			m_game_shortcuts = std::move(shortcuts);
+			m_layouts.game_active = std::move(active);
+			m_layouts.draw_game = std::move(draw);
+			m_layouts.game_shortcuts = std::move(shortcuts);
 			m_game_after_implicit = std::move(after_implicit);
+		}
+		// #518: while `active` says so, `draw` is drawn instead of the dockspace or the game layout, and no shortcut
+		// fires. The implicit callbacks still draw over it. Unset (the default): the frame is as without it.
+		void set_loading_screen(std::function<bool()> active, std::function<void()> draw) {
+			m_layouts.loading_active = std::move(active);
+			m_layouts.draw_loading = std::move(draw);
 		}
 
 	private:
 		gui::menu_layout_manager m_manager;
 		dockspace m_dockspace;
 		editor_context* m_context = nullptr;
-		std::function<bool()> m_game_active;
-		std::function<void()> m_draw_game;
-		std::function<bool(std::string_view)> m_game_shortcuts;
+		editor_layouts m_layouts;
 		std::function<void()> m_game_after_implicit;
 	};
 }

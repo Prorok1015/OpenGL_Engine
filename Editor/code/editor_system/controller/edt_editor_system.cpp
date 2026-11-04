@@ -215,7 +215,10 @@ edt::editor_system::~editor_system()
 	m_session_connections.clear();
 	m_agent_access.reset();
 	// The layer may outlive this system: no game layout drawn through it any more.
-	if (editor_layer) editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
+	if (editor_layer) {
+		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
+		editor_layer->set_loading_screen(nullptr, nullptr);
+	}
 	m_mode_changed.disconnect();
 	m_modes.reset();
 	if (m_play) {
@@ -426,6 +429,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		begin_level_load(res::tag::make(relative.string()));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	};
+	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
+	// its level (#518). A person has no menu or shortcut then.
+	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
+		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
+		return std::nullopt;
+	};
 #if SNK_HAS_ASSIMP
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 #endif
@@ -605,6 +614,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	if (!project_held && !startup_level.empty()) {
 		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
 		const res::tag level = startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level);
+		// #518: a neutral loading screen until the load ends; every end of it (loaded, failed, Esc in its modal) passes
+		// through the poll below to finish_startup.
+		if (start_in_game && m_modes) m_modes->begin_startup(std::string(level.view()));
 		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { begin_level_load(level); },
 			[this, start_in_game] {
 				bool loaded = false;
@@ -614,7 +626,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				// Begun in a frame, the load ends a frame later, and closing its modal focuses the top panel. The
 				// editor starts with no panel focused, as when the load began before the first frame (#437).
 				ImGui::SetWindowFocus(nullptr);
-				if (start_in_game) enter_startup_game_mode(loaded);
+				if (start_in_game && m_modes) m_modes->finish_startup(loaded, static_cast<bool>(m_stop_after_level_loaded));
 				return false;
 			}));
 	}
@@ -902,6 +914,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		},
 		is_game_mode_shortcut,
 		[this] { m_game_view_panel->bind_fullscreen_input(); });
+	// The start level of --game (#518). Also off once its load's implicit callback is gone, so the screen never outlives it.
+	editor_layer->set_loading_screen(
+		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
+		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label())); });
 	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});
@@ -914,21 +930,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		draw_play_status();
 		m_live_mode->draw_status();
 	});
-}
-
-void edt::editor_system::enter_startup_game_mode(bool level_loaded)
-{
-	if (!level_loaded) {
-		egLOG_WARN("editor", "game mode not entered: the start level did not load");
-		return;
-	}
-	// editor/exit_after_level_loaded already asked the loop to stop: Play would only start to be torn down.
-	if (m_stop_after_level_loaded) {
-		egLOG_INFO("editor", "game mode not entered: the editor exits after the level loaded");
-		return;
-	}
-	// A refusal is logged by the controller; the editor stays in editor mode.
-	if (m_modes) (void)m_modes->set_mode(editor_mode::game);
 }
 
 void edt::editor_system::draw_play_status()
