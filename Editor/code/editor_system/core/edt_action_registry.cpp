@@ -289,10 +289,11 @@ bool edt::action_registry::activate(std::string_view id)
 	return true;
 }
 
-bool edt::action_registry::dispatch(const shortcut& chord, bool text_input)
+bool edt::action_registry::dispatch(const shortcut& chord, bool text_input, const std::function<bool(std::string_view)>& allowed)
 {
 	for (const auto& a : m_ui) {
 		if (a->binding != chord || (text_input && a->ui.yields_to_text_input)) continue;
+		if (allowed && !allowed(a->id)) continue;
 		if (enabled_for_person(*a)) return activate(a->id);
 	}
 	return false;

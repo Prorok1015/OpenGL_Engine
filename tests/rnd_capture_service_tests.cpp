@@ -487,6 +487,7 @@ BOOST_AUTO_TEST_CASE(RenderInit_OffersTheServiceAndTheCommand)
 {
 	auto& commands = storage.require<cmd::command_registry>();
 	BOOST_CHECK(commands.contains("viewport.capture"));
+	BOOST_CHECK(commands.contains("capture.compare"));
 	BOOST_CHECK(storage.has_value<rnd::capture_service>());
 }
 

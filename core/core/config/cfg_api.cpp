@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 #include <yaml-cpp/yaml.h>
@@ -188,12 +189,16 @@ bool cfg::initialize_configs(int argc, char* argv[])
 			"it also ends the editor (unsaved changes are dropped)")
 		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
 			"used only with --headless: it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
-			"Missing or broken: every agent request is denied");
+			"Missing or broken: every agent request is denied")
+		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
+			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
+			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
 	const int style = po::command_line_style::default_style & ~po::command_line_style::allow_guessing;
-	po::store(po::command_line_parser(argc, argv).options(desc).style(style).run(), vm);
+	const po::parsed_options parsed = po::command_line_parser(argc, argv).options(desc).style(style).run();
+	po::store(parsed, vm);
 	po::notify(vm);
 
 	if (vm.count("help")) {
@@ -229,6 +234,13 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	}
 	if (vm.count("agent-policy")) {
 		set_registered("editor/agent_policy_file", vm["agent-policy"].as<std::string>());
+	}
+	if (vm.count("game")) {
+		set_registered("editor/start_mode", "game");
+		// Its own key: the editor checks it is a res:// tag, which editor/startup_level is not held to.
+		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
+			set_registered("editor/game_level", level);
+		}
 	}
 	if (vm.count("headless")) {
 		set_registered("editor/headless", "true");

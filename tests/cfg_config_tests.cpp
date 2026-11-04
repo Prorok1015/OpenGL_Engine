@@ -1,9 +1,12 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log_sinks.h>
+#include "edt_editor_mode.h"
 #include "test_temp_dir.hpp"
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // NOTE: cfg::initialize_configs(path) is guarded by a process-wide "already initialized" flag,
@@ -373,6 +376,83 @@ BOOST_AUTO_TEST_CASE(Cli_AgentPolicyIsAPathRelativeToTheWorkingDirectory)
 	BOOST_TEST(static_cast<std::filesystem::path>(agent_policy) == std::filesystem::current_path() / "answers/agent.json");
 	run_cli({ "-s", "editor/agent_policy_file", "" });
 	BOOST_TEST(agent_policy->empty());
+}
+
+// --game (#294): the variables stand in for the editor's of the same names; the real ones take the values too, so each
+// test puts them back. The level goes to editor/game_level, never to editor/startup_level: the editor takes it only as a
+// res:// tag (edt::game_level_problem, EdtGameModeUiTests).
+BOOST_AUTO_TEST_CASE(Cli_GameAloneSetsTheStartModeAndNoLevel)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
+	run_cli({ "-s", "editor/startup_level", "levels/kept.desc" });
+	BOOST_TEST(run_cli({ "--game" }) == 1);
+	BOOST_TEST(*start_mode == "game");
+	BOOST_TEST(game_level->empty());
+	BOOST_TEST(*startup_level == "levels/kept.desc");
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/startup_level", "" });
+	BOOST_TEST(*start_mode == "editor");
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameWithALevelSetsTheGameLevelAsWritten)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
+	BOOST_TEST(run_cli({ "--game=res://levels/smoke_level.desc" }) == 1);
+	BOOST_TEST(*start_mode == "game");
+	BOOST_TEST(*game_level == "res://levels/smoke_level.desc");
+	BOOST_TEST(startup_level->empty());
+	// Not a res:// tag: still stored as written (no path is resolved here); the editor refuses it at startup.
+	BOOST_TEST(run_cli({ "--game=../levels/main.desc" }) == 1);
+	BOOST_TEST(*game_level == "../levels/main.desc");
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/game_level", "" });
+	BOOST_TEST(game_level->empty());
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameWithASpaceBeforeTheLevel_TakesTheLevelAsWritten)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	BOOST_TEST(run_cli({ "--game", "res://levels/a.desc" }) == 1);
+	BOOST_TEST(*start_mode == "game");
+	BOOST_TEST(*game_level == "res://levels/a.desc");
+	BOOST_TEST(edt::game_level_problem(*game_level).empty());
+	// Not a res:// tag: taken as written all the same, and the editor refuses it at startup.
+	BOOST_TEST(run_cli({ "--game", "levels/a.desc" }) == 1);
+	BOOST_TEST(*game_level == "levels/a.desc");
+	BOOST_TEST(!edt::game_level_problem(*game_level).empty());
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/game_level", "" });
+	BOOST_TEST(game_level->empty());
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameDoesNotTakeTheBlameForAStrayTokenElsewhere)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	std::vector<std::string> errors;
+	const engine::log_sink_handle sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.emplace_back(message);
+	});
+	BOOST_TEST(run_cli({ "stray", "--game" }) == 1);
+	BOOST_TEST(run_cli({ "--game", "--non-interactive", "stray" }) == 1);
+	BOOST_TEST(run_cli({ "--game=res://levels/a.desc", "stray" }) == 1);
+	BOOST_TEST(*game_level == "res://levels/a.desc");
+	BOOST_TEST(errors.empty());
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/game_level", "", "app/non_interactive", "false" });
+	BOOST_TEST(game_level->empty());
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameLosesToSet)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	BOOST_TEST(run_cli({ "--game=res://levels/a.desc", "-s", "editor/start_mode", "editor", "editor/game_level", "res://levels/b.desc" }) == 1);
+	BOOST_TEST(*start_mode == "editor");
+	BOOST_TEST(*game_level == "res://levels/b.desc");
+	run_cli({ "-s", "editor/game_level", "" });
+	BOOST_TEST(game_level->empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
