@@ -88,9 +88,16 @@ namespace ds
 		}
 
 		// Does not allocate: the free list was reserved by insert().
+		// Destroys in place rather than through extract(): the moved-from optional that extract() returns trips
+		// GCC 13's -Wmaybe-uninitialized under TSan at -O1 (#524).
 		bool erase(handle_type h)
 		{
-			return extract(h).has_value();
+			if (!find(h)) {
+				return false;
+			}
+			m_slots[h.index - 1].value.reset();
+			free_slot(h.index);
+			return true;
 		}
 
 		// Takes the object out of its slot and frees the slot, like erase(), but hands the object over, so the
@@ -103,9 +110,7 @@ namespace ds
 			slot& s = m_slots[h.index - 1];
 			std::optional<T> taken = std::move(s.value);
 			s.value.reset();
-			++s.gen;
-			m_free.push_back(h.index);
-			--m_live;
+			free_slot(h.index);
 			return taken;
 		}
 
@@ -131,6 +136,13 @@ namespace ds
 		};
 
 		std::uint32_t visible(std::uint32_t gen) const noexcept { return m_tag | (gen & m_mask); }
+
+		void free_slot(std::uint32_t index)
+		{
+			++m_slots[index - 1].gen;
+			m_free.push_back(index);
+			--m_live;
+		}
 
 		std::uint32_t m_mask = 0xffffffffu;
 		std::uint32_t m_tag = 0;
