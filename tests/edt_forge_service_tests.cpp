@@ -770,7 +770,7 @@ BOOST_AUTO_TEST_CASE(NoToken_IsTheAnswer_AndNothingIsSent)
 	const json::value result = run("forge.create_pr", create_args());
 
 	BOOST_TEST(is_error(result, "no_token"));
-	BOOST_TEST(text_of(result.as_object().at("error").as_object().at("message")).find("Settings") != std::string::npos);
+	BOOST_TEST(text_of(result.as_object().at("error").as_object().at("message")).find("Git Account") != std::string::npos);
 	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "no_token"));
 	BOOST_TEST(is_error(run("forge.list_prs", "{}"), "no_token"));
 	BOOST_TEST(requests.empty());
