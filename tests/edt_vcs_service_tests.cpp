@@ -3,6 +3,7 @@
 #include "edt_path_text.h"
 #include "edt_agent_policy.h"
 #include "edt_git_panel_model.h"
+#include "edt_repository_watcher.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_service_commands.h>
 #include <snk/platform/plt_process.h>
@@ -2452,6 +2453,141 @@ BOOST_AUTO_TEST_CASE(AnAgentsPull_WithoutARemote_IsCheckedAgainstTheBranchsRemot
 	BOOST_TEST(is_error(finish(service->start_fetch({}, cmd::origin_kind::agent)), "denied"));
 }
 
+// #485: the probe gives the worktree's own git folder and the common one, absolute, for the repository watcher.
+BOOST_AUTO_TEST_CASE(RealRepository_AndALinkedWorktree_GiveAbsoluteGitDirAndCommonDir)
+{
+	const fs::path repo = make_plain_repository("main_repo");
+	fs::create_directories(repo / "sub");
+	const fs::path tree = base / "linked";
+	git(repo, { "worktree", "add", "-b", "linked_branch", edt::utf8_of(tree) });
+	const auto check = [this](const fs::path& project, const fs::path& git_dir, const fs::path& common_dir) {
+		make_service(real_options(project));
+		const auto& state = service->info();
+		BOOST_REQUIRE_MESSAGE(state.available, state.reason);
+		BOOST_REQUIRE(state.git_dir.has_value());
+		BOOST_REQUIRE(state.common_dir.has_value());
+		BOOST_TEST(state.git_dir->is_absolute(), edt::utf8_of(*state.git_dir));
+		BOOST_TEST(state.common_dir->is_absolute(), edt::utf8_of(*state.common_dir));
+		std::error_code ec;
+		BOOST_TEST(fs::equivalent(*state.git_dir, git_dir, ec), edt::utf8_of(*state.git_dir));
+		BOOST_TEST(fs::equivalent(*state.common_dir, common_dir, ec), edt::utf8_of(*state.common_dir));
+	};
+	check(repo, repo / ".git", repo / ".git");
+	check(repo / "sub", repo / ".git", repo / ".git");
+	check(tree, repo / ".git" / "worktrees" / "linked", repo / ".git");
+
+	registrations = edt::register_vcs_commands(commands, *service);
+	const cmd::result info = commands.invoke("vcs.info", json::object{}, cmd::origin::test());
+	BOOST_REQUIRE_MESSAGE(info.ok, info.error);
+	BOOST_TEST(info.value.as_object().contains("git_dir"));
+	BOOST_TEST(info.value.as_object().contains("common_dir"));
+}
+
+// Only writes can touch the index (reads pass --no-optional-locks): only they are the editor's own for the watcher.
+BOOST_AUTO_TEST_CASE(TheWriteObserver_SeesEachWriteStart_ButNoRead_AndTheCountGoesBackToZero)
+{
+	const fs::path repo = make_plain_repository("observed");
+	write(repo / "b.txt", "bee\n");
+	make_service(real_options(repo));
+	int started = 0;
+	int running_at_start = -1;
+	service->set_write_observer([this, &started, &running_at_start] {
+		++started;
+		running_at_start = service->running_writes();
+	});
+
+	const auto status = service->start_status(cmd::origin_kind::ui);
+	BOOST_TEST(started == 0);
+	BOOST_TEST(service->running_writes() == 0);
+	finish(status);
+
+	const auto stage = service->start_stage({ "b.txt" }, cmd::origin_kind::ui);
+	BOOST_TEST(started == 1);
+	BOOST_TEST(running_at_start == 1);
+	BOOST_TEST(service->running_writes() == 1);
+	finish(stage);
+	BOOST_TEST(service->running_writes() == 0);
+
+	// Cancelled before it ran: the job is dropped unrun and counts no more.
+	const auto cancelled = service->start_unstage({ "b.txt" }, cmd::origin_kind::ui);
+	BOOST_REQUIRE(static_cast<bool>(cancelled));
+	BOOST_TEST(started == 2);
+	BOOST_TEST(jobs->cancel(cancelled.job));
+	run_to_end();
+	BOOST_TEST(service->running_writes() == 0);
+}
+
+// The watcher next to the service, as editor_system ticks it: an outside index change while a read job runs is
+// reported, one during a write job is not.
+BOOST_AUTO_TEST_CASE(RealRepository_AnIndexChangeDuringARead_IsReported_DuringAWrite_IsNot)
+{
+	const fs::path repo = make_plain_repository("reads_and_writes");
+	write(repo / "b.txt", "bee\n");
+	write(repo / "c.txt", "sea\n");
+	make_service(real_options(repo));
+	edt::vcs::repository_watcher::clock::time_point now{};
+	edt::vcs::repository_watcher::ports ports;
+	ports.now = [&now] { return now; };
+	ports.own_writes_running = [this] { return service->running_writes() > 0; };
+	edt::vcs::repository_watcher watcher(std::move(ports));
+	service->set_write_observer([&watcher] { watcher.begin_own_write(); });
+	watcher.follow(*service);
+	BOOST_REQUIRE(watcher.armed());
+	const auto poll = [&now, &watcher] {
+		now += edt::vcs::repository_watcher::k_poll_interval;
+		return watcher.tick();
+	};
+	BOOST_TEST(!poll().any());
+
+	// A read job waits on the io lane while someone stages a file in a terminal.
+	const auto status = service->start_status(cmd::origin_kind::ui);
+	git(repo, { "add", "b.txt" });
+	BOOST_TEST(poll().index);
+	finish(status);
+	BOOST_TEST(!poll().any());
+
+	// The editor's own write: its index change is not news, during it or after it.
+	const auto stage = service->start_stage({ "c.txt" }, cmd::origin_kind::ui);
+	finish(stage);
+	BOOST_TEST(!poll().index);
+	BOOST_TEST(!poll().index);
+}
+
+// The watcher over a real repository (std::filesystem ports, a hand-moved clock): a commit and a checkout made
+// outside the editor are refs changes.
+BOOST_AUTO_TEST_CASE(RealRepository_TheWatcher_SeesACommitAndACheckoutMadeOutsideTheEditor)
+{
+	const fs::path repo = make_plain_repository("watched");
+	git(repo, { "config", "commit.gpgsign", "false" });
+	// The commit below then writes refs/heads/main as a new loose file: seen whatever the file system's time resolution.
+	git(repo, { "pack-refs", "--all" });
+	make_service(real_options(repo));
+	const auto& state = service->info();
+	BOOST_REQUIRE_MESSAGE(state.available, state.reason);
+	BOOST_REQUIRE(state.git_dir.has_value() && state.common_dir.has_value() && state.root.has_value());
+
+	edt::vcs::repository_watcher::clock::time_point now{};
+	edt::vcs::repository_watcher::ports ports;
+	ports.now = [&now] { return now; };
+	edt::vcs::repository_watcher watcher(std::move(ports));
+	watcher.follow(*service);
+	BOOST_REQUIRE(watcher.armed());
+	const auto poll = [&now, &watcher] {
+		now += edt::vcs::repository_watcher::k_poll_interval;
+		return watcher.tick();
+	};
+	BOOST_TEST(!poll().any());
+
+	write(repo / "b.txt", "bee\n");
+	git(repo, { "add", "b.txt" });
+	git(repo, { "commit", "-q", "-m", "made outside" });
+	BOOST_TEST(poll().refs);
+
+	// HEAD's text gets longer and a new loose ref appears.
+	git(repo, { "checkout", "-q", "-b", "a_branch_made_outside" });
+	BOOST_TEST(poll().refs);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtVcsFakeGitTests, fake_git_fixture)
@@ -4173,6 +4309,107 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckoutOfARemoteOnlyBranch_UsesTheCheckedOid)
 	const json::value failed = finish(service->start_checkout("feature", cmd::origin_kind::agent));
 	BOOST_TEST(failed.as_object().contains("error"), json::serialize(failed));
 	BOOST_TEST(has_arg(calls.back(), "--set-upstream-to=refs/remotes/origin/feature"));
+}
+
+// #485: a git that does not know --absolute-git-dir / --git-common-dir echoes them: the root still counts, the
+// git folders stay unknown (the repository watcher stays off).
+BOOST_AUTO_TEST_CASE(AGitThatEchoesTheFolderFlags_LeavesTheGitFoldersUnknown)
+{
+	auto options = fake_options();
+	options.run = [this, inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--absolute-git-dir")) {
+			on_line(edt::utf8_of(base) + "\n--absolute-git-dir\n--git-common-dir\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	const auto& state = service->info();
+	BOOST_REQUIRE_MESSAGE(state.available, state.reason);
+	BOOST_REQUIRE(state.root.has_value());
+	BOOST_TEST(*state.root == base);
+	BOOST_TEST(!state.git_dir.has_value());
+	BOOST_TEST(!state.common_dir.has_value());
+}
+
+// The watcher reads the service's cached state every frame without probing, and re-arms once something else (vcs.info,
+// the Git panel's refresh) probed the new project.
+BOOST_AUTO_TEST_CASE(TheWatcher_FollowsTheCachedStateWithoutProbing_AndReArmsAfterAProbeOfANewProject)
+{
+	const fs::path first = base / "first";
+	const fs::path second = base / "second";
+	fs::create_directories(first / ".git");
+	fs::create_directories(second / ".git");
+	std::optional<fs::path> project = first;
+	int probes = 0;
+	auto options = fake_options();
+	options.project_root = [&project] { return project; };
+	options.run = [&probes, inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--absolute-git-dir")) {
+			++probes;
+			on_line(edt::utf8_of(opts.working_dir) + "\n" + edt::utf8_of(opts.working_dir / ".git") + "\n.git\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	BOOST_REQUIRE_MESSAGE(service->cached_state().available, service->cached_state().reason);
+	BOOST_REQUIRE(service->cached_state().git_dir.has_value());
+	BOOST_TEST(probes == 1);
+
+	edt::vcs::repository_watcher::clock::time_point now{};
+	edt::vcs::repository_watcher::ports ports;
+	ports.now = [&now] { return now; };
+	edt::vcs::repository_watcher watcher(std::move(ports));
+	const auto frames = [&] {
+		for (int i = 0; i < 100; ++i) {
+			watcher.follow(*service);
+			now += std::chrono::milliseconds{ 100 };
+			static_cast<void>(watcher.tick());
+		}
+	};
+	frames();
+	BOOST_TEST(probes == 1);
+	BOOST_REQUIRE(watcher.armed());
+	BOOST_TEST(watcher.watched_git_dir() == *service->cached_state().git_dir);
+
+	// A switch nothing has probed yet: the old repository is not watched any more, and nothing is probed.
+	project = second;
+	watcher.follow(*service);
+	BOOST_TEST(!watcher.armed());
+	fs::create_directories(first / ".git" / "refs" / "heads");
+	std::ofstream(first / ".git" / "HEAD") << "ref: refs/heads/main\n";
+	bool any = false;
+	for (int i = 0; i < 100; ++i) {
+		watcher.follow(*service);
+		now += std::chrono::milliseconds{ 100 };
+		any = watcher.tick().any() || any;
+	}
+	BOOST_TEST(!any);
+	BOOST_TEST(!watcher.armed());
+	BOOST_TEST(probes == 1);
+
+	// The probe (vcs.info, the panel's refresh) arms it on the new repository.
+	BOOST_TEST(service->info().available);
+	BOOST_TEST(probes == 2);
+	watcher.follow(*service);
+	BOOST_REQUIRE(watcher.armed());
+	BOOST_REQUIRE(service->cached_state().git_dir.has_value());
+	BOOST_TEST(watcher.watched_git_dir() == *service->cached_state().git_dir);
+	std::error_code ec;
+	BOOST_TEST(fs::equivalent(watcher.watched_git_dir(), second / ".git", ec));
+	BOOST_TEST(fs::equivalent(*service->cached_state().common_dir, second / ".git", ec));
+
+	// Away and back without a probe: back on the probed project, it watches again from the cached state.
+	project = first;
+	watcher.follow(*service);
+	BOOST_TEST(!watcher.armed());
+	project = second;
+	watcher.follow(*service);
+	BOOST_TEST(watcher.armed());
+	BOOST_TEST(probes == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

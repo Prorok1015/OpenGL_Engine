@@ -393,6 +393,85 @@ BOOST_AUTO_TEST_CASE(AnOlderStatus_DoesNotOverwriteANewerOne)
 	BOOST_TEST(model.head() == "new");
 }
 
+// #485: a change of the repository outside the editor (a commit in a terminal) reaches the panel through
+// editor_events::repository_changed.
+BOOST_AUTO_TEST_CASE(ARepositoryChange_RefreshesWithinASecond_WhileVisible)
+{
+	open_and_read();
+	const auto status_before = last("vcs.status")->job;
+	events.repository_changed.emit(edt::repository_change::refs);
+	now += 100ms;
+	model.tick();
+	BOOST_TEST(last("vcs.status")->job == status_before);
+	now += edt::git_panel_model::k_repo_delay;
+	model.tick();
+	BOOST_TEST(last("vcs.status")->job != status_before);
+	BOOST_TEST((edt::git_panel_model::k_repo_delay + 100ms < 1s));
+}
+
+BOOST_AUTO_TEST_CASE(ARepositoryChangeWhileHidden_RunsNoGit_AndRefreshesWhenShown)
+{
+	open_and_read();
+	model.set_visible(false);
+	const auto before = calls.size();
+	events.repository_changed.emit(edt::repository_change::refs);
+	events.repository_changed.emit(edt::repository_change::index);
+	now += 5s;
+	model.tick();
+	BOOST_TEST(calls.size() == before);
+	BOOST_TEST(model.refs_changed() == 0u);
+	model.set_visible(true);
+	BOOST_TEST(calls.size() == before + 3u); // info, status, branches
+	BOOST_TEST(model.refs_changed() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AnIndexChange_RefreshesTheStatusOnly)
+{
+	open_and_read();
+	const auto status_before = last("vcs.status")->job;
+	events.repository_changed.emit(edt::repository_change::index);
+	now += edt::git_panel_model::k_repo_delay;
+	model.tick();
+	BOOST_TEST(last("vcs.status")->job != status_before);
+	BOOST_TEST(model.refs_changed() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ARefsChange_RefreshesTheStatus_AndTheHistory)
+{
+	open_and_read();
+	const auto status_before = last("vcs.status")->job;
+	events.repository_changed.emit(edt::repository_change::refs);
+	events.repository_changed.emit(edt::repository_change::index);
+	now += edt::git_panel_model::k_repo_delay;
+	model.tick();
+	BOOST_TEST(last("vcs.status")->job != status_before);
+	BOOST_TEST(model.refs_changed() == 1u);
+	now += 5s;
+	model.tick();
+	BOOST_TEST(model.refs_changed() == 1u);
+}
+
+// Every refs change reloads the History tab, also right after a write of the panel (owner decision: one extra
+// reload after the panel's own commit rather than a lost one after a commit made outside).
+BOOST_AUTO_TEST_CASE(AStageThenAnOutsideCommitWithinTwoSeconds_ReloadsTheHistory)
+{
+	open_and_read();
+	model.set_staged("src/b.cpp", true);
+	finish("vcs.stage", json::object{ { "output", "" } });
+	BOOST_TEST(model.writes_finished() == 1u);
+	now += 1500ms;
+	events.repository_changed.emit(edt::repository_change::refs);
+	now += edt::git_panel_model::k_repo_delay;
+	model.tick();
+	BOOST_TEST(model.refs_changed() == 1u);
+
+	now += 10s;
+	events.repository_changed.emit(edt::repository_change::refs);
+	now += edt::git_panel_model::k_repo_delay;
+	model.tick();
+	BOOST_TEST(model.refs_changed() == 2u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_CASE(EdtGitDiffLines_HeadersEndAtTheFirstHunk)

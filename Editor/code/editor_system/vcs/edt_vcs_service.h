@@ -6,6 +6,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_registration.h>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -82,6 +83,10 @@ namespace edt
 			std::string git_version;
 			// The repository's top level (git rev-parse --show-toplevel).
 			std::optional<std::filesystem::path> root;
+			// Absolute: the worktree's own .git folder (HEAD, index) and the folder shared by all worktrees (refs,
+			// packed-refs). The same folder outside a linked worktree.
+			std::optional<std::filesystem::path> git_dir;
+			std::optional<std::filesystem::path> common_dir;
 		};
 
 		// What a start_* call did: a job, or why there is none (code + message, as a command failure).
@@ -100,15 +105,36 @@ namespace edt
 		// stage / unstage: the paths of one call, in bytes (a command line on Windows holds 32K characters).
 		inline static constexpr std::size_t k_max_paths_bytes = 16 * 1024;
 
-		// Finds git and the repository right away (git --version, git rev-parse --show-toplevel): the answer of
+		// Finds git and the repository right away (git --version, git rev-parse --show-toplevel --absolute-git-dir
+		// --git-common-dir): the answer of
 		// vcs.info. Nothing fails here: an editor without git keeps running.
 		vcs_service(job_service& jobs, vcs_options options);
 		~vcs_service();
 		vcs_service(const vcs_service&) = delete;
 		vcs_service& operator=(const vcs_service&) = delete;
 
-		// The cached state; the repository is looked up again when the project root changed.
+		// The cached state; the repository is looked up again when the project root changed. Only a new project root
+		// probes again: a `git init` in the open project is seen after a project switch or a restart.
 		const state& info();
+		// The cached state as it is, never probing (what info() returned last).
+		const state& cached_state() const { return m_state; }
+		// Moves whenever a probe set the state: compare it to see that cached_state() changed.
+		std::uint64_t state_generation() const { return m_state_generation; }
+		// The project root the cached state was probed for.
+		const std::optional<std::filesystem::path>& probed_project() const { return m_probed_project; }
+		// The open project's root now (vcs_options::project_root), never probing: differs from probed_project() after a
+		// project switch nothing has probed yet.
+		std::optional<std::filesystem::path> current_project() const
+		{
+			return m_options.project_root ? m_options.project_root() : std::nullopt;
+		}
+
+		// Called on the main thread as each write job that runs git is started, before git can run
+		// (repository_watcher: what the editor's own writes do to the index and the work tree is not news). Reads pass
+		// --no-optional-locks and never touch the index: they are not reported.
+		void set_write_observer(std::function<void()> on_start) { m_write_observer = std::move(on_start); }
+		// The write jobs that run git and have not ended yet (decremented on any thread as a job ends or is dropped unrun).
+		int running_writes() const { return m_running_writes->load(); }
 
 		using log_filter = vcs_log_filter;
 
@@ -257,11 +283,16 @@ namespace edt
 		std::uint64_t m_message_count = 0;
 		// Shared with the log jobs, which fill it on the io lane.
 		std::shared_ptr<log_snapshots> m_log_snapshots;
+		std::function<void()> m_write_observer;
+		// Shared with the jobs: one dropped before it ran may be destroyed after the service.
+		std::shared_ptr<std::atomic<int>> m_running_writes = std::make_shared<std::atomic<int>>(0);
+		// 1: the state the constructor set; every probe adds one.
+		std::uint64_t m_state_generation = 1;
 		// Last: its jobs are stopped before the rest goes.
 		ds::lifetime m_life{ ds::lifetime_option::cancel_on_destroy };
 	};
 
-	// vcs.info {} -> {available, reason?, code?, root?, git_version?} (sync)
+	// vcs.info {} -> {available, reason?, code?, root?, git_dir?, common_dir?, git_version?} (sync)
 	// vcs.status {} -> {job}; result {branch: {head, detached, oid, upstream?, ahead?, behind?},
 	//     entries: [{path, orig_path?, index, worktree, kind: ordinary|renamed|unmerged|untracked|ignored}], clean, truncated}
 	// vcs.diff {path?, staged?, commit?} -> {job}; result {text, truncated} (text cut at 256 KiB, truncated true then);

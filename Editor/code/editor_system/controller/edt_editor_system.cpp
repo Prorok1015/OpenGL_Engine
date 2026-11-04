@@ -40,6 +40,7 @@
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
 #include "edt_vcs_service.h"
+#include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_play_commands.h"
 #include "edt_play_session.h"
@@ -558,6 +559,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	edt::vcs::repository_watcher::ports watch_ports;
+	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
+	m_repo_watcher = std::make_unique<edt::vcs::repository_watcher>(std::move(watch_ports));
+	m_vcs->set_write_observer([this] {
+		if (m_repo_watcher) m_repo_watcher->begin_own_write();
+	});
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -836,6 +843,16 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 void edt::editor_system::tick_live_mode()
 {
 	if (m_live_mode) m_live_mode->tick();
+}
+
+void edt::editor_system::tick_repository_watcher()
+{
+	if (!m_repo_watcher || !m_vcs || !m_context) return;
+	// Not info(): after a project switch that would run the blocking repository probe here, every frame.
+	m_repo_watcher->follow(*m_vcs);
+	const edt::vcs::repository_changes changes = m_repo_watcher->tick();
+	if (changes.refs) m_context->events().repository_changed.emit(repository_change::refs);
+	if (changes.index) m_context->events().repository_changed.emit(repository_change::index);
 }
 
 void edt::editor_system::stop_live_build()

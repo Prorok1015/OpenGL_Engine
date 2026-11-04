@@ -19,8 +19,8 @@ namespace edt
 	// View > Git (#456): the repository's changes, commit, branches and the diff of a file (tab Changes), and the
 	// history with its graph and the files of a commit (tab History, #457); it only draws git_panel_model and
 	// vcs::history_model, which run everything through the vcs.* commands. Closed by default: while closed it reads
-	// nothing and draws nothing; the history is read only while its tab is shown. A change of code/ refreshes it (the
-	// repository outside code/ through Refresh, #485).
+	// nothing and draws nothing; the history is read only while its tab is shown. A change of code/ or of the
+	// repository (editor_events::repository_changed, #485) refreshes it.
 	class git_panel final : public panel_base
 	{
 	public:
@@ -49,6 +49,7 @@ namespace edt
 		git_panel_model m_model;
 		vcs::history_model m_history;
 		std::uint64_t m_seen_writes = 0;
+		std::uint64_t m_seen_refs = 0;
 		// The selected file's diff split into lines once per history_model::diff_version, not every frame.
 		std::vector<git_diff_line> m_history_diff;
 		std::uint64_t m_history_diff_version = 0;
