@@ -108,7 +108,7 @@ namespace {
 
 edt::git_panel::git_panel(editor_events& events, git_panel_model::ports ports, dialog_service& dialogs, res::resource_system& resources)
 	: panel_base("git", "Git"), m_model(events, ports), m_history(events, history_ports_of(ports)),
-	  m_pr(events, forge_pr_dialog_model::ports{ ports.invoke, ports.cancel }), m_dialogs(dialogs),
+	  m_pr(events, forge_pr_dialog_model::ports{ ports.invoke, ports.cancel, {} }), m_dialogs(dialogs),
 	  m_resources(resources)
 {
 	// Whether or not code/ is mounted yet: a project that comes later still refreshes the panel. Both subscriptions are
