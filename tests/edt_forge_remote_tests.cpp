@@ -168,7 +168,14 @@ BOOST_AUTO_TEST_CASE(SanitizeText_DropsControlBidiAndInvisibleCharacters)
 	const std::string bidi = "\xE2\x80\xAE";       // U+202E
 	const std::string zero_width = "\xE2\x80\x8B"; // U+200B
 	const std::string c1 = "\xC2\x85";             // U+0085
-	const std::string cleaned = sanitize_text("a\x07" "b\r\nc" + bidi + "d" + zero_width + "e" + c1 + "f\x7F" "g", 100);
+	std::string input = "a\x07" "b\r\nc";
+	input += bidi;
+	input += "d";
+	input += zero_width;
+	input += "e";
+	input += c1;
+	input += "f\x7F" "g";
+	const std::string cleaned = sanitize_text(input, 100);
 	BOOST_TEST(cleaned == "a b  c d e f g");
 	BOOST_TEST(sanitize_text("ok \xC3\xBC", 100) == "ok \xC3\xBC");
 }
