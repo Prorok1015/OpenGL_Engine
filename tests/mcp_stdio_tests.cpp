@@ -378,6 +378,27 @@ BOOST_FIXTURE_TEST_CASE(Progress_IsWrittenOnlyForACallWithAToken, stdio_fixture)
 	BOOST_TEST(output.all_well_formed());
 }
 
+BOOST_FIXTURE_TEST_CASE(Cancelled_ReachesTheHostAndIsNotAnswered, stdio_fixture)
+{
+	mcp::stdio_transport transport(host, config());
+	feed(transport, initialize_line);
+	host.set_defer_calls(true);
+	feed(transport, R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"probe","_meta":{"progressToken":"p-1"}}})");
+	const auto calls = host.calls();
+	BOOST_REQUIRE(calls.size() == 1u);
+	BOOST_TEST(calls[0].wants_progress);
+	BOOST_TEST(calls[0].request_id.as_int64() == 9);
+
+	const std::size_t before = output.size();
+	feed(transport, R"({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}})");
+	BOOST_REQUIRE(transport.flush());
+	BOOST_TEST(output.size() == before);
+	const auto cancels = host.cancels();
+	BOOST_REQUIRE(cancels.size() == 1u);
+	BOOST_TEST(cancels[0].session_id == transport.session_id());
+	BOOST_TEST(cancels[0].request_id.as_int64() == 9);
+}
+
 BOOST_FIXTURE_TEST_CASE(BadInput_IsAnsweredWithTheErrorsHttpGives, stdio_fixture)
 {
 	mcp::stdio_transport transport(host, config());

@@ -41,6 +41,14 @@ public:
 		std::string name;
 		boost::json::value args;
 		mcp::progress_sink progress;
+		boost::json::value request_id;
+		bool wants_progress = false;
+	};
+
+	struct cancel_record
+	{
+		std::string session_id;
+		boost::json::value request_id;
 	};
 
 	void list_tools(std::function<void(std::vector<mcp::tool_info>)> done) override
@@ -62,7 +70,7 @@ public:
 		mcp::call_result answer;
 		{
 			std::lock_guard lock(m_mutex);
-			m_calls.push_back({ context.session_id, name, args, progress });
+			m_calls.push_back({ context.session_id, name, args, progress, context.request_id, context.wants_progress });
 			if (m_throw_on_call) {
 				throw std::runtime_error("call_tool failed");
 			}
@@ -110,8 +118,32 @@ public:
 
 	void session_closed(std::string session_id) override
 	{
+		std::vector<std::function<void(mcp::call_result)>> dropped;
+		{
+			std::lock_guard lock(m_mutex);
+			m_closed_sessions.push_back(std::move(session_id));
+			if (m_drop_on_cancel) {
+				dropped.swap(m_deferred);
+			}
+		}
+	}
+
+	void cancel_request(std::string session_id, boost::json::value request_id) override
+	{
+		std::vector<std::function<void(mcp::call_result)>> dropped;
+		{
+			std::lock_guard lock(m_mutex);
+			m_cancels.push_back({ std::move(session_id), std::move(request_id) });
+			if (m_drop_on_cancel) {
+				dropped.swap(m_deferred);
+			}
+		}
+	}
+
+	std::vector<cancel_record> cancels() const
+	{
 		std::lock_guard lock(m_mutex);
-		m_closed_sessions.push_back(std::move(session_id));
+		return m_cancels;
 	}
 
 	std::vector<std::string> closed_sessions() const
@@ -145,6 +177,12 @@ public:
 		std::lock_guard lock(m_mutex);
 		m_defer_calls = defer;
 	}
+	// A cancel or the end of a session drops every deferred answer uncalled, as the editor's bridge does with a held call.
+	void set_drop_on_cancel(bool value)
+	{
+		std::lock_guard lock(m_mutex);
+		m_drop_on_cancel = value;
+	}
 	void set_throw_on_list(bool value)
 	{
 		std::lock_guard lock(m_mutex);
@@ -172,6 +210,20 @@ public:
 		std::unique_lock lock(m_mutex);
 		return m_deferred_cv.wait_for(lock, std::chrono::seconds(20), [&] { return m_deferred.size() >= count; });
 	}
+	// Drops the oldest deferred call without answering it (outside the lock: dropping it may complete the request).
+	bool drop_deferred()
+	{
+		std::function<void(mcp::call_result)> done;
+		{
+			std::lock_guard lock(m_mutex);
+			if (m_deferred.empty()) {
+				return false;
+			}
+			done = std::move(m_deferred.front());
+			m_deferred.erase(m_deferred.begin());
+		}
+		return true;
+	}
 	// Answers the oldest deferred call with the next result.
 	bool answer_deferred(mcp::call_result result)
 	{
@@ -198,8 +250,10 @@ private:
 	std::vector<std::function<void(mcp::call_result)>> m_deferred;
 	std::vector<std::string> m_logs;
 	std::vector<std::string> m_closed_sessions;
+	std::vector<cancel_record> m_cancels;
 	mcp::call_result m_next_result;
 	bool m_defer_calls = false;
+	bool m_drop_on_cancel = false;
 	bool m_throw_on_list = false;
 	bool m_throw_on_call = false;
 };

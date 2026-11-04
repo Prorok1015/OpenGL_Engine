@@ -47,7 +47,8 @@ namespace mcp
 	//
 	// Supported: initialize, ping, tools/list, tools/call (with notifications/progress on the event stream),
 	// resources/list, resources/templates/list, resources/read, resources/subscribe, resources/unsubscribe,
-	// notifications/resources/updated and notifications/tools/list_changed on the event stream (GET).
+	// notifications/resources/updated and notifications/tools/list_changed on the event stream (GET), and
+	// notifications/cancelled from the client (host::cancel_request).
 	// Batches are refused (removed from the protocol in 2025-06-18). The methods themselves are rpc_dispatcher's.
 	// One MCP session as a person sees it (the agents window). `client_name` is what the client called itself in initialize
 	// (clientInfo.name): untrusted text, cut to 64 bytes without control characters.

@@ -641,6 +641,67 @@ BOOST_AUTO_TEST_CASE(SlowTool_AnswersFromAnotherThreadWhileTheServerStaysRespons
 	BOOST_TEST(json_of(response->body).at("result").at("content").as_array().size() == 1u);
 }
 
+// A call whose answer the host drops (cancelled, or its session ended) still completes its POST and frees the
+// connection: otherwise each one would hold a connection slot until max_connections refuses every client.
+BOOST_AUTO_TEST_CASE(ACancelledCall_CompletesItsPostAndClosesTheConnection)
+{
+	fake_host host;
+	host.set_defer_calls(true);
+	host.set_drop_on_cancel(true);
+	mcp::server server(host, make_config());
+	BOOST_REQUIRE(server.start());
+	const std::uint16_t port = server.port();
+
+	test_client caller(port);
+	caller.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
+	const auto init = caller.read_response();
+	BOOST_REQUIRE(init.has_value());
+	const std::string session = session_of(*init);
+	caller.send(request_text(port, "POST", rpc(2, "tools/call", R"({"name":"slow","_meta":{"progressToken":"t"}})"), session));
+	BOOST_REQUIRE(host.wait_for_deferred(1));
+
+	test_client other(port);
+	other.send(request_text(port, "POST", R"({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}})", session));
+	const auto accepted = other.read_response();
+	BOOST_REQUIRE(accepted.has_value());
+	BOOST_TEST(accepted->status == 202);
+
+	const auto completed = caller.read_response();
+	BOOST_REQUIRE(completed.has_value());
+	BOOST_TEST(completed->status == 202);
+	BOOST_TEST(completed->body.empty());
+	BOOST_TEST(caller.reaches_end_of_stream());
+}
+
+BOOST_AUTO_TEST_CASE(ACallWhoseSessionEnds_CompletesItsPostAndClosesTheConnection)
+{
+	fake_host host;
+	host.set_defer_calls(true);
+	host.set_drop_on_cancel(true);
+	mcp::server server(host, make_config());
+	BOOST_REQUIRE(server.start());
+	const std::uint16_t port = server.port();
+
+	test_client caller(port);
+	caller.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
+	const auto init = caller.read_response();
+	BOOST_REQUIRE(init.has_value());
+	const std::string session = session_of(*init);
+	caller.send(request_text(port, "POST", rpc(2, "tools/call", R"({"name":"slow"})"), session));
+	BOOST_REQUIRE(host.wait_for_deferred(1));
+
+	test_client other(port);
+	other.send(request_text(port, "DELETE", {}, session));
+	const auto deleted = other.read_response();
+	BOOST_REQUIRE(deleted.has_value());
+	BOOST_TEST(deleted->status == 200);
+
+	const auto completed = caller.read_response();
+	BOOST_REQUIRE(completed.has_value());
+	BOOST_TEST(completed->status == 202);
+	BOOST_TEST(caller.reaches_end_of_stream());
+}
+
 BOOST_AUTO_TEST_CASE(ConnectionLimit_DropsTheExtraConnection)
 {
 	fake_host host;

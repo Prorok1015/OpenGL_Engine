@@ -293,6 +293,7 @@ void mcp::rpc_dispatcher::dispatch(const std::string& method, const json::value&
 			}
 		}
 		progress_sink progress = [](double, double, std::string_view) {};
+		bool wants_progress = false;
 		if (session.notify) {
 			const json::value* meta = params.if_contains("_meta");
 			const json::value* token = (meta != nullptr && meta->is_object()) ? meta->get_object().if_contains("progressToken") : nullptr;
@@ -309,10 +310,13 @@ void mcp::rpc_dispatcher::dispatch(const std::string& method, const json::value&
 					}
 					notify(rpc_notification("notifications/progress", std::move(body)));
 				};
+				wants_progress = true;
 			}
 		}
 		request_context context;
 		context.session_id = session.id;
+		context.request_id = id;
+		context.wants_progress = wants_progress;
 		m_host.call_tool(std::move(context), string_of(name->get_string()), std::move(arguments), std::move(progress),
 			[reply, id](call_result result) {
 				reply(rpc_result(id, call_result_json(result)));
@@ -340,6 +344,7 @@ void mcp::rpc_dispatcher::dispatch(const std::string& method, const json::value&
 		}
 		request_context context;
 		context.session_id = session.id;
+		context.request_id = id;
 		m_host.read_resource(std::move(context), string_of(uri->get_string()), [reply, id](resource_result outcome) {
 			if (!outcome.found) {
 				reply(rpc_error(id, rpc_codes::resource_not_found,
@@ -385,4 +390,16 @@ void mcp::rpc_dispatcher::dispatch(const std::string& method, const json::value&
 	} else {
 		reply(rpc_error(id, rpc_codes::method_not_found, "method not found"));
 	}
+}
+
+void mcp::rpc_dispatcher::notification(const std::string& method, const json::object& params, const rpc_session& session) const
+{
+	if (method != "notifications/cancelled") {
+		return;
+	}
+	const json::value* request_id = params.if_contains("requestId");
+	if (request_id == nullptr || !is_id(*request_id)) {
+		return;
+	}
+	m_host.cancel_request(session.id, *request_id);
 }
