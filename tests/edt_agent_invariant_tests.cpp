@@ -119,7 +119,7 @@ bool has_schema_type(const boost::json::value& schema, std::string_view type)
 // The smallest value that passes the schema's type; only the name tells a code version from a text.
 boost::json::value minimal_value(const boost::json::value& schema, std::string_view name)
 {
-	if (name == "version") return std::string("0");
+	if (name == "version") return boost::json::string("0");
 	if (schema.is_object()) {
 		const boost::json::value* options = schema.as_object().if_contains("enum");
 		if (options != nullptr && options->is_array() && !options->as_array().empty()) return options->as_array().front();
@@ -128,7 +128,7 @@ boost::json::value minimal_value(const boost::json::value& schema, std::string_v
 	if (has_schema_type(schema, "integer") || has_schema_type(schema, "number")) return 0;
 	if (has_schema_type(schema, "array")) return boost::json::array{};
 	if (has_schema_type(schema, "object")) return boost::json::object{};
-	return std::string("x");
+	return boost::json::string("x");
 }
 
 boost::json::value path_value(const boost::json::value& schema, const std::string& path)

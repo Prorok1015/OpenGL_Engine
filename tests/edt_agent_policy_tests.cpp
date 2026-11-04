@@ -540,7 +540,7 @@ BOOST_AUTO_TEST_CASE(SaveProject_WritesTheFileAndTakesTheLayerOver)
 	edt::agent_policy policy{ project_file, dir.path() / "personal.json", approved };
 	policy.set_approval_allowed(true);
 
-	BOOST_TEST(!policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), policy_layer{}).has_value());
+	BOOST_TEST(!policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{}).has_value());
 
 	BOOST_TEST(fs::exists(project_file));
 	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::allow));
@@ -556,7 +556,7 @@ BOOST_AUTO_TEST_CASE(SaveProject_WithAFailingWriter_ReportsAndKeepsTheOldLayer)
 	policy.set_approval_allowed(true);
 	policy.refresh();
 
-	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), policy_layer{},
+	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{},
 		[](const fs::path&, std::string_view) { return std::optional<std::string>{ "disk full" }; });
 
 	BOOST_REQUIRE(error.has_value());
@@ -1065,7 +1065,7 @@ BOOST_FIXTURE_TEST_CASE(ACopyApprovedForAnotherProject_IsNotTrusted, approval_fi
 BOOST_FIXTURE_TEST_CASE(APersonsSaveInTheSettingsWindow_IsTheirApproval, approval_fixture)
 {
 	const auto policy = make();
-	BOOST_TEST(!policy->save_project(layer_with(agent_category::code_files, policy_mode::allow), policy_layer{}).has_value());
+	BOOST_TEST(!policy->save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{}).has_value());
 	BOOST_TEST(!policy->project_pending_approval());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::allow));
 	BOOST_TEST(fs::exists(approved_file));
@@ -1147,7 +1147,7 @@ BOOST_FIXTURE_TEST_CASE(APersonsEditOnTopOfTheApprovedLayer_DropsThePendingLoose
 
 	edt::policy_layer edited = policy->approved_project();
 	edited.categories[agent_category::scene_edit] = policy_mode::ask;
-	BOOST_TEST(!policy->save_project(edited, policy_layer{}).has_value());
+	BOOST_TEST(!policy->save_project(edited, edt::policy_layer{}).has_value());
 
 	BOOST_TEST(!policy->project_pending_approval());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
@@ -1695,7 +1695,7 @@ BOOST_AUTO_TEST_CASE(SaveProject_WithoutAPersonToApprove_IsRefusedAndWritesNothi
 	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
 	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
 
-	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), policy_layer{});
+	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{});
 	BOOST_REQUIRE(error.has_value());
 	BOOST_TEST(!fs::exists(project_file));
 	// The personal file is the person's own and not judged by this.
@@ -1758,7 +1758,7 @@ BOOST_AUTO_TEST_CASE(AProjectFileThatIsALink_IsABrokenLayer_AndSaveWritesNothing
 	BOOST_TEST(!policy.project_error().empty());
 	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::deny));
 
-	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), policy_layer{});
+	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{});
 	BOOST_REQUIRE(error.has_value());
 	BOOST_TEST(slurp(victim) == "keep me");
 	BOOST_TEST(fs::is_symlink(project_file));
@@ -1775,7 +1775,7 @@ BOOST_AUTO_TEST_CASE(ADanglingLinkAsTheProjectFile_IsNotTakenForNoFile)
 	policy.set_approval_allowed(true);
 	policy.refresh();
 	BOOST_TEST(!policy.project_error().empty());
-	BOOST_TEST(policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), policy_layer{}).has_value());
+	BOOST_TEST(policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{}).has_value());
 	BOOST_TEST(!fs::exists(dir.path() / "missing.txt"));
 }
 
@@ -1794,7 +1794,7 @@ BOOST_AUTO_TEST_CASE(AProjectPolicyFolderThatIsALink_IsABrokenLayer_AndSaveWrite
 	BOOST_TEST(!policy.project_error().empty());
 	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::deny));
 
-	BOOST_REQUIRE(policy.save_project(layer_with(agent_category::build, policy_mode::allow), policy_layer{}).has_value());
+	BOOST_REQUIRE(policy.save_project(layer_with(agent_category::build, policy_mode::allow), edt::policy_layer{}).has_value());
 	BOOST_TEST(slurp(dir.path() / "elsewhere" / "agent_policy.json") == before);
 	std::size_t entries = 0;
 	for (const auto& entry : fs::directory_iterator(dir.path() / "elsewhere")) {
