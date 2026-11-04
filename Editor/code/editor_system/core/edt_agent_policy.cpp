@@ -3,6 +3,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_json_text.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/basic_parser.hpp>
@@ -301,6 +302,16 @@ namespace edt
 			std::ifstream in(file, std::ios::binary);
 			if (!in) return std::nullopt;
 			return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+
+		// <project>/.snk/agent_policy.json, read without following a link at .snk or at the file (#526): nullopt for a
+		// link there, which fails the layer closed like an unreadable file.
+		std::optional<std::string> read_project_layer(const std::filesystem::path& file)
+		{
+			const prj::project_file_location at = prj::project_file_location_of(file);
+			prj::project_file_text read = prj::read_project_file(at.root, at.relative);
+			if (!read.exists || !read.error.empty()) return std::nullopt;
+			return std::move(read.text);
 		}
 
 	}
@@ -1001,7 +1012,11 @@ namespace edt
 			std::filesystem::file_time_type modified{};
 			std::uintmax_t size = 0;
 			std::string error;
+			// The file or .snk is a link (#526): logged as an ERROR, not a WARN.
+			bool refused_link = false;
 		};
+
+		constexpr std::string_view k_not_regular = "it is not a regular file";
 
 		file_probe probe_file(const std::filesystem::path& file, bool refuse_links)
 		{
@@ -1011,6 +1026,7 @@ namespace edt
 			if (refuse_links) {
 				if (std::string why = project_policy_link_error(file); !why.empty()) {
 					out.error = std::move(why);
+					out.refused_link = true;
 					return out;
 				}
 			}
@@ -1028,7 +1044,7 @@ namespace edt
 			}
 			if (!std::filesystem::exists(status)) return out;
 			if (!std::filesystem::is_regular_file(status)) {
-				out.error = "it is not a regular file";
+				out.error = k_not_regular;
 				return out;
 			}
 			out.exists = true;
@@ -1057,7 +1073,10 @@ namespace edt
 		what.loaded = true;
 		what.layer = {};
 		what.error.clear();
-		const file_probe now = probe_file(what.file, what.kind == policy_layer_kind::project);
+		const bool project_layer = what.kind == policy_layer_kind::project;
+		const file_probe now = probe_file(what.file, project_layer);
+		// A link at the project file or at .snk (#526): the layer fails closed and the person is told loudly.
+		bool refused_link = project_layer && (now.refused_link || now.error == k_not_regular);
 		what.existed = now.exists;
 		what.modified = now.modified;
 		what.size = now.size;
@@ -1076,9 +1095,10 @@ namespace edt
 			what.error = std::move(misplaced);
 		}
 		else if (now.exists) {
-			const std::optional<std::string> text = read_text(what.file);
+			const std::optional<std::string> text = project_layer ? read_project_layer(what.file) : read_text(what.file);
 			if (!text) {
-				what.error = "the file cannot be read";
+				what.error = project_layer ? "the file cannot be read, or it or .snk is a link" : "the file cannot be read";
+				refused_link = project_layer;
 			}
 			else {
 				policy_parse_result parsed = parse_policy_layer(*text, what.kind);
@@ -1090,6 +1110,9 @@ namespace edt
 			if (what.kind == policy_layer_kind::preanswers) {
 				egLOG_ERROR("editor/agent_policy", "--agent-policy {}: {}; every agent request of a headless run is denied",
 					fs_paths::utf8_of(what.file), what.error);
+			}
+			else if (refused_link) {
+				egLOG_ERROR("editor/agent_policy", "{}: {}; every agent request is denied", fs_paths::utf8_of(what.file), what.error);
 			}
 			else {
 				egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
