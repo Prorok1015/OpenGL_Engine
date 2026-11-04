@@ -5,11 +5,16 @@
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/ecs/ecs_channel.hpp>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <set>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <vector>
 
 // Procedural primitives (pure math), context_manager load/hot-reload policy and the world wrapper
 // adapter. All headless.
@@ -283,6 +288,32 @@ BOOST_AUTO_TEST_CASE(HotReload_FailedWorldDescKeepsTheCurrentLevelAndSkipsTheCal
 	BOOST_TEST(lvl.has("w1"));
 	BOOST_TEST(lvl.has("rt"));
 	BOOST_TEST(has_named(lvl.get("w0").state(), "c1")); // not rebuilt
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_ADeletedLevelFileKeepsTheLevelWithoutAnError)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+	int reloads = 0;
+	mgr.set_on_reload([&reloads] { ++reloads; });
+
+	std::vector<std::string> errors;
+	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.push_back(std::format("{}: {}", category, message));
+	});
+	BOOST_REQUIRE(ram->erase(tag));
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	for (const auto& error : errors) BOOST_TEST_MESSAGE(error);
+	BOOST_TEST(errors.empty());
+	BOOST_TEST(reloads == 0);
+	auto& lvl = mgr.level_set();
+	BOOST_TEST(lvl.size() == 2u);
+	BOOST_TEST(lvl.has("w0"));
+	BOOST_TEST(lvl.has("w1"));
+	BOOST_TEST(has_named(lvl.get("w0").state(), "c1"));
 }
 
 BOOST_AUTO_TEST_CASE(HotReload_DescWorldReplacesRuntimeWorldWithTheSameName)
