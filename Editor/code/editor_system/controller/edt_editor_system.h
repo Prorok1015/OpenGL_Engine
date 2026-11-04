@@ -161,6 +161,8 @@ namespace edt {
 		// port cannot be bound. Main thread.
 		bool set_agent_server(bool enabled, std::uint16_t port);
 		agent_server* agent_server_object() { return m_agent_server.get(); }
+		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
+		agent_access* agent_access_object() { return m_agent_access.get(); }
 
 	private:
 		// Editor layer & panels
