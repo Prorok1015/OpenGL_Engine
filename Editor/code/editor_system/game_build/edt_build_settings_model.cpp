@@ -1,12 +1,11 @@
 #include "edt_build_settings_model.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_json_text.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <algorithm>
 #include <format>
-#include <fstream>
-#include <iterator>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -92,13 +91,9 @@ fs::path edt::build_settings_model::build_settings_file() const
 
 edt::build_settings_model::snapshot edt::build_settings_model::read_snapshot(const fs::path& file)
 {
-	snapshot out;
-	std::error_code ec;
-	if (!fs::exists(file, ec)) return out;
-	std::ifstream stream(file, std::ios::binary);
-	out.exists = true;
-	if (stream) out.text.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
-	return out;
+	const prj::project_file_location at = prj::project_file_location_of(file);
+	prj::project_file_text read = prj::read_project_file(at.root, at.relative);
+	return { read.exists, std::move(read.text), std::move(read.error) };
 }
 
 void edt::build_settings_model::load(const fs::path& root)
@@ -124,6 +119,11 @@ void edt::build_settings_model::load(const fs::path& root)
 	m_settings_snapshot = read_snapshot(build_settings_file());
 	if (!m_main_snapshot.exists) {
 		m_unavailable = "The project has no code/CMakePresets.json";
+		revert();
+		return;
+	}
+	if (!m_main_snapshot.error.empty()) {
+		m_unavailable = std::format("code/CMakePresets.json cannot be read: {}", m_main_snapshot.error);
 		revert();
 		return;
 	}

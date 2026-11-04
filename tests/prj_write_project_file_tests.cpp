@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_json_text.h>
+#include <snk/project/prj_cmake_presets.h>
 #include "edt_build_settings.h"
 #include "test_temp_dir.hpp"
 #include <cstddef>
@@ -16,7 +17,8 @@
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_reparse_tag.h>
 
-// Files under <project>/.snk are written without following a link below the project root (#523).
+// Files under <project>/.snk are written (#523), the CMake presets of <project>/code read and written (#527), without
+// following a link below the project root.
 
 namespace {
 
@@ -226,6 +228,132 @@ BOOST_AUTO_TEST_CASE(FolderEntry_FilterPlaceholdersAreEntered_LinksAndJunctionsR
 	BOOST_TEST((folder_entry_of(reparse, false, 0) == folder_entry::refused)); // tag unreadable
 	BOOST_TEST((folder_entry_of(platform::beneath::k_file_attribute_reparse_point, true, 0x9000001Au) == folder_entry::not_a_folder));
 	BOOST_TEST((folder_entry_of(0, true, 0) == folder_entry::not_a_folder));
+}
+
+BOOST_AUTO_TEST_CASE(Read_GivesTheText_AndNothingAtTheNameIsNoError)
+{
+	test_util::temp_dir dir("prj_read_project_file_plain");
+	dir.write(".snk/build.json", "one");
+	const prj::project_file_text read = prj::read_project_file(dir.path(), fs::path(".snk") / "build.json");
+	BOOST_TEST(read.exists);
+	BOOST_TEST(read.error.empty(), read.error);
+	BOOST_TEST(read.text == "one");
+
+	const prj::project_file_text missing = prj::read_project_file(dir.path(), fs::path(".snk") / "mcp.json");
+	BOOST_TEST(!missing.exists);
+	BOOST_TEST(missing.error.empty(), missing.error);
+	const prj::project_file_text no_folder = prj::read_project_file(dir.path(), fs::path("code") / "CMakePresets.json");
+	BOOST_TEST(!no_folder.exists);
+	BOOST_TEST(no_folder.error.empty(), no_folder.error);
+}
+
+BOOST_AUTO_TEST_CASE(Read_RefusesALinkAtTheFile)
+{
+	test_util::temp_dir dir("prj_read_project_file_file_link");
+	const fs::path victim = dir.write("victim.json", k_victim);
+	fs::create_directories(dir.path() / ".snk");
+	if (!make_file_link(victim, dir.path() / ".snk" / "build.json")) return;
+
+	const prj::project_file_text read = prj::read_project_file(dir.path(), fs::path(".snk") / "build.json");
+	BOOST_TEST(read.exists);
+	BOOST_TEST(!read.error.empty());
+	BOOST_TEST(read.text.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Read_RefusesALinkAtTheFolder)
+{
+	test_util::temp_dir dir("prj_read_project_file_folder_link");
+	dir.write("outside/build.json", k_victim);
+	make_folder_link(dir.path() / "outside", dir.path() / ".snk");
+
+	const prj::project_file_text read = prj::read_project_file(dir.path(), fs::path(".snk") / "build.json");
+	BOOST_TEST(read.exists);
+	BOOST_TEST(!read.error.empty());
+	BOOST_TEST(read.text.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Read_RefusesAFileOverTheLimit)
+{
+	test_util::temp_dir dir("prj_read_project_file_large");
+	dir.write(".snk/build.json", "0123456789");
+	const prj::project_file_text read = prj::read_project_file(dir.path(), fs::path(".snk") / "build.json", 4);
+	BOOST_TEST(read.exists);
+	BOOST_TEST(!read.error.empty());
+	BOOST_TEST(read.text.empty());
+}
+
+BOOST_AUTO_TEST_CASE(LocationOf_MakesTheFoldersParentTheRoot)
+{
+	test_util::temp_dir dir("prj_project_file_location");
+	const prj::project_file_location at = prj::project_file_location_of(dir.path() / "code" / "CMakePresets.json");
+	BOOST_TEST(at.root == fs::absolute(dir.path()).lexically_normal());
+	BOOST_TEST(at.relative == fs::path("code") / "CMakePresets.json");
+}
+
+namespace {
+constexpr std::string_view k_presets = R"json({
+    "version": 3,
+    "configurePresets": [ { "name": "debuggame", "generator": "Ninja", "binaryDir": "${sourceDir}/../build/${presetName}" } ],
+    "buildPresets": [ { "name": "debuggame", "configurePreset": "debuggame" } ]
+}
+)json";
+}
+
+BOOST_AUTO_TEST_CASE(Presets_ALinkAtTheCodeFolder_IsNeitherReadNorWrittenThrough)
+{
+	test_util::temp_dir dir("prj_presets_code_link");
+	const fs::path outside = dir.path() / "outside";
+	dir.write("outside/CMakePresets.json", k_presets);
+	fs::create_directories(dir.path() / "project");
+	make_folder_link(outside, dir.path() / "project" / "code");
+
+	const fs::path code = dir.path() / "project" / "code";
+	BOOST_TEST(!prj::load_cmake_presets(code / prj::k_cmake_presets_file_name).presets.has_value());
+	const auto saved = prj::save_user_presets(code, { prj::ensure_user_preset{ "debuggame" } });
+	BOOST_TEST(!saved.error.empty());
+	BOOST_TEST(!saved.written);
+	BOOST_TEST(!fs::exists(outside / prj::k_cmake_user_presets_file_name));
+}
+
+BOOST_AUTO_TEST_CASE(Presets_ALinkAtTheUserFile_IsNeitherReadNorWritten)
+{
+	test_util::temp_dir dir("prj_presets_user_link");
+	dir.write("project/code/CMakePresets.json", k_presets);
+	const std::string shared = "{ \"version\": 3 }\n";
+	const fs::path victim = dir.write("victim.json", shared);
+	const fs::path code = dir.path() / "project" / "code";
+	if (!make_file_link(victim, code / prj::k_cmake_user_presets_file_name)) return;
+
+	BOOST_TEST(!prj::read_user_presets(code).error.empty());
+	const auto saved = prj::save_user_presets(code, { prj::ensure_user_preset{ "debuggame" } });
+	BOOST_TEST(!saved.error.empty());
+	BOOST_TEST(read_text(victim) == shared);
+}
+
+BOOST_AUTO_TEST_CASE(Presets_ALinkAtTheMainFile_IsAnError)
+{
+	test_util::temp_dir dir("prj_presets_main_link");
+	const fs::path victim = dir.write("victim.json", k_presets);
+	fs::create_directories(dir.path() / "project" / "code");
+	const fs::path code = dir.path() / "project" / "code";
+	if (!make_file_link(victim, code / prj::k_cmake_presets_file_name)) return;
+
+	BOOST_TEST(!prj::load_cmake_presets(code / prj::k_cmake_presets_file_name).presets.has_value());
+	const auto saved = prj::save_user_presets(code, { prj::ensure_user_preset{ "debuggame" } });
+	BOOST_TEST(!saved.error.empty());
+	BOOST_TEST(!fs::exists(code / prj::k_cmake_user_presets_file_name));
+}
+
+BOOST_AUTO_TEST_CASE(Presets_PlainFiles_AreSavedThroughTheRealWriter)
+{
+	test_util::temp_dir dir("prj_presets_plain");
+	dir.write("project/code/CMakePresets.json", k_presets);
+	const fs::path code = dir.path() / "project" / "code";
+	const auto saved = prj::save_user_presets(code, { prj::ensure_user_preset{ "debuggame" } });
+	BOOST_REQUIRE_MESSAGE(saved.error.empty(), saved.error);
+	BOOST_TEST(saved.written);
+	BOOST_TEST(prj::read_user_presets(code).error.empty());
+	BOOST_TEST(read_text(code / prj::k_cmake_user_presets_file_name).find("user-debuggame") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
