@@ -1205,18 +1205,23 @@ namespace edt
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::save: main thread only");
 		const std::string text = serialize_policy_layer(layer);
-		std::error_code ec;
 		if (!what.file.has_parent_path()) return "no place to write the policy";
-		const bool refuse_links = what.kind == policy_layer_kind::project;
-		if (refuse_links) {
-			if (const std::string why = project_policy_link_error(what.file); !why.empty()) return "not written: " + why;
+		std::optional<std::string> error;
+		if (!write && what.kind == policy_layer_kind::project) {
+			// <project>/.snk/agent_policy.json without following a link at .snk or at the file, nor racing one (#523).
+			std::error_code ec;
+			std::filesystem::path file = std::filesystem::absolute(what.file, ec);
+			if (ec) file = what.file;
+			const std::filesystem::path folder = file.parent_path();
+			error = prj::write_project_file(folder.parent_path(), folder.filename() / file.filename(), text);
+			if (error) {
+				return "not written: " + *error + " (neither .snk nor agent_policy.json may be a link or a junction)";
+			}
+		} else {
+			std::error_code ec;
+			std::filesystem::create_directories(what.file.parent_path(), ec);
+			error = write ? write(what.file, text) : prj::write_text_atomically(what.file, text);
 		}
-		std::filesystem::create_directories(what.file.parent_path(), ec);
-		// Again right before the write: the folder may have just been made, and the write goes to the real folder it names.
-		if (refuse_links) {
-			if (const std::string why = project_policy_link_error(what.file); !why.empty()) return "not written: " + why;
-		}
-		const std::optional<std::string> error = write ? write(what.file, text) : prj::write_text_atomically(what.file, text);
 		if (error) return error;
 		// A person's own edit is the approval of what they changed.
 		if (record != nullptr) {

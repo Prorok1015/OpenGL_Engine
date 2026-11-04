@@ -5,6 +5,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -1802,6 +1803,27 @@ BOOST_AUTO_TEST_CASE(AProjectPolicyFolderThatIsALink_IsABrokenLayer_AndSaveWrite
 		++entries;
 	}
 	BOOST_TEST(entries == 1u);
+}
+
+// A junction needs no privilege on Windows, so this case always runs there; elsewhere it is a folder symlink (#523).
+BOOST_AUTO_TEST_CASE(SaveProject_ThroughAJunctionOrFolderLinkAtSnk_WritesNothingIntoItsTarget)
+{
+	test_util::temp_dir dir("edt_agent_policy_save_junction");
+	fs::create_directories(dir.path() / "elsewhere");
+#ifdef _WIN32
+	const std::string command = "cmd /c mklink /J \"" + (dir.path() / ".snk").string() + "\" \"" + (dir.path() / "elsewhere").string() + "\" >nul";
+	BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && fs::exists(dir.path() / ".snk"), "mklink /J failed");
+#else
+	fs::create_directory_symlink(dir.path() / "elsewhere", dir.path() / ".snk");
+#endif
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
+
+	const auto error = policy.save_project(layer_with(agent_category::build, policy_mode::allow), edt::policy_layer{});
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("not written") != std::string::npos, *error);
+	BOOST_TEST(error->find("link") != std::string::npos, *error);
+	BOOST_TEST(fs::is_empty(dir.path() / "elsewhere"));
 }
 
 BOOST_AUTO_TEST_CASE(AGitListEntry_WithControlInvisibleOrCommaCharacters_OrTooLong_IsALayerError)
