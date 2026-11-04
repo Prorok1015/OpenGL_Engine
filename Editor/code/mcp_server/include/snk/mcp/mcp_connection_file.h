@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -44,4 +45,11 @@ namespace mcp
 
 	// Removes <directory>/mcp.json if it still holds the token and pid of `mine`; a file of another editor is left alone.
 	void remove_connection_file(const std::filesystem::path& directory, const connection_info& mine);
+
+	namespace detail
+	{
+		// Tests only: called by write_connection_file after its checks by path, right before the directory is opened for
+		// the write, so a test can swap the directory for a link there (#523). Not thread-safe; empty to clear.
+		void set_before_directory_open(std::function<void(const std::filesystem::path& directory)> hook);
+	}
 }

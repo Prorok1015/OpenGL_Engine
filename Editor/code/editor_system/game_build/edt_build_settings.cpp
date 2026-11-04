@@ -262,13 +262,7 @@ std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, c
 
 	merge_build_settings(doc, after);
 	const std::string text = prj::to_indented_json(doc);
-	if (write) {
-		// A test's writer gets the folder made by path, as before #523.
-		std::error_code ec;
-		fs::create_directories(snk_dir, ec);
-		if (ec) return std::format("'{}' cannot be created: {}", utf8_of(snk_dir), ec.message());
-		return write(file, text);
-	}
+	if (write) return write(file, text);
 	// The root is the project's, so .snk itself is opened without following a link (#523).
 	fs::path dir = snk_dir.lexically_normal();
 	if (!dir.has_filename()) dir = dir.parent_path();

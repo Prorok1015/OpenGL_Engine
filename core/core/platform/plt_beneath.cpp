@@ -63,7 +63,7 @@ namespace {
 		return !name.empty() && !name.has_root_path() && name == name.filename() && name != "." && name != "..";
 	}
 
-	constexpr std::string_view k_not_below = "the path is not a chain of folder names below the resource root";
+	constexpr std::string_view k_not_below = "the path is not a chain of folder names below the root";
 
 }
 
@@ -246,7 +246,7 @@ int platform::beneath::pinned_root::descriptor(std::string& error)
 		fs::create_directories(m_root, ec);
 		m_fd = ::open(m_root.c_str(), k_dir_flags);
 		if (m_fd < 0) {
-			error = errno_text("cannot open the resource root", m_root);
+			error = errno_text("cannot open the root", m_root);
 		}
 	}
 	return m_fd;
@@ -404,7 +404,7 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 	}
 	const fd_holder root{ ::open(request.root.c_str(), k_dir_flags) };
 	if (root.get() < 0) {
-		return { errno == ENOENT ? read_status::missing : read_status::failed, errno_text("cannot open the resource root", request.root) };
+		return { errno == ENOENT ? read_status::missing : read_status::failed, errno_text("cannot open the root", request.root) };
 	}
 	fs::path reached = request.root;
 	const fd_holder folder = open_below(root.get(), *parts, false, reached);
@@ -557,20 +557,6 @@ namespace {
 		return handle_holder{ handle };
 	}
 
-	bool is_real_folder(HANDLE folder)
-	{
-		BY_HANDLE_FILE_INFORMATION information{};
-		if (!::GetFileInformationByHandle(folder, &information)) {
-			return false; // its own error, not "a reparse point"
-		}
-		if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
-			|| (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-			::SetLastError(ERROR_CANT_ACCESS_FILE);
-			return false;
-		}
-		return true;
-	}
-
 	bool same_file(const BY_HANDLE_FILE_INFORMATION& a, const BY_HANDLE_FILE_INFORMATION& b)
 	{
 		return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh
@@ -593,26 +579,28 @@ namespace {
 		return platform::beneath::reparse_tag_redirects(tag.ReparseTag) ? reparse_kind::redirect : reparse_kind::filter;
 	}
 
-	// A read's folder (#484): `held` was opened as the reparse point itself. A folder a filter keeps in place is opened
-	// again through the filter by `reopen` and kept only if that is the same folder; a link or a junction is refused.
-	// Invalid with the last error set when refused.
-	handle_holder read_folder(handle_holder held, const std::function<handle_holder()>& reopen)
+	// A folder of the walk, reads (#484) and writes (#523) alike: `held` was opened as the reparse point itself. A folder
+	// a filter keeps in place (a OneDrive placeholder) is opened again through the filter by `reopen` and kept only if
+	// that is the same folder; a link or a junction is refused (platform::beneath::folder_entry_of). Invalid with the
+	// last error set when refused.
+	handle_holder enter_folder(handle_holder held, const std::function<handle_holder()>& reopen)
 	{
 		BY_HANDLE_FILE_INFORMATION information{};
 		if (!held.valid() || !::GetFileInformationByHandle(held.get(), &information)) {
 			return handle_holder{};
 		}
-		if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+		FILE_ATTRIBUTE_TAG_INFO tag{};
+		const bool tag_known = (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0
+			|| ::GetFileInformationByHandleEx(held.get(), FileAttributeTagInfo, &tag, sizeof(tag)) != 0;
+		switch (platform::beneath::folder_entry_of(information.dwFileAttributes, tag_known, tag.ReparseTag)) {
+		case platform::beneath::folder_entry::enter:
+			return held;
+		case platform::beneath::folder_entry::through_filter:
+			break;
+		case platform::beneath::folder_entry::not_a_folder:
 			::SetLastError(ERROR_DIRECTORY);
 			return handle_holder{};
-		}
-		switch (reparse_of(held.get(), information)) {
-		case reparse_kind::none:
-			return held;
-		case reparse_kind::filter:
-			break;
-		case reparse_kind::redirect:
-		case reparse_kind::unknown:
+		case platform::beneath::folder_entry::refused:
 			::SetLastError(ERROR_CANT_ACCESS_FILE);
 			return handle_holder{};
 		}
@@ -634,10 +622,9 @@ namespace {
 
 	// The root and every folder down to `parts`, each opened from the handle of the one above it and all held until
 	// the chain goes; empty on failure, `reached` naming where it stopped.
-	// `for_read`: a folder a file system filter keeps as a reparse point (a cloud placeholder) is entered through the filter
-	// (read_folder); writes refuse every reparse point.
-	std::vector<handle_holder> hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached,
-		bool for_read = false)
+	// A folder a file system filter keeps as a reparse point (a cloud placeholder) is entered through the filter
+	// (enter_folder), for writes too since #523; a link or a junction is refused anywhere.
+	std::vector<handle_holder> hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached)
 	{
 		std::vector<handle_holder> chain;
 		// Closing what was held must not change the error the caller reports.
@@ -654,13 +641,11 @@ namespace {
 		reached = root;
 		handle_holder top{ ::CreateFileW(root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr, OPEN_EXISTING,
 			FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
-		if (for_read) {
-			top = read_folder(std::move(top), [&root] {
-				return handle_holder{ ::CreateFileW(root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr, OPEN_EXISTING,
-					FILE_FLAG_BACKUP_SEMANTICS, nullptr) };
-			});
-		}
-		if (!top.valid() || (!for_read && !is_real_folder(top.get()))) {
+		top = enter_folder(std::move(top), [&root] {
+			return handle_holder{ ::CreateFileW(root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr, OPEN_EXISTING,
+				FILE_FLAG_BACKUP_SEMANTICS, nullptr) };
+		});
+		if (!top.valid()) {
 			return give_up();
 		}
 		chain.push_back(std::move(top));
@@ -668,13 +653,11 @@ namespace {
 			reached /= part;
 			handle_holder next = open_in(chain.back().get(), part, k_folder_access, k_folder_share,
 				create ? FILE_OPEN_IF : FILE_OPEN, FILE_DIRECTORY_FILE);
-			if (for_read) {
-				const HANDLE parent = chain.back().get();
-				next = read_folder(std::move(next), [parent, &part] {
-					return open_in(parent, part, k_folder_access, k_folder_share, FILE_OPEN, FILE_DIRECTORY_FILE, false);
-				});
-			}
-			if (!next.valid() || (!for_read && !is_real_folder(next.get()))) {
+			const HANDLE parent = chain.back().get();
+			next = enter_folder(std::move(next), [parent, &part] {
+				return open_in(parent, part, k_folder_access, k_folder_share, FILE_OPEN, FILE_DIRECTORY_FILE, false);
+			});
+			if (!next.valid()) {
 				return give_up();
 			}
 			chain.push_back(std::move(next));
@@ -798,7 +781,7 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 	fs::path reached;
 	const std::vector<handle_holder> chain = hold_chain(root.path(), *parts, true, reached);
 	if (chain.empty()) {
-		return last_error_text("cannot open the folder (a reparse point, or not a folder)", reached);
+		return last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached);
 	}
 	if (request.hook && *request.hook) {
 		(*request.hook)(write_stage::folders_held, request.tmp_path);
@@ -812,7 +795,7 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 	temp_guard guard{ file.get(), request.tmp_path };
 	if (!lies_at(file.get(), chain.front().get(), *parts, request.tmp_leaf)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
-		return last_error_text("the temp file was not created below the resource root", request.tmp_path);
+		return last_error_text("the temp file was not created below the root", request.tmp_path);
 	}
 	std::size_t done = 0;
 	while (done < request.data.size()) {
@@ -861,7 +844,7 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 		const DWORD code = ::GetLastError();
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND
 			? std::string{}
-			: last_error_text("cannot open the folder (a reparse point, or not a folder)", reached);
+			: last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached);
 	}
 	const fs::path path = reached / leaf;
 	handle_holder file = open_in(chain.back().get(), leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
@@ -896,7 +879,7 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 	fs::path from_reached;
 	const std::vector<handle_holder> from_chain = hold_chain(root.path(), *from_parts, false, from_reached);
 	if (from_chain.empty()) {
-		return last_error_text("cannot open the folder (a reparse point, or not a folder)", from_reached);
+		return last_error_text("cannot open the folder (a link, a junction, or not a folder)", from_reached);
 	}
 	const fs::path source = from_reached / request.from_leaf;
 	handle_holder file = open_in(from_chain.back().get(), request.from_leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -914,12 +897,12 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 	}
 	if (!lies_at(file.get(), from_chain.front().get(), *from_parts, request.from_leaf)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
-		return last_error_text("the file was not found below the resource root", source);
+		return last_error_text("the file was not found below the root", source);
 	}
 	fs::path to_reached;
 	const std::vector<handle_holder> to_chain = hold_chain(root.path(), *to_parts, false, to_reached);
 	if (to_chain.empty()) {
-		return last_error_text("cannot open the target folder (missing, a reparse point, or not a folder)", to_reached);
+		return last_error_text("cannot open the target folder (missing, a link, a junction, or not a folder)", to_reached);
 	}
 	if (!rename_to(file.get(), to_chain.back().get(), request.to_leaf, request.allow_replace)) {
 		return last_error_text("cannot move to", to_reached / request.to_leaf);
@@ -942,7 +925,7 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
 	};
 	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached, true);
+	const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached);
 	if (chain.empty()) {
 		return { is_missing() ? read_status::missing : read_status::failed,
 			last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached) };

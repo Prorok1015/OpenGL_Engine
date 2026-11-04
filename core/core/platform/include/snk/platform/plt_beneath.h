@@ -12,8 +12,9 @@
 // How files are written, removed and read under a root folder without a race between the path check and the file
 // operation (#414, #484; moved here from the resource system for #523): every folder below the root is opened relative
 // to the one above it without following a link (POSIX: openat with O_NOFOLLOW from a root descriptor kept open;
-// Windows: NtCreateFile relative to the parent's handle with FILE_OPEN_REPARSE_POINT, each refusing a reparse point and
-// held without FILE_SHARE_DELETE), the temp file is created relative to the last folder only if nothing is there yet,
+// Windows: NtCreateFile relative to the parent's handle with FILE_OPEN_REPARSE_POINT, each refusing a link or a junction,
+// a folder a filter keeps in place such as a OneDrive placeholder entered through the filter (folder_entry_of in
+// plt_reparse_tag.h, #523), and held without FILE_SHARE_DELETE), the temp file is created relative to the last folder only if nothing is there yet,
 // and the rename happens inside that folder.
 namespace platform::beneath {
 
@@ -114,7 +115,7 @@ namespace platform::beneath {
 	};
 
 	// Reads a regular file below the root like the writes reach theirs (#484): every folder opened from the one above it
-	// without following a link (Windows: none may be a reparse point), the file opened from the last folder without
+	// without following a link (Windows: no link or junction), the file opened from the last folder without
 	// following a link and without blocking (POSIX: O_NONBLOCK, so a FIFO cannot hold the io thread), then checked to be
 	// a regular file through that same descriptor or handle and read from it. A link, a folder, a FIFO or a device at
 	// the name is `not_regular`.
