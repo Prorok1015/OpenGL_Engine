@@ -138,6 +138,7 @@ namespace {
 
 	// NtSetInformationFile (wdm.h), looked up rather than declared or linked: winternl.h does not have it.
 	using set_information_file_t = NTSTATUS(NTAPI*)(HANDLE, IO_STATUS_BLOCK*, void*, ULONG, ULONG);
+	using status_to_dos_error_t = ULONG(NTAPI*)(NTSTATUS);
 	constexpr ULONG k_file_rename_information = 10;
 
 	// Renames the open file to `name` inside the folder `folder` holds, replacing what is there (a link at the name is
@@ -161,8 +162,9 @@ namespace {
 		IO_STATUS_BLOCK status_block{};
 		const NTSTATUS status = set_information(file, &status_block, info, static_cast<ULONG>(buffer.size()), k_file_rename_information);
 		if (status < 0) {
-			// The status as the error number: RtlNtStatusToDosError would need ntdll linked.
-			SetLastError(static_cast<DWORD>(status));
+			static const auto to_dos_error = reinterpret_cast<status_to_dos_error_t>(
+				reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlNtStatusToDosError")));
+			SetLastError(to_dos_error != nullptr ? static_cast<DWORD>(to_dos_error(status)) : static_cast<DWORD>(status));
 			return false;
 		}
 		return true;

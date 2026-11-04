@@ -215,7 +215,11 @@ BOOST_AUTO_TEST_CASE(FolderEntry_FilterPlaceholdersAreEntered_LinksAndJunctionsR
 	BOOST_TEST((folder_entry_of(directory, true, 0) == folder_entry::enter));
 	BOOST_TEST((folder_entry_of(reparse, true, 0x9000001Au) == folder_entry::through_filter)); // IO_REPARSE_TAG_CLOUD (OneDrive)
 	BOOST_TEST((folder_entry_of(reparse, true, 0x9000601Au) == folder_entry::through_filter)); // IO_REPARSE_TAG_CLOUD_6
+	BOOST_TEST((folder_entry_of(reparse, true, 0x9000F01Au) == folder_entry::through_filter)); // IO_REPARSE_TAG_CLOUD_F
 	BOOST_TEST((folder_entry_of(reparse, true, 0x80000013u) == folder_entry::through_filter)); // IO_REPARSE_TAG_DEDUP
+	BOOST_TEST((folder_entry_of(reparse, true, 0x80000017u) == folder_entry::refused)); // IO_REPARSE_TAG_WOF: not allowlisted
+	BOOST_TEST((folder_entry_of(reparse, true, 0x90001018u) == folder_entry::refused)); // IO_REPARSE_TAG_WCI_1: not allowlisted
+	BOOST_TEST((folder_entry_of(reparse, true, 0x9000101Bu) == folder_entry::refused)); // next to CLOUD_1, not a cloud tag
 	BOOST_TEST((folder_entry_of(reparse, true, 0xA0000003u) == folder_entry::refused)); // junction
 	BOOST_TEST((folder_entry_of(reparse, true, 0xA000000Cu) == folder_entry::refused)); // symlink
 	BOOST_TEST((folder_entry_of(reparse, true, 0xA000001Du) == folder_entry::refused)); // LX symlink
