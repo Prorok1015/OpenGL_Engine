@@ -113,7 +113,7 @@ void edt::agents_panel::on_render()
 {
 	// The only refresh of the frame: the banner, the rows and the copy an approval refers to all come from this state.
 	m_model.refresh();
-	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
 		m_model.note_interaction();
 	}
 	draw_banner();

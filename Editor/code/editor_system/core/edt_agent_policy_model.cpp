@@ -325,7 +325,7 @@ namespace edt
 			side& s = m_side[index_of(scope)];
 			// The project's save approves the command entries the person changed, not the ones the file brought along.
 			const std::optional<std::string> error = scope == policy_scope::project
-				? m_policy.save_project(*s.edit, {}, parse_policy_layer(s.base_text).layer)
+				? m_policy.save_project(*s.edit, parse_policy_layer(s.base_text).layer)
 				: m_policy.save_personal(*s.edit);
 			if (error) return error;
 			s.edit.reset();

@@ -137,7 +137,7 @@ struct agent_editor_fixture : scratch_dirs, test_util::null_engine_fixture
 		for (const cmd::agent_category category : edt::settable_categories()) {
 			layer.categories[category] = cmd::policy_mode::allow;
 		}
-		const auto error = access().policy().save_project(layer);
+		const auto error = access().policy().save_project(layer, edt::policy_layer{});
 		BOOST_REQUIRE_MESSAGE(!error, error.value_or(""));
 		BOOST_REQUIRE(!access().policy().project_pending_approval());
 	}

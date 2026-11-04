@@ -1206,8 +1206,8 @@ namespace edt
 		return what.error.empty() ? std::nullopt : std::optional<std::string>{ what.error };
 	}
 
-	std::optional<std::string> agent_policy::save_project(const policy_layer& layer, const prj::text_writer& write,
-		const policy_layer& edited_from)
+	std::optional<std::string> agent_policy::save_project(const policy_layer& layer, const policy_layer& edited_from,
+		const prj::text_writer& write)
 	{
 		if (!m_approval_allowed) return "no person is here to save the project policy";
 		// Entries of commands other than `deny` are recorded only when the person changed them in this edit: one the file
