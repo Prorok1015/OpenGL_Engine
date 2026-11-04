@@ -54,6 +54,8 @@
 #include "edt_agent_access.h"
 #include "edt_agent_server.h"
 #include "edt_agent_server_settings.h"
+#include "edt_agent_policy_model.h"
+#include "edt_agents_panel.h"
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
@@ -686,6 +688,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_agent_access->set_questions_routed(true);
 		// A person is here to approve a looser project policy only with a window; headless never loosens (#483).
 		m_agent_access->policy().set_approval_allowed(!headless);
+		// Once, so a project file that loosens something is known (the notice, the status bar) before an agent ever connects.
+		if (!headless) m_agent_access->policy().refresh();
 		m_agent_access->set_headless(headless);
 		if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
 			if (headless) {
@@ -743,6 +747,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			registration added = register_editor_quit(commands, std::move(quit));
 			if (added.active()) m_registrations.push_back(std::move(added));
 		}
+
+		// The agents window (#449). Nothing here is a command an agent could call: the buttons call the model directly.
+		m_agent_policy_model = std::make_unique<agent_policy_model>(m_agent_access->policy(), [&commands] { return commands.list(); });
+		agents_panel_services services;
+		services.server = [this] { return m_agent_server.get(); };
+		services.set_server = [this](bool enabled, std::uint16_t port) { return set_agent_server(enabled, port); };
+		services.chosen_port = [this] { return load_agent_server_settings(m_agent_server_settings_file).port; };
+		m_agents_panel = std::make_shared<agents_panel>(*m_agent_policy_model, std::move(services));
+		m_registrations.push_back(m_context->panels().add({ .id = m_agents_panel->get_id(), .title = m_agents_panel->get_title(),
+			.slot = dock_slot::floating, .open_by_default = false, .panel = m_agents_panel }));
+		m_registrations.push_back(m_context->actions().add({ .id = "agent.settings.open", .label = "Agents...",
+			.execute = no_args([this] { open_agents_panel(); }),
+			.expose_as_tool = false, .category = cmd::agent_category::not_for_agents }));
+		m_session_connections.push_back(events.agent_action.subscribe([this](const agent_action_info& info) {
+			m_recent_agent_actions.push_back({ info.command, info.target, info.session, std::chrono::steady_clock::now() });
+			while (m_recent_agent_actions.size() > 8) m_recent_agent_actions.pop_front();
+		}));
+		editor_layer->register_implicit("edt/agent_policy_notice", [this, headless] {
+			if (!headless) draw_agent_policy_notice();
+			return true;
+		});
 	}
 }
 
@@ -940,9 +965,103 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	});
 
 	editor_layer->set_menu_bar_status([this] {
+		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
+		draw_agent_status();
 		draw_play_status();
 		m_live_mode->draw_status();
 	});
+}
+
+void edt::editor_system::open_agents_panel()
+{
+	if (m_agents_panel == nullptr) return;
+	m_context->panels().set_open(m_agents_panel->get_id(), true);
+	m_agents_panel->focus();
+}
+
+void edt::editor_system::draw_agent_policy_notice()
+{
+	if (m_agent_access == nullptr) return;
+	if (!m_agent_access->policy().project_pending_approval()) {
+		m_policy_notice_dismissed_key.clear();
+		return;
+	}
+	// agent_access::frame reads the files every frame while the server is active; a waiting policy must also notice, about once
+	// a second, that its file was fixed or changed again. Nothing is done while no policy waits (the idle editor).
+	if (m_agent_server == nullptr || !m_agent_server->active()) {
+		const auto now = std::chrono::steady_clock::now();
+		if (now - m_policy_refreshed >= std::chrono::seconds(1)) {
+			m_policy_refreshed = now;
+			m_agent_access->policy().refresh();
+			if (!m_agent_access->policy().project_pending_approval()) return;
+		}
+	}
+	std::string pending_key;
+	for (const policy_loosening& change : m_agent_access->policy().pending_loosenings()) {
+		pending_key += change.what + '|' + cmd::to_string(change.from) + '|' + cmd::to_string(change.to) + '\n';
+	}
+	if (m_policy_notice_dismissed_key == pending_key) return;
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 12.f),
+		ImGuiCond_Always, ImVec2(1.f, 1.f));
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
+	if (ImGui::Begin("Agent policy##agent_policy_notice", nullptr, flags)) {
+		ImGui::TextUnformatted("The project's agent policy waits for your approval.");
+		if (ImGui::Button("Open")) {
+			open_agents_panel();
+			m_policy_notice_dismissed_key = pending_key;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Later")) m_policy_notice_dismissed_key = pending_key;
+	}
+	ImGui::End();
+}
+
+void edt::editor_system::draw_agent_status()
+{
+	if (m_agent_access == nullptr || m_agent_server == nullptr) return;
+	const bool pending = m_agent_access->policy().project_pending_approval();
+	// Before any ImGui call: for a person who does not use agents the menu bar is what it was.
+	if (!pending && !m_agent_server->active()) return;
+
+	const std::vector<agent_session_info> sessions = m_agent_server->sessions();
+	const std::size_t connected = sessions.size() + (m_agent_server->stdio_session().empty() ? 0u : 1u);
+	const std::size_t questions = m_agent_access->confirmations().pending().size();
+	const bool flash = !m_recent_agent_actions.empty()
+		&& std::chrono::steady_clock::now() - m_recent_agent_actions.back().at < std::chrono::seconds(2);
+
+	std::string label = pending ? std::string("Agent policy: approve")
+		: questions > 0 ? std::format("Agent: {} waiting", questions) : std::format("Agent: {}", connected);
+	label += "###agent_status";
+	const ImVec4 color = pending || questions > 0 ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f)
+		: flash ? ImVec4(0.4f, 0.85f, 0.4f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const float width = ImGui::CalcTextSize(label.c_str(), nullptr, true).x;
+	ImGui::PushStyleColor(ImGuiCol_Text, color);
+	const bool clicked = ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_None, ImVec2(width, 0.f));
+	ImGui::PopStyleColor();
+	if (clicked) ImGui::OpenPopup("agent_status_popup");
+	if (ImGui::BeginPopup("agent_status_popup")) {
+		if (pending) ImGui::TextUnformatted("The project's agent policy waits for your approval.");
+		if (m_recent_agent_actions.empty()) {
+			ImGui::TextDisabled("No agent action yet.");
+		}
+		for (auto it = m_recent_agent_actions.rbegin(); it != m_recent_agent_actions.rend(); ++it) {
+			// Paths and ids of ours, but shown as plain text all the same.
+			const std::string line = it->command + "  " + it->target;
+			ImGui::TextUnformatted(line.c_str());
+		}
+		ImGui::Separator();
+		for (const agent_session_info& session : sessions) {
+			ImGui::PushID(session.id.c_str());
+			ImGui::TextUnformatted(session.client_name.empty() ? "(unnamed)" : session.client_name.c_str());
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Disconnect")) m_agent_server->close_session(session.id);
+			ImGui::PopID();
+		}
+		if (ImGui::MenuItem("Settings...")) open_agents_panel();
+		ImGui::EndPopup();
+	}
 }
 
 void edt::editor_system::draw_play_status()

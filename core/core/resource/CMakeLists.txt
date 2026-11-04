@@ -8,10 +8,8 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_RESOURCE_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::engine_logger PRIVATE snk::image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE snk::config_system PRIVATE snk::project)
-# vfs writes open below a held folder handle (res_vfs_write.cpp, #414): NtCreateFile.
-if(WIN32)
-	target_link_libraries(${PROJECT_NAME} PRIVATE ntdll)
-endif()
+# PUBLIC: res_vfs_resolver.h names the no-follow file primitives of platform::beneath (#414, #484, #523).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::platform)
 
 #assimp
 # ASSIMP_* / BUILD_SHARED_LIBS options live in cmake/ThirdParty.cmake (EPIC-41 US-41-1).

@@ -68,7 +68,7 @@ namespace edt
 		// a --fresh mark, so that build does not run on with the old configure; its outcome reaches live mode, which
 		// builds again. A build configuring meanwhile cannot clear the new mark anyway (fresh_generation). Null: none.
 		void set_stop_background(std::function<void()> stop) { m_stop_background = std::move(stop); }
-		// How the files are written; null: prj::write_text_atomically (tests inject failures).
+		// How the files are written; null: both through prj::write_project_file (tests inject failures).
 		void set_writer(prj::text_writer write) { m_write = std::move(write); }
 		// Called by apply() after it wrote build.json, with the settings now in the file (live mode follows
 		// live_enabled, #445). Null: none.
@@ -147,6 +147,8 @@ namespace edt
 		{
 			bool exists = false;
 			std::string text;
+			// A link or an unreadable file (prj::read_project_file).
+			std::string error;
 		};
 
 		static snapshot read_snapshot(const std::filesystem::path& file);

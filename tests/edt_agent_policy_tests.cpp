@@ -5,7 +5,9 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <functional>
 #include <initializer_list>
@@ -540,8 +542,9 @@ BOOST_AUTO_TEST_CASE(SaveProject_WritesTheFileAndTakesTheLayerOver)
 	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
 	const edt::approved_snapshot_location approved{ dir.path() / "approved.json", "/projects/save" };
 	edt::agent_policy policy{ project_file, dir.path() / "personal.json", approved };
+	policy.set_approval_allowed(true);
 
-	BOOST_TEST(!policy.save_project(layer_with(agent_category::code_files, policy_mode::allow)).has_value());
+	BOOST_TEST(!policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{}).has_value());
 
 	BOOST_TEST(fs::exists(project_file));
 	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::allow));
@@ -554,9 +557,10 @@ BOOST_AUTO_TEST_CASE(SaveProject_WithAFailingWriter_ReportsAndKeepsTheOldLayer)
 	test_util::temp_dir dir("edt_agent_policy_save_fail");
 	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"ask"}})");
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
 	policy.refresh();
 
-	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow),
+	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{},
 		[](const fs::path&, std::string_view) { return std::optional<std::string>{ "disk full" }; });
 
 	BOOST_REQUIRE(error.has_value());
@@ -1064,8 +1068,8 @@ BOOST_FIXTURE_TEST_CASE(ACopyApprovedForAnotherProject_IsNotTrusted, approval_fi
 
 BOOST_FIXTURE_TEST_CASE(APersonsSaveInTheSettingsWindow_IsTheirApproval, approval_fixture)
 {
-	const auto policy = make(false);
-	BOOST_TEST(!policy->save_project(layer_with(agent_category::code_files, policy_mode::allow)).has_value());
+	const auto policy = make();
+	BOOST_TEST(!policy->save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{}).has_value());
 	BOOST_TEST(!policy->project_pending_approval());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::allow));
 	BOOST_TEST(fs::exists(approved_file));
@@ -1147,7 +1151,7 @@ BOOST_FIXTURE_TEST_CASE(APersonsEditOnTopOfTheApprovedLayer_DropsThePendingLoose
 
 	edt::policy_layer edited = policy->approved_project();
 	edited.categories[agent_category::scene_edit] = policy_mode::ask;
-	BOOST_TEST(!policy->save_project(edited).has_value());
+	BOOST_TEST(!policy->save_project(edited, edt::policy_layer{}).has_value());
 
 	BOOST_TEST(!policy->project_pending_approval());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
@@ -1688,5 +1692,165 @@ BOOST_AUTO_TEST_CASE(ApplyPreanswers_IsTheOnlyRule)
 	by_command.commands["code.create"] = policy_mode::allow;
 	BOOST_TEST((edt::apply_preanswers(create, agent_category::cmake_presets, asked, by_command, {}).mode == policy_mode::ask));
 }
+
+BOOST_AUTO_TEST_CASE(SaveProject_WithoutAPersonToApprove_IsRefusedAndWritesNothing)
+{
+	test_util::temp_dir dir("edt_agent_policy_save_headless");
+	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
+
+	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{});
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(!fs::exists(project_file));
+	// The personal file is the person's own and not judged by this.
+	BOOST_TEST(!policy.save_personal(layer_with(agent_category::build, policy_mode::deny)).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(SaveProject_ApprovesOnlyTheCommandEntriesThePersonChanged)
+{
+	test_util::temp_dir dir("edt_agent_policy_save_entries");
+	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
+
+	edt::policy_layer brought_along;
+	brought_along.commands["scene.query"] = policy_mode::ask;
+	edt::policy_layer edited = brought_along;
+	edited.commands["code.write"] = policy_mode::ask;
+	edited.commands["build.game_module"] = policy_mode::deny;
+	BOOST_TEST(!policy.save_project(edited, brought_along).has_value());
+
+	const edt::policy_layer& approved = policy.approved_project();
+	BOOST_TEST(!approved.commands.contains("scene.query"));
+	BOOST_TEST((approved.commands.at("code.write") == policy_mode::ask));
+	BOOST_TEST((approved.commands.at("build.game_module") == policy_mode::deny));
+	// The file is written whole either way.
+	BOOST_TEST(fs::exists(project_file));
+}
+
+namespace {
+
+// A symbolic link, or false (with a message) where the platform or the user may not make one.
+bool try_link(const fs::path& target, const fs::path& link, bool folder)
+{
+	std::error_code ec;
+	if (folder) fs::create_directory_symlink(target, link, ec);
+	else fs::create_symlink(target, link, ec);
+	if (ec) BOOST_TEST_MESSAGE("symbolic links cannot be made here: " << ec.message());
+	return !ec;
+}
+
+std::string slurp(const fs::path& file)
+{
+	std::ifstream in(file, std::ios::binary);
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AProjectFileThatIsALink_IsABrokenLayer_AndSaveWritesNothingThroughIt)
+{
+	test_util::temp_dir dir("edt_agent_policy_link_file");
+	const fs::path victim = dir.write("victim.txt", "keep me");
+	fs::create_directories(dir.path() / ".snk");
+	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
+	if (!try_link(victim, project_file, false)) return;
+
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
+	policy.refresh();
+	BOOST_TEST(!policy.project_error().empty());
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::deny));
+
+	const auto error = policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{});
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(slurp(victim) == "keep me");
+	BOOST_TEST(fs::is_symlink(project_file));
+}
+
+BOOST_AUTO_TEST_CASE(ADanglingLinkAsTheProjectFile_IsNotTakenForNoFile)
+{
+	test_util::temp_dir dir("edt_agent_policy_link_dangling");
+	fs::create_directories(dir.path() / ".snk");
+	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
+	if (!try_link(dir.path() / "missing.txt", project_file, false)) return;
+
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
+	policy.refresh();
+	BOOST_TEST(!policy.project_error().empty());
+	BOOST_TEST(policy.save_project(layer_with(agent_category::code_files, policy_mode::allow), edt::policy_layer{}).has_value());
+	BOOST_TEST(!fs::exists(dir.path() / "missing.txt"));
+}
+
+BOOST_AUTO_TEST_CASE(AProjectPolicyFolderThatIsALink_IsABrokenLayer_AndSaveWritesNothingThroughIt)
+{
+	test_util::temp_dir dir("edt_agent_policy_link_folder");
+	fs::create_directories(dir.path() / "elsewhere");
+	dir.write("elsewhere/agent_policy.json", R"({"categories":{"code_files":"allow"}})");
+	const std::string before = slurp(dir.path() / "elsewhere" / "agent_policy.json");
+	if (!try_link(dir.path() / "elsewhere", dir.path() / ".snk", true)) return;
+	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
+
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
+	policy.refresh();
+	BOOST_TEST(!policy.project_error().empty());
+	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::deny));
+
+	BOOST_REQUIRE(policy.save_project(layer_with(agent_category::build, policy_mode::allow), edt::policy_layer{}).has_value());
+	BOOST_TEST(slurp(dir.path() / "elsewhere" / "agent_policy.json") == before);
+	std::size_t entries = 0;
+	for (const auto& entry : fs::directory_iterator(dir.path() / "elsewhere")) {
+		(void)entry;
+		++entries;
+	}
+	BOOST_TEST(entries == 1u);
+}
+
+// A junction needs no privilege on Windows, so this case always runs there; elsewhere it is a folder symlink (#523).
+BOOST_AUTO_TEST_CASE(SaveProject_ThroughAJunctionOrFolderLinkAtSnk_WritesNothingIntoItsTarget)
+{
+	test_util::temp_dir dir("edt_agent_policy_save_junction");
+	fs::create_directories(dir.path() / "elsewhere");
+#ifdef _WIN32
+	const std::string command = "cmd /c mklink /J \"" + (dir.path() / ".snk").string() + "\" \"" + (dir.path() / "elsewhere").string() + "\" >nul";
+	BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && fs::exists(dir.path() / ".snk"), "mklink /J failed");
+#else
+	fs::create_directory_symlink(dir.path() / "elsewhere", dir.path() / ".snk");
+#endif
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	policy.set_approval_allowed(true);
+
+	const auto error = policy.save_project(layer_with(agent_category::build, policy_mode::allow), edt::policy_layer{});
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("not written") != std::string::npos, *error);
+	BOOST_TEST(error->find("link") != std::string::npos, *error);
+	BOOST_TEST(fs::is_empty(dir.path() / "elsewhere"));
+}
+
+BOOST_AUTO_TEST_CASE(AGitListEntry_WithControlInvisibleOrCommaCharacters_OrTooLong_IsALayerError)
+{
+	const auto parse = [](const std::string& entry) {
+		return edt::parse_policy_layer(R"({"vcs":{"push_branches":[")" + entry + R"("]}})");
+	};
+	BOOST_TEST(parse("agent/*").error.empty());
+	BOOST_TEST(!parse("a,b").error.empty());
+	BOOST_TEST(!parse("a\\u0007b").error.empty());
+	BOOST_TEST(!parse("a\\u0085b").error.empty());
+	BOOST_TEST(!parse("a\\u200bb").error.empty());
+	BOOST_TEST(!parse("a\\u202eb").error.empty());
+	BOOST_TEST(!parse("a\\u2066b").error.empty());
+	BOOST_TEST(!parse("a\\ufeffb").error.empty());
+	BOOST_TEST(!parse(std::string(257, 'a')).error.empty());
+	BOOST_TEST(parse(std::string(256, 'a')).error.empty());
+	// A broken layer fails closed, whatever else it holds; the error names the problem, never the entry.
+	BOOST_TEST(parse("a,b").layer.empty());
+	BOOST_TEST(parse("SECRET\\u202ex").error.find("SECRET") == std::string::npos);
+	BOOST_TEST(edt::display_safe(std::string("a\n\xe2\x80\xae" "b\x07\xc3\x28")) == "a b(");
+	BOOST_TEST(edt::vcs_entry_problem("agent/*").empty());
+	BOOST_TEST(!edt::vcs_entry_problem(std::string("\xc3\x28")).empty());
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

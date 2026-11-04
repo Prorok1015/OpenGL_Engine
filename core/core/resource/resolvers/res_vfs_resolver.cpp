@@ -4,7 +4,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/core_thread_utils.hpp>
 #include <snk/resource/res_path_sanitize.h>
-#include "res_vfs_write.h"
+#include <snk/platform/plt_beneath.h>
 #include <cctype>
 #include <format>
 #include <random>
@@ -73,7 +73,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 		entries_stack.push(pinned);
 	}
 	// Opened on the first write: the root may not exist yet (a user folder, a project made after the mount).
-	m_write_root = std::make_unique<detail::pinned_root>(entries_stack.top());
+	m_write_root = std::make_unique<platform::beneath::pinned_root>(entries_stack.top());
 
 	if (watch.report_changes) {
 		watcher.report_changes(std::move(watch), [this](std::vector<raw_change> found) {
@@ -388,7 +388,7 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 		const fs::path relative = path.lexically_relative(m_write_root->path());
 		const std::string error = relative.empty() || *relative.begin() == ".."
 			? std::string{ "its file does not lie below the resource root" }
-			: detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename());
+			: platform::beneath::remove_beneath(*m_write_root, relative.parent_path(), relative.filename());
 		if (!error.empty()) {
 			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", fs_paths::utf8_of(path), error);
 		}
@@ -493,7 +493,7 @@ std::string res::vfs_resolver::remove_on_io(const tag& tag, const fs::path& targ
 	if (relative.empty() || *relative.begin() == "..") {
 		return "its file does not lie below the resource root";
 	}
-	if (std::string error = detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename(), true); !error.empty()) {
+	if (std::string error = platform::beneath::remove_beneath(*m_write_root, relative.parent_path(), relative.filename(), true); !error.empty()) {
 		return error;
 	}
 	{
@@ -579,13 +579,13 @@ std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& sou
 	if (from_relative.empty() || *from_relative.begin() == ".." || to_relative.empty() || *to_relative.begin() == "..") {
 		return "its file does not lie below the resource root";
 	}
-	detail::rename_request request;
+	platform::beneath::rename_request request;
 	request.from_folder = from_relative.parent_path();
 	request.from_leaf = from_relative.filename();
 	request.to_folder = to_relative.parent_path();
 	request.to_leaf = to_relative.filename();
 	request.allow_replace = case_only;
-	if (std::string error = detail::rename_beneath(*m_write_root, request); !error.empty()) {
+	if (std::string error = platform::beneath::rename_beneath(*m_write_root, request); !error.empty()) {
 		return error;
 	}
 	{
@@ -746,7 +746,7 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		}
 
 		if (m_write_hook) {
-			m_write_hook(detail::write_stage::after_check, tmp_path);
+			m_write_hook(platform::beneath::write_stage::after_check, tmp_path);
 		}
 
 		// From here on nothing goes by path: the folders below the root are opened one by one without following a
@@ -757,7 +757,7 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		}
 		std::error_code exists_ec;
 		const bool existed = fs::exists(target_path, exists_ec);
-		detail::write_request request;
+		platform::beneath::write_request request;
 		request.folder = relative.parent_path();
 		request.leaf = relative.filename();
 		request.tmp_leaf = tmp_path.filename();
@@ -767,7 +767,7 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		request.replace = replace;
 		request.hook = &m_write_hook;
 		request.tmp_path = tmp_path;
-		if (const std::string error = detail::write_beneath(*m_write_root, request); !error.empty()) {
+		if (const std::string error = platform::beneath::write_beneath(*m_write_root, request); !error.empty()) {
 			return fail(error);
 		}
 
@@ -796,28 +796,28 @@ void res::vfs_resolver::read_from_disk(core::res::res_resolver_interface::async_
 		// Nothing goes by path from here (#484): the folders below the layer's root and the file are opened without
 		// following a link, and the bytes come from the descriptor that was checked to be a regular file.
 		const fs::path relative = path.lexically_relative(root);
-		detail::read_request request;
+		platform::beneath::read_request request;
 		request.root = std::move(root);
 		request.folder = relative.parent_path();
 		request.leaf = relative.filename();
 		request.max_bytes = m_read_limit != 0 ? m_read_limit : res::max_external_file_bytes;
 		request.hook = m_read_hook ? &m_read_hook : nullptr;
 		std::vector<std::byte> data;
-		const detail::read_result result = detail::read_beneath(request, data);
+		const platform::beneath::read_result result = platform::beneath::read_beneath(request, data);
 		switch (result.status) {
-		case detail::read_status::ok:
+		case platform::beneath::read_status::ok:
 			data_sp->set_ready(std::move(data));
 			return;
-		case detail::read_status::missing:
+		case platform::beneath::read_status::missing:
 			data_sp->set_error("File does not exist: " + fs_paths::utf8_of(path));
 			return;
-		case detail::read_status::not_regular:
+		case platform::beneath::read_status::not_regular:
 			data_sp->set_error("Not a regular file: " + fs_paths::utf8_of(path));
 			return;
-		case detail::read_status::too_large:
+		case platform::beneath::read_status::too_large:
 			data_sp->set_error(std::format("File is larger than {} bytes: {}", request.max_bytes, fs_paths::utf8_of(path)));
 			return;
-		case detail::read_status::failed:
+		case platform::beneath::read_status::failed:
 			break;
 		}
 		data_sp->set_error("Failed to open file: " + result.error);
