@@ -40,6 +40,7 @@
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
 #include "edt_vcs_service.h"
+#include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_play_commands.h"
 #include "edt_play_session.h"
@@ -556,6 +557,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	edt::vcs::repository_watcher::ports watch_ports;
+	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
+	m_repo_watcher = std::make_unique<edt::vcs::repository_watcher>(std::move(watch_ports));
+	m_vcs->set_write_observer([this] {
+		if (m_repo_watcher) m_repo_watcher->begin_own_write();
+	});
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -665,6 +672,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
 		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
 			if (m_agent_access == nullptr) return false;
+			if (m_agent_server) m_agent_server->tick();
 			// Nothing to do for a person who does not use agents: no question can come, and the policy files are not read.
 			if (m_agent_server == nullptr || !m_agent_server->active()) return true;
 			return headless ? m_agent_access->frame_headless() : m_agent_access->frame(ImGui::GetFont());
@@ -678,6 +686,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_agent_sessions) m_agent_sessions->session_closed(session);
 		}));
 		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
+		options.jobs = &m_context->jobs();
+		options.events = &events;
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
 		// Every open document, not only the scene: a modified preview is dropped too.
@@ -808,6 +818,16 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 void edt::editor_system::tick_live_mode()
 {
 	if (m_live_mode) m_live_mode->tick();
+}
+
+void edt::editor_system::tick_repository_watcher()
+{
+	if (!m_repo_watcher || !m_vcs || !m_context) return;
+	// Not info(): after a project switch that would run the blocking repository probe here, every frame.
+	m_repo_watcher->follow(*m_vcs);
+	const edt::vcs::repository_changes changes = m_repo_watcher->tick();
+	if (changes.refs) m_context->events().repository_changed.emit(repository_change::refs);
+	if (changes.index) m_context->events().repository_changed.emit(repository_change::index);
 }
 
 void edt::editor_system::stop_live_build()

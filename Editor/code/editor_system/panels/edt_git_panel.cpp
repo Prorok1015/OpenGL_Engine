@@ -286,9 +286,10 @@ void edt::git_panel::draw_diff()
 
 void edt::git_panel::draw_history()
 {
-	// A commit, pull, checkout... of this panel moved HEAD or the refs.
-	if (m_model.writes_finished() != m_seen_writes) {
+	// A commit, pull, checkout... of this panel, or one made elsewhere, moved HEAD or the refs.
+	if (m_model.writes_finished() != m_seen_writes || m_model.refs_changed() != m_seen_refs) {
 		m_seen_writes = m_model.writes_finished();
+		m_seen_refs = m_model.refs_changed();
 		m_history.reload();
 	}
 	m_history.set_visible(true);

@@ -77,6 +77,7 @@ edt::git_panel_model::git_panel_model(editor_events& events, ports ports)
 	m_progress = m_events.job_progress.subscribe([this](std::uint64_t id, float fraction, const std::string& note) {
 		if (m_busy_job == id) m_busy_progress = git_busy_progress{ fraction, note };
 	});
+	m_repository = m_events.repository_changed.subscribe([this](repository_change kind) { repository_changed(kind); });
 }
 
 void edt::git_panel_model::set_visible(bool visible)
@@ -100,9 +101,17 @@ void edt::git_panel_model::files_changed()
 	if (m_visible) m_refresh_at = m_ports.now() + k_change_delay;
 }
 
+void edt::git_panel_model::repository_changed(repository_change kind)
+{
+	m_stale = true;
+	if (kind == repository_change::refs) m_refs_pending = true;
+	if (m_visible) m_refresh_at = m_ports.now() + k_repo_delay;
+}
+
 void edt::git_panel_model::refresh()
 {
 	m_stale = false;
+	if (std::exchange(m_refs_pending, false)) ++m_refs_changed;
 	m_read = true;
 	m_refresh_at.reset();
 	const cmd::result info = m_ports.invoke("vcs.info", json::object{});

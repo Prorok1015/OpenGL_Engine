@@ -457,14 +457,20 @@ struct mcp::stdio_transport::core : std::enable_shared_from_this<mcp::stdio_tran
 			}
 			return;
 		}
-		if (!is_request) {
-			// notifications/initialized, notifications/cancelled and the rest need no answer.
-			return;
-		}
-
 		std::weak_ptr<core> weak = weak_from_this();
 		rpc_session session;
 		session.id = current;
+		if (!is_request) {
+			// notifications/initialized, notifications/cancelled and the rest need no answer.
+			try {
+				rpc.notification(rpc_in.method, rpc_in.params, session);
+			} catch (const std::exception& e) {
+				application.log(log_level::error, std::string("notification failed: ") + e.what());
+			} catch (...) {
+				application.log(log_level::error, "notification failed");
+			}
+			return;
+		}
 		session.notify = [weak, current](const json::value& note) {
 			if (const auto self = weak.lock()) {
 				self->send_to(current, note);
