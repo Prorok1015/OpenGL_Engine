@@ -56,6 +56,7 @@ struct imgui_ctx
 		ctx = ImGui::CreateContext();
 		ImGuiIO& io = ImGui::GetIO();
 		io.IniFilename = nullptr;
+		io.ConfigInputTrickleEventQueue = false;
 		io.DisplaySize = ImVec2(800.f, 600.f);
 		unsigned char* px = nullptr;
 		int w = 0, h = 0;

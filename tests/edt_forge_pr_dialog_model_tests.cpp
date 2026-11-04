@@ -282,6 +282,7 @@ BOOST_AUTO_TEST_CASE(ARefusedCall_IsShown_AndStartsNoJob)
 	BOOST_TEST(model.error_text() == "the policy says no");
 	BOOST_TEST((model.state() == edt::forge_pr_dialog_model::phase::editing));
 
+	fill();
 	next_answer = cmd::result::success(json::object{});
 	model.create();
 	BOOST_TEST(model.error_code() == "failed");
