@@ -57,6 +57,7 @@ namespace edt {
 	class prefab_editor_panel;
 	class prefab_document;
 	class play_session;
+	namespace vcs { class repository_watcher; }
 	class editor_mode_controller;
 
 	class editor_system
@@ -78,6 +79,9 @@ namespace edt {
 		void run_implicit_callbacks();
 		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
 		void tick_live_mode();
+		// The repository watcher's frame (#485): the `editor_vcs` frame stage. Re-arms it when a probe changed the
+		// service's cached state (never probes itself) and raises editor_events::repository_changed.
+		void tick_repository_watcher();
 		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
 		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
 		bool person_is_editing() const;
@@ -210,6 +214,8 @@ namespace edt {
 		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
 		// Version control (#454); its commands are in m_registrations, removed before it.
 		std::unique_ptr<edt::vcs_service> m_vcs;
+		// After the service whose write observer reaches it, so it is destroyed first.
+		std::unique_ptr<edt::vcs::repository_watcher> m_repo_watcher;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
