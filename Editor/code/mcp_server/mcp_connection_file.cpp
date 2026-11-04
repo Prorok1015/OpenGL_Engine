@@ -121,35 +121,22 @@ namespace {
 	}
 
 	HANDLE open_real_directory(const fs::path& directory);
-	bool read_file_in(const fs::path& directory, std::string& out);
 
-	HANDLE open_token_file(const fs::path& path, DWORD flags)
+	HANDLE open_token_file(const fs::path& path, DWORD access, DWORD flags)
 	{
-		return CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | flags, nullptr);
+		return CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL | flags, nullptr);
 	}
 
-	// The file as it is, if it is a plain file: opened without following a link, and a pipe, a device or a directory is
-	// not read (reading one could block for ever). The directory is judged and held like the write's (#526), so a
-	// junction at .snk reads as no file; a file OneDrive or deduplication keeps in place is read through its filter if
-	// it is still the same file there (#529), as platform::beneath::read_beneath does.
-	bool read_small_file(const fs::path& directory, std::string& out)
+	// The token file opened without following a link, if it is a plain file on disk (a pipe, a device or a directory is
+	// never read: reading one could block for ever); a file OneDrive or deduplication keeps in place is opened through
+	// its filter if it is still the same file there (#529), as platform::beneath::read_beneath does.
+	// INVALID_HANDLE_VALUE otherwise.
+	HANDLE open_plain_token_file(const fs::path& path, DWORD access)
 	{
-		const HANDLE held_directory = open_real_directory(directory);
-		if (held_directory == INVALID_HANDLE_VALUE) {
-			return false;
-		}
-		const bool read = read_file_in(directory, out);
-		CloseHandle(held_directory);
-		return read;
-	}
-
-	bool read_file_in(const fs::path& directory, std::string& out)
-	{
-		const fs::path path = directory / file_name;
-		HANDLE file = open_token_file(path, FILE_FLAG_OPEN_REPARSE_POINT);
+		HANDLE file = open_token_file(path, access, FILE_FLAG_OPEN_REPARSE_POINT);
 		if (file == INVALID_HANDLE_VALUE) {
-			return false;
+			return INVALID_HANDLE_VALUE;
 		}
 		BY_HANDLE_FILE_INFORMATION information{};
 		bool ok = GetFileInformationByHandle(file, &information) != 0;
@@ -164,7 +151,7 @@ namespace {
 				ok = false;
 				break;
 			case mcp::detail::file_entry::through_filter: {
-				const HANDLE followed = open_token_file(path, 0);
+				const HANDLE followed = open_token_file(path, access, 0);
 				BY_HANDLE_FILE_INFORMATION after{};
 				ok = followed != INVALID_HANDLE_VALUE && GetFileInformationByHandle(followed, &after) && same_file(information, after)
 					&& (after.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
@@ -175,16 +162,38 @@ namespace {
 			}
 		}
 		ok = ok && GetFileType(file) == FILE_TYPE_DISK;
-		if (ok) {
-			out.assign(max_file_bytes, '\0');
-			DWORD got = 0;
-			ok = ReadFile(file, out.data(), static_cast<DWORD>(max_file_bytes), &got, nullptr) != 0;
-			out.resize(ok ? static_cast<std::size_t>(got) : 0);
+		if (!ok) {
+			if (file != INVALID_HANDLE_VALUE) {
+				CloseHandle(file);
+			}
+			return INVALID_HANDLE_VALUE;
 		}
+		return file;
+	}
+
+	bool read_open_file(HANDLE file, std::string& out)
+	{
+		out.assign(max_file_bytes, '\0');
+		DWORD got = 0;
+		const bool ok = ReadFile(file, out.data(), static_cast<DWORD>(max_file_bytes), &got, nullptr) != 0;
+		out.resize(ok ? static_cast<std::size_t>(got) : 0);
+		return ok;
+	}
+
+	// The directory is judged and held like the write's (#526), so behind a junction at .snk there is no file.
+	bool read_small_file(const fs::path& directory, std::string& out)
+	{
+		const HANDLE held_directory = open_real_directory(directory);
+		if (held_directory == INVALID_HANDLE_VALUE) {
+			return false;
+		}
+		const HANDLE file = open_plain_token_file(directory / file_name, GENERIC_READ);
+		const bool read = file != INVALID_HANDLE_VALUE && read_open_file(file, out);
 		if (file != INVALID_HANDLE_VALUE) {
 			CloseHandle(file);
 		}
-		return ok;
+		CloseHandle(held_directory);
+		return read;
 	}
 
 	// FILE_LIST_DIRECTORY: a handle with only attribute access does not take part in sharing; no FILE_SHARE_DELETE.
@@ -497,45 +506,65 @@ fs::path mcp::connection_file_path(const fs::path& directory)
 	return directory / file_name;
 }
 
+namespace
+{
+	std::optional<mcp::connection_info> parse_connection(const std::string& text)
+	{
+		boost::system::error_code ec;
+		const boost::json::value parsed = boost::json::parse(text, ec);
+		if (ec || !parsed.is_object()) {
+			return std::nullopt;
+		}
+		const boost::json::object& object = parsed.get_object();
+		const boost::json::value* port = object.if_contains("port");
+		const boost::json::value* token = object.if_contains("token");
+		const boost::json::value* pid = object.if_contains("pid");
+		if (port == nullptr || !port->is_int64() || token == nullptr || !token->is_string()) {
+			return std::nullopt;
+		}
+		mcp::connection_info info;
+		info.port = static_cast<std::uint16_t>(port->get_int64());
+		info.token = std::string(token->get_string().data(), token->get_string().size());
+		info.pid = (pid != nullptr && pid->is_int64()) ? pid->get_int64() : 0;
+		return info;
+	}
+
+	bool is_mine(const std::optional<mcp::connection_info>& existing, const mcp::connection_info& mine)
+	{
+		return existing && existing->token == mine.token && existing->pid == mine.pid;
+	}
+}
+
 std::optional<mcp::connection_info> mcp::read_connection_file(const fs::path& directory)
 {
 	std::string text;
 	if (!read_small_file(directory, text)) {
 		return std::nullopt;
 	}
-
-	boost::system::error_code ec;
-	const boost::json::value parsed = boost::json::parse(text, ec);
-	if (ec || !parsed.is_object()) {
-		return std::nullopt;
-	}
-	const boost::json::object& object = parsed.get_object();
-	const boost::json::value* port = object.if_contains("port");
-	const boost::json::value* token = object.if_contains("token");
-	const boost::json::value* pid = object.if_contains("pid");
-	if (port == nullptr || !port->is_int64() || token == nullptr || !token->is_string()) {
-		return std::nullopt;
-	}
-	connection_info info;
-	info.port = static_cast<std::uint16_t>(port->get_int64());
-	info.token = std::string(token->get_string().data(), token->get_string().size());
-	info.pid = (pid != nullptr && pid->is_int64()) ? pid->get_int64() : 0;
-	return info;
+	return parse_connection(text);
 }
 
-std::string mcp::write_connection_file(const fs::path& directory, const connection_info& info)
+std::string mcp::connection_directory_problem(const fs::path& directory)
 {
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(directory, ec);
 	if (!ec && fs::is_symlink(status)) {
-		return "refusing to write the token into " + utf8_of(directory) + ": it is a symbolic link";
+		return utf8_of(directory) + " is a symbolic link";
 	}
 #ifdef _WIN32
 	if (refused_by_path(directory)) {
-		return "refusing to write the token into " + utf8_of(directory) + ": it is a link or a reparse point";
+		return utf8_of(directory) + " is a link or a reparse point";
 	}
 #endif
-	ec.clear();
+	return {};
+}
+
+std::string mcp::write_connection_file(const fs::path& directory, const connection_info& info)
+{
+	if (const std::string problem = connection_directory_problem(directory); !problem.empty()) {
+		return "refusing to write the token: " + problem;
+	}
+	std::error_code ec;
 	const bool created = fs::create_directories(directory, ec);
 	if (ec) {
 		return "cannot create " + utf8_of(directory) + ": " + ec.message();
@@ -558,22 +587,39 @@ std::string mcp::write_connection_file(const fs::path& directory, const connecti
 	return write_atomic(directory, connection_json(info));
 }
 
-void mcp::remove_connection_file(const fs::path& directory, const connection_info& mine)
+std::string mcp::remove_connection_file(const fs::path& directory, const connection_info& mine)
 {
-	const std::optional<connection_info> existing = read_connection_file(directory);
-	if (!existing || existing->token != mine.token || existing->pid != mine.pid) {
-		return;
+	if (const std::string problem = connection_directory_problem(directory); !problem.empty()) {
+		return "the token file is left alone: " + problem;
 	}
 #ifdef _WIN32
-	std::error_code ec;
-	fs::remove(connection_file_path(directory), ec);
+	// Read, checked and deleted through one handle of the file, inside the held directory (#526).
+	const HANDLE held_directory = open_real_directory(directory);
+	if (held_directory == INVALID_HANDLE_VALUE) {
+		return {};
+	}
+	const HANDLE file = open_plain_token_file(directory / file_name, GENERIC_READ | DELETE);
+	std::string text;
+	if (file != INVALID_HANDLE_VALUE && read_open_file(file, text) && is_mine(parse_connection(text), mine)) {
+		FILE_DISPOSITION_INFO disposition{};
+		disposition.DeleteFile = TRUE;
+		SetFileInformationByHandle(file, FileDispositionInfo, &disposition, sizeof(disposition));
+	}
+	if (file != INVALID_HANDLE_VALUE) {
+		CloseHandle(file);
+	}
+	CloseHandle(held_directory);
 #else
+	if (!is_mine(read_connection_file(directory), mine)) {
+		return {};
+	}
 	const int dir_fd = open_owned_directory(directory);
 	if (dir_fd >= 0) {
 		::unlinkat(dir_fd, file_name, 0);
 		::close(dir_fd);
 	}
 #endif
+	return {};
 }
 
 void mcp::detail::set_before_directory_open(std::function<void(const fs::path& directory)> hook)

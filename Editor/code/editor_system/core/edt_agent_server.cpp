@@ -122,7 +122,9 @@ void edt::agent_server::stop_http()
 		m_impl->server.reset();
 	}
 	if (m_impl->file_written) {
-		mcp::remove_connection_file(snk_dir_of(m_impl->options), m_impl->file_info);
+		if (const std::string problem = mcp::remove_connection_file(snk_dir_of(m_impl->options), m_impl->file_info); !problem.empty()) {
+			egLOG_WARN("mcp", "{}", problem);
+		}
 		m_impl->file_written = false;
 	}
 	m_impl->options.http = false;

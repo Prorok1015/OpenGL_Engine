@@ -891,6 +891,7 @@ namespace edt
 		};
 
 		constexpr std::string_view k_not_regular = "it is not a regular file";
+		constexpr std::string_view k_folder_is_link = "its folder (.snk) is a link or not a folder";
 
 		// `no_follow`: a link at the file is itself what is probed (the project layer, #526), so a dangling one is not
 		// mistaken for a project without a policy.
@@ -899,6 +900,15 @@ namespace edt
 			file_probe out;
 			if (file.empty()) return out;
 			std::error_code ec;
+			if (no_follow) {
+				// .snk itself as a link (a dangling one too; a junction on Windows is not a directory either).
+				const std::filesystem::file_status folder = std::filesystem::symlink_status(file.parent_path(), ec);
+				if (!ec && folder.type() != std::filesystem::file_type::not_found && folder.type() != std::filesystem::file_type::directory) {
+					out.error = k_folder_is_link;
+					return out;
+				}
+				ec.clear();
+			}
 			const std::filesystem::file_status status = no_follow ? std::filesystem::symlink_status(file, ec) : std::filesystem::status(file, ec);
 			// A missing file is the normal case of a project with no policy of its own. Some standard libraries report it as
 			// an error code besides file_type::not_found, so that comes first.
@@ -944,7 +954,7 @@ namespace edt
 		const bool project_layer = what.kind == policy_layer_kind::project;
 		const file_probe now = probe_file(what.file, project_layer);
 		// A link at the project file or at .snk (#526): the layer fails closed and the person is told loudly.
-		bool refused_link = project_layer && now.error == k_not_regular;
+		bool refused_link = project_layer && (now.error == k_not_regular || now.error == k_folder_is_link);
 		what.existed = now.exists;
 		what.modified = now.modified;
 		what.size = now.size;

@@ -9,6 +9,9 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 // The project's .snk files are read without following a link at .snk or at the file (#526): the policy fails closed,
 // build.json is broken (defaults), mcp.json is not there.
@@ -143,5 +146,58 @@ BOOST_AUTO_TEST_CASE(McpJson_BehindALinkAtSnk_IsNotThere)
 
 	BOOST_TEST(!mcp::read_connection_file(dir.path() / ".snk").has_value());
 }
+
+BOOST_AUTO_TEST_CASE(McpJson_RemoveBehindALinkAtSnk_SaysWhy_AndDeletesNothing)
+{
+	test_util::temp_dir dir("edt_nofollow_mcp_remove_link");
+	mcp::connection_info mine;
+	mine.port = 7;
+	mine.token = "mine";
+	mine.pid = mcp::current_process_id();
+	BOOST_REQUIRE(mcp::write_connection_file(dir.path() / "outside", mine).empty());
+	make_folder_link(dir.path() / "outside", dir.path() / ".snk");
+
+	BOOST_TEST(!mcp::remove_connection_file(dir.path() / ".snk", mine).empty());
+	BOOST_TEST(fs::exists(mcp::connection_file_path(dir.path() / "outside")));
+	BOOST_TEST(mcp::remove_connection_file(dir.path() / "outside", mine).empty());
+	BOOST_TEST(!fs::exists(mcp::connection_file_path(dir.path() / "outside")));
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(Policy_ADanglingLinkAtSnk_FailsClosed)
+{
+	test_util::temp_dir dir("edt_nofollow_policy_dangling_folder");
+	fs::create_directory_symlink(dir.path() / "nowhere", dir.path() / ".snk");
+
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::deny));
+	BOOST_TEST(!policy.project_error().empty());
+}
+
+// A FIFO at the name is refused without blocking: the policy fails closed, build.json is broken.
+BOOST_AUTO_TEST_CASE(Policy_AFifo_FailsClosed_AndReturns)
+{
+	test_util::temp_dir dir("edt_nofollow_policy_fifo");
+	fs::create_directories(dir.path() / ".snk");
+	BOOST_REQUIRE(::mkfifo((dir.path() / ".snk" / "agent_policy.json").c_str(), 0600) == 0);
+
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::deny));
+	BOOST_TEST(!policy.project_error().empty());
+}
+
+BOOST_AUTO_TEST_CASE(BuildSettings_AFifo_IsBroken_AndReturns)
+{
+	test_util::temp_dir dir("edt_nofollow_build_fifo");
+	fs::create_directories(dir.path() / ".snk");
+	BOOST_REQUIRE(::mkfifo((dir.path() / ".snk" / "build.json").c_str(), 0600) == 0);
+
+	BOOST_TEST(!edt::load_build_settings(dir.path() / ".snk").live_enabled);
+	BOOST_TEST(edt::check_build_settings_file(dir.path() / ".snk").has_value());
+	BOOST_TEST(edt::update_build_settings(dir.path() / ".snk", [](edt::build_settings& settings) {
+		settings.live_enabled = true;
+	}).has_value());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
