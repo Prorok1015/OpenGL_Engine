@@ -115,6 +115,9 @@ namespace platform
 		std::map<secret_key, secret_text> m_values;
 	};
 
+	// Where a value is kept, as presence() found it.
+	enum class secret_presence { absent, in_memory, in_os_store, unknown };
+
 	// The primary backend first; when it is `unavailable` or `failed` the value stays in RAM for the session. It is
 	// never written to a file. A RAM entry always wins over the primary on load(): it is the newer value, because a
 	// successful store() to the primary drops the RAM entry. Same blocking rules as the OS backend.
@@ -132,6 +135,10 @@ namespace platform
 		// status is returned: a persisted copy may remain and come back after a restart.
 		secret_result erase(const secret_key& key);
 
+		// Whether a value is stored and where, without handing it out (it is read into a local that is wiped at once).
+		// `unknown`: the primary could not be reached. Same blocking rules as load(); a value found in the primary
+		// counts as persisted() from then on.
+		secret_presence presence(const secret_key& key);
 		// True when the primary backend holds the value (it survives a restart).
 		bool persisted(const secret_key& key) const;
 		// The backend that took the last store(): the primary's name, or "memory".

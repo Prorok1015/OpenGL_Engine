@@ -43,7 +43,8 @@ namespace edt
 	// `git remote get-url`'s: a remote with a pushurl, or whose URL a url.<base>.insteadOf rewrites, is refused `denied`
 	// (the repository's own config could point the token at another repository). The repository is read before the
 	// person is asked (describe_*) and the job checks that it found the same one; an approved call whose shown repository
-	// is no longer remembered, or could not be determined in time, is denied.
+	// is no longer remembered, or could not be determined in time, is denied. A person's create_pr (the dialog) is held to
+	// the same: it goes to the repository describe_target showed, or is `denied`.
 	class forge_service
 	{
 	public:
@@ -85,6 +86,10 @@ namespace edt
 			std::string remote;
 		};
 
+		// Why a create request cannot be sent (base/head valid branch names, title 1..k_max_title bytes, body at most
+		// k_max_body bytes, both plain text), else nullopt. What the service checks before any job; the PR dialog asks it too.
+		static std::optional<std::string> check_create_request(const create_request& request);
+
 		// What a person is told before an agent's call is allowed: the repository it would go to (host/owner/repo and the
 		// remote), read now from the config on the main thread (bounded by vcs_options::describe_timeout), or why the call
 		// will be refused. Remembers the repository, so that the job started for the same call (same session and
@@ -92,6 +97,25 @@ namespace edt
 		std::optional<std::string> describe_create_pr(const create_request& request, const cmd::origin& caller);
 		std::optional<std::string> describe_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller);
 		std::optional<std::string> describe_list_prs(const list_request& request, const cmd::origin& caller);
+
+		// What the Create PR dialog shows a person before the request is allowed (#458 PR-4): where `remote` (empty: git's
+		// default) leads, read now on the main thread and bounded by vcs_options::describe_timeout, as plain sanitized text.
+		// Remembers the repository, so that forge.create_pr as a person's call, made after it, finds the same one or is
+		// `denied`; a person's create_pr with nothing remembered is `denied` too. Unlike an agent's, a rewritten URL or a
+		// pushurl is not refused: both addresses are returned and the person decides (`rewritten`).
+		struct target_description
+		{
+			// The request may be made (after the person accepts a rewrite, when there is one).
+			bool ok = false;
+			// "github.com/octo/engine (remote origin)", or why the request will be refused.
+			std::string text;
+			// insteadOf or a pushurl changes the address: the person must accept it. The three are plain text.
+			bool rewritten = false;
+			std::string written_url;
+			std::string effective_url;
+			std::string push_url;
+		};
+		target_description describe_target(const std::string& remote);
 
 		// `approved`: a person answered a question for this call (call::confirmation is set). A guarded approved call whose
 		// shown repository is no longer remembered (evicted, expired) is `denied` by the job before any request.
@@ -105,6 +129,8 @@ namespace edt
 		// vcs_service::read_remote_now).
 		void set_clock(clock_function clock) { m_clock = std::move(clock); }
 		void set_remote_reader(remote_reader reader) { m_remote_reader = std::move(reader); }
+		// Tests: the same for describe_target (a person's read).
+		void set_person_remote_reader(remote_reader reader) { m_person_remote_reader = std::move(reader); }
 
 	private:
 		struct shown_target
@@ -122,11 +148,14 @@ namespace edt
 		void remember_shown(std::string key, std::string target);
 		// The repository shown for this call, once.
 		std::optional<std::string> take_shown(const std::string& key);
+		// A person's record is kept, not used up: a failed request can be sent again until it is forgotten.
+		std::optional<std::string> peek_shown(const std::string& key);
 
 		vcs_service& m_vcs;
 		std::function<vcs_policy()> m_policy_source;
 		clock_function m_clock;
 		remote_reader m_remote_reader;
+		remote_reader m_person_remote_reader;
 		// Held by the jobs as well: one dropped before it ran may outlive the service.
 		std::shared_ptr<const forge_options> m_options;
 		// The last few repositories shown to a person, by call; dropped when their job starts or after a few minutes.

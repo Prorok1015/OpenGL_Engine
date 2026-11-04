@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
 #include <algorithm>
+#include <cfloat>
 #include <chrono>
 #include <format>
 #include <iterator>
@@ -18,6 +19,7 @@ namespace {
 	const ImVec4 k_hunk{ 0.45f, 0.70f, 0.95f, 1.0f };
 	const ImVec4 k_meta{ 0.65f, 0.65f, 0.65f, 1.0f };
 	const ImVec4 k_error{ 1.0f, 0.45f, 0.40f, 1.0f };
+	constexpr const char* k_pr_popup = "Create pull request";
 
 	const ImVec4 k_head_ref{ 0.95f, 0.75f, 0.30f, 1.0f };
 	const ImVec4 k_branch_ref{ 0.45f, 0.80f, 0.45f, 1.0f };
@@ -105,7 +107,8 @@ namespace {
 }
 
 edt::git_panel::git_panel(editor_events& events, git_panel_model::ports ports, dialog_service& dialogs, res::resource_system& resources)
-	: panel_base("git", "Git"), m_model(events, ports), m_history(events, history_ports_of(ports)), m_dialogs(dialogs),
+	: panel_base("git", "Git"), m_model(events, ports), m_history(events, history_ports_of(ports)),
+	  m_pr(events, forge_pr_dialog_model::ports{ ports.invoke, ports.cancel, {} }), m_dialogs(dialogs),
 	  m_resources(resources)
 {
 	// Whether or not code/ is mounted yet: a project that comes later still refreshes the panel. Both subscriptions are
@@ -182,6 +185,16 @@ void edt::git_panel::draw_header()
 	ImGui::SameLine();
 	if (ImGui::Button("Push")) m_model.push();
 	ImGui::EndDisabled();
+	ImGui::SameLine();
+	ImGui::BeginDisabled(busy || m_model.detached() || m_model.head().empty());
+	if (ImGui::Button("Create PR")) {
+		m_pr.reset(m_model.head());
+		ImGui::OpenPopup(k_pr_popup);
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button("Account...") && m_open_account) m_open_account();
+	draw_create_pr();
 	if (busy) {
 		ImGui::SameLine();
 		ImGui::TextDisabled("%s: running...", m_model.busy().c_str());
@@ -474,4 +487,101 @@ void edt::git_panel::draw_history_details()
 		draw_diff_lines("##commit_diff", m_history_diff);
 	}
 	ImGui::EndGroup();
+}
+
+// Where the request goes, as plain text; Create stays off until this is shown, and a rewritten address is ticked.
+void edt::git_panel::draw_pr_target(bool running)
+{
+	const auto& target = m_pr.target();
+	if (!target) {
+		ImGui::TextDisabled("The repository for this pull request is not read.");
+	} else if (!target->ok) {
+		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(target->text.c_str());
+		ImGui::PopTextWrapPos();
+		ImGui::PopStyleColor();
+	} else {
+		ImGui::TextUnformatted("The pull request goes to:");
+		ImGui::SameLine();
+		ImGui::TextUnformatted(target->text.c_str());
+		if (target->rewritten) {
+			ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextUnformatted("The address of this remote is rewritten by the git config (url.<base>.insteadOf or pushurl):");
+			ImGui::TextUnformatted(std::format("written in the config: {}", target->written_url).c_str());
+			ImGui::TextUnformatted(std::format("used: {}", target->effective_url).c_str());
+			if (!target->push_url.empty()) ImGui::TextUnformatted(std::format("pushurl: {}", target->push_url).c_str());
+			ImGui::PopTextWrapPos();
+			ImGui::PopStyleColor();
+			ImGui::BeginDisabled(running);
+			ImGui::Checkbox("I understand the address is rewritten", &m_pr.rewrite_accepted());
+			ImGui::EndDisabled();
+		}
+	}
+	if (!running && ImGui::SmallButton("Check again")) m_pr.refresh_target();
+}
+
+void edt::git_panel::draw_create_pr()
+{
+	ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 36.0f, 0.0f), ImGuiCond_Appearing);
+	if (!ImGui::BeginPopupModal(k_pr_popup, nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+
+	if (m_pr.state() == forge_pr_dialog_model::phase::created) {
+		ImGui::TextUnformatted(std::format("Pull request #{} created.", m_pr.number().value_or(0)).c_str());
+		if (!m_pr.url().empty()) {
+			ImGui::TextUnformatted(m_pr.url().c_str());
+			if (ImGui::Button("Copy link")) ImGui::SetClipboardText(m_pr.url().c_str());
+			ImGui::SameLine();
+		}
+		if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		return;
+	}
+
+	const bool running = m_pr.running();
+	draw_pr_target(running);
+	ImGui::Separator();
+	ImGui::BeginDisabled(running);
+	const float width = ImGui::GetFontSize() * 28.0f;
+	ImGui::SetNextItemWidth(width);
+	ImGui::InputText("Base", &m_pr.base());
+	ImGui::SetNextItemWidth(width);
+	ImGui::InputText("Head", &m_pr.head());
+	ImGui::SetNextItemWidth(width);
+	ImGui::InputText("Title", &m_pr.title());
+	ImGui::InputTextMultiline("##pr_body", &m_pr.body(), ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 8.0f));
+	ImGui::Checkbox("Draft", &m_pr.draft());
+	ImGui::EndDisabled();
+	if (!m_pr.draft()) ImGui::TextDisabled("It will be ready for review at once.");
+
+	if (const auto problem = m_pr.input_error()) {
+		ImGui::TextDisabled("%s", problem->c_str());
+	}
+	if (!m_pr.error_text().empty()) {
+		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(std::format("{}: {}", m_pr.error_code(), m_pr.error_text()).c_str());
+		ImGui::PopTextWrapPos();
+		ImGui::PopStyleColor();
+		if (!m_pr.error_hint().empty()) {
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextUnformatted(m_pr.error_hint().c_str());
+			ImGui::PopTextWrapPos();
+		}
+		if (m_pr.needs_token() && m_open_account && ImGui::Button("Open Git Account")) m_open_account();
+	}
+
+	ImGui::BeginDisabled(!m_pr.can_create());
+	if (ImGui::Button("Create")) m_pr.create();
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (running) {
+		ImGui::TextDisabled("creating...");
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Cancel request")) m_pr.cancel();
+	} else if (ImGui::Button("Close")) {
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
 }

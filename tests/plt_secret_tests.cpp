@@ -273,6 +273,30 @@ BOOST_AUTO_TEST_CASE(Messages_NeverContainTheSecret)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(Presence_SaysWhereTheValueIs_WithoutHandingItOut)
+{
+	harness h(secret_status::ok);
+	BOOST_TEST((h.store.presence(key) == platform::secret_presence::absent));
+	BOOST_REQUIRE((h.store.store(key, secret_text{ std::string(canary) }).status == secret_status::ok));
+	BOOST_TEST((h.store.presence(key) == platform::secret_presence::in_os_store));
+
+	harness down(secret_status::unavailable);
+	BOOST_TEST((down.store.presence(key) == platform::secret_presence::unknown));
+	BOOST_REQUIRE((down.store.store(key, secret_text{ std::string(canary) }).status == secret_status::ok));
+	BOOST_TEST((down.store.presence(key) == platform::secret_presence::in_memory));
+	BOOST_TEST(!down.store.persisted(key));
+}
+
+BOOST_AUTO_TEST_CASE(Presence_ARestartedStoreFindsThePersistedValue)
+{
+	auto backend = std::make_unique<fake_backend>(secret_status::ok);
+	BOOST_REQUIRE((backend->store(key, secret_text{ std::string(canary) }).status == secret_status::ok));
+	platform::secret_store fresh(std::move(backend));
+	BOOST_TEST(!fresh.persisted(key));
+	BOOST_TEST((fresh.presence(key) == platform::secret_presence::in_os_store));
+	BOOST_TEST(fresh.persisted(key));
+}
+
 // The real store is only read, and only for a key that cannot exist: CI machines may have no keychain or daemon.
 BOOST_AUTO_TEST_CASE(OsBackend_LoadOfUnknownKeyNeverSucceeds)
 {

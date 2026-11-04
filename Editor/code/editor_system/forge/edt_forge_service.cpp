@@ -78,6 +78,8 @@ namespace {
 		std::optional<std::string> shown;
 		// Guarded: a person approved this call, so a missing `shown` is a record lost, not a call nobody was asked about.
 		bool approved = false;
+		// A person's create_pr: the dialog showed the repository, so a missing `shown` is denied as well.
+		bool person_shown = false;
 	};
 
 	struct target
@@ -137,7 +139,7 @@ namespace {
 	{
 		const std::stop_token stop = task.stop;
 		// Fail closed: without the repository the person was shown there is nothing to compare the one found with.
-		if (plan.guarded && plan.approved && !plan.shown) {
+		if (((plan.guarded && plan.approved) || plan.person_shown) && !plan.shown) {
 			return error_result("denied", "the repository shown for approval is no longer known: ask again");
 		}
 		if (plan.guarded && !plan.head.empty()) {
@@ -156,7 +158,7 @@ namespace {
 		if (!url.ok()) return error_result(url.code, url.error);
 		edt::forge::forge_remote parsed;
 		if (auto failure = judge_url(options, plan.guarded, name.text, url.text, parsed)) return error_result(failure->code, failure->message);
-		if (plan.guarded && plan.shown) {
+		if (plan.shown) {
 			const std::string found = target_text(parsed, name.text);
 			if (found != *plan.shown) {
 				return error_result("denied", std::format("the repository is not the one the request was allowed for (allowed for '{}', found '{}')",
@@ -175,7 +177,7 @@ namespace {
 			: platform::secret_result{ platform::secret_status::unavailable, "no secret store" };
 		if (stop.stop_requested()) throw ds::task_cancelled{};
 		if (loaded.status == platform::secret_status::not_found || (loaded.status == platform::secret_status::ok && out.token.empty())) {
-			return error_result("no_token", std::format("no token is stored for {}: add one in Settings (Version Control)", parsed.host));
+			return error_result("no_token", std::format("no token is stored for {}: a person adds one in the Git Account window (Git panel, Account...)", parsed.host));
 		}
 		if (loaded.status != platform::secret_status::ok) {
 			return error_result(edt::forge::forge_error_code_name(edt::forge::forge_error_code::unavailable),
@@ -202,27 +204,6 @@ namespace {
 			if (task.stop.stop_requested()) throw ds::task_cancelled{};
 			return answer;
 		}, caller);
-	}
-
-	std::optional<std::string> request_error(const edt::forge_service::create_request& request)
-	{
-		if (!edt::forge::is_valid_branch_name(request.base)) return std::string("base is not a valid branch name");
-		if (!edt::forge::is_valid_branch_name(request.head)) return std::string("head is not a valid branch name");
-		if (request.title.empty() || request.title.size() > edt::forge_service::k_max_title) {
-			return std::format("title must be 1 to {} bytes", edt::forge_service::k_max_title);
-		}
-		// Nothing a title or a body can hide behind: it is what a reviewer reads, and it is shown to a person.
-		if (!edt::forge::is_plain_text(request.title, false)) {
-			return std::string("title must be valid UTF-8 without control, bidirectional or invisible characters");
-		}
-		if (request.body.size() > edt::forge_service::k_max_body) {
-			return std::format("body must be at most {} bytes", edt::forge_service::k_max_body);
-		}
-		if (!edt::forge::is_plain_text(request.body, true)) {
-			return std::string("body must be valid UTF-8 without control characters (except tab and line breaks), "
-				"bidirectional or invisible characters");
-		}
-		return std::nullopt;
 	}
 
 	constexpr const char* JOB_RESULT_SCHEMA = R"({
@@ -322,6 +303,15 @@ void edt::forge_service::remember_shown(std::string key, std::string target)
 	m_shown.push_back({ std::move(key), std::move(target), now });
 }
 
+std::optional<std::string> edt::forge_service::peek_shown(const std::string& key)
+{
+	const auto now = this->now();
+	std::erase_if(m_shown, [&](const shown_target& shown) { return now - shown.at > k_shown_lifetime; });
+	const auto found = std::find_if(m_shown.begin(), m_shown.end(), [&](const shown_target& shown) { return shown.key == key; });
+	if (found == m_shown.end()) return std::nullopt;
+	return found->target;
+}
+
 std::optional<std::string> edt::forge_service::take_shown(const std::string& key)
 {
 	const auto now = this->now();
@@ -363,13 +353,39 @@ std::optional<std::string> edt::forge_service::describe(std::string before, cons
 	return forge::sanitize_text(text, 400);
 }
 
+edt::forge_service::target_description edt::forge_service::describe_target(const std::string& remote)
+{
+	target_description out;
+	const std::string key = call_key(cmd::origin::ui(), "create_pr_target", { remote });
+	const vcs_service::remote_snapshot snapshot = m_person_remote_reader ? m_person_remote_reader(remote) : m_vcs.read_remote_now(remote, true);
+	std::string target = "refused";
+	forge::forge_remote parsed;
+	if (snapshot.code == vcs_service::k_describe_timeout) {
+		out.text = "The repository could not be determined in time: the request will be refused.";
+	} else if (!snapshot.ok()) {
+		out.text = forge::sanitize_text("The request will be refused: " + snapshot.error, 400);
+	} else if (auto failure = judge_url(*m_options, false, snapshot.remote, snapshot.effective_url, parsed)) {
+		out.text = forge::sanitize_text("The request will be refused: " + failure->message, 400);
+	} else {
+		target = target_text(parsed, snapshot.remote);
+		out.ok = true;
+		out.text = forge::sanitize_text(target, 400);
+		out.written_url = forge::sanitize_text(snapshot.url, 200);
+		out.effective_url = forge::sanitize_text(snapshot.effective_url, 200);
+		out.push_url = forge::sanitize_text(snapshot.push_url, 200);
+		out.rewritten = snapshot.url != snapshot.effective_url || !snapshot.push_url.empty();
+	}
+	remember_shown(key, target);
+	return out;
+}
+
 std::optional<std::string> edt::forge_service::describe_create_pr(const create_request& request, const cmd::origin& caller)
 {
 	const bool guarded = caller.kind != cmd::origin_kind::ui;
 	std::optional<std::string> refusal;
 	if (guarded && request.draft_given && !request.draft) {
 		refusal = "a pull request made by an agent is always a draft: draft:false is refused";
-	} else if (auto error = request_error(request)) {
+	} else if (auto error = check_create_request(request)) {
 		refusal = std::move(*error);
 	} else if (auto why = vcs_push_branch_refusal(current_policy(), request.head)) {
 		refusal = "a pull request's head must be a branch an agent may push: " + *why;
@@ -395,6 +411,27 @@ std::optional<std::string> edt::forge_service::describe_list_prs(const list_requ
 			? std::nullopt : std::optional<std::string>{ "state must be open, closed or all" });
 }
 
+std::optional<std::string> edt::forge_service::check_create_request(const create_request& request)
+{
+	if (!edt::forge::is_valid_branch_name(request.base)) return std::string("base is not a valid branch name");
+	if (!edt::forge::is_valid_branch_name(request.head)) return std::string("head is not a valid branch name");
+	if (request.title.empty() || request.title.size() > k_max_title) {
+		return std::format("title must be 1 to {} bytes", k_max_title);
+	}
+	// Nothing a title or a body can hide behind: it is what a reviewer reads, and it is shown to a person.
+	if (!edt::forge::is_plain_text(request.title, false)) {
+		return std::string("title must be valid UTF-8 without control, bidirectional or invisible characters");
+	}
+	if (request.body.size() > k_max_body) {
+		return std::format("body must be at most {} bytes", k_max_body);
+	}
+	if (!edt::forge::is_plain_text(request.body, true)) {
+		return std::string("body must be valid UTF-8 without control characters (except tab and line breaks), "
+			"bidirectional or invisible characters");
+	}
+	return std::nullopt;
+}
+
 edt::vcs_service::started edt::forge_service::start_create_pr(const create_request& request, const cmd::origin& caller, bool approved)
 {
 	const bool guarded = caller.kind != cmd::origin_kind::ui;
@@ -402,7 +439,7 @@ edt::vcs_service::started edt::forge_service::start_create_pr(const create_reque
 	if (guarded && request.draft_given && !request.draft) {
 		return { 0, cmd::codes::denied, "a pull request made by an agent is always a draft: draft:false is refused" };
 	}
-	if (auto error = request_error(request)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (auto error = check_create_request(request)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 
 	call_plan plan;
 	plan.label = "forge create_pr";
@@ -413,6 +450,9 @@ edt::vcs_service::started edt::forge_service::start_create_pr(const create_reque
 		plan.head = request.head;
 		plan.approved = approved;
 		plan.shown = take_shown(call_key(caller, "create_pr", { request.remote, request.base, request.head, request.title, request.body }));
+	} else {
+		plan.person_shown = true;
+		plan.shown = peek_shown(call_key(caller, "create_pr_target", { request.remote }));
 	}
 	forge::create_pr_request wanted;
 	wanted.base = request.base;

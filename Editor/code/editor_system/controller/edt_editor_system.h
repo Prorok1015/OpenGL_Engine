@@ -44,6 +44,7 @@ namespace edt {
 	class game_reloader;
 	class vcs_service;
 	class forge_service;
+	class forge_account_panel;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -184,6 +185,10 @@ namespace edt {
 		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
 		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
 		std::shared_ptr<git_panel>             m_git_panel;
+		// Git Account (#458 PR-4): the person sets the forge tokens here; floating, closed by default.
+		std::shared_ptr<forge_account_panel>   m_forge_account_panel;
+		// Owner of the Git Account jobs (token save/remove/probe): not under SNK_HAS_ASSIMP like the import's, so it is here.
+		ds::lifetime                           m_forge_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		// The console's feed from the engine log; removed with the editor system.
 		engine::log_sink_handle                m_log_sink;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
