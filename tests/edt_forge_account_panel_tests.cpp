@@ -56,7 +56,6 @@ struct imgui_ctx
 		ctx = ImGui::CreateContext();
 		ImGuiIO& io = ImGui::GetIO();
 		io.IniFilename = nullptr;
-		io.ConfigInputTrickleEventQueue = false;
 		io.DisplaySize = ImVec2(800.f, 600.f);
 		unsigned char* px = nullptr;
 		int w = 0, h = 0;
@@ -131,7 +130,7 @@ BOOST_AUTO_TEST_CASE(WipeImguiTokenState_AfterTypingInARealField_LeavesNoCanary)
 	ImGuiContext& g = *imgui.ctx;
 	ImGuiIO& io = ImGui::GetIO();
 	std::array<char, 128> buffer{};
-	ImGuiID id = 0;
+	ImGuiID id = 0xFFFFFFFFu;
 	const auto frame = [&] {
 		ImGui::NewFrame();
 		ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
