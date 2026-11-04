@@ -168,26 +168,16 @@ BOOST_AUTO_TEST_CASE(SanitizeText_DropsControlBidiAndInvisibleCharacters)
 	const std::string bidi = "\xE2\x80\xAE";       // U+202E
 	const std::string zero_width = "\xE2\x80\x8B"; // U+200B
 	const std::string c1 = "\xC2\x85";             // U+0085
-	const std::string cleaned = sanitize_text("a\x07" "b\r\nc" + bidi + "d" + zero_width + "e" + c1 + "f\x7F" "g", 100);
+	std::string input = "a\x07" "b\r\nc";
+	input += bidi;
+	input += "d";
+	input += zero_width;
+	input += "e";
+	input += c1;
+	input += "f\x7F" "g";
+	const std::string cleaned = sanitize_text(input, 100);
 	BOOST_TEST(cleaned == "a b  c d e f g");
 	BOOST_TEST(sanitize_text("ok \xC3\xBC", 100) == "ok \xC3\xBC");
-}
-
-BOOST_AUTO_TEST_CASE(IsPlainText_RefusesWhatSanitizeTextWouldChange)
-{
-	using edt::forge::is_plain_text;
-	BOOST_TEST(is_plain_text("ok \xC3\xBC", false));
-	BOOST_TEST(!is_plain_text("a\tb", false));
-	BOOST_TEST(!is_plain_text("a\nb", false));
-	BOOST_TEST(is_plain_text("a\tb\r\nc\n", true));
-	for (const char* bad : { "a\x01" "b", "a\x07" "b", "a\x1B" "b", "a\x7F" "b", "a\xC2\x85" "b", "a\xE2\x80\xAE" "b",
-			"a\xE2\x80\x8B" "b", "a\xE2\x80\xA8" "b", "a\xEF\xBB\xBF" "b", "a\xFF" "b", "a\xC3" }) {
-		BOOST_TEST_CONTEXT(bad) {
-			BOOST_TEST(!is_plain_text(bad, false));
-			BOOST_TEST(!is_plain_text(bad, true));
-		}
-	}
-	BOOST_TEST(!is_plain_text(std::string("a\0b", 3), true));
 }
 
 BOOST_AUTO_TEST_CASE(SanitizeText_ReplacesInvalidUtf8)
@@ -226,6 +216,23 @@ BOOST_AUTO_TEST_CASE(ScrubSecret_ReplacesEveryOccurrence)
 	std::string untouched = "abc";
 	edt::forge::scrub_secret(untouched, platform::secret_text{});
 	BOOST_TEST(untouched == "abc");
+}
+
+BOOST_AUTO_TEST_CASE(IsPlainText_RefusesWhatSanitizeTextWouldChange)
+{
+	using edt::forge::is_plain_text;
+	BOOST_TEST(is_plain_text("ok \xC3\xBC", false));
+	BOOST_TEST(!is_plain_text("a\tb", false));
+	BOOST_TEST(!is_plain_text("a\nb", false));
+	BOOST_TEST(is_plain_text("a\tb\r\nc\n", true));
+	for (const char* bad : { "a\x01" "b", "a\x07" "b", "a\x1B" "b", "a\x7F" "b", "a\xC2\x85" "b", "a\xE2\x80\xAE" "b",
+			"a\xE2\x80\x8B" "b", "a\xE2\x80\xA8" "b", "a\xEF\xBB\xBF" "b", "a\xFF" "b", "a\xC3" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			BOOST_TEST(!is_plain_text(bad, false));
+			BOOST_TEST(!is_plain_text(bad, true));
+		}
+	}
+	BOOST_TEST(!is_plain_text(std::string("a\0b", 3), true));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
