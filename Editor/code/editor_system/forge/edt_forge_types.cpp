@@ -182,6 +182,20 @@ std::string edt::forge::sanitize_text(std::string_view text, std::size_t max_byt
 	return out;
 }
 
+bool edt::forge::is_plain_text(std::string_view text, bool allow_line_breaks)
+{
+	std::size_t i = 0;
+	while (i < text.size()) {
+		char32_t code = 0;
+		const std::size_t length = decode_utf8(text.substr(i), code);
+		if (length == 0) return false;
+		const bool line_break = code == U'\t' || code == U'\n' || code == U'\r';
+		if (is_unsafe_to_show(code) && !(allow_line_breaks && line_break)) return false;
+		i += length;
+	}
+	return true;
+}
+
 bool edt::forge::is_valid_utf8(std::string_view text)
 {
 	std::size_t i = 0;

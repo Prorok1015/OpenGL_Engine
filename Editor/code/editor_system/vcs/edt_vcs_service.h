@@ -259,14 +259,35 @@ namespace edt
 			// The remote as named, else the current branch's, else the only configured one, else origin (what git would
 			// pick); resolved once here, so the caller checks and uses one name.
 			answer remote_name(const std::string& named, std::stop_token stop) const;
-			// `git remote get-url <remote>`: the first URL.
+			// `git remote get-url <remote>`: the first URL, with the repository's url.<base>.insteadOf applied.
 			answer remote_url(const std::string& remote, std::stop_token stop) const;
+			// The first `remote.<remote>.url` as written in the config, which no insteadOf has touched (what `git config
+			// --get` prints). Refused (`denied`) when the remote has a pushurl or when a url.<base>.insteadOf /
+			// pushInsteadOf would rewrite that URL: with either, the URL a push or `git remote get-url` uses is not the
+			// one written, and a person cannot be told where a request goes.
+			answer remote_raw_url(const std::string& remote, std::stop_token stop) const;
 			// The commit refs/heads/<branch> points to; `not_found` when there is no such local branch.
 			answer local_branch(const std::string& branch, std::stop_token stop) const;
 
 		private:
 			std::shared_ptr<const impl> m_impl;
 		};
+
+		// What read_remote_now found: the remote's name (as remote_name resolves it) and its raw URL (remote_raw_url), or
+		// why not (a vcs code, `denied` for a rewrite or pushurl, `vcs_unavailable` when git did not answer in time).
+		struct remote_snapshot
+		{
+			std::string remote;
+			std::string url;
+			std::string code;
+			std::string error;
+
+			bool ok() const { return code.empty(); }
+		};
+
+		// The same two reads, now, on the main thread, for what a person is shown before an agent's request is allowed.
+		// Git is stopped after vcs_options::probe_timeout (5 s). Always the protected read of an agent.
+		remote_snapshot read_remote_now(const std::string& named);
 
 		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's
 		// (ui) means the protected read. The work may throw ds::task_cancelled.

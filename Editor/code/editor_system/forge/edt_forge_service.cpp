@@ -11,8 +11,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <format>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -71,6 +73,9 @@ namespace {
 		edt::vcs_policy policy;
 		// create_pr, guarded: the head branch, which passes the push rules and exists locally.
 		std::string head;
+		// Guarded: the repository a person was shown for this very call ("host/owner/repo (remote name)"); the job finds
+		// the same or denies. Empty: nobody was asked (the policy allowed it).
+		std::optional<std::string> shown;
 	};
 
 	struct target
@@ -92,6 +97,37 @@ namespace {
 		});
 	}
 
+	struct url_failure
+	{
+		std::string code;
+		std::string message;
+	};
+
+	// The remote's URL as the rules see it: parses, and its host is allowed. `out` is filled when nullopt comes back.
+	std::optional<url_failure> judge_url(const edt::forge_options& options, bool guarded, const std::string& remote_name,
+		std::string_view url, edt::forge::forge_remote& out)
+	{
+		auto parsed = edt::forge::parse_forge_remote(url);
+		if (!parsed) return url_failure{ edt::forge::forge_error_code_name(parsed.error().code), parsed.error().message };
+		if (!host_allowed(options, parsed.value().host)) {
+			return url_failure{ guarded ? "denied" : "host_not_allowed",
+				std::format("the host '{}' of the remote '{}' is not one pull requests are made on", parsed.value().host, remote_name) };
+		}
+		out = std::move(parsed.value());
+		return std::nullopt;
+	}
+
+	// How the repository of a call is named to a person and compared by the job.
+	std::string target_text(const edt::forge::forge_remote& remote, const std::string& remote_name)
+	{
+		return std::format("{}/{}/{} (remote {})", remote.host, remote.owner, remote.repo, remote_name);
+	}
+
+	bool remote_in_policy(const edt::vcs_policy& policy, const std::string& name)
+	{
+		return std::find(policy.remotes.begin(), policy.remotes.end(), name) != policy.remotes.end();
+	}
+
 	// Everything up to the network: the rules, the remote and its URL, the token. The job's answer when something is wrong;
 	// nullopt with `out` filled when the call may go on. Runs on the io lane (the secret store blocks).
 	std::optional<json::value> prepare(const edt::forge_options& options, const call_plan& plan,
@@ -105,35 +141,42 @@ namespace {
 		}
 		const auto name = git.remote_name(plan.remote, stop);
 		if (!name.ok()) return error_result(name.code, name.error);
-		if (plan.guarded && std::find(plan.policy.remotes.begin(), plan.policy.remotes.end(), name.text) == plan.policy.remotes.end()) {
+		if (plan.guarded && !remote_in_policy(plan.policy, name.text)) {
 			return error_result("denied", std::format("the agent policy does not allow the remote '{}' (vcs.remotes)", name.text));
 		}
-		const auto url = git.remote_url(name.text, stop);
+		// A guarded call takes the URL as written, not `git remote get-url`'s (insteadOf applied, pushurl ignored): it is the
+		// one a person was shown.
+		const auto url = plan.guarded ? git.remote_raw_url(name.text, stop) : git.remote_url(name.text, stop);
 		if (!url.ok()) return error_result(url.code, url.error);
-		auto parsed = edt::forge::parse_forge_remote(url.text);
-		if (!parsed) return error_result(edt::forge::forge_error_code_name(parsed.error().code), parsed.error().message);
-		if (!host_allowed(options, parsed.value().host)) {
-			return error_result(plan.guarded ? "denied" : "host_not_allowed",
-				std::format("the host '{}' of the remote '{}' is not one pull requests are made on", parsed.value().host, name.text));
+		edt::forge::forge_remote parsed;
+		if (auto failure = judge_url(options, plan.guarded, name.text, url.text, parsed)) return error_result(failure->code, failure->message);
+		if (plan.guarded && plan.shown) {
+			const std::string found = target_text(parsed, name.text);
+			if (found != *plan.shown) {
+				return error_result("denied", std::format("the repository is not the one the request was allowed for (allowed for '{}', found '{}')",
+					*plan.shown, found));
+			}
 		}
 		if (plan.guarded && !plan.head.empty()) {
 			const auto branch = git.local_branch(plan.head, stop);
-			if (!branch.ok()) return error_result(branch.code, branch.error);
+			if (!branch.ok()) {
+				return error_result(branch.code == cmd::codes::not_found ? "no_local_branch" : branch.code, branch.error);
+			}
 		}
 
-		const platform::secret_key key{ edt::forge_service::k_secret_service, parsed.value().host };
+		const platform::secret_key key{ edt::forge_service::k_secret_service, parsed.host };
 		const platform::secret_result loaded = options.secrets ? options.secrets->load(key, out.token)
 			: platform::secret_result{ platform::secret_status::unavailable, "no secret store" };
 		if (stop.stop_requested()) throw ds::task_cancelled{};
 		if (loaded.status == platform::secret_status::not_found || (loaded.status == platform::secret_status::ok && out.token.empty())) {
-			return error_result("no_token", std::format("no token is stored for {}: add one in Settings (Version Control)", parsed.value().host));
+			return error_result("no_token", std::format("no token is stored for {}: add one in Settings (Version Control)", parsed.host));
 		}
 		if (loaded.status != platform::secret_status::ok) {
 			return error_result(edt::forge::forge_error_code_name(edt::forge::forge_error_code::unavailable),
 				"the secret store could not be read: " + loaded.message);
 		}
-		egLOG_DEBUG("forge", "{} on {}", plan.label, parsed.value().host);
-		out.remote = std::move(parsed.value());
+		egLOG_DEBUG("forge", "{} on {}", plan.label, parsed.host);
+		out.remote = std::move(parsed);
 		return std::nullopt;
 	}
 
@@ -162,15 +205,16 @@ namespace {
 		if (request.title.empty() || request.title.size() > edt::forge_service::k_max_title) {
 			return std::format("title must be 1 to {} bytes", edt::forge_service::k_max_title);
 		}
-		// Nothing a title can hide behind: control, bidi and invisible characters would change under sanitize_text.
-		if (edt::forge::sanitize_text(request.title, request.title.size() + 4) != request.title) {
+		// Nothing a title or a body can hide behind: it is what a reviewer reads, and it is shown to a person.
+		if (!edt::forge::is_plain_text(request.title, false)) {
 			return std::string("title must be valid UTF-8 without control, bidirectional or invisible characters");
 		}
 		if (request.body.size() > edt::forge_service::k_max_body) {
 			return std::format("body must be at most {} bytes", edt::forge_service::k_max_body);
 		}
-		if (!edt::forge::is_valid_utf8(request.body) || request.body.find('\0') != std::string::npos) {
-			return std::string("body must be valid UTF-8 without NUL");
+		if (!edt::forge::is_plain_text(request.body, true)) {
+			return std::string("body must be valid UTF-8 without control characters (except tab and line breaks), "
+				"bidirectional or invisible characters");
 		}
 		return std::nullopt;
 	}
@@ -207,6 +251,45 @@ namespace {
 		return desc;
 	}
 
+	// Identifies one call (what the person was asked about) among those shown: the session and every argument, each with its length.
+	std::string call_key(const cmd::origin& caller, std::string_view kind, std::initializer_list<std::string_view> parts)
+	{
+		std::string key = std::format("{}:{}|{}:{}", caller.session.size(), caller.session, kind.size(), kind);
+		for (const std::string_view part : parts) key += std::format("|{}:{}", part.size(), part);
+		return key;
+	}
+
+	constexpr std::size_t k_max_shown = 32;
+	constexpr std::chrono::minutes k_shown_lifetime{ 5 };
+
+	edt::forge_service::create_request create_request_of(const json::object& args)
+	{
+		edt::forge_service::create_request wanted;
+		wanted.base = string_arg(args, "base");
+		wanted.head = string_arg(args, "head");
+		wanted.title = string_arg(args, "title");
+		wanted.body = string_arg(args, "body");
+		wanted.remote = string_arg(args, "remote");
+		if (const json::value* draft = args.if_contains("draft")) {
+			wanted.draft = draft->as_bool();
+			wanted.draft_given = true;
+		}
+		return wanted;
+	}
+
+	edt::forge_service::list_request list_request_of(const json::object& args)
+	{
+		edt::forge_service::list_request wanted;
+		if (const json::value* state = args.if_contains("state")) wanted.state = std::string(state->as_string());
+		wanted.head = string_arg(args, "head");
+		wanted.base = string_arg(args, "base");
+		wanted.remote = string_arg(args, "remote");
+		if (const json::value* limit = args.if_contains("limit")) {
+			wanted.limit = static_cast<int>(cmd::json_schema::integer_of(*limit).value_or(edt::forge_service::k_default_list_limit));
+		}
+		return wanted;
+	}
+
 	void keep(std::vector<edt::registration>& out, edt::registration added)
 	{
 		if (added.active()) out.push_back(std::move(added));
@@ -225,6 +308,82 @@ edt::vcs_policy edt::forge_service::current_policy() const
 	return m_policy_source ? m_policy_source() : vcs_policy{};
 }
 
+void edt::forge_service::remember_shown(std::string key, std::string target)
+{
+	const auto now = std::chrono::steady_clock::now();
+	std::erase_if(m_shown, [&](const shown_target& shown) { return shown.key == key || now - shown.at > k_shown_lifetime; });
+	if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
+	m_shown.push_back({ std::move(key), std::move(target), now });
+}
+
+std::optional<std::string> edt::forge_service::take_shown(const std::string& key)
+{
+	const auto now = std::chrono::steady_clock::now();
+	std::erase_if(m_shown, [&](const shown_target& shown) { return now - shown.at > k_shown_lifetime; });
+	const auto found = std::find_if(m_shown.begin(), m_shown.end(), [&](const shown_target& shown) { return shown.key == key; });
+	if (found == m_shown.end()) return std::nullopt;
+	std::string target = std::move(found->target);
+	m_shown.erase(found);
+	return target;
+}
+
+// `before` + the repository + `after` is the text; `refusal`, when set, is why the call will be refused (the job says the same).
+std::optional<std::string> edt::forge_service::describe(std::string before, const std::string& remote, std::string key,
+	const cmd::origin& caller, std::string after, std::optional<std::string> refusal)
+{
+	if (caller.kind == cmd::origin_kind::ui) return std::nullopt;
+	std::string target = "refused";
+	if (!refusal) {
+		const vcs_policy policy = current_policy();
+		const vcs_service::remote_snapshot snapshot = m_vcs.read_remote_now(remote);
+		forge::forge_remote parsed;
+		if (!snapshot.ok()) {
+			refusal = snapshot.error;
+		} else if (!remote_in_policy(policy, snapshot.remote)) {
+			refusal = std::format("the agent policy does not allow the remote '{}' (vcs.remotes)", snapshot.remote);
+		} else if (auto failure = judge_url(*m_options, true, snapshot.remote, snapshot.url, parsed)) {
+			refusal = failure->message;
+		} else {
+			target = target_text(parsed, snapshot.remote);
+		}
+	}
+	remember_shown(std::move(key), target);
+	const std::string text = refusal ? "This request will be refused: " + *refusal : before + target + after;
+	return forge::sanitize_text(text, 400);
+}
+
+std::optional<std::string> edt::forge_service::describe_create_pr(const create_request& request, const cmd::origin& caller)
+{
+	const bool guarded = caller.kind != cmd::origin_kind::ui;
+	std::optional<std::string> refusal;
+	if (guarded && request.draft_given && !request.draft) {
+		refusal = "a pull request made by an agent is always a draft: draft:false is refused";
+	} else if (auto error = request_error(request)) {
+		refusal = std::move(*error);
+	} else if (auto why = vcs_push_branch_refusal(current_policy(), request.head)) {
+		refusal = "a pull request's head must be a branch an agent may push: " + *why;
+	}
+	return describe("Create a draft PR in ", request.remote,
+		call_key(caller, "create_pr", { request.remote, request.base, request.head, request.title, request.body }), caller,
+		std::format(": {} -> {}", request.head, request.base), std::move(refusal));
+}
+
+std::optional<std::string> edt::forge_service::describe_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller)
+{
+	const std::string numeral = std::to_string(number);
+	return describe(std::format("Read pull request #{} of ", number), remote, call_key(caller, "pr_status", { remote, numeral }), caller, {},
+		number <= 0 ? std::optional<std::string>{ "number must be a pull request number" } : std::nullopt);
+}
+
+std::optional<std::string> edt::forge_service::describe_list_prs(const list_request& request, const cmd::origin& caller)
+{
+	const std::string limit = std::to_string(std::clamp(request.limit, 1, k_max_list_limit));
+	return describe("List pull requests of ", request.remote,
+		call_key(caller, "list_prs", { request.remote, request.state, request.head, request.base, limit }), caller, {},
+		request.state == "open" || request.state == "closed" || request.state == "all"
+			? std::nullopt : std::optional<std::string>{ "state must be open, closed or all" });
+}
+
 edt::vcs_service::started edt::forge_service::start_create_pr(const create_request& request, const cmd::origin& caller)
 {
 	const bool guarded = caller.kind != cmd::origin_kind::ui;
@@ -241,6 +400,7 @@ edt::vcs_service::started edt::forge_service::start_create_pr(const create_reque
 	if (guarded) {
 		plan.policy = current_policy();
 		plan.head = request.head;
+		plan.shown = take_shown(call_key(caller, "create_pr", { request.remote, request.base, request.head, request.title, request.body }));
 	}
 	forge::create_pr_request wanted;
 	wanted.base = request.base;
@@ -263,7 +423,10 @@ edt::vcs_service::started edt::forge_service::start_pr_status(std::int64_t numbe
 	plan.label = "forge pr_status";
 	plan.remote = remote;
 	plan.guarded = caller.kind != cmd::origin_kind::ui;
-	if (plan.guarded) plan.policy = current_policy();
+	if (plan.guarded) {
+		plan.policy = current_policy();
+		plan.shown = take_shown(call_key(caller, "pr_status", { remote, std::to_string(number) }));
+	}
 	return start_call(m_vcs, m_options, std::move(plan), caller, [number](forge::forge_provider& provider, const target& found,
 		std::stop_token stop) -> json::value {
 		const auto status = provider.pr_status(found.remote, number, found.token, stop);
@@ -281,7 +444,11 @@ edt::vcs_service::started edt::forge_service::start_list_prs(const list_request&
 	plan.label = "forge list_prs";
 	plan.remote = request.remote;
 	plan.guarded = caller.kind != cmd::origin_kind::ui;
-	if (plan.guarded) plan.policy = current_policy();
+	if (plan.guarded) {
+		plan.policy = current_policy();
+		const std::string limit = std::to_string(std::clamp(request.limit, 1, k_max_list_limit));
+		plan.shown = take_shown(call_key(caller, "list_prs", { request.remote, request.state, request.head, request.base, limit }));
+	}
 	forge::list_prs_filter filter;
 	filter.state = request.state;
 	if (!request.head.empty()) filter.head = request.head;
@@ -319,18 +486,10 @@ std::vector<edt::registration> edt::register_forge_commands(cmd::command_registr
 	})", true);
 	create.risk = cmd::danger::confirm;
 	create.invoke = [&service](const cmd::call& request) {
-		const json::object& args = request.args.as_object();
-		forge_service::create_request wanted;
-		wanted.base = string_arg(args, "base");
-		wanted.head = string_arg(args, "head");
-		wanted.title = string_arg(args, "title");
-		wanted.body = string_arg(args, "body");
-		wanted.remote = string_arg(args, "remote");
-		if (const json::value* draft = args.if_contains("draft")) {
-			wanted.draft = draft->as_bool();
-			wanted.draft_given = true;
-		}
-		return job_answer(service.start_create_pr(wanted, request.from));
+		return job_answer(service.start_create_pr(create_request_of(request.args.as_object()), request.from));
+	};
+	create.describe = [&service](const cmd::call& request) {
+		return service.describe_create_pr(create_request_of(request.args.as_object()), request.from);
 	};
 	keep(out, commands.add(std::move(create)));
 
@@ -349,6 +508,11 @@ std::vector<edt::registration> edt::register_forge_commands(cmd::command_registr
 		const std::int64_t number = cmd::json_schema::integer_of(args.at("number")).value_or(0);
 		return job_answer(service.start_pr_status(number, string_arg(args, "remote"), request.from));
 	};
+	status.describe = [&service](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		const std::int64_t number = cmd::json_schema::integer_of(args.at("number")).value_or(0);
+		return service.describe_pr_status(number, string_arg(args, "remote"), request.from);
+	};
 	keep(out, commands.add(std::move(status)));
 
 	cmd::command_desc list = forge_command("forge.list_prs", "Start listing the pull requests of the project's git remote, "
@@ -364,16 +528,10 @@ std::vector<edt::registration> edt::register_forge_commands(cmd::command_registr
 		"additionalProperties": false
 	})", false);
 	list.invoke = [&service](const cmd::call& request) {
-		const json::object& args = request.args.as_object();
-		forge_service::list_request wanted;
-		if (const json::value* state = args.if_contains("state")) wanted.state = std::string(state->as_string());
-		wanted.head = string_arg(args, "head");
-		wanted.base = string_arg(args, "base");
-		wanted.remote = string_arg(args, "remote");
-		if (const json::value* limit = args.if_contains("limit")) {
-			wanted.limit = static_cast<int>(cmd::json_schema::integer_of(*limit).value_or(forge_service::k_default_list_limit));
-		}
-		return job_answer(service.start_list_prs(wanted, request.from));
+		return job_answer(service.start_list_prs(list_request_of(request.args.as_object()), request.from));
+	};
+	list.describe = [&service](const cmd::call& request) {
+		return service.describe_list_prs(list_request_of(request.args.as_object()), request.from);
 	};
 	keep(out, commands.add(std::move(list)));
 	return out;

@@ -185,7 +185,7 @@ std::optional<cmd::command_registry::pending_confirmation> cmd::command_registry
 	drop_expired_tickets();
 	const auto found = std::find_if(m_tickets.begin(), m_tickets.end(), [ticket](const confirmation_ticket& t) { return t.id == ticket; });
 	if (found == m_tickets.end()) return std::nullopt;
-	return pending_confirmation{ found->command, found->args, found->reason, found->session, found->category, found->approved };
+	return pending_confirmation{ found->command, found->args, found->reason, found->detail, found->session, found->category, found->approved };
 }
 
 bool cmd::command_registry::approve(std::string_view ticket)
@@ -270,6 +270,19 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 	if (m_tickets.size() >= max_pending_confirmations) {
 		return denied("too many confirmations are waiting for a person");
 	}
+	std::string detail;
+	if (command.describe) {
+		// Before the ticket exists: a description that cannot be made is a call nobody can be told about.
+		try {
+			if (auto text = command.describe(request)) detail = std::move(*text);
+		} catch (const std::exception& e) {
+			egLOG_WARN("command", "the description of a call of '{}' could not be made ({}): it is refused", command.id, e.what());
+			return denied("what it would do could not be told to a person");
+		} catch (...) {
+			egLOG_WARN("command", "the description of a call of '{}' could not be made: it is refused", command.id);
+			return denied("what it would do could not be told to a person");
+		}
+	}
 	// The ticket is a secret between the registry and whoever asks: 128 bits straight from the system's source.
 	std::random_device entropy;
 	const auto word = [&entropy] {
@@ -284,6 +297,7 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 	ticket.args = args;
 	ticket.session = request.from.session;
 	ticket.reason = decision.reason;
+	ticket.detail = std::move(detail);
 	ticket.category = decision.category != agent_category::unset ? decision.category : command.category;
 	ticket.expires = now() + confirmation_lifetime;
 	result answer = describe(ticket);

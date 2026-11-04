@@ -2,6 +2,7 @@
 #include <boost/json/value.hpp>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -144,6 +145,11 @@ namespace cmd
 		// The category of one call when it depends on the arguments (code.write to a CMake file is cmake_presets, not
 		// code_edit). Pure; called only with arguments that match args_schema (category_of_call). Null: `category`.
 		std::function<agent_category(const call&)> category_of;
+		// What a person is told about one call besides its arguments when the policy asks (the repository a pull request
+		// goes to). Called on the main thread only when a ticket is issued, with arguments that match args_schema; it may
+		// read for a bounded time. Plain text, not trusted by the registry's callers: the confirmation UI sanitizes it. A
+		// throw refuses the call. Null or nullopt: nothing more to say.
+		std::function<std::optional<std::string>(const call&)> describe;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
 		// It reads or draws what only a display produces (a viewport capture): in a headless process

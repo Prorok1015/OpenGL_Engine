@@ -64,6 +64,9 @@ namespace edt::forge
 	// character boundary ("..." at the end when cut).
 	std::string sanitize_text(std::string_view text, std::size_t max_bytes);
 	bool is_valid_utf8(std::string_view text);
+	// Valid UTF-8 with none of what sanitize_text would replace: no control character (C0, DEL, C1), bidi control or
+	// invisible character. `allow_line_breaks`: tab, line feed and carriage return are allowed (a body, not a title).
+	bool is_plain_text(std::string_view text, bool allow_line_breaks);
 	// Replaces every occurrence of the token in `text` with "<redacted>"; no-op for an empty token.
 	void scrub_secret(std::string& text, const platform::secret_text& token);
 

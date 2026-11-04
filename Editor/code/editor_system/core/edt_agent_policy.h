@@ -318,7 +318,8 @@ namespace edt
 		bool can_ask() const override { return m_can_ask; }
 		void set_can_ask(bool value) { m_can_ask = value; }
 		// "Allow until this agent session ends": an `ask` for a category the agent's session was granted is an allow.
-		// A deny stays a deny. null: no grants.
+		// A deny stays a deny, and a command whose `risk` is not none is asked every time (a grant never covers it). null:
+		// no grants.
 		void set_session_grants(const session_grants* grants) { m_grants = grants; }
 
 	private:

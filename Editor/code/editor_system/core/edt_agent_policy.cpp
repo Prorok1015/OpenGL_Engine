@@ -1080,7 +1080,10 @@ namespace edt
 		case cmd::policy_mode::ask: {
 			// The grant has to be for the category that asks; when both ask, the call's (the narrower one) covers it.
 			const cmd::agent_category asking = by_call.mode == cmd::policy_mode::ask ? of_call : command.category;
-			if (m_grants != nullptr && !request.from.session.empty() && m_grants->has(request.from.session, asking)) {
+			// A grant given for a harmless call of the category must not carry a call that sends or destroys something:
+			// a command with a risk is asked every time.
+			if (command.risk == cmd::danger::none && m_grants != nullptr && !request.from.session.empty()
+				&& m_grants->has(request.from.session, asking)) {
 				return cmd::policy_decision::allow();
 			}
 			return cmd::policy_decision::ask(command.summary, asking);

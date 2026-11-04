@@ -86,6 +86,8 @@ namespace cmd
 			std::string args;
 			// Why the policy asked.
 			std::string reason;
+			// command_desc::describe of the call, as the ticket was issued; empty: none.
+			std::string detail;
 			std::string session;
 			// The category the policy asked for (policy_decision::category): what "allow for this session" grants.
 			agent_category category = agent_category::unset;
@@ -112,6 +114,7 @@ namespace cmd
 			std::string args;
 			std::string session;
 			std::string reason;
+			std::string detail;
 			agent_category category = agent_category::unset;
 			std::chrono::steady_clock::time_point expires;
 			bool approved = false;

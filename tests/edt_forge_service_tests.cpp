@@ -135,7 +135,33 @@ struct forge_fixture
 			on_chunk("git version 2.45.1\n");
 			return exited(0);
 		}
-		if (has_arg(args, "--get-regexp")) return exited(1);
+		if (has_arg(args, "--get-all")) {
+			// The URL as written in the config, with NUL as the end of a value (config -z).
+			const std::string key = args.back();
+			if (key.ends_with(".pushurl")) {
+				for (const auto& [remote, url] : push_urls) {
+					if (key == "remote." + remote + ".pushurl") {
+						on_chunk(url + std::string(1, '\0'));
+						return exited(0);
+					}
+				}
+				return exited(1);
+			}
+			for (const auto& [remote, url] : remote_urls) {
+				if (key == "remote." + remote + ".url") {
+					on_chunk(url + std::string(1, '\0'));
+					return exited(0);
+				}
+			}
+			return exited(1);
+		}
+		if (has_arg(args, "--get-regexp")) {
+			const bool asks_for_rewrites = std::any_of(args.begin(), args.end(),
+				[](const std::string& arg) { return arg.find("insteadof") != std::string::npos; });
+			if (!asks_for_rewrites || rewrites.empty()) return exited(1);
+			for (const auto& [key, value] : rewrites) on_chunk(key + "\n" + value + std::string(1, '\0'));
+			return exited(0);
+		}
 		if (has_arg(args, "rev-parse")) {
 			if (has_arg(args, "--verify")) {
 				const std::string wanted = args.back();
@@ -261,6 +287,9 @@ struct forge_fixture
 	edt::vcs_policy policy;
 
 	std::vector<std::pair<std::string, std::string>> remote_urls;
+	// remote -> pushurl, and url.<base>.insteadof -> the prefix it replaces.
+	std::vector<std::pair<std::string, std::string>> push_urls;
+	std::vector<std::pair<std::string, std::string>> rewrites;
 	std::vector<std::string> branches;
 	std::string current_branch = "agent/forge";
 	std::string branch_remote;
@@ -363,7 +392,7 @@ BOOST_AUTO_TEST_CASE(CreatePr_TheHeadMustExistLocally_ForAnAgent)
 {
 	const json::value missing = run("forge.create_pr", create_args("agent/not-made-yet"));
 
-	BOOST_TEST(is_error(missing, "not_found"));
+	BOOST_TEST(is_error(missing, "no_local_branch"));
 	BOOST_TEST(requests.empty());
 }
 
@@ -374,11 +403,18 @@ BOOST_AUTO_TEST_CASE(CreatePr_ArgumentsAreCheckedForEveryone)
 		BOOST_TEST(invalid(R"({"base":"main","head":"a..b","title":"t"})"));
 		BOOST_TEST(invalid(R"({"base":"-main","head":"agent/x","title":"t"})"));
 		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"line\u0007bell"})"));
-		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"bidi‮title"})"));
-		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"invisible​title"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"bidi\u202etitle"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"invisible\u200btitle"})"));
 		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":""})"));
 		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x"})"));
 		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u0000b"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u0007b"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u001bb"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u007fb"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u202eb"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u200bb"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t","body":"a\u2028b"})"));
+		BOOST_TEST(invalid(R"({"base":"main","head":"agent/x","title":"t\u202e"})"));
 
 		json::object long_title{ { "base", "main" }, { "head", "agent/x" }, { "title", json::string(std::string(257, 't')) } };
 		BOOST_TEST((commands.invoke("forge.create_pr", long_title, from).code == cmd::codes::invalid_args));
@@ -390,6 +426,14 @@ BOOST_AUTO_TEST_CASE(CreatePr_ArgumentsAreCheckedForEveryone)
 		BOOST_TEST(commands.invoke("forge.create_pr", edge, from).ok);
 	}
 	run_to_end();
+}
+
+BOOST_AUTO_TEST_CASE(Body_MayHaveTabsAndLineBreaks)
+{
+	const json::value result = run("forge.create_pr", R"({"base":"main","head":"agent/forge","title":"t","body":"one\ttwo\r\nthree\n\u00e9"})");
+
+	BOOST_TEST(!result.as_object().contains("error"));
+	BOOST_TEST(requests.size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(OwnerAndRepository_NeverComeFromArguments)
@@ -428,6 +472,179 @@ BOOST_AUTO_TEST_CASE(Remote_MustBeInThePolicy_ForAnAgent)
 
 	policy.remotes = { "upstream" };
 	BOOST_TEST(!run("forge.create_pr", create_args()).as_object().contains("error"));
+}
+
+namespace {
+
+edt::forge_service::create_request create_request_for_the_tests()
+{
+	edt::forge_service::create_request request;
+	request.base = "main";
+	request.head = "agent/forge";
+	request.title = "Add the forge layer";
+	request.body = "Details";
+	return request;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(Describe_NamesTheRepositoryTheRequestWouldGoTo_ForAnAgent)
+{
+	const std::optional<std::string> text = forge->describe_create_pr(create_request_for_the_tests(), cmd::origin::agent("0123abcd"));
+
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST(text->find("github.com/octo/engine") != std::string::npos);
+	BOOST_TEST(text->find("origin") != std::string::npos);
+	BOOST_TEST(text->find("agent/forge -> main") != std::string::npos);
+	BOOST_TEST(text->find("draft") != std::string::npos);
+	const std::optional<std::string> reading = forge->describe_pr_status(3, "", cmd::origin::agent("0123abcd"));
+	BOOST_REQUIRE(reading.has_value());
+	BOOST_TEST(reading->find("#3") != std::string::npos);
+	BOOST_TEST(reading->find("github.com/octo/engine") != std::string::npos);
+	const std::optional<std::string> listing = forge->describe_list_prs(edt::forge_service::list_request{}, cmd::origin::agent("0123abcd"));
+	BOOST_REQUIRE(listing.has_value());
+	BOOST_TEST(listing->find("github.com/octo/engine") != std::string::npos);
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Describe_IsNothingForAPerson)
+{
+	BOOST_TEST(!forge->describe_create_pr(create_request_for_the_tests(), cmd::origin::ui()).has_value());
+	BOOST_TEST(!forge->describe_pr_status(3, "", cmd::origin::ui()).has_value());
+	BOOST_TEST(!forge->describe_list_prs(edt::forge_service::list_request{}, cmd::origin::ui()).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(Describe_ReadsTheUrlAsWritten_NotWhatGitReportsAfterRewrites)
+{
+	remote_urls = { { "origin", "https://github.com/octo/engine.git" } };
+	git_calls.clear();
+
+	forge->describe_create_pr(create_request_for_the_tests(), cmd::origin::agent("0123abcd"));
+
+	BOOST_TEST(!git_asked("get-url"));
+	BOOST_TEST(git_asked("--get-all"));
+}
+
+BOOST_AUTO_TEST_CASE(Describe_ARefusedRequest_SaysSo)
+{
+	edt::forge_service::create_request ready = create_request_for_the_tests();
+	ready.draft = false;
+	ready.draft_given = true;
+	const std::optional<std::string> text = forge->describe_create_pr(ready, cmd::origin::agent("0123abcd"));
+
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST(text->starts_with("This request will be refused"));
+}
+
+BOOST_AUTO_TEST_CASE(UrlRewrite_ThatAppliesToTheRemote_IsRefusedWithNoRequest)
+{
+	// What `git remote get-url` would report is github.com/attacker/x; the config as written says octo/engine.
+	rewrites = { { "url.https://github.com/attacker/x.insteadof", "https://github.com/octo/engine" } };
+
+	const std::optional<std::string> text = forge->describe_create_pr(create_request_for_the_tests(), cmd::origin::agent("0123abcd"));
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST(text->starts_with("This request will be refused"));
+	BOOST_TEST(text->find("rewrites") != std::string::npos);
+
+	BOOST_TEST(is_error(run("forge.create_pr", create_args()), "denied"));
+	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "denied"));
+	BOOST_TEST(is_error(run("forge.list_prs", "{}"), "denied"));
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(UrlRewrite_ThatDoesNotApplyToTheRemote_IsNoObstacle)
+{
+	rewrites = { { "url.https://github.com/attacker/x.insteadof", "https://elsewhere.example/" },
+		{ "url.https://github.com/attacker/y.pushinsteadof", "git@gitlab.example:" } };
+
+	BOOST_TEST(!run("forge.create_pr", create_args()).as_object().contains("error"));
+	BOOST_TEST(requests.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(UrlRewrite_AnEmptyPrefixMatchesEveryUrl)
+{
+	rewrites = { { "url.https://github.com/attacker/x.insteadof", "" } };
+
+	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "denied"));
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(UrlRewrite_DoesNotStopAPerson)
+{
+	rewrites = { { "url.https://github.com/attacker/x.insteadof", "https://github.com/octo/engine" } };
+
+	BOOST_TEST(!run("forge.pr_status", R"({"number":1})", cmd::origin::ui()).as_object().contains("error"));
+	BOOST_TEST(requests.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(PushUrl_OnTheRemote_IsRefusedWithNoRequest)
+{
+	push_urls = { { "origin", "https://github.com/attacker/x.git" } };
+
+	const std::optional<std::string> text = forge->describe_create_pr(create_request_for_the_tests(), cmd::origin::agent("0123abcd"));
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST(text->find("pushurl") != std::string::npos);
+	BOOST_TEST(is_error(run("forge.create_pr", create_args()), "denied"));
+	BOOST_TEST(is_error(run("forge.list_prs", "{}"), "denied"));
+	BOOST_TEST(requests.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheRepositoryShown_IsTheOneTheJobUses)
+{
+	const cmd::origin agent = cmd::origin::agent("0123abcd");
+	BOOST_REQUIRE(forge->describe_create_pr(create_request_for_the_tests(), agent).has_value());
+
+	const json::value result = run("forge.create_pr", create_args());
+
+	BOOST_TEST(!result.as_object().contains("error"));
+	BOOST_REQUIRE(requests.size() == 1u);
+	BOOST_TEST(requests[0].url == "https://api.github.com/repos/octo/engine/pulls");
+}
+
+BOOST_AUTO_TEST_CASE(TheRepositoryChangedAfterTheQuestion_IsDenied_WithNoRequest)
+{
+	const cmd::origin agent = cmd::origin::agent("0123abcd");
+	BOOST_REQUIRE(forge->describe_create_pr(create_request_for_the_tests(), agent).has_value());
+	remote_urls = { { "origin", "https://github.com/attacker/x.git" } };
+
+	const json::value result = run("forge.create_pr", create_args());
+
+	BOOST_TEST(is_error(result, "denied"));
+	BOOST_TEST(text_of(result.as_object().at("error").as_object().at("message")).find("attacker/x") != std::string::npos);
+	BOOST_TEST(requests.empty());
+
+	// What was shown is spent by the job: a later identical call is not held to it.
+	BOOST_TEST(!run("forge.create_pr", create_args()).as_object().contains("error"));
+	BOOST_TEST(requests.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheRepositoryShown_IsForThatSessionAndThoseArgumentsOnly)
+{
+	BOOST_REQUIRE(forge->describe_pr_status(1, "", cmd::origin::agent("0123abcd")).has_value());
+	remote_urls = { { "origin", "https://github.com/attacker/x.git" } };
+
+	// Another session, and other arguments, were shown nothing: they are not compared.
+	BOOST_TEST(!run("forge.pr_status", R"({"number":1})", cmd::origin::agent("ffff0000")).as_object().contains("error"));
+	BOOST_TEST(!run("forge.pr_status", R"({"number":2})").as_object().contains("error"));
+	BOOST_TEST(is_error(run("forge.pr_status", R"({"number":1})"), "denied"));
+}
+
+BOOST_AUTO_TEST_CASE(Describe_ThroughTheRegistry_IsBoundToTheTicket)
+{
+	struct recording_gate : cmd::policy_gate
+	{
+		cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override { return cmd::policy_decision::ask("why"); }
+		bool can_ask() const override { return true; }
+	};
+	commands.set_policy_gate(std::make_shared<recording_gate>());
+
+	const cmd::result asked = invoke("forge.create_pr", create_args(), cmd::origin::agent("0123abcd"));
+
+	BOOST_REQUIRE(asked.code == cmd::codes::confirmation_required);
+	const auto bound = commands.confirmation_of(std::string(asked.value.as_object().at("ticket").as_string()));
+	BOOST_REQUIRE(bound.has_value());
+	BOOST_TEST(bound->detail.find("github.com/octo/engine") != std::string::npos);
+	commands.set_policy_gate(nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(Remote_APersonMayUseAnyConfiguredRemote)

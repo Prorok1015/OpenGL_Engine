@@ -2484,6 +2484,68 @@ edt::vcs_service::started edt::vcs_service::start_reader_job(std::string label, 
 	}, std::nullopt, {}, caller.kind);
 }
 
+edt::vcs_service::remote_snapshot edt::vcs_service::read_remote_now(const std::string& named)
+{
+	remote_snapshot out;
+	const auto fail = [&out](std::string code, std::string error) {
+		out.code = std::move(code);
+		out.error = std::move(error);
+		return out;
+	};
+	const state& now = info();
+	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") {
+		return fail(m_state.code.empty() ? "vcs_unavailable" : m_state.code, m_state.reason);
+	}
+	git_context context = make_context(m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run);
+	context.agent_call = true;
+	// The same protected read as a reader job's: no lazy fetch, no transport.
+	set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
+	context.refuse_partial_clone_read = !version_at_least(m_state.git_version, 2, 45);
+	set_variable(context.environment, "GIT_ALLOW_PROTOCOL", "_none");
+
+	std::stop_source stop;
+	std::atomic<bool> returned = false;
+	const std::chrono::milliseconds timeout = m_options.probe_timeout;
+	bool cancelled = false;
+	{
+		// Destroyed (stop requested, joined) as soon as the reads return: no thread outlives the call.
+		std::jthread watchdog([&stop, &returned, timeout](std::stop_token own) {
+			std::mutex mutex;
+			std::condition_variable_any wake;
+			std::unique_lock lock(mutex);
+			static_cast<void>(wake.wait_for(lock, own, timeout, [] { return false; }));
+			if (!own.stop_requested() && !returned) stop.request_stop();
+		});
+		try {
+			if (auto refusal = harden_read(context, stop.get_token())) {
+				out.code = refusal->refused_code.empty() ? "vcs_unavailable" : refusal->refused_code;
+				out.error = refusal->err;
+			} else {
+				const repository_reader reader{ std::make_shared<const repository_reader::impl>(repository_reader::impl{ std::move(context) }) };
+				const auto name = reader.remote_name(named, stop.get_token());
+				if (!name.ok()) {
+					out.code = name.code;
+					out.error = name.error;
+				} else {
+					const auto url = reader.remote_raw_url(name.text, stop.get_token());
+					out.remote = name.text;
+					out.code = url.code;
+					out.error = url.error;
+					out.url = url.text;
+				}
+			}
+		} catch (const ds::task_cancelled&) {
+			cancelled = true;
+		}
+		returned = true;
+	}
+	if (cancelled) {
+		set_probe_timeout();
+		return fail("vcs_unavailable", m_state.reason);
+	}
+	return out;
+}
+
 namespace {
 	// A failed git call as a reader answer; a stop of the job ends it cancelled.
 	edt::vcs_service::repository_reader::answer reader_failure(const git_output& out, std::stop_token stop)
@@ -2545,6 +2607,45 @@ edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader:
 	if (lines.empty()) return reader_refusal("git_failed", std::format("the remote '{}' has no URL", edt::vcs::valid_utf8(remote)));
 	answer found;
 	found.text = std::string(lines.front());
+	return found;
+}
+
+edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader::remote_raw_url(const std::string& remote,
+	std::stop_token stop) const
+{
+	if (auto error = remote_error(remote)) return reader_refusal(cmd::codes::invalid_args, std::move(*error));
+	const std::string shown = edt::vcs::valid_utf8(remote);
+	const auto broken = [](const git_output& out) {
+		return !out.refused_code.empty() || !out.process.error.empty() || out.truncated || out.process.exit_code > 1;
+	};
+	// `git remote get-url` and a push go to the pushurl when there is one, and the rewrites apply to what they read.
+	const git_output push = run_git(m_impl->git, { "config", "-z", "--get-all", "remote." + remote + ".pushurl" }, stop, k_read_cap);
+	if (broken(push)) return reader_failure(push, stop);
+	if (push.process.exit_code == 0) {
+		return reader_refusal(cmd::codes::denied, std::format("the remote '{}' has a pushurl: the address a request goes to "
+			"cannot be told", shown));
+	}
+	const git_output urls = run_git(m_impl->git, { "config", "-z", "--get-all", "remote." + remote + ".url" }, stop, k_read_cap);
+	if (broken(urls)) return reader_failure(urls, stop);
+	const std::vector<std::string> written = split_nul(urls.out);
+	if (urls.process.exit_code != 0 || written.empty()) {
+		return reader_refusal("git_failed", std::format("the remote '{}' has no URL", shown));
+	}
+	const git_output rewrites = run_git(m_impl->git, { "config", "-z", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$" },
+		stop, k_read_cap);
+	if (broken(rewrites)) return reader_failure(rewrites, stop);
+	for (const std::string& record : split_nul(rewrites.out)) {
+		const std::size_t newline = record.find('\n');
+		// A bare key reads as an empty prefix, which every URL starts with.
+		const std::string_view prefix = newline == std::string::npos ? std::string_view{} : std::string_view(record).substr(newline + 1);
+		if (written.front().starts_with(prefix)) {
+			return reader_refusal(cmd::codes::denied, std::format("the repository's config rewrites the URL of the remote '{}' "
+				"({}): the address a request goes to cannot be told", shown,
+				edt::vcs::valid_utf8(edt::vcs::utf8_prefix(record.substr(0, newline), 120))));
+		}
+	}
+	answer found;
+	found.text = written.front();
 	return found;
 }
 
