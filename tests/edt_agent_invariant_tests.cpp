@@ -282,8 +282,14 @@ struct agent_editor_fixture : scratch_dirs, test_util::null_engine_fixture
 				const std::string key = label + "/" + path.lexically_relative(root).generic_string();
 				const fs::file_status status = it->symlink_status(ec);
 				BOOST_TEST_REQUIRE(!ec, "cannot examine " << path.string() << ": " << ec.message());
-				if (fs::is_symlink(status)) {
-					out.files[key] = "<link> " + fs::read_symlink(path, ec).generic_string();
+				bool link = fs::is_symlink(status);
+#ifdef _MSC_VER
+				link = link || status.type() == fs::file_type::junction;
+#endif
+				if (link) {
+					const fs::path target = fs::read_symlink(path, ec);
+					BOOST_TEST_REQUIRE(!ec, "cannot read the link " << path.string() << ": " << ec.message());
+					out.files[key] = "<link> " + target.generic_string();
 				} else if (fs::is_directory(status)) {
 					out.files[key + "/"] = "<dir>";
 				} else if (fs::is_regular_file(status)) {

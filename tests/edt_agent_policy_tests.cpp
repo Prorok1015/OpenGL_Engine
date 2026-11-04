@@ -1819,7 +1819,10 @@ BOOST_AUTO_TEST_CASE(SaveProject_ThroughAJunctionOrFolderLinkAtSnk_WritesNothing
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 	policy.set_approval_allowed(true);
 
-	BOOST_TEST(policy.save_project(layer_with(agent_category::build, policy_mode::allow), edt::policy_layer{}).has_value());
+	const auto error = policy.save_project(layer_with(agent_category::build, policy_mode::allow), edt::policy_layer{});
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("not written") != std::string::npos, *error);
+	BOOST_TEST(error->find("link") != std::string::npos, *error);
 	BOOST_TEST(fs::is_empty(dir.path() / "elsewhere"));
 }
 

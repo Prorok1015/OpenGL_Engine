@@ -1191,6 +1191,9 @@ namespace edt
 			if (ec) file = what.file;
 			const std::filesystem::path folder = file.parent_path();
 			error = prj::write_project_file(folder.parent_path(), folder.filename() / file.filename(), text);
+			if (error) {
+				return "not written: " + *error + " (neither .snk nor agent_policy.json may be a link or a junction)";
+			}
 		} else {
 			std::error_code ec;
 			std::filesystem::create_directories(what.file.parent_path(), ec);
