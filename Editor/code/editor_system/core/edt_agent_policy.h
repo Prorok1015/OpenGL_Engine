@@ -272,6 +272,7 @@ namespace edt
 		// outside the project folder): the project's file is never written through one. Of the command entries other than
 		// `deny` only those that differ from `edited_from` (the layer the person's edit began with) are approved with the save;
 		// the file's own stay unapproved and wait like any change of a file.
+		// `write` is for tests only: with it the project file is written by path, not through prj::write_project_file (#523).
 		std::optional<std::string> save_project(const policy_layer& layer, const policy_layer& edited_from,
 			const prj::text_writer& write = {});
 		std::optional<std::string> save_personal(const policy_layer& layer, const prj::text_writer& write = {});
