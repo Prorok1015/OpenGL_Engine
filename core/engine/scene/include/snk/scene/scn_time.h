@@ -8,8 +8,9 @@ namespace scn {
 	struct delta_time { float dt; };
 	struct fixed_time { float dt; };
 	struct update_alpha { float dt; };
-	// The sum of the delta_time of every frame since the context was made or its level loaded (reset_time):
-	// it stands in Pause, moves by one fixed step in Step and follows the time scale. Shaders get it as `time`.
+	// The sum of the delta_time of every frame: it stands in Pause, moves by one fixed step in Step and follows the
+	// time scale. Only a level load (reset_time) sets it to 0; a context joining a set takes the time of the set and a
+	// reloaded world keeps its own. Shaders get it as `time`.
 	struct world_time { double seconds; };
 
 } // namespace scn

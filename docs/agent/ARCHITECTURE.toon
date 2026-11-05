@@ -56,8 +56,9 @@ render_pipeline:
      composition, debug
   3. Output: ImGui overlay, per-camera render targets
   shader time (#544): `time` of block Matrices = scn::world_time of the camera's world
-     (sum of delta_time: stands in Pause, one fixed step in Step, follows time_scale; 0 at a
-     context's creation and at a level load, so Play starts at 0), wrapped by rnd::shader_time
+     (sum of delta_time: stands in Pause, one fixed step in Step, follows time_scale; only a level
+     load resets it to 0; a context joining a set takes the set's time, a reloaded world
+     (context_set::reload_context) keeps its own; a new set (Play) starts at 0), wrapped by rnd::shader_time
      to [0, 1024*pi s) (~53.6 min; sin/cos of an integer frequency stay smooth across the wrap);
      the extractor puts it in camera_render_data_t::time, every scene pass writes it
 
