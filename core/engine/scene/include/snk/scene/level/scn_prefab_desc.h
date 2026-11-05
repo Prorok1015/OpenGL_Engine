@@ -91,6 +91,10 @@ namespace scn {
 	// { "__type": "prefab_desc", "__parent": X }) becomes `overrides` records on the instance node.
 	SNK_API void migrate_prefab_v2(boost::json::object& obj);
 
+	// prefab_desc / world_desc v3 -> v4: the pose of a camera moves from camera_desc.transform into its node's transform
+	// (camera_desc v1 -> v2, see migrate_camera_transform_into_node).
+	SNK_API void migrate_prefab_v3(boost::json::object& obj);
+
 	enum class reconcile_mode {
 		spawn,  // `live` is a fresh entity: create everything below it
 		reload, // `live` already has children: update the ones that still exist, add new ones, destroy the rest

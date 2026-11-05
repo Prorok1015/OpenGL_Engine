@@ -29,7 +29,11 @@ namespace edt {
 
 	// Copies the pose of the editor camera entity of `reg` into `state` (no-op when there is none).
 	void save_camera_state(entt::registry& reg, editor_camera_state& state);
-	// Replaces the editor camera entity of `reg` with one built from `state`.
+	// Replaces the editor camera entity of `reg` with one built from `state`. The mouse controller starts switched off:
+	// only the panel that is the one under the mouse switches it on (set_editor_camera_input), so a game camera or
+	// another panel never shares its input (#545).
 	void inject_camera(entt::registry& reg, const editor_camera_state& state);
+	// Lets the editor camera of `reg` read the mouse (true) or not.
+	void set_editor_camera_input(entt::registry& reg, bool enabled);
 
 } // namespace edt

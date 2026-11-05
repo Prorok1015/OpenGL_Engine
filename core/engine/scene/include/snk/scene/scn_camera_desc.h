@@ -64,8 +64,6 @@ namespace desc {
 		f("m_fov").key("/fov").range(1, 179, 0.5).degrees().tooltip("Vertical field of view"),
 		f("m_near_distance").key("/near_distance").range(0.0001, 10, 0.001),
 		f("m_far_distance").key("/far_distance").range(1, 100000, 1),
-		f("m_rotation").key("/transform/rotation").range(0, 0, 0.5).degrees(), // no bounds (min == max), a drag step of half a degree
-		f("m_position").key("/transform/position"),
 		f("m_color_targets").key("/color_targets").alias("/texture").write_if_valid().hidden(),
 		f("m_depth_target").key("/depth_target").write_if_valid().hidden(),
 		f("m_tp_accum_target").key("/tp_accum_target").write_if_valid().hidden(),
@@ -111,8 +109,6 @@ namespace scn {
 		float fov() const { return m_fov; }
 		float near_distance() const { return m_near_distance; }
 		float far_distance() const { return m_far_distance; }
-		glm::vec3 rotation() const { return glm::radians(m_rotation); }
-		glm::vec3 position() const { return m_position; }
 		const ds::fixed_vector<res::tag, 4>& color_targets() const { return m_color_targets; }
 		res::tag depth_target() const { return m_depth_target; }
 		res::tag tp_accum_target() const { return m_tp_accum_target; }
@@ -126,8 +122,6 @@ namespace scn {
 		float m_fov = 90.f;
 		float m_near_distance = 0.0001f;
 		float m_far_distance = 1000.f;
-		glm::vec3 m_rotation{ 0.f };
-		glm::vec3 m_position{ 0.f };
 		ds::fixed_vector<res::tag, 4> m_color_targets;
 		res::tag m_depth_target;
 		res::tag m_tp_accum_target;
@@ -137,10 +131,23 @@ namespace scn {
 		camera_projection m_projection = camera_projection::perspective;
 		float m_ortho_size = default_camera_ortho_size;
 
-		BOOST_DESCRIBE_CLASS(camera_desc, (), (), (), (m_fov, m_near_distance, m_far_distance, m_rotation, m_position,
+		BOOST_DESCRIBE_CLASS(camera_desc, (), (), (), (m_fov, m_near_distance, m_far_distance,
 			m_color_targets, m_depth_target, m_tp_accum_target, m_tp_reveal_target,
 			m_layer, m_clear, m_projection, m_ortho_size))
 	};
 
+	// The camera takes the transform of its node, as every component does; assemble_camera leaves local_transform alone.
 	SNK_API void assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name);
+
+	// LEGACY (camera_desc v1 -> v2). Until v2 the pose of a camera lived in camera_desc.transform (the pivot of the mouse
+	// controller, the camera standing 2 units behind it along its own Z) and the node's own transform was never used.
+	// For every inline v1 camera component of `node` this writes the pose that was rendered into the node's transform and
+	// drops camera_desc.transform. A narrow adapter on purpose: it moves into the general migrator chain of #28 (ADR-06)
+	// as it is. Called by the prefab_desc / world_desc v3 -> v4 step, which owns the node.
+	SNK_API void migrate_camera_transform_into_node(json::object& node);
+
+	// LEGACY (camera_desc v1 -> v2) for a camera desc outside a node (a file a component refers to): there is no node to
+	// take the pose, so camera_desc.transform is dropped with a warning. (A camera that derives from another desc, with
+	// "__parent", or is referenced by a "res://..." tag gets the same warning: only an inline camera is baked.)
+	SNK_API void migrate_camera_v1(json::object& camera);
 }

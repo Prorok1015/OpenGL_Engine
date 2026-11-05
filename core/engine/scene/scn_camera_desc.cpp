@@ -1,9 +1,12 @@
 #include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
-#include <snk/scene/scn_camera_controller_component.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/euler_angles.hpp>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <snk/common/logger/engine_log.h>
@@ -67,7 +70,96 @@ void scn::assemble_camera(entt::registry& reg, entt::entity e, const camera_desc
 	cam_comp.ortho_size = desc.ortho_size();
 	reg.emplace_or_replace<scn::camera_component>(e, std::move(cam_comp));
 	
-	scn::mouse_controller_component controller{ .rotation = desc.rotation(), .position = desc.position() };
-	reg.emplace_or_replace<scn::local_transform>(e, glm::translate(controller.position) * glm::toMat4(glm::quat(controller.rotation)) * glm::translate(glm::mat4(1.0), glm::vec3(0, 0, controller.distance)));
-	reg.emplace_or_replace<scn::mouse_controller_component>(e, controller);
+	if (!reg.all_of<scn::local_transform>(e))
+		reg.emplace<scn::local_transform>(e);
+}
+
+namespace {
+	// The distance mouse_controller_component had by default: v1 put the camera this far behind camera_desc.transform.
+	constexpr float legacy_pivot_distance = 2.f;
+
+	glm::vec3 vec3_of(const json::object* object, std::string_view key)
+	{
+		const json::value* value = object ? object->if_contains(key) : nullptr;
+		if (!value || !value->is_array() || value->as_array().size() != 3) return glm::vec3{ 0.f };
+		glm::vec3 out{ 0.f };
+		for (std::size_t i = 0; i < 3; ++i) {
+			const json::value& item = value->as_array()[i];
+			if (item.is_double()) out[static_cast<glm::length_t>(i)] = static_cast<float>(item.as_double());
+			else if (item.is_int64()) out[static_cast<glm::length_t>(i)] = static_cast<float>(item.as_int64());
+			else if (item.is_uint64()) out[static_cast<glm::length_t>(i)] = static_cast<float>(item.as_uint64());
+		}
+		return out;
+	}
+
+	// The float as it is, widened: a value the node reads back is the very float the old assembly used (a pose rounded on the way
+	// would move the camera by a few millionths). Noise around zero, and a negative zero, are written as 0.
+	json::array array_of(glm::vec3 value)
+	{
+		json::array out;
+		for (glm::length_t i = 0; i < 3; ++i) {
+			const double widened = std::abs(value[i]) < 1e-6f ? 0.0 : static_cast<double>(value[i]);
+			out.push_back(widened);
+		}
+		return out;
+	}
+
+	int version_of(const json::object& object)
+	{
+		const json::value* version = object.if_contains("__version");
+		if (!version) return 1;
+		if (version->is_int64()) return static_cast<int>(version->as_int64());
+		if (version->is_uint64()) return static_cast<int>(version->as_uint64());
+		return 1;
+	}
+}
+
+void scn::migrate_camera_transform_into_node(json::object& node)
+{
+	const auto components = node.find("components");
+	if (components == node.end() || !components->value().is_object()) return;
+
+	std::optional<json::object> placed;
+	for (auto& member : components->value().as_object()) {
+		if (!member.value().is_object()) continue;
+		json::object& camera = member.value().as_object();
+		const json::value* type = camera.if_contains("__type");
+		if (!type || !type->is_string() || type->as_string() != camera_desc::__type) continue;
+		if (version_of(camera) >= 2) continue;
+		if (camera.contains("__parent")) {
+			// The pose may sit in the desc this one derives from, which is not loaded here: it cannot be baked.
+			egLOG_WARN("scene/camera", "a camera that derives from another desc keeps no pose of its own any more: the transform of its node "
+				"is the pose, any camera_desc.transform it or its parent has is dropped");
+			camera.erase("transform");
+			camera["__version"] = 2;
+			continue;
+		}
+
+		const json::value* transform = camera.if_contains("transform");
+		const json::object* legacy = transform && transform->is_object() ? &transform->as_object() : nullptr;
+		const glm::vec3 pivot = vec3_of(legacy, "position");
+		const glm::vec3 rotation = glm::radians(vec3_of(legacy, "rotation"));
+		const glm::mat4 pose = glm::translate(glm::mat4(1.f), pivot) * glm::toMat4(glm::quat(rotation))
+			* glm::translate(glm::mat4(1.f), glm::vec3(0.f, 0.f, legacy_pivot_distance));
+
+		// A node rebuilds its rotation as yawPitchRoll(y, x, z), so decompose in the same order.
+		float yaw = 0.f, pitch = 0.f, roll = 0.f;
+		glm::extractEulerAngleYXZ(pose, yaw, pitch, roll);
+		json::object transform_of_node;
+		transform_of_node["position"] = array_of(glm::vec3(pose[3]));
+		transform_of_node["rotation"] = array_of(glm::degrees(glm::vec3(pitch, yaw, roll)));
+		placed = std::move(transform_of_node);
+
+		camera.erase("transform");
+		camera["__version"] = 2;
+	}
+	if (placed) node["transform"] = std::move(*placed);
+}
+
+void scn::migrate_camera_v1(json::object& camera)
+{
+	if (camera.erase("transform") != 0) {
+		egLOG_WARN("scene/camera", "camera_desc.transform is gone: the camera takes the transform of its node. "
+			"This camera desc is not part of a node, so its pose was dropped");
+	}
 }

@@ -13,5 +13,8 @@ namespace scn
 		glm::vec2 last_mouse_pos{ 0 };
 		bool is_moving = false;
 		bool is_rotating = false;
+		// The owner of the camera (the editor) turns this off while the input is not meant for it, e.g. while another panel
+		// is the one under the mouse. A disabled controller neither reads the input nor writes the transform.
+		bool input_enabled = true;
 	};
 }

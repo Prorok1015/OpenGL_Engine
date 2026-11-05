@@ -6,7 +6,7 @@
     "worlds" : [
         {
             "__type" : "world_desc",
-            "__version" : 3,
+            "__version" : 4,
             "name" : "3d_scene",
             "systems" : [
                 "inp::update_input_state",
@@ -25,14 +25,14 @@
                 {
                     "__id" : "39d3e30167f16e0d",
                     "name" : "Camera",
+                    "transform" : {
+                        "position" : [-0.07950657606124878, 0.9551191926002502, -1.354621171951294],
+                        "rotation" : [-28.52613639831543, -15.373703956604004, 0.0]
+                    },
                     "components" : {
                         "camera" : {
                             "__type" : "camera_desc",
-                            "__version" : 1,
-                            "transform" : {
-                                "rotation" : [-28.52613639831543, -15.373703956604004, 0.0],
-                                "position" : [0.386350691318512, 0.0, -3.0489423274993896]
-                            }
+                            "__version" : 2
                         }
                     }
                 },

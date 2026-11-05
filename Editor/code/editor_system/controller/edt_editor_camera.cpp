@@ -23,6 +23,12 @@ void save_camera_state(entt::registry& reg, editor_camera_state& state)
 	}
 }
 
+void set_editor_camera_input(entt::registry& reg, bool enabled)
+{
+	for (auto ent : reg.view<editor_camera_tag, scn::mouse_controller_component>())
+		reg.get<scn::mouse_controller_component>(ent).input_enabled = enabled;
+}
+
 void inject_camera(entt::registry& reg, const editor_camera_state& state)
 {
 	for (auto ent : reg.view<editor_camera_tag>())
@@ -47,6 +53,7 @@ void inject_camera(entt::registry& reg, const editor_camera_state& state)
 	ctrl.distance       = state.distance;
 	ctrl.movement_speed = state.movement_speed;
 	ctrl.rotating_speed = state.rotating_speed;
+	ctrl.input_enabled  = false;
 	reg.emplace<scn::mouse_controller_component>(cam, ctrl);
 
 	glm::mat4 orientation = glm::toMat4(glm::quat(ctrl.rotation));

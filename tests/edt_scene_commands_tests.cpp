@@ -29,10 +29,10 @@ namespace json = boost::json;
 using prefab_node = scn::prefab_desc::prefab_node;
 
 constexpr const char* WORLD = R"({
-	"__type": "world_desc", "__version": 3, "name": "w0", "systems": [],
+	"__type": "world_desc", "__version": 4, "name": "w0", "systems": [],
 	"children": [
 		{ "__id": "00000000000000a2", "name": "MainCamera",
-		  "components": { "camera_desc": { "__type": "camera_desc", "fov": 70.0 } } },
+		  "components": { "camera_desc": { "__type": "camera_desc", "__version": 2, "fov": 70.0 } } },
 		{ "__id": "00000000000000a3", "name": "Crate",
 		  "children": [ { "__id": "00000000000000b1", "name": "Lid" } ] },
 		{ "__id": "00000000000000a4", "name": "Crate2" }
@@ -40,14 +40,16 @@ constexpr const char* WORLD = R"({
 })";
 
 constexpr const char* PREFAB = R"({
-	"__type": "prefab_desc", "__version": 3,
+	"__type": "prefab_desc", "__version": 4,
 	"children": [
-		{ "__id": "00000000000000c1", "name": "eye", "components": { "camera_desc": { "__type": "camera_desc", "fov": 40.0 } } }
+		{ "__id": "00000000000000c1", "name": "eye", "components": {
+			"camera_desc": { "__type": "camera_desc", "__version": 2, "fov": 40.0 },
+			"material": { "__type": "material_desc", "__version": 1 } } }
 	]
 })";
 
 constexpr const char* WORLD_1 = R"({
-	"__type": "world_desc", "__version": 3, "name": "w1", "systems": [],
+	"__type": "world_desc", "__version": 4, "name": "w1", "systems": [],
 	"children": [
 		{ "__id": "00000000000000e1", "name": "Inst",
 		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/rig.prefab.desc" } } },
@@ -253,105 +255,114 @@ BOOST_AUTO_TEST_CASE(component_edits_of_a_node_of_the_scene)
 	BOOST_TEST(call("transform.set", R"({"ref":)" + crate + R"(,"position":[1,2]})").code == cmd::codes::invalid_args);
 }
 
+// The nested fields of a schema are material_desc's /uniforms/albedo, /uniforms/emissive and /uniforms/shininess.
+namespace {
+	constexpr const char* add_material = R"(,"key":"mat","type":"material_desc"})";
+}
+
 BOOST_AUTO_TEST_CASE(a_nested_patch_of_the_schema_leaves_is_applied_and_undone)
 {
-	const std::string eye = ref({ "00000000000000a2" });
-	const auto set = call("component.set", R"({"ref":)" + eye
-		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,15,13],"rotation":[-48,0,0]}}})");
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate + add_material).ok);
+	const auto set = call("component.set", R"({"ref":)" + crate
+		+ R"(,"key":"mat","patch":{"uniforms":{"shininess":32,"albedo":[1,0,0,1]}}})");
 	BOOST_REQUIRE_MESSAGE(set.ok, set.error);
-	const auto& overrides = child(root(), 0xa2)->components.at("camera_desc").overrides;
-	const auto& transform = overrides.at("transform").as_object();
-	BOOST_REQUIRE(transform.at("position").as_array().size() == 3u);
-	BOOST_TEST(transform.at("position").as_array()[1].to_number<double>() == 15.0);
-	BOOST_TEST(transform.at("rotation").as_array()[0].to_number<double>() == -48.0);
-	BOOST_TEST(overrides.at("fov").to_number<double>() == 70.0);
+	const auto& overrides = child(root(), 0xa4)->components.at("mat").overrides;
+	const auto& uniforms = overrides.at("uniforms").as_object();
+	BOOST_TEST(uniforms.at("shininess").to_number<double>() == 32.0);
+	BOOST_REQUIRE(uniforms.at("albedo").as_array().size() == 4u);
+	BOOST_TEST(uniforms.at("albedo").as_array()[0].to_number<double>() == 1.0);
 
-	BOOST_REQUIRE(scene.undo());
-	const auto& undone = child(root(), 0xa2)->components.at("camera_desc").overrides;
-	BOOST_TEST(!undone.contains("transform"));
-	BOOST_TEST(undone.at("fov").to_number<double>() == 70.0);
-	BOOST_TEST(!scene.history().can_undo()); // the nested patch was one step
+	BOOST_REQUIRE(scene.undo()); // the nested patch was one step
+	const auto& undone = child(root(), 0xa4)->components.at("mat").overrides;
+	BOOST_TEST(!undone.contains("uniforms"));
+	BOOST_REQUIRE(scene.undo()); // and the add before it another
+	BOOST_TEST(!scene.history().can_undo());
 }
 
 BOOST_AUTO_TEST_CASE(a_nested_patch_inside_a_prefab_instance_becomes_override_records)
 {
 	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");
 	const auto set = call("component.set", R"({"ref":)" + eye
-		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,15,13]}}})");
+		+ R"(,"key":"material","patch":{"uniforms":{"shininess":64}}})");
 	BOOST_REQUIRE_MESSAGE(set.ok, set.error);
 	const prefab_node& inst = *child(root(1), 0xe1);
 	// the editor writes a diff of the component as the value of one record at ""
 	BOOST_TEST(std::ranges::any_of(inst.overrides, [](const scn::override_record& r) {
-		return r.component == "camera_desc" && r.path.empty() && r.value.is_object()
-			&& r.value.as_object().contains("transform") && r.value.as_object().at("transform").as_object().contains("position"); }));
+		return r.component == "material" && r.path.empty() && r.value.is_object()
+			&& r.value.as_object().contains("uniforms") && r.value.as_object().at("uniforms").as_object().contains("shininess"); }));
 
 	BOOST_TEST(call("component.set", R"({"ref":)" + eye
-		+ R"(,"key":"camera_desc","patch":{"transform":{"scale":[1,1,1]}}})").code == cmd::codes::invalid_args);
+		+ R"(,"key":"material","patch":{"uniforms":{"gloss":1}}})").code == cmd::codes::invalid_args);
 	BOOST_REQUIRE(scene.undo());
 	BOOST_TEST(!scene.history().can_undo());
 }
 
 BOOST_AUTO_TEST_CASE(a_patch_that_changes_nothing_commits_nothing_and_leaves_no_empty_object)
 {
-	const std::string eye = ref({ "00000000000000a2" });
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate + add_material).ok);
 	const auto before = scene.generation();
-	for (const char* patch : { R"({"transform":{}})", R"({"transform":{"position":null}})", R"({"transform":{"position":null,"rotation":null}})" }) {
+	const auto steps = scene.history().size();
+	for (const char* patch : { R"({"uniforms":{}})", R"({"uniforms":{"shininess":null}})", R"({"uniforms":{"shininess":null,"albedo":null}})" }) {
 		BOOST_TEST_INFO(patch);
-		const auto result = call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":)" + patch + "}");
+		const auto result = call("component.set", R"({"ref":)" + crate + R"(,"key":"mat","patch":)" + patch + "}");
 		BOOST_REQUIRE_MESSAGE(result.ok, result.error);
 	}
 	BOOST_TEST(scene.generation() == before);
-	BOOST_TEST(!scene.history().can_undo());
-	BOOST_TEST(!child(root(), 0xa2)->components.at("camera_desc").overrides.contains("transform"));
+	BOOST_TEST(scene.history().size() == steps);
+	BOOST_TEST(!child(root(), 0xa4)->components.at("mat").overrides.contains("uniforms"));
 
-	// A nested object the patch empties by nulls goes, but a one that was empty already stays as it is.
-	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"transform":{"position":[1,2,3]}}})").ok);
-	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"transform":{"position":null}}})").ok);
-	BOOST_TEST(!child(root(), 0xa2)->components.at("camera_desc").overrides.contains("transform"));
+	// A nested object the patch empties by nulls goes.
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + crate + R"(,"key":"mat","patch":{"uniforms":{"shininess":5}}})").ok);
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + crate + R"(,"key":"mat","patch":{"uniforms":{"shininess":null}}})").ok);
+	BOOST_TEST(!child(root(), 0xa4)->components.at("mat").overrides.contains("uniforms"));
 }
 
 BOOST_AUTO_TEST_CASE(a_nested_field_is_refused_with_its_whole_path)
 {
-	const std::string eye = ref({ "00000000000000a2" });
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate + add_material).ok);
 	const auto before = scene.generation();
-	const auto unknown = call("component.set", R"({"ref":)" + eye
-		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,1,2],"scale":[1,1,1]}}})");
+	const auto steps = scene.history().size();
+	const auto unknown = call("component.set", R"({"ref":)" + crate
+		+ R"(,"key":"mat","patch":{"uniforms":{"shininess":10,"glow":[1,1,1,1]}}})");
 	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
-	BOOST_TEST(unknown.error.find("transform/scale (no such field)") != std::string::npos);
+	BOOST_TEST(unknown.error.find("uniforms/glow (no such field)") != std::string::npos);
 
-	const auto not_fitting = call("component.set", R"({"ref":)" + eye
-		+ R"(,"key":"camera_desc","patch":{"transform":{"position":"up"}}})");
+	const auto not_fitting = call("component.set", R"({"ref":)" + crate
+		+ R"(,"key":"mat","patch":{"uniforms":{"shininess":"hard"}}})");
 	BOOST_TEST(not_fitting.code == cmd::codes::invalid_args);
-	BOOST_TEST(not_fitting.error.find("transform/position (the value does not fit)") != std::string::npos);
+	BOOST_TEST(not_fitting.error.find("uniforms/shininess (the value does not fit)") != std::string::npos);
 
-	const auto no_container = call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"fov":{"x":1}}})");
+	const auto no_container = call("component.set", R"({"ref":)" + crate + R"(,"key":"mat","patch":{"uniforms":{"shininess":{"x":1}}}})");
 	BOOST_TEST(no_container.code == cmd::codes::invalid_args);
 
 	BOOST_TEST(scene.generation() == before);
-	BOOST_TEST(!scene.history().can_undo());
+	BOOST_TEST(scene.history().size() == steps);
 }
 
 BOOST_AUTO_TEST_CASE(a_new_component_may_carry_nested_fields)
 {
 	const std::string crate = ref({ "00000000000000a4" });
 	const auto added = call("component.add", R"({"ref":)" + crate
-		+ R"(,"key":"cam","type":"camera_desc","fields":{"transform":{"position":[1,2,3]}}})");
+		+ R"(,"key":"mat","type":"material_desc","fields":{"uniforms":{"shininess":10,"albedo":[0,1,0,1]}}})");
 	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
-	BOOST_TEST(child(root(), 0xa4)->components.at("cam").overrides.at("transform").as_object().at("position").as_array().size() == 3u);
+	BOOST_TEST(child(root(), 0xa4)->components.at("mat").overrides.at("uniforms").as_object().at("albedo").as_array().size() == 4u);
 	BOOST_TEST(call("component.add", R"({"ref":)" + crate
-		+ R"(,"key":"cam2","type":"camera_desc","fields":{"transform":{"nope":1}}})").code == cmd::codes::invalid_args);
+		+ R"(,"key":"mat2","type":"material_desc","fields":{"uniforms":{"nope":1}}})").code == cmd::codes::invalid_args);
 }
 
 BOOST_AUTO_TEST_CASE(a_new_component_keeps_no_nulls)
 {
 	const std::string crate = ref({ "00000000000000a4" });
 	const auto added = call("component.add", R"({"ref":)" + crate
-		+ R"(,"key":"cam","type":"camera_desc","fields":{"fov":30.0,"far_distance":null,"transform":{"position":null}}})");
+		+ R"(,"key":"mat","type":"material_desc","fields":{"queue":"transparent","render_mode":null,"uniforms":{"shininess":null}}})");
 	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
-	const auto& overrides = child(root(), 0xa4)->components.at("cam").overrides;
-	BOOST_TEST(overrides.at("fov").to_number<double>() == 30.0);
-	BOOST_TEST(!overrides.contains("far_distance"));
-	BOOST_TEST(!overrides.contains("transform"));
+	const auto& overrides = child(root(), 0xa4)->components.at("mat").overrides;
+	BOOST_TEST(overrides.at("queue").as_string() == "transparent");
+	BOOST_TEST(!overrides.contains("render_mode"));
+	BOOST_TEST(!overrides.contains("uniforms"));
 }
 
 BOOST_AUTO_TEST_CASE(inside_a_prefab_instance_only_overrides)

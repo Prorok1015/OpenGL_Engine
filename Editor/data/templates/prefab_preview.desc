@@ -1,6 +1,6 @@
 {
     "__type" : "world_desc",
-    "__version" : 3,
+    "__version" : 4,
     "name" : "__prefab_preview",
     "systems" : [
         "inp::update_input_state",
