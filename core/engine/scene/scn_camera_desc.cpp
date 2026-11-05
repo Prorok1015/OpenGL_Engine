@@ -92,13 +92,14 @@ namespace {
 		return out;
 	}
 
+	// The float as it is, widened: a value the node reads back is the very float the old assembly used (a pose rounded on the way
+	// would move the camera by a few millionths). Noise around zero, and a negative zero, are written as 0.
 	json::array array_of(glm::vec3 value)
 	{
 		json::array out;
 		for (glm::length_t i = 0; i < 3; ++i) {
-			double rounded = std::round(static_cast<double>(value[i]) * 1e5) / 1e5;
-			if (rounded == 0.0) rounded = 0.0;
-			out.push_back(rounded);
+			const double widened = std::abs(value[i]) < 1e-6f ? 0.0 : static_cast<double>(value[i]);
+			out.push_back(widened);
 		}
 		return out;
 	}
