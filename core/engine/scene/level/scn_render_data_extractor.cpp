@@ -4,12 +4,14 @@
 #include <memory_resource>
 #include <unordered_map>
 #include <snk/common/eng_transform_3d.hpp>
+#include <snk/render/rnd_gpu_blocks.h>
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_time.h>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/mem_allocator.h>
 
@@ -79,6 +81,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.camera.render_priority = cam.layer;
             packet.camera.clear = clear_mode_of(cam.clear);
             packet.camera.wireframe = cam.wireframe;
+            packet.camera.time = rnd::shader_time(reg.ctx().get<scn::world_time>().seconds);
 
             auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
             auto mesh_count = meshes_view.size_hint();

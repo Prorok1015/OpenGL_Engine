@@ -44,6 +44,8 @@ namespace rnd {
 		// Debug view of this camera only: the scene passes (z-prepass, opaque, transparent) draw lines instead of
 		// filled triangles. The sky, the composition and the debug lines stay filled.
 		bool wireframe = false;
+		// The `time` of the camera's world as the shaders see it (rnd::shader_time); every scene pass writes it.
+		float time = 0.0f;
 	};
 
 	// Where a camera's main color goes: straight to the window's default framebuffer, or into a texture.

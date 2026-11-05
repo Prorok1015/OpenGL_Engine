@@ -11,6 +11,7 @@ scn::world_context::world_context(uint32_t id, std::string_view name)
 	// Present from the start, so a system never sees a missing time resource.
 	m_state.ctx().insert_or_assign(scn::delta_time{ 0.0f });
 	m_state.ctx().insert_or_assign(scn::update_alpha{ 0.0f });
+	m_state.ctx().insert_or_assign(scn::world_time{ 0.0 });
 	m_state.ctx().insert_or_assign(scn::fixed_time{ m_stepper.step() });
 }
 
@@ -39,6 +40,7 @@ void scn::world_context::begin_frame(std::chrono::duration<float> dt)
 	}
 	m_state.ctx().insert_or_assign(scn::delta_time{ frame_dt });
 	m_state.ctx().insert_or_assign(scn::update_alpha{ m_stepper.alpha() });
+	m_state.ctx().get<scn::world_time>().seconds += frame_dt;
 }
 
 void scn::world_context::write_fixed_time()
@@ -50,6 +52,7 @@ void scn::world_context::reset_time()
 {
 	m_stepper.reset();
 	m_state.ctx().insert_or_assign(scn::update_alpha{ 0.0f });
+	m_state.ctx().insert_or_assign(scn::world_time{ 0.0 });
 }
 
 void scn::world_context::set_stepper(const ecs::fixed_stepper& stepper)

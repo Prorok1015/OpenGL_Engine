@@ -104,6 +104,7 @@ namespace rnd {
 			common_matrix.view = packet.camera.view_matrix;
 			common_matrix.projection = packet.camera.projection_matrix;
 			common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
+			common_matrix.time = packet.camera.time;
 			context.write_view(common_matrix);
 			context.bind_frame();
 			drv.set_viewport(glm::ivec4{packet.camera.viewport.x, packet.camera.viewport.y, vp_width, vp_height});

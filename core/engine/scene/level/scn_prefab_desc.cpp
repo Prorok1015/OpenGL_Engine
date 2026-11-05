@@ -600,8 +600,10 @@ namespace {
 		}
 	}
 
+	// A parent may still list a child that game code destroyed with a bare reg.destroy (#543).
 	void destroy_entity_hierarchy(entt::registry& reg, entt::entity entity)
 	{
+		if (!reg.valid(entity)) return;
 		if (auto* children_comp = reg.try_get<scn::children_component>(entity)) {
 			auto children = children_comp->children;
 			for (auto child : children) {
@@ -621,6 +623,7 @@ namespace {
 			auto* children_comp = reg.try_get<scn::children_component>(parent);
 			if (!children_comp) return;
 			for (auto child : children_comp->children) {
+				if (!reg.valid(child)) continue; // destroyed by game code, still listed (#543): unclaimed, a reload drops it
 				entry e{ child, desc::invalid_node_id, {} };
 				if (const auto* path = reg.try_get<scn::node_id_component>(child); path && !path->path.empty())
 					e.id = path->path.back();

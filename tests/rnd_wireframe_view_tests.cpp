@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
 #include "rnd_composition_pass.h"
+#include "rnd_drawing_test_context.hpp"
 #include "rnd_null_driver.h"
 #include "rnd_opaque_pass.h"
 #include "rnd_skybox_pass.h"
@@ -29,56 +30,7 @@ namespace {
 using namespace rnd;
 using driver::polygon_mode;
 
-// What a draw of every kind needs from the renderer, served by the null driver.
-class drawing_context final : public render_context
-{
-public:
-	explicit drawing_context(driver::null::driver& drv)
-	{
-		m_texture = drv.create_texture(driver::texture_header{});
-		m_vertex_array = drv.create_vertex_array();
-		m_program = drv.create_shader({
-			{ "a.vert", "#version 450 core\nvoid main() {}\n", driver::shader_header::shader_type::VERTEX },
-			{ "a.frag", "#version 450 core\nvoid main() {}\n", driver::shader_header::shader_type::FRAGMENT },
-		});
-		const auto layout = drv.create_bind_group_layout({});
-		m_layouts = { layout, layout, layout, layout, layout };
-
-		shader_config config;
-		m_material.base = m_material.opaque = m_variants.intern(config.cdata);
-		m_material.runtime.samplers.push_back(texture_id{ 1 });
-	}
-
-	void use_packets(std::pmr::vector<render_packet_t>* packets) { m_packets = packets; }
-
-	std::span<render_packet_t> packets() override { return m_packets ? std::span<render_packet_t>{ *m_packets } : std::span<render_packet_t>{}; }
-	driver::texture_handle find_texture(const res::tag&) const override { return m_texture; }
-	driver::texture_handle texture(texture_id) const override { return m_texture; }
-	driver::texture_handle ensure_render_target(const res::tag&, glm::ivec2, driver::texture_header::TYPE,
-		driver::texture_usage, const render_targets::sampling&) override { return m_texture; }
-	driver::vertex_array_interface* geometry(const res::tag&) override { return m_vertex_array.get(); }
-	shader_config_cache& variants() override { return m_variants; }
-	driver::shader_interface* program(variant_id) override { return m_program.get(); }
-	const set_layouts& layouts() const override { return m_layouts; }
-	void write_view(const global_params&) override {}
-	void write_lights(const lights_params&) override {}
-	void bind_frame() override {}
-	const compiled_material& material(material_instance_id) const override { return m_material; }
-	void bind_material(material_instance_id) override {}
-	void upload_objects(std::span<const object_data>, std::span<const glm::mat4>) override {}
-	void bind_object(std::uint32_t, const res::tag&) override {}
-
-	variant_id variant() const { return m_material.base; }
-
-private:
-	std::pmr::vector<render_packet_t>* m_packets = nullptr;
-	driver::texture_handle m_texture;
-	std::unique_ptr<driver::vertex_array_interface> m_vertex_array;
-	std::unique_ptr<driver::shader_interface> m_program;
-	set_layouts m_layouts;
-	shader_config_cache m_variants;
-	compiled_material m_material;
-};
+using test_util::drawing_context;
 
 constexpr std::size_t opaque_draws = 2;
 constexpr std::size_t transparent_draws = 1;

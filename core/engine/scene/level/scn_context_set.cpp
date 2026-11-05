@@ -177,7 +177,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	}
 	ASSERT_MSG(!m_contexts.contains(id), "create_world: world id is already in use");
 
-	const ecs::fixed_stepper* lockstep_ref = m_contexts.empty() ? nullptr : &m_contexts.begin()->second->stepper();
+	const scn::world_context* lockstep_ref = m_contexts.empty() ? nullptr : m_contexts.begin()->second.get();
 	auto& w = *(m_contexts[id] = std::make_unique<scn::world_context>(id, name));
 	m_context_ids[std::string{ name }] = id;
 	w.set_kind(kind);
@@ -188,8 +188,11 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	w.seed(m_seed);
 	w.set_mode(m_mode);
 	w.set_time_scale(m_time_scale);
-	// lockstep: a context created later joins at the same point of the step as the others
-	if (lockstep_ref) w.set_stepper(*lockstep_ref);
+	// lockstep: a context created later joins at the same point of the step and of the time as the others
+	if (lockstep_ref) {
+		w.set_stepper(lockstep_ref->stepper());
+		w.state().ctx().get<scn::world_time>() = lockstep_ref->state().ctx().get<scn::world_time>();
+	}
 
 	if (m_hot_reload_manager) {
 		m_hot_reload_manager->attach_registry(w.state());
@@ -230,9 +233,12 @@ void scn::context_set::reload_context(
 
 	const uint32_t old_id = m_context_ids[std::string{name}];
 	const context_kind kind = m_contexts.at(old_id)->kind();
+	// a structural edit of one world does not restart its shader animations (#544)
+	const scn::world_time time = m_contexts.at(old_id)->state().ctx().get<scn::world_time>();
 	destroy_by_id(old_id);
 
 	auto& w = create_context(name, old_id, kind);
+	w.state().ctx().get<scn::world_time>() = time;
 	w.set_input_layer(desc.get_input_layer());
 	add_systems(w, desc.get_systems(), sf);
 
