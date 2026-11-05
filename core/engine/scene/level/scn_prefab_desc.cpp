@@ -1,6 +1,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
@@ -928,6 +929,35 @@ namespace {
 void scn::migrate_prefab_v2(json::object& obj)
 {
 	upgrade_node_v2(obj);
+}
+
+namespace {
+	// Every node of the tree: its children and the nodes an `add_node` record carries.
+	void bake_camera_poses(json::object& node)
+	{
+		scn::migrate_camera_transform_into_node(node);
+		if (auto children = node.find("children"); children != node.end() && children->value().is_array()) {
+			for (auto& child : children->value().as_array()) {
+				if (child.is_object()) bake_camera_poses(child.as_object());
+			}
+		}
+		if (auto records = node.find("overrides"); records != node.end() && records->value().is_array()) {
+			for (auto& record : records->value().as_array()) {
+				if (!record.is_object()) continue;
+				auto added = record.as_object().find("value");
+				const auto op = record.as_object().if_contains("op");
+				if (added != record.as_object().end() && added->value().is_object() && op && op->is_string() && op->as_string() == "add_node") {
+					bake_camera_poses(added->value().as_object());
+				}
+			}
+		}
+	}
+}
+
+// v4: a camera takes the transform of its node; the pose it kept in camera_desc.transform is written into the node.
+void scn::migrate_prefab_v3(json::object& obj)
+{
+	bake_camera_poses(obj);
 }
 
 namespace {

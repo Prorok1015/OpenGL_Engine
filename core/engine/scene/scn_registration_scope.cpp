@@ -121,6 +121,12 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	// v3: the override layer of an explicit nested instance becomes `overrides` records.
 	scope.migration("prefab_desc", 2, migrate_prefab_v2);
 	scope.migration(world_desc::__type, 2, migrate_prefab_v2);
+	// v4: a camera takes the transform of its node. LEGACY adapter, moves into the migrator chain of #28 (ADR-06):
+	// camera_desc v1 -> v2 for a camera outside a node, the node-level bake for the rest (parent first: the node
+	// step runs before the camera objects below it are visited, and stamps them v2).
+	scope.migration("prefab_desc", 3, migrate_prefab_v3);
+	scope.migration(world_desc::__type, 3, migrate_prefab_v3);
+	scope.migration(camera_desc::__type, 1, migrate_camera_v1);
 	scope.migration("level_desc", 1, [](json::object&) {}); // the worlds are typed objects and migrate on their own
 
 	// The assembler that runs it: a prefab spawned in a layer builds its components with the layer's.

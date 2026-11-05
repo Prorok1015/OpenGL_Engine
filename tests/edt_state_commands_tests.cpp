@@ -518,7 +518,7 @@ BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheLightIsGeneratedFromItsTypeSchema)
 	BOOST_TEST(at(result, "/schema/properties/direction/items/maximum").to_number<double>() == 1.0);
 }
 
-BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheCameraHasRangesDefaultsNestedKeysAndEnums)
+BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheCameraHasRangesDefaultsAndEnums)
 {
 	const auto result = call("component.schema", R"({"type":"camera_desc"})");
 
@@ -529,10 +529,6 @@ BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheCameraHasRangesDefaultsNestedKeysAndEn
 	BOOST_TEST(at(result, "/schema/properties/fov/default").to_number<double>() == 90.0);
 	BOOST_TEST(at(result, "/schema/properties/fov/x-degrees").as_bool());
 	BOOST_TEST(at(result, "/schema/properties/fov/description").as_string() == "Vertical field of view");
-	// The key "/transform/rotation" is nested under "transform".
-	BOOST_TEST(at(result, "/schema/properties/transform/type").as_string() == "object");
-	BOOST_TEST(at(result, "/schema/properties/transform/properties/rotation/type").as_string() == "array");
-	BOOST_TEST(at(result, "/schema/properties/transform/properties/position/minItems").to_number<int>() == 3);
 	// An enumeration lists the names of its enum schema.
 	const json::array& clears = at(result, "/schema/properties/clear/enum").as_array();
 	bool has_depth = false;
@@ -540,18 +536,39 @@ BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheCameraHasRangesDefaultsNestedKeysAndEn
 	BOOST_TEST(has_depth);
 }
 
-BOOST_AUTO_TEST_CASE(ComponentSchema_ARangeWithoutSpanIsNoBound)
+BOOST_AUTO_TEST_CASE(ComponentSchema_ABoundedRangeKeepsBothBounds)
 {
-	// camera_desc /transform/rotation is range(0, 0, 0.5): only a drag step, no bounds.
 	const auto result = call("component.schema", R"({"type":"camera_desc"})");
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
-	boost::system::error_code ec;
-	BOOST_TEST(result.value.find_pointer("/schema/properties/transform/properties/rotation/items/minimum", ec) == nullptr);
-	BOOST_TEST(result.value.find_pointer("/schema/properties/transform/properties/rotation/items/maximum", ec) == nullptr);
-	BOOST_TEST(result.value.find_pointer("/schema/properties/transform/properties/rotation/minimum", ec) == nullptr);
-	// A bounded field keeps both.
 	BOOST_TEST(at(result, "/schema/properties/far_distance/minimum").to_number<double>() == 1.0);
 	BOOST_TEST(at(result, "/schema/properties/far_distance/maximum").to_number<double>() == 100000.0);
+}
+
+BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_NestsPointerKeys_AndARangeWithoutSpanIsNoBound)
+{
+	desc::schema_registry registry;
+	desc::type_schema schema;
+	schema.name = "posed";
+	desc::field_schema rotation;
+	rotation.name = "rotation";
+	rotation.key = "/pose/rotation";
+	rotation.kind = desc::field_kind::vec3;
+	rotation.range = desc::field_range{ 0.0, 0.0, 0.5 }; // only a drag step, no bounds
+	desc::field_schema position;
+	position.name = "position";
+	position.key = "/pose/position";
+	position.kind = desc::field_kind::vec3;
+	schema.fields = { rotation, position };
+
+	const json::value root = desc::to_json_schema(schema, registry);
+
+	BOOST_TEST(root.at_pointer("/properties/pose/type").as_string() == "object");
+	BOOST_TEST(root.at_pointer("/properties/pose/properties/rotation/type").as_string() == "array");
+	BOOST_TEST(root.at_pointer("/properties/pose/properties/position/minItems").to_number<int>() == 3);
+	boost::system::error_code ec;
+	BOOST_TEST(root.find_pointer("/properties/pose/properties/rotation/items/minimum", ec) == nullptr);
+	BOOST_TEST(root.find_pointer("/properties/pose/properties/rotation/items/maximum", ec) == nullptr);
+	BOOST_TEST(root.find_pointer("/properties/pose/properties/rotation/minimum", ec) == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_ARangeOfAnArrayOfVectorsBoundsTheNumbers)

@@ -9,7 +9,9 @@
 #include <snk/common/eng_transform_3d.hpp>
 #include <snk/input/inp_events.hpp>
 #include "edt_guizmo.hpp"
+#include "edt_editor_camera.h"
 #include <imgui.h>
+#include <optional>
 #include <utility>
 
 namespace edt
@@ -31,10 +33,17 @@ namespace edt
 		return s_editor_cam_tag;
 	}
 
+	void viewport_panel::on_hidden()
+	{
+		if (entt::registry* reg = m_get_registry ? m_get_registry() : nullptr)
+			set_editor_camera_input(*reg, false);
+	}
+
 	void viewport_panel::suspend_camera()
 	{
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		if (!reg) return;
+		set_editor_camera_input(*reg, false);
 		for (auto ent : reg->view<scn::camera_component>()) {
 			auto& cam = reg->get<scn::camera_component>(ent);
 			if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
@@ -120,9 +129,7 @@ namespace edt
 			ImGui::TextDisabled("(no render target — load a level first)");
 		}
 
-		// Input (and the camera focus derived from it) reaches the world only while the image is hovered
-		if (m_input_target)
-			bind_item_input(m_router, m_input_target());
+		const view_item view = capture_view_item();
 
 		// Interactive transform gizmo (drawn on top of scene image)
 		if (!locked && reg && m_selected != entt::null && reg->valid(m_selected))
@@ -131,6 +138,15 @@ namespace edt
 		// Re-fetch: on_transform_committed inside the gizmo may have triggered
 		// reload_world(), which destroys the old scn::world_context and its registry.
 		reg = m_get_registry ? m_get_registry() : nullptr;
+
+		// Input (and the camera focus derived from it) reaches the world only while the image is hovered and no gizmo handle
+		// is in the way; the editor camera reads it only then (the Game view shares the world and must not move it, #545).
+		std::optional<inp::input_target> target;
+		if (m_input_target)
+			target = m_input_target();
+		const bool takes_input = bind_view_input(m_router, target, view, is_dragging_gizmo());
+		if (reg)
+			set_editor_camera_input(*reg, takes_input);
 
 		if (reg)
 			render_orientation_gizmo(*reg);

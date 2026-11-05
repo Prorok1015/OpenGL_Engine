@@ -63,6 +63,7 @@ namespace edt
 
 	protected:
 		void on_render() override;
+		void on_hidden() override;
 
 	private:
 		void render_toolbar();

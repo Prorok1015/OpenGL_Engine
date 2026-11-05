@@ -561,7 +561,7 @@ BOOST_AUTO_TEST_CASE(CameraDefaultsComeFromTheSchema)
 	json::object serialized;
 	camera.serialize(serialized);
 	const json::value written_json(serialized);
-	for (const char* pointer : { "/fov", "/near_distance", "/far_distance", "/transform/rotation", "/transform/position" }) {
+	for (const char* pointer : { "/fov", "/near_distance", "/far_distance" }) {
 		const json::value* written = desc::json_pointer_get(written_json, pointer);
 		const json::value* seen = desc::json_pointer_get(shown, pointer);
 		BOOST_REQUIRE_MESSAGE(written && seen, pointer);

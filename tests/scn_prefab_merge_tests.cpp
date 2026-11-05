@@ -773,7 +773,7 @@ BOOST_AUTO_TEST_CASE(Migration_NestedInstanceLayerBecomesRecords)
 			{"__id":"00000000000000a1","name":"arm","transform":{"position":[7,0,0]},
 			 "components":{"stat":{"__type":"stat_desc","hp":30}}},
 			{"__id":"00000000000000e1","name":"extra","components":{"stat":{"__type":"stat_desc","hp":1}}}]})");
-	BOOST_TEST(migrated.at("__version").as_int64() == 3);
+	BOOST_TEST(migrated.at("__version").as_int64() == 4);
 	BOOST_TEST(!migrated.contains("children"));
 	BOOST_TEST(migrated.at("components").as_object().size() == 1u); // only the reference stays a component
 	const auto& records = migrated.at("overrides").as_array();
@@ -809,9 +809,9 @@ BOOST_AUTO_TEST_CASE(Migration_VersionTwoFileWithoutAnInstanceOnlyGetsTheNewVers
 	const char* text = R"({"__type":"prefab_desc","__version":2,"children":[
 		{"__id":"00000000000000aa","name":"a","transform":{"position":[1,0,0]}}]})";
 	auto migrated = parse_migrated(text);
-	BOOST_TEST(migrated.at("__version").as_int64() == 3);
+	BOOST_TEST(migrated.at("__version").as_int64() == 4);
 	auto expected = json::parse(text).as_object();
-	expected["__version"] = 3;
+	expected["__version"] = 4;
 	BOOST_TEST(json::value(migrated) == json::value(expected));
 }
 

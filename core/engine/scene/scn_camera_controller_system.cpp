@@ -13,6 +13,8 @@ void update_camera_matrix_system(const inp::input_state& state,
     if (!focus.active) return;
 
     for (auto&& [ent, local, controller] : view.each()) {
+        if (!controller.input_enabled) continue;
+
         auto& rotation = controller.rotation;
         auto& pos = controller.position;
         auto& last_mouse_pos = controller.last_mouse_pos;

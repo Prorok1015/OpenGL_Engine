@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_editor_camera.h"
 #include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/scn_camera_desc.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <snk/scene/scn_model.h>
 #include "test_scene_env.hpp"
 #include <snk/scene/level/scn_context_set.h>
@@ -118,6 +120,7 @@ BOOST_FIXTURE_TEST_CASE(DefaultState_IdleFramesKeepTheIdentityView, camera_world
 BOOST_FIXTURE_TEST_CASE(DefaultState_ZoomStepMovesAlongTheViewAxis, camera_world_fixture)
 {
 	BOOST_REQUIRE(cam != entt::null);
+	edt::set_editor_camera_input(*reg, true);
 	const glm::vec3 before = world_pos();
 	input->scroll = { 0.f, 1.f };
 	step();
@@ -133,6 +136,7 @@ BOOST_FIXTURE_TEST_CASE(DefaultState_ZoomStepMovesAlongTheViewAxis, camera_world
 BOOST_FIXTURE_TEST_CASE(DefaultState_OrbitStepDoesNotJump, camera_world_fixture)
 {
 	BOOST_REQUIRE(cam != entt::null);
+	edt::set_editor_camera_input(*reg, true);
 	const glm::vec3 before = world_pos();
 	input->mouse[(int)inp::MOUSE_BUTTONS::RIGHT] = true;
 	input->mouse_dir = { 0.01f, 0.f };
@@ -140,6 +144,51 @@ BOOST_FIXTURE_TEST_CASE(DefaultState_OrbitStepDoesNotJump, camera_world_fixture)
 
 	BOOST_CHECK_LT(glm::length(world_pos() - before), 0.05f);
 	BOOST_CHECK(reg->get<scn::world_transform>(cam).world == reg->get<scn::local_transform>(cam).local);
+}
+
+// Bug #545 (F11): the Editor view and the Game view feed the same world; only the panel under the mouse switches the
+// editor camera on, and a camera of the game is not a camera of the editor at all.
+BOOST_FIXTURE_TEST_CASE(TheEditorCameraIgnoresTheMouseUntilAPanelSwitchesItOn, camera_world_fixture)
+{
+	BOOST_REQUIRE(cam != entt::null);
+	BOOST_TEST(!reg->get<scn::mouse_controller_component>(cam).input_enabled);
+
+	const glm::vec3 before = world_pos();
+	input->mouse[(int)inp::MOUSE_BUTTONS::LEFT] = true;
+	input->mouse_dir = { 0.1f, 0.2f };
+	input->scroll = { 0.f, 1.f };
+	step();
+	BOOST_TEST((world_pos() == before));
+
+	edt::set_editor_camera_input(*reg, true);
+	input->mouse[(int)inp::MOUSE_BUTTONS::LEFT] = true;
+	input->mouse_dir = { 0.1f, 0.2f };
+	step();
+	BOOST_TEST((world_pos() != before));
+
+	edt::set_editor_camera_input(*reg, false);
+	const glm::vec3 moved = world_pos();
+	input->mouse[(int)inp::MOUSE_BUTTONS::LEFT] = true;
+	input->mouse_dir = { 0.1f, 0.2f };
+	step();
+	BOOST_TEST((world_pos() == moved));
+}
+
+BOOST_FIXTURE_TEST_CASE(AGameCameraInTheSameWorldStaysWhereItsNodePutIt, camera_world_fixture)
+{
+	const auto game = reg->create();
+	reg->emplace<scn::local_transform>(game, glm::translate(glm::mat4(1.f), glm::vec3(0.f, 5.f, 0.f)));
+	reg->emplace<scn::world_transform>(game);
+	reg->emplace<scn::depth_level>(game);
+	scn::assemble_camera(*reg, game, scn::camera_desc{}, "game");
+
+	edt::set_editor_camera_input(*reg, true);
+	input->mouse[(int)inp::MOUSE_BUTTONS::LEFT] = true;
+	input->mouse_dir = { 0.1f, 0.2f };
+	step();
+
+	BOOST_TEST((world_pos() != glm::vec3(0.f, 0.f, 0.f)));
+	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(game).local[3]) == glm::vec3(0.f, 5.f, 0.f)));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
