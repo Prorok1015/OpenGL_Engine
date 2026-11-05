@@ -41,6 +41,7 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/scn_time.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
@@ -322,6 +323,27 @@ BOOST_AUTO_TEST_CASE(switching_the_active_world_during_play_moves_the_editor_cam
 	play.stop();
 	BOOST_TEST(state.active_world_idx == 0); // the world active before Play
 	BOOST_TEST(edt::view_registry(services, state) == &contexts().level_set().get("w0").state());
+}
+
+BOOST_AUTO_TEST_CASE(the_play_twins_start_their_shader_time_at_zero_on_every_start)
+{
+	open_level();
+	const auto seconds = [](scn::world_context& world) { return world.state().ctx().get<scn::world_time>().seconds; };
+	const auto frames = [this](int count) { for (int i = 0; i < count; ++i) contexts().update(std::chrono::duration<float>(0.016f)); };
+	frames(5); // the level's time runs in Edit
+	scn::world_context& level_w0 = contexts().level_set().get("w0");
+	const double level_before = seconds(level_w0);
+	BOOST_REQUIRE(level_before > 0.0);
+
+	for (int session = 0; session < 2; ++session) {
+		BOOST_REQUIRE(play.start());
+		play_set()->for_each([&](scn::world_context& world) { BOOST_TEST(seconds(world) == 0.0); });
+		frames(3);
+		BOOST_TEST(seconds(play_set()->get("w0")) > 0.0);
+		play.stop();
+	}
+	// the hidden level stood during Play and keeps its own time
+	BOOST_TEST(seconds(contexts().level_set().get("w0")) == level_before);
 }
 
 BOOST_AUTO_TEST_CASE(stop_brings_the_editor_back_as_it_was_before_play)

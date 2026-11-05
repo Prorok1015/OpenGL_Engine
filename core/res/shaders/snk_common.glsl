@@ -12,6 +12,8 @@ SNK_UBO(0, 0) uniform Matrices
 {
     mat4 projection;
     mat4 view;
+    // Seconds of the camera's world (Pause stops it, Step and the time scale move it; Play starts at 0), wrapped to
+    // 0 every 1024*pi s (~53.6 min): sin/cos(k * time) of an integer k stay smooth, anything else jumps there.
     float time;
     vec3 cameraPosition;
 };

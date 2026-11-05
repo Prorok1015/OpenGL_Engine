@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/snk_api.h>
 #include <snk/render/rnd_render_pass_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
 #include <snk/driver/rnd_buffer_interface.h>
@@ -8,7 +9,7 @@
 namespace res { class resource_system; }
 
 namespace rnd {
-class debug_pass : public render_pass_interface {
+class SNK_API debug_pass : public render_pass_interface {
 public:
 	explicit debug_pass(res::resource_system& res_sys);
 

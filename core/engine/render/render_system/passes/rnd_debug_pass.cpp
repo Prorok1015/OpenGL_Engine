@@ -102,7 +102,7 @@ void debug_pass::execute(render_context& context, driver::driver_interface& drv)
 		common_matrix.view = packet.camera.view_matrix;
 		common_matrix.projection = packet.camera.projection_matrix;
 		common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
-		common_matrix.time = 0.f;
+		common_matrix.time = packet.camera.time;
 
 		context.write_view(common_matrix);
 		context.bind_frame();
