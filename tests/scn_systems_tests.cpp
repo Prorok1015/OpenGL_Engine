@@ -435,4 +435,22 @@ BOOST_FIXTURE_TEST_CASE(Camera_ClearInputSystemResetsFrameDeltasButKeepsButtons,
 	BOOST_TEST(state->mouse[(int)inp::MOUSE_BUTTONS::LEFT]);
 }
 
+// Bug #545 (F11): a game camera carried a mouse controller, so every drag that reaches the world moved it too.
+BOOST_FIXTURE_TEST_CASE(Camera_ABuiltGameCameraIsNotMovedByTheMouse, camera_fixture)
+{
+	const auto game = reg->create();
+	reg->emplace<scn::local_transform>(game, glm::translate(glm::mat4(1.0f), glm::vec3(0.f, 5.f, 0.f)));
+	reg->emplace<scn::world_transform>(game);
+	reg->emplace<scn::depth_level>(game);
+	scn::assemble_camera(*reg, game, scn::camera_desc{}, "game");
+
+	state->mouse[(int)inp::MOUSE_BUTTONS::LEFT] = true;
+	state->mouse_dir = { 0.1f, 0.2f };
+	step(0.016f);
+
+	BOOST_TEST(ctl().position.x == 0.3f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(!reg->all_of<scn::mouse_controller_component>(game));
+	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(game).local[3]) == glm::vec3(0.f, 5.f, 0.f)));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
