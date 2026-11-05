@@ -70,7 +70,8 @@ void scn::assemble_camera(entt::registry& reg, entt::entity e, const camera_desc
 	cam_comp.ortho_size = desc.ortho_size();
 	reg.emplace_or_replace<scn::camera_component>(e, std::move(cam_comp));
 	
-	reg.get_or_emplace<scn::local_transform>(e);
+	if (!reg.all_of<scn::local_transform>(e))
+		reg.emplace<scn::local_transform>(e);
 }
 
 namespace {
