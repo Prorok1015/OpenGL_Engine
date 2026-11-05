@@ -951,6 +951,12 @@ namespace {
 		if (const auto records = node.find("overrides"); records != node.end() && records->value().is_array()) {
 			for (const auto& record : records->value().as_array()) {
 				if (!record.is_object()) continue;
+				// a record that says what it sets: a camera
+				const auto* component = record.as_object().if_contains("component");
+				if (const auto* set = record.as_object().if_contains("value"); component && component->is_string() && set && set->is_object()) {
+					const auto* type = set->as_object().if_contains("__type");
+					if (type && type->is_string() && type->as_string() == scn::camera_desc::__type) keys.emplace(component->as_string());
+				}
 				const auto added = record.as_object().find("value");
 				const auto* op = record.as_object().if_contains("op");
 				if (added != record.as_object().end() && added->value().is_object() && op && op->is_string() && op->as_string() == "add_node") {
@@ -1002,7 +1008,10 @@ namespace {
 			const auto* path = object.if_contains("path");
 			const std::string key = component && component->is_string() ? std::string{ component->as_string() } : std::string{};
 			const std::string where = path && path->is_string() ? std::string{ path->as_string() } : std::string{};
-			if (key == scn::transform_pseudo_component || !camera_keys.contains(key)) {
+			const auto* typed_value = object.if_contains("value");
+			const auto* typed_type = typed_value && typed_value->is_object() ? typed_value->as_object().if_contains("__type") : nullptr;
+			const bool typed_camera = typed_type && typed_type->is_string() && typed_type->as_string() == scn::camera_desc::__type;
+			if (key == scn::transform_pseudo_component || (!typed_camera && !camera_keys.contains(key))) {
 				migrated.push_back(std::move(record));
 				continue;
 			}
