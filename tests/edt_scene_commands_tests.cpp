@@ -280,8 +280,10 @@ BOOST_AUTO_TEST_CASE(a_nested_patch_inside_a_prefab_instance_becomes_override_re
 		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,15,13]}}})");
 	BOOST_REQUIRE_MESSAGE(set.ok, set.error);
 	const prefab_node& inst = *child(root(1), 0xe1);
+	// the editor writes a diff of the component as the value of one record at ""
 	BOOST_TEST(std::ranges::any_of(inst.overrides, [](const scn::override_record& r) {
-		return r.component == "camera_desc" && r.path == "/transform/position"; }));
+		return r.component == "camera_desc" && r.path.empty() && r.value.is_object()
+			&& r.value.as_object().contains("transform") && r.value.as_object().at("transform").as_object().contains("position"); }));
 
 	BOOST_TEST(call("component.set", R"({"ref":)" + eye
 		+ R"(,"key":"camera_desc","patch":{"transform":{"scale":[1,1,1]}}})").code == cmd::codes::invalid_args);
