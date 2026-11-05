@@ -253,6 +253,107 @@ BOOST_AUTO_TEST_CASE(component_edits_of_a_node_of_the_scene)
 	BOOST_TEST(call("transform.set", R"({"ref":)" + crate + R"(,"position":[1,2]})").code == cmd::codes::invalid_args);
 }
 
+BOOST_AUTO_TEST_CASE(a_nested_patch_of_the_schema_leaves_is_applied_and_undone)
+{
+	const std::string eye = ref({ "00000000000000a2" });
+	const auto set = call("component.set", R"({"ref":)" + eye
+		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,15,13],"rotation":[-48,0,0]}}})");
+	BOOST_REQUIRE_MESSAGE(set.ok, set.error);
+	const auto& overrides = child(root(), 0xa2)->components.at("camera_desc").overrides;
+	const auto& transform = overrides.at("transform").as_object();
+	BOOST_REQUIRE(transform.at("position").as_array().size() == 3u);
+	BOOST_TEST(transform.at("position").as_array()[1].to_number<double>() == 15.0);
+	BOOST_TEST(transform.at("rotation").as_array()[0].to_number<double>() == -48.0);
+	BOOST_TEST(overrides.at("fov").to_number<double>() == 70.0);
+
+	BOOST_REQUIRE(scene.undo());
+	const auto& undone = child(root(), 0xa2)->components.at("camera_desc").overrides;
+	BOOST_TEST(!undone.contains("transform"));
+	BOOST_TEST(undone.at("fov").to_number<double>() == 70.0);
+	BOOST_TEST(!scene.history().can_undo()); // the nested patch was one step
+}
+
+BOOST_AUTO_TEST_CASE(a_nested_patch_inside_a_prefab_instance_becomes_override_records)
+{
+	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");
+	const auto set = call("component.set", R"({"ref":)" + eye
+		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,15,13]}}})");
+	BOOST_REQUIRE_MESSAGE(set.ok, set.error);
+	const prefab_node& inst = *child(root(1), 0xe1);
+	// the editor writes a diff of the component as the value of one record at ""
+	BOOST_TEST(std::ranges::any_of(inst.overrides, [](const scn::override_record& r) {
+		return r.component == "camera_desc" && r.path.empty() && r.value.is_object()
+			&& r.value.as_object().contains("transform") && r.value.as_object().at("transform").as_object().contains("position"); }));
+
+	BOOST_TEST(call("component.set", R"({"ref":)" + eye
+		+ R"(,"key":"camera_desc","patch":{"transform":{"scale":[1,1,1]}}})").code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(!scene.history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(a_patch_that_changes_nothing_commits_nothing_and_leaves_no_empty_object)
+{
+	const std::string eye = ref({ "00000000000000a2" });
+	const auto before = scene.generation();
+	for (const char* patch : { R"({"transform":{}})", R"({"transform":{"position":null}})", R"({"transform":{"position":null,"rotation":null}})" }) {
+		BOOST_TEST_INFO(patch);
+		const auto result = call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":)" + patch + "}");
+		BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	}
+	BOOST_TEST(scene.generation() == before);
+	BOOST_TEST(!scene.history().can_undo());
+	BOOST_TEST(!child(root(), 0xa2)->components.at("camera_desc").overrides.contains("transform"));
+
+	// A nested object the patch empties by nulls goes, but a one that was empty already stays as it is.
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"transform":{"position":[1,2,3]}}})").ok);
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"transform":{"position":null}}})").ok);
+	BOOST_TEST(!child(root(), 0xa2)->components.at("camera_desc").overrides.contains("transform"));
+}
+
+BOOST_AUTO_TEST_CASE(a_nested_field_is_refused_with_its_whole_path)
+{
+	const std::string eye = ref({ "00000000000000a2" });
+	const auto before = scene.generation();
+	const auto unknown = call("component.set", R"({"ref":)" + eye
+		+ R"(,"key":"camera_desc","patch":{"transform":{"position":[0,1,2],"scale":[1,1,1]}}})");
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_TEST(unknown.error.find("transform/scale (no such field)") != std::string::npos);
+
+	const auto not_fitting = call("component.set", R"({"ref":)" + eye
+		+ R"(,"key":"camera_desc","patch":{"transform":{"position":"up"}}})");
+	BOOST_TEST(not_fitting.code == cmd::codes::invalid_args);
+	BOOST_TEST(not_fitting.error.find("transform/position (the value does not fit)") != std::string::npos);
+
+	const auto no_container = call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"fov":{"x":1}}})");
+	BOOST_TEST(no_container.code == cmd::codes::invalid_args);
+
+	BOOST_TEST(scene.generation() == before);
+	BOOST_TEST(!scene.history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(a_new_component_may_carry_nested_fields)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	const auto added = call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"cam","type":"camera_desc","fields":{"transform":{"position":[1,2,3]}}})");
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+	BOOST_TEST(child(root(), 0xa4)->components.at("cam").overrides.at("transform").as_object().at("position").as_array().size() == 3u);
+	BOOST_TEST(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"cam2","type":"camera_desc","fields":{"transform":{"nope":1}}})").code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(a_new_component_keeps_no_nulls)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	const auto added = call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"cam","type":"camera_desc","fields":{"fov":30.0,"far_distance":null,"transform":{"position":null}}})");
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+	const auto& overrides = child(root(), 0xa4)->components.at("cam").overrides;
+	BOOST_TEST(overrides.at("fov").to_number<double>() == 30.0);
+	BOOST_TEST(!overrides.contains("far_distance"));
+	BOOST_TEST(!overrides.contains("transform"));
+}
+
 BOOST_AUTO_TEST_CASE(inside_a_prefab_instance_only_overrides)
 {
 	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");

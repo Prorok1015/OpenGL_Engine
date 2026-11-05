@@ -118,6 +118,26 @@ namespace desc
 	// must fit the field. An unknown pointer logs a "stale override" warning; the record is never removed.
 	SNK_API override_status validate_override(const type_schema& schema, const json_change& record, const schema_registry* resolve = nullptr);
 
+	// True when `pointer` is not a field itself but a prefix of the keys of some (a "/transform" above "/transform/position"),
+	// also inside structure fields. A merge patch may carry an object there; its leaves are what validate_override checks.
+	// Silent: unlike validate_override it logs nothing for a pointer that is no field.
+	// Aliases are not looked at: a container only an alias names is not recognized (it fails closed, as a stale pointer).
+	SNK_API bool is_field_container(const type_schema& schema, std::string_view pointer, const schema_registry* resolve = nullptr);
+
+	// Where the check of a whole object stopped: the verdict and the pointer of the field that caused it.
+	struct override_failure
+	{
+		override_status status = override_status::valid;
+		std::string pointer;
+	};
+
+	// Checks every member of `patch` (a merge patch, or the value of a structure field) the way validate_override checks one
+	// record, descending into objects: containers (is_field_container) and structure fields whose schema `resolve` knows, so an
+	// undeclared key or a value of the wrong type at any depth is refused. A null member clears and always fits. A leaf is
+	// checked with the value `current` (the merged object) holds for it, else with the patch's. The first member that does not
+	// fit ends it. Silent: nothing is logged, a hostile patch cannot flood the log; `pointer` is the full path of the member.
+	SNK_API override_failure check_override_object(const type_schema& schema, const json::object& patch, const json::object* current = nullptr, const schema_registry* resolve = nullptr);
+
 	// Relative tolerance for float32 values (float32 holds ~7 digits); shared by diff and the editor's override edits.
 	inline constexpr double float_relative_tolerance = 1e-6;
 

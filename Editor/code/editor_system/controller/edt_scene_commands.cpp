@@ -49,7 +49,9 @@ namespace {
 		return cmd::result::failure(code, std::move(message));
 	}
 
-	// RFC 7386: objects merge key by key, null removes the key, anything else replaces.
+	// RFC 7386: objects merge key by key, null removes the key, anything else replaces. One departure: an object that the
+	// patch leaves empty (it had nothing, or only what the nulls took away) is not kept, so a patch that changes nothing
+	// ({"transform":{}}, {"transform":{"position":null}} without an override) leaves the object as it was.
 	json::value merge_patch(json::value target, const json::value& patch)
 	{
 		if (!patch.is_object()) return patch;
@@ -61,24 +63,41 @@ namespace {
 				continue;
 			}
 			const json::value* current = object.if_contains(key);
-			object[key] = merge_patch(current ? *current : json::value{}, value);
+			json::value merged = merge_patch(current ? *current : json::value{}, value);
+			const bool had_content = current && current->is_object() && !current->as_object().empty();
+			if (value.is_object() && merged.is_object() && merged.as_object().empty() && (!current || had_content)) {
+				object.erase(key);
+				continue;
+			}
+			object[key] = std::move(merged);
 		}
 		return target;
 	}
 
-	std::string pointer_token(std::string_view key)
+	// The fields of a new component: no null (a null only clears, and there is nothing to clear), and no object left empty
+	// by that.
+	void strip_nulls(json::object& object)
 	{
-		std::string out;
-		out.reserve(key.size());
-		for (const char c : key) {
-			if (c == '~') out += "~0";
-			else if (c == '/') out += "~1";
-			else out += c;
+		for (auto it = object.begin(); it != object.end();) {
+			if (it->value().is_null()) {
+				it = object.erase(it);
+				continue;
+			}
+			if (it->value().is_object()) {
+				const bool had_content = !it->value().as_object().empty();
+				strip_nulls(it->value().as_object());
+				if (had_content && it->value().as_object().empty()) {
+					it = object.erase(it);
+					continue;
+				}
+			}
+			++it;
 		}
-		return out;
 	}
 
-	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it.
+	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it. The schema
+	// publishes leaves ("/transform/position") and a patch nests them as objects; the check descends through those and
+	// through structure fields, quietly, and names the full path of the first field that does not fit.
 	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const std::string& type, const json::object& patch,
 		const json::object& edited)
 	{
@@ -86,18 +105,10 @@ namespace {
 		if (!schema) {
 			return failure(cmd::codes::invalid_args, std::format("'{}' has no schema: its fields cannot be checked", type));
 		}
-		std::string refused;
-		for (const auto& [key, value] : patch) {
-			if (value.is_null()) continue;
-			const json::value* now = edited.if_contains(key);
-			const desc::json_change change{ "/" + pointer_token(key), now ? *now : value };
-			const auto status = desc::validate_override(*schema, change, &descs.schemas());
-			if (status == desc::override_status::valid) continue;
-			refused += std::format("{}{} ({})", refused.empty() ? "" : ", ", std::string_view(key),
-				status == desc::override_status::stale ? "no such field" : "the value does not fit");
-		}
-		if (!refused.empty()) return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {}", type, refused));
-		return std::nullopt;
+		const desc::override_failure bad = desc::check_override_object(*schema, patch, &edited, &descs.schemas());
+		if (bad.status == desc::override_status::valid) return std::nullopt;
+		return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, std::string_view(bad.pointer).substr(1),
+			bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"));
 	}
 
 	// Three finite numbers a float holds.
@@ -292,11 +303,13 @@ namespace {
 			scn::prefab_desc::prefab_comp_node& out) const
 		{
 			if (auto bad = check_type(type)) return bad;
-			if (!fields.empty()) {
-				if (auto bad = check_fields(*sources.services.descs(), type, fields, fields)) return bad;
+			json::object kept = fields;
+			strip_nulls(kept);
+			if (!kept.empty()) {
+				if (auto bad = check_fields(*sources.services.descs(), type, kept, kept)) return bad;
 			}
 			out.type_name = type;
-			out.overrides = fields;
+			out.overrides = std::move(kept);
 			return std::nullopt;
 		}
 	};

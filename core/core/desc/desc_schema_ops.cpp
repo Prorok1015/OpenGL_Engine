@@ -538,11 +538,19 @@ namespace desc
 			return resolve && !field.ref_type.empty() ? resolve->find_enum(field.ref_type) : nullptr;
 		}
 
+		override_failure check_members(const type_schema& schema, const std::string& root_prefix, const std::string& local,
+			const json::object& patch, const json::object* current, const schema_registry* resolve);
+
 		override_status check_override(const type_schema& schema, std::string_view pointer, const json::value& value, const schema_registry* resolve)
 		{
 			for (const auto& field : schema.fields) {
 				const bool is_alias = std::ranges::find(field.read_aliases, pointer, [](const std::string& alias) { return std::string_view{ alias }; }) != field.read_aliases.end();
 				if (pointer == field.key || is_alias) {
+					if (field.kind == field_kind::structure && value.is_object()) {
+						if (const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr) {
+							return check_members(*nested, {}, {}, value.as_object(), nullptr, resolve).status;
+						}
+					}
 					return json_fits(field.kind, field.element, enum_of(field, resolve), value, field.write == write_policy::null_if_empty) ? override_status::valid : override_status::bad_value;
 				}
 			}
@@ -590,6 +598,43 @@ namespace desc
 			}
 			return override_status::stale;
 		}
+
+		override_failure check_members(const type_schema& schema, const std::string& root_prefix, const std::string& local,
+			const json::object& patch, const json::object* current, const schema_registry* resolve)
+		{
+			for (const auto& member : patch) {
+				if (member.value().is_null()) continue;
+				const std::string here = local + "/" + escape_token(member.key());
+				const json::value* now = current ? current->if_contains(member.key()) : nullptr;
+				const json::object* now_object = now && now->is_object() ? &now->as_object() : nullptr;
+
+				if (member.value().is_object()) {
+					if (is_field_container(schema, here, resolve)) {
+						if (auto failure = check_members(schema, root_prefix, here, member.value().as_object(), now_object, resolve); failure.status != override_status::valid) {
+							return failure;
+						}
+						continue;
+					}
+					const field_schema* field = schema.find_field(here);
+					const type_schema* nested = field && field->kind == field_kind::structure && resolve ? resolve->find(field->ref_type) : nullptr;
+					if (nested) {
+						if (auto failure = check_members(*nested, root_prefix + here, {}, member.value().as_object(), now_object, resolve); failure.status != override_status::valid) {
+							return failure;
+						}
+						continue;
+					}
+				}
+
+				const auto status = check_override(schema, here, now ? *now : member.value(), resolve);
+				if (status != override_status::valid) return { status, root_prefix + here };
+			}
+			return {};
+		}
+	}
+
+	override_failure check_override_object(const type_schema& schema, const json::object& patch, const json::object* current, const schema_registry* resolve)
+	{
+		return check_members(schema, {}, {}, patch, current, resolve);
 	}
 
 	bool json_equal(const json::value& a, const json::value& b, double tolerance)
@@ -906,5 +951,21 @@ namespace desc
 			egLOG_WARN(log_category, "override '{}' for '{}' has a value that does not fit the field", record.pointer, schema.name);
 		}
 		return status;
+	}
+
+	bool is_field_container(const type_schema& schema, std::string_view pointer, const schema_registry* resolve)
+	{
+		for (const auto& field : schema.fields) {
+			if (field.key.size() > pointer.size() && field.key.starts_with(pointer) && field.key[pointer.size()] == '/') {
+				return true;
+			}
+			if (field.kind == field_kind::structure && pointer.size() > field.key.size() && pointer.starts_with(field.key) && pointer[field.key.size()] == '/') {
+				const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr;
+				if (nested && is_field_container(*nested, pointer.substr(field.key.size()), resolve)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 }
