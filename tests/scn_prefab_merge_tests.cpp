@@ -1003,6 +1003,31 @@ BOOST_AUTO_TEST_CASE(HotReload_UpdatesLiveChildrenInPlaceAddsNewAndRemovesDroppe
 	BOOST_TEST((names == std::vector<std::string>{ "Light", "arm", "head" }));
 }
 
+// Game code may destroy a prefab child with a bare reg.destroy; its parent still lists it (#543).
+BOOST_AUTO_TEST_CASE(HotReload_ChildDestroyedByGameCodeIsDroppedFromTheList)
+{
+	auto tag = put("base.prefab.desc", BASE_PREFAB);
+	auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *prefab, "r", tag);
+	auto arm = child_named(reg, root, "arm");
+	auto leg = child_named(reg, root, "leg");
+	BOOST_REQUIRE(reg.valid(arm) && reg.valid(leg));
+	const auto listed_before = reg.get<scn::children_component>(root).children.size();
+
+	reg.destroy(leg);
+	rs->signal_changed(tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
+
+	const auto& children = reg.get<scn::children_component>(root).children;
+	BOOST_TEST(std::ranges::all_of(children, [&](entt::entity e) { return reg.valid(e); }));
+	BOOST_TEST(std::ranges::find(children, leg) == children.end());
+	BOOST_TEST((child_named(reg, root, "arm") == arm)); // the live child is matched as before
+	BOOST_TEST(children.size() == listed_before);       // the reload re-creates "leg" from the desc
+}
+
 BOOST_AUTO_TEST_CASE(HotReload_RenamedChildIsRecreatedNotMoved_CurrentBehavior)
 {
 	// Children are matched by NAME only; a rename is seen as "removed + added", so the live entity

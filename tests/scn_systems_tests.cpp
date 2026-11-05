@@ -278,6 +278,29 @@ BOOST_AUTO_TEST_CASE(DepthSystem_SkipsAndUnlinksDestroyedChildStillListedByItsPa
 	BOOST_TEST((reg.get<scn::children_component>(root).children == std::vector{ kept }));
 }
 
+BOOST_AUTO_TEST_CASE(TransformSystem_StaleChildHandleDoesNotReachTheEntityThatReusedItsIndex)
+{
+	auto& reg = make_world({ "scn::depth_system", "scn::transform_system" }).state();
+	auto root = node(reg, entt::null, { 1, 0, 0 });
+	auto gone = node(reg, root, { 0, 1, 0 });
+	emit_hierarchy(reg, root);
+	step(0.016f);
+
+	reg.destroy(gone); // bare destroy: `root` still lists the old handle
+	auto fresh = reg.create();
+	BOOST_REQUIRE(entt::to_entity(fresh) == entt::to_entity(gone)); // EnTT hands the index out again
+	const glm::mat4 untouched = glm::translate(glm::mat4(1.0f), glm::vec3{ 7, 7, 7 });
+	reg.emplace<scn::local_transform>(fresh, glm::translate(glm::mat4(1.0f), glm::vec3{ 0, 5, 0 }));
+	reg.emplace<scn::world_transform>(fresh).world = untouched;
+	emit_hierarchy(reg, root);
+	emit_transform(reg, root);
+	step(0.016f);
+
+	BOOST_TEST((reg.get<scn::world_transform>(fresh).world == untouched)); // not treated as root's child
+	BOOST_TEST(reg.get<scn::children_component>(root).children.empty());
+	BOOST_TEST(!reg.all_of<scn::depth_level>(fresh));
+}
+
 BOOST_AUTO_TEST_CASE(TransformSystem_KeepsLiveChildWithoutTransformInItsParentsList)
 {
 	auto& reg = make_world({ "scn::depth_system", "scn::transform_system" }).state();
@@ -424,6 +447,18 @@ BOOST_FIXTURE_TEST_CASE(Anim_GameDespawnsAnimatedNodeInTheFrameItWasAnimated, an
 	emit_transform(*reg, root);
 	step(0.1f);
 	BOOST_TEST((world_pos(*reg, root) == glm::vec3{ 3, 0, 0 }));
+}
+
+// Only the queue path: nothing reports the parent in that frame, so its list is not walked.
+BOOST_FIXTURE_TEST_CASE(Anim_GameDespawnsAnimatedNodeInTheFrameItWasAnimated_QueueOnly, anim_despawn_fixture)
+{
+	run_for(0.25f);
+	reg->ctx().emplace<despawn_request>().root = bone;
+	step(0.1f);
+
+	BOOST_TEST(!reg->valid(bone));
+	BOOST_TEST(reg->get<scn::children_component>(root).children.size() == 1u); // still listed: no walk this frame
+	BOOST_TEST(reg->ctx().get<ecs::event<scn::transform_updated>>().size() == 0u);
 }
 
 // ---------------------------------------------------------------- camera controller
