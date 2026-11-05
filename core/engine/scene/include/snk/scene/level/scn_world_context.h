@@ -77,7 +77,7 @@ namespace scn
 		void begin_frame(std::chrono::duration<float> dt);
 		int fixed_steps() const { return m_fixed_steps; }
 		void write_fixed_time();
-		// Forgets the leftover fraction of a step (a fresh load); alpha goes back to 0.
+		// Forgets the leftover fraction of a step (a fresh load); alpha and world_time go back to 0.
 		void reset_time();
 
 		// The owner keeps stepper and mode identical across the contexts of a set (lockstep).

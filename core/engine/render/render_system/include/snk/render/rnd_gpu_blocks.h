@@ -1,5 +1,7 @@
 #pragma once
+#include <cmath>
 #include <cstddef>
+#include <numbers>
 #include <glm/glm.hpp>
 
 // The uniform blocks of set 0, as the shaders declare them (core/res/shaders/snk_common.glsl).
@@ -20,6 +22,16 @@ namespace rnd
 	static_assert(offsetof(global_params, time) == 128);
 	static_assert(offsetof(global_params, view_position) == 144);
 	static_assert(sizeof(global_params) == 160);
+
+	// `time` of the shaders wraps to 0 after this period (#544): a float keeps a step of ~0.24 ms below it, and a
+	// multiple of 2*pi keeps sin(k * time) and cos(k * time) of an integer k smooth across the wrap.
+	inline constexpr double shader_time_period = 1024.0 * std::numbers::pi;
+
+	// The `time` of global_params for the time of a world in seconds.
+	inline float shader_time(double seconds)
+	{
+		return static_cast<float>(std::fmod(seconds, shader_time_period));
+	}
 
 	struct lights_params
 	{
