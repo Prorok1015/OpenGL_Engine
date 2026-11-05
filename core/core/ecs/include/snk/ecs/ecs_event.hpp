@@ -28,6 +28,11 @@ namespace ecs
 		void clear() {
 			m_list.clear();
 		}
+
+		template<class Pred>
+		void erase_if(Pred pred) {
+			std::erase_if(m_list, pred);
+		}
 	private:
 		std::vector<entt::entity> m_list;
 	};
