@@ -122,25 +122,25 @@ constexpr std::uint64_t crate_id = 0xa2;
 
 // w0: a camera that draws to the backbuffer (redirected in the editor) and a crate; w1: empty.
 constexpr const char* LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":3,"name":"w0","systems":[],"children":[
-		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}},
+	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
-	{"__type":"world_desc","__version":3,"name":"w1","systems":[]}]})";
+	{"__type":"world_desc","__version":4,"name":"w1","systems":[]}]})";
 
 // The same level after a change on disk: the crate is gone and a world was added.
 constexpr const char* LEVEL_CHANGED = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":3,"name":"w0","systems":[],"children":[
-		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}}]},
-	{"__type":"world_desc","__version":3,"name":"w1","systems":[]},
-	{"__type":"world_desc","__version":3,"name":"w2","systems":[]}]})";
+	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}}]},
+	{"__type":"world_desc","__version":4,"name":"w1","systems":[]},
+	{"__type":"world_desc","__version":4,"name":"w2","systems":[]}]})";
 
 // LEVEL with a system that runs only in Play (not in Edit, the level's mode) and holds a resource nothing else holds.
 constexpr const char* PLAY_ONLY_SYSTEM = "test::hold_play_only_resource";
 constexpr const char* HOLDING_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":3,"name":"w0","systems":["test::hold_play_only_resource"],"children":[
-		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}},
+	{"__type":"world_desc","__version":4,"name":"w0","systems":["test::hold_play_only_resource"],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
-	{"__type":"world_desc","__version":3,"name":"w1","systems":[]}]})";
+	{"__type":"world_desc","__version":4,"name":"w1","systems":[]}]})";
 
 // A context variable of the world: the handle goes with the world's registry.
 struct play_only_holder
@@ -159,7 +159,7 @@ void hold_play_only_resource(play_only_holder& holder)
 
 // A level with a component of the module's desc type.
 constexpr const char* MODULE_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":3,"name":"w0","systems":[],"components":{"gc":{"__type":"play_game_desc","speed":3}}}]})";
+	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"components":{"gc":{"__type":"play_game_desc","speed":3}}}]})";
 
 using state_change = std::pair<edt::play_state, edt::play_reason>;
 

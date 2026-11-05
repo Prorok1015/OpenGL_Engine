@@ -85,6 +85,32 @@ BOOST_AUTO_TEST_CASE(TheImageBindsTheInputOnlyWhereNothingIsOnTopOfIt)
 	BOOST_TEST(ui.bound);
 }
 
+// A press on the image (it has no id) makes ImGui move the window: the window's own id is active until release. That is
+// the person dragging in the view; it must keep the input bound (the left-drag pan of the editor camera).
+BOOST_AUTO_TEST_CASE(APressOnTheImageItselfKeepsTheInputBoundWhileItIsHeld)
+{
+	viewport_frames ui;
+	ui.frame();
+	ui.mouse_at_image(20.f, 20.f);
+	ui.settle();
+	BOOST_TEST(ui.bound);
+
+	ImGui::GetIO().AddMouseButtonEvent(0, true);
+	for (int i = 0; i < 3; ++i) {
+		ui.frame();
+		BOOST_TEST(ui.bound);
+	}
+	ui.mouse_at_image(35.f, 25.f); // the drag moves
+	for (int i = 0; i < 3; ++i) {
+		ui.frame();
+		BOOST_TEST(ui.bound);
+	}
+
+	ImGui::GetIO().AddMouseButtonEvent(0, false);
+	ui.settle();
+	BOOST_TEST(ui.bound);
+}
+
 BOOST_AUTO_TEST_CASE(AViewThatTracksItsOwnDragBindsNothing)
 {
 	viewport_frames ui;

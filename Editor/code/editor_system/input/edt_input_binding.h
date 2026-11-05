@@ -2,6 +2,7 @@
 #include "edt_input_manager.h"
 #include <snk/input/inp_input_router.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <functional>
 #include <optional>
 
@@ -39,6 +40,16 @@ namespace edt
 		return { ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::IsItemHovered() };
 	}
 
+	// An item other than the window itself is held. A press on an item without an id (the image) makes ImGui move the
+	// window, and holds that as the active id (the window's MoveId, or its TabId when docked) until release: that is the
+	// person dragging in the view, not a handle.
+	inline bool another_item_is_active()
+	{
+		const ImGuiContext& g = *ImGui::GetCurrentContext();
+		const ImGuiWindow* window = ImGui::GetCurrentWindowRead();
+		return g.ActiveId != 0 && (!window || (g.ActiveId != window->MoveId && g.ActiveId != window->TabId));
+	}
+
 	// Binds the image of a view once everything that sits on top of it is submitted (#368, #545). The image itself has no
 	// ImGui id, so ImGui calls it hovered also while the mouse is over a gizmo handle drawn above it, and a handle that is
 	// held leaves it hovered on the frame of the press; the world must not get that mouse. So: no binding while any item is
@@ -47,7 +58,7 @@ namespace edt
 		const view_item& view, bool blocked = false)
 	{
 		if (!router || !target || !view.hovered || blocked) return false;
-		if (ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive()) return false;
+		if (ImGui::IsAnyItemHovered() || another_item_is_active()) return false;
 		bind_rect_input(*router, *target, view.min, view.max);
 		return true;
 	}

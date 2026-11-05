@@ -124,7 +124,15 @@ void scn::migrate_camera_transform_into_node(json::object& node)
 		json::object& camera = member.value().as_object();
 		const json::value* type = camera.if_contains("__type");
 		if (!type || !type->is_string() || type->as_string() != camera_desc::__type) continue;
-		if (version_of(camera) >= 2 || camera.contains("__parent")) continue;
+		if (version_of(camera) >= 2) continue;
+		if (camera.contains("__parent")) {
+			// The pose may sit in the desc this one derives from, which is not loaded here: it cannot be baked.
+			egLOG_WARN("scene/camera", "a camera that derives from another desc keeps no pose of its own any more: the transform of its node "
+				"is the pose, any camera_desc.transform it or its parent has is dropped");
+			camera.erase("transform");
+			camera["__version"] = 2;
+			continue;
+		}
 
 		const json::value* transform = camera.if_contains("transform");
 		const json::object* legacy = transform && transform->is_object() ? &transform->as_object() : nullptr;

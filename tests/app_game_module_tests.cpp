@@ -237,7 +237,7 @@ constexpr const char* PREFAB_LEVEL = R"({"__type":"level_desc","name":"lv","worl
 	 "components":{"g":{"__type":"game_desc","value":1}},
 	 "children":{"robot":{"components":{"model_key":"memory://t/rig.prefab.desc"}}}}]})";
 
-constexpr const char* RIG_PREFAB = R"({"__type":"prefab_desc","__version":3,"children":[
+constexpr const char* RIG_PREFAB = R"({"__type":"prefab_desc","__version":4,"children":[
 	{"__id":"00000000000000a1","name":"bone"}]})";
 
 // A continuation of the module's task that tries to unload the module it belongs to (#406).

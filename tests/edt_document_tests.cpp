@@ -26,7 +26,7 @@
 namespace {
 
 constexpr const char* PREVIEW_TEMPLATE = R"({
-	"__type": "world_desc", "__version": 3, "name": "__prefab_preview", "systems": [],
+	"__type": "world_desc", "__version": 4, "name": "__prefab_preview", "systems": [],
 	"components": { "anchor": { "__type": "anchor_desc", "__version": 1 } },
 	"children": [
 		{ "__id": "09705f78a49797f0", "name": "PrefabLight",

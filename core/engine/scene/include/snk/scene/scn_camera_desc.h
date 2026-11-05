@@ -147,6 +147,7 @@ namespace scn {
 	SNK_API void migrate_camera_transform_into_node(json::object& node);
 
 	// LEGACY (camera_desc v1 -> v2) for a camera desc outside a node (a file a component refers to): there is no node to
-	// take the pose, so camera_desc.transform is dropped with a warning.
+	// take the pose, so camera_desc.transform is dropped with a warning. (A camera that derives from another desc, with
+	// "__parent", or is referenced by a "res://..." tag gets the same warning: only an inline camera is baked.)
 	SNK_API void migrate_camera_v1(json::object& camera);
 }

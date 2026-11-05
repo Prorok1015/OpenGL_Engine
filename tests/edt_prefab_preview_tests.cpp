@@ -43,7 +43,7 @@ constexpr const char* LEVEL_ONE_WORLD = R"({"__type":"level_desc","name":"lv","w
 	{"__type":"world_desc","name":"only","systems":[]}]})";
 
 constexpr const char* PREVIEW_TEMPLATE = R"({
-	"__type": "world_desc", "__version": 3, "name": "__prefab_preview", "systems": [],
+	"__type": "world_desc", "__version": 4, "name": "__prefab_preview", "systems": [],
 	"components": { "anchor": { "__type": "anchor_desc", "__version": 1 } },
 	"children": [
 		{ "__id": "09705f78a49797f0", "name": "PrefabLight",

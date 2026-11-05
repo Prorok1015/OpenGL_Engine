@@ -29,10 +29,10 @@ namespace json = boost::json;
 using prefab_node = scn::prefab_desc::prefab_node;
 
 constexpr const char* WORLD = R"({
-	"__type": "world_desc", "__version": 3, "name": "w0", "systems": [],
+	"__type": "world_desc", "__version": 4, "name": "w0", "systems": [],
 	"children": [
 		{ "__id": "00000000000000a2", "name": "MainCamera",
-		  "components": { "camera_desc": { "__type": "camera_desc", "fov": 70.0 } } },
+		  "components": { "camera_desc": { "__type": "camera_desc", "__version": 2, "fov": 70.0 } } },
 		{ "__id": "00000000000000a3", "name": "Crate",
 		  "children": [ { "__id": "00000000000000b1", "name": "Lid" } ] },
 		{ "__id": "00000000000000a4", "name": "Crate2" }
@@ -40,14 +40,14 @@ constexpr const char* WORLD = R"({
 })";
 
 constexpr const char* PREFAB = R"({
-	"__type": "prefab_desc", "__version": 3,
+	"__type": "prefab_desc", "__version": 4,
 	"children": [
-		{ "__id": "00000000000000c1", "name": "eye", "components": { "camera_desc": { "__type": "camera_desc", "fov": 40.0 } } }
+		{ "__id": "00000000000000c1", "name": "eye", "components": { "camera_desc": { "__type": "camera_desc", "__version": 2, "fov": 40.0 } } }
 	]
 })";
 
 constexpr const char* WORLD_1 = R"({
-	"__type": "world_desc", "__version": 3, "name": "w1", "systems": [],
+	"__type": "world_desc", "__version": 4, "name": "w1", "systems": [],
 	"children": [
 		{ "__id": "00000000000000e1", "name": "Inst",
 		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/rig.prefab.desc" } } },

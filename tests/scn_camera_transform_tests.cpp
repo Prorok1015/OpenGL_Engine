@@ -42,9 +42,9 @@ BOOST_FIXTURE_TEST_SUITE(ScnCameraTransformTests, camera_transform_fixture)
 
 BOOST_AUTO_TEST_CASE(ACameraNodeKeepsItsOwnTransformWhenSpawned)
 {
-	const auto tag = put("cam.prefab.desc", R"({"__type":"prefab_desc","children":[
+	const auto tag = put("cam.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
 		{"__id":"00000000000000c1","name":"Cam","transform":{"position":[0,5,0]},
-		 "components":{"camera":{"__type":"camera_desc"}}}]})");
+		 "components":{"camera":{"__type":"camera_desc","__version":2}}}]})");
 	entt::registry reg;
 	const auto root = reg.create();
 	scn::assemble_prefab(*assembler, reg, root, *load<scn::prefab_desc>(tag), "inst", tag);
@@ -93,6 +93,7 @@ BOOST_AUTO_TEST_CASE(TheMigrationWritesTheRenderedPoseIntoTheNodeAndDropsTheCame
 
 BOOST_AUTO_TEST_CASE(ACameraWithoutATransformRenderedTwoUnitsBehindTheOrigin)
 {
+	// no __version on the camera: a file without one is version 1, with the legacy semantics
 	auto world = migrated(R"({"__type":"world_desc","__version":3,"children":[
 		{"__id":"00000000000000c1","name":"Cam","transform":{"position":[9,9,9],"scale":[2,2,2]},
 		 "components":{"camera":{"__type":"camera_desc"}}}]})");
@@ -126,6 +127,52 @@ BOOST_AUTO_TEST_CASE(ACameraDescOutsideANodeLosesItsTransformWithAWarning)
 	BOOST_TEST(!camera.contains("transform"));
 	BOOST_TEST(camera.at("__version").as_int64() == 2);
 	BOOST_TEST(camera.at("fov").to_number<double>() == 50.0);
+}
+
+// A nested instance (v2/v3) writes the components it sets on a node of its prefab as override records.
+BOOST_AUTO_TEST_CASE(OverrideRecordsOnALegacyCameraAreMigratedOrDroppedWithAWarning)
+{
+	auto prefab = migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000a1","name":"inst",
+		 "components":{"prefab_desc":{"__type":"prefab_desc","__version":4,"__parent":"memory://t/base.prefab.desc"}},
+		 "overrides":[
+			{"target":["00000000000000c1"],"component":"camera","path":"","value":{"__type":"camera_desc","fov":50,
+				"transform":{"position":[0,1,3],"rotation":[-5,0,0]}}},
+			{"target":["00000000000000c1"],"component":"camera","path":"/transform/position","value":[1,2,3]},
+			{"target":["00000000000000c1"],"component":"camera","path":"/fov","value":60}]}]})");
+	BOOST_TEST(prefab.at("__version").as_int64() == 4);
+
+	const auto& records = prefab.at("children").as_array()[0].at("overrides").as_array();
+	BOOST_REQUIRE(records.size() == 4u); // the camera, its pose as two transform records, the fov; the /transform edit is dropped
+
+	const auto& camera = records[0].at("value").as_object();
+	BOOST_TEST(!camera.contains("transform"));
+	BOOST_TEST(camera.at("__version").as_int64() == 2);
+	BOOST_TEST(camera.at("fov").to_number<double>() == 50.0);
+
+	BOOST_TEST(records[1].at("component").as_string() == "transform");
+	BOOST_TEST(records[1].at("path").as_string() == "/position");
+	BOOST_TEST(records[1].at("target").as_array()[0].as_string() == "00000000000000c1");
+	BOOST_TEST(number(records[1].at("value"), 1) == 1.174311, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(number(records[1].at("value"), 2) == 4.992389, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(records[2].at("component").as_string() == "transform");
+	BOOST_TEST(records[2].at("path").as_string() == "/rotation");
+	BOOST_TEST(number(records[2].at("value"), 0) == -5.0, boost::test_tools::tolerance(1e-4));
+
+	BOOST_TEST(records[3].at("path").as_string() == "/fov");
+	for (const auto& record : records) BOOST_TEST(record.at("path").as_string() != "/transform/position");
+}
+
+BOOST_AUTO_TEST_CASE(ACameraThatDerivesFromAnotherDescKeepsNoPoseOfItsOwn)
+{
+	auto world = migrated(R"({"__type":"world_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"Cam","transform":{"position":[5,5,5]},
+		 "components":{"camera":{"__type":"camera_desc","__parent":"memory://t/cam.desc","transform":{"position":[0,1,3]}}}}]})");
+	const auto& node = world.at("children").as_array()[0].as_object();
+	BOOST_TEST(number(node.at("transform").at("position"), 0) == 5.0); // the node keeps its own transform, nothing is baked
+	const auto& camera = node.at("components").at("camera").as_object();
+	BOOST_TEST(!camera.contains("transform"));
+	BOOST_TEST(camera.at("__version").as_int64() == 2);
 }
 
 // The point of the migration: a level made before renders from the same place as it did.
