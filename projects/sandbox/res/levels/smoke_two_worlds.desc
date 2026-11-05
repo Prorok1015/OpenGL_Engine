@@ -6,7 +6,7 @@
     "worlds" : [
         {
             "__type" : "world_desc",
-            "__version" : 3,
+            "__version" : 4,
             "name" : "3d_scene",
             "systems" : [
                 "inp::update_input_state",
@@ -28,14 +28,14 @@
                 {
                     "__id" : "5a1f0c3e7b9d2468",
                     "name" : "Game Camera",
+                    "transform" : {
+                        "position" : [0.0, 1.1743115186691284, 4.99238920211792],
+                        "rotation" : [-5.0, 0.0, 0.0]
+                    },
                     "components" : {
                         "camera" : {
                             "__type" : "camera_desc",
-                            "__version" : 1,
-                            "transform" : {
-                                "rotation" : [-5.0, 0.0, 0.0],
-                                "position" : [0.0, 1.0, 3.0]
-                            }
+                            "__version" : 2
                         }
                     }
                 },
@@ -71,7 +71,7 @@
         },
         {
             "__type" : "world_desc",
-            "__version" : 3,
+            "__version" : 4,
             "name" : "overlay",
             "systems" : [
                 "inp::update_input_state",
@@ -93,18 +93,17 @@
                 {
                     "__id" : "2c9d6b41e8f07a35",
                     "name" : "Overlay Camera",
+                    "transform" : {
+                        "position" : [0.0, 0.0, 7.0]
+                    },
                     "components" : {
                         "camera" : {
                             "__type" : "camera_desc",
-                            "__version" : 1,
+                            "__version" : 2,
                             "layer" : 1,
                             "clear" : "depth",
                             "projection" : "ortho",
-                            "ortho_size" : 4.0,
-                            "transform" : {
-                                "rotation" : [0.0, 0.0, 0.0],
-                                "position" : [0.0, 0.0, 5.0]
-                            }
+                            "ortho_size" : 4.0
                         }
                     }
                 },
