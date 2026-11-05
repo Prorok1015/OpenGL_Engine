@@ -960,8 +960,97 @@ BOOST_AUTO_TEST_CASE(IsFieldContainerNamesThePrefixesOfFieldKeysOnly)
 	BOOST_TEST(!desc::is_field_container(schema, "/cam", &registry));
 	BOOST_TEST(!desc::is_field_container(schema, "/label", &registry));
 	BOOST_TEST(!desc::is_field_container(schema, "/no_such_field", &registry));
+	// A structure field is a field, not a container; its leaves belong to the nested schema.
 	BOOST_TEST(!desc::is_field_container(schema, "/nested", &registry));
 	BOOST_TEST(!desc::is_field_container(schema, "/nested/scale", &registry));
+}
+
+namespace {
+	// "outer" has a structure field "/inner" whose schema keys its fields under a container: "/pose/x", "/pose/y".
+	struct nested_containers
+	{
+		nested_containers()
+		{
+			desc::type_schema inner;
+			inner.name = "inner.posed";
+			for (const char* name : { "x", "y" }) {
+				desc::field_schema field;
+				field.name = name;
+				field.key = std::string("/pose/") + name;
+				field.kind = desc::field_kind::f32;
+				inner.fields.push_back(field);
+			}
+			registry.add(inner);
+			desc::field_schema holder;
+			holder.name = "inner";
+			holder.key = "/inner";
+			holder.kind = desc::field_kind::structure;
+			holder.ref_type = "inner.posed";
+			outer.name = "outer";
+			outer.fields = { holder };
+		}
+
+		desc::schema_registry registry;
+		desc::type_schema outer;
+	};
+}
+
+BOOST_AUTO_TEST_CASE(IsFieldContainerLooksIntoStructureFields)
+{
+	nested_containers env;
+	BOOST_TEST(desc::is_field_container(env.outer, "/inner/pose", &env.registry));
+	BOOST_TEST(!desc::is_field_container(env.outer, "/inner/pose/x", &env.registry));
+	BOOST_TEST(!desc::is_field_container(env.outer, "/inner/gone", &env.registry));
+	BOOST_TEST(!desc::is_field_container(env.outer, "/inner/pose", nullptr)); // without the nested schema nothing is known
+}
+
+BOOST_AUTO_TEST_CASE(CheckOverrideObjectValidatesTheLeavesOfStructureFieldsAndContainers)
+{
+	const auto schema = desc::schema_generator<ops_test::widget>::make("ops.widget", 1, desc::schema_kind::component);
+	desc::schema_registry registry;
+	registry.add_enum(desc::make_enum_schema<ops_test::mode>());
+	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
+	using desc::override_status;
+	const auto check = [&](const char* patch, const char* current = nullptr) {
+		const json::object current_object = current ? json::parse(current).as_object() : json::object{};
+		return desc::check_override_object(schema, json::parse(patch).as_object(), current ? &current_object : nullptr, &registry);
+	};
+
+	BOOST_TEST((check(R"({"nested":{"scale":2.5}})").status == override_status::valid));
+	BOOST_TEST((check(R"({"nested":{}})").status == override_status::valid));
+	BOOST_TEST((check(R"({"nested":{"scale":null}})").status == override_status::valid));
+	// An undeclared key, or a value of the wrong type, inside a structure field is refused, with its full path.
+	auto evil = check(R"({"nested":{"evil":1}})");
+	BOOST_TEST((evil.status == override_status::stale));
+	BOOST_TEST(evil.pointer == "/nested/evil");
+	auto wrong = check(R"({"nested":{"scale":"x"}})");
+	BOOST_TEST((wrong.status == override_status::bad_value));
+	BOOST_TEST(wrong.pointer == "/nested/scale");
+	// the same through validate_override: a whole structure value is no longer taken on its word
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/nested", json::parse(R"({"evil":1})") }, &registry) == override_status::stale));
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/nested", json::parse(R"({"scale":2.5})") }, &registry) == override_status::valid));
+	// a container, a leaf and the escaping of a key
+	BOOST_TEST((check(R"({"camera":{"fov":12}})").status == override_status::valid));
+	BOOST_TEST(check(R"({"camera":{"gone":1}})").pointer == "/camera/gone");
+	BOOST_TEST(check(R"({"a/b~c":1})").pointer == "/a~1b~0c");
+	// the leaf is checked with the merged value when there is one
+	BOOST_TEST((check(R"({"label":"x"})", R"({"label":5})").status == override_status::bad_value));
+	// silent: nothing about it is logged (the check returns the reason instead)
+	BOOST_TEST((check(R"({"no_such_field":1})").status == override_status::stale));
+}
+
+BOOST_AUTO_TEST_CASE(CheckOverrideObjectDescendsThroughContainersInsideStructureFields)
+{
+	nested_containers env;
+	using desc::override_status;
+	const auto check = [&](const char* patch) {
+		return desc::check_override_object(env.outer, json::parse(patch).as_object(), nullptr, &env.registry);
+	};
+	BOOST_TEST((check(R"({"inner":{"pose":{"x":1,"y":2}}})").status == override_status::valid));
+	const auto gone = check(R"({"inner":{"pose":{"z":1}}})");
+	BOOST_TEST((gone.status == override_status::stale));
+	BOOST_TEST(gone.pointer == "/inner/pose/z");
+	BOOST_TEST((check(R"({"inner":{"pose":{"x":"no"}}})").status == override_status::bad_value));
 }
 
 BOOST_AUTO_TEST_CASE(JsonEqualComparesNumbersByValueWithinTolerance)
