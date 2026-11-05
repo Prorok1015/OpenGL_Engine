@@ -932,22 +932,61 @@ void scn::migrate_prefab_v2(json::object& obj)
 }
 
 namespace {
-	bool is_legacy_camera_value(const json::value& value)
+	// The keys the camera components of the tree live under (override records name a component by its key, and a camera of
+	// an instance's prefab is not in this tree), and the two names the editor and the files give it.
+	void collect_camera_keys(const json::object& node, std::unordered_set<std::string>& keys)
+	{
+		if (const auto components = node.find("components"); components != node.end() && components->value().is_object()) {
+			for (const auto& member : components->value().as_object()) {
+				if (!member.value().is_object()) continue;
+				const auto* type = member.value().as_object().if_contains("__type");
+				if (type && type->is_string() && type->as_string() == scn::camera_desc::__type) keys.emplace(member.key());
+			}
+		}
+		if (const auto children = node.find("children"); children != node.end() && children->value().is_array()) {
+			for (const auto& child : children->value().as_array()) {
+				if (child.is_object()) collect_camera_keys(child.as_object(), keys);
+			}
+		}
+		if (const auto records = node.find("overrides"); records != node.end() && records->value().is_array()) {
+			for (const auto& record : records->value().as_array()) {
+				if (!record.is_object()) continue;
+				const auto added = record.as_object().find("value");
+				const auto* op = record.as_object().if_contains("op");
+				if (added != record.as_object().end() && added->value().is_object() && op && op->is_string() && op->as_string() == "add_node") {
+					collect_camera_keys(added->value().as_object(), keys);
+				}
+			}
+		}
+	}
+
+	bool has_vec3(const json::object& object, std::string_view key)
+	{
+		const auto* value = object.if_contains(key);
+		return value && value->is_array() && value->as_array().size() == 3;
+	}
+
+	// A camera record that sets camera fields ("path": "", the value is merged onto the camera of the prefab; the editor writes
+	// a diff without "__type", a file may carry a whole typed camera) and has the legacy "transform" in it.
+	bool is_legacy_camera_record_value(const json::value& value)
 	{
 		if (!value.is_object()) return false;
 		const auto& object = value.as_object();
 		const auto* type = object.if_contains("__type");
-		if (!type || !type->is_string() || type->as_string() != scn::camera_desc::__type || object.contains("__parent")) return false;
+		if (type && (!type->is_string() || type->as_string() != scn::camera_desc::__type)) return false;
+		if (object.contains("__parent") || !object.contains("transform")) return false;
 		const auto* version = object.if_contains("__version");
 		return !version || (version->is_int64() && version->as_int64() < 2) || (version->is_uint64() && version->as_uint64() < 2);
 	}
 
-	// The override records of a nested instance on a v1 camera (see migrate_camera_transform_into_node):
-	// - a whole camera value set on a node of the prefab ("path": "", what migrate_prefab_v2 writes for a nested instance's
-	//   own components) keeps its pose: the pose becomes the transform records of the same target;
-	// - a record into camera_desc.transform itself cannot be baked (the pose it edits lives in the prefab, which is not
-	//   loaded here): it is dropped with a warning.
-	void migrate_camera_records(json::object& node)
+	// The override records of a nested instance on a camera (see migrate_camera_transform_into_node), only those of a
+	// component whose key is a camera's:
+	// - a record at "" with the legacy camera_desc.transform in it: when the record sets the whole pose (position and
+	//   rotation) the pose that was rendered becomes the `transform` records of the same target, after this one (so a
+	//   transform record the instance already has, further down, wins); a partial pose cannot be converted (it is merged onto
+	//   a pose in the prefab, which is not loaded here) and is dropped with a warning; fields set besides stay;
+	// - a record into camera_desc.transform itself ("/transform/position") is dropped with a warning, for the same reason.
+	void migrate_camera_records(json::object& node, const std::unordered_set<std::string>& camera_keys)
 	{
 		const auto records = node.find("overrides");
 		if (records == node.end() || !records->value().is_array()) return;
@@ -961,30 +1000,47 @@ namespace {
 			json::object& object = record.as_object();
 			const auto* component = object.if_contains("component");
 			const auto* path = object.if_contains("path");
-			const std::string_view key = component && component->is_string() ? std::string_view{ component->as_string() } : std::string_view{};
-			const std::string_view where = path && path->is_string() ? std::string_view{ path->as_string() } : std::string_view{};
-			if (key == scn::transform_pseudo_component) {
+			const std::string key = component && component->is_string() ? std::string{ component->as_string() } : std::string{};
+			const std::string where = path && path->is_string() ? std::string{ path->as_string() } : std::string{};
+			if (key == scn::transform_pseudo_component || !camera_keys.contains(key)) {
 				migrated.push_back(std::move(record));
 				continue;
 			}
 
 			const auto* value = object.if_contains("value");
-			if (where.empty() && value && is_legacy_camera_value(*value)) {
-				json::object holder;
-				holder["components"] = json::object{ { "camera", *value } };
-				scn::migrate_camera_transform_into_node(holder);
-				const json::object& pose = holder.at("transform").as_object();
+			if (where.empty() && value && is_legacy_camera_record_value(*value)) {
+				json::object camera = value->as_object();
+				const json::value legacy = camera.at("transform");
+				camera.erase("transform");
+				const bool typed = camera.contains("__type");
+				if (typed) camera["__version"] = 2;
+
 				const json::value target = object.if_contains("target") ? *object.if_contains("target") : json::value(json::array{});
-				object["value"] = holder.at("components").at("camera");
-				migrated.push_back(std::move(record));
-				for (const char* field : { "position", "rotation" }) {
-					json::object moved;
-					moved["target"] = target;
-					moved["component"] = std::string{ scn::transform_pseudo_component };
-					moved["path"] = std::string("/") + field;
-					moved["value"] = pose.at(field);
-					migrated.push_back(std::move(moved));
+				std::vector<json::object> moved;
+				if (legacy.is_object() && has_vec3(legacy.as_object(), "position") && has_vec3(legacy.as_object(), "rotation")) {
+					json::object holder;
+					holder["components"] = json::object{ { "camera", json::object{ { "__type", std::string{ scn::camera_desc::__type } }, { "transform", legacy } } } };
+					scn::migrate_camera_transform_into_node(holder);
+					const json::object& pose = holder.at("transform").as_object();
+					for (const char* field : { "position", "rotation" }) {
+						json::object entry;
+						entry["target"] = target;
+						entry["component"] = std::string{ scn::transform_pseudo_component };
+						entry["path"] = std::string("/") + field;
+						entry["value"] = pose.at(field);
+						moved.push_back(std::move(entry));
+					}
+				} else if (legacy.is_object() && (legacy.as_object().contains("position") || legacy.as_object().contains("rotation"))) {
+					egLOG_WARN("desc", "an override of '{}' sets only part of the legacy camera_desc.transform: it is dropped, the transform of the "
+						"node is the pose now (a partial pose cannot be converted here, the rest of it is in the prefab)", key);
 				}
+
+				// what is left of the record: fields besides the header; nothing, no record
+				if (std::ranges::any_of(camera, [](const auto& member) { return !member.key().starts_with("__"); })) {
+					object["value"] = std::move(camera);
+					migrated.push_back(std::move(record));
+				}
+				for (auto& entry : moved) migrated.push_back(std::move(entry));
 				continue;
 			}
 			if (where == "/transform" || where.starts_with("/transform/")) {
@@ -998,13 +1054,13 @@ namespace {
 	}
 
 	// Every node of the tree: its children and the nodes an `add_node` record carries.
-	void bake_camera_poses(json::object& node)
+	void bake_camera_poses(json::object& node, const std::unordered_set<std::string>& camera_keys)
 	{
 		scn::migrate_camera_transform_into_node(node);
-		migrate_camera_records(node);
+		migrate_camera_records(node, camera_keys);
 		if (auto children = node.find("children"); children != node.end() && children->value().is_array()) {
 			for (auto& child : children->value().as_array()) {
-				if (child.is_object()) bake_camera_poses(child.as_object());
+				if (child.is_object()) bake_camera_poses(child.as_object(), camera_keys);
 			}
 		}
 		if (auto records = node.find("overrides"); records != node.end() && records->value().is_array()) {
@@ -1013,7 +1069,7 @@ namespace {
 				auto added = record.as_object().find("value");
 				const auto op = record.as_object().if_contains("op");
 				if (added != record.as_object().end() && added->value().is_object() && op && op->is_string() && op->as_string() == "add_node") {
-					bake_camera_poses(added->value().as_object());
+					bake_camera_poses(added->value().as_object(), camera_keys);
 				}
 			}
 		}
@@ -1023,7 +1079,9 @@ namespace {
 // v4: a camera takes the transform of its node; the pose it kept in camera_desc.transform is written into the node.
 void scn::migrate_prefab_v3(json::object& obj)
 {
-	bake_camera_poses(obj);
+	std::unordered_set<std::string> camera_keys{ std::string{ "camera" }, std::string{ scn::camera_desc::__type } };
+	collect_camera_keys(obj, camera_keys);
+	bake_camera_poses(obj, camera_keys);
 }
 
 namespace {

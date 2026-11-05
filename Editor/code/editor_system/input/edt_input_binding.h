@@ -40,14 +40,16 @@ namespace edt
 		return { ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::IsItemHovered() };
 	}
 
-	// An item other than the window itself is held. A press on an item without an id (the image) makes ImGui move the
-	// window, and holds that as the active id (the window's MoveId, or its TabId when docked) until release: that is the
-	// person dragging in the view, not a handle.
+	// An item other than the window itself is held. A press on an item without an id (the image) makes ImGui start moving
+	// the hovered window at the end of the frame (UpdateMouseMovingWindowEndFrame: StartMouseMovingWindow(g.HoveredWindow),
+	// docked or not, even with NoMove), which holds the window's MoveId as the active id until release: that is the person
+	// dragging in the view, not a handle. The window's TabId is not exempt: it is held while a tab is dragged, and that drag
+	// over the image must not pan the camera.
 	inline bool another_item_is_active()
 	{
 		const ImGuiContext& g = *ImGui::GetCurrentContext();
 		const ImGuiWindow* window = ImGui::GetCurrentWindowRead();
-		return g.ActiveId != 0 && (!window || (g.ActiveId != window->MoveId && g.ActiveId != window->TabId));
+		return g.ActiveId != 0 && (!window || g.ActiveId != window->MoveId);
 	}
 
 	// Binds the image of a view once everything that sits on top of it is submitted (#368, #545). The image itself has no

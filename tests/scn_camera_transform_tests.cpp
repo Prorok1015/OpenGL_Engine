@@ -163,6 +163,59 @@ BOOST_AUTO_TEST_CASE(OverrideRecordsOnALegacyCameraAreMigratedOrDroppedWithAWarn
 	for (const auto& record : records) BOOST_TEST(record.at("path").as_string() != "/transform/position");
 }
 
+// What override_edit::write_component writes (edt_override_edit.cpp): the component key, no "path", a value that is a diff of the
+// camera without "__type". A full pose becomes transform records, a partial one is dropped; the other fields stay.
+BOOST_AUTO_TEST_CASE(TheEditorsOwnOverrideRecordOfACameraPoseIsMigrated)
+{
+	auto prefab = migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000a1","name":"inst",
+		 "components":{"prefab_desc":{"__type":"prefab_desc","__version":4,"__parent":"memory://t/base.prefab.desc"}},
+		 "overrides":[
+			{"target":["00000000000000c1"],"component":"camera","value":{"fov":50,"transform":{"position":[0,1,3],"rotation":[-5,0,0]}}},
+			{"target":["00000000000000c2"],"component":"camera","value":{"transform":{"position":[4,5,6]}}},
+			{"target":["00000000000000c3"],"component":"camera","value":{"transform":{"rotation":[0,90,0]},"far_distance":500}},
+			{"target":["00000000000000c4"],"component":"camera","value":{"transform":{"position":[1,1,1],"rotation":[0,0,0]}}},
+			{"target":["00000000000000c5"],"component":"lens","value":{"transform":{"position":[7,7,7]}}}]}]})");
+	const auto& records = prefab.at("children").as_array()[0].at("overrides").as_array();
+
+	// c1: the camera keeps its fov, the pose follows as two transform records
+	BOOST_REQUIRE(records.size() == 7u);
+	BOOST_TEST(records[0].at("component").as_string() == "camera");
+	BOOST_TEST(!records[0].at("value").as_object().contains("transform"));
+	BOOST_TEST(records[0].at("value").at("fov").to_number<double>() == 50.0);
+	BOOST_TEST(records[1].at("component").as_string() == "transform");
+	BOOST_TEST(records[1].at("path").as_string() == "/position");
+	BOOST_TEST(number(records[1].at("value"), 1) == 1.174311, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(records[2].at("path").as_string() == "/rotation");
+	BOOST_TEST(number(records[2].at("value"), 0) == -5.0, boost::test_tools::tolerance(1e-4));
+
+	// c2: only a position, nothing left of the record; c3: only a rotation, the far_distance stays
+	BOOST_TEST(records[3].at("target").as_array()[0].as_string() == "00000000000000c3");
+	BOOST_TEST(records[3].at("value").as_object().size() == 1u);
+	BOOST_TEST(records[3].at("value").at("far_distance").to_number<double>() == 500.0);
+
+	// c4: a whole pose that is the default one — still baked (eye 2 units behind the pivot)
+	BOOST_TEST(records[4].at("target").as_array()[0].as_string() == "00000000000000c4");
+	BOOST_TEST(records[4].at("path").as_string() == "/position");
+	BOOST_TEST(number(records[4].at("value"), 2) == 3.0, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(records[5].at("path").as_string() == "/rotation");
+
+	// c5: a component that is not a camera is not touched
+	BOOST_TEST(records[6].at("component").as_string() == "lens");
+	BOOST_TEST(records[6].at("value").at("transform").at("position").as_array().size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(ARecordIntoTheTransformOfAnotherComponentIsLeftAlone)
+{
+	auto prefab = migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000a1","name":"inst",
+		 "components":{"prefab_desc":{"__type":"prefab_desc","__version":4,"__parent":"memory://t/base.prefab.desc"}},
+		 "overrides":[{"target":["00000000000000c1"],"component":"lens","path":"/transform/position","value":[1,2,3]}]}]})");
+	const auto& records = prefab.at("children").as_array()[0].at("overrides").as_array();
+	BOOST_REQUIRE(records.size() == 1u);
+	BOOST_TEST(records[0].at("path").as_string() == "/transform/position");
+}
+
 BOOST_AUTO_TEST_CASE(ACameraThatDerivesFromAnotherDescKeepsNoPoseOfItsOwn)
 {
 	auto world = migrated(R"({"__type":"world_desc","__version":3,"children":[
