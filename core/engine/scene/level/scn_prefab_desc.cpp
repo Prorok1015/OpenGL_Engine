@@ -1030,13 +1030,14 @@ namespace {
 						entry["value"] = pose.at(field);
 						moved.push_back(std::move(entry));
 					}
-				} else if (legacy.is_object() && (legacy.as_object().contains("position") || legacy.as_object().contains("rotation"))) {
-					egLOG_WARN("desc", "an override of '{}' sets only part of the legacy camera_desc.transform: it is dropped, the transform of the "
+				} else {
+					egLOG_WARN("desc", "an override of '{}' sets no whole legacy camera_desc.transform: it is dropped, the transform of the "
 						"node is the pose now (a partial pose cannot be converted here, the rest of it is in the prefab)", key);
 				}
 
-				// what is left of the record: fields besides the header; nothing, no record
-				if (std::ranges::any_of(camera, [](const auto& member) { return !member.key().starts_with("__"); })) {
+				// what is left of the record: a typed record may create the camera component, so it stays; a diff stays when it
+				// still sets a field
+				if (typed || std::ranges::any_of(camera, [](const auto& member) { return !member.key().starts_with("__"); })) {
 					object["value"] = std::move(camera);
 					migrated.push_back(std::move(record));
 				}

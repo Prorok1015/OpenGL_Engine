@@ -205,6 +205,37 @@ BOOST_AUTO_TEST_CASE(TheEditorsOwnOverrideRecordOfACameraPoseIsMigrated)
 	BOOST_TEST(records[6].at("value").at("transform").at("position").as_array().size() == 3u);
 }
 
+// A typed record at "" creates the camera component on a node that has none (an instance's own components are written
+// like that by migrate_prefab_v2): it must stay even when the pose was all it said.
+BOOST_AUTO_TEST_CASE(ATypedCameraRecordThatOnlySaidThePoseStillCreatesTheCamera)
+{
+	auto prefab = migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000a1","name":"inst",
+		 "components":{"prefab_desc":{"__type":"prefab_desc","__version":4,"__parent":"memory://t/base.prefab.desc"}},
+		 "overrides":[
+			{"target":["00000000000000c1"],"component":"eye","path":"","value":{"__type":"camera_desc",
+				"transform":{"position":[0,1,3],"rotation":[-5,0,0]}}},
+			{"target":["00000000000000c2"],"component":"eye","path":"","value":{"__type":"camera_desc","transform":{}}},
+			{"target":["00000000000000c3"],"component":"eye","path":"","value":{"__type":"camera_desc","transform":5}}]}]})");
+	const auto& records = prefab.at("children").as_array()[0].at("overrides").as_array();
+	BOOST_REQUIRE(records.size() == 5u); // c1: the camera and its pose (2); c2 and c3: the camera only, the bad transform dropped
+
+	BOOST_TEST(records[0].at("target").as_array()[0].as_string() == "00000000000000c1");
+	BOOST_TEST(records[0].at("component").as_string() == "eye");
+	const auto& camera = records[0].at("value").as_object();
+	BOOST_TEST(camera.at("__type").as_string() == "camera_desc");
+	BOOST_TEST(camera.at("__version").as_int64() == 2);
+	BOOST_TEST(!camera.contains("transform"));
+	BOOST_TEST(records[1].at("path").as_string() == "/position");
+	BOOST_TEST(records[2].at("path").as_string() == "/rotation");
+
+	BOOST_TEST(records[3].at("target").as_array()[0].as_string() == "00000000000000c2");
+	BOOST_TEST(records[3].at("value").at("__type").as_string() == "camera_desc");
+	BOOST_TEST(!records[3].at("value").as_object().contains("transform"));
+	BOOST_TEST(records[4].at("target").as_array()[0].as_string() == "00000000000000c3");
+	BOOST_TEST(!records[4].at("value").as_object().contains("transform"));
+}
+
 BOOST_AUTO_TEST_CASE(ARecordIntoTheTransformOfAnotherComponentIsLeftAlone)
 {
 	auto prefab = migrated(R"({"__type":"prefab_desc","__version":3,"children":[
