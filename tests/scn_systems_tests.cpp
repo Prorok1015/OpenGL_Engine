@@ -18,6 +18,25 @@ namespace {
 
 using test_util::stat_component;
 
+// Stands in for game code that despawns a prefab tree mid-frame with a bare reg.destroy (#543).
+struct despawn_request { entt::entity root = entt::null; };
+
+void destroy_tree(entt::registry& reg, entt::entity e)
+{
+	if (auto* kids = reg.try_get<scn::children_component>(e)) {
+		for (auto child : std::vector(kids->children)) destroy_tree(reg, child);
+	}
+	reg.destroy(e);
+}
+
+void despawn_system(entt::registry& reg)
+{
+	auto* request = reg.ctx().find<despawn_request>();
+	if (!request || request->root == entt::null) return;
+	destroy_tree(reg, request->root);
+	request->root = entt::null;
+}
+
 struct systems_fixture : test_util::scene_env
 {
 	systems_fixture() : lvl("level", nullptr)
@@ -25,6 +44,8 @@ struct systems_fixture : test_util::scene_env
 		scn::init_transform_system(sf);
 		scn::init_animation_system(sf);
 		scn::init_mouse_controller_system(sf);
+		sf.register_system<&despawn_system>("test::despawn",
+			{ .phase = ecs::phase::update, .after = { "scn::animation_system_node" }, .run_in_edit = true });
 	}
 
 	scn::world_context& make_world(std::vector<std::string> systems)
@@ -191,18 +212,102 @@ BOOST_AUTO_TEST_CASE(TransformSystem_ChildEventAloneUsesCurrentParentWorld)
 	BOOST_TEST((world_pos(reg, child) == glm::vec3{ 5, 7, 0 }));
 }
 
+// ---------------------------------------------------------------- entities destroyed before phase::transform (#543)
+
+BOOST_AUTO_TEST_CASE(TransformSystem_SkipsEntityDestroyedAfterItsEvent)
+{
+	auto& reg = make_world({ "scn::depth_system", "scn::transform_system" }).state();
+	auto root = node(reg, entt::null, { 1, 0, 0 });
+	auto child = node(reg, root, { 0, 1, 0 });
+	auto other = node(reg, entt::null, { 0, 0, 4 });
+	emit_hierarchy(reg, root);
+	emit_hierarchy(reg, other);
+	step(0.016f);
+
+	emit_transform(reg, child);
+	emit_transform(reg, other);
+	reg.destroy(child);
+	step(0.016f);
+
+	BOOST_TEST((world_pos(reg, other) == glm::vec3{ 0, 0, 4 }));
+	BOOST_TEST(reg.ctx().get<ecs::event<scn::transform_updated>>().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(DepthSystem_SkipsEntityDestroyedAfterItsEvent)
+{
+	auto& reg = make_world({ "scn::depth_system" }).state();
+	auto gone = reg.create(); // no depth_level yet: the system would add one
+	auto kept = node(reg, entt::null, {});
+	emit_hierarchy(reg, gone);
+	emit_hierarchy(reg, kept);
+	reg.destroy(gone);
+	step(0.016f);
+
+	BOOST_TEST(!reg.storage<scn::depth_level>().contains(gone)); // no component left behind for a dead id
+	BOOST_TEST(reg.get<scn::depth_level>(kept).value == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TransformSystem_SkipsAndUnlinksDestroyedChildStillListedByItsParent)
+{
+	auto& reg = make_world({ "scn::depth_system", "scn::transform_system" }).state();
+	auto root = node(reg, entt::null, { 1, 0, 0 });
+	auto gone = node(reg, root, { 0, 1, 0 });
+	auto kept = node(reg, root, { 0, 2, 0 });
+	emit_hierarchy(reg, root);
+	step(0.016f);
+
+	reg.destroy(gone); // bare destroy: `root` still lists it
+	emit_transform(reg, root);
+	step(0.016f);
+
+	BOOST_TEST((world_pos(reg, kept) == glm::vec3{ 1, 2, 0 }));
+	BOOST_TEST((reg.get<scn::children_component>(root).children == std::vector{ kept }));
+}
+
+BOOST_AUTO_TEST_CASE(DepthSystem_SkipsAndUnlinksDestroyedChildStillListedByItsParent)
+{
+	auto& reg = make_world({ "scn::depth_system" }).state();
+	auto root = node(reg, entt::null, {});
+	auto gone = node(reg, root, {});
+	auto kept = node(reg, root, {});
+	reg.destroy(gone);
+	emit_hierarchy(reg, root);
+	step(0.016f);
+
+	BOOST_TEST(reg.get<scn::depth_level>(kept).value == 1u);
+	BOOST_TEST((reg.get<scn::children_component>(root).children == std::vector{ kept }));
+}
+
+BOOST_AUTO_TEST_CASE(TransformSystem_KeepsLiveChildWithoutTransformInItsParentsList)
+{
+	auto& reg = make_world({ "scn::depth_system", "scn::transform_system" }).state();
+	auto root = node(reg, entt::null, {});
+	auto bare = reg.create(); // alive, but no local/world transform
+	reg.emplace<scn::parent_component>(bare, root);
+	reg.emplace<scn::children_component>(root, std::vector{ bare });
+	emit_hierarchy(reg, root);
+	emit_transform(reg, root);
+	step(0.016f);
+
+	BOOST_TEST((reg.get<scn::children_component>(root).children == std::vector{ bare }));
+}
+
 // ---------------------------------------------------------------- animation systems
 
 struct anim_fixture : systems_fixture
 {
-	anim_fixture()
+	anim_fixture() : anim_fixture(false) {}
+
+	explicit anim_fixture(bool with_despawn)
 	{
 		auto coll = load<scn::animation_collection_desc>(put("anims.desc", R"({"__type":"animation_collection_desc","clips":[
 			{"__type":"animation_clip_desc","name":"Walk","duration":10.0,"ticks_per_second":10.0,
 			 "channels":{"Bone":{"position":[{"value":[0,0,0],"time":0.0},{"value":[10,0,0],"time":10.0}],"rotation":[],"scale":[]}}}]})"));
 		collection = coll;
-		auto& world = make_world({ "scn::animation_controller_update", "scn::animation_system_node",
-			"scn::depth_system", "scn::transform_system", "scn::animation_system_matrix" });
+		std::vector<std::string> systems{ "scn::animation_controller_update", "scn::animation_system_node",
+			"scn::depth_system", "scn::transform_system", "scn::animation_system_matrix" };
+		if (with_despawn) systems.insert(systems.begin() + 2, "test::despawn");
+		auto& world = make_world(std::move(systems));
 		reg = &world.state();
 
 		root = node(*reg, entt::null, {});
@@ -296,6 +401,29 @@ BOOST_FIXTURE_TEST_CASE(Anim_NodeWithoutChannelInClipIsSkipped, anim_fixture)
 	reg->get<scn::animated_node_component>(bone).node_name = "Other";
 	step(0.5f);
 	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(bone).local[3]) == glm::vec3{ 0, 0, 0 }));
+}
+
+struct anim_despawn_fixture : anim_fixture
+{
+	anim_despawn_fixture() : anim_fixture(true) {}
+};
+
+// The demo crash (#543): the animation queues the bone's transform_updated in `update`, game code destroys the
+// bone later in the same phase, and phase::transform then consumes the queue and walks the parent's children.
+BOOST_FIXTURE_TEST_CASE(Anim_GameDespawnsAnimatedNodeInTheFrameItWasAnimated, anim_despawn_fixture)
+{
+	run_for(0.25f);
+	reg->ctx().emplace<despawn_request>().root = bone;
+	emit_transform(*reg, root);
+	step(0.1f);
+
+	BOOST_TEST(!reg->valid(bone));
+	BOOST_TEST(reg->get<scn::children_component>(root).children.empty());
+
+	reg->get<scn::local_transform>(root).local = glm::translate(glm::mat4(1.0f), glm::vec3{ 3, 0, 0 });
+	emit_transform(*reg, root);
+	step(0.1f);
+	BOOST_TEST((world_pos(*reg, root) == glm::vec3{ 3, 0, 0 }));
 }
 
 // ---------------------------------------------------------------- camera controller
