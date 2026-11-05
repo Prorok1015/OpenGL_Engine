@@ -78,6 +78,27 @@ namespace {
 		return out;
 	}
 
+	// The schema publishes leaves ("/transform/position"), a patch may nest them as an object: such an object is a
+	// container, its members are checked one by one under their full pointer.
+	void check_patch(const desc::desc_system& descs, const desc::type_schema& schema, const std::string& pointer,
+		const json::object& patch, const json::object* edited, std::string& refused)
+	{
+		for (const auto& [key, value] : patch) {
+			if (value.is_null()) continue;
+			const std::string path = pointer + "/" + pointer_token(key);
+			const json::value* now = edited ? edited->if_contains(key) : nullptr;
+			if (value.is_object() && desc::is_field_container(schema, path, &descs.schemas())) {
+				check_patch(descs, schema, path, value.as_object(), now && now->is_object() ? &now->as_object() : nullptr, refused);
+				continue;
+			}
+			const desc::json_change change{ path, now ? *now : value };
+			const auto status = desc::validate_override(schema, change, &descs.schemas());
+			if (status == desc::override_status::valid) continue;
+			refused += std::format("{}{} ({})", refused.empty() ? "" : ", ", std::string_view(path).substr(1),
+				status == desc::override_status::stale ? "no such field" : "the value does not fit");
+		}
+	}
+
 	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it.
 	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const std::string& type, const json::object& patch,
 		const json::object& edited)
@@ -87,15 +108,7 @@ namespace {
 			return failure(cmd::codes::invalid_args, std::format("'{}' has no schema: its fields cannot be checked", type));
 		}
 		std::string refused;
-		for (const auto& [key, value] : patch) {
-			if (value.is_null()) continue;
-			const json::value* now = edited.if_contains(key);
-			const desc::json_change change{ "/" + pointer_token(key), now ? *now : value };
-			const auto status = desc::validate_override(*schema, change, &descs.schemas());
-			if (status == desc::override_status::valid) continue;
-			refused += std::format("{}{} ({})", refused.empty() ? "" : ", ", std::string_view(key),
-				status == desc::override_status::stale ? "no such field" : "the value does not fit");
-		}
+		check_patch(descs, *schema, {}, patch, &edited, refused);
 		if (!refused.empty()) return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {}", type, refused));
 		return std::nullopt;
 	}

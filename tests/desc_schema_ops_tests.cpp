@@ -947,6 +947,23 @@ BOOST_AUTO_TEST_CASE(ValidateOverrideAcceptsFieldsAndWarnsAboutStaleOnes)
 	BOOST_TEST(record.value.as_int64() == 1);
 }
 
+BOOST_AUTO_TEST_CASE(IsFieldContainerNamesThePrefixesOfFieldKeysOnly)
+{
+	const auto schema = desc::schema_generator<ops_test::widget>::make("ops.widget", 1, desc::schema_kind::component);
+	desc::schema_registry registry;
+	registry.add_enum(desc::make_enum_schema<ops_test::mode>());
+	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
+
+	BOOST_TEST(desc::is_field_container(schema, "/camera", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/camera/fov", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/camera/gone", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/cam", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/label", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/no_such_field", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/nested", &registry));
+	BOOST_TEST(!desc::is_field_container(schema, "/nested/scale", &registry));
+}
+
 BOOST_AUTO_TEST_CASE(JsonEqualComparesNumbersByValueWithinTolerance)
 {
 	BOOST_TEST(desc::json_equal(json::value(1), json::value(1.0)));

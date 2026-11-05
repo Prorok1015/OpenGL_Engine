@@ -907,4 +907,20 @@ namespace desc
 		}
 		return status;
 	}
+
+	bool is_field_container(const type_schema& schema, std::string_view pointer, const schema_registry* resolve)
+	{
+		for (const auto& field : schema.fields) {
+			if (field.key.size() > pointer.size() && field.key.starts_with(pointer) && field.key[pointer.size()] == '/') {
+				return true;
+			}
+			if (field.kind == field_kind::structure && pointer.size() > field.key.size() && pointer.starts_with(field.key) && pointer[field.key.size()] == '/') {
+				const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr;
+				if (nested && is_field_container(*nested, pointer.substr(field.key.size()), resolve)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 }
