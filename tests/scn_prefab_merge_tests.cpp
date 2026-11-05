@@ -1023,7 +1023,7 @@ BOOST_AUTO_TEST_CASE(HotReload_ChildDestroyedByGameCodeIsDroppedFromTheList)
 
 	const auto& children = reg.get<scn::children_component>(root).children;
 	BOOST_TEST(std::ranges::all_of(children, [&](entt::entity e) { return reg.valid(e); }));
-	BOOST_TEST(std::ranges::find(children, leg) == children.end());
+	BOOST_TEST((std::ranges::find(children, leg) == children.end()));
 	BOOST_TEST((child_named(reg, root, "arm") == arm)); // the live child is matched as before
 	BOOST_TEST(children.size() == listed_before);       // the reload re-creates "leg" from the desc
 }
