@@ -29,10 +29,10 @@ on:
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
 # Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
-# Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared (both also build the project
-# template's game module, #434), Linux TSan,
-# SDK package (Linux), SDK package (Windows shared), Extract benchmark (#505: on a PR it only builds, so a warning
-# that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes and by hand only).
+# Full adds: Linux GCC Shared (the project template's game module, #434), Linux TSan, SDK package (Linux),
+# Windows package (Release, Debug, check: the release archives, #223), Extract benchmark (#505: on a PR it only
+# builds, so a warning that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes
+# and by hand only). Every build uses the shared engine but Linux Clang Debug and the static SDK halves (#223).
 
 # A newer push to a PR cancels its running run. A push run (aibranch, main) is never cancelled once it
 # runs, or frequent merges would leave the branch without a single complete run (#476): the benchmark
@@ -140,7 +140,8 @@ jobs:
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
         with:
-          key: cc-ci-linux-shared
+          # The same preset as the editor smoke job (shared engine, #223): one compiler cache for both.
+          key: cc-ci-linux-gcc-debug
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -813,8 +814,11 @@ jobs:
       - name: Build SDK targets (static)
         run: cmake --build build/ci-linux-static --target snk_sdk --parallel
 
+      # Its own Boost build directory (the static tree's compiles Boost with other definitions); the sources are shared.
       - name: Configure (shared)
-        run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: |
+          cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}/ci-linux-gcc-debug" \
+            "-DFETCHCONTENT_SOURCE_DIR_BOOST=${FC_DIR}/boost-src"
 
       - name: Build SDK targets (shared)
         run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel

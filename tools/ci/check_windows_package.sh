@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Checks the Windows release package the way a user gets it (#223):
 #
-#   tools/ci/check_windows_package.sh <Snake-*-windows-x64.zip> <Snake-*-windows-x64-debug.zip>
+#   tools/ci/check_windows_package.sh <Snake-*-windows-x64.zip> <Snake-*-windows-x64-debug.zip> <debug-targets dir>
 #
+# 0. The Debug package was built with the same configuration-independent targets files as the Release one (the
+#    debug archive only adds *-debug.cmake files, which pair with the Release package's snake_sdk_*Targets.cmake).
 # 1. The debug archive unpacks over the main one without replacing any of its files.
 # 2. The layout: the editor, snk_engine.dll and the Debug snk_engined.dll, PDBs, the MSVC runtime, the SDK.
 # 3. editor.exe and snk_engine.dll need no DLL outside the package but Windows' own (check_windows_deps.sh).
@@ -14,8 +16,10 @@
 # Run from the repository root in an MSVC developer shell (cl, ninja, dumpbin, 7z on PATH).
 set -euo pipefail
 
-main_zip="${1:?usage: check_windows_package.sh <main zip> <debug zip>}"
-debug_zip="${2:?usage: check_windows_package.sh <main zip> <debug zip>}"
+usage="usage: check_windows_package.sh <main zip> <debug zip> <debug-targets dir>"
+main_zip="${1:?$usage}"
+debug_zip="${2:?$usage}"
+debug_targets="${3:?$usage}"
 work="$(cygpath -m "${RUNNER_TEMP:-$PWD/.tmp}")/package_check"
 rm -rf "$work"
 mkdir -p "$work"
@@ -44,6 +48,15 @@ if [[ "$before" != "$after" ]]; then
 	exit 1
 fi
 echo "Snake/${ver}: $(wc -l <<< "$main_files") files, the debug archive adds $(cd "${work}/debug/Snake/${ver}" && find . -type f | wc -l)"
+
+# ---- 0. the Debug and Release packages agree on everything but the per-configuration files ----
+for f in snake_sdk_sharedTargets.cmake snake_sdk_staticTargets.cmake; do
+	if ! cmp -s "${debug_targets}/${f}" "${root}/lib/cmake/snake_sdk/${f}"; then
+		echo "::error::${f} of the Debug build differs from the Release package's: a definition or target depends on the configuration"
+		diff "${debug_targets}/${f}" "${root}/lib/cmake/snake_sdk/${f}" | head -40 || true
+		exit 1
+	fi
+done
 
 # ---- 2. layout ----
 status=0

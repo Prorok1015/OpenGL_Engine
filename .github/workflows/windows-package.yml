@@ -83,6 +83,15 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      # The configuration-independent targets files of the Debug build: the check job compares them with the Release
+      # package's (the debug archive relies on those).
+      - uses: actions/upload-artifact@v4
+        if: matrix.config == 'Debug'
+        with:
+          name: sdk-debug-targets
+          path: package_out/debug-targets/
+          if-no-files-found: error
+
   check:
     name: Windows package check
     needs: package
@@ -105,9 +114,14 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-debug-targets
+          path: debug-targets
+
       - name: Unpack and check the package
         run: |
           ls -l dist
           main="$(ls dist/Snake-*-windows-x64.zip)"
           debug="$(ls dist/Snake-*-windows-x64-debug.zip)"
-          bash tools/ci/check_windows_package.sh "$main" "$debug"
+          bash tools/ci/check_windows_package.sh "$main" "$debug" debug-targets

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.27)
 
 # SNK_COMPILER_CACHE / SNK_PCH. Before project(): the MSVC debug-info policy it sets must precede
 # it, and NO_POLICY_SCOPE keeps that policy in this scope.
@@ -10,8 +10,12 @@ project(build_all)
 # one C++ runtime, which the release package bundles. Debug builds use its debug variant (/MDd), never shipped.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 if(MSVC)
-    # The PDBs of the Release package (#223): /DEBUG, with the optimizations it would otherwise turn off.
+    # The PDBs of the Release package (#223): /DEBUG, with the optimizations it would otherwise turn off. /FS: the
+    # Release /Zi of a shared-engine build (cmake/SnkBuildCache.cmake) writes compiler PDBs from parallel compiles.
     add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+    if(SNK_ENGINE_SHARED)
+        add_compile_options($<$<CONFIG:Release>:/FS>)
+    endif()
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

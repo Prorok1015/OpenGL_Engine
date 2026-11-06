@@ -61,4 +61,17 @@ if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
 	endif()
 endif()
 
+# A multi-config generator (Visual Studio) only learns the configuration at build time: warn instead.
+if(MSVC AND "Debug" IN_LIST CMAKE_CONFIGURATION_TYPES)
+	if(snake_sdk_HAS_SHARED)
+		get_target_property(_snk_sdk_configs snk::engine IMPORTED_CONFIGURATIONS)
+	else()
+		get_target_property(_snk_sdk_configs snk::engine_static IMPORTED_CONFIGURATIONS)
+	endif()
+	if(NOT "DEBUG" IN_LIST _snk_sdk_configs)
+		message(WARNING "snake_sdk: this SDK has no Debug engine, so the Debug configuration cannot link it (/MDd vs /MD). "
+			"Unpack Snake-<version>-windows-x64-debug.zip over the SDK to build Debug.")
+	endif()
+endif()
+
 check_required_components(snake_sdk)

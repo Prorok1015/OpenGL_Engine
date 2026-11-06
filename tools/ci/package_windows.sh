@@ -11,7 +11,9 @@
 #
 # Run from the repository root in an MSVC developer shell (cl, ninja and 7z on PATH). Extra configure
 # arguments come from SNK_PACKAGE_CMAKE_ARGS (release.yml: -DSNK_ASSIMP_FORMATS=ALL), the FetchContent cache
-# from FC_DIR. Uses the presets ci-windows-msvc-{static-,}{release,debug}.
+# from FC_DIR. Uses the presets ci-windows-msvc-{static-,}{release,debug}, with ENGINE_PROFILE_MODE=NONE in both
+# configurations: the Debug package reuses the Release package's configuration-independent targets files, so every
+# PUBLIC definition must be the same (the check job compares the files, <out>/debug-targets/).
 set -euo pipefail
 
 config="${1:?usage: package_windows.sh <Release|Debug> <output dir> <version>}"
@@ -27,11 +29,16 @@ if command -v cygpath >/dev/null; then out="$(cygpath -m "$out")"; fi
 static_preset="ci-windows-msvc-static-${cfg}"
 shared_preset="ci-windows-msvc-${cfg}"
 read -r -a extra <<< "${SNK_PACKAGE_CMAKE_ARGS:-}"
-if [[ -n "${FC_DIR:-}" ]]; then extra+=("-DFETCHCONTENT_BASE_DIR=${FC_DIR}"); fi
+extra+=(-DENGINE_PROFILE_MODE=NONE)
+fc="${FC_DIR:-${PWD}/.fetchcontent-cache}"
+if command -v cygpath >/dev/null; then fc="$(cygpath -m "$fc")"; fi
 
-for preset in "$static_preset" "$shared_preset"; do
-	cmake --preset "$preset" "${extra[@]}"
-done
+# Each tree builds Boost in its own directory (FetchContent puts <name>-build under FETCHCONTENT_BASE_DIR): the two
+# trees compile it with different definitions, and a shared build directory would rebuild it for the second tree and
+# install the second tree's archives with the first. The downloaded sources are shared.
+cmake --preset "$static_preset" "${extra[@]}" "-DFETCHCONTENT_BASE_DIR=${fc}"
+cmake --preset "$shared_preset" "${extra[@]}" "-DFETCHCONTENT_BASE_DIR=${fc}/${shared_preset}" \
+	"-DFETCHCONTENT_SOURCE_DIR_BOOST=${fc}/boost-src"
 cmake --build "build/${static_preset}" --target snk_sdk --parallel
 if [[ "$config" == Release ]]; then
 	cmake --build "build/${shared_preset}" --target snk_sdk editor --parallel
@@ -88,6 +95,11 @@ else
 		cp -a "${full}/${f}" "${root}/${f}"
 	done < <(cd "$full" && find bin lib -type f \( -name '*.dll' -o -name '*.pdb' -o -name '*.lib' -o -name '*-debug.cmake' \) | sort)
 	[[ $status -eq 0 ]] || exit 1
+	# The configuration-independent targets files this Debug package relies on, for the check job to compare with
+	# the Release package's: a Debug-only PUBLIC definition or target would make them differ.
+	mkdir -p "${out}/debug-targets"
+	cp "${full}/lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake" "${full}/lib/cmake/snake_sdk/snake_sdk_staticTargets.cmake" \
+		"${out}/debug-targets/"
 fi
 
 zip="${out}/Snake-${ver}-windows-x64${zip_suffix}.zip"

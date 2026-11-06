@@ -4,15 +4,19 @@
 #   tools/ci/check_windows_deps.sh <bin dir> <file>...
 #
 # Reads the imports (and delay-load imports) with `dumpbin -dependents` (an MSVC developer shell). A dependency is
-# fine when it sits in <bin dir> next to the binary, or is a Windows system DLL (an API set, or a file in
-# %SystemRoot%\System32). The MSVC runtime (vcruntime*, msvcp*, concrt*, vccorlib*, vcomp*) must be in the package
-# even though the runner has it in System32: an end user's machine may not.
+# fine when it sits in <bin dir> next to the binary, or is on the explicit list of Windows DLLs below (API sets
+# included). Anything else fails, the MSVC runtime too (vcruntime*, msvcp*, ...): the runner has it in System32,
+# an end user's machine may not. Extend the list only with a DLL that ships with every Windows 10/11.
 set -euo pipefail
 
 bin="${1:?usage: check_windows_deps.sh <bin dir> <file>...}"
 shift
 [[ $# -gt 0 ]] || { echo "usage: check_windows_deps.sh <bin dir> <file>..."; exit 2; }
-sys="$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")/System32"
+windows_dlls=" kernel32.dll user32.dll gdi32.dll shell32.dll advapi32.dll ole32.dll oleaut32.dll opengl32.dll
+	ws2_32.dll mswsock.dll shlwapi.dll comdlg32.dll comctl32.dll imm32.dll winmm.dll dwmapi.dll version.dll
+	bcrypt.dll crypt32.dll dbghelp.dll ntdll.dll uxtheme.dll setupapi.dll iphlpapi.dll userenv.dll "
+# One space-separated line, so " name " matches a whole entry.
+windows_dlls=" $(echo ${windows_dlls}) "
 
 status=0
 for f in "$@"; do
@@ -40,10 +44,10 @@ for f in "$@"; do
 			status=1
 		elif [[ "$lower" == api-ms-win-* || "$lower" == ext-ms-* ]]; then
 			echo "  ${dep}: Windows API set"
-		elif [[ -f "${sys}/${dep}" ]]; then
+		elif [[ "$windows_dlls" == *" ${lower} "* ]]; then
 			echo "  ${dep}: Windows"
 		else
-			echo "::error::${f} needs ${dep}, which is neither in ${bin} nor a Windows system DLL"
+			echo "::error::${f} needs ${dep}: it is neither in ${bin} nor on the list of Windows DLLs (tools/ci/check_windows_deps.sh)"
 			status=1
 		fi
 	done <<< "$deps"
