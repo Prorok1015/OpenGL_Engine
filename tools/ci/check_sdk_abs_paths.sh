@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fails when an installed snake_sdk CMake config file hard-codes an absolute path (#239).
+# Fails when an installed snake_sdk CMake config file hard-codes an absolute path (#239), or the SDK installs
+# headers under a build-tree path (#223).
 #
 #   tools/ci/check_sdk_abs_paths.sh <sdk prefix>
 #
@@ -50,6 +51,14 @@ while IFS= read -r -d '' file; do
 		done < <(grep -oE "${path_re}" <<<"${line}" || true)
 	done <"${file}"
 done < <(find "${cmake_dir}" -type f -name '*.cmake' -print0 | sort -z)
+
+# A build-tree path in the install layout (include/snk/build/<preset>/...) differs per build and configuration
+# (#223): generated headers belong under include/snk/_generated/.
+if [[ -d "${prefix}/include/snk/build" ]]; then
+	echo "::error::${prefix}/include/snk/build exists: a build-tree include directory was installed under its build-tree path"
+	find "${prefix}/include/snk/build" -maxdepth 4 -type d | sed 's/^/  /'
+	found=$((found + 1))
+fi
 
 echo "check_sdk_abs_paths: ${checked} files scanned, ${found} absolute path(s) found"
 if [[ "${checked}" -eq 0 ]]; then
