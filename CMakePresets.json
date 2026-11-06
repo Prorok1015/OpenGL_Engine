@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 26, "patch": 0 },
+  "cmakeMinimumRequired": { "major": 3, "minor": 27, "patch": 0 },
   "configurePresets": [
     {
       "name": "base",
@@ -11,7 +11,8 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "SNK_COMPILER_CACHE": "AUTO",
         "SNK_PCH": "AUTO",
-        "SNK_WARNINGS_AS_ERRORS": "ON"
+        "SNK_WARNINGS_AS_ERRORS": "ON",
+        "SNK_ENGINE_SHARED": "ON"
       }
     },
     {
@@ -92,12 +93,20 @@
       "name": "ci-linux-clang-debug",
       "inherits": "ci-linux",
       "displayName": "CI Linux Clang Debug (PCH off)",
-      "description": "PCH is off on purpose: this job catches headers that only compile thanks to the PCH",
+      "description": "PCH is off on purpose: this job catches headers that only compile thanks to the PCH. The one CI build of the static engine with the unit tests (no editor executable), the path Shipping (#23) uses (#223)",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
-        "SNK_PCH": "OFF"
+        "SNK_PCH": "OFF",
+        "SNK_ENGINE_SHARED": "OFF"
       }
+    },
+    {
+      "name": "ci-linux-static",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux GCC static engine (SDK)",
+      "description": "The static half of the SDK package (snk::engine_static); no editor executable",
+      "cacheVariables": { "SNK_ENGINE_SHARED": "OFF" }
     },
     {
       "name": "ci-linux-no-assimp",
@@ -136,25 +145,11 @@
       }
     },
     {
-      "name": "ci-linux-shared",
-      "inherits": "ci-linux",
-      "displayName": "CI Linux GCC shared snk_engine",
-      "description": "Needs CMake 3.27+",
-      "cacheVariables": { "SNK_ENGINE_SHARED": "ON" }
-    },
-    {
       "name": "ci-windows-msvc-debug",
       "inherits": "ci",
       "displayName": "CI Windows MSVC Debug",
       "description": "Run from a Developer Command Prompt (cl.exe on PATH)",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
-    },
-    {
-      "name": "ci-windows-msvc-shared",
-      "inherits": "ci-windows-msvc-debug",
-      "displayName": "CI Windows MSVC shared snk_engine",
-      "description": "Needs CMake 3.27+",
-      "cacheVariables": { "SNK_ENGINE_SHARED": "ON" }
     },
     {
       "name": "ci-windows-msvc-release",
@@ -166,11 +161,18 @@
       }
     },
     {
-      "name": "ci-windows-msvc-shared-release",
+      "name": "ci-windows-msvc-static-debug",
+      "inherits": "ci-windows-msvc-debug",
+      "displayName": "CI Windows MSVC Debug static engine (SDK)",
+      "description": "The static half of the Debug SDK package (snk::engine_static); no editor executable",
+      "cacheVariables": { "SNK_ENGINE_SHARED": "OFF" }
+    },
+    {
+      "name": "ci-windows-msvc-static-release",
       "inherits": "ci-windows-msvc-release",
-      "displayName": "CI Windows MSVC Release shared snk_engine",
-      "description": "Needs CMake 3.27+",
-      "cacheVariables": { "SNK_ENGINE_SHARED": "ON" }
+      "displayName": "CI Windows MSVC Release static engine (SDK)",
+      "description": "The static half of the Release SDK package (snk::engine_static); no editor executable",
+      "cacheVariables": { "SNK_ENGINE_SHARED": "OFF" }
     }
   ],
   "buildPresets": [

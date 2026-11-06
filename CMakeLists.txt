@@ -14,9 +14,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # when SNK_ENGINE_SHARED is on). Must be set before any target is created.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# One shared library (snk_engine) instead of static engine components; the editor and the tests
-# link it. Experimental; CI covers Linux GCC and Windows MSVC (EPIC-29 #59, #198).
-option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" OFF)
+# One shared library (snk_engine) instead of static engine components. The editor and game modules
+# (game.dll) always use it (owner decision R11, #223); the static engine is for Shipping (#23) and one
+# CI build that keeps that path compiling. A static build has no editor executable.
+option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" ON)
 if(SNK_ENGINE_SHARED)
     # $<COMPILE_ONLY:> (usage requirements without linking) keeps consumers from linking the
     # component archives a second time.
@@ -24,6 +25,12 @@ if(SNK_ENGINE_SHARED)
         message(FATAL_ERROR "SNK_ENGINE_SHARED requires CMake 3.27+ (found ${CMAKE_VERSION})")
     endif()
     add_compile_definitions(SNK_ENGINE_SHARED)
+endif()
+
+# Debug libraries carry a "d" (snk_engined.dll) so a Debug and a Release install can share one SDK
+# prefix (#223). Before any target: it only initializes DEBUG_POSTFIX of targets created after it.
+if(NOT DEFINED CMAKE_DEBUG_POSTFIX)
+    set(CMAKE_DEBUG_POSTFIX d)
 endif()
 
 set(ENGINE_PROFILE_MODE "NONE" CACHE STRING "Profiling mode: NONE, INTERNAL, TRACY")
