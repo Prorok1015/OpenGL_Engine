@@ -65,13 +65,17 @@ jobs:
         run: bash tools/ci/package_windows.sh "${{ matrix.config }}" "${GITHUB_WORKSPACE}/package_out" "${SNK_VERSION}"
 
       # The unit tests on the shared Release engine (what the removed "Windows MSVC Shared Release" job ran).
-      - name: Build and run unit tests (shared Release engine)
+      # Built in the package's shared tree (only the test sources and Boost.Test are left to compile), with no step
+      # limit, as the build matrix does: a cold compiler cache makes it ~30 minutes. The run has the matrix's limit.
+      - name: Build unit tests (shared Release engine)
         if: inputs.run-tests && matrix.config == 'Release'
-        # The test build alone: ~270 objects, 25+ minutes with a cold compiler cache (a failed run saves none).
-        timeout-minutes: 45
-        run: |
-          cmake --build build/ci-windows-msvc-release --target unit_tests --parallel
-          cd build/ci-windows-msvc-release && ./unit_tests --log_level=test_suite
+        run: cmake --build build/ci-windows-msvc-release --target unit_tests --parallel
+
+      - name: Run unit tests (shared Release engine)
+        if: inputs.run-tests && matrix.config == 'Release'
+        timeout-minutes: 10
+        working-directory: build/ci-windows-msvc-release
+        run: ./unit_tests --log_level=test_suite
 
       - name: Compiler cache statistics
         if: always()
