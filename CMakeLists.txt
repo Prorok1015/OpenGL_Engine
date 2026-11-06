@@ -1,10 +1,23 @@
-cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.27)
 
 # SNK_COMPILER_CACHE / SNK_PCH. Before project(): the MSVC debug-info policy it sets must precede
 # it, and NO_POLICY_SCOPE keeps that policy in this scope.
 include(cmake/SnkBuildCache.cmake NO_POLICY_SCOPE)
 
 project(build_all)
+
+# /MD everywhere, Shipping included (owner decision R11, #223): the editor, snk_engine.dll and game.dll share
+# one C++ runtime, which the release package bundles. Debug builds use its debug variant (/MDd), never shipped.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+if(MSVC)
+    # The PDBs of the Release package (#223): /DEBUG, with the optimizations it would otherwise turn off. /FS: without
+    # a compiler cache, the Release /Zi of a shared-engine build (cmake/SnkBuildCache.cmake) writes compiler PDBs from
+    # parallel compiles.
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+    if(SNK_ENGINE_SHARED)
+        add_compile_options($<$<CONFIG:Release>:/FS>)
+    endif()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,9 +27,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # when SNK_ENGINE_SHARED is on). Must be set before any target is created.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# One shared library (snk_engine) instead of static engine components; the editor and the tests
-# link it. Experimental; CI covers Linux GCC and Windows MSVC (EPIC-29 #59, #198).
-option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" OFF)
+# One shared library (snk_engine) instead of static engine components. The editor and game modules
+# (game.dll) always use it (owner decision R11, #223); the static engine is for Shipping (#23) and one
+# CI build that keeps that path compiling. A static build has no editor executable.
+option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" ON)
 if(SNK_ENGINE_SHARED)
     # $<COMPILE_ONLY:> (usage requirements without linking) keeps consumers from linking the
     # component archives a second time.
@@ -24,6 +38,12 @@ if(SNK_ENGINE_SHARED)
         message(FATAL_ERROR "SNK_ENGINE_SHARED requires CMake 3.27+ (found ${CMAKE_VERSION})")
     endif()
     add_compile_definitions(SNK_ENGINE_SHARED)
+endif()
+
+# Debug libraries carry a "d" (snk_engined.dll) so a Debug and a Release install can share one SDK
+# prefix (#223). Before any target: it only initializes DEBUG_POSTFIX of targets created after it.
+if(NOT DEFINED CMAKE_DEBUG_POSTFIX)
+    set(CMAKE_DEBUG_POSTFIX d)
 endif()
 
 set(ENGINE_PROFILE_MODE "NONE" CACHE STRING "Profiling mode: NONE, INTERNAL, TRACY")

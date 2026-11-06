@@ -7,14 +7,21 @@
 #                                       snk_component_headers(), #109): include/ installs to include/
 #   include/snk/lib3dparty/...          headers of the bundled submodule libraries (glm, imgui, ...)
 #   include/snk/boost/                  the Boost headers the engine needs, merged into one tree
-#   lib/snk/*.a                         static engine components and the bundled third-party
-#                                       libraries (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...)
-#   lib/libsnk_engine.so                SNK_ENGINE_SHARED only
-#   bin/snk_engine.dll, lib/snk/snk_engine.lib   SNK_ENGINE_SHARED on Windows
-#   lib/cmake/snake_sdk/                snake_sdkConfig.cmake, ...ConfigVersion.cmake, ...Targets.cmake
+#   lib/snk/*.a                         a shared build: the components and bundled third-party libraries
+#                                       (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...) behind snk_engine
+#   lib/snk/static/*.a                  a static build: the same, compiled without the DLL export side
+#   lib/libsnk_engine.so                a shared build
+#   bin/snk_engine.dll, lib/snk/snk_engine.lib   a shared build on Windows
+#   lib/cmake/snake_sdk/                snake_sdkConfig.cmake, ...ConfigVersion.cmake,
+#                                       snake_sdk_{shared,static}Targets[-<config>].cmake
 #
-# Consumers: find_package(snake_sdk) and link snk::engine + snk::engine_api. Third-party libraries
-# are bundled: their targets are exported in the same set (snk::thirdparty_<name>), so a consumer
+# One prefix holds both engines, installed from two builds of the same sources (#223): a shared build
+# exports snk::engine (the editor and game modules link it with snk::engine_api), a static build
+# exports snk::engine_static (Shipping, #23). The two builds compile the same component sources
+# differently (SNK_API dllexport vs nothing), so each has its own export set, file names and target
+# names (snk::static_<name>): installing one never overwrites the other. Debug libraries carry a "d"
+# (CMAKE_DEBUG_POSTFIX), so a Debug and a Release install share the prefix too. Third-party libraries
+# are bundled: their targets are exported in the same sets (snk::thirdparty_<name>), so a consumer
 # needs nothing but the prefix (and Threads from the system).
 #
 # Nothing is installed unless `cmake --install` is run. Build `snk_sdk` first: it builds exactly
@@ -27,8 +34,14 @@
 include(CMakePackageConfigHelpers)
 
 set(SNK_SDK_VERSION 0.2.0)
-set(SNK_SDK_EXPORT_SET snake_sdk_targets)
 set(SNK_SDK_CMAKE_DIR lib/cmake/snake_sdk)
+if(SNK_ENGINE_SHARED)
+	set(SNK_SDK_KIND shared)
+else()
+	set(SNK_SDK_KIND static)
+endif()
+set(SNK_SDK_EXPORT_SET snake_sdk_${SNK_SDK_KIND}_targets)
+set(SNK_SDK_TARGETS_FILE snake_sdk_${SNK_SDK_KIND}Targets.cmake)
 
 option(SNK_INSTALL_SDK "Generate install/export rules for the snake_sdk package (cmake --install)" ON)
 
@@ -101,6 +114,15 @@ function(_snk_sdk_include_dest out abs)
 			set(_dest include/snk/boost)
 		endif()
 	endif()
+	# The build tree before the source tree: the presets put it inside the source tree (build/<preset>), and a
+	# generated header directory must land in the same place whichever configuration built it.
+	if(NOT _dest)
+		string(FIND "${abs}/" "${CMAKE_BINARY_DIR}/" _pos)
+		if(_pos EQUAL 0)
+			file(RELATIVE_PATH _rel "${CMAKE_BINARY_DIR}" "${abs}")
+			set(_dest include/snk/_generated/${_rel})
+		endif()
+	endif()
 	if(NOT _dest)
 		string(FIND "${abs}/" "${CMAKE_SOURCE_DIR}/" _pos)
 		if(_pos EQUAL 0)
@@ -113,13 +135,6 @@ function(_snk_sdk_include_dest out abs)
 				# Bundled third-party libraries keep their path in the repo.
 				set(_dest include/snk/${_rel})
 			endif()
-		endif()
-	endif()
-	if(NOT _dest)
-		string(FIND "${abs}/" "${CMAKE_BINARY_DIR}/" _pos)
-		if(_pos EQUAL 0)
-			file(RELATIVE_PATH _rel "${CMAKE_BINARY_DIR}" "${abs}")
-			set(_dest include/snk/_generated/${_rel})
 		endif()
 	endif()
 	set(${out} "${_dest}" PARENT_SCOPE)
@@ -277,18 +292,51 @@ function(snk_install_sdk)
 		if(_3p)
 			set_property(TARGET ${_t} PROPERTY EXPORT_NAME thirdparty_${_t})
 		endif()
+		if(NOT SNK_ENGINE_SHARED)
+			if(_t STREQUAL "engine")
+				set_property(TARGET ${_t} PROPERTY EXPORT_NAME engine_static)
+			else()
+				get_target_property(_name ${_t} EXPORT_NAME)
+				if(NOT _name)
+					set(_name ${_t})
+				endif()
+				set_property(TARGET ${_t} PROPERTY EXPORT_NAME static_${_name})
+			endif()
+		endif()
 	endforeach()
 
+	if(SNK_ENGINE_SHARED)
+		set(_archive_dir lib/snk)
+	else()
+		set(_archive_dir lib/snk/static)
+	endif()
+	# COMPONENT after an artifact kind applies to that kind only: each kind names it, or `--component snake_sdk`
+	# leaves the libraries out.
 	install(TARGETS ${_closure} EXPORT ${SNK_SDK_EXPORT_SET}
-		ARCHIVE DESTINATION lib/snk
-		LIBRARY DESTINATION lib
-		RUNTIME DESTINATION bin
-		COMPONENT snake_sdk)
+		ARCHIVE DESTINATION ${_archive_dir} COMPONENT snake_sdk
+		LIBRARY DESTINATION lib COMPONENT snake_sdk
+		RUNTIME DESTINATION bin COMPONENT snake_sdk)
 	install(EXPORT ${SNK_SDK_EXPORT_SET}
 		NAMESPACE snk::
-		FILE snake_sdkTargets.cmake
+		FILE ${SNK_SDK_TARGETS_FILE}
 		DESTINATION ${SNK_SDK_CMAKE_DIR}
 		COMPONENT snake_sdk)
+	if(MSVC AND SNK_ENGINE_SHARED)
+		install(FILES $<TARGET_PDB_FILE:snk_engine> DESTINATION bin OPTIONAL COMPONENT snake_sdk)
+		# The Microsoft C++ runtime next to snk_engine.dll and editor.exe (R11, #223); Shipping (#23) copies it next
+		# to the game. Not for Debug: the debug runtime is not redistributable. No UCRT: it is part of Windows 10+.
+		# The shared build only, so the static install into the same prefix does not write the same files again.
+		if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+			set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION bin)
+			set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT snake_sdk)
+			set(CMAKE_INSTALL_DEBUG_LIBRARIES OFF)
+			set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)
+			include(InstallRequiredSystemLibraries)
+			if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+				message(WARNING "snake_sdk: InstallRequiredSystemLibraries found no MSVC runtime to install")
+			endif()
+		endif()
+	endif()
 
 	configure_package_config_file(
 		"${CMAKE_SOURCE_DIR}/cmake/snake_sdkConfig.cmake.in"
@@ -309,7 +357,7 @@ function(snk_install_sdk)
 	set(_tree_dir "${CMAKE_BINARY_DIR}/snake_sdk")
 	export(EXPORT ${SNK_SDK_EXPORT_SET}
 		NAMESPACE snk::
-		FILE "${_tree_dir}/snake_sdkTargets.cmake")
+		FILE "${_tree_dir}/${SNK_SDK_TARGETS_FILE}")
 	configure_package_config_file(
 		"${CMAKE_SOURCE_DIR}/cmake/snake_sdkConfig.cmake.in"
 		"${_tree_dir}/snake_sdkConfig.cmake"
@@ -326,5 +374,5 @@ function(snk_install_sdk)
 		endif()
 	endforeach()
 	add_custom_target(snk_sdk DEPENDS ${_buildable})
-	message(STATUS "snake_sdk ${SNK_SDK_VERSION}: ${CMAKE_INSTALL_PREFIX} (cmake --install after building snk_sdk)")
+	message(STATUS "snake_sdk ${SNK_SDK_VERSION} (${SNK_SDK_KIND} engine): ${CMAKE_INSTALL_PREFIX} (cmake --install after building snk_sdk)")
 endfunction()

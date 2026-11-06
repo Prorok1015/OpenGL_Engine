@@ -1,0 +1,132 @@
+# The Windows release package (#223), built and checked the same way for pull requests (build.yml) and
+# releases (release.yml): one leg per configuration builds the static and the shared engine and packs
+# Snake-<ver>-windows-x64.zip (Release: the editor, the SDK with both engines, PDBs, the MSVC runtime) or
+# Snake-<ver>-windows-x64-debug.zip (the Debug engine, unpacked over the main archive); a check job
+# unpacks both like a user and builds against them (tools/ci/check_windows_package.sh).
+name: Windows package
+
+on:
+  workflow_call:
+    inputs:
+      cmake-args:
+        description: Extra configure arguments for both engine builds
+        type: string
+        default: ""
+      run-tests:
+        description: Also build and run unit_tests with the shared Release engine
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Windows package (${{ matrix.config }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Release, Debug]
+    defaults:
+      run:
+        shell: bash
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      SNK_PACKAGE_CMAKE_ARGS: ${{ inputs.cmake-args }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-package-${{ matrix.config }}
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-package-${{ matrix.config }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then ver="${GITHUB_REF_NAME}"; else ver="${GITHUB_SHA::8}"; fi
+          echo "SNK_VERSION=${ver}" >> "$GITHUB_ENV"
+
+      - name: Build, install and pack (static and shared engine)
+        run: bash tools/ci/package_windows.sh "${{ matrix.config }}" "${GITHUB_WORKSPACE}/package_out" "${SNK_VERSION}"
+
+      # The unit tests on the shared Release engine (what the removed "Windows MSVC Shared Release" job ran).
+      # Built in the package's shared tree (only the test sources and Boost.Test are left to compile), with no step
+      # limit, as the build matrix does: a cold compiler cache makes it ~30 minutes. The run has the matrix's limit.
+      - name: Build unit tests (shared Release engine)
+        if: inputs.run-tests && matrix.config == 'Release'
+        run: cmake --build build/ci-windows-msvc-release --target unit_tests --parallel
+
+      - name: Run unit tests (shared Release engine)
+        if: inputs.run-tests && matrix.config == 'Release'
+        timeout-minutes: 10
+        working-directory: build/ci-windows-msvc-release
+        run: ./unit_tests --log_level=test_suite
+
+      - name: Compiler cache statistics
+        if: always()
+        run: if command -v sccache >/dev/null; then sccache --show-stats; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snake-windows-x64-${{ matrix.config }}
+          path: package_out/Snake-*.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      # The configuration-independent targets files of the Debug build: the check job compares them with the Release
+      # package's (the debug archive relies on those).
+      - uses: actions/upload-artifact@v4
+        if: matrix.config == 'Debug'
+        with:
+          name: sdk-debug-targets
+          path: package_out/debug-targets/
+          if-no-files-found: error
+
+  check:
+    name: Windows package check
+    needs: package
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The consumer and the project template come from the sources; the engine only from the archives.
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: snake-windows-x64-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-debug-targets
+          path: debug-targets
+
+      - name: Unpack and check the package
+        run: |
+          ls -l dist
+          main="$(ls dist/Snake-*-windows-x64.zip)"
+          debug="$(ls dist/Snake-*-windows-x64-debug.zip)"
+          bash tools/ci/check_windows_package.sh "$main" "$debug" debug-targets

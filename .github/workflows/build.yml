@@ -29,10 +29,10 @@ on:
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
 # Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
-# Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared (both also build the project
-# template's game module, #434), Linux TSan,
-# SDK package (Linux), SDK package (Windows shared), Extract benchmark (#505: on a PR it only builds, so a warning
-# that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes and by hand only).
+# Full adds: Linux GCC Shared (the project template's game module, #434), Linux TSan, SDK package (Linux),
+# Windows package (Release, Debug, check: the release archives, #223), Extract benchmark (#505: on a PR it only
+# builds, so a warning that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes
+# and by hand only). Every build uses the shared engine but Linux Clang Debug and the static SDK halves (#223).
 
 # A newer push to a PR cancels its running run. A push run (aibranch, main) is never cancelled once it
 # runs, or frequent merges would leave the branch without a single complete run (#476): the benchmark
@@ -52,9 +52,12 @@ jobs:
     strategy:
       fail-fast: false
       # PCH is off in the ci-linux-clang-debug preset: it catches headers that compile only thanks to the PCH.
-      # Fast list on draft PRs, full list otherwise.
+      # It is also the one static-engine build with the unit tests (#223); a static build has no editor executable.
+      # The same two jobs in both tiers: the Windows Release builds moved to the Windows package jobs (#223).
       matrix:
-        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Windows MSVC Release","os":"windows-latest","preset":"ci-windows-msvc-release"},{"name":"Windows MSVC Shared Release","os":"windows-latest","preset":"ci-windows-msvc-shared-release"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]') }}
+        include:
+          - { name: "Windows MSVC Debug", os: windows-latest, preset: ci-windows-msvc-debug }
+          - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests }
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -95,7 +98,7 @@ jobs:
         run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor and unit_tests
-        run: cmake --build build/${{ matrix.preset }} --target editor unit_tests --parallel
+        run: cmake --build build/${{ matrix.preset }} --target ${{ matrix.targets || 'editor unit_tests' }} --parallel
 
       - name: Compiler cache statistics
         if: always()
@@ -112,31 +115,8 @@ jobs:
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
-      # The project template's game module (#434) against the installed SDK of this shared Release engine (the /MD
-      # runtime the template uses): both configurations land in <project>/build/bin as game.dll, without a postfix.
-      - name: Build the project template's game module against the SDK
-        if: matrix.preset == 'ci-windows-msvc-shared-release'
-        shell: bash
-        run: |
-          cmake --build "build/${{ matrix.preset }}" --target snk_sdk --parallel
-          cmake --install "build/${{ matrix.preset }}" --prefix "${RUNNER_TEMP}/sdk"
-          proj="${RUNNER_TEMP}/template_project"
-          rm -rf "$proj"
-          cp -r Editor/data/templates/projects/empty "$proj"
-          export SNAKE_SDK_DIR="${RUNNER_TEMP}/sdk/lib/cmake/snake_sdk"
-          for preset in release debuggame; do
-            (cd "$proj/code" && cmake --preset "$preset" && cmake --build --preset "$preset")
-          done
-          ls -l "$proj/build/bin"
-          test -f "$proj/build/bin/game.dll"
-          test -f "$proj/build/bin/game.pdb"
-          if ls "$proj/build/bin" | grep -qi "^gamed\."; then echo "::error::the module has a debug postfix"; exit 1; fi
-          # DebugGame (built last) names its PDB without a path (/PDBALTPATH, #435): the debugger reads the one next to the
-          # editor's copy and leaves build/bin/game.pdb free.
-          if grep -aqi "bin[\\/]game\.pdb" "$proj/build/bin/game.dll"; then echo "::error::game.dll names its PDB by path"; exit 1; fi
-
-  # One shared snk_engine library instead of static components (EPIC-29 #59). The Windows MSVC
-  # variant is the 'Windows MSVC Shared Release' entry of the build matrix above. FULL tier.
+  # The shared engine (snk_engine, the default since #223) with the project template's game module built against the
+  # build tree SDK and loaded by the editor. Windows: the Windows package jobs below. FULL tier.
   shared:
     name: Linux GCC Shared
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -160,7 +140,8 @@ jobs:
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
         with:
-          key: cc-ci-linux-shared
+          # The same preset as the editor smoke job (shared engine, #223): one compiler cache for both.
+          key: cc-ci-linux-gcc-debug
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -169,10 +150,10 @@ jobs:
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure
-        run: cmake --preset ci-linux-shared "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor and unit_tests
-        run: cmake --build build/ci-linux-shared --target editor unit_tests --parallel
+        run: cmake --build build/ci-linux-gcc-debug --target editor unit_tests --parallel
 
       - name: Compiler cache statistics
         if: always()
@@ -180,18 +161,18 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 10
-        working-directory: build/ci-linux-shared
+        working-directory: build/ci-linux-gcc-debug
         run: ./unit_tests --log_level=test_suite
 
       # The project template's game module (#434), built against this build tree's SDK (<build>/snake_sdk, no
       # cmake --install) in both configurations; DebugGame last, the one that matches this Debug engine.
       - name: Build the project template's game module against the build tree SDK
         run: |
-          cmake --build build/ci-linux-shared --target snk_sdk --parallel
+          cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
           proj="${RUNNER_TEMP}/template_project"
           rm -rf "$proj"
           cp -r Editor/data/templates/projects/empty "$proj"
-          export SNAKE_SDK_DIR="${GITHUB_WORKSPACE}/build/ci-linux-shared/snake_sdk"
+          export SNAKE_SDK_DIR="${GITHUB_WORKSPACE}/build/ci-linux-gcc-debug/snake_sdk"
           for preset in release debuggame; do
             (cd "$proj/code" && cmake --preset "$preset" && cmake --build --preset "$preset")
           done
@@ -203,7 +184,7 @@ jobs:
       # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag.
       - name: The editor loads the template's game module
         run: |
-          tools/run_headless.sh --editor build/ci-linux-shared/Editor/editor --frames 30 --shot headless_out/template/final.png \
+          tools/run_headless.sh --editor build/ci-linux-gcc-debug/Editor/editor --frames 30 --shot headless_out/template/final.png \
             -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch
           grep -E "module 'game' (loaded|refused)" headless_out/template/editor.log || true
           grep -q "module 'game' loaded" headless_out/template/editor.log
@@ -277,7 +258,7 @@ jobs:
 
       - name: Install SDK
         if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: cmake --install build/ci-linux-no-assimp --prefix "${SDK_PREFIX}"
+        run: cmake --install build/ci-linux-no-assimp --prefix "${SDK_PREFIX}" --component snake_sdk
 
       - name: Check the SDK has no assimp
         if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -790,7 +771,7 @@ jobs:
 
   # Installs the SDK (cmake --install, package `snake_sdk`) and builds tests/package_consumer
   # against it with find_package: proves the export set is complete and self-contained (third-party
-  # libraries are bundled). Static, then shared (SNK_ENGINE_SHARED) engine, in one job. FULL tier.
+  # libraries are bundled). The static and the shared engine go into one prefix, and the consumer links each. FULL tier.
   sdk-package:
     name: SDK package (Linux)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -800,6 +781,7 @@ jobs:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
       SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
       SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install
 
     steps:
       - uses: actions/checkout@v4
@@ -823,176 +805,75 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
-      # ---- static ----
+      # Both engines are built and installed twice: each into its own prefix (to check that they can share one), and
+      # both into SDK_PREFIX, static first, the way the release package is put together (#223).
       - name: Configure (static)
-        run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ci-linux-static "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       # snk_sdk builds exactly the targets the install step copies.
       - name: Build SDK targets (static)
-        run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
+        run: cmake --build build/ci-linux-static --target snk_sdk --parallel
 
-      - name: Compiler cache statistics (static)
-        if: always()
-        run: ccache -s
-
-      - name: Install SDK (static)
-        run: cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_STATIC}"
-
-      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
-      - name: Check the installed headers (static)
-        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_STATIC}"
-
-      # The MCP server module is for the editor only: nothing of it in the installed SDK.
-      - name: Check the SDK has no MCP server module (static)
-        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX_STATIC}"
-
-      - name: Check the package does not point into the build or source tree (static)
-        run: |
-          find "${SDK_PREFIX_STATIC}/lib/cmake/snake_sdk" -type f | sort
-          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX_STATIC}/lib/cmake"; then
-            echo "::error::installed package config references the workspace"
-            exit 1
-          fi
-
-      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
-      - name: Check the package has no absolute paths (static)
-        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX_STATIC}"
-
-      - name: Configure consumer (static)
-        run: |
-          cmake -S tests/package_consumer -B build/consumer-static -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX_STATIC}" -DSNK_CONSUMER_HEADER_CHECK=ON
-
-      - name: Build consumer (static)
-        run: cmake --build build/consumer-static
-
-      - name: Run consumer (static)
-        run: build/consumer-static/package_consumer
-
-      # ---- shared ----
+      # Its own Boost build directory (the static tree's compiles Boost with other definitions); the sources are shared.
       - name: Configure (shared)
-        run: cmake --preset ci-linux-shared "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: |
+          cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}/ci-linux-gcc-debug" \
+            "-DFETCHCONTENT_SOURCE_DIR_BOOST=${FC_DIR}/boost-src"
 
-      # snk_sdk builds exactly the targets the install step copies.
       - name: Build SDK targets (shared)
-        run: cmake --build build/ci-linux-shared --target snk_sdk --parallel
-
-      - name: Compiler cache statistics (shared)
-        if: always()
-        run: ccache -s
-
-      - name: Install SDK (shared)
-        run: cmake --install build/ci-linux-shared --prefix "${SDK_PREFIX_SHARED}"
-
-      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
-      - name: Check the installed headers (shared)
-        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_SHARED}"
-
-      - name: Check the SDK has no MCP server module (shared)
-        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX_SHARED}"
-
-      - name: Check the package does not point into the build or source tree (shared)
-        run: |
-          find "${SDK_PREFIX_SHARED}/lib/cmake/snake_sdk" -type f | sort
-          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX_SHARED}/lib/cmake"; then
-            echo "::error::installed package config references the workspace"
-            exit 1
-          fi
-
-      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
-      - name: Check the package has no absolute paths (shared)
-        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX_SHARED}"
-
-      - name: Configure consumer (shared)
-        run: |
-          cmake -S tests/package_consumer -B build/consumer-shared -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX_SHARED}" -DSNK_CONSUMER_HEADER_CHECK=ON
-
-      - name: Build consumer (shared)
-        run: cmake --build build/consumer-shared
-
-      - name: Run consumer (shared)
-        run: build/consumer-shared/package_consumer
-
-  # The Windows variant of the shared SDK: snk_engine.dll goes to bin/, the import library to
-  # lib/snk/, and the consumer copies the DLL next to its executable (no rpath on Windows).
-  sdk-package-windows:
-    name: SDK package (Windows shared)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
-      SDK_PREFIX: ${{ github.workspace }}/sdk-install
-      PRESET: ci-windows-msvc-shared
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Set up compiler cache
-        uses: ./.github/actions/compiler-cache
-        with:
-          key: cc-sdk-ci-windows-msvc-shared
-
-      - name: Cache FetchContent (Boost)
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.FC_DIR }}
-          key: fc-sdk-ci-windows-msvc-shared-${{ hashFiles('cmake/ThirdParty.cmake') }}
-
-      - name: Configure
-        run: cmake --preset "${PRESET}" "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
-
-      - name: Build SDK targets
-        run: cmake --build "build/${PRESET}" --target snk_sdk --parallel
+        run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
 
       - name: Compiler cache statistics
         if: always()
+        run: ccache -s
+
+      - name: Install SDK (static, shared, both into one prefix)
         run: |
-          if command -v sccache >/dev/null; then sccache --show-stats; fi
+          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX_STATIC}" --component snake_sdk
+          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_SHARED}" --component snake_sdk
+          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX}" --component snake_sdk
+          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX}" --component snake_sdk
+          find "${SDK_PREFIX}/lib" -maxdepth 2 | sort
 
-      - name: Install SDK
-        run: cmake --install "build/${PRESET}" --prefix "${SDK_PREFIX}"
+      # The second install may only rewrite the headers and the package config, with the same content.
+      - name: Check the two engines share one prefix
+        run: tools/ci/check_sdk_merge.sh "${SDK_PREFIX_STATIC}" "${SDK_PREFIX_SHARED}"
 
+      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
       - name: Check the installed headers
-        run: bash tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
+        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
 
+      # The MCP server module is for the editor only: nothing of it in the installed SDK.
       - name: Check the SDK has no MCP server module
-        run: bash tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX}"
+        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX}"
 
-      - name: Check the installed layout
+      - name: Check the package does not point into the build or source tree
         run: |
-          find "${SDK_PREFIX}/bin" "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
-          # Debug builds carry a "d" postfix (snk_engined.dll).
-          ls "${SDK_PREFIX}"/bin/snk_engine*.dll "${SDK_PREFIX}"/lib/snk/snk_engine*.lib
-          ws="$(cygpath -m "${GITHUB_WORKSPACE}")"
-          if grep -rIn -e "${ws}" "${SDK_PREFIX}/lib/cmake"; then
+          find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
+          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX}/lib/cmake"; then
             echo "::error::installed package config references the workspace"
             exit 1
           fi
 
+      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
       - name: Check the package has no absolute paths
-        run: bash tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
+        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
 
-      - name: Configure consumer
+      - name: Build and run the consumer against each engine
         run: |
-          # The consumer must use the configuration the SDK was built with (MSVC runtime, DLL name).
-          build_type="$(sed -n 's/^CMAKE_BUILD_TYPE:[A-Z]*=//p' "build/${PRESET}/CMakeCache.txt")"
-          cmake -S tests/package_consumer -B build/consumer -G Ninja "-DCMAKE_BUILD_TYPE=${build_type}" \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
+          for engine in static shared; do
+            cmake -S tests/package_consumer -B "build/consumer-${engine}" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+              "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" "-DSNK_CONSUMER_ENGINE=${engine}" -DSNK_CONSUMER_HEADER_CHECK=ON
+            cmake --build "build/consumer-${engine}"
+            "build/consumer-${engine}/package_consumer"
+          done
 
-      - name: Build consumer
-        run: cmake --build build/consumer
-
-      - name: Run consumer
-        run: build/consumer/package_consumer.exe
+  # The Windows release package (#223): Release and Debug legs build the static and the shared engine and pack the two
+  # archives, a check job unpacks them like a user (the consumer against both engines, the template's game module,
+  # dumpbin, editor.exe --headless from the unpacked folder). release.yml runs the same workflow. FULL tier.
+  windows-package:
+    name: Windows package
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      run-tests: true

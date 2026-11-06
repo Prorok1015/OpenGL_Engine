@@ -3,9 +3,75 @@
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
 
-# ON when the engine was built as one shared library (SNK_ENGINE_SHARED).
-set(snake_sdk_ENGINE_SHARED @SNK_ENGINE_SHARED@)
+# One prefix holds the shared engine (snk::engine + snk::engine_api: the editor, game modules) and/or
+# the static one (snk::engine_static: Shipping), each installed from its own build (#223).
+include("${CMAKE_CURRENT_LIST_DIR}/snake_sdk_sharedTargets.cmake" OPTIONAL RESULT_VARIABLE _snk_sdk_shared_file)
+include("${CMAKE_CURRENT_LIST_DIR}/snake_sdk_staticTargets.cmake" OPTIONAL RESULT_VARIABLE _snk_sdk_static_file)
+if(_snk_sdk_shared_file)
+	set(snake_sdk_HAS_SHARED ON)
+else()
+	set(snake_sdk_HAS_SHARED OFF)
+endif()
+if(_snk_sdk_static_file)
+	set(snake_sdk_HAS_STATIC ON)
+else()
+	set(snake_sdk_HAS_STATIC OFF)
+endif()
+# Older name, read by the game template: ON when the shared engine is there.
+set(snake_sdk_ENGINE_SHARED ${snake_sdk_HAS_SHARED})
+if(NOT snake_sdk_HAS_SHARED AND NOT snake_sdk_HAS_STATIC)
+	set(snake_sdk_FOUND FALSE)
+	set(snake_sdk_NOT_FOUND_MESSAGE "${CMAKE_CURRENT_LIST_DIR} holds neither snake_sdk_sharedTargets.cmake nor snake_sdk_staticTargets.cmake")
+	return()
+endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/snake_sdkTargets.cmake")
+if(snake_sdk_HAS_STATIC)
+	# One target for a static consumer: the engine archive and the headers of the layer contract.
+	set_property(TARGET snk::engine_static APPEND PROPERTY INTERFACE_LINK_LIBRARIES snk::static_engine_api)
+endif()
+
+# The engine is installed as Release and, from the separate debug package, Debug. A configuration of
+# the consumer that is neither (DebugGame of the game template, RelWithDebInfo, MinSizeRel) links the
+# Release engine: CMake would otherwise pick whichever comes first, Debug, whose runtime (/MDd) the
+# consumer does not use. Debug is the fallback for a prefix that holds only a Debug engine.
+get_directory_property(_snk_sdk_imported IMPORTED_TARGETS)
+foreach(_snk_sdk_target IN LISTS _snk_sdk_imported)
+	if(_snk_sdk_target MATCHES "^snk::")
+		foreach(_snk_sdk_config IN ITEMS DEBUGGAME RELWITHDEBINFO MINSIZEREL)
+			get_target_property(_snk_sdk_map ${_snk_sdk_target} MAP_IMPORTED_CONFIG_${_snk_sdk_config})
+			if(NOT _snk_sdk_map)
+				set_property(TARGET ${_snk_sdk_target} PROPERTY MAP_IMPORTED_CONFIG_${_snk_sdk_config} Release Debug)
+			endif()
+		endforeach()
+	endif()
+endforeach()
+
+# MSVC: a Debug consumer (/MDd) cannot link a Release engine (/MD). The Debug engine is a separate package.
+if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+	if(snake_sdk_HAS_SHARED)
+		get_target_property(_snk_sdk_configs snk::engine IMPORTED_CONFIGURATIONS)
+	else()
+		get_target_property(_snk_sdk_configs snk::engine_static IMPORTED_CONFIGURATIONS)
+	endif()
+	if(NOT "DEBUG" IN_LIST _snk_sdk_configs)
+		set(snake_sdk_FOUND FALSE)
+		set(snake_sdk_NOT_FOUND_MESSAGE "This SDK has no Debug engine; a Debug build with MSVC needs it. "
+			"Unpack Snake-<version>-windows-x64-debug.zip over the SDK, or build the consumer in Release.")
+		return()
+	endif()
+endif()
+
+# A multi-config generator (Visual Studio) only learns the configuration at build time: warn instead.
+if(MSVC AND "Debug" IN_LIST CMAKE_CONFIGURATION_TYPES)
+	if(snake_sdk_HAS_SHARED)
+		get_target_property(_snk_sdk_configs snk::engine IMPORTED_CONFIGURATIONS)
+	else()
+		get_target_property(_snk_sdk_configs snk::engine_static IMPORTED_CONFIGURATIONS)
+	endif()
+	if(NOT "DEBUG" IN_LIST _snk_sdk_configs)
+		message(WARNING "snake_sdk: this SDK has no Debug engine, so the Debug configuration cannot link it (/MDd vs /MD). "
+			"Unpack Snake-<version>-windows-x64-debug.zip over the SDK to build Debug.")
+	endif()
+endif()
 
 check_required_components(snake_sdk)

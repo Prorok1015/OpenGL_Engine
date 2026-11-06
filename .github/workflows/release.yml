@@ -13,92 +13,13 @@ permissions:
   contents: read
 
 jobs:
+  # The editor on the shared engine and the SDK with both engines (#223), built and checked by the same workflow as
+  # the pull-request CI: Snake-<ver>-windows-x64.zip (Release with PDBs, the MSVC runtime) and
+  # Snake-<ver>-windows-x64-debug.zip (the Debug engine, unpacked over it). All Assimp formats, as the release preset.
   package:
-    name: Windows Release package
-    runs-on: windows-latest
-    env:
-      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
-      PKG: SnakeEditor
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      # Same preset (and cache key) as the Windows MSVC Release job in build.yml.
-      - name: Set up compiler cache
-        uses: ./.github/actions/compiler-cache
-        with:
-          key: cc-ci-windows-msvc-release
-
-      - name: Cache FetchContent (Boost)
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.FC_DIR }}
-          key: fc-release-windows-latest-${{ hashFiles('cmake/ThirdParty.cmake') }}
-
-      - name: Configure
-        shell: bash
-        run: cmake --preset ci-windows-msvc-release -DSNK_ASSIMP_FORMATS=ALL "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
-
-      - name: Build editor
-        run: cmake --build build/ci-windows-msvc-release --target editor --parallel
-
-      - name: Package
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then ver="${GITHUB_REF_NAME}"; else ver="${GITHUB_SHA::8}"; fi
-          echo "VERSION=${ver}" >> "$GITHUB_ENV"
-
-          # Paths in editor.cfg resolve relative to the cfg file: config/../data == SnakeEditor/data (edt://,
-          # editor-only icons and templates). Engine base resources (core/res) ship as res_core/, the test
-          # project as projects/sandbox/ (EPIC-42 #157); the packaged cfg's base_path and resource path (used
-          # when the editor runs without --project) are rewritten from the in-repo ones.
-          mkdir -p "${PKG}/bin" "${PKG}/config"
-          BUILD_DIR=build/ci-windows-msvc-release
-          cp "${BUILD_DIR}/Editor/editor.exe" "${PKG}/bin/" || cp "$(find "${BUILD_DIR}" -name editor.exe | head -n1)" "${PKG}/bin/"
-          # Runtime DLLs (libs are static by default, so normally none).
-          find "${BUILD_DIR}/Editor" -maxdepth 1 -name '*.dll' -exec cp {} "${PKG}/bin/" \;
-          sed -e 's#base_path: ../../core/res/#base_path: ../res_core/#' \
-              -e 's#path: ../../projects/sandbox/res/#path: ../projects/sandbox/res/#' \
-              Editor/config/editor.cfg > "${PKG}/config/editor.cfg"
-          grep -q 'base_path: ../res_core/' "${PKG}/config/editor.cfg"
-          grep -q ' path: ../projects/sandbox/res/' "${PKG}/config/editor.cfg"
-          cp -r core/res "${PKG}/res_core"
-          mkdir -p "${PKG}/projects"
-          cp -r projects/sandbox "${PKG}/projects/sandbox"
-          rm -rf "${PKG}/projects/sandbox/.cache" "${PKG}/projects/sandbox/.snk"
-          cp -r Editor/data "${PKG}/data"
-          cat > "${PKG}/README.txt" <<'TXT'
-          SnakeEditor - OpenGL Engine editor
-
-          Requirements: Windows 10/11 x64, GPU with OpenGL 4.5+ drivers.
-
-          Run from this folder:
-              bin\editor.exe --config config\editor.cfg --project projects\sandbox
-
-          Keep the bin/, config/, data/, projects/ and res_core/ folders side by side: the
-          config refers to the engine's base resources as ../res_core/ and to the editor's
-          own icons and templates as ../data/, relative to the config file. projects\sandbox
-          is the test project; open another one with --project <folder>. Logs are written
-          to logs\ relative to the working directory. When launched from the package
-          root, the log file is <package>\logs\engine.log.
-          TXT
-          cp LICENSE "${PKG}/" 2>/dev/null || true
-
-          7z a -tzip -mx=5 "SnakeEditor-${ver}-windows-x64.zip" "${PKG}" > /dev/null
-          ls -l SnakeEditor-*.zip
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SnakeEditor-windows-x64
-          path: SnakeEditor-*-windows-x64.zip
-          compression-level: 0
-          if-no-files-found: error
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      cmake-args: -DSNK_ASSIMP_FORMATS=ALL
 
   publish:
     name: Publish GitHub Release
@@ -110,11 +31,16 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: SnakeEditor-windows-x64
+          pattern: snake-windows-x64-*
           path: dist
+          merge-multiple: true
 
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/*.zip --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+        run: |
+          ls -l dist
+          test -f "dist/Snake-${GITHUB_REF_NAME}-windows-x64.zip"
+          test -f "dist/Snake-${GITHUB_REF_NAME}-windows-x64-debug.zip"
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag

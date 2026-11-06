@@ -66,7 +66,7 @@
 - Проект игры генерируется из шаблона. Сборка: `cmake --preset` + `cmake --build` фоновой задачей (`job_service` #139 / `task_system` #17). Вывод MSVC (`file(line): error Cxxxx`) разбирается в панель problems (#24), затем перезагрузка `game.dll`.
 
 **Конфигурации (DebugGame).**
-- Движок поставляется одной конфигурацией: RelWithDebInfo, `/MD`, PDB рядом с DLL (`install(FILES $<TARGET_PDB_FILE:…>)`, `/DEBUG` в Release-линковке).
+- Движок поставляется одной конфигурацией: RelWithDebInfo, `/MD`, PDB рядом с DLL (`install(FILES $<TARGET_PDB_FILE:…>)`, `/DEBUG` в Release-линковке). **Заменено Р11 (#223):** основная конфигурация — Release с PDB, Debug-движок — отдельный zip; см. «Реализация #223» в конце.
 - Шаблон игры: `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL` для всех конфигураций. Конфигурация `DebugGame` = `/Od /Zi /MD`, без `_DEBUG`, `_ITERATOR_DEBUG_LEVEL=0`; `Release` = `/O2 /MD`.
 - Полный Debug движка (`/MDd`) — отдельный необязательный пакет для разработчиков движка: другой `build_info`, с обычным SDK не смешивается. Symbol server — позже.
 
@@ -78,7 +78,7 @@
 - Рекомендуемый минимум: 14.44 (`_MSC_VER 1944`, VS 2022 17.14). v145 (VS 18) бинарно совместим с v143, так что пользователи VS 2022 не отсекаются, а движок собирается самым старым поддерживаемым toolset. Альтернатива — только VS 18 (1950), см. §5.
 
 **Поставка.**
-- Сначала портативный zip из CI: shared RelWithDebInfo редактор + SDK (`cmake --install`) + PDB + базовые ресурсы + шаблоны.
+- Сначала портативный zip из CI: shared RelWithDebInfo редактор + SDK (`cmake --install`) + PDB + базовые ресурсы + шаблоны. **Сделано в #223** (Release вместо RelWithDebInfo, см. конец).
 - Затем CPack-установщик поверх правил install (компоненты `editor`, `snake_sdk`, `templates`, `redist`).
 - Затем браузер проектов / лаунчер с выбором версии движка.
 - Standalone-игра: Release `game.dll` + лаунчер + `snk_engine.dll` + redist + ресурсы (cook — #46). Опционально — монолитная статическая сборка для shipping (модель (1) без DLL; это же путь Б из §7.2).
@@ -168,3 +168,12 @@ wasm — инструмент разработки; при упаковке дв
 5. Редактор под Windows поставляется только shared-сборкой; статическая остаётся для CI и shipping.
 6. Монолитная статическая сборка для shipping — отдельной задачей позже, не в S8.
 7. Долгосрочная цель — wasm-слой игрового кода вместо встроенного LLVM (§7); shipping — AOT по умолчанию, нативная монолитная сборка опционально (§7.2); spike — отдельная story без вехи (S12).
+
+## Реализация #223 (решение Р11, 2026-11-06)
+
+- **Shared по умолчанию.** `SNK_ENGINE_SHARED` = ON во всех пресетах (`dev-*`, `release`, `ci-*`), кроме `ci-linux-clang-debug` и `ci-*-static*`. В статической сборке исполняемого `editor` нет (строка STATUS): статический движок нужен только Shipping (#23). В CI одна статическая сборка с тестами — Linux Clang Debug; статический движок Windows собирается и линкуется в пакете (`snk::engine_static` в `package_consumer`).
+- **Два движка в одном префиксе.** Shared- и static-сборка компилируют одни и те же компоненты по-разному (`SNK_API` dllexport или пусто), поэтому у каждой свой export set: `snake_sdk_sharedTargets.cmake` (`snk::engine`, `snk::engine_api`, архивы в `lib/snk/`) и `snake_sdk_staticTargets.cmake` (`snk::engine_static`, `snk::static_*`, архивы в `lib/snk/static/`). `snake_sdkConfig.cmake` подключает оба, если есть (`snake_sdk_HAS_SHARED`/`_HAS_STATIC`). `tools/ci/check_sdk_merge.sh` проверяет, что вторая установка перезаписывает только одинаковые заголовки и конфиг пакета.
+- **Debug и Release.** `CMAKE_DEBUG_POSTFIX d` задан в корне. Основной zip — Release с PDB (`/Z7` или `/Zi` в Release, `/DEBUG /OPT:REF /OPT:ICF`). `Snake-<ver>-windows-x64-debug.zip` содержит только то, что добавляет Debug: `bin/*d.dll`, `*d.pdb`, `lib/**/*d.lib`, `*Targets-debug.cmake`; распаковывается поверх основного, ничего не заменяя (проверяется в CI). Конфиг пакета отображает `DebugGame`/`RelWithDebInfo`/`MinSizeRel` на Release-движок (`MAP_IMPORTED_CONFIG_*`); Debug-потребитель MSVC без Debug-движка получает понятную ошибку.
+- **Рантайм.** `/MD` везде (`CMAKE_MSVC_RUNTIME_LIBRARY`, `/MDd` только у Debug). `InstallRequiredSystemLibraries` (без debug-библиотек и UCRT — Windows 10+) кладёт рантайм MSVC в `bin/` рядом с `editor.exe` и `snk_engine.dll`. CI проверяет `dumpbin -dependents` у `editor.exe` и `snk_engine.dll`: всё либо в пакете, либо системная DLL Windows.
+- **Раскладка zip:** `Snake/<ver>/{bin (editor.exe, snk_engine.dll, PDB, рантайм), include, lib (snk, snk/static), lib/cmake/snake_sdk, res_core, data (иконки, шаблоны), config (editor.cfg), projects/sandbox, README.txt, LICENSE}`. Редактор ставится правилами install (компонент `editor`), SDK — компонент `snake_sdk`.
+- **CI и релиз.** `.github/workflows/windows-package.yml` (вызывают `build.yml`, full tier, и `release.yml`): «Windows package (Release|Debug)» — `tools/ci/package_windows.sh`; «Windows package check» — `tools/ci/check_windows_package.sh`: распаковка, раскладка, зависимости, `package_consumer` × {shared, static} × {Debug, Release}, модуль шаблона (Release и DebugGame), запуск `editor.exe --headless` из распакованной папки (null-окно и null-рендерер, GL-контекст не нужен).
