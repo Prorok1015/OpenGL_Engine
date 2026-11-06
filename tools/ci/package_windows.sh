@@ -105,6 +105,14 @@ fi
 zip="${out}/Snake-${ver}-windows-x64${zip_suffix}.zip"
 rm -f "$zip"
 (cd "$pkg" && 7z a -tzip -mx=5 "$zip" Snake > /dev/null)
-echo "${zip}:"
-(cd "$pkg" && find Snake -type f | sort | sed 's/^/  /' | head -n 400)
+# A summary, not the file list: a pipe cut short (head) fails the script under pipefail, and the Release package
+# holds thousands of headers. The sizes are the ones the package review reads (#223).
+echo "${zip}: $(cd "$pkg" && find Snake -type f | wc -l) files"
+(cd "$root" && du -sk -- * | sort -k2 | awk '{ printf "  %8d KiB  %s\n", $1, $2 }')
+echo "binaries and libraries:"
+(cd "$root" && find bin lib -type f \( -name '*.dll' -o -name '*.exe' -o -name '*.pdb' -o -name '*.lib' \) -exec du -k {} + \
+	| sort -k2 | awk '{ printf "  %8d KiB  %s\n", $1, $2 }')
+for ext in lib pdb dll; do
+	(cd "$root" && find . -type f -name "*.${ext}" -exec du -k {} + | awk -v e="$ext" '{ t += $1 } END { printf "  total .%s: %d KiB\n", e, t }')
+done
 ls -l "$zip"
