@@ -141,7 +141,8 @@
       "displayName": "CI Linux GCC coverage",
       "cacheVariables": {
         "CMAKE_CXX_FLAGS": "--coverage",
-        "CMAKE_EXE_LINKER_FLAGS": "--coverage"
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
+        "CMAKE_SHARED_LINKER_FLAGS": "--coverage"
       }
     },
     {
