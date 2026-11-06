@@ -68,9 +68,12 @@ endif()
 # MSVC: /Zi writes one shared PDB through mspdbsrv, which a compiler cache cannot reproduce.
 # Embedded debug info (/Z7) keeps it in each object file, so objects are cacheable. Harmless for
 # other compilers (the variable is only read by MSVC); the policy exists since CMake 3.25.
-if(SNK_COMPILER_CACHE_TOOL AND NOT SNK_COMPILER_CACHE STREQUAL "OFF")
-	if(POLICY CMP0141)
-		cmake_policy(SET CMP0141 NEW)
-		set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+# Release has debug info too: the release package ships Release binaries with their PDBs (#223).
+if(POLICY CMP0141)
+	cmake_policy(SET CMP0141 NEW)
+	if(SNK_COMPILER_CACHE_TOOL AND NOT SNK_COMPILER_CACHE STREQUAL "OFF")
+		set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo,Release>:Embedded>")
+	else()
+		set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo,Release>:ProgramDatabase>")
 	endif()
 endif()

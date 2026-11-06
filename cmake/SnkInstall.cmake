@@ -318,6 +318,22 @@ function(snk_install_sdk)
 		FILE ${SNK_SDK_TARGETS_FILE}
 		DESTINATION ${SNK_SDK_CMAKE_DIR}
 		COMPONENT snake_sdk)
+	if(MSVC AND SNK_ENGINE_SHARED)
+		install(FILES $<TARGET_PDB_FILE:snk_engine> DESTINATION bin OPTIONAL COMPONENT snake_sdk)
+		# The Microsoft C++ runtime next to snk_engine.dll and editor.exe (R11, #223); Shipping (#23) copies it next
+		# to the game. Not for Debug: the debug runtime is not redistributable. No UCRT: it is part of Windows 10+.
+		# The shared build only, so the static install into the same prefix does not write the same files again.
+		if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+			set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION bin)
+			set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT snake_sdk)
+			set(CMAKE_INSTALL_DEBUG_LIBRARIES OFF)
+			set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)
+			include(InstallRequiredSystemLibraries)
+			if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+				message(WARNING "snake_sdk: InstallRequiredSystemLibraries found no MSVC runtime to install")
+			endif()
+		endif()
+	endif()
 
 	configure_package_config_file(
 		"${CMAKE_SOURCE_DIR}/cmake/snake_sdkConfig.cmake.in"

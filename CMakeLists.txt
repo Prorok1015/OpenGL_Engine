@@ -6,6 +6,14 @@ include(cmake/SnkBuildCache.cmake NO_POLICY_SCOPE)
 
 project(build_all)
 
+# /MD everywhere, Shipping included (owner decision R11, #223): the editor, snk_engine.dll and game.dll share
+# one C++ runtime, which the release package bundles. Debug builds use its debug variant (/MDd), never shipped.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+if(MSVC)
+    # The PDBs of the Release package (#223): /DEBUG, with the optimizations it would otherwise turn off.
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

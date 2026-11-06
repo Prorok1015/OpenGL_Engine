@@ -28,3 +28,30 @@ if(WIN32)
 		COMMAND_EXPAND_LISTS)
 endif()
 
+# The editor in the release package (component `editor`, #223), next to the SDK (component `snake_sdk`):
+#   bin/editor.exe (+ PDB)  config/editor.cfg  data/ (editor icons, templates)  res_core/ (engine base resources)
+#   projects/sandbox/ (the test project)  README.txt  LICENSE
+# editor.cfg resolves its paths relative to itself, so the packaged copy points one level up instead of into the repository.
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin COMPONENT editor)
+if(MSVC)
+	install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION bin OPTIONAL COMPONENT editor)
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/config/editor.cfg")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/config/editor.cfg" _edt_cfg)
+string(REPLACE "base_path: ../../core/res/" "base_path: ../res_core/" _edt_cfg "${_edt_cfg}")
+string(REPLACE "path: ../../projects/sandbox/res/" "path: ../projects/sandbox/res/" _edt_cfg "${_edt_cfg}")
+foreach(_edt_expected "base_path: ../res_core/" " path: ../projects/sandbox/res/" "data_path: ../data/")
+	string(FIND "${_edt_cfg}" "${_edt_expected}" _edt_at)
+	if(_edt_at EQUAL -1)
+		message(FATAL_ERROR "Editor/config/editor.cfg changed: the packaged copy has no '${_edt_expected}'")
+	endif()
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/package/editor.cfg" "${_edt_cfg}")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/package/editor.cfg" DESTINATION config COMPONENT editor)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/" DESTINATION data COMPONENT editor)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/core/res/" DESTINATION res_core COMPONENT editor)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/projects/sandbox/" DESTINATION projects/sandbox COMPONENT editor
+	PATTERN ".cache" EXCLUDE
+	PATTERN ".snk" EXCLUDE)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/package/README.txt" "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION . COMPONENT editor)
+
