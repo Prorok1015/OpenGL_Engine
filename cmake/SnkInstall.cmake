@@ -308,11 +308,12 @@ function(snk_install_sdk)
 	else()
 		set(_archive_dir lib/snk/static)
 	endif()
+	# COMPONENT after an artifact kind applies to that kind only: each kind names it, or `--component snake_sdk`
+	# leaves the libraries out.
 	install(TARGETS ${_closure} EXPORT ${SNK_SDK_EXPORT_SET}
-		ARCHIVE DESTINATION ${_archive_dir}
-		LIBRARY DESTINATION lib
-		RUNTIME DESTINATION bin
-		COMPONENT snake_sdk)
+		ARCHIVE DESTINATION ${_archive_dir} COMPONENT snake_sdk
+		LIBRARY DESTINATION lib COMPONENT snake_sdk
+		RUNTIME DESTINATION bin COMPONENT snake_sdk)
 	install(EXPORT ${SNK_SDK_EXPORT_SET}
 		NAMESPACE snk::
 		FILE ${SNK_SDK_TARGETS_FILE}
