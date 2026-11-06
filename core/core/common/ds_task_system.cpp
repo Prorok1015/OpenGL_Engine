@@ -95,6 +95,7 @@ namespace ds::detail {
 		std::vector<std::weak_ptr<main_item>> main_items;
 		// Callbacks of this owner, or continuations of its tasks, running now (running_callbacks).
 		std::atomic<int> running{ 0 };
+		std::atomic<bool> refuses_new_tasks{ false };
 		// Main-thread continuations of the tasks of this group (bind_group), held by some owner: ~lifetime drops them,
 		// so none runs once the group is gone.
 		std::vector<std::weak_ptr<held_slot>> group_slots;
@@ -537,6 +538,13 @@ namespace ds::detail {
 		m_group = std::move(group);
 	}
 
+	bool task_state_base::origin_refuses_new_tasks() const
+	{
+		std::lock_guard lock(m_mutex);
+		const auto origin = m_origin.lock();
+		return origin && origin->refuses_new_tasks.load();
+	}
+
 	std::function<void()> task_state_base::for_main(std::function<void()> fn)
 	{
 		std::weak_ptr<lifetime_state> origin;
@@ -742,6 +750,11 @@ namespace ds {
 		}
 	}
 
+	void lifetime::refuse_new_tasks() const
+	{
+		m_state->refuses_new_tasks.store(true);
+	}
+
 	void lifetime::bind(const std::shared_ptr<detail::task_state_base>& state) const
 	{
 		state->set_origin(m_state);
@@ -859,6 +872,12 @@ namespace ds {
 	void task_system::submit(lane where, const std::shared_ptr<detail::task_state_base>& state)
 	{
 		m_impl->register_live(state);
+		// Cancelled after registering, as a shutdown does: finalize() unregisters it.
+		if (state->origin_refuses_new_tasks()) {
+			egLOG_WARN("task", "'{}' started after its owner stopped its tasks: cancelled", state->desc().name);
+			state->cancel();
+			return;
+		}
 		// Re-checked after registering: a shutdown that started in between has not seen this task.
 		m_impl->enqueue_task(where, state);
 	}
