@@ -67,7 +67,8 @@ jobs:
       # The unit tests on the shared Release engine (what the removed "Windows MSVC Shared Release" job ran).
       - name: Build and run unit tests (shared Release engine)
         if: inputs.run-tests && matrix.config == 'Release'
-        timeout-minutes: 15
+        # The test build alone: ~270 objects, 25+ minutes with a cold compiler cache (a failed run saves none).
+        timeout-minutes: 45
         run: |
           cmake --build build/ci-windows-msvc-release --target unit_tests --parallel
           cd build/ci-windows-msvc-release && ./unit_tests --log_level=test_suite
