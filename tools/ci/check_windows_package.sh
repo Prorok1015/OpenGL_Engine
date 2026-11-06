@@ -105,7 +105,10 @@ done
 ls -l "${proj}/build/bin"
 test -f "${proj}/build/bin/game.dll"
 test -f "${proj}/build/bin/game.pdb"
-if ls "${proj}/build/bin" | grep -qi '^gamed\.'; then echo "::error::the module has a debug postfix"; exit 1; fi
+# No pipe into grep -q: under pipefail an early exit of the reader fails the writer, and the check would pass.
+if [[ -n "$(find "${proj}/build/bin" -maxdepth 1 -iname 'gamed.*' -print -quit)" ]]; then
+	echo "::error::the module has a debug postfix"; exit 1
+fi
 # DebugGame (built last) names its PDB without a path (/PDBALTPATH, #435).
 if grep -aqi 'bin[\/]game\.pdb' "${proj}/build/bin/game.dll"; then echo "::error::game.dll names its PDB by path"; exit 1; fi
 
