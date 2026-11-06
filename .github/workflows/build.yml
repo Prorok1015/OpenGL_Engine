@@ -791,7 +791,7 @@ jobs:
 
   # Installs the SDK (cmake --install, package `snake_sdk`) and builds tests/package_consumer
   # against it with find_package: proves the export set is complete and self-contained (third-party
-  # libraries are bundled). Static, then shared (SNK_ENGINE_SHARED) engine, in one job. FULL tier.
+  # libraries are bundled). The static and the shared engine go into one prefix, and the consumer links each. FULL tier.
   sdk-package:
     name: SDK package (Linux)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -801,6 +801,7 @@ jobs:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
       SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
       SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install
 
     steps:
       - uses: actions/checkout@v4
@@ -824,7 +825,8 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
-      # ---- static ----
+      # Both engines are built and installed twice: each into its own prefix (to check that they can share one), and
+      # both into SDK_PREFIX, static first, the way the release package is put together (#223).
       - name: Configure (static)
         run: cmake --preset ci-linux-static "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
@@ -832,88 +834,56 @@ jobs:
       - name: Build SDK targets (static)
         run: cmake --build build/ci-linux-static --target snk_sdk --parallel
 
-      - name: Compiler cache statistics (static)
-        if: always()
-        run: ccache -s
-
-      - name: Install SDK (static)
-        run: cmake --install build/ci-linux-static --prefix "${SDK_PREFIX_STATIC}"
-
-      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
-      - name: Check the installed headers (static)
-        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_STATIC}"
-
-      # The MCP server module is for the editor only: nothing of it in the installed SDK.
-      - name: Check the SDK has no MCP server module (static)
-        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX_STATIC}"
-
-      - name: Check the package does not point into the build or source tree (static)
-        run: |
-          find "${SDK_PREFIX_STATIC}/lib/cmake/snake_sdk" -type f | sort
-          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX_STATIC}/lib/cmake"; then
-            echo "::error::installed package config references the workspace"
-            exit 1
-          fi
-
-      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
-      - name: Check the package has no absolute paths (static)
-        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX_STATIC}"
-
-      - name: Configure consumer (static)
-        run: |
-          cmake -S tests/package_consumer -B build/consumer-static -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX_STATIC}" -DSNK_CONSUMER_HEADER_CHECK=ON
-
-      - name: Build consumer (static)
-        run: cmake --build build/consumer-static
-
-      - name: Run consumer (static)
-        run: build/consumer-static/package_consumer
-
-      # ---- shared ----
       - name: Configure (shared)
         run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
-      # snk_sdk builds exactly the targets the install step copies.
       - name: Build SDK targets (shared)
         run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
 
-      - name: Compiler cache statistics (shared)
+      - name: Compiler cache statistics
         if: always()
         run: ccache -s
 
-      - name: Install SDK (shared)
-        run: cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_SHARED}"
+      - name: Install SDK (static, shared, both into one prefix)
+        run: |
+          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX_STATIC}"
+          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_SHARED}"
+          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX}"
+          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX}"
+          find "${SDK_PREFIX}/lib" -maxdepth 2 | sort
+
+      # The second install may only rewrite the headers and the package config, with the same content.
+      - name: Check the two engines share one prefix
+        run: tools/ci/check_sdk_merge.sh "${SDK_PREFIX_STATIC}" "${SDK_PREFIX_SHARED}"
 
       # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
-      - name: Check the installed headers (shared)
-        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_SHARED}"
+      - name: Check the installed headers
+        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
 
-      - name: Check the SDK has no MCP server module (shared)
-        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX_SHARED}"
+      # The MCP server module is for the editor only: nothing of it in the installed SDK.
+      - name: Check the SDK has no MCP server module
+        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX}"
 
-      - name: Check the package does not point into the build or source tree (shared)
+      - name: Check the package does not point into the build or source tree
         run: |
-          find "${SDK_PREFIX_SHARED}/lib/cmake/snake_sdk" -type f | sort
-          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX_SHARED}/lib/cmake"; then
+          find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
+          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX}/lib/cmake"; then
             echo "::error::installed package config references the workspace"
             exit 1
           fi
 
       # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
-      - name: Check the package has no absolute paths (shared)
-        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX_SHARED}"
+      - name: Check the package has no absolute paths
+        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
 
-      - name: Configure consumer (shared)
+      - name: Build and run the consumer against each engine
         run: |
-          cmake -S tests/package_consumer -B build/consumer-shared -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX_SHARED}" -DSNK_CONSUMER_HEADER_CHECK=ON
-
-      - name: Build consumer (shared)
-        run: cmake --build build/consumer-shared
-
-      - name: Run consumer (shared)
-        run: build/consumer-shared/package_consumer
+          for engine in static shared; do
+            cmake -S tests/package_consumer -B "build/consumer-${engine}" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+              "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" "-DSNK_CONSUMER_ENGINE=${engine}" -DSNK_CONSUMER_HEADER_CHECK=ON
+            cmake --build "build/consumer-${engine}"
+            "build/consumer-${engine}/package_consumer"
+          done
 
   # The Windows variant of the shared SDK: snk_engine.dll goes to bin/, the import library to
   # lib/snk/, and the consumer copies the DLL next to its executable (no rpath on Windows).
