@@ -59,6 +59,12 @@ if [[ -d "${prefix}/include/snk/build" ]]; then
 	find "${prefix}/include/snk/build" -maxdepth 4 -type d | sed 's/^/  /'
 	found=$((found + 1))
 fi
+# The same leak in the exported include directories, which a single-configuration package cannot diff away.
+while IFS= read -r hit; do
+	[[ -z "${hit}" ]] && continue
+	echo "::error::an exported include directory names a build tree or a preset: ${hit}"
+	found=$((found + 1))
+done < <(grep -rnE 'INCLUDE_DIRECTORIES "[^"]*(/build/|/(ci|dev)-[a-z0-9-]+/)' "${cmake_dir}" --include='*.cmake' || true)
 
 echo "check_sdk_abs_paths: ${checked} files scanned, ${found} absolute path(s) found"
 if [[ "${checked}" -eq 0 ]]; then
