@@ -69,19 +69,21 @@ endif()
 # Embedded debug info (/Z7) keeps it in each object file, so objects are cacheable. Harmless for
 # other compilers (the variable is only read by MSVC); the policy exists since CMake 3.25.
 # Release: the release package ships snk_engine.dll and editor.exe with PDBs (#223), so a shared-engine build
-# compiles Release with /Zi: the debug info goes to the compiler PDBs and the linker's PDB, not into the objects, so
-# the installed archives stay as small as before (not cached by sccache). A static-engine Release build (the static
-# half of the SDK, Shipping) has no debug info: its archives ship without it.
+# compiles Release with debug info, in the same format as Debug: under a compiler cache it is embedded (sccache
+# fails on /Zi: parallel compiles hold the shared compiler PDB it tries to store), so the archives the shared SDK
+# installs carry it; without one, /Zi keeps it out of them. The linker's /DEBUG writes the DLL and EXE PDBs either
+# way. A static-engine Release build (the static half of the SDK, Shipping) has no debug info.
 if(POLICY CMP0141)
 	cmake_policy(SET CMP0141 NEW)
-	if(NOT DEFINED SNK_ENGINE_SHARED OR SNK_ENGINE_SHARED)
-		set(_snk_release_debug_info "$<$<CONFIG:Release>:ProgramDatabase>")
-	else()
-		set(_snk_release_debug_info "")
-	endif()
 	if(SNK_COMPILER_CACHE_TOOL AND NOT SNK_COMPILER_CACHE STREQUAL "OFF")
-		set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>${_snk_release_debug_info}")
+		set(_snk_debug_info_format Embedded)
 	else()
-		set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>${_snk_release_debug_info}")
+		set(_snk_debug_info_format ProgramDatabase)
 	endif()
+	if(NOT DEFINED SNK_ENGINE_SHARED OR SNK_ENGINE_SHARED)
+		set(_snk_debug_info_configs "Debug,RelWithDebInfo,Release")
+	else()
+		set(_snk_debug_info_configs "Debug,RelWithDebInfo")
+	endif()
+	set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:${_snk_debug_info_configs}>:${_snk_debug_info_format}>")
 endif()
