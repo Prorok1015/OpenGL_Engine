@@ -31,8 +31,6 @@
 
 namespace fs = std::filesystem;
 
-CFG_VAR_EXT_PATH(cfg_res_base_path);
-
 namespace {
 
 	std::vector<std::byte> read_file(const fs::path& path)
@@ -81,7 +79,8 @@ int main(int argc, char** argv)
 			egLOG_ERROR("desc_resave", "base '{}' is not a directory", base_dir.string());
 			return 2;
 		}
-		*cfg_res_base_path = base_dir;
+		// By name, like `--set`: the variable lives in the engine, which a shared build does not export it from (#223).
+		cfg::set_variable("resource/base_path", base_dir.string());
 	}
 	if (!edt_dir.empty() && !fs::is_directory(edt_dir)) {
 		egLOG_ERROR("desc_resave", "edt directory '{}' does not exist", edt_dir.string());
