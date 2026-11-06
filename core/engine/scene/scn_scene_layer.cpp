@@ -31,6 +31,7 @@ scn::scene_layer::~scene_layer()
 
 void scn::scene_layer::stop_tasks()
 {
+	m_tasks.refuse_new_tasks();
 	m_tasks.cancel_tasks();
 	if (m_task_system) {
 		m_task_system->wait_idle(m_tasks);

@@ -671,6 +671,33 @@ BOOST_AUTO_TEST_CASE(RunPendingMainRunsOnlyTheContinuationsOfTheBoundTasks)
 	BOOST_TEST(bound_calls == 2);
 }
 
+// #579: once the owner refuses new tasks, a task bound to it never runs, but its continuations do, through the owner.
+BOOST_AUTO_TEST_CASE(ATaskBoundAfterTheOwnerRefusesNewTasksIsCancelledAndItsContinuationsRun)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	bool ran = false;
+	auto before = tasks.run(lane::compute, { "before" }, owner, [&](ds::task_context&) { ran = true; });
+	owner.refuse_new_tasks();
+	bool body_ran = false;
+	auto refused = tasks.run(lane::compute, { "refused" }, owner, [&](ds::task_context&) { body_ran = true; });
+	BOOST_CHECK(refused.status() == task_status::cancelled);
+
+	int continuations = 0;
+	refused.then_main([&](ds::task_result<void>& result) {
+		BOOST_TEST(!result.ok());
+		++continuations;
+	});
+	ds::detail::run_pending_main(owner);
+	BOOST_TEST(continuations == 1);
+
+	while (tasks.run_one(lane::compute)) {}
+	BOOST_TEST(!body_ran);
+	BOOST_TEST(ran); // bound before: refusing new tasks does not cancel it
+	tasks.drain_main();
+	BOOST_TEST(continuations == 1);
+}
+
 BOOST_AUTO_TEST_CASE(PlainThenMainIgnoresLifetimes)
 {
 	ds::task_system tasks(manual_config());
