@@ -12,9 +12,9 @@ set -euo pipefail
 bin="${1:?usage: check_windows_deps.sh <bin dir> <file>...}"
 shift
 [[ $# -gt 0 ]] || { echo "usage: check_windows_deps.sh <bin dir> <file>..."; exit 2; }
-windows_dlls=" kernel32.dll user32.dll gdi32.dll shell32.dll advapi32.dll ole32.dll oleaut32.dll opengl32.dll
-	ws2_32.dll mswsock.dll shlwapi.dll comdlg32.dll comctl32.dll imm32.dll winmm.dll dwmapi.dll version.dll
-	bcrypt.dll crypt32.dll dbghelp.dll ntdll.dll uxtheme.dll setupapi.dll iphlpapi.dll userenv.dll "
+# Exactly what editor.exe and snk_engine.dll import today (dumpbin, #223): a new import fails until it is added here.
+# opengl32.dll is not imported: GLFW and glad load it at run time.
+windows_dlls=" kernel32.dll user32.dll gdi32.dll shell32.dll advapi32.dll imm32.dll ws2_32.dll mswsock.dll ntdll.dll "
 # One space-separated line, so " name " matches a whole entry.
 windows_dlls=" $(echo ${windows_dlls}) "
 
