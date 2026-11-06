@@ -13,6 +13,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -351,6 +352,78 @@ private:
 		&observed_test_create_module, &observed_test_destroy_module };
 };
 
+// A module whose task continuations use its own service, which its shutdown_content destroys (#579): the unload has
+// to run those continuations while the service is still there. The flag stands in for the service, so a wrong order
+// shows as a failed check, not as a use after free.
+bool g_order_service_alive = false;
+
+struct order_service {
+	order_service() { g_order_service_alive = true; }
+	~order_service()
+	{
+		g_order_service_alive = false;
+		g_teardown.emplace_back("service");
+	}
+};
+
+void note_continuation(const char* which)
+{
+	g_teardown.emplace_back(std::string(which) + (g_order_service_alive ? ", service alive" : ", service gone"));
+}
+
+// With `reschedule`, its owned continuation starts another task of the module while the unload runs it: that task's
+// continuation has to run before the service goes as well.
+class shutdown_order_game_module final : public gs::game_module {
+public:
+	explicit shutdown_order_game_module(bool reschedule = false) : m_reschedule(reschedule) {}
+
+	std::string_view name() const override { return "shutdown_order_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
+	{
+		data.construct<order_service>();
+		auto* context = &data.require<gs::module_context>();
+		auto task = context->run(ds::lane::compute, ds::task_desc{ .name = "game.order" }, [](ds::task_context&) {});
+		task.then_main(layer.tasks(), [context, reschedule = m_reschedule](ds::task_result<void>&) {
+			note_continuation("owned continuation");
+			if (reschedule) {
+				context->run(ds::lane::compute, ds::task_desc{ .name = "game.order.again" }, [](ds::task_context&) {})
+					.then_main([](ds::task_result<void>&) { note_continuation("rescheduled continuation"); });
+			}
+		});
+		task.then_main([](ds::task_result<void>&) { note_continuation("plain continuation"); });
+	}
+
+	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		if (data.has_value<order_service>()) {
+			data.destruct<order_service>();
+		}
+	}
+
+private:
+	bool m_reschedule = false;
+};
+
+// Every continuation ran with the service alive, and the service went last.
+void check_continuations_ran_before_the_service_went(std::vector<std::string> continuations = { "owned continuation",
+	"plain continuation" })
+{
+	BOOST_TEST_INFO("teardown: " << [] {
+		std::string all;
+		for (const auto& step : g_teardown) all += "[" + step + "] ";
+		return all;
+	}());
+	BOOST_REQUIRE(g_teardown.size() == continuations.size() + 1);
+	BOOST_TEST(g_teardown.back() == "service");
+	for (const auto& continuation : continuations) {
+		BOOST_TEST_INFO("continuation: " << continuation);
+		BOOST_TEST((std::ranges::find(g_teardown, continuation + ", service alive") != g_teardown.end()));
+	}
+}
+
 struct game_module_fixture : test_util::module_env {
 	game_module_fixture()
 	{
@@ -514,6 +587,42 @@ BOOST_AUTO_TEST_CASE(unloading_takes_the_worlds_then_the_layer_then_the_module_s
 
 	loader.unload("test_game", root);
 	BOOST_TEST(g_teardown == (std::vector<std::string>{ "world", "service" }), boost::test_tools::per_element());
+}
+
+// #579: the module's continuations, with an owner and without, run before its shutdown_content destroys the service
+// they use; the layer's own drain afterwards finds nothing left.
+BOOST_AUTO_TEST_CASE(unloading_runs_the_module_continuations_before_its_content_shuts_down)
+{
+	loader.load(std::make_unique<shutdown_order_game_module>(), root);
+	BOOST_REQUIRE((loader.state("shutdown_order_game") == app::modules::module_state::initialized));
+	g_teardown.clear();
+
+	loader.unload("shutdown_order_game", root);
+	check_continuations_ran_before_the_service_went();
+}
+
+// The same when every module shuts down at once (the editor's exit, with or without Play running).
+BOOST_AUTO_TEST_CASE(shutting_all_modules_down_runs_the_module_continuations_before_its_content)
+{
+	loader.load(std::make_unique<shutdown_order_game_module>(), root);
+	BOOST_REQUIRE((loader.state("shutdown_order_game") == app::modules::module_state::initialized));
+	g_teardown.clear();
+
+	loader.shutdown_all_services(root);
+	check_continuations_ran_before_the_service_went();
+}
+
+// A continuation that the unload runs may start another task of the module: that task does not outlive the unload
+// either, and its continuation runs before the service goes.
+BOOST_AUTO_TEST_CASE(a_task_started_by_a_continuation_during_the_unload_finishes_before_the_module_content)
+{
+	loader.load(std::make_unique<shutdown_order_game_module>(true), root);
+	BOOST_REQUIRE((loader.state("shutdown_order_game") == app::modules::module_state::initialized));
+	g_teardown.clear();
+
+	loader.unload("shutdown_order_game", root);
+	check_continuations_ran_before_the_service_went({ "owned continuation", "plain continuation",
+		"rescheduled continuation" });
 }
 
 // Under ASan: unloading must not reach the layer's hot reload manager after the layer's resources are gone.

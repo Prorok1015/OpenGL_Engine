@@ -46,6 +46,8 @@ namespace {
 		{
 			// Its tasks, its worlds (the set "level" goes with the change of the game layer), the rest of the layer,
 			// then the module's services: none of them may run the module's code after the layer is gone.
+			// gs::game_module::shutdown_services already stopped the tasks and ran their continuations, before the module's
+			// shutdown_content (#579); this finds nothing left then, and covers a layer whose module never got that far.
 			m_layer->stop_tasks();
 			// Stopping them queued the main-thread continuations of the module's tasks (then_main, with an owner or
 			// without): they run now, while the layer is there, so none of them holds the module's code past its unload

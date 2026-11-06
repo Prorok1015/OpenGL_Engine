@@ -55,7 +55,8 @@ namespace scn
 
 		// Owner of the module's tasks: run them with task_system::run(lane, desc, layer.tasks(), fn).
 		const ds::lifetime& tasks() const { return m_tasks; }
-		// Cancels the layer's tasks and waits for them. Idempotent; the layer does it before its worlds and services go.
+		// Cancels the layer's tasks and waits for them; a task started after that (from one of their continuations) is
+		// cancelled at once. Idempotent and final: the layer does it before its worlds and services go.
 		void stop_tasks();
 		// What the layer's tasks run on; null when nothing is bound to tasks().
 		ds::task_system* task_runner() const { return m_task_system; }

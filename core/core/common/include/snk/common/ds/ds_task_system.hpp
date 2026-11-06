@@ -83,6 +83,10 @@ namespace ds {
 		// not started drops its body here, on the calling thread: a capture must not hold the last reference to the
 		// lifetime's owner, or the owner dies inside this call.
 		void cancel_tasks() const;
+		// From now on a task bound to it is cancelled before it is queued (logged), so none started later runs; their
+		// continuations still do. What an owner does when it starts to go (a game module's layer, #579). Any thread;
+		// cannot be undone.
+		void refuse_new_tasks() const;
 		[[nodiscard]] std::weak_ptr<detail::lifetime_state> token() const { return m_state; }
 
 	private:
@@ -194,6 +198,8 @@ namespace ds {
 			// inside it (its body or a main-thread continuation) for the same origin joins the group too, and its
 			// main-thread continuations are dropped without a call once the group is destroyed.
 			void set_group(std::weak_ptr<lifetime_state> group);
+			// The lifetime it is bound to refuses new tasks (lifetime::refuse_new_tasks).
+			[[nodiscard]] bool origin_refuses_new_tasks() const;
 			// then_main with a functor of the caller's binary: the task keeps and queues the engine's call of a slot.
 			// With a slot (then_main(owner, ...)): the owner holds the functor. Without: the lifetime the task is bound
 			// to holds it; for a task bound to none, the queued call alone does.

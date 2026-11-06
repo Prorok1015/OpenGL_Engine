@@ -28,9 +28,11 @@ namespace gs
 	// (ecs::register_component<T>(layer.meta()), never a binary's entt::locator), message types (layer.channels()).
 	// `data` (the layer's storage) is isolated: the base's registries are not handed out, and what the module registers
 	// in the engine outside the layer (commands, log sinks, tasks) goes through gs::module_context, which the layer
-	// keeps and removes before it goes. Its own services go into `data` and are destroyed after the layer. The base
-	// sets are built from the base registries alone and the module's sets go with its layer, so unloading needs no
-	// rebuild_all_plans.
+	// keeps and removes before it goes. Its own services go into `data` and are destroyed after the layer (or by
+	// shutdown_content). On shutdown the layer's tasks stop and their main-thread continuations run first, and a task
+	// started from one of them is cancelled at once, so none of the module's code runs after shutdown_content or the
+	// services it destroys (#579). The base sets are built from the base registries alone and the module's sets go
+	// with its layer, so unloading needs no rebuild_all_plans.
 	class game_module : public app::modules::module_interface
 	{
 	public:
@@ -39,12 +41,21 @@ namespace gs
 
 		void register_services(ds::app_data_storage& data) final { register_content(data.require<scn::scene_layer>(), data); }
 		void initialize_services(ds::app_data_storage& data) override { initialize_content(data.require<scn::scene_layer>(), data); }
-		void shutdown_services(ds::app_data_storage& data) final { shutdown_content(data.require<scn::scene_layer>(), data); }
+		void shutdown_services(ds::app_data_storage& data) final
+		{
+			auto& layer = data.require<scn::scene_layer>();
+			layer.stop_tasks();
+			ds::detail::run_pending_main(layer.tasks());
+			shutdown_content(layer, data);
+		}
 
 	protected:
 		virtual void register_content(scn::scene_layer& layer, ds::app_data_storage& data) = 0;
 		virtual void initialize_content(scn::scene_layer&, ds::app_data_storage&) {}
-		// Stops what runs the module's code outside what the layer drops by itself.
+		// Stops what runs the module's code outside what the layer drops by itself. The layer's tasks and their
+		// continuations have already finished, and a task started now is cancelled at once. So the module's tasks must
+		// honour cancellation (task_context::stop): the unload waits for them before this, and one that waits for
+		// something only this sets would hang it.
 		virtual void shutdown_content(scn::scene_layer&, ds::app_data_storage&) {}
 	};
 
