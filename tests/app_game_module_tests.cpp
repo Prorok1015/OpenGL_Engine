@@ -13,6 +13,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -351,6 +352,63 @@ private:
 		&observed_test_create_module, &observed_test_destroy_module };
 };
 
+// A module whose task continuations use its own service, which its shutdown_content destroys (#579): the unload has
+// to run those continuations while the service is still there. The flag stands in for the service, so a wrong order
+// shows as a failed check, not as a use after free.
+bool g_order_service_alive = false;
+
+struct order_service {
+	order_service() { g_order_service_alive = true; }
+	~order_service()
+	{
+		g_order_service_alive = false;
+		g_teardown.emplace_back("service");
+	}
+};
+
+void note_continuation(const char* which)
+{
+	g_teardown.emplace_back(std::string(which) + (g_order_service_alive ? ", service alive" : ", service gone"));
+}
+
+class shutdown_order_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "shutdown_order_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
+	{
+		data.construct<order_service>();
+		auto task = data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "game.order" },
+			[](ds::task_context&) {});
+		task.then_main(layer.tasks(), [](ds::task_result<void>&) { note_continuation("owned continuation"); });
+		task.then_main([](ds::task_result<void>&) { note_continuation("plain continuation"); });
+	}
+
+	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		if (data.has_value<order_service>()) {
+			data.destruct<order_service>();
+		}
+	}
+};
+
+// Both continuations ran with the service alive, and the service went last.
+void check_continuations_ran_before_the_service_went()
+{
+	BOOST_TEST_INFO("teardown: " << [] {
+		std::string all;
+		for (const auto& step : g_teardown) all += "[" + step + "] ";
+		return all;
+	}());
+	BOOST_REQUIRE(g_teardown.size() == 3u);
+	BOOST_TEST(g_teardown.back() == "service");
+	const auto ran = [](const char* step) { return std::ranges::find(g_teardown, std::string(step)) != g_teardown.end(); };
+	BOOST_TEST(ran("owned continuation, service alive"));
+	BOOST_TEST(ran("plain continuation, service alive"));
+}
+
 struct game_module_fixture : test_util::module_env {
 	game_module_fixture()
 	{
@@ -514,6 +572,29 @@ BOOST_AUTO_TEST_CASE(unloading_takes_the_worlds_then_the_layer_then_the_module_s
 
 	loader.unload("test_game", root);
 	BOOST_TEST(g_teardown == (std::vector<std::string>{ "world", "service" }), boost::test_tools::per_element());
+}
+
+// #579: the module's continuations, with an owner and without, run before its shutdown_content destroys the service
+// they use; the layer's own drain afterwards finds nothing left.
+BOOST_AUTO_TEST_CASE(unloading_runs_the_module_continuations_before_its_content_shuts_down)
+{
+	loader.load(std::make_unique<shutdown_order_game_module>(), root);
+	BOOST_REQUIRE((loader.state("shutdown_order_game") == app::modules::module_state::initialized));
+	g_teardown.clear();
+
+	loader.unload("shutdown_order_game", root);
+	check_continuations_ran_before_the_service_went();
+}
+
+// The same when every module shuts down at once (the editor's exit, with or without Play running).
+BOOST_AUTO_TEST_CASE(shutting_all_modules_down_runs_the_module_continuations_before_its_content)
+{
+	loader.load(std::make_unique<shutdown_order_game_module>(), root);
+	BOOST_REQUIRE((loader.state("shutdown_order_game") == app::modules::module_state::initialized));
+	g_teardown.clear();
+
+	loader.shutdown_all_services(root);
+	check_continuations_ran_before_the_service_went();
 }
 
 // Under ASan: unloading must not reach the layer's hot reload manager after the layer's resources are gone.
