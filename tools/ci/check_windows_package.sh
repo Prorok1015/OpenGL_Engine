@@ -49,17 +49,19 @@ if [[ "$before" != "$after" ]]; then
 fi
 echo "Snake/${ver}: $(wc -l <<< "$main_files") files, the debug archive adds $(cd "${work}/debug/Snake/${ver}" && find . -type f | wc -l)"
 
+# Sections 0-3 report every failure before the script stops, so one run also lists the DLL dependencies.
+status=0
+
 # ---- 0. the Debug and Release packages agree on everything but the per-configuration files ----
 for f in snake_sdk_sharedTargets.cmake snake_sdk_staticTargets.cmake; do
 	if ! cmp -s "${debug_targets}/${f}" "${root}/lib/cmake/snake_sdk/${f}"; then
 		echo "::error::${f} of the Debug build differs from the Release package's: a definition or target depends on the configuration"
 		diff "${debug_targets}/${f}" "${root}/lib/cmake/snake_sdk/${f}" | head -40 || true
-		exit 1
+		status=1
 	fi
 done
 
 # ---- 2. layout ----
-status=0
 for f in bin/editor.exe bin/editor.pdb bin/snk_engine.dll bin/snk_engine.pdb bin/snk_engined.dll bin/snk_engined.pdb \
 	bin/vcruntime140.dll bin/msvcp140.dll lib/snk/snk_engine.lib lib/snk/snk_engined.lib \
 	lib/cmake/snake_sdk/snake_sdkConfig.cmake lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake \
@@ -73,10 +75,10 @@ if ls "${root}/bin" | grep -Ei '^(vcruntime|msvcp|concrt|vccorlib)[0-9_]*d\.dll$
 	echo "::error::the debug MSVC runtime is not redistributable"; status=1
 fi
 ls -l "${root}/bin"
-[[ $status -eq 0 ]] || exit 1
 
 # ---- 3. dependencies ----
-bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_engine.dll
+bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_engine.dll || status=1
+[[ $status -eq 0 ]] || exit 1
 
 # ---- 4. consumer, both engines, both configurations ----
 header_check=ON
