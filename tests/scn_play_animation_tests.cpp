@@ -91,6 +91,18 @@ BOOST_AUTO_TEST_CASE(TheClipThatPlaysKeepsItsTimeAndTakesTheNewLoopAndSpeed)
 	BOOST_TEST(controller().playing);
 }
 
+BOOST_AUTO_TEST_CASE(TheClipThatPlaysIsNotLookedUpAgain)
+{
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "idle"));
+	// what the collection would give back is not written again on the continuing call
+	controller().duration = 99.0f;
+	controller().ticks_per_second = 3.0f;
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "idle", true, 2.0f));
+	BOOST_TEST(controller().duration == 99.0f);
+	BOOST_TEST(controller().ticks_per_second == 3.0f);
+	BOOST_TEST(controller().speed == 2.0f);
+}
+
 BOOST_AUTO_TEST_CASE(AClipWithoutLoopStopsAtItsEndAndTheNextCallPlaysItAgain)
 {
 	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));

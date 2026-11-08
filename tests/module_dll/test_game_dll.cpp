@@ -67,7 +67,7 @@ void dll_move(entt::view<entt::get_t<dll_game::dll_component>> view)
 	}
 }
 
-void dll_animate(entt::registry& reg, entt::view<entt::get_t<const scn::animation_controller_component>> models)
+void dll_animate(entt::registry& reg, entt::view<entt::get_t<scn::animation_controller_component>> models)
 {
 	for (auto&& [model, controller] : models.each()) {
 		if (controller.current_animation == "idle") {

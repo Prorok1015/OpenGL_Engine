@@ -27,17 +27,17 @@ bool scn::play_animation(entt::registry& reg, entt::entity entity, std::string_v
 			entt::to_integral(entity), speed);
 		return false;
 	}
-	const auto* collection = reg.try_get<animation_collection_component>(entity);
-	const animation_clip_desc* clip = collection ? collection->find(std::string{ clip_name }) : nullptr;
-	if (!clip) {
-		egLOG_WARN("animation", "play_animation: no clip '{}' in the animation collection of entity {}", clip_name,
-			entt::to_integral(entity));
-		return false;
-	}
-
-	const bool continues = controller->playing && controller->current_animation == clip->name;
-	select_animation_clip(*controller, *clip);
+	// The clip that plays goes on without a lookup: a call every frame never waits on a clip's resource handle.
+	const bool continues = controller->playing && controller->current_animation == clip_name;
 	if (!continues) {
+		const auto* collection = reg.try_get<animation_collection_component>(entity);
+		const animation_clip_desc* clip = collection ? collection->find(std::string{ clip_name }) : nullptr;
+		if (!clip) {
+			egLOG_WARN("animation", "play_animation: no clip '{}' in the animation collection of entity {}", clip_name,
+				entt::to_integral(entity));
+			return false;
+		}
+		select_animation_clip(*controller, *clip);
 		controller->current_time = 0.0f;
 	}
 	controller->loop = loop;
