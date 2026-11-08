@@ -59,9 +59,17 @@ struct import_fixture : test_util::scene_env
 	edt::agent_import_options options()
 	{
 		edt::agent_import_options result;
-		result.import = [this](const fs::path& model, ds::task_context* task) { return fake_import(model, task); };
+		result.import = [this](const edt::import_source& source, ds::task_context* task) { return fake_import(source, task); };
+		result.scan = [this](const edt::import_source&, ds::task_context*) {
+			++scans;
+			edt::model_file_scan scan;
+			scan.error = scan_error;
+			scan.files = listed_files;
+			for (const auto& file : listed_files) scan.total_bytes += file.size;
+			return scan;
+		};
 		result.resource_layers = [this] { return std::vector<fs::path>{ res_root }; };
-		result.resources_path = res_root;
+		result.resources_path = [this] { return res_root; };
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
 		result.now = [this] { return clock; };
 		result.max_source_bytes = 4096;
@@ -69,9 +77,12 @@ struct import_fixture : test_util::scene_env
 	}
 
 	// What assimp would leave in memory://: textures, a geometry and a prefab that refers to it.
-	edt::import_intermediate fake_import(const fs::path& model, ds::task_context*)
+	edt::import_intermediate fake_import(const edt::import_source& source, ds::task_context*)
 	{
+		const fs::path& model = source.path;
 		++imports;
+		if (source.allowed) seen_allowed = *source.allowed;
+		if (source.preloaded) seen_bytes.assign(reinterpret_cast<const char*>(source.preloaded->data()), source.preloaded->size());
 		if (during_import) during_import();
 		edt::import_intermediate imported;
 		if (fail_import) {
@@ -86,6 +97,8 @@ struct import_fixture : test_util::scene_env
 		rs->store(geometry, test_util::to_bytes(R"({"__type":"geometry_desc"})"));
 		rs->store(prefab, test_util::to_bytes(R"({"geometry":")" + std::string(geometry.view()) + R"("})"));
 		imported.all_tags = { texture, geometry, prefab };
+		imported.created_tags = imported.all_tags;
+		if (foreign_tag) imported.all_tags.push_back(*foreign_tag);
 		imported.geom_tag = geometry;
 		imported.prefab_tag = prefab;
 		imported.source_path = model;
@@ -130,6 +143,12 @@ struct import_fixture : test_util::scene_env
 	std::optional<std::string> blocked;
 	bool fail_import = false;
 	int imports = 0;
+	int scans = 0;
+	std::string scan_error;
+	std::vector<edt::referenced_file> listed_files;
+	std::vector<edt::referenced_file> seen_allowed;
+	std::string seen_bytes;
+	std::optional<res::tag> foreign_tag;
 	std::function<void()> during_import;
 };
 
@@ -262,6 +281,76 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 	const std::optional<std::string> refused = service->describe({ "relative.glb", "", "" }, agent);
 	BOOST_REQUIRE(refused.has_value());
 	BOOST_CHECK(refused->rfind("This request will be refused", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Describe_ListsTheFilesTheModelReadsAndTheirTotal)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 }, { dir.path() / "outside" / "mesh.bin", 3000 } };
+	const std::optional<std::string> text = service->describe(request("hero", "models"), agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK(text->find((dir.path() / "outside" / "skin.png").string()) != std::string::npos);
+	BOOST_CHECK(text->find((dir.path() / "outside" / "mesh.bin").string()) != std::string::npos);
+	BOOST_CHECK(text->find("4000 bytes") != std::string::npos);
+	BOOST_CHECK(text->find("2 files") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Describe_WithoutOtherFiles_SaysSo)
+{
+	const std::optional<std::string> text = service->describe(request(), agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK(text->find("no other file") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Describe_AModelThatTheScanRefuses_IsRefusedAndNotRemembered)
+{
+	scan_error = "the model refers to '.ssh/id_rsa': a hidden file or folder";
+	const std::optional<std::string> text = service->describe(request(), agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK(text->rfind("This request will be refused", 0) == 0u);
+	BOOST_CHECK(text->find("hidden") != std::string::npos);
+
+	scan_error.clear();
+	const auto started = service->start(request(), agent, true);
+	BOOST_CHECK(!started.ok());
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(Start_ImportsOnlyTheShownFiles_FromTheBytesItChecked)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const auto started = approved_start(request(), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	scan_error = "must not be asked again";
+	run_jobs();
+	BOOST_CHECK_EQUAL(imports, 1);
+	BOOST_CHECK_EQUAL(scans, 1);
+	BOOST_REQUIRE_EQUAL(seen_allowed.size(), 1u);
+	BOOST_CHECK(seen_allowed[0].path == dir.path() / "outside" / "skin.png");
+	BOOST_CHECK_EQUAL(seen_allowed[0].size, 1000u);
+	BOOST_CHECK_EQUAL(seen_bytes, "glb bytes of the robot");
+}
+
+BOOST_AUTO_TEST_CASE(Start_WithoutAnApproval_LooksAtNoPath)
+{
+	const auto missing = service->start({ (dir.path() / "no" / "such.glb").string(), "", "" }, agent, false);
+	BOOST_CHECK_EQUAL(missing.code, cmd::codes::denied);
+	const auto present = service->start(request(), agent, false);
+	BOOST_CHECK_EQUAL(present.code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(missing.error, present.error);
+	BOOST_CHECK_EQUAL(scans, 0);
+}
+
+BOOST_AUTO_TEST_CASE(Job_ErasesOnlyTheMemoryCopiesItCreated)
+{
+	const res::tag foreign{ "memory://robot/tex/foreign.png" };
+	rs->store(foreign, test_util::to_bytes("belongs to somebody else"));
+	foreign_tag = foreign;
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE(started.ok());
+	run_jobs();
+	BOOST_CHECK(in_memory("memory://robot/tex/foreign.png"));
+	BOOST_CHECK(!in_memory("memory://robot/robot.prefab.desc"));
 }
 
 BOOST_AUTO_TEST_CASE(Start_AfterTheApproval_ImportsExportsAndCleansMemory)
@@ -455,6 +544,7 @@ BOOST_AUTO_TEST_CASE(APersonsOwnCall_NeedsNoApproval)
 	const auto started = service->start(request("mine", "models"), cmd::origin::ui(), false);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	run_jobs();
+	BOOST_CHECK_EQUAL(scans, 1);
 	BOOST_CHECK(fs::exists(res_root / "models" / "mine.prefab.desc"));
 }
 

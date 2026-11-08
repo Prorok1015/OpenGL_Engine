@@ -1,6 +1,8 @@
 #pragma once
 #include "edt_asset_exporter.h"
 #include "edt_async_import_task.h"
+#include "edt_model_file_access.h"
+#include "edt_model_importer.h"
 #include <snk/command/cmd_types.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_job_service.h>
@@ -33,6 +35,10 @@ namespace edt {
 		std::string name;
 		std::string folder;
 		std::string prefab;	// res:// tag of the prefab the import produces
+		// The files besides the model that the import may read: what the person was shown. Filled by `describe`.
+		std::vector<referenced_file> files;
+		std::uintmax_t files_bytes = 0;
+		bool scanned = false;
 		// Set when the request is refused: the command code (invalid_args, not_found, needs_input, busy) and why.
 		std::string code;
 		std::string error;
@@ -44,17 +50,21 @@ namespace edt {
 	struct agent_import_options
 	{
 		// Reads the model and puts its resources into memory://. Null: the editor was built without assimp.
-		std::function<import_intermediate(const std::filesystem::path&, ds::task_context*)> import;
+		std::function<import_intermediate(const import_source&, ds::task_context*)> import;
+		// Lists the files besides the model it would read, or why an agent may not import it.
+		std::function<model_file_scan(const import_source&, ds::task_context*)> scan;
 		// The folders res:// is read from, the top one last: a target that exists in any of them is not overwritten.
 		std::function<std::vector<std::filesystem::path>()> resource_layers;
-		// The folder an import writes into (the top layer).
-		std::filesystem::path resources_path;
+		// The folder an import writes into (the top layer of the project that is open now).
+		std::function<std::filesystem::path()> resources_path;
 		// Why no import may start now (Play, the dialog import is running); null or nullopt: it may.
 		std::function<std::optional<std::string>()> blocker;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
-		// The largest model file an agent may import.
-		std::uintmax_t max_source_bytes = 256ull * 1024ull * 1024ull;
+		// The largest model file an agent may import: `describe` parses it while the person's question is put.
+		std::uintmax_t max_source_bytes = 64ull * 1024ull * 1024ull;
+		// What the model may make the import read besides itself.
+		model_file_limits file_limits;
 	};
 
 	// The import of a model an agent asks for: no dialog, one background job that imports, exports into the project and
@@ -68,7 +78,7 @@ namespace edt {
 		agent_model_import& operator=(const agent_model_import&) = delete;
 
 		// The import is built in (the editor has assimp).
-		bool available() const { return static_cast<bool>(m_options.import); }
+		bool available() const { return static_cast<bool>(m_options.import) && static_cast<bool>(m_options.scan); }
 		// An import job of this service is running.
 		bool running() const;
 

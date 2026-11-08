@@ -1004,12 +1004,13 @@ struct import_question_fixture : question_fixture
 	{
 		dir.write("models/robot.glb", "glb");
 		edt::agent_import_options options;
-		options.import = [this](const std::filesystem::path&, ds::task_context*) {
+		options.import = [this](const edt::import_source&, ds::task_context*) {
 			++imports;
 			return edt::import_intermediate{};
 		};
+		options.scan = [](const edt::import_source&, ds::task_context*) { return edt::model_file_scan{}; };
 		options.resource_layers = [] { return std::vector<std::filesystem::path>{}; };
-		options.resources_path = dir.path() / "res";
+		options.resources_path = [this] { return dir.path() / "res"; };
 		service = std::make_unique<edt::agent_model_import>(exporter, jobs, resources, std::move(options));
 		hooks.agent_import = service.get();
 		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);

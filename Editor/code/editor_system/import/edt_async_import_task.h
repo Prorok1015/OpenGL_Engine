@@ -14,6 +14,8 @@ namespace edt {
 		res::tag                          geom_tag;
 		res::tag                          prefab_tag;
 		std::vector<res::tag>             all_tags;
+		// The tags this run stored itself; the rest of all_tags was there before.
+		std::vector<res::tag>             created_tags;
 		std::filesystem::path             source_path;
 
 		// Owned copy of prefab JSON for main-thread desc_sys.create_instance + deserialize.

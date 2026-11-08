@@ -18,6 +18,9 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <fstream>
+#include <stdexcept>
+#include <optional>
+#include <algorithm>
 #include <unordered_set>
 
 namespace json = boost::json;
@@ -48,7 +51,20 @@ struct import_tags
 {
 	std::vector<res::tag>& all;
 	std::vector<res::tag>& created;
+	// Set for an agent's import: decides which files next to the model are read, and nothing already in memory:// is reused.
+	edt::model_file_access* files = nullptr;
 };
+
+// True when the tag was stored by this run before. A tag from anywhere else is not this import's to reuse or overwrite
+// in an agent's import: its bytes could belong to another model.
+bool already_there(const import_tags& tags, res::resource_system& res, const res::tag& tag)
+{
+	if (!res.exists(tag)) return false;
+	if (tags.files && std::find(tags.created.begin(), tags.created.end(), tag) == tags.created.end()) {
+		throw std::runtime_error(std::format("'{}' is already in memory: another import of a model with this name has not finished", tag.view()));
+	}
+	return true;
+}
 
 // Erases the memory:// tags a failed or cancelled import has stored so far.
 class stored_tags_guard
@@ -167,7 +183,7 @@ json::value find_material_texture(
 
 			res::tag emb_tag = res::tag(res::tag::memory, mem_prefix + emb_path);
 
-			if (!res_sys.exists(emb_tag)) {
+			if (!already_there(out_tags, res_sys, emb_tag)) {
 				std::vector<std::byte> data_byte;
 
 				if (pEmbTxm->mHeight != 0) {
@@ -199,7 +215,7 @@ json::value find_material_texture(
 			res::tag desc_tag = res::tag{ res::tag::memory,
 				std::format("{0}{1}.txm.desc", emb_tag.path(), emb_tag.pure_name()) };
 
-			if (!res_sys.exists(desc_tag)) {
+			if (!already_there(out_tags, res_sys, desc_tag)) {
 				json::object desc;
 				desc["__type"] = "texture_2d_desc";
 				desc["__parent"] = "res://base_texture.desc";
@@ -218,12 +234,19 @@ json::value find_material_texture(
 		}
 
 		// External texture file — read from model's directory and store in memory://
-		const std::string safe_texture_name = res::sanitize_relative_path(texture_name);
+		edt::resolved_reference reference;
+		std::string texture_key{ texture_name };
+		if (out_tags.files) {
+			reference = out_tags.files->resolve(texture_name, edt::model_file_kind::texture);
+			if (!reference.error.empty()) throw std::runtime_error(reference.error);
+			if (reference.found()) texture_key = out_tags.files->relative_name(reference);
+		}
+		const std::string safe_texture_name = res::sanitize_relative_path(texture_key);
 		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + safe_texture_name);
 
-		if (!res_sys.exists(tex_data_tag)) {
+		if (!already_there(out_tags, res_sys, tex_data_tag)) {
 			// The name comes from the model file: only regular files inside the model dir are read.
-			if (auto tex_bytes = res::read_file_within_dir(model_dir, texture_name)) {
+			if (auto tex_bytes = out_tags.files ? out_tags.files->read(reference) : res::read_file_within_dir(model_dir, texture_name)) {
 				res_sys.store(tex_data_tag, *tex_bytes);
 				out_tags.created.push_back(tex_data_tag);
 			} else {
@@ -235,7 +258,7 @@ json::value find_material_texture(
 		res::tag desc_tag = res::tag{ res::tag::memory,
 			std::format("{0}textures/{1}.txm.desc", mem_prefix, safe_texture_name) };
 
-		if (!res_sys.exists(desc_tag)) {
+		if (!already_there(out_tags, res_sys, desc_tag)) {
 			json::object desc;
 			desc["__type"] = "texture_2d_desc";
 			desc["__parent"] = "res://base_texture.desc";
@@ -333,7 +356,7 @@ json::value process_material(
 	res::tag mat_tag = res::tag{ res::tag::memory,
 		std::format("{0}materials/{1}.mat.desc", mem_prefix, res::sanitize_relative_path(mat_name)) };
 
-	if (!res_sys.exists(mat_tag)) {
+	if (!already_there(out_tags, res_sys, mat_tag)) {
 		std::string s = json::serialize(jsmaterial);
 		std::vector<std::byte> data(s.size());
 		std::memcpy(data.data(), s.data(), s.size());
@@ -590,33 +613,89 @@ edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system&
 
 edt::import_intermediate edt::model_importer::import_background(const std::filesystem::path& abs_path, ds::task_context* ctx)
 {
+	import_source source;
+	source.path = abs_path;
+	return import_background(source, ctx);
+}
+
+edt::model_file_scan edt::model_importer::scan_files(const import_source& source, ds::task_context* ctx)
+{
+	model_file_scan scan;
+	if (!source.preloaded) {
+		scan.error = "the model file was not read";
+		return scan;
+	}
+	model_file_access access(source.path, source.limits);
+	Assimp::Importer importer;
+	if (ctx) importer.SetProgressHandler(new stop_progress_handler(*ctx));
+	importer.SetIOHandler(new edt::filesystem_assimp_io(source.path, *source.preloaded, &access));
+	const aiScene* scene = importer.ReadFile(source.path.string(), 0);
+	checkpoint(ctx);
+	if (!scene) {
+		scan.error = std::format("the model cannot be read: {}", importer.GetErrorString());
+		return scan;
+	}
+	constexpr aiTextureType read_types[] = { aiTextureType_DIFFUSE, aiTextureType_BASE_COLOR, aiTextureType_SPECULAR, aiTextureType_NORMALS };
+	for (unsigned int m = 0; m < scene->mNumMaterials; ++m) {
+		const aiMaterial* material = scene->mMaterials[m];
+		for (const aiTextureType type : read_types) {
+			for (unsigned int i = 0; i < material->GetTextureCount(type); ++i) {
+				aiString name;
+				material->GetTexture(type, i, &name);
+				if (scene->GetEmbeddedTexture(name.C_Str())) continue;
+				const resolved_reference reference = access.resolve(name.C_Str(), model_file_kind::texture);
+				if (!reference.error.empty()) {
+					scan.error = reference.error;
+					return scan;
+				}
+			}
+		}
+	}
+	scan.files = access.files();
+	scan.total_bytes = access.listed_bytes();
+	return scan;
+}
+
+edt::import_intermediate edt::model_importer::import_background(const import_source& source, ds::task_context* ctx)
+{
+	const std::filesystem::path& abs_path = source.path;
 	import_intermediate im;
 	im.source_path = abs_path;
 	std::vector<res::tag> created_tags;
 	import_tags tags{ im.all_tags, created_tags };
+	std::optional<model_file_access> access;
+	if (source.allowed) {
+		access.emplace(abs_path, source.limits, source.allowed);
+		tags.files = &*access;
+	}
 	stored_tags_guard cleanup(m_res, created_tags);
 	checkpoint(ctx);
 
-	// 1. Read file from disk
-	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
-	if (!in) {
-		im.error = std::format("Failed to open file: {}", abs_path.string());
-		egLOG_ERROR("edt/import", "{}", im.error);
-		return im;
-	}
+	// 1. Read file from disk (an agent's import brings the bytes it checked)
+	std::vector<std::byte> file_data;
+	if (source.preloaded) {
+		file_data = *source.preloaded;
+	} else {
+		std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
+		if (!in) {
+			im.error = std::format("Failed to open file: {}", abs_path.string());
+			egLOG_ERROR("edt/import", "{}", im.error);
+			return im;
+		}
 
-	auto file_size = static_cast<std::streamsize>(in.tellg());
-	in.seekg(0);
-	std::vector<std::byte> file_data(static_cast<size_t>(file_size));
-	in.read(reinterpret_cast<char*>(file_data.data()), file_size);
-	in.close();
+		auto file_size = static_cast<std::streamsize>(in.tellg());
+		in.seekg(0);
+		file_data.resize(static_cast<size_t>(file_size));
+		in.read(reinterpret_cast<char*>(file_data.data()), file_size);
+		in.close();
+	}
 	checkpoint(ctx);
 
 	// 2. Import via Assimp with filesystem IO
 	Assimp::Importer importer;
 	if (ctx) importer.SetProgressHandler(new stop_progress_handler(*ctx));
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
-	importer.SetIOHandler(new edt::filesystem_assimp_io(abs_path, file_data));
+	importer.SetIOHandler(new edt::filesystem_assimp_io(abs_path, file_data, tags.files));
 	const aiScene* scene = importer.ReadFile(abs_path.string(), flags);
 	// An aborted parse also returns no scene: that is a cancel, not an import error.
 	checkpoint(ctx);
@@ -789,6 +868,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	std::string geom_str = json::serialize(jsgeometry);
 	std::vector<std::byte> geom_bytes(geom_str.size());
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
+	(void)already_there(tags, m_res, geom_tag);
 	store_tracked(m_res, geom_tag, geom_bytes, created_tags);
 	im.all_tags.push_back(geom_tag);
 
@@ -803,6 +883,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 
 	im.prefab_tag = prefab_tag;
 
+	(void)already_there(tags, m_res, prefab_tag);
 	store_tracked(m_res, prefab_tag, m_desc.serialize_to_bytes(jsdata), created_tags);
 	im.all_tags.push_back(prefab_tag);
 
@@ -821,6 +902,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	for (const auto& t : im.all_tags) {
 		egLOG("edt/import", "  tag: {}", t.view());
 	}
+	im.created_tags = created_tags;
 	cleanup.disarm();
 	return im;
 }

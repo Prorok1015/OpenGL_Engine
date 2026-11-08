@@ -6,6 +6,7 @@
 #include <boost/json/object.hpp>
 #include <cctype>
 #include <format>
+#include <fstream>
 #include <iterator>
 #include <stdexcept>
 #include <system_error>
@@ -65,6 +66,21 @@ namespace {
 		return {};
 	}
 
+	// The bytes of the model, read once: no more than the size that was shown, and the file must still be that file.
+	std::vector<std::byte> read_checked_source(const edt::agent_import_plan& plan)
+	{
+		if (const std::string why = identity_problem(plan); !why.empty()) throw std::runtime_error(why);
+		std::ifstream in(plan.source, std::ios::binary);
+		if (!in) throw std::runtime_error("the file cannot be opened");
+		std::vector<std::byte> bytes(static_cast<std::size_t>(plan.size));
+		in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		if (static_cast<std::uintmax_t>(in.gcount()) != plan.size || in.peek() != std::char_traits<char>::eof()) {
+			throw std::runtime_error("the size of the file changed while it was read");
+		}
+		if (const std::string why = identity_problem(plan); !why.empty()) throw std::runtime_error("the file changed while it was read: " + why);
+		return bytes;
+	}
+
 	// Takes back the files a failed or cancelled export wrote: only those, only plain files.
 	void take_back(const std::vector<res::tag>& written, const fs::path& top)
 	{
@@ -79,7 +95,9 @@ namespace {
 	{
 		edt::asset_exporter* exporter = nullptr;
 		res::resource_system* resources = nullptr;
-		std::function<edt::import_intermediate(const fs::path&, ds::task_context*)> import;
+		std::function<edt::import_intermediate(const edt::import_source&, ds::task_context*)> import;
+		std::function<edt::model_file_scan(const edt::import_source&, ds::task_context*)> scan;
+		edt::model_file_limits limits;
 		std::vector<fs::path> layers;
 		fs::path top;
 		edt::agent_import_plan plan;
@@ -91,8 +109,21 @@ namespace {
 		ctx.set_progress(0.f, "Reading the model");
 		if (const std::string why = identity_problem(in.plan); !why.empty()) throw std::runtime_error(why);
 
-		edt::import_intermediate imported = in.import(in.plan.source, &ctx);
-		const std::vector<res::tag> memory_copies = imported.all_tags;
+		const std::vector<std::byte> source_bytes = read_checked_source(in.plan);
+		edt::import_source source;
+		source.path = in.plan.source;
+		source.preloaded = &source_bytes;
+		source.limits = in.limits;
+		std::vector<edt::referenced_file> files = in.plan.files;
+		if (!in.plan.scanned) {
+			const edt::model_file_scan found = in.scan(source, &ctx);
+			if (!found.ok()) throw std::runtime_error(found.error);
+			files = found.files;
+		}
+		source.allowed = &files;
+
+		edt::import_intermediate imported = in.import(source, &ctx);
+		const std::vector<res::tag> memory_copies = imported.created_tags;
 		const auto drop_memory_copies = [&] {
 			for (const res::tag& tag : memory_copies) in.resources->erase(tag);
 		};
@@ -265,31 +296,63 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 {
 	agent_import_plan plan = resolve(request);
 	if (!plan.ok()) return "This request will be refused: " + plan.error;
-	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab; "
-		"the editor also reads the files the model refers to from its folder.",
+	try {
+		const std::vector<std::byte> bytes = read_checked_source(plan);
+		import_source source;
+		source.path = plan.source;
+		source.preloaded = &bytes;
+		source.limits = m_options.file_limits;
+		const model_file_scan found = m_options.scan(source, nullptr);
+		if (!found.ok()) return "This request will be refused: " + found.error;
+		plan.files = found.files;
+		plan.files_bytes = found.total_bytes;
+		plan.scanned = true;
+	} catch (const std::exception& error) {
+		return std::string("This request will be refused: ") + error.what();
+	}
+	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
 		to_utf8(plan.source), size_text(plan.size), plan.folder, plan.name, plan.prefab);
+	if (plan.files.empty()) {
+		text += "The model refers to no other file.";
+	} else {
+		text += std::format("The model also makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
+		constexpr std::size_t k_listed = 20;
+		for (std::size_t i = 0; i < plan.files.size() && i < k_listed; ++i) {
+			text += std::format("\n  {}  {}", to_utf8(plan.files[i].path), size_text(plan.files[i].size));
+		}
+		if (plan.files.size() > k_listed) text += std::format("\n  ... and {} more", plan.files.size() - k_listed);
+	}
 	remember(call_key(request, caller), std::move(plan));
 	return text;
 }
 
 edt::agent_model_import::started edt::agent_model_import::start(const agent_import_request& request, const cmd::origin& caller, bool confirmed)
 {
-	agent_import_plan plan = resolve(request);
-	if (!plan.ok()) return { 0, plan.code, plan.error };
-	// A person's own call (a script of theirs) is the approval; anyone else needs one, for exactly this file.
+	// A person's own call (a script of theirs) is the approval; anyone else needs one, for exactly this file. Nothing about
+	// the disk is looked at before that, so an unapproved call cannot probe paths.
+	std::optional<agent_import_plan> shown;
 	if (caller.kind != cmd::origin_kind::ui) {
 		if (!confirmed) return { 0, cmd::codes::denied, "an import needs a person's approval" };
-		const std::optional<agent_import_plan> shown = take(call_key(request, caller));
+		shown = take(call_key(request, caller));
 		if (!shown) return { 0, cmd::codes::denied, "this import was not shown to a person, or the approval is too old: ask again" };
+	}
+	agent_import_plan plan = resolve(request);
+	if (!plan.ok()) return { 0, plan.code, plan.error };
+	if (shown) {
 		if (!shown->same_file_as(plan)) return { 0, cmd::codes::denied, "the file changed since a person was shown it: ask again" };
+		plan.files = std::move(shown->files);
+		plan.files_bytes = shown->files_bytes;
+		plan.scanned = shown->scanned;
 	}
 
 	import_job_inputs inputs;
 	inputs.exporter = &m_exporter;
 	inputs.resources = &m_resources;
 	inputs.import = m_options.import;
+	inputs.scan = m_options.scan;
+	inputs.limits = m_options.file_limits;
 	inputs.layers = m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
-	inputs.top = m_options.resources_path;
+	inputs.top = m_options.resources_path ? m_options.resources_path() : fs::path{};
 	inputs.plan = std::move(plan);
 	std::string label = "Import " + inputs.plan.name;
 	m_job = m_jobs.start_with_result(ds::lane::compute, { std::move(label), "import" }, m_lifetime,

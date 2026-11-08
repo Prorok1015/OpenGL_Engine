@@ -319,12 +319,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	{
 		edt::agent_import_options import_options;
 #if SNK_HAS_ASSIMP
-		import_options.import = [importer = m_model_importer.get()](const std::filesystem::path& source, ds::task_context* task) {
+		import_options.import = [importer = m_model_importer.get()](const edt::import_source& source, ds::task_context* task) {
 			return importer->import_background(source, task);
+		};
+		import_options.scan = [](const edt::import_source& source, ds::task_context* task) {
+			return edt::model_importer::scan_files(source, task);
 		};
 #endif
 		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
-		import_options.resources_path = m_res.get_resources_path();
+		import_options.resources_path = [this] { return m_res.get_resources_path(); };
 		import_options.blocker = [this]() -> std::optional<std::string> {
 			if (m_play && m_play->active()) return std::string{ "Stop Play to import." };
 			if (m_export_dialog_active) return std::string{ "an import is waiting in the editor's export dialog" };
