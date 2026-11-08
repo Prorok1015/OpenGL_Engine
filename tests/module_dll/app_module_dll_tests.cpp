@@ -158,6 +158,7 @@ BOOST_AUTO_TEST_CASE(a_module_library_fills_its_layer_and_its_worlds_run)
 	BOOST_TEST(layer->descs().is_registered(dll_game::desc_type));
 	BOOST_TEST(!descs->is_registered(dll_game::desc_type));
 	BOOST_TEST((layer->components().find(dll_game::component_name) == entt::type_hash<dll_game::dll_component>::value()));
+	BOOST_TEST(!contexts().catalog().find(dll_game::component_name));
 
 	BOOST_REQUIRE(contexts().load_level(put("lv.desc", DLL_LEVEL)));
 	pump();
@@ -167,6 +168,14 @@ BOOST_AUTO_TEST_CASE(a_module_library_fills_its_layer_and_its_worlds_run)
 	BOOST_REQUIRE(view.size() == 1u);
 	contexts().update(std::chrono::duration<float>(0.016f));
 	BOOST_TEST(view.get<dll_game::dll_component>(view.front()).value == 3);
+
+	// The library's catalog entry writes the component through the schema the library built.
+	const scn::component_entry* entry = layer->catalog().find(dll_game::component_name);
+	BOOST_REQUIRE(entry != nullptr);
+	BOOST_REQUIRE(entry->saved());
+	json::object saved;
+	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), view.front(), saved));
+	BOOST_TEST(saved.at("value").to_number<int>() == 3);
 }
 
 BOOST_AUTO_TEST_CASE(module_code_switches_the_clips_of_a_model_with_play_animation)
@@ -219,6 +228,7 @@ BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)
 			BOOST_TEST(!resident(g_module_path));
 			BOOST_TEST(contexts().level_set().size() == 0u);
 			BOOST_TEST(!contexts().game_layer()->descs().is_registered(dll_game::desc_type));
+			BOOST_TEST(!contexts().game_layer()->catalog().find(dll_game::component_name));
 		}
 	}
 }

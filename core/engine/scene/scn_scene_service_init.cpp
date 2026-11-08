@@ -6,6 +6,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_camera_controller_system.h>
+#include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_transform_system.h>
 
@@ -30,6 +31,7 @@ void scn::scene_init(ds::app_data_storage &store) {
   auto &contexts = store.construct<scn::context_manager>(
       resource, assembler, sfactory,
       store.require_shared<scn::hot_reload_manager>());
+  scn::register_engine_components(contexts.catalog());
   // The game worlds always live in a layer, empty until a game module fills it (MODULE_LAYER.md).
   contexts.set_game_layer(&contexts.create_layer());
   store.construct<rnd::skinning_manager>();

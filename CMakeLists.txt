@@ -182,6 +182,10 @@ target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,S
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
+if(MSVC)
+	# Test files that describe and register several component schemas exceed the default section count (C1128).
+	target_compile_options(unit_tests PRIVATE /bigobj)
+endif()
 # desc_repo_roundtrip_tests loads the descs the repository ships.
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/projects/sandbox")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
