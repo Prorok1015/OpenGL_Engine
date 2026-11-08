@@ -644,10 +644,10 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
 	hooks.quick_save = [&] { calls.push_back("quick_save"); dirty = false; return true; };
 	hooks.save_level_as = [&](const std::string& path) { calls.push_back("save_as:" + path); dirty = false; return true; };
 	hooks.discard_changes = [&dirty] { dirty = false; };
-	hooks.load_level = [&](const std::filesystem::path& path) { calls.push_back("load:" + path.generic_string()); };
+	hooks.load_level_tag = [&](const std::string& path) { calls.push_back("load_tag:" + path); };
 	hooks.exit = [] {};
 	hooks.resources_path = "/proj/res";
-	hooks.level_file_state = [](const std::string& path) {
+	hooks.inspect_level = [](const std::string& path) {
 		return path == "levels/current.desc" || path == "levels/next.desc" ? edt::level_file_state::file : edt::level_file_state::missing;
 	};
 	edt::file_menu menu(dialogs, actions, hooks);
@@ -670,7 +670,7 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
 	BOOST_TEST(!call_tool("file_save").is_error);
 	BOOST_TEST(!call_tool("file_open", R"({"path":"res://levels/next.desc"})").is_error);
 	BOOST_TEST(!call_tool("file_save_as", R"({"path":"levels/copy.desc"})").is_error);
-	BOOST_TEST((calls == std::vector<std::string>{ "quick_save", "load:/proj/res/levels/next.desc", "save_as:levels/copy.desc" }));
+	BOOST_TEST((calls == std::vector<std::string>{ "quick_save", "load_tag:levels/next.desc", "save_as:levels/copy.desc" }));
 
 	// A path out of the project, or over another existing file, is refused.
 	for (const char* path : { "../escape.desc", "/etc/x.desc", "C:/x.desc", "memory://x.desc", "levels/next.desc" }) {

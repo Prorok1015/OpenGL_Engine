@@ -12,6 +12,7 @@
 #include <boost/json/serialize.hpp>
 #include <filesystem>
 #include <functional>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <optional>
@@ -1058,7 +1059,8 @@ struct agent_menu
 	{
 		hooks = fixture.hooks;
 		hooks.resources_path = "/proj/res";
-		hooks.level_file_state = [this](const std::string& path) {
+		hooks.load_level_tag = [this](const std::string& path) { base.calls.push_back("load_tag:" + path); };
+		hooks.inspect_level = [this](const std::string& path) {
 			const auto found = files.find(path);
 			return found == files.end() ? edt::level_file_state::missing : found->second;
 		};
@@ -1089,7 +1091,10 @@ struct agent_menu
 const std::vector<std::string> bad_agent_paths{
 	"../x.desc", "levels/../../x.desc", "res://../x.desc", "/etc/x.desc", "C:/x.desc", "C:\\x.desc", "\\x.desc", "levels\\x.desc",
 	"memory://x.desc", "code://x.desc", "res://levels//x.desc", "levels/./x.desc", "levels/x.txt", "levels/.desc", "levels/x.desc/",
-	"levels/x\ny.desc", "res://", "x" };
+	"levels/x\ny.desc", "res://", "x",
+	"levels/CON.desc", "levels/con.txt.desc", "levels/Nul.desc", "levels/aux/x.desc", "PRN/x.desc", "levels/COM1.desc", "levels/lpt9.desc",
+	"levels/com0.desc", "levels/x.desc.", "levels/dir./x.desc", "levels/dir /x.desc", "levels/a<b.desc", "levels/a|b.desc",
+	"levels/a?b.desc", "levels/a*b.desc", "levels/a\"b.desc", "levels/a>b.desc" };
 
 }
 
@@ -1136,7 +1141,7 @@ BOOST_AUTO_TEST_CASE(AnAgent_OpensAnotherLevelByATagOrAProjectPath)
 	BOOST_REQUIRE_MESSAGE(by_path.ok, by_path.error);
 	BOOST_CHECK(by_path.value.as_object().at("level_loading").as_bool());
 	BOOST_CHECK(m.as_agent("file.open", R"({"path":"res://levels/a.desc"})").ok);
-	BOOST_TEST((f.calls == std::vector<std::string>{ "load:/proj/res/levels/a.desc", "load:/proj/res/levels/a.desc" }));
+	BOOST_TEST((f.calls == std::vector<std::string>{ "load_tag:levels/a.desc", "load_tag:levels/a.desc" }));
 
 	BOOST_CHECK_EQUAL(m.as_agent("file.open", R"({"path":"levels/none.desc"})").code, "not_found");
 	m.files["levels/link.desc"] = edt::level_file_state::unsafe;
@@ -1208,7 +1213,7 @@ BOOST_AUTO_TEST_CASE(AnAgent_OpenOfADirtyLevelNeedsInput_AndDiscardUnsavedIsReje
 	BOOST_CHECK(m.as_agent("file.save", "{}").ok);
 	f.dirty = false;
 	BOOST_CHECK(m.as_agent("file.open", R"({"path":"levels/a.desc","discard_unsaved":false})").ok);
-	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save", "load:/proj/res/levels/a.desc" }));
+	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save", "load_tag:levels/a.desc" }));
 }
 
 BOOST_AUTO_TEST_CASE(AnAgent_IsStillHeldByTheStartLevelBlocker)
@@ -1225,6 +1230,55 @@ BOOST_AUTO_TEST_CASE(AnAgent_IsStillHeldByTheStartLevelBlocker)
 	request.args = boost::json::parse(R"({"path":"levels/a.desc"})");
 	request.from = cmd::origin::agent("session-1");
 	BOOST_CHECK_EQUAL(actions.invoke("file.open", request).code, "busy");
+	BOOST_CHECK(f.calls.empty());
+}
+
+// While a level loads the document does not belong to its file yet: nobody saves it, a person included.
+BOOST_AUTO_TEST_CASE(SaveAndSaveAs_AreBusyWhileALevelLoads)
+{
+	file_menu_fixture f;
+	std::optional<std::string> loading = "a level is loading";
+	edt::action_registry actions;
+	edt::file_menu_hooks hooks = f.hooks;
+	hooks.level_write_blocker = [&loading] { return loading; };
+	hooks.level_change_blocker = [&loading] { return loading; };
+	hooks.inspect_level = [](const std::string&) { return edt::level_file_state::missing; };
+	edt::file_menu menu(f.dialogs, actions, hooks);
+	menu.register_actions();
+	const auto call = [&actions](cmd::origin from, const char* id, const char* args) {
+		cmd::call request;
+		request.args = boost::json::parse(args);
+		request.from = std::move(from);
+		return actions.invoke(id, request).code;
+	};
+	for (const cmd::origin& from : { cmd::origin::agent("s1"), cmd::origin::ui() }) {
+		BOOST_TEST_CONTEXT("origin kind " << static_cast<int>(from.kind)) {
+			BOOST_CHECK_EQUAL(call(from, "file.save", "{}"), "busy");
+			BOOST_CHECK_EQUAL(call(from, "file.save_as", R"({"path":"levels/copy.desc"})"), "busy");
+			BOOST_CHECK_EQUAL(call(from, "file.open", R"({"path":"levels/a.desc"})"), "busy");
+		}
+	}
+	BOOST_CHECK(f.calls.empty());
+
+	loading.reset();
+	BOOST_CHECK_EQUAL(call(cmd::origin::agent("s1"), "file.save", "{}"), "ok");
+	BOOST_CHECK_EQUAL(call(cmd::origin::ui(), "file.save_as", R"({"path":"levels/copy.desc"})"), "ok");
+	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save", "save_as:levels/copy.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentOpen_NeedsTheLevelByTagHook)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	m.files["levels/a.desc"] = edt::level_file_state::file;
+	m.hooks.load_level_tag = nullptr;
+	edt::action_registry actions;
+	edt::file_menu menu(f.dialogs, actions, m.hooks);
+	menu.register_actions();
+	cmd::call request;
+	request.args = boost::json::parse(R"({"path":"levels/a.desc"})");
+	request.from = cmd::origin::agent("s1");
+	BOOST_CHECK_EQUAL(actions.invoke("file.open", request).code, "failed");
 	BOOST_CHECK(f.calls.empty());
 }
 
@@ -1272,6 +1326,18 @@ BOOST_AUTO_TEST_CASE(InspectLevelFile_SeesLinksFoldersAndMissingFiles)
 	BOOST_CHECK((edt::inspect_level_file(root, "levels/a.desc/inside.desc") == edt::level_file_state::unsafe));
 	BOOST_CHECK((edt::inspect_level_file({}, "levels/a.desc") == edt::level_file_state::missing));
 
+#ifdef _WIN32
+	// A junction is a folder that leads elsewhere: another way out of the project that is not a symlink.
+	{
+		const fs::path junction = root / "junction";
+		const std::string command = "mklink /J \"" + junction.string() + "\" \"" + (dir.path() / "outside").string() + "\" >nul 2>&1";
+		if (std::system(command.c_str()) == 0 && fs::exists(junction)) {
+			BOOST_CHECK((edt::inspect_level_file(root, "junction/target.desc") == edt::level_file_state::unsafe));
+		} else {
+			BOOST_TEST_MESSAGE("could not create a junction here: that part is not checked");
+		}
+	}
+#endif
 	std::error_code ec;
 	fs::create_symlink(dir.path() / "outside" / "target.desc", root / "levels" / "link.desc", ec);
 	if (ec) {

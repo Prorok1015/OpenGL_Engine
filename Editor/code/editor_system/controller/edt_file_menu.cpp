@@ -1,6 +1,7 @@
 #include "edt_file_menu.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_project.h>
+#include <cctype>
 #include <cstddef>
 #include <format>
 #include <string_view>
@@ -51,6 +52,17 @@ namespace {
 	std::filesystem::path from_utf8(std::string_view text)
 	{
 		return std::filesystem::path(std::u8string(text.begin(), text.end()));
+	}
+
+	bool is_reserved_device_name(std::string_view segment)
+	{
+		const std::string_view stem = segment.substr(0, segment.find('.'));
+		std::string upper;
+		upper.reserve(stem.size());
+		for (const char character : stem) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
+		while (!upper.empty() && upper.back() == ' ') upper.pop_back();
+		if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") return true;
+		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0' && upper[3] <= '9';
 	}
 
 	bool wants_discard(const json::value& args)
@@ -142,12 +154,16 @@ edt::agent_level_path edt::check_agent_level_path(std::string_view text)
 	if (text.front() == '/') return refuse("the path must be inside the project, not absolute");
 	for (const char character : text) {
 		if (static_cast<unsigned char>(character) < 0x20 || character == 0x7f) return refuse("the path has a control character");
+		if (std::string_view("<>\"|?*").find(character) != std::string_view::npos) return refuse("the path has a character a file name cannot have");
 	}
 	std::size_t start = 0;
 	while (true) {
 		const std::size_t end = text.find('/', start);
 		const std::string_view segment = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
 		if (segment.empty() || segment == "." || segment == "..") return refuse("the path must not have empty, '.' or '..' segments");
+		// Windows drops a trailing dot or space and opens a device for CON, NUL, COM1... (with any extension).
+		if (segment.back() == '.' || segment.back() == ' ') return refuse("a name must not end in '.' or ' '");
+		if (is_reserved_device_name(segment)) return refuse("the path has a name Windows reserves for a device");
 		if (end == std::string_view::npos) break;
 		start = end + 1;
 	}
@@ -365,7 +381,7 @@ void edt::file_menu::register_actions()
 	// never overwrites another file nor drops unsaved changes.
 	const auto restricted = [](const cmd::call& request) { return request.from.kind != cmd::origin_kind::ui; };
 	const auto file_state = [this](const std::string& relative) {
-		return m_hooks.level_file_state ? m_hooks.level_file_state(relative) : inspect_level_file(m_hooks.resources_path, relative);
+		return m_hooks.inspect_level ? m_hooks.inspect_level(relative) : inspect_level_file(m_hooks.resources_path, relative);
 	};
 
 	add({ .id = "file.open", .label = "Open Level...", .menu_path = "File",
@@ -388,7 +404,8 @@ void edt::file_menu::register_actions()
 			case level_file_state::file: break;
 			}
 			if (m_hooks.is_dirty()) return action_result::failure("needs_input", AGENT_UNSAVED_MESSAGE);
-			m_hooks.load_level(m_hooks.resources_path / from_utf8(named.path));
+			if (!m_hooks.load_level_tag) return action_result::failure("failed", "opening a level by its path is not available");
+			m_hooks.load_level_tag(named.path);
 			return action_result::success(json::object{ { "level_loading", true } });
 		},
 		.args_schema = path_schema(true, LEVEL_PATH_DESCRIPTION),
@@ -399,8 +416,17 @@ void edt::file_menu::register_actions()
 		.activate = [this] { open_level(); },
 		.category = cmd::agent_category::scene_edit });
 
+	// The document does not belong to its file while a level is loading: a save then would write the old worlds over the
+	// level being opened.
+	const auto level_write_busy = [this]() -> std::optional<action_result> {
+		if (!m_hooks.level_write_blocker) return std::nullopt;
+		if (std::optional<std::string> why = m_hooks.level_write_blocker()) return action_result::failure(cmd::codes::busy, *why);
+		return std::nullopt;
+	};
+
 	add({ .id = "file.save", .label = "Save Level", .menu_path = "File", .shortcut = "Ctrl+S",
-		.execute = [this](const json::value&) {
+		.execute = [this, level_write_busy](const json::value&) {
+			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
 			if (!m_hooks.quick_save()) return action_result::failure("failed", "the level could not be written");
@@ -410,7 +436,8 @@ void edt::file_menu::register_actions()
 		.category = cmd::agent_category::scene_edit });
 
 	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File", .shortcut = "Ctrl+Shift+S",
-		.execute_call = [this, restricted, file_state](const cmd::call& request) {
+		.execute_call = [this, restricted, file_state, level_write_busy](const cmd::call& request) {
+			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			std::string target(request.args.as_object().at("path").as_string());
 			if (restricted(request)) {

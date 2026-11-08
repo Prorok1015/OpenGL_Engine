@@ -27,7 +27,8 @@ namespace edt
 
 	// The level path an agent may name: `res://levels/a.desc` or `levels/a.desc`. A path with another protocol, a drive
 	// letter, a leading '/', a backslash, a control character, an empty, '.' or '..' segment, or not ending in `.desc`
-	// is refused (`error` says why); otherwise `path` is the project-relative path without the protocol.
+	// is refused (`error` says why); so is a name Windows treats as a device (CON, NUL, COM1, ... with any extension), a
+	// segment ending in '.' or ' ' and the characters <>\"|?*; otherwise `path` is the project-relative path without the protocol.
 	struct agent_level_path
 	{
 		std::string path;
@@ -48,9 +49,16 @@ namespace edt
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
-		// What the level file at a project-relative path is, for the commands an agent calls. Null: looked at below
-		// `resources_path` with inspect_level_file.
-		std::function<level_file_state(const std::string&)> level_file_state;
+		// Starts loading the level at a project-relative path (`levels/a.desc`) without a round trip through a file
+		// system path: what the commands an agent calls use. Null: those commands answer `failed`.
+		std::function<void(const std::string&)> load_level_tag;
+		// What the level file at a project-relative path is, for the commands an agent calls: looked at in every layer of
+		// the resources (a lower content root, the engine), not only the top one. Null: looked at below `resources_path`
+		// with inspect_level_file.
+		std::function<level_file_state(const std::string&)> inspect_level;
+		// Why the level may not be written now (a level is loading: the document does not belong to its file yet):
+		// file.save and file.save_as answer `busy` with it, whoever calls. Null or nullopt: they run.
+		std::function<std::optional<std::string>()> level_write_blocker;
 		// Why the level may not be replaced now (the start level of --game is loading, #518): file.new and file.open
 		// answer `busy` with it, whoever calls. Null or nullopt: they run.
 		std::function<std::optional<std::string>()> level_change_blocker;

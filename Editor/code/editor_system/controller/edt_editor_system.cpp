@@ -199,6 +199,27 @@ namespace {
 		return {};
 #endif
 	}
+
+	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
+	// one: an agent's save_as onto a file that only a lower layer has would shadow it, and its open of such a level works.
+	// A link or a folder in any layer is unsafe; a layer that is not a folder (a RAM or archive resolver) is asked itself.
+	edt::level_file_state inspect_level_in_layers(const res::resource_system& resources, const std::string& relative)
+	{
+		bool found = false;
+		for (const std::filesystem::path& root : resources.get_resource_layers()) {
+			switch (edt::inspect_level_file(root, relative)) {
+			case edt::level_file_state::unsafe: return edt::level_file_state::unsafe;
+			case edt::level_file_state::file: found = true; break;
+			case edt::level_file_state::missing: break;
+			}
+		}
+		if (found) return edt::level_file_state::file;
+		if (const auto raw = resources.fetch_data(res::tag::make(relative))) {
+			raw->wait();
+			if (raw->is_ready()) return edt::level_file_state::file;
+		}
+		return edt::level_file_state::missing;
+	}
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -437,10 +458,21 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		begin_level_load(res::tag::make(relative.string()));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	};
+	// The commands an agent calls name a level by its project path: no file system path in between.
+	hooks.load_level_tag = [this](const std::string& relative) {
+		begin_level_load(res::tag::make(relative));
+		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+	};
+	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
+	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
+		if (m_loading_level) return std::string{ "a level is loading" };
+		return std::nullopt;
+	};
 	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
 	// its level (#518). A person has no menu or shortcut then.
 	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
 		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
+		if (m_loading_level) return std::string{ "a level is loading" };
 		return std::nullopt;
 	};
 #if SNK_HAS_ASSIMP
@@ -1164,9 +1196,8 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
 		if (m_loading_level) {
-			m_level_after_layer_change = m_state.level_tag;
-			m_loading_level = false;
-			m_loading_level_handle = {};
+			m_level_after_layer_change = m_loading_level_tag;
+			abandon_level_load();
 		}
 		m_level_ctrl.detach_from_game_layer();
 		return;
@@ -1372,8 +1403,9 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_level_ctrl.unwatch_level();
 
 	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
+	if (!m_loading_level) m_editor_tag_before_load = m_state.editor_tag;
 	m_state.editor_tag = res::tag{ "memory://editor/" + stem + ".desc" };
-	m_state.level_tag = original_tag;
+	m_loading_level_tag = original_tag;
 
 	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
 	auto& game_resources = *m_services.resources();
@@ -1388,13 +1420,21 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_loading_level = true;
 }
 
+void edt::editor_system::abandon_level_load()
+{
+	if (m_loading_level) m_state.editor_tag = m_editor_tag_before_load;
+	m_editor_tag_before_load = {};
+	m_loading_level_tag = {};
+	m_loading_level = false;
+	m_loading_level_handle = {};
+}
+
 bool edt::editor_system::poll_level_load(bool* loaded_out)
 {
 	if (m_loading_level_handle.has_error()) {
-		egLOG_ERROR("Editor/Load", "Failed to load level '{}'", m_state.editor_tag.view());
+		egLOG_ERROR("Editor/Load", "Failed to load level '{}'", m_loading_level_tag.view());
 		if (loaded_out) *loaded_out = false;
-		m_loading_level = false;
-		m_loading_level_handle = {};
+		abandon_level_load();
 		return false;
 	}
 
@@ -1406,8 +1446,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
 				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
 				if (loaded_out) *loaded_out = false;
-				m_loading_level = false;
-				m_loading_level_handle = {};
+				abandon_level_load();
 				ImGui::CloseCurrentPopup();
 				ImGui::EndPopup();
 				return false;
@@ -1428,10 +1467,20 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
+	// The level takes the new file only now; finish_level_load reads it, and a failure puts the old one back.
+	const res::tag level_tag_before = m_state.level_tag;
+	m_state.level_tag = m_loading_level_tag;
 	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
 	if (loaded_out) *loaded_out = loaded;
-	m_loading_level = false;
-	m_loading_level_handle = {};
+	if (!loaded) m_state.level_tag = level_tag_before;
+	if (loaded) {
+		m_loading_level = false;
+		m_editor_tag_before_load = {};
+		m_loading_level_tag = {};
+		m_loading_level_handle = {};
+	} else {
+		abandon_level_load();
+	}
 	if (loaded) {
 		egLOG_INFO("Editor/LoadLevel", "level loaded: {}", m_state.level_tag.view());
 		if (m_stop_after_level_loaded) {

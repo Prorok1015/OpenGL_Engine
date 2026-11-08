@@ -80,6 +80,11 @@ namespace edt {
 		editor_context* context() const { return m_context; }
 
 		void begin_level_load(const res::tag& level_tag);
+		// True from begin_level_load until the level is loaded, failed or cancelled. The document still belongs to the
+		// level it had before; only a successful load makes it the new one.
+		bool level_load_in_progress() const { return m_loading_level; }
+		// The level file the document belongs to (empty for an untitled one); not the one being loaded.
+		const res::tag& current_level_tag() const { return m_state.level_tag; }
 
 		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
 		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
@@ -208,6 +213,12 @@ namespace edt {
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
+		// The level being loaded and the document's tags from before the load: the document takes the new level tag only
+		// when the load succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused).
+		res::tag m_loading_level_tag;
+		res::tag m_editor_tag_before_load;
+		// A load that ended without a level: the document keeps what it had.
+		void abandon_level_load();
 		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
 		bool poll_level_load(bool* loaded = nullptr);
 
