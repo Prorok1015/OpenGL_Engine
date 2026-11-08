@@ -540,3 +540,192 @@ BOOST_FIXTURE_TEST_CASE(OpeningTheAgentsWindow_WritesNoPolicyFile, agent_editor_
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// The real begin_level_load / level_tag path of the editor (#547): the document belongs to a level file only once that level
+// is loaded, and nothing writes it in between.
+BOOST_AUTO_TEST_SUITE(EdtAgentLevelFiles)
+
+namespace {
+
+std::vector<std::byte> bytes_of_resource(res::resource_system& resources, const char* relative)
+{
+	auto raw = resources.fetch_data(res::tag::make(relative));
+	BOOST_REQUIRE(raw);
+	raw->wait();
+	BOOST_REQUIRE(raw->is_ready());
+	return raw->data;
+}
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAgentCannotSaveWhileALevelLoads_AndTheOldLevelFileIsKept, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+
+	// The open starts the load; the frame that would finish it has not run yet.
+	cmd::call open;
+	open.args = boost::json::object{ { "path", "levels/test_level.desc" } };
+	open.from = cmd::origin::agent("agent-invariant-test");
+	cmd::result started;
+	gui().run_without_drawing([&] { started = registry().invoke("file.open", open); });
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	BOOST_REQUIRE(editor().level_load_in_progress());
+
+	// The document still belongs to the old level, and nobody writes it now: not the agent, not a person.
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+	const std::vector<std::byte> next_before = bytes_of_resource(storage.require<res::resource_system>(), "levels/test_level.desc");
+	for (const cmd::origin& from : { cmd::origin::agent("agent-invariant-test"), cmd::origin::ui() }) {
+		cmd::call save;
+		save.from = from;
+		BOOST_CHECK_EQUAL(registry().invoke("file.save", save).code, "busy");
+		save.args = boost::json::object{ { "path", "levels/copy.desc" } };
+		BOOST_CHECK_EQUAL(registry().invoke("file.save_as", save).code, "busy");
+		save.args = boost::json::object{ { "path", "levels/other.desc" } };
+		BOOST_CHECK_EQUAL(registry().invoke("file.open", save).code, "busy");
+	}
+	BOOST_CHECK(bytes_of_resource(storage.require<res::resource_system>(), "levels/test_level.desc") == next_before);
+
+	pump_level_load();
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/test_level.desc");
+	BOOST_CHECK(bytes_of_resource(storage.require<res::resource_system>(), "levels/test_level.desc") == next_before);
+}
+
+// The working copy of a load is its own: a second level with the same file name from another folder, abandoned, leaves the
+// copy the document's level is read from as it was.
+BOOST_FIXTURE_TEST_CASE(AnAbandonedLoadOfASameNamedLevel_LeavesTheEditedLevelsCopyAlone, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	auto& resources = storage.require<res::resource_system>();
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+	const res::tag copy = editor().current_editor_tag();
+	BOOST_REQUIRE(copy.is_valid());
+	const std::string copy_view(copy.view());
+	const auto copy_bytes = [&] {
+		auto raw = resources.fetch_data(res::tag{ copy_view });
+		BOOST_REQUIRE(raw);
+		raw->wait();
+		BOOST_REQUIRE(raw->is_ready());
+		return raw->data;
+	};
+	const std::vector<std::byte> copy_before = copy_bytes();
+	BOOST_REQUIRE(!copy_before.empty());
+
+	// Same stem, another folder, and no level: the load fails.
+	const std::string junk = "not a level";
+	std::vector<std::byte> junk_bytes(junk.size());
+	std::transform(junk.begin(), junk.end(), junk_bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+	BOOST_REQUIRE(resources.store_sync(res::tag::make("other/smoke_level.desc"), junk_bytes));
+	BOOST_CHECK(invoke_as_agent("file.open", boost::json::object{ { "path", "other/smoke_level.desc" } }).ok);
+	pump_level_load();
+
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+	BOOST_CHECK_EQUAL(std::string(editor().current_editor_tag().view()), copy_view);
+	BOOST_CHECK(copy_bytes() == copy_before);
+}
+
+// Opening levels in a loop (an agent can) leaves one working copy in memory://: the document's own. A failed load takes its
+// copy with it, a successful one takes the previous level's.
+BOOST_FIXTURE_TEST_CASE(ManyOpens_LeaveOnlyTheCurrentLevelsWorkingCopy, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	auto& resources = storage.require<res::resource_system>();
+	const auto exists = [&resources](const std::string& tag) {
+		auto raw = resources.fetch_data(res::tag{ tag });
+		if (!raw) return false;
+		raw->wait();
+		return raw->is_ready();
+	};
+	const std::string junk = "not a level";
+	std::vector<std::byte> junk_bytes(junk.size());
+	std::transform(junk.begin(), junk.end(), junk_bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+	BOOST_REQUIRE(resources.store_sync(res::tag::make("other/smoke_level.desc"), junk_bytes));
+	BOOST_REQUIRE(resources.store_sync(res::tag::make("other/test_level.desc"), junk_bytes));
+
+	// The working copies of the loads in the order they begin: 1..6.
+	const std::vector<std::pair<std::string, bool>> opens{
+		{ "levels/smoke_level.desc", true }, { "other/smoke_level.desc", false }, { "levels/test_level.desc", true },
+		{ "other/test_level.desc", false }, { "levels/smoke_level.desc", true }, { "other/smoke_level.desc", false } };
+	std::vector<std::string> copies;
+	std::string current_copy;
+	for (const auto& [path, is_level] : opens) {
+		const std::string stem = fs::path(path).stem().string();
+		const std::string copy = "memory://editor/loading/" + std::to_string(copies.size() + 1) + "/" + stem + ".desc";
+		copies.push_back(copy);
+		BOOST_TEST_CONTEXT("open " << path) {
+			BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", path } }).ok);
+			pump_level_load();
+			if (is_level) current_copy = copy;
+			BOOST_CHECK_EQUAL(std::string(editor().current_editor_tag().view()), current_copy);
+		}
+	}
+	for (const std::string& copy : copies) {
+		BOOST_TEST_CONTEXT(copy) { BOOST_CHECK_EQUAL(exists(copy), copy == current_copy); }
+	}
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAgentOpeningAFileThatIsNoLevel_LeavesTheDocumentOnItsOldLevel, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	auto& resources = storage.require<res::resource_system>();
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+	const std::vector<std::byte> material_before = bytes_of_resource(resources, "base_material.desc");
+
+	// A material is a .desc but not a level: the open is refused before anything loads (reading it as a level asserts in the
+	// desc adapter), and the document keeps its level.
+	const cmd::result refused = invoke_as_agent("file.open", boost::json::object{ { "path", "base_material.desc" } });
+	BOOST_CHECK(!refused.ok);
+	BOOST_CHECK_EQUAL(refused.code, "invalid_args");
+	BOOST_CHECK(!editor().level_load_in_progress());
+	pump_level_load();
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+
+	// The failed open did not make the material the file to save to: the rule "another existing file needs input" holds.
+	const cmd::result over = invoke_as_agent("file.save_as", boost::json::object{ { "path", "base_material.desc" } });
+	BOOST_CHECK(!over.ok);
+	BOOST_CHECK_EQUAL(over.code, "needs_input");
+	BOOST_CHECK(bytes_of_resource(resources, "base_material.desc") == material_before);
+
+	// A plain save goes to the old level, not to the material.
+	const cmd::result saved = invoke_as_agent("file.save", boost::json::object{});
+	BOOST_CHECK_MESSAGE(saved.ok, saved.error);
+	BOOST_CHECK(bytes_of_resource(resources, "base_material.desc") == material_before);
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+

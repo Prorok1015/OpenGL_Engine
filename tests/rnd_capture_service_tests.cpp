@@ -247,6 +247,133 @@ BOOST_AUTO_TEST_CASE(Capture_TighterLimitsAlsoApplyToTheNativeSize)
 	BOOST_CHECK(service.capture("scene").ok());
 }
 
+BOOST_AUTO_TEST_CASE(Capture_FitScalesTheTargetDownToTheLimitsKeepingItsProportions)
+{
+	auto wide = make_texture(drv, target_header(40, 20));
+	auto tall = make_texture(drv, target_header(20, 40));
+	cmd::registration wide_reg = service.add_target("wide", [&wide] { return wide.handle(); });
+	cmd::registration tall_reg = service.add_target("tall", [&tall] { return tall.handle(); });
+
+	rnd::capture_limits side;
+	side.max_side = 10;
+	side.fit = true;
+	const auto landscape = service.capture("wide", { 0, 0 }, side);
+	BOOST_REQUIRE(landscape.ok());
+	BOOST_CHECK_EQUAL(landscape.image.size.x, 10);
+	BOOST_CHECK_EQUAL(landscape.image.size.y, 5);
+	BOOST_CHECK_EQUAL(landscape.image.rgba.size(), 10u * 5u * 4u);
+	const auto portrait = service.capture("tall", { 0, 0 }, side);
+	BOOST_REQUIRE(portrait.ok());
+	BOOST_CHECK_EQUAL(portrait.image.size.x, 5);
+	BOOST_CHECK_EQUAL(portrait.image.size.y, 10);
+
+	rnd::capture_limits pixels;
+	pixels.max_pixels = 50;
+	pixels.fit = true;
+	const auto budget = service.capture("wide", { 0, 0 }, pixels);
+	BOOST_REQUIRE(budget.ok());
+	BOOST_CHECK_LE(static_cast<std::int64_t>(budget.image.size.x) * budget.image.size.y, 50);
+	BOOST_CHECK_EQUAL(budget.image.size.x, budget.image.size.y * 2);
+
+	// An odd budget the square root cannot hit exactly still holds.
+	pixels.max_pixels = 7;
+	const auto odd = service.capture("wide", { 0, 0 }, pixels);
+	BOOST_REQUIRE(odd.ok());
+	BOOST_CHECK_LE(static_cast<std::int64_t>(odd.image.size.x) * odd.image.size.y, 7);
+	BOOST_CHECK_GE(odd.image.size.y, 1);
+
+	rnd::capture_limits one;
+	one.max_pixels = 1;
+	one.fit = true;
+	const auto single = service.capture("wide", { 0, 0 }, one);
+	BOOST_REQUIRE(single.ok());
+	BOOST_CHECK_EQUAL(single.image.size.x, 1);
+	BOOST_CHECK_EQUAL(single.image.size.y, 1);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitOfExtremeAspectsKeepsEverySideAtLeastOnePixel)
+{
+	auto strip = make_texture(drv, target_header(8192, 3));
+	auto pole = make_texture(drv, target_header(1, 8192));
+	cmd::registration strip_reg = service.add_target("strip", [&strip] { return strip.handle(); });
+	cmd::registration pole_reg = service.add_target("pole", [&pole] { return pole.handle(); });
+
+	rnd::capture_limits side;
+	side.max_side = 100;
+	side.fit = true;
+	const auto flat = service.capture("strip", { 0, 0 }, side);
+	BOOST_REQUIRE(flat.ok());
+	BOOST_CHECK_EQUAL(flat.image.size.x, 100);
+	BOOST_CHECK_EQUAL(flat.image.size.y, 1);
+	const auto thin = service.capture("pole", { 0, 0 }, side);
+	BOOST_REQUIRE(thin.ok());
+	BOOST_CHECK_EQUAL(thin.image.size.x, 1);
+	BOOST_CHECK_EQUAL(thin.image.size.y, 100);
+
+	rnd::capture_limits pixels;
+	pixels.max_pixels = 10;
+	pixels.fit = true;
+	const auto budget = service.capture("strip", { 0, 0 }, pixels);
+	BOOST_REQUIRE(budget.ok());
+	BOOST_CHECK_GE(budget.image.size.x, 1);
+	BOOST_CHECK_GE(budget.image.size.y, 1);
+	BOOST_CHECK_LE(static_cast<std::int64_t>(budget.image.size.x) * budget.image.size.y, 10);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitHonoursMaxSideAndMaxPixelsTogether)
+{
+	auto wide = make_texture(drv, target_header(40, 20));
+	cmd::registration wide_reg = service.add_target("wide", [&wide] { return wide.handle(); });
+
+	// The side limit alone gives 20 x 10 = 200 pixels, over the budget; the budget then takes it to 10 x 5.
+	rnd::capture_limits both;
+	both.max_side = 20;
+	both.max_pixels = 50;
+	both.fit = true;
+	const auto fitted = service.capture("wide", { 0, 0 }, both);
+	BOOST_REQUIRE(fitted.ok());
+	BOOST_CHECK_EQUAL(fitted.image.size.x, 10);
+	BOOST_CHECK_EQUAL(fitted.image.size.y, 5);
+
+	// The other way round: the budget is roomy, the side limit decides.
+	both.max_side = 8;
+	both.max_pixels = 1000;
+	const auto by_side = service.capture("wide", { 0, 0 }, both);
+	BOOST_REQUIRE(by_side.ok());
+	BOOST_CHECK_EQUAL(by_side.image.size.x, 8);
+	BOOST_CHECK_EQUAL(by_side.image.size.y, 4);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitNeverEnlargesASmallTarget)
+{
+	rnd::capture_limits roomy;
+	roomy.max_side = 4096;
+	roomy.max_pixels = 1LL << 22;
+	roomy.fit = true;
+	const auto native = service.capture("scene", { 0, 0 }, roomy);
+	BOOST_REQUIRE(native.ok());
+	BOOST_CHECK_EQUAL(native.image.size.x, tex_width);
+	BOOST_CHECK_EQUAL(native.image.size.y, tex_height);
+
+	// The edge case: the longest side equals the limit.
+	roomy.max_side = tex_width;
+	const auto exact = service.capture("scene", { 0, 0 }, roomy);
+	BOOST_REQUIRE(exact.ok());
+	BOOST_CHECK_EQUAL(exact.image.size.x, tex_width);
+	BOOST_CHECK_EQUAL(exact.image.size.y, tex_height);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitDoesNotScaleAnExplicitSizeOverTheLimits)
+{
+	rnd::capture_limits narrow;
+	narrow.max_side = 3;
+	narrow.fit = true;
+	BOOST_CHECK(service.capture("scene", { 8, 0 }, narrow).status == rnd::capture_status::invalid_size);
+	BOOST_CHECK(service.capture("scene", { 0, 8 }, narrow).status == rnd::capture_status::invalid_size);
+	BOOST_CHECK(service.capture("scene", { 8, 4 }, narrow).status == rnd::capture_status::invalid_size);
+	BOOST_CHECK(service.capture("scene", { 3, 0 }, narrow).ok());
+}
+
 BOOST_AUTO_TEST_CASE(Capture_SourceLimitOfTheCallerRefusesABigTargetEvenWhenTheAnswerIsSmall)
 {
 	auto big = make_texture(drv, target_header(64, 64));
@@ -417,6 +544,62 @@ BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 	BOOST_CHECK_EQUAL(capture(R"({"max_side":8193})").code, cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(capture(R"({"max_pixels":33554433})").code, cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(capture(R"({"max_pixels":"many"})").code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_WithoutASizeMaxSideScalesTheViewDown)
+{
+	auto wide = make_texture(drv, target_header(64, 32));
+	auto small = make_texture(drv, target_header(8, 4));
+	cmd::registration wide_reg = service.add_target("wide", [&wide] { return wide.handle(); });
+	cmd::registration small_reg = service.add_target("small", [&small] { return small.handle(); });
+
+	const auto scaled = capture(R"({"viewport":"wide","max_side":16})");
+	BOOST_REQUIRE_MESSAGE(scaled.ok, scaled.error);
+	BOOST_CHECK_EQUAL(scaled.value.as_object().at("width").as_int64(), 16);
+	BOOST_CHECK_EQUAL(scaled.value.as_object().at("height").as_int64(), 8);
+
+	const auto pixels = capture(R"({"viewport":"wide","max_pixels":128})");
+	BOOST_REQUIRE_MESSAGE(pixels.ok, pixels.error);
+	BOOST_CHECK_LE(pixels.value.as_object().at("width").as_int64() * pixels.value.as_object().at("height").as_int64(), 128);
+
+	// Never up: a view smaller than max_side keeps its size.
+	const auto kept = capture(R"({"viewport":"small","max_side":1000})");
+	BOOST_REQUIRE_MESSAGE(kept.ok, kept.error);
+	BOOST_CHECK_EQUAL(kept.value.as_object().at("width").as_int64(), 8);
+	BOOST_CHECK_EQUAL(kept.value.as_object().at("height").as_int64(), 4);
+
+	// A size that is named is not fitted: a derived side over max_side is still refused.
+	const auto refused = capture(R"({"viewport":"wide","width":64,"max_side":16})");
+	BOOST_CHECK(!refused.ok);
+	BOOST_CHECK_EQUAL(refused.code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"viewport":"wide","height":40,"max_side":16})").code, cmd::codes::invalid_args);
+
+	// No limit named: the view as it is.
+	const auto native = capture(R"({"viewport":"wide"})");
+	BOOST_REQUIRE_MESSAGE(native.ok, native.error);
+	BOOST_CHECK_EQUAL(native.value.as_object().at("width").as_int64(), 64);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitIsNotAnArgument)
+{
+	BOOST_CHECK_EQUAL(capture(R"({"fit":true})").code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"max_side":16,"fit":false})").code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Registered_DescribesHowSizeAndLimitsWork)
+{
+	const cmd::command_desc* desc = commands.find("viewport.capture");
+	BOOST_REQUIRE(desc != nullptr);
+	const json::object& properties = desc->args_schema.as_object().at("properties").as_object();
+	for (const char* name : { "width", "height", "max_side", "max_pixels", "max_source_pixels" }) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_REQUIRE(properties.at(name).as_object().contains("description"));
+			BOOST_CHECK(!properties.at(name).as_object().at("description").as_string().empty());
+		}
+	}
+	const std::string summary = desc->summary;
+	BOOST_CHECK(summary.find("max_side") != std::string::npos);
+	BOOST_CHECK(summary.find("never up") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(Capture_MaxSourcePixelsRefusesABigViewBeforeReadingIt)

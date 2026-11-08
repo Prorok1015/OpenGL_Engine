@@ -319,6 +319,41 @@ BOOST_AUTO_TEST_CASE(StartWithResult_FailedOrCancelledJobs_HaveNoResult)
 	BOOST_TEST(!cancelled_info->result.has_value());
 }
 
+BOOST_AUTO_TEST_CASE(ACollectingJob_CarriesItsDiagnosticsToOnDoneAndItsInfo)
+{
+	const res::diagnostic problem{ res::diagnostic_severity::error, std::string{ res::diagnostic_kind::unknown_type },
+		"memory://t/a.desc", "/__type", "unknown '__type' 'x'" };
+	std::vector<res::diagnostic> delivered;
+	int value = 0;
+	const auto id = jobs->start_collecting(ds::lane::compute, { "load", "test" }, owner,
+		[&problem](ds::task_context&, res::diagnostics_collector& collector) {
+			collector.add(problem);
+			return 7;
+		},
+		[&](ds::task_result<int>& r, const std::vector<res::diagnostic>& diagnostics) {
+			value = *r.value;
+			delivered = diagnostics;
+		});
+
+	run_lane();
+	BOOST_REQUIRE(jobs->info(id));
+	BOOST_TEST((jobs->info(id)->diagnostics == std::vector<res::diagnostic>{ problem }));
+	deliver();
+	BOOST_TEST(value == 7);
+	BOOST_TEST((delivered == std::vector<res::diagnostic>{ problem }));
+	BOOST_REQUIRE(jobs->info(id));
+	BOOST_TEST((jobs->info(id)->status == edt::job_status::done));
+	BOOST_TEST((jobs->info(id)->diagnostics == std::vector<res::diagnostic>{ problem }));
+
+	// a plain job has none
+	const auto plain = jobs->start(ds::lane::compute, { "plain", "test" }, owner, [](ds::task_context&) { return 1; },
+		[](ds::task_result<int>&) {});
+	run_lane();
+	deliver();
+	BOOST_REQUIRE(jobs->info(plain));
+	BOOST_TEST(jobs->info(plain)->diagnostics.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {

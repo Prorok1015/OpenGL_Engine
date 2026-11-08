@@ -1,6 +1,7 @@
 #include <snk/scene/scn_animation_controller_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_animation.h>
 
 void scn::animation_controller_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
@@ -44,10 +45,8 @@ void scn::assemble_animation_controller(entt::registry& reg, entt::entity e,
 				ctrl.current_animation = clips_comp->clips[0].get_sync()->name;
 			}
 		}
-		// Cache duration and ticks_per_second from the selected animation clip
 		if (const auto* clip = clips_comp->find(ctrl.current_animation)) {
-			ctrl.duration = clip->duration;
-			ctrl.ticks_per_second = clip->ticks_per_second;
+			scn::select_animation_clip(ctrl, *clip);
 		}
 	}
 

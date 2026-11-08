@@ -79,7 +79,16 @@ namespace edt {
 		// Created in init() and owned by the app_data_storage; null before init().
 		editor_context* context() const { return m_context; }
 
-		void begin_level_load(const res::tag& level_tag);
+		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
+		// would assert in the desc adapter.
+		bool begin_level_load(const res::tag& level_tag);
+		// True from begin_level_load until the level is loaded, failed or cancelled. The document still belongs to the
+		// level it had before; only a successful load makes it the new one.
+		bool level_load_in_progress() const { return m_loading_level; }
+		// The level file the document belongs to (empty for an untitled one); not the one being loaded.
+		const res::tag& current_level_tag() const { return m_state.level_tag; }
+		// The working copy the document's level is read from (`memory://editor/loading/<n>/<name>.desc`).
+		const res::tag& current_editor_tag() const { return m_state.editor_tag; }
 
 		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
 		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
@@ -208,6 +217,19 @@ namespace edt {
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
+		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
+		// succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused). Every load has a
+		// working copy of its own (`memory://editor/loading/<n>/<name>.desc`), so one that is abandoned never overwrites
+		// the copy of the level being edited, whatever the two files are called.
+		res::tag m_loading_level_tag;
+		res::tag m_loading_editor_tag;
+		std::uint32_t m_load_serial = 0;
+		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
+		void abandon_level_load();
+		// The load is over: forgets its tags and handle. The working copy stays (it is the document's now).
+		void release_level_load();
+		// Removes the working copy of a load (only `memory://editor/loading/...`; the document's other copies are not touched).
+		void erase_loading_copy(const res::tag& copy);
 		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
 		bool poll_level_load(bool* loaded = nullptr);
 

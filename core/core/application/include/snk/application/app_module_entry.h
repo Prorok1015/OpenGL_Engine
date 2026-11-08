@@ -13,7 +13,8 @@
 // snk_module_build_info before it creates anything, and the binary that created a module
 // destroys it (snk_destroy_module), so allocation never crosses a heap boundary.
 
-#define SNK_MODULE_API_VERSION 0x0001'0000u // major << 16 | minor
+// 2.0 (#595): resource control blocks and res_dep, which inline engine code compiled into a module uses, changed layout.
+#define SNK_MODULE_API_VERSION 0x0002'0000u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)

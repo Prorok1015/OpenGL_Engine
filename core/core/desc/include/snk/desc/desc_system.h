@@ -2,6 +2,7 @@
 #include <snk/common/common.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
 #include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
 #include <snk/desc/desc_base.hpp>
@@ -236,11 +237,15 @@ namespace desc
 			return instance;
 		}
 
+		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
+		// its memory:// copy's diagnostics go to the owner's file at that path (#595).
 		template<typename T>
-		auto get_field_desc(const desc::desc_base& owner, const json::value& data) const
+		auto get_field_desc(const desc::desc_base& owner, const json::value& data, std::string_view json_path = {}) const
 		{
 			if (data.is_string()) {
-				return m_res_system.require<T>(json::value_to<res::tag>(data));
+				auto handle = m_res_system.require<T>(json::value_to<res::tag>(data));
+				res::note_field_load(handle.get_control_block(), json_path, false);
+				return handle;
 			}
 
             ASSERT_MSG(data.is_object() && data.as_object().contains("__type"), "Invalid desc field data: expected either string tag or object with '__type' field");
@@ -251,7 +256,9 @@ namespace desc
 			if (!m_res_system.exists(mem_tag)) {
 				m_res_system.store(mem_tag, serialize_to_bytes(data));
 			}
-			return m_res_system.require<T>(mem_tag);
+			auto handle = m_res_system.require<T>(mem_tag);
+			res::note_field_load(handle.get_control_block(), json_path, true);
+			return handle;
 		}
 
         void write_pretty_json(std::ostream& os, json::value const& jv, std::string* indent = nullptr) const
