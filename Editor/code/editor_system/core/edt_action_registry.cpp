@@ -125,6 +125,10 @@ edt::registration edt::action_registry::add(action_desc desc)
 	}
 	command.enabled = std::move(desc.enabled);
 	command.category = desc.category;
+	command.risk = desc.risk;
+	command.describe = std::move(desc.describe);
+	command.starts_job = desc.starts_job;
+	command.disabled_reason = desc.disabled_reason;
 
 	action_ui ui;
 	ui.label = std::move(desc.label);

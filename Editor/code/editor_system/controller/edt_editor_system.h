@@ -50,6 +50,7 @@ namespace edt {
 	class editor_layer;
 	class model_importer;
 	class asset_exporter;
+	class agent_model_import;
 	class asset_export_dialog;
 	class scene_hierarchy_panel;
 	class inspector_panel;
@@ -136,6 +137,8 @@ namespace edt {
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
+		// The model import an agent asks for (#548): after the exporter it uses, before the context's job service goes.
+		std::unique_ptr<edt::agent_model_import> m_agent_import;
 #if SNK_HAS_ASSIMP
 		// The import in flight (m_importing); the job's on_done fills m_import_result or m_import_failure on the main thread.
 		bool m_importing = false;

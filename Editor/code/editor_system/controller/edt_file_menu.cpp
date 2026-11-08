@@ -3,6 +3,7 @@
 #include <snk/project/prj_project.h>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <string_view>
 #include <system_error>
@@ -141,32 +142,57 @@ edt::level_file_state edt::inspect_level_file(const std::filesystem::path& root,
 	return level_file_state::missing;
 }
 
+namespace {
+	// The checks of a project path that hold for a file and for a folder; empty text when the path is fine. `text` is
+	// already without a `res://` prefix.
+	std::string project_path_problem(std::string_view text)
+	{
+		if (text.empty()) return "the path is empty";
+		if (text.size() > 512) return "the path is too long";
+		if (text.find(':') != std::string_view::npos) return "the path must be a res:// tag or a path inside the project, without another protocol or a drive";
+		if (text.find('\\') != std::string_view::npos) return "the path must use '/' as the separator";
+		if (text.front() == '/') return "the path must be inside the project, not absolute";
+		for (const char character : text) {
+			if (static_cast<unsigned char>(character) < 0x20 || character == 0x7f) return "the path has a control character";
+			if (std::string_view("<>\"|?*").find(character) != std::string_view::npos) return "the path has a character a file name cannot have";
+		}
+		std::size_t start = 0;
+		while (true) {
+			const std::size_t end = text.find('/', start);
+			const std::string_view segment = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+			if (segment.empty() || segment == "." || segment == "..") return "the path must not have empty, '.' or '..' segments";
+			// Windows drops a trailing dot or space and opens a device for CON, NUL, COM1... (with any extension).
+			if (segment.back() == '.' || segment.back() == ' ') return "a name must not end in '.' or ' '";
+			if (is_reserved_device_name(segment)) return "the path has a name Windows reserves for a device";
+			if (end == std::string_view::npos) break;
+			start = end + 1;
+		}
+		return {};
+	}
+}
+
+edt::agent_level_path edt::check_agent_folder(std::string_view text)
+{
+	constexpr std::string_view scheme = "res://";
+	if (text.starts_with(scheme)) text.remove_prefix(scheme.size());
+	if (std::string why = project_path_problem(text); !why.empty()) return { {}, std::move(why) };
+	return { std::string(text), {} };
+}
+
+edt::agent_level_path edt::check_agent_name(std::string_view text)
+{
+	if (text.find('/') != std::string_view::npos) return { {}, "a name is one path segment, without '/'" };
+	if (std::string why = project_path_problem(text); !why.empty()) return { {}, std::move(why) };
+	return { std::string(text), {} };
+}
+
 edt::agent_level_path edt::check_agent_level_path(std::string_view text)
 {
 	constexpr std::string_view scheme = "res://";
 	constexpr std::string_view extension = ".desc";
 	const auto refuse = [](std::string why) { return agent_level_path{ {}, std::move(why) }; };
 	if (text.starts_with(scheme)) text.remove_prefix(scheme.size());
-	if (text.empty()) return refuse("the path is empty");
-	if (text.size() > 512) return refuse("the path is too long");
-	if (text.find(':') != std::string_view::npos) return refuse("the path must be a res:// tag or a path inside the project, without another protocol or a drive");
-	if (text.find('\\') != std::string_view::npos) return refuse("the path must use '/' as the separator");
-	if (text.front() == '/') return refuse("the path must be inside the project, not absolute");
-	for (const char character : text) {
-		if (static_cast<unsigned char>(character) < 0x20 || character == 0x7f) return refuse("the path has a control character");
-		if (std::string_view("<>\"|?*").find(character) != std::string_view::npos) return refuse("the path has a character a file name cannot have");
-	}
-	std::size_t start = 0;
-	while (true) {
-		const std::size_t end = text.find('/', start);
-		const std::string_view segment = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
-		if (segment.empty() || segment == "." || segment == "..") return refuse("the path must not have empty, '.' or '..' segments");
-		// Windows drops a trailing dot or space and opens a device for CON, NUL, COM1... (with any extension).
-		if (segment.back() == '.' || segment.back() == ' ') return refuse("a name must not end in '.' or ' '");
-		if (is_reserved_device_name(segment)) return refuse("the path has a name Windows reserves for a device");
-		if (end == std::string_view::npos) break;
-		start = end + 1;
-	}
+	if (std::string why = project_path_problem(text); !why.empty()) return refuse(std::move(why));
 	const std::string_view name = text.substr(text.rfind('/') == std::string_view::npos ? 0 : text.rfind('/') + 1);
 	if (name.size() <= extension.size() || !name.ends_with(extension)) return refuse("the path must name a level file (*.desc)");
 	return { std::string(text), {} };
@@ -463,16 +489,61 @@ void edt::file_menu::register_actions()
 		.activate = [this] { save_level(); },
 		.category = cmd::agent_category::scene_edit });
 
+	const auto import_request_of = [](const json::object& args) {
+		const auto text_of = [&args](const char* key) {
+			const json::value* value = args.if_contains(key);
+			return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string{};
+		};
+		return agent_import_request{ text_of("path"), text_of("name"), text_of("folder") };
+	};
+	const auto import_available = [this] {
+		return static_cast<bool>(m_hooks.import_model) || (m_hooks.agent_import != nullptr && m_hooks.agent_import->available());
+	};
+	constexpr const char* IMPORT_UNAVAILABLE = "Model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF).";
+
 	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
-		.disabled_tooltip = "Model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF).",
-		.execute = [this](const json::value& args) {
-			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
-			m_hooks.import_model(from_json_string(args.as_object().at("path").as_string()));
-			return action_result::success();
+		.disabled_tooltip = IMPORT_UNAVAILABLE,
+		.disabled_reason = [] { return std::string(IMPORT_UNAVAILABLE); },
+		.execute_call = [this, import_request_of](const cmd::call& request) {
+			const json::object& args = request.args.as_object();
+			const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name") && !args.contains("folder");
+			if (dialog) {
+				// A person at the menu or a script of theirs with only a path: the dialog flow, as before.
+				if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
+				m_hooks.import_model(from_json_string(args.at("path").as_string()));
+				return action_result::success();
+			}
+			// An agent, or a person naming the asset and its folder: no dialog, one background job.
+			if (m_hooks.agent_import == nullptr) return action_result::failure(cmd::codes::disabled, IMPORT_UNAVAILABLE);
+			const agent_model_import::started started = m_hooks.agent_import->start(import_request_of(args), request.from, !request.confirmation.empty());
+			if (!started.ok()) return action_result::failure(started.code, started.error);
+			return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
 		},
-		.args_schema = path_schema(false),
+		.args_schema = json::object{
+			{ "type", "object" },
+			{ "properties", json::object{
+				{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
+					{ "description", "Absolute path of the model file (.glb, .gltf, .obj, .fbx); a regular file, not a link. An agent's import asks a person first." } } },
+				{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
+					{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, imports without the dialog." } } },
+				{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
+					{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an existing file." } } } } },
+			{ "required", json::array{ "path" } },
+			{ "additionalProperties", false } },
+		.result_schema = json::object{
+			{ "type", "object" },
+			{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
+				{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}; job.cancel stops it and takes back what it wrote." } } } } },
+			{ "additionalProperties", false } },
 		.activate = [this] { import_model(); },
-		.enabled = [this] { return static_cast<bool>(m_hooks.import_model); } });
+		.enabled = import_available,
+		.category = cmd::agent_category::scene_edit,
+		.risk = cmd::danger::confirm,
+		.describe = [this, import_request_of](const cmd::call& request) -> std::optional<std::string> {
+			if (m_hooks.agent_import == nullptr) return std::nullopt;
+			return m_hooks.agent_import->describe(import_request_of(request.args.as_object()), request.from);
+		},
+		.starts_job = true });
 
 	add({ .id = "file.new_project", .label = "New Project...", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
