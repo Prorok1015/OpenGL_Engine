@@ -109,7 +109,7 @@ jobs:
         run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor and unit_tests
-        run: cmake --build build/${{ matrix.preset }} --target ${{ matrix.targets || 'editor unit_tests' }} --parallel
+        run: cmake --build build/${{ matrix.preset }} --target ${{ matrix.targets || 'editor unit_tests' }} --parallel ${{ matrix.preset == 'ci-linux-clang-debug' && '-- -k 0' || '' }}
 
       - name: Compiler cache statistics
         if: always()
