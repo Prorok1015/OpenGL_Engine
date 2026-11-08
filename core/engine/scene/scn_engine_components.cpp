@@ -1,4 +1,5 @@
 #include <snk/scene/scn_component_catalog.h>
+#include <snk/common/engine_assert.h>
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
@@ -33,7 +34,15 @@ namespace
 	template<typename T>
 	void add(scn::component_catalog& catalog, std::string_view name)
 	{
-		catalog.add<T>(std::string{ name }, desc::bind_described<T>(name, 1, desc::schema_kind::component));
+		const auto* entry = catalog.add<T>(std::string{ name }, desc::bind_described<T>(name, 1, desc::schema_kind::component));
+		ASSERT_MSG(entry, "engine component '{}' is registered twice", name);
+	}
+
+	template<typename T>
+	void add_derived(scn::component_catalog& catalog, std::string_view name)
+	{
+		const auto* entry = catalog.add_derived<T>(std::string{ name });
+		ASSERT_MSG(entry, "engine component '{}' is registered twice", name);
 	}
 
 	// Registered so that a snapshot knows them, without a schema until #599 PR 3 describes them: a snapshot reports
@@ -59,10 +68,10 @@ void scn::register_engine_components(component_catalog& catalog)
 	add<mouse_controller_component>(catalog, "scn.mouse_controller");
 	add<screen_anchor_component>(catalog, "scn.screen_anchor");
 
-	catalog.add_derived<world_transform>("scn.world_transform");
-	catalog.add_derived<depth_level>("scn.depth_level");
-	catalog.add_derived<screen_anchor_result>("scn.screen_anchor_result");
-	catalog.add_derived<bone_matrices_component>("scn.bone_matrices");
+	add_derived<world_transform>(catalog, "scn.world_transform");
+	add_derived<depth_level>(catalog, "scn.depth_level");
+	add_derived<screen_anchor_result>(catalog, "scn.screen_anchor_result");
+	add_derived<bone_matrices_component>(catalog, "scn.bone_matrices");
 
 	add_pending<mesh_component>(catalog, "scn.mesh");
 	add_pending<geometry_component>(catalog, "scn.geometry");
