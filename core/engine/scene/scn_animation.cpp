@@ -1,0 +1,47 @@
+#include <snk/scene/scn_animation.h>
+#include <snk/scene/scn_animation_clip_desc.h>
+#include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/common/logger/engine_log.h>
+#include <entt/entt.hpp>
+#include <cmath>
+#include <string>
+
+void scn::select_animation_clip(animation_controller_component& controller, const animation_clip_desc& clip)
+{
+	controller.current_animation = clip.name;
+	controller.duration = clip.duration;
+	controller.ticks_per_second = clip.ticks_per_second;
+}
+
+bool scn::play_animation(entt::registry& reg, entt::entity entity, std::string_view clip_name, bool loop, float speed)
+{
+	auto* controller = reg.valid(entity) ? reg.try_get<animation_controller_component>(entity) : nullptr;
+	if (!controller) {
+		egLOG_WARN("animation", "play_animation '{}': no animation controller on entity {}; pass the model root that holds it",
+			clip_name, entt::to_integral(entity));
+		return false;
+	}
+	if (!std::isfinite(speed) || speed < 0.0f) {
+		egLOG_WARN("animation", "play_animation '{}' on entity {}: speed {} is not a finite value >= 0", clip_name,
+			entt::to_integral(entity), speed);
+		return false;
+	}
+	const auto* collection = reg.try_get<animation_collection_component>(entity);
+	const animation_clip_desc* clip = collection ? collection->find(std::string{ clip_name }) : nullptr;
+	if (!clip) {
+		egLOG_WARN("animation", "play_animation: no clip '{}' in the animation collection of entity {}", clip_name,
+			entt::to_integral(entity));
+		return false;
+	}
+
+	const bool continues = controller->playing && controller->current_animation == clip->name;
+	select_animation_clip(*controller, *clip);
+	if (!continues) {
+		controller->current_time = 0.0f;
+	}
+	controller->loop = loop;
+	controller->speed = speed;
+	controller->playing = true;
+	return true;
+}

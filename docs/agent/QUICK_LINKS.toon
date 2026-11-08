@@ -70,6 +70,8 @@ Rendering Pipeline:
 Animation & Skinning:
   → core/engine/scene/scn_animation_* , scn_skinning_desc.* (EPIC-33)
   → core/engine/render/render_system/skinning/ (rnd::skinning_manager)
+  → game code: scn::play_animation(reg, model_root, clip, loop, speed) in snk/scene/scn_animation.h (#563);
+    same clip while playing keeps its time, a stopped one restarts; only the entity holding the controller
 
 Input System:
   → core/engine/input/include/snk/input/inp_input_system.h , inp_ecs_input_manager.h , inp_input_router.h
