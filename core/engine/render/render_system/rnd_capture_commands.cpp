@@ -157,7 +157,7 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 		"at its size, scaled down to fit max_side (longest side) and max_pixels when they are given, never up";
 	desc.category = cmd::agent_category::read;
 	desc.needs_display = true;
-	desc.args_schema = json::parse(R"({
+	desc.args_schema = json::parse(R"json({
 		"type": "object",
 		"properties": {
 			"viewport": { "type": "string", "minLength": 1 },
@@ -173,7 +173,7 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 				"description": "Refuses a view with more pixels than this before reading it" }
 		},
 		"additionalProperties": false
-	})");
+	})json");
 	desc.result_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
