@@ -580,8 +580,29 @@ struct res::resource_system::await_state {
   std::mutex mutex;
   std::string failure; // the first failed dependency
   std::size_t failed_index = 0;
+  // What the failed dependency recorded, with its resource: nobody keeps a failed dependency, so the owner carries it.
+  std::vector<res::diagnostic> failed_diagnostics;
   std::vector<dependency_role> roles; // empty, or one per block
 };
+
+namespace {
+// The diagnostics a settled block recorded, each with its resource; a failure it did not describe as kind `load`.
+std::vector<res::diagnostic> own_diagnostics(const core::res::res_control_block_base &block) {
+  auto snapshot = block.diagnostics.read();
+  bool error_recorded = false;
+  for (auto &item : snapshot.items) {
+    error_recorded = error_recorded || item.severity == res::diagnostic_severity::error;
+    if (item.resource.empty()) {
+      item.resource = snapshot.resource;
+    }
+  }
+  if (block.status.load(std::memory_order_acquire) == core::res::res_status::error && !error_recorded) {
+    snapshot.items.push_back(res::diagnostic{res::diagnostic_severity::error, std::string{res::diagnostic_kind::load},
+                                             snapshot.resource, {}, block.error_msg});
+  }
+  return std::move(snapshot.items);
+}
+} // namespace
 
 void res::resource_system::await_blocks(
     const std::shared_ptr<resource_handle> &owner, const res::tag &owner_tag,
@@ -627,16 +648,21 @@ void res::resource_system::await_blocks(
     }
     std::string failure;
     std::size_t failed_index = 0;
+    std::vector<res::diagnostic> carried;
     {
       std::lock_guard lock(s->mutex);
       failure = s->failure;
       failed_index = s->failed_index;
+      carried = s->failed_diagnostics;
     }
     if (failure.empty()) {
       s->on_done();
     } else {
       const dependency_role role = role_of(*s, failed_index);
       describe(s->owner, role.kind, role.json_path, failure);
+      for (auto &item : carried) {
+        res::add_while_unsettled(*s->owner, std::move(item));
+      }
       fail_owner(s->owner, failure);
     }
   };
@@ -659,10 +685,20 @@ void res::resource_system::await_blocks(
     if (added.result == wait_graph::verdict::cycle) {
       const std::string message = "dependency cycle: " + added.path;
       egLOG_ERROR("res/graph", "{}", message);
-      // Every member waits on the next one through the same kind of edge (a desc: its __parent).
+      // Every member waits on the next one through the same kind of edge (a desc: its __parent). Each member carries
+      // the entry of every other one too: nobody keeps a failed member alive for a walk to reach it.
       const dependency_role role = role_of(*state, i);
+      std::vector<std::string> resources;
+      resources.reserve(added.members.size());
       for (const auto &member : added.members) {
-        describe(member, res::diagnostic_kind::cycle, role.json_path, message);
+        resources.push_back(member->diagnostics.read().resource);
+      }
+      for (const auto &member : added.members) {
+        for (const auto &resource : resources) {
+          res::add_while_unsettled(*member, res::diagnostic{res::diagnostic_severity::error,
+                                                            std::string{res::diagnostic_kind::cycle}, resource,
+                                                            role.json_path, message});
+        }
         fail_owner(member, message);
       }
       drop_await(id);
@@ -687,10 +723,12 @@ void res::resource_system::await_blocks(
         }
         self.m_graph->remove_edge(s->owner.get(), &settled);
         if (settled.has_error()) {
+          auto carried = own_diagnostics(settled);
           std::lock_guard lock(s->mutex);
           if (s->failure.empty()) {
             s->failure = "Dependency failed: " + std::string{s->blocks[i].second.view()} + ": " + settled.error_msg;
             s->failed_index = i;
+            s->failed_diagnostics = std::move(carried);
           }
         }
         one_settled(self, s);
