@@ -93,6 +93,20 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-${{ matrix.preset }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
+      # The preset pins the compiler (#585): the runner image's default clang++ moved from 18 to 21 unannounced.
+      - name: Check the pinned Clang is installed
+        if: matrix.preset == 'ci-linux-clang-debug'
+        shell: bash
+        run: |
+          if ! command -v clang++-21 >/dev/null; then
+            echo "::error::clang++-21 (CMakePresets.json, ci-linux-clang-debug) is not on the runner; installed: $(ls /usr/bin/clang++-* 2>/dev/null | tr '\n' ' ')"
+            exit 1
+          fi
+          clang++-21 --version
+
       - name: Configure
         shell: bash
         run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -123,6 +137,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
 
     steps:
@@ -148,6 +165,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure
         run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -205,6 +225,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
       SDK_PREFIX: ${{ github.workspace }}/sdk-install-no-assimp
 
@@ -229,6 +252,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure
         run: cmake --preset ci-linux-no-assimp "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -323,6 +349,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
@@ -416,6 +445,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-coverage-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       - name: Configure (--coverage)
         run: cmake --preset ci-linux-coverage "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
@@ -448,7 +480,8 @@ jobs:
           # Product code only: engine/core libraries and the editor. Third-party code, the tests
           # themselves and build output are excluded. Multi-threaded tests can produce negative
           # hit counts and header templates repeat across TUs, hence the tolerance flags.
-          gcovr_args=(--root . --object-directory build/ci-linux-coverage
+          # gcov must match the compiler: the pinned GCC of the ci-linux presets (#585).
+          gcovr_args=(--root . --object-directory build/ci-linux-coverage --gcov-executable gcov-15
             --filter 'core/' --filter 'Editor/code/'
             --exclude 'lib3dparty/' --exclude 'tests/' --exclude 'build/' --exclude '.fetchcontent-cache/'
             --exclude-unreachable-branches --exclude-throw-branches
@@ -533,6 +566,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure
         run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -750,6 +786,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Release-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       - name: Configure
         run: cmake --preset ci-linux-gcc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
@@ -796,6 +835,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
       SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
       SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared
@@ -822,6 +864,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       # Both engines are built and installed twice: each into its own prefix (to check that they can share one), and
       # both into SDK_PREFIX, static first, the way the release package is put together (#223).
