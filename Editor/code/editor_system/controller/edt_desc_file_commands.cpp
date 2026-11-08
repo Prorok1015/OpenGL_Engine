@@ -43,12 +43,6 @@ namespace {
 		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 	}
 
-	std::vector<std::byte> bytes_of(std::string_view text)
-	{
-		const auto* first = reinterpret_cast<const std::byte*>(text.data());
-		return { first, first + text.size() };
-	}
-
 	std::string who(const cmd::origin& from)
 	{
 		switch (from.kind) {
