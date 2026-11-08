@@ -7,6 +7,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_directional_light_desc.h>
 #include <algorithm>
+#include <format>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -109,8 +110,19 @@ BOOST_AUTO_TEST_CASE(AValueThatDoesNotFitTheSchemaIsAWarningAndTheLoadSucceeds)
 	BOOST_TEST((items[0].severity == res::diagnostic_severity::warning));
 	BOOST_TEST(items[0].kind == res::diagnostic_kind::schema);
 	BOOST_TEST(items[0].resource == where("light.desc"));
-	BOOST_TEST(items[0].json_path.ends_with("diffuse"));
+	BOOST_TEST(items[0].json_path == "/diffuse");
 	BOOST_TEST(collector.error_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ASchemaWarningOfAnInlineDescIsAtTheOwnersFieldPath)
+{
+	put("sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","uniforms":{"albedo":"red"}}})");
+	const auto items = diagnostics_of("sky.desc");
+	BOOST_REQUIRE_EQUAL(items.size(), 1u);
+	BOOST_TEST((items[0].severity == res::diagnostic_severity::warning));
+	BOOST_TEST(items[0].kind == res::diagnostic_kind::schema);
+	BOOST_TEST(items[0].resource == where("sky.desc"));
+	BOOST_TEST(items[0].json_path == "/material/uniforms/albedo");
 }
 
 BOOST_AUTO_TEST_CASE(AnUnknownPrefabComponentIsAWarningAtItsPath)
@@ -155,6 +167,72 @@ BOOST_AUTO_TEST_CASE(AnInlineDescReportsAtItsOwnersFileAndPath_WithoutChangingIt
 	auto again = rs->require<scn::animation_clip_desc>(broken.get_tag());
 	BOOST_TEST((again.get_control_block() == broken.get_control_block()));
 	BOOST_TEST(collection.get()->clips[0].is_ready());
+}
+
+BOOST_AUTO_TEST_CASE(AKeyWithSlashAndTildeIsEscapedInThePath)
+{
+	put("keys.prefab.desc", R"({"__type":"prefab_desc","components":{"a/b~c":{"__type":"no_such_component_desc"}}})");
+	const auto items = diagnostics_of("keys.prefab.desc");
+	BOOST_REQUIRE_EQUAL(items.size(), 1u);
+	BOOST_TEST(items[0].json_path == "/components/a~1b~0c");
+}
+
+BOOST_AUTO_TEST_CASE(OneFileKeepsAtMost64AndCountsTheRest)
+{
+	std::string components;
+	for (int i = 0; i < 70; ++i) {
+		components += std::format(R"({}"c{}":{{"__type":"no_such_component_desc"}})", i == 0 ? "" : ",", i);
+	}
+	put("many.prefab.desc", R"({"__type":"prefab_desc","components":{)" + components + "}}");
+	const auto items = diagnostics_of("many.prefab.desc");
+	BOOST_REQUIRE_EQUAL(items.size(), res::load_diagnostics::max_items + 1);
+	BOOST_TEST(items.back().kind == res::diagnostic_kind::truncated);
+	BOOST_TEST(items.back().reason == "6 more diagnostics");
+}
+
+BOOST_AUTO_TEST_CASE(CollectingTheSameRequestAgainAddsNothing)
+{
+	put("twice.desc", R"({"__type":"no_such_desc"})");
+	auto handle = rs->require_sync<desc::desc_base>(tag_of("twice.desc"));
+	res::diagnostics_collector collector;
+	collector.collect(handle.get_control_block());
+	collector.collect(handle.get_control_block());
+	BOOST_TEST(collector.items().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AReloadOfTheFixedFileHasNoDiagnostics)
+{
+	const auto tag = put("fixed.desc", R"({"__type":"no_such_desc"})");
+	BOOST_TEST(diagnostics_of("fixed.desc").size() == 1u);
+
+	put("fixed.desc", R"({"__type":"prefab_desc"})");
+	rs->signal_changed(tag);
+	pump();
+	BOOST_TEST(diagnostics_of("fixed.desc").empty());
+}
+
+BOOST_AUTO_TEST_CASE(OwnersSharingOneInlineCopy_ReportAtTheFirstOwnersFile)
+{
+	// Same file name, same inline desc: desc_system names the memory copy by both, so the two share it.
+	constexpr const char* text = R"({"__type":"animation_collection_desc","clips":[{"__type":"no_such_clip_desc","name":"x"}]})";
+	put("first/shared.desc", text);
+	put("second/shared.desc", text);
+
+	auto first = rs->require_sync<desc::desc_base>(tag_of("first/shared.desc"));
+	pump();
+	auto second = rs->require_sync<desc::desc_base>(tag_of("second/shared.desc"));
+	pump();
+
+	res::diagnostics_collector of_first;
+	of_first.collect(first.get_control_block());
+	res::diagnostics_collector of_second;
+	of_second.collect(second.get_control_block());
+	BOOST_REQUIRE_EQUAL(of_first.items().size(), 1u);
+	BOOST_REQUIRE_EQUAL(of_second.items().size(), 1u);
+	BOOST_TEST(of_first.items()[0].resource == where("first/shared.desc"));
+	// the copy belongs to the owner that loaded it first, while that one lives
+	BOOST_TEST(of_second.items()[0].resource == where("first/shared.desc"));
+	BOOST_TEST(of_second.items()[0].json_path == "/clips/0/__type");
 }
 
 BOOST_AUTO_TEST_CASE(ACachedFailureGivesTheSameDiagnosticsToTheNextRequest)

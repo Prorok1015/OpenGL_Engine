@@ -537,7 +537,7 @@ void res::resource_system::collect_stage(const res::tag &tag,
                  },
                  std::move(roles));
   } catch (const res::load_error &e) {
-    block->diagnostics.add(e.what_diagnostic());
+    res::add_while_unsettled(*block, e.what_diagnostic());
     block->set_error(std::string{"Adapter error: "} + e.what());
     egLOG_ERROR("res/adapter", "Failed to collect dependencies of {0}: {1}", tag.view(), e.what());
   } catch (const std::exception &e) {
@@ -560,7 +560,7 @@ void res::resource_system::deserialize_stage(const res::tag &tag,
     const res::load_scope scope(block);
     block->set_ready(ad->deserialize(tag, raw->data, deps));
   } catch (const res::load_error &e) {
-    block->diagnostics.add(e.what_diagnostic());
+    res::add_while_unsettled(*block, e.what_diagnostic());
     block->set_error(std::string{"Adapter error: "} + e.what());
     egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
   } catch (const std::exception &e) {
@@ -606,14 +606,12 @@ void res::resource_system::await_blocks(
       block->set_error(message);
     }
   };
-  // Recorded before the block settles, so whoever sees the failure sees its diagnostic too.
+  // Recorded before the block settles (add_while_unsettled), so whoever sees the failure sees its diagnostic too.
   const auto describe = [](const std::shared_ptr<resource_handle> &block, std::string_view kind, std::string json_path,
                            const std::string &message) {
-    if (!is_finished(*block)) {
-      block->diagnostics.add(res::diagnostic{res::diagnostic_severity::error,
-                                             std::string{kind.empty() ? res::diagnostic_kind::load : kind}, {},
-                                             std::move(json_path), message});
-    }
+    res::add_while_unsettled(*block, res::diagnostic{res::diagnostic_severity::error,
+                                                     std::string{kind.empty() ? res::diagnostic_kind::load : kind}, {},
+                                                     std::move(json_path), message});
   };
   const auto role_of = [](const await_state &s, std::size_t i) {
     return i < s.roles.size() ? s.roles[i] : dependency_role{};

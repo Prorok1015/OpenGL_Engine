@@ -60,7 +60,7 @@ namespace desc
 				egLOG_WARN("desc", "an inline desc needs an owner with a tag to name its memory copy, keeping the current reference");
 				return false;
 			}
-			handle = ctx.system->get_field_desc<T>(*ctx.owner, in);
+			handle = ctx.system->get_field_desc<T>(*ctx.owner, in, ctx.field_pointer);
 			return true;
 		}
 

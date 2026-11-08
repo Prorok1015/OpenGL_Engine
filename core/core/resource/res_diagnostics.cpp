@@ -96,10 +96,21 @@ res::load_scope* res::load_scope::current()
 	return t_current_scope;
 }
 
+bool res::add_while_unsettled(core::res::res_control_block_base& block, diagnostic item)
+{
+	std::lock_guard lock(block.callback_mtx);
+	const auto status = block.status.load(std::memory_order_acquire);
+	if (status == core::res::res_status::ready || status == core::res::res_status::error) {
+		return false;
+	}
+	block.diagnostics.add(std::move(item));
+	return true;
+}
+
 void res::report_load_warning(std::string_view kind, std::string_view json_path, std::string reason)
 {
 	if (const auto* scope = load_scope::current(); scope && scope->block()) {
-		scope->block()->diagnostics.add(
+		add_while_unsettled(*scope->block(),
 			diagnostic{ diagnostic_severity::warning, std::string{ kind }, {}, std::string{ json_path }, std::move(reason) });
 	}
 }
@@ -142,15 +153,22 @@ void res::diagnostics_collector::add_locked(diagnostic item)
 
 void res::diagnostics_collector::collect(const std::shared_ptr<core::res::res_control_block_base>& block)
 {
-	std::lock_guard lock(m_mutex);
+	std::vector<diagnostic> found;
+	std::size_t dropped = 0;
 	std::vector<std::shared_ptr<core::res::res_control_block_base>> pending{ block };
 	while (!pending.empty()) {
 		auto current = std::move(pending.back());
 		pending.pop_back();
-		if (!current || !m_seen.insert(current.get()).second) {
+		if (!current) {
 			continue;
 		}
-		m_walked.push_back(current);
+		{
+			std::lock_guard lock(m_mutex);
+			if (!m_seen.insert(current.get()).second) {
+				continue;
+			}
+			m_walked.push_back(current);
+		}
 
 		const auto own = current->diagnostics.read();
 		// An inline copy reports at its owner's file, under the path of the field it was written in.
@@ -173,14 +191,14 @@ void res::diagnostics_collector::collect(const std::shared_ptr<core::res::res_co
 				item.resource = resource;
 				item.json_path = prefix + item.json_path;
 			}
-			add_locked(std::move(item));
+			found.push_back(std::move(item));
 		}
 		// Every failed load shows, also one whose failure no adapter described.
 		if (current->status.load(std::memory_order_acquire) == core::res::res_status::error && !error_recorded) {
-			add_locked(diagnostic{ diagnostic_severity::error, std::string{ diagnostic_kind::load }, resource, prefix,
+			found.push_back(diagnostic{ diagnostic_severity::error, std::string{ diagnostic_kind::load }, resource, prefix,
 				current->error_msg });
 		}
-		m_dropped += own.dropped;
+		dropped += own.dropped;
 
 		for (auto it = own.children.rbegin(); it != own.children.rend(); ++it) {
 			if (auto child = it->lock()) {
@@ -188,6 +206,12 @@ void res::diagnostics_collector::collect(const std::shared_ptr<core::res::res_co
 			}
 		}
 	}
+
+	std::lock_guard lock(m_mutex);
+	for (auto& item : found) {
+		add_locked(std::move(item));
+	}
+	m_dropped += dropped;
 }
 
 std::vector<res::diagnostic> res::diagnostics_collector::items() const

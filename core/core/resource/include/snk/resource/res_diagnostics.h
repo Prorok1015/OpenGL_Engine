@@ -81,7 +81,9 @@ namespace res
 		// A load this one started: its dependencies and the descs of its fields.
 		void add_child(const std::shared_ptr<core::res::res_control_block_base>& child);
 		// This block is the memory:// copy of a desc written inline at `json_path` of `owner`: its problems are reported
-		// there. The cache key stays the copy's. An owner still alive keeps its claim; a dead one is replaced.
+		// there. The cache key stays the copy's. An owner still alive keeps its claim; a dead one is replaced. Owners
+		// whose files have the same name and write the same inline desc share one copy (desc_system names it by the
+		// owner's name and the content), so the second one's request reports the problem at the first one's file.
 		void set_origin(const std::shared_ptr<core::res::res_control_block_base>& owner, std::string json_path);
 
 		snapshot read() const;
@@ -114,6 +116,10 @@ namespace res
 		load_scope* m_previous = nullptr;
 	};
 
+	// Adds `item` while `block` has not settled, under the lock that settles it: whoever sees the block settled sees
+	// every diagnostic it will ever have. False (nothing added) once it has settled.
+	SNK_API bool add_while_unsettled(core::res::res_control_block_base& block, diagnostic item);
+
 	// A problem that does not fail the load, of the resource deserialized on this thread. Outside a load: nothing.
 	SNK_API void report_load_warning(std::string_view kind, std::string_view json_path, std::string reason);
 
@@ -125,7 +131,8 @@ namespace res
 
 	// The diagnostics of settled requests and of everything they loaded (dependencies, field descs), each block once.
 	// A cached block gives the same diagnostics to every request. At most `limit` are kept; the rest show as one
-	// "N more diagnostics" entry. Thread safe.
+	// "N more diagnostics" entry. Thread safe; collect() walks without holding the collector's lock, so items() never
+	// waits for a walk.
 	class SNK_API diagnostics_collector
 	{
 	public:
