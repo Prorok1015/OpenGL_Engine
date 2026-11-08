@@ -6,9 +6,14 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <chrono>
+#include <concepts>
+#include <format>
 #include <memory>
 #include <functional>
+#include <string>
+#include <string_view>
 #include <type_traits>
+#include <typeinfo>
 
 namespace core::res
 {
@@ -18,6 +23,17 @@ namespace core::res
         // pointer to the block's data, on the main thread; a failed block empties it without a call.
         SNK_API void then_on_main(const std::shared_ptr<res_resource_block>& block, ds::task_system& tasks,
             std::shared_ptr<ds::detail::held_slot> slot);
+    }
+
+    // The name a type mismatch gives for T: its desc __type when it has one.
+    template<typename T>
+    std::string_view handle_type_name()
+    {
+        if constexpr (requires { { T::__type } -> std::convertible_to<std::string_view>; }) {
+            return T::__type;
+        } else {
+            return typeid(T).name();
+        }
     }
 
     template<typename T>
@@ -37,13 +53,33 @@ namespace core::res
 
         auto operator<=> (const res_handle<T>&) const noexcept = default;
 
-        bool is_ready() const { return m_block && m_block->is_ready(); }
-        bool has_error() const { return m_block && m_block->has_error(); }
+        // A block cached for another request type can hold data that is not a T (a material file required as a
+        // level, #615): such a handle is failed, while the block stays ready for the requests it fits.
+        bool is_ready() const { return m_block && m_block->is_ready() && holds_t(); }
+        bool has_error() const { return m_block && (m_block->has_error() || (m_block->is_ready() && !holds_t())); }
 		bool is_valid() const { return m_block != nullptr; }
 
         std::shared_ptr<T> get() const {
             if (!m_block || !m_block->is_ready()) return nullptr;
-            return ds::polymorphic_pointer_cast<T>(m_block->data);
+            return std::dynamic_pointer_cast<T>(m_block->data);
+        }
+
+        // Why has_error(); empty when it has none.
+        std::string error_text() const {
+            if (!m_block) return {};
+            if (m_block->has_error()) return m_block->error_msg;
+            if (m_block->is_ready() && !holds_t()) return type_mismatch_text();
+            return {};
+        }
+
+        // What res::diagnostics_collector::collect gives for the block, and the type mismatch of this request.
+        void collect_into(::res::diagnostics_collector& collector) const {
+            if (!m_block) return;
+            collector.collect(m_block);
+            if (m_block->is_ready() && !holds_t()) {
+                collector.add(::res::diagnostic{ ::res::diagnostic_severity::error, std::string{ ::res::diagnostic_kind::type_mismatch },
+                    std::string{ m_tag.view() }, "/__type", type_mismatch_text() });
+            }
         }
 
         // Blocks until the load finished, either way (check is_ready() / has_error() after).
@@ -74,7 +110,11 @@ namespace core::res
                 egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), m_block->error_msg);
                 return nullptr;
             }
-            return ds::polymorphic_pointer_cast<T>(m_block->data);
+            auto typed = std::dynamic_pointer_cast<T>(m_block->data);
+            if (!typed) {
+                egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), type_mismatch_text());
+            }
+            return typed;
         }
 
         // Runs `cb` on the main thread (next task_system::drain_main) once the resource is ready; never for a
@@ -86,8 +126,13 @@ namespace core::res
             ASSERT_MSG(m_tasks, "res_handle::then: the handle has no task_system");
             if (!m_tasks) return;
             using data_t = std::remove_cvref_t<decltype(m_block->data)>;
-            detail::then_on_main(m_block, *m_tasks, ds::detail::hold(owner, [cb = std::move(cb)](void* data) {
-                cb(*ds::polymorphic_pointer_cast<T>(*static_cast<data_t*>(data)));
+            detail::then_on_main(m_block, *m_tasks, ds::detail::hold(owner, [cb = std::move(cb), tag = m_tag](void* data) {
+                const auto& entry = *static_cast<data_t*>(data);
+                if (auto typed = std::dynamic_pointer_cast<T>(entry)) {
+                    cb(*typed);
+                    return;
+                }
+                egLOG_WARN("resource", "then on '{}' not called: {}", tag.view(), type_mismatch_text(tag, entry.get()));
             }));
         }
 
@@ -113,6 +158,20 @@ namespace core::res
 		}
 
     private:
+        // Read only once the block is ready (its data is published then).
+        bool holds_t() const {
+            return !m_block->data || std::dynamic_pointer_cast<T>(m_block->data) != nullptr;
+        }
+
+        std::string type_mismatch_text() const {
+            return type_mismatch_text(m_tag, m_block ? m_block->data.get() : nullptr);
+        }
+
+        static std::string type_mismatch_text(const ::res::tag& tag, const ::res::resource_entry* entry) {
+            const std::string_view actual = entry && !entry->kind_name().empty() ? entry->kind_name() : std::string_view{ "another type" };
+            return std::format("'{}' is a '{}', expected '{}'", tag.view(), actual, handle_type_name<T>());
+        }
+
         std::shared_ptr<resource_control_block> m_block;
         ::res::tag m_tag;
         ds::task_system* m_tasks = nullptr;

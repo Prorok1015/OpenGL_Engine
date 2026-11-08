@@ -2,6 +2,7 @@
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -9,6 +10,25 @@ thread_local res::load_scope* t_current_scope = nullptr;
 
 // Deep enough for any real nesting of inline descs; a broken chain cannot loop forever.
 constexpr int k_max_origin_depth = 32;
+
+// The field's desc loaded fine, but as another type than the field asked for: its handle reads as failed (#615).
+std::optional<res::diagnostic> type_mismatch_of(const res::child_link& link,
+	const core::res::res_control_block_base& child, const std::string& resource, const std::string& prefix)
+{
+	if (link.expected.id == 0 || child.status.load(std::memory_order_acquire) != core::res::res_status::ready) {
+		return std::nullopt;
+	}
+	const auto* block = dynamic_cast<const core::res::res_resource_block*>(&child);
+	if (!block || !block->data || block->data->is_kind_of(link.expected)) {
+		return std::nullopt;
+	}
+	const std::string_view actual = block->data->kind_name().empty() ? std::string_view{ "another type" } : block->data->kind_name();
+	std::string reason = link.inline_copy
+		? std::format("the desc written here is a '{}', expected '{}'", actual, link.expected_name)
+		: std::format("'{}' is a '{}', expected '{}'", block->data->get_tag().view(), actual, link.expected_name);
+	return res::diagnostic{ res::diagnostic_severity::error, std::string{ res::diagnostic_kind::type_mismatch }, resource,
+		prefix + link.json_path + (link.inline_copy ? "/__type" : ""), std::move(reason) };
+}
 }
 
 std::string res::json_pointer_token(std::string_view key)
@@ -49,17 +69,21 @@ void res::load_diagnostics::add(diagnostic item)
 	m_items.push_back(std::move(item));
 }
 
-void res::load_diagnostics::add_child(const std::shared_ptr<core::res::res_control_block_base>& child)
+void res::load_diagnostics::add_child(const std::shared_ptr<core::res::res_control_block_base>& child, child_link link)
 {
 	if (!child) {
 		return;
 	}
 	std::lock_guard lock(m_mutex);
-	const bool known = std::ranges::any_of(m_children, [&](const auto& c) {
-		return !c.owner_before(child) && !child.owner_before(c);
+	const auto known = std::ranges::find_if(m_children, [&](const child_link& c) {
+		return !c.block.owner_before(child) && !child.owner_before(c.block);
 	});
-	if (!known) {
-		m_children.push_back(child);
+	if (known == m_children.end()) {
+		link.block = child;
+		m_children.push_back(std::move(link));
+	} else if (known->expected.id == 0 && link.expected.id != 0) {
+		link.block = child;
+		*known = std::move(link);
 	}
 }
 
@@ -116,13 +140,14 @@ void res::report_load_warning(std::string_view kind, std::string_view json_path,
 }
 
 void res::note_field_load(const std::shared_ptr<core::res::res_control_block_base>& child, std::string_view json_path,
-	bool inline_copy)
+	bool inline_copy, ds::type_id expected, std::string_view expected_name)
 {
 	const auto* scope = load_scope::current();
 	if (!scope || !scope->block() || !child || child == scope->block()) {
 		return;
 	}
-	scope->block()->diagnostics.add_child(child);
+	scope->block()->diagnostics.add_child(child,
+		child_link{ {}, std::string{ json_path }, inline_copy, expected, std::string{ expected_name } });
 	if (inline_copy) {
 		child->diagnostics.set_origin(scope->block(), std::string{ json_path });
 	}
@@ -201,7 +226,10 @@ void res::diagnostics_collector::collect(const std::shared_ptr<core::res::res_co
 		dropped += own.dropped;
 
 		for (auto it = own.children.rbegin(); it != own.children.rend(); ++it) {
-			if (auto child = it->lock()) {
+			if (auto child = it->block.lock()) {
+				if (auto mismatch = type_mismatch_of(*it, *child, resource, prefix)) {
+					found.push_back(std::move(*mismatch));
+				}
 				pending.push_back(std::move(child));
 			}
 		}

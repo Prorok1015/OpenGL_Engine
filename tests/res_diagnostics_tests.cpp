@@ -4,7 +4,10 @@
 #include <snk/resource/res_diagnostics.h>
 #include <snk/scene/scn_animation_clip_desc.h>
 #include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/resource/adapters/res_dependencies.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/scn_directional_light_desc.h>
 #include <algorithm>
 #include <format>
@@ -167,6 +170,84 @@ BOOST_AUTO_TEST_CASE(AnInlineDescReportsAtItsOwnersFileAndPath_WithoutChangingIt
 	auto again = rs->require<scn::animation_clip_desc>(broken.get_tag());
 	BOOST_TEST((again.get_control_block() == broken.get_control_block()));
 	BOOST_TEST(collection.get()->clips[0].is_ready());
+}
+
+BOOST_AUTO_TEST_CASE(ADescRequiredAsAnotherType_IsAFailedHandle_AndTheBlockStaysReady)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto level = rs->require_sync<scn::level_desc>(tag_of("mat.desc"));
+	pump();
+	BOOST_TEST(!level.is_ready());
+	BOOST_TEST(level.has_error());
+	BOOST_TEST(!level.get());
+	BOOST_TEST(!level.get_sync());
+	const auto text = level.error_text();
+	BOOST_TEST(text.find("material_desc") != std::string::npos);
+	BOOST_TEST(text.find("level_desc") != std::string::npos);
+
+	bool called = false;
+	ds::lifetime owner;
+	level.then(owner, [&](scn::level_desc&) { called = true; });
+	pump();
+	BOOST_TEST(!called);
+
+	res::diagnostics_collector collector;
+	level.collect_into(collector);
+	const auto items = collector.items();
+	const auto* mismatch = find(items, res::diagnostic_kind::type_mismatch, where("mat.desc"));
+	BOOST_REQUIRE(mismatch);
+	BOOST_TEST((mismatch->severity == res::diagnostic_severity::error));
+	BOOST_TEST(mismatch->json_path == "/__type");
+	BOOST_TEST(mismatch->reason == text);
+
+	// The cache is not touched: a request the data fits gets the same ready block.
+	auto any = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(any.is_ready());
+	BOOST_TEST(any.get()->get_type() == "material_desc");
+	BOOST_TEST(any.error_text().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AFieldDescOfAnotherType_IsAFailedHandle_ReportedAtTheField)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	put("clips.desc", R"({"__type":"animation_collection_desc","clips":["memory://t/mat.desc",{"__type":"material_desc"}]})");
+	auto collection = rs->require_sync<scn::animation_collection_desc>(tag_of("clips.desc"));
+	pump();
+	BOOST_REQUIRE(collection.is_ready());
+	const auto& clips = collection.get()->clips;
+	BOOST_REQUIRE_EQUAL(clips.size(), 2u);
+	for (const auto& clip : clips) {
+		BOOST_TEST(clip.has_error());
+		BOOST_TEST(!clip.get());
+		BOOST_TEST(clip.error_text().find("animation_clip_desc") != std::string::npos);
+	}
+
+	res::diagnostics_collector collector;
+	collector.collect(collection.get_control_block());
+	const auto items = collector.items();
+	BOOST_TEST(std::ranges::count_if(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }) == 2);
+	for (const std::string_view path : { "/clips/0", "/clips/1/__type" }) {
+		const auto it = std::ranges::find_if(items, [&](const res::diagnostic& d) { return d.json_path == path; });
+		BOOST_REQUIRE_MESSAGE(it != items.end(), path);
+		BOOST_TEST((it->severity == res::diagnostic_severity::error));
+		BOOST_TEST(it->kind == res::diagnostic_kind::type_mismatch);
+		BOOST_TEST(it->resource == where("clips.desc"));
+		BOOST_TEST(it->reason.find("material_desc") != std::string::npos);
+		BOOST_TEST(it->reason.find("animation_clip_desc") != std::string::npos);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ADependencyOfAnotherTypeIsNotGivenOut)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto material = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(material.is_ready());
+
+	res::res_deps deps;
+	deps.add(res::make_dep<scn::level_desc>(tag_of("mat.desc")), material.get());
+	BOOST_TEST(!deps.get<scn::level_desc>(tag_of("mat.desc")));
+	deps.add(res::make_dep<desc::desc_base>(tag_of("mat.desc")), material.get());
+	BOOST_TEST((deps.get<desc::desc_base>(tag_of("mat.desc")) == material.get()));
 }
 
 BOOST_AUTO_TEST_CASE(AKeyWithSlashAndTildeIsEscapedInThePath)
