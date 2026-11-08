@@ -42,13 +42,14 @@ namespace res
 			m_entries.push_back(entry{ std::move(dep), std::move(value) });
 		}
 
+		// Null also when the dependency loaded as something that is not a T (#615).
 		template<class T>
 		std::shared_ptr<T> get(const ::res::tag& target) const
 		{
 			const auto type = ds::type_id::make<T>();
 			for (const auto& item : m_entries) {
 				if (item.dep.type == type && item.dep.target == target) {
-					return ds::polymorphic_pointer_cast<T>(item.value);
+					return std::dynamic_pointer_cast<T>(item.value);
 				}
 			}
 			return nullptr;

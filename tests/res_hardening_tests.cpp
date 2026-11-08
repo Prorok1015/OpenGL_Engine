@@ -25,6 +25,8 @@ std::vector<std::byte> bytes_of(const std::string& str)
 
 struct hardening_test_desc : desc::desc_base
 {
+	// The resource system finds the desc adapter for require<hardening_test_desc> through it.
+	using base_type = desc::desc_base;
 	int value = 0;
 
 	void copy_to(desc::desc_base& other) const override
@@ -40,6 +42,13 @@ struct hardening_test_desc : desc::desc_base
 	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
 };
 
+struct other_test_desc : desc::desc_base
+{
+	using base_type = desc::desc_base;
+	void deserialize(desc::desc_system&, const boost::json::object&) override {}
+	void serialize(boost::json::object&) const override {}
+};
+
 struct desc_fixture
 {
 	desc_fixture()
@@ -49,6 +58,7 @@ struct desc_fixture
 		res_sys = std::make_unique<res::resource_system>(tasks);
 		desc_sys = std::make_unique<desc::desc_system>(*res_sys);
 		desc_sys->register_desc<hardening_test_desc>("hardening_test_desc");
+		desc_sys->register_desc<other_test_desc>("other_test_desc");
 		res_sys->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*res_sys), std::ref(*desc_sys));
 	}
 
@@ -264,6 +274,23 @@ BOOST_AUTO_TEST_CASE(Desc_ParentCycle_IsLoadError)
 	auto handle = f.res_sys->require_sync<desc::desc_base>(res::tag{ "memory://hardening/cycle_a.desc" });
 	BOOST_CHECK(handle.get_sync() == nullptr);
 	BOOST_CHECK(handle.has_error());
+}
+
+// #615: the cached block holds an other_test_desc; asking for it as hardening_test_desc fails that handle only.
+BOOST_AUTO_TEST_CASE(Desc_OfAnotherType_IsAFailedHandleWithoutAsserting)
+{
+	desc_fixture f;
+	auto tag = f.put("other_type", R"({"__type":"other_test_desc"})");
+	auto handle = f.res_sys->require_sync<hardening_test_desc>(tag);
+	BOOST_CHECK(!handle.is_ready());
+	BOOST_CHECK(handle.has_error());
+	BOOST_CHECK(handle.get() == nullptr);
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.error_text().find("other_test_desc") != std::string::npos);
+
+	auto any = f.res_sys->require_sync<desc::desc_base>(tag);
+	BOOST_CHECK(any.is_ready());
+	BOOST_CHECK(std::dynamic_pointer_cast<other_test_desc>(any.get_sync()) != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -35,6 +35,7 @@
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
+#include "edt_desc_file_commands.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -556,6 +557,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// A7 (#451): the agent's edits of code/ through code://; without a code folder they answer no_project.
 	for (auto& command : register_code_commands(m_context->actions().commands(), { m_res, &m_context->events() })) {
 		m_registrations.push_back(std::move(command));
+	}
+	// #550: the agent's reads and writes of the desc files of res/, checked against the schemas first.
+	{
+		edt::desc_file_deps desc_files{ m_res, desc_system };
+		desc_files.top_layer = [this] { return m_res.get_resources_path(); };
+		desc_files.layers = [this] { return m_res.get_resource_layers(); };
+		desc_files.open_level_files = [this] {
+			std::vector<std::string> open;
+			for (const res::tag* tag : { &current_level_tag(), &current_editor_tag() }) {
+				if (!tag->view().empty()) open.emplace_back(tag->relative());
+			}
+			return open;
+		};
+		desc_files.events = &m_context->events();
+		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
+			m_registrations.push_back(std::move(command));
+		}
 	}
 	m_file_menu->attach_window_close(wnd_sys);
 

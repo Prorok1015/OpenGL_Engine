@@ -41,6 +41,7 @@ namespace desc
 		}
 
 		std::string_view get_type() const { return type; }
+		std::string_view kind_name() const override { return type; }
 
 		// UUID v4 in lowercase; empty for files without __guid (memory://, inline, not yet saved).
 		const std::string& get_guid() const { return m_guid; }

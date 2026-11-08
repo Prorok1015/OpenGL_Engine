@@ -16,6 +16,8 @@ namespace core::res { struct res_control_block_base; }
 // own control block; diagnostics_collector gathers them over everything a request loaded.
 namespace res
 {
+	class resource_entry;
+
 	enum class diagnostic_severity : std::uint8_t { error, warning };
 
 	namespace diagnostic_kind
@@ -25,6 +27,8 @@ namespace res
 		inline constexpr std::string_view cycle = "cycle";
 		inline constexpr std::string_view schema = "schema";
 		inline constexpr std::string_view unknown_component = "unknown_component";
+		// A desc of one type where another is expected (a material file as a level, #615). The load itself succeeded.
+		inline constexpr std::string_view type_mismatch = "type_mismatch";
 		// Any other failure of a load (no file, no adapter, a parse error, ...).
 		inline constexpr std::string_view load = "load";
 		// The collector's own entry when it kept no more: "N more diagnostics".
@@ -58,6 +62,18 @@ namespace res
 		diagnostic m_diagnostic;
 	};
 
+	// A load another one started. `fits` (null: any) tells whether the loaded data is the type the field asked for; the
+	// collector calls it. It is code of the binary that deserialized the owner, whose blocks live in that binary's
+	// resource layer and go with it (MODULE_LAYER.md).
+	struct child_link
+	{
+		std::weak_ptr<core::res::res_control_block_base> block;
+		std::string json_path;
+		bool inline_copy = false;
+		bool (*fits)(const resource_entry&) = nullptr;
+		std::string expected_name;
+	};
+
 	// The problems one load recorded on its control block, and what the collector needs to walk from it.
 	class SNK_API load_diagnostics
 	{
@@ -72,14 +88,14 @@ namespace res
 			std::size_t dropped = 0;
 			std::weak_ptr<core::res::res_control_block_base> origin;
 			std::string origin_path;
-			std::vector<std::weak_ptr<core::res::res_control_block_base>> children;
+			std::vector<child_link> children;
 		};
 
 		void set_resource(std::string resource);
 		// `item.resource` empty: this block's resource.
 		void add(diagnostic item);
 		// A load this one started: its dependencies and the descs of its fields.
-		void add_child(const std::shared_ptr<core::res::res_control_block_base>& child);
+		void add_child(const std::shared_ptr<core::res::res_control_block_base>& child, child_link link = {});
 		// This block is the memory:// copy of a desc written inline at `json_path` of `owner`: its problems are reported
 		// there. The cache key stays the copy's. An owner still alive keeps its claim; a dead one is replaced. Owners
 		// whose files have the same name and write the same inline desc share one copy (desc_system names it by the
@@ -95,7 +111,7 @@ namespace res
 		std::size_t m_dropped = 0;
 		std::weak_ptr<core::res::res_control_block_base> m_origin;
 		std::string m_origin_path;
-		std::vector<std::weak_ptr<core::res::res_control_block_base>> m_children;
+		std::vector<child_link> m_children;
 	};
 
 	// While an adapter deserializes `block` on this thread (resource_system sets it): report_load_warning and
@@ -125,9 +141,10 @@ namespace res
 
 	// A load started for a field at `json_path` of the resource deserialized on this thread: the collector walks into
 	// it, and when `inline_copy` (a memory:// copy of an inline desc) its problems are reported at the owner's file and
-	// path. Outside a load: nothing.
+	// path. The collector reports a `type_mismatch` there when `fits` (null: not checked) rejects the field's data.
+	// Outside a load: nothing.
 	SNK_API void note_field_load(const std::shared_ptr<core::res::res_control_block_base>& child, std::string_view json_path,
-		bool inline_copy);
+		bool inline_copy, bool (*fits)(const resource_entry&) = nullptr, std::string_view expected_name = {});
 
 	// The diagnostics of settled requests and of everything they loaded (dependencies, field descs), each block once.
 	// A cached block gives the same diagnostics to every request. At most `limit` are kept; the rest show as one

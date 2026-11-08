@@ -4,7 +4,13 @@
 #include <snk/resource/res_diagnostics.h>
 #include <snk/scene/scn_animation_clip_desc.h>
 #include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_world_desc.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/resolvers/res_control_block.hpp>
+#include <snk/resource/adapters/res_dependencies.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/scn_directional_light_desc.h>
 #include <algorithm>
 #include <format>
@@ -25,6 +31,21 @@ namespace res {
 }
 
 namespace {
+
+// A field typed with a base desc type: a derived desc in it is what it asks for.
+struct prefab_holder_desc : desc::desc_base
+{
+	res::res_handle<scn::prefab_desc> prefab;
+
+	void copy_to(desc::desc_base& other) const override { copy_to_same(*this, other); }
+	void deserialize(desc::desc_system& system, const json::object& data) override
+	{
+		if (const auto* p = data.if_contains("prefab")) {
+			prefab = system.get_field_desc<scn::prefab_desc>(*this, *p, "/prefab");
+		}
+	}
+	void serialize(json::object&) const override {}
+};
 
 struct diagnostics_fixture : test_util::scene_env
 {
@@ -167,6 +188,177 @@ BOOST_AUTO_TEST_CASE(AnInlineDescReportsAtItsOwnersFileAndPath_WithoutChangingIt
 	auto again = rs->require<scn::animation_clip_desc>(broken.get_tag());
 	BOOST_TEST((again.get_control_block() == broken.get_control_block()));
 	BOOST_TEST(collection.get()->clips[0].is_ready());
+}
+
+BOOST_AUTO_TEST_CASE(ADescRequiredAsAnotherType_IsAFailedHandle_AndTheBlockStaysReady)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto level = rs->require_sync<scn::level_desc>(tag_of("mat.desc"));
+	pump();
+	BOOST_TEST(!level.is_ready());
+	BOOST_TEST(level.has_error());
+	BOOST_TEST(!level.get());
+	BOOST_TEST(!level.get_sync());
+	const auto text = level.error_text();
+	BOOST_TEST(text.find("material_desc") != std::string::npos);
+	BOOST_TEST(text.find("level_desc") != std::string::npos);
+
+	bool called = false;
+	ds::lifetime owner;
+	level.then(owner, [&](scn::level_desc&) { called = true; });
+	pump();
+	BOOST_TEST(!called);
+
+	res::diagnostics_collector collector;
+	level.collect_into(collector);
+	const auto items = collector.items();
+	const auto* mismatch = find(items, res::diagnostic_kind::type_mismatch, where("mat.desc"));
+	BOOST_REQUIRE(mismatch);
+	BOOST_TEST((mismatch->severity == res::diagnostic_severity::error));
+	BOOST_TEST(mismatch->json_path == "/__type");
+	BOOST_TEST(mismatch->reason == text);
+
+	// The cache is not touched: a request the data fits gets the same ready block.
+	auto any = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(any.is_ready());
+	BOOST_TEST(any.get()->get_type() == "material_desc");
+	BOOST_TEST(any.error_text().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AFieldDescOfAnotherType_IsAFailedHandle_ReportedAtTheField)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	put("clips.desc", R"({"__type":"animation_collection_desc","clips":["memory://t/mat.desc",{"__type":"material_desc"}]})");
+	auto collection = rs->require_sync<scn::animation_collection_desc>(tag_of("clips.desc"));
+	pump();
+	BOOST_REQUIRE(collection.is_ready());
+	const auto& clips = collection.get()->clips;
+	BOOST_REQUIRE_EQUAL(clips.size(), 2u);
+	for (const auto& clip : clips) {
+		BOOST_TEST(clip.has_error());
+		BOOST_TEST(!clip.get());
+		BOOST_TEST(clip.error_text().find("animation_clip_desc") != std::string::npos);
+	}
+
+	res::diagnostics_collector collector;
+	collector.collect(collection.get_control_block());
+	const auto items = collector.items();
+	BOOST_TEST(std::ranges::count_if(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }) == 2);
+	for (const std::string_view path : { "/clips/0", "/clips/1/__type" }) {
+		const auto it = std::ranges::find_if(items, [&](const res::diagnostic& d) { return d.json_path == path; });
+		BOOST_REQUIRE_MESSAGE(it != items.end(), path);
+		BOOST_TEST((it->severity == res::diagnostic_severity::error));
+		BOOST_TEST(it->kind == res::diagnostic_kind::type_mismatch);
+		BOOST_TEST(it->resource == where("clips.desc"));
+		BOOST_TEST(it->reason.find("material_desc") != std::string::npos);
+		BOOST_TEST(it->reason.find("animation_clip_desc") != std::string::npos);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ADependencyOfAnotherTypeIsNotGivenOut)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto material = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(material.is_ready());
+
+	res::res_deps deps;
+	deps.add(res::make_dep<scn::level_desc>(tag_of("mat.desc")), material.get());
+	BOOST_TEST(!deps.get<scn::level_desc>(tag_of("mat.desc")));
+	deps.add(res::make_dep<desc::desc_base>(tag_of("mat.desc")), material.get());
+	BOOST_TEST((deps.get<desc::desc_base>(tag_of("mat.desc")) == material.get()));
+}
+
+BOOST_AUTO_TEST_CASE(ADerivedDescInABaseTypedField_IsWhatItAsksFor)
+{
+	descs->register_desc<prefab_holder_desc>("prefab_holder_desc");
+	put("world.desc", R"({"__type":"world_desc"})");
+	put("holder.desc", R"({"__type":"prefab_holder_desc","prefab":"memory://t/world.desc"})");
+	auto holder = rs->require_sync<desc::desc_base>(tag_of("holder.desc"));
+	pump();
+	BOOST_REQUIRE(holder.is_ready());
+	const auto& prefab = std::dynamic_pointer_cast<prefab_holder_desc>(holder.get())->prefab;
+	BOOST_TEST(prefab.is_ready());
+	BOOST_TEST(!prefab.has_error());
+	BOOST_TEST(prefab.error_text().empty());
+
+	res::diagnostics_collector collector;
+	collector.collect(holder.get_control_block());
+	const auto items = collector.items();
+	BOOST_TEST(std::ranges::none_of(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }));
+}
+
+BOOST_AUTO_TEST_CASE(TwoFieldsSharingABlock_EachReportTheirMismatch)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	put("clips.desc", R"({"__type":"animation_collection_desc","clips":["memory://t/mat.desc","memory://t/mat.desc"]})");
+	auto collection = rs->require_sync<scn::animation_collection_desc>(tag_of("clips.desc"));
+	pump();
+	BOOST_REQUIRE(collection.is_ready());
+	const auto& clips = collection.get()->clips;
+	BOOST_REQUIRE_EQUAL(clips.size(), 2u);
+	BOOST_TEST((clips[0].get_control_block() == clips[1].get_control_block()));
+
+	res::diagnostics_collector collector;
+	collector.collect(collection.get_control_block());
+	const auto items = collector.items();
+	for (const std::string_view path : { "/clips/0", "/clips/1" }) {
+		BOOST_TEST_MESSAGE(path);
+		BOOST_TEST(std::ranges::count_if(items, [&](const res::diagnostic& d) {
+			return d.kind == res::diagnostic_kind::type_mismatch && d.json_path == path;
+		}) == 1);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ABlockThatIsADependencyAndAField_ReportsOneMismatch)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto material = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(material.is_ready());
+
+	const res::child_link field{ {}, "/level", false, &core::res::holds<scn::level_desc>, "level_desc" };
+	for (const bool field_first : { false, true }) {
+		auto owner = std::make_shared<core::res::res_resource_block>();
+		owner->diagnostics.set_resource("memory://t/owner.desc");
+		const auto child = material.get_control_block();
+		if (field_first) {
+			owner->diagnostics.add_child(child, field);
+			owner->diagnostics.add_child(child);
+		} else {
+			owner->diagnostics.add_child(child);
+			owner->diagnostics.add_child(child, field);
+		}
+		owner->set_ready(std::make_shared<res::resource_entry>());
+
+		res::diagnostics_collector collector;
+		collector.collect(owner);
+		const auto items = collector.items();
+		BOOST_TEST_MESSAGE(field_first);
+		BOOST_REQUIRE_EQUAL(std::ranges::count_if(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }), 1);
+		const auto* mismatch = find(items, res::diagnostic_kind::type_mismatch, "memory://t/owner.desc");
+		BOOST_REQUIRE(mismatch);
+		BOOST_TEST(mismatch->json_path == "/level");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AFailedOwner_DoesNotRunItsFieldChecks)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto material = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(material.is_ready());
+
+	static bool checked = false;
+	checked = false;
+	const res::child_link field{ {}, "/level", false, [](const res::resource_entry&) { checked = true; return false; }, "level_desc" };
+	auto owner = std::make_shared<core::res::res_resource_block>();
+	owner->diagnostics.set_resource("memory://t/owner.desc");
+	owner->diagnostics.add_child(material.get_control_block(), field);
+	owner->set_error("broken");
+
+	res::diagnostics_collector collector;
+	collector.collect(owner);
+	BOOST_TEST(!checked);
+	const auto items = collector.items();
+	BOOST_TEST(std::ranges::none_of(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }));
 }
 
 BOOST_AUTO_TEST_CASE(AKeyWithSlashAndTildeIsEscapedInThePath)
