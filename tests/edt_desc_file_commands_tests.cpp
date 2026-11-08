@@ -36,6 +36,7 @@ struct desc_fixture : test_util::scene_env
 	{
 		fs::create_directories(res_root / "materials");
 		fs::create_directories(lower / "materials");
+		rs->unregistrate_resolver(res::tag::default_protocol());
 		rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ res_root },
 			res::mount_access::read_write, res::write_policy::allow_all());
 		seen = events.agent_action.subscribe([this](const edt::agent_action_info& info) { actions.push_back(info); });
