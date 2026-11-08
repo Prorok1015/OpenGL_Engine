@@ -1,12 +1,12 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/desc/desc_schema_ops.h>
+#include <snk/scene/scn_component_schema.h>
 #include <boost/json/object.hpp>
 #include <entt/core/type_info.hpp>
 #include <entt/entity/registry.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -69,21 +69,29 @@ namespace scn
 			return value && write_value(schema, *value, out);
 		}
 
+		// False when a value of `in` does not fit its field: that field keeps its default, the rest is read.
+		inline bool fits(const desc::schema_binding& schema, const json::object& in)
+		{
+			return desc::check_override_object(*schema.schema, in).status == desc::override_status::valid;
+		}
+
 		// The value is complete before it is placed: an on_construct observer never sees a default-built component.
 		template<typename T>
-		void read(const desc::schema_binding& schema, entt::registry& reg, entt::entity entity, const json::object& in, const desc::read_context& ctx)
+		bool read(const desc::schema_binding& schema, entt::registry& reg, entt::entity entity, const json::object& in, const desc::read_context& ctx)
 		{
 			T value{};
 			desc::deserialize(schema, &value, in, ctx);
 			reg.emplace_or_replace<T>(entity, std::move(value));
+			return fits(schema, in);
 		}
 
 		template<typename T>
-		void read_ctx(const desc::schema_binding& schema, entt::registry& reg, entt::entity, const json::object& in, const desc::read_context& ctx)
+		bool read_ctx(const desc::schema_binding& schema, entt::registry& reg, entt::entity, const json::object& in, const desc::read_context& ctx)
 		{
 			T value{};
 			desc::deserialize(schema, &value, in, ctx);
 			reg.ctx().insert_or_assign(std::move(value));
+			return fits(schema, in);
 		}
 	}
 
@@ -91,7 +99,8 @@ namespace scn
 	{
 		using contains_fn = bool (*)(const entt::registry&, entt::entity);
 		using write_fn = bool (*)(const desc::schema_binding&, const entt::registry&, entt::entity, json::object&);
-		using read_fn = void (*)(const desc::schema_binding&, entt::registry&, entt::entity, const json::object&, const desc::read_context&);
+		// False: the component was placed, but a value of the input did not fit its field (logged).
+		using read_fn = bool (*)(const desc::schema_binding&, entt::registry&, entt::entity, const json::object&, const desc::read_context&);
 
 		std::string name;
 		entt::id_type id = 0;
@@ -108,8 +117,12 @@ namespace scn
 	};
 
 	// The runtime components and ctx resources a snapshot knows, by stable name, in registration order. A layer over
-	// `parent` (MODULE_LAYER.md) sees the parent's entries first and cannot reuse their names or types. This is the
-	// schema side of the names in ecs::component_registry; main thread, between frames.
+	// `parent` (MODULE_LAYER.md) sees the parent's entries first; a name or type the parent has (also one the parent got
+	// after the layer) is the parent's, and the layer's own entry for it is not listed. This is the schema side of the
+	// names in ecs::component_registry; main thread, between frames.
+	//
+	// The entries of a module point into its binary (the typed functions, the schema's deleters): the module's layer
+	// clears its catalog before the module is unloaded, and the parent must outlive the layer.
 	class SNK_API component_catalog
 	{
 	public:
@@ -152,8 +165,11 @@ namespace scn
 			return add_entry(std::move(entry));
 		}
 
-		// Removes one of this layer's entries; false for an unknown name or one of the parent's.
+		// Removes one of this layer's entries; false for an unknown name or one of the parent's. Pointers to the entry
+		// handed out before are dangling afterwards.
 		bool remove(std::string_view name);
+		// Removes all of this layer's entries.
+		void clear();
 
 		const component_entry* find(std::string_view name) const;
 		const component_entry* find(entt::id_type id) const;
@@ -166,8 +182,8 @@ namespace scn
 				m_parent->for_each(visit);
 			}
 			for (const auto& entry : m_entries) {
-				if (!entry.name.empty()) {
-					visit(entry);
+				if (!shadowed(*entry)) {
+					visit(*entry);
 				}
 			}
 		}
@@ -199,10 +215,12 @@ namespace scn
 		}
 
 		const component_entry* add_entry(component_entry entry);
+		// The parent registered the same name or type after this layer did.
+		bool shadowed(const component_entry& entry) const;
 
 		const component_catalog* m_parent = nullptr;
-		// A removed entry stays as a tombstone (empty name): the pointers handed out keep pointing at stable storage.
-		std::deque<component_entry> m_entries;
+		// Registration order; the entries themselves stay where they are while others come and go.
+		std::vector<std::unique_ptr<component_entry>> m_entries;
 		std::unordered_map<std::string, const component_entry*> m_by_name;
 		std::unordered_map<entt::id_type, const component_entry*> m_by_id;
 	};
