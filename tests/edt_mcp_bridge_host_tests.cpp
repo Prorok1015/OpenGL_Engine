@@ -602,13 +602,53 @@ BOOST_AUTO_TEST_CASE(CallTool_ACaptureSizeIsLimitedForAnAgent)
 
 	BOOST_TEST(!call_tool("viewport_capture", R"({"width":2048,"height":2048})").is_error);
 	BOOST_TEST(!call_tool("viewport_capture", R"({"height":600})").is_error);
-	// No size named: a default width, not the native size of a possibly huge view.
+	// No size named: the view is fitted to a default longest side, not returned at the native size of a possibly huge view.
 	BOOST_TEST(!call_tool("viewport_capture", "{}").is_error);
 	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
 	// The ceilings travel with the request: the command derives the side the agent did not name and checks it against them.
 	BOOST_TEST(seen[0] == R"({"width":2048,"height":2048,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
 	BOOST_TEST(seen[1] == R"({"height":600,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
-	BOOST_TEST(seen[2] == R"({"width":1280,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[2] == R"({"max_side":1280,"max_pixels":4194304,"max_source_pixels":8388608})");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentCannotSwitchFitOnOrOffItself)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	// The schema has no `fit`: the command decides it from the arguments, so an argument of that name is refused.
+	BOOST_TEST(call_tool("viewport_capture", R"({"fit":true})").is_error);
+	BOOST_TEST(call_tool("viewport_capture", R"({"max_side":100,"fit":false})").is_error);
+	BOOST_TEST(seen.empty());
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACaptureWithOnlyMaxSideIsFittedNotRefused)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	BOOST_TEST(!call_tool("viewport_capture", R"({"viewport":"game","max_side":1000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"max_side":5000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":300,"max_side":100})").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	// No width or height is added, so the command fits the view into max_side.
+	BOOST_TEST(seen[0] == R"({"viewport":"game","max_side":1000,"max_pixels":4194304,"max_source_pixels":8388608})");
+	// Over the ceiling of an agent: lowered, never raised.
+	BOOST_TEST(seen[1] == R"({"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	// A named size is left alone, the command refuses it when the derived side is over max_side.
+	BOOST_TEST(seen[2] == R"({"width":300,"max_side":100,"max_pixels":4194304,"max_source_pixels":8388608})");
 }
 
 BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
