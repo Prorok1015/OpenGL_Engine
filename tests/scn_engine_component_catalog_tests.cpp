@@ -5,6 +5,7 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/level/scn_screen_anchor.h>
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <type_traits>
@@ -15,9 +16,9 @@
 #include <vector>
 
 // Every runtime component the engine creates is in the base catalog with a schema, or marked derived / editor-only
-// (#599, HOT_RELOAD_PLAY.md section 4.3). A world is spawned through the production spawners with a node of every
-// scene desc, and every non-empty storage must be known: a component a new spawner adds without registering it makes
-// the walk report it, which fails the test.
+// (#599, HOT_RELOAD_PLAY.md section 4.3). A world is spawned through the production spawners with a node per scene desc
+// listed below (a hand-written list: a new desc type must be added to it), and every non-empty storage must be known:
+// a component one of these spawners adds without registering it makes the walk report it, which fails the test.
 
 namespace
 {
@@ -25,8 +26,8 @@ namespace
 	{
 		catalog_fixture() { scn::register_engine_components(catalog); }
 
-		// A prefab with one node per scene desc the engine spawns; a skinning node with bones adds the skeleton and the
-		// bone matrices to the root.
+		// A prefab with one node per scene desc listed here; a skinning node with bones adds the skeleton and the bone
+		// matrices to the root.
 		entt::entity spawn_every_desc(entt::registry& reg)
 		{
 			const auto tag = put("all.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
@@ -79,6 +80,17 @@ BOOST_AUTO_TEST_CASE(EveryComponentOfASpawnedWorldIsInTheCatalog)
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::bone_matrices_component>::value()));
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::parent_component>::value()));
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::children_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::scene_anchor_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::renderable>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::directional_light>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::screen_anchor_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::skeleton_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::animated_node_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::mesh_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::animation_controller_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::object_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::sky_component>::value()));
+	BOOST_TEST(has_storage(reg, entt::type_hash<scn::bone_component>::value()));
 }
 
 BOOST_AUTO_TEST_CASE(EveryEngineEntryHasASchemaOrIsMarked)

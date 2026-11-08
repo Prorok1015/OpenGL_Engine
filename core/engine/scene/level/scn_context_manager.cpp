@@ -80,6 +80,7 @@ void scn::context_manager::destroy_layer(scn::scene_layer& layer)
 		set_game_layer(nullptr);
 	}
 	std::erase_if(m_sets, [&layer](const auto& set) { return set->layer() == &layer; });
+	layer.catalog().clear();
 	const auto it = std::ranges::find_if(m_layers, [&layer](const auto& owned) { return owned.get() == &layer; });
 	ASSERT_MSG(it != m_layers.end(), "destroy_layer: the layer was not created by this manager");
 	m_layers.erase(it);

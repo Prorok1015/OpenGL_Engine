@@ -10,6 +10,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/res_tag.h>
+#include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_scene_layer.h>
 
@@ -23,6 +24,10 @@
 
 // A game module as its own shared library, the way a game.dll is built (#220 PR-7): it registers into the layer
 // module_loader gives it and is loaded by tests/module_dll/app_module_dll_tests.cpp through native_library_source.
+
+namespace dll_game {
+	BOOST_DESCRIBE_STRUCT(dll_component, (), (value))
+}
 
 namespace {
 
@@ -100,6 +105,9 @@ private:
 		});
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
+		// Its functions and schema live in this library: the layer drops them before the library goes.
+		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },
+			desc::bind_described<dll_game::dll_component>(dll_game::component_name, 1, desc::schema_kind::component));
 		ecs::register_component<dll_game::dll_component>(layer.meta());
 		auto& service = data.construct<dll_service>();
 

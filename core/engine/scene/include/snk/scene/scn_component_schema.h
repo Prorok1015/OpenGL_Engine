@@ -22,6 +22,10 @@
 
 namespace desc
 {
+	// Snapshots carry an entity as its 32-bit raw id. A runtime (blob) schema stores field_kind::entity as a u32 too, but
+	// snapshots never go through a blob: only C++ components are captured, through these traits.
+	static_assert(sizeof(entt::entity) == sizeof(std::uint32_t), "a snapshot writes an entity as its 32-bit raw id");
+
 	template<>
 	struct entity_traits<entt::entity>
 	{
