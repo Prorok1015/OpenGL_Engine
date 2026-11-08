@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <boost/json/serialize.hpp>
 #include "test_scene_env.hpp"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_node_index.h>
@@ -194,7 +195,10 @@ BOOST_AUTO_TEST_CASE(EverySavedComponentComesBackFieldByField)
 			if (k_entity_fields.contains(entry.name)) {
 				return;
 			}
-			BOOST_TEST(value_of(entry, from, entity) == value_of(entry, to, copy), entry.name << " differs after the restore");
+			// Parenthesised: Boost.Test would compare json::object as a collection, which MSVC cannot instantiate.
+			const json::object before = value_of(entry, from, entity);
+			const json::object after = value_of(entry, to, copy);
+			BOOST_TEST((before == after), entry.name << " differs after the restore: " << json::serialize(before) << " vs " << json::serialize(after));
 		});
 
 		if (const auto* parent = from.try_get<scn::parent_component>(entity)) {
