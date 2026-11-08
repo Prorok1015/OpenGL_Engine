@@ -93,6 +93,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-${{ matrix.preset }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       # The preset pins the compiler (#585): the runner image's default clang++ moved from 18 to 21 unannounced.
       - name: Check the pinned Clang is installed
         if: matrix.preset == 'ci-linux-clang-debug'
@@ -162,6 +165,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure
         run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -246,6 +252,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure
         run: cmake --preset ci-linux-no-assimp "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -340,6 +349,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
@@ -414,6 +426,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-coverage-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure (--coverage)
         run: cmake --preset ci-linux-coverage "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -533,6 +548,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       - name: Configure
         run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -750,6 +768,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Release-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       - name: Configure
         run: cmake --preset ci-linux-gcc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
@@ -825,6 +846,9 @@ jobs:
         with:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
 
       # Both engines are built and installed twice: each into its own prefix (to check that they can share one), and
       # both into SDK_PREFIX, static first, the way the release package is put together (#223).

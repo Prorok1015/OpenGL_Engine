@@ -12,19 +12,41 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Restore sccache download (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.sccache-download
+        key: sccache-v0.19.0-x86_64-pc-windows-msvc-28be8c61f6b2c89b9eb2869f6af7f78e6f992e78a8abae0ce855fcc129cbeac1
+
+    # The release asset itself, pinned by SHA256 (#626); Chocolatey's mirror of it was refused (403).
+    # Without sccache the build still works, just uncached (CMake only logs a status line), so this never fails the job.
     - name: Install sccache (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      # Without sccache the build still works, just uncached (CMake only logs a status line).
-      # A transient refusal of the release download (403/504) is retried; after that the job goes on uncached.
       continue-on-error: true
+      env:
+        SCCACHE_URL: https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
+        SCCACHE_SHA256: 28be8c61f6b2c89b9eb2869f6af7f78e6f992e78a8abae0ce855fcc129cbeac1
       run: |
+        $dir = Join-Path $env:GITHUB_WORKSPACE '.sccache-download'
+        $zip = Join-Path $dir 'sccache.zip'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        function Test-Zip { (Test-Path $zip) -and ((Get-FileHash -Algorithm SHA256 $zip).Hash -eq $env:SCCACHE_SHA256) }
         foreach ($wait in 0, 10, 30) {
+          if (Test-Zip) { break }
           Start-Sleep -Seconds $wait
-          choco install sccache --yes --no-progress
-          if ($LASTEXITCODE -eq 0) { exit 0 }
+          try { Invoke-WebRequest -Uri $env:SCCACHE_URL -OutFile $zip -UseBasicParsing } catch { Write-Output "sccache download failed: $_" }
         }
-        Write-Output "::warning title=sccache::sccache could not be installed; this build runs without the compiler cache"
+        if (-not (Test-Zip)) {
+          Remove-Item -Force -ErrorAction SilentlyContinue $zip
+          Write-Output "::warning title=sccache::sccache could not be downloaded; this build runs without the compiler cache"
+          exit 0
+        }
+        $bin = Join-Path $dir 'bin'
+        Expand-Archive -Force -Path $zip -DestinationPath $bin
+        $exe = Get-ChildItem -Path $bin -Recurse -Filter sccache.exe | Select-Object -First 1
+        Add-Content -Path $env:GITHUB_PATH -Value $exe.DirectoryName
         exit 0
 
     - name: Configure compiler cache
