@@ -4,6 +4,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/level/scn_screen_anchor.h>
 #include <entt/entt.hpp>
 #include <algorithm>
