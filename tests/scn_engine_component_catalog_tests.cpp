@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <type_traits>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -204,6 +205,67 @@ BOOST_AUTO_TEST_CASE(Batch2ComponentsRoundTripWithoutResources)
 	BOOST_TEST(tracked.at("camera").type_name == "camera_desc");
 	BOOST_TEST(tracked.at("camera").source_desc.view() == "memory://cam.desc");
 	BOOST_TEST(tracked.at("camera").local_overrides.at("fov").to_number<int>() == 60);
+}
+
+BOOST_AUTO_TEST_CASE(Batch2ResourceFreeComponentsRoundTripFieldByField)
+{
+	entt::registry source;
+	const entt::entity node = source.create();
+	glm::mat4 offset{ 1.0f };
+	offset[3] = glm::vec4{ 1.5f, -2.f, 0.25f, 1.f };
+	source.emplace<scn::geometry_component>(node, scn::geometry_component{ res::tag{ "memory://mesh.geom" } });
+	source.emplace<scn::skeleton_component>(node, scn::skeleton_component{ res::tag{ "memory://skin" }, 12, true });
+	source.emplace<scn::sky_component>(node, scn::sky_component{ { res::tag{ "memory://px" }, res::tag{ "memory://nx" } } });
+	source.emplace<scn::bone_component>(node, scn::bone_component{ offset, 7 });
+	source.emplace<scn::animated_node_component>(node, scn::animated_node_component{ "Spine" });
+	source.emplace<scn::skinning_component>(node, scn::skinning_component{ res::tag{ "memory://skin" }, entt::null });
+	scn::camera_component camera;
+	camera.m_viewport = scn::viewport{ glm::ivec4{ 10, 20, 640, 480 } };
+	source.emplace<scn::camera_component>(node, camera);
+	scn::component_tracker tracker;
+	tracker.tracked_components["zeta"] = scn::tracked_component_info{ "b_desc", res::tag{ "memory://b.desc" }, {} };
+	tracker.tracked_components["alpha"] = scn::tracked_component_info{ "a_desc", res::tag{ "memory://a.desc" }, {} };
+	source.emplace<scn::component_tracker>(node, tracker);
+
+	struct no_ids final : desc::entity_remap
+	{
+		std::optional<std::uint32_t> find(std::uint32_t) const override { return std::nullopt; }
+	} ids;
+	desc::read_context ctx;
+	ctx.entities = &ids;
+	entt::registry target;
+	const entt::entity restored = target.create();
+	for (std::string_view name : { "scn.geometry", "scn.skeleton", "scn.sky", "scn.bone", "scn.animated_node", "scn.skinning", "scn.camera", "scn.component_tracker" }) {
+		const scn::component_entry* entry = catalog.find(name);
+		BOOST_REQUIRE(entry && entry->schema);
+		json::object data;
+		BOOST_REQUIRE(entry->write(*entry->schema, source, node, data));
+		if (name == "scn.component_tracker") {
+			const auto& tracked = data.at("tracked_components").as_object();
+			BOOST_REQUIRE_EQUAL(tracked.size(), 2u);
+			BOOST_TEST(tracked.begin()->key() == "alpha"); // written in name order
+		}
+		BOOST_TEST(entry->read(*entry->schema, target, restored, data, ctx), name);
+	}
+
+	BOOST_TEST(target.get<scn::geometry_component>(restored).geom_tag.view() == "memory://mesh.geom");
+	const auto& skeleton = target.get<scn::skeleton_component>(restored);
+	BOOST_TEST(skeleton.skinning_tag.view() == "memory://skin");
+	BOOST_TEST(skeleton.bone_count == 12);
+	BOOST_TEST(skeleton.show_skeleton);
+	const auto& sky = target.get<scn::sky_component>(restored).cube_map;
+	BOOST_REQUIRE_EQUAL(sky.size(), 2u);
+	BOOST_TEST(sky[1].view() == "memory://nx");
+	const auto& bone = target.get<scn::bone_component>(restored);
+	BOOST_TEST(std::memcmp(&bone.offset, &offset, sizeof(glm::mat4)) == 0);
+	BOOST_TEST(bone.index == 7);
+	BOOST_TEST(target.get<scn::animated_node_component>(restored).node_name == "Spine");
+	BOOST_TEST((target.get<scn::skinning_component>(restored).skeleton_entity == entt::null));
+	const glm::ivec4 viewport = target.get<scn::camera_component>(restored).m_viewport;
+	BOOST_TEST((viewport == glm::ivec4{ 10, 20, 640, 480 }));
+	const auto& tracked = target.get<scn::component_tracker>(restored).tracked_components;
+	BOOST_TEST(tracked.at("zeta").type_name == "b_desc");
+	BOOST_TEST(tracked.at("alpha").source_desc.view() == "memory://a.desc");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -52,6 +52,8 @@ namespace desc
 			holder.get_root() = value;
 			json::object out;
 			holder.serialize(out);
+			// A prefab desc does not write the name of its root; the remembered node has one.
+			out["__root_name"] = value.name;
 			return json::value(std::move(out));
 		}
 
@@ -64,9 +66,16 @@ namespace desc
 			if (!in.is_object() || !ctx.system) {
 				return false;
 			}
+			json::object data = in.as_object();
+			std::string name;
+			if (const auto* root_name = data.if_contains("__root_name"); root_name && root_name->is_string()) {
+				name = std::string{ root_name->as_string() };
+			}
+			data.erase("__root_name");
 			scn::prefab_desc holder;
-			holder.deserialize(*ctx.system, in.as_object());
+			holder.deserialize(*ctx.system, data);
 			value = std::move(holder.get_root());
+			value.name = std::move(name);
 			return true;
 		}
 	};
