@@ -32,6 +32,9 @@ namespace rnd
 		// The target itself is read back whole before it is scaled, so this bounds the source: a target with more
 		// pixels is refused (status failed) whatever size is asked. The service ceiling applies.
 		std::int64_t max_source_pixels = 32LL * 1024 * 1024;
+		// With no size asked, the picture is the target scaled down (proportions kept, never up) until it fits max_side
+		// and max_pixels, instead of a refusal when the target is bigger than they allow.
+		bool fit = false;
 	};
 
 	enum class capture_status : std::uint8_t

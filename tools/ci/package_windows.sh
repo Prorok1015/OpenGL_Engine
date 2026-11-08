@@ -58,6 +58,10 @@ cmake --install "build/${static_preset}" --prefix "$full" --component snake_sdk
 cmake --install "build/${shared_preset}" --prefix "$full" --component snake_sdk
 bash tools/ci/check_sdk_headers.sh "$full"
 bash tools/ci/check_sdk_abs_paths.sh "$full"
+# No archive next to snk_engine.dll but Boost.JSON and what it links, for game modules (SPIKE-218 section 3.6, #581).
+python="$(command -v python3 || command -v python)" # Windows runners have only `python`
+"$python" tools/ci/check_sdk_shared_set.py --self-test
+"$python" tools/ci/check_sdk_shared_set.py "$full" --allow thirdparty_boost_json thirdparty_boost_container
 # The SDK alone, before the editor (which links the MCP server module) joins the prefix.
 bash tools/ci/check_mcp_isolation.sh --sdk "$full"
 ws="${GITHUB_WORKSPACE:-$PWD}"

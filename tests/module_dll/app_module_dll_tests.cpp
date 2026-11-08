@@ -9,6 +9,8 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
 #include <chrono>
@@ -174,6 +176,40 @@ BOOST_AUTO_TEST_CASE(a_module_library_fills_its_layer_and_its_worlds_run)
 	json::object saved;
 	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), view.front(), saved));
 	BOOST_TEST(saved.at("value").to_number<int>() == 3);
+}
+
+BOOST_AUTO_TEST_CASE(module_code_switches_the_clips_of_a_model_with_play_animation)
+{
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(contexts().load_level(put("anim_lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":["dll::animate"]}]})")));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	auto& reg = world->state();
+
+	const entt::entity model = reg.create();
+	scn::animation_collection_component collection;
+	collection.clips = load<scn::animation_collection_desc>(put("dll_clips.desc", R"({"__type":"animation_collection_desc","clips":[
+		{"__type":"animation_clip_desc","name":"idle","duration":20.0,"ticks_per_second":10.0},
+		{"__type":"animation_clip_desc","name":"walk","duration":10.0,"ticks_per_second":20.0},
+		{"__type":"animation_clip_desc","name":"jump","duration":6.0,"ticks_per_second":12.0}]})"))->clips;
+	reg.emplace<scn::animation_collection_component>(model, std::move(collection));
+	auto& controller = reg.emplace<scn::animation_controller_component>(model);
+	controller.current_animation = "idle";
+	controller.playing = true;
+
+	contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_TEST(controller.current_animation == "walk");
+	BOOST_TEST(controller.duration == 10.0f);
+	BOOST_TEST(controller.loop);
+
+	contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_TEST(controller.current_animation == "jump");
+	BOOST_TEST(controller.duration == 6.0f);
+	BOOST_TEST(controller.ticks_per_second == 12.0f);
+	BOOST_TEST(!controller.loop);
+	BOOST_TEST(controller.current_time == 0.0f);
 }
 
 BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)

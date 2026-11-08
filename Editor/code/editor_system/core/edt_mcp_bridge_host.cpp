@@ -37,8 +37,8 @@ namespace {
 	// The view is read back whole before it is scaled down to that, on the main thread: a view of 8 Mpixels (4K UHD
 	// fits) is 32 MiB, plus the flipped copy. A bigger view is refused for an agent instead of read.
 	constexpr std::int64_t agent_max_source_pixels = 8LL * 1024 * 1024;
-	// Width asked when the agent names no size (the design's 1280 pixels on the long side, for a landscape view).
-	constexpr std::int64_t agent_default_capture_width = 1280;
+	// Longest side of the picture when the agent names neither a size nor max_side (the design's 1280 pixels).
+	constexpr std::int64_t agent_default_capture_side = 1280;
 	// Largest answer sent to an agent, in bytes of JSON or base64 text.
 	constexpr std::size_t agent_max_response_bytes = 16u * 1024u * 1024u;
 
@@ -87,8 +87,8 @@ namespace {
 				return std::string(side) + " is limited to " + std::to_string(agent_max_capture_side) + " pixels for an agent";
 			}
 		}
-		if (!sized) {
-			object["width"] = agent_default_capture_width;
+		if (!sized && !object.contains("max_side")) {
+			object["max_side"] = agent_default_capture_side;
 		}
 		ceiling(object, "max_side", agent_max_capture_side);
 		ceiling(object, "max_pixels", agent_max_capture_pixels);

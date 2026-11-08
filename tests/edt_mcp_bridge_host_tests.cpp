@@ -4,12 +4,16 @@
 #include "edt_agent_confirmations.h"
 #include "edt_agent_policy.h"
 #include "test_temp_dir.hpp"
+#include "edt_file_menu.h"
 #include "edt_mcp_bridge_host.h"
 #include "mcp_test_support.hpp"
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/mcp/mcp_endpoint.h>
 #include <snk/command/cmd_registry.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <boost/json/parse.hpp>
@@ -598,13 +602,53 @@ BOOST_AUTO_TEST_CASE(CallTool_ACaptureSizeIsLimitedForAnAgent)
 
 	BOOST_TEST(!call_tool("viewport_capture", R"({"width":2048,"height":2048})").is_error);
 	BOOST_TEST(!call_tool("viewport_capture", R"({"height":600})").is_error);
-	// No size named: a default width, not the native size of a possibly huge view.
+	// No size named: the view is fitted to a default longest side, not returned at the native size of a possibly huge view.
 	BOOST_TEST(!call_tool("viewport_capture", "{}").is_error);
 	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
 	// The ceilings travel with the request: the command derives the side the agent did not name and checks it against them.
 	BOOST_TEST(seen[0] == R"({"width":2048,"height":2048,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
 	BOOST_TEST(seen[1] == R"({"height":600,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
-	BOOST_TEST(seen[2] == R"({"width":1280,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[2] == R"({"max_side":1280,"max_pixels":4194304,"max_source_pixels":8388608})");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentCannotSwitchFitOnOrOffItself)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	// The schema has no `fit`: the command decides it from the arguments, so an argument of that name is refused.
+	BOOST_TEST(call_tool("viewport_capture", R"({"fit":true})").is_error);
+	BOOST_TEST(call_tool("viewport_capture", R"({"max_side":100,"fit":false})").is_error);
+	BOOST_TEST(seen.empty());
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACaptureWithOnlyMaxSideIsFittedNotRefused)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	BOOST_TEST(!call_tool("viewport_capture", R"({"viewport":"game","max_side":1000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"max_side":5000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":300,"max_side":100})").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	// No width or height is added, so the command fits the view into max_side.
+	BOOST_TEST(seen[0] == R"({"viewport":"game","max_side":1000,"max_pixels":4194304,"max_source_pixels":8388608})");
+	// Over the ceiling of an agent: lowered, never raised.
+	BOOST_TEST(seen[1] == R"({"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	// A named size is left alone, the command refuses it when the derived side is over max_side.
+	BOOST_TEST(seen[2] == R"({"width":300,"max_side":100,"max_pixels":4194304,"max_source_pixels":8388608})");
 }
 
 BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
@@ -623,6 +667,59 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
 	BOOST_REQUIRE_EQUAL(seen.size(), 2u);
 	BOOST_TEST(seen[0] == R"({"width":100,"max_side":512,"max_pixels":1000,"max_source_pixels":8388608})");
 	BOOST_TEST(seen[1] == R"({"width":100,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+}
+
+// The real File menu actions behind the bridge: what an agent can do with a level (#547).
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
+{
+	edt::dialog_service dialogs;
+	edt::action_registry actions{ commands };
+	bool dirty = true;
+	std::vector<std::string> calls;
+	edt::file_menu_hooks hooks;
+	hooks.has_scene = [] { return true; };
+	hooks.is_dirty = [&dirty] { return dirty; };
+	hooks.level_path = [] { return std::string("levels/current.desc"); };
+	hooks.new_level = [] {};
+	hooks.quick_save = [&] { calls.push_back("quick_save"); dirty = false; return true; };
+	hooks.save_level_as = [&](const std::string& path) { calls.push_back("save_as:" + path); dirty = false; return true; };
+	hooks.discard_changes = [&dirty] { dirty = false; };
+	hooks.load_level_tag = [&](const std::string& path) -> std::optional<std::string> { calls.push_back("load_tag:" + path); return std::nullopt; };
+	hooks.exit = [] {};
+	hooks.resources_path = "/proj/res";
+	hooks.inspect_level = [](const std::string& path) {
+		return path == "levels/current.desc" || path == "levels/next.desc" ? edt::level_file_state::file : edt::level_file_state::missing;
+	};
+	edt::file_menu menu(dialogs, actions, hooks);
+	menu.register_actions();
+
+	const std::vector<std::string> tools = names_of(list_tools());
+	const auto listed = [&tools](const char* name) { return std::find(tools.begin(), tools.end(), name) != tools.end(); };
+	for (const char* name : { "file_save", "file_save_as", "file_open" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(listed(name)); }
+	}
+	for (const char* name : { "file_new", "file_import_model", "file_exit", "file_open_project" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!listed(name)); }
+	}
+
+	// Unsaved changes are not dropped by an open: an error, whether or not the agent asks to discard them.
+	BOOST_TEST(call_tool("file_open", R"({"path":"levels/next.desc"})").is_error);
+	BOOST_TEST(call_tool("file_open", R"({"path":"levels/next.desc","discard_unsaved":true})").is_error);
+	BOOST_TEST(dirty);
+	BOOST_TEST(calls.empty());
+
+	BOOST_TEST(!call_tool("file_save").is_error);
+	BOOST_TEST(!call_tool("file_open", R"({"path":"res://levels/next.desc"})").is_error);
+	BOOST_TEST(!call_tool("file_save_as", R"({"path":"levels/copy.desc"})").is_error);
+	BOOST_TEST((calls == std::vector<std::string>{ "quick_save", "load_tag:levels/next.desc", "save_as:levels/copy.desc" }));
+
+	// A path out of the project, or over another existing file, is refused.
+	for (const char* path : { "../escape.desc", "/etc/x.desc", "C:/x.desc", "memory://x.desc", "levels/next.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			BOOST_TEST(call_tool("file_save_as", json::serialize(json::object{ { "path", path } })).is_error);
+		}
+	}
+	BOOST_TEST(calls.size() == 3u);
 }
 
 BOOST_AUTO_TEST_CASE(CallTool_ACompareGetsTheSourceCeilingOfACapture)

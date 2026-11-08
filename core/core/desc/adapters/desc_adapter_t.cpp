@@ -2,6 +2,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_guid.h>
+#include <snk/resource/res_diagnostics.h>
 #include <algorithm>
 #include <format>
 #include <optional>
@@ -26,10 +27,12 @@ std::optional<::res::tag> read_parent(const ::res::tag& tag, const json::object&
 	try {
 		parent_tag = json::value_to<::res::tag>(*field);
 	} catch (const std::exception& e) {
-		throw std::runtime_error(std::format("desc '{}': invalid '__parent': {}", tag.view(), e.what()));
+		throw ::res::load_error(::res::diagnostic_kind::missing_parent, "/__parent",
+			std::format("desc '{}': invalid '__parent': {}", tag.view(), e.what()));
 	}
 	if (parent_tag == tag) {
-		throw std::runtime_error(std::format("desc '{}': '__parent' cycle through '{}'", tag.view(), parent_tag.view()));
+		throw ::res::load_error(::res::diagnostic_kind::cycle, "/__parent",
+			std::format("desc '{}': '__parent' cycle through '{}'", tag.view(), parent_tag.view()));
 	}
 	return parent_tag;
 }
@@ -53,7 +56,10 @@ std::vector<::res::res_dep> core::desc::desc_adapter_t::collect_dependencies(con
 	}
 
 	if (const auto parent_tag = read_parent(tag, parse_body(data))) {
-		return { ::res::make_dep<::desc::desc_base>(*parent_tag) };
+		auto dep = ::res::make_dep<::desc::desc_base>(*parent_tag);
+		dep.failure_kind = ::res::diagnostic_kind::missing_parent;
+		dep.json_path = "/__parent";
+		return { std::move(dep) };
 	}
 	return {};
 }
@@ -67,30 +73,30 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 {
 	auto json_body = parse_body(data);
 
-	auto fail = [&tag](const std::string& reason) {
-		throw std::runtime_error(std::format("desc '{}': {}", tag.view(), reason));
+	auto fail = [&tag](std::string_view kind, std::string_view json_path, const std::string& reason) {
+		throw ::res::load_error(kind, json_path, std::format("desc '{}': {}", tag.view(), reason));
 	};
 
 	try {
 		m_desc_system.migrate_tree(json_body, tag.view());
 	} catch (const std::exception& e) {
-		fail(e.what());
+		fail(::res::diagnostic_kind::load, "", e.what());
 	}
 
 	if (!json_body.contains("__type") || !json_body.at("__type").is_string()) {
-		fail("missing or non-string '__type' field");
+		fail(::res::diagnostic_kind::unknown_type, "/__type", "missing or non-string '__type' field");
 	}
 
     std::string type_id = json::value_to<std::string>(json_body.at("__type"));
     auto instance = m_desc_system.create_instance(type_id, tag);
 	if (!instance) {
-		fail(std::format("unknown '__type' '{}'", type_id));
+		fail(::res::diagnostic_kind::unknown_type, "/__type", std::format("unknown '__type' '{}'", type_id));
 	}
 
 	if (const auto parent_tag = read_parent(tag, json_body)) {
 		const auto parent = deps.get<::desc::desc_base>(*parent_tag);
 		if (!parent) {
-			fail(std::format("failed to load '__parent' '{}'", parent_tag->view()));
+			fail(::res::diagnostic_kind::missing_parent, "/__parent", std::format("failed to load '__parent' '{}'", parent_tag->view()));
 		}
 		parent->copy_to(*instance);
 	}
