@@ -654,11 +654,12 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
 	menu.register_actions();
 
 	const std::vector<std::string> tools = names_of(list_tools());
+	const auto listed = [&tools](const char* name) { return std::find(tools.begin(), tools.end(), name) != tools.end(); };
 	for (const char* name : { "file_save", "file_save_as", "file_open" }) {
-		BOOST_TEST_CONTEXT(name) { BOOST_TEST(std::find(tools.begin(), tools.end(), name) != tools.end()); }
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(listed(name)); }
 	}
 	for (const char* name : { "file_new", "file_import_model", "file_exit", "file_open_project" }) {
-		BOOST_TEST_CONTEXT(name) { BOOST_TEST(std::find(tools.begin(), tools.end(), name) == tools.end()); }
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!listed(name)); }
 	}
 
 	// Unsaved changes are not dropped by an open: an error, whether or not the agent asks to discard them.
