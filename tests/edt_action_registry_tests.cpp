@@ -1331,11 +1331,9 @@ BOOST_AUTO_TEST_CASE(InspectLevelFile_SeesLinksFoldersAndMissingFiles)
 	{
 		const fs::path junction = root / "junction";
 		const std::string command = "mklink /J \"" + junction.string() + "\" \"" + (dir.path() / "outside").string() + "\" >nul 2>&1";
-		if (std::system(command.c_str()) == 0 && fs::exists(junction)) {
-			BOOST_CHECK((edt::inspect_level_file(root, "junction/target.desc") == edt::level_file_state::unsafe));
-		} else {
-			BOOST_TEST_MESSAGE("could not create a junction here: that part is not checked");
-		}
+		// Required, not skipped: a junction the runner cannot make would leave this check vacuous.
+		BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && fs::exists(junction), "mklink /J did not make a junction: " << command);
+		BOOST_CHECK((edt::inspect_level_file(root, "junction/target.desc") == edt::level_file_state::unsafe));
 	}
 #endif
 	std::error_code ec;

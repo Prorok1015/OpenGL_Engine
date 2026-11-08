@@ -1403,8 +1403,7 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_level_ctrl.unwatch_level();
 
 	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
-	if (!m_loading_level) m_editor_tag_before_load = m_state.editor_tag;
-	m_state.editor_tag = res::tag{ "memory://editor/" + stem + ".desc" };
+	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
 
 	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
@@ -1412,19 +1411,18 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	if (const auto raw = game_resources.fetch_data(original_tag)) {
 		raw->wait();
 		if (raw->is_ready()) {
-			m_services.writable_resources()->store(m_state.editor_tag, raw->data);
+			m_services.writable_resources()->store(m_loading_editor_tag, raw->data);
 		}
 	}
 
-	m_loading_level_handle = game_resources.require<scn::level_desc>(m_state.editor_tag);
+	m_loading_level_handle = game_resources.require<scn::level_desc>(m_loading_editor_tag);
 	m_loading_level = true;
 }
 
 void edt::editor_system::abandon_level_load()
 {
-	if (m_loading_level) m_state.editor_tag = m_editor_tag_before_load;
-	m_editor_tag_before_load = {};
-	m_loading_level_tag = {};
+	m_loading_editor_tag = res::tag{};
+	m_loading_level_tag = res::tag{};
 	m_loading_level = false;
 	m_loading_level_handle = {};
 }
@@ -1469,18 +1467,16 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	if (m_play && m_play->active()) m_play->stop();
 	// The level takes the new file only now; finish_level_load reads it, and a failure puts the old one back.
 	const res::tag level_tag_before = m_state.level_tag;
+	const res::tag editor_tag_before = m_state.editor_tag;
 	m_state.level_tag = m_loading_level_tag;
+	m_state.editor_tag = m_loading_editor_tag;
 	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
 	if (loaded_out) *loaded_out = loaded;
-	if (!loaded) m_state.level_tag = level_tag_before;
-	if (loaded) {
-		m_loading_level = false;
-		m_editor_tag_before_load = {};
-		m_loading_level_tag = {};
-		m_loading_level_handle = {};
-	} else {
-		abandon_level_load();
+	if (!loaded) {
+		m_state.level_tag = level_tag_before;
+		m_state.editor_tag = editor_tag_before;
 	}
+	abandon_level_load();
 	if (loaded) {
 		egLOG_INFO("Editor/LoadLevel", "level loaded: {}", m_state.level_tag.view());
 		if (m_stop_after_level_loaded) {

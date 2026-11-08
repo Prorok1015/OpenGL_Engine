@@ -85,6 +85,8 @@ namespace edt {
 		bool level_load_in_progress() const { return m_loading_level; }
 		// The level file the document belongs to (empty for an untitled one); not the one being loaded.
 		const res::tag& current_level_tag() const { return m_state.level_tag; }
+		// The working copy the document's level is read from (`memory://editor/loading/<n>/<name>.desc`).
+		const res::tag& current_editor_tag() const { return m_state.editor_tag; }
 
 		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
 		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
@@ -213,10 +215,13 @@ namespace edt {
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
-		// The level being loaded and the document's tags from before the load: the document takes the new level tag only
-		// when the load succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused).
+		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
+		// succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused). Every load has a
+		// working copy of its own (`memory://editor/loading/<n>/<name>.desc`), so one that is abandoned never overwrites
+		// the copy of the level being edited, whatever the two files are called.
 		res::tag m_loading_level_tag;
-		res::tag m_editor_tag_before_load;
+		res::tag m_loading_editor_tag;
+		std::uint32_t m_load_serial = 0;
 		// A load that ended without a level: the document keeps what it had.
 		void abandon_level_load();
 		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.

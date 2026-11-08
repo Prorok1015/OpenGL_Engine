@@ -600,6 +600,48 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCannotSaveWhileALevelLoads_AndTheOldLevelFileIsKe
 	BOOST_CHECK(bytes_of_resource(storage.require<res::resource_system>(), "levels/test_level.desc") == next_before);
 }
 
+// The working copy of a load is its own: a second level with the same file name from another folder, abandoned, leaves the
+// copy the document's level is read from as it was.
+BOOST_FIXTURE_TEST_CASE(AnAbandonedLoadOfASameNamedLevel_LeavesTheEditedLevelsCopyAlone, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	auto& resources = storage.require<res::resource_system>();
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+	const res::tag copy = editor().current_editor_tag();
+	BOOST_REQUIRE(copy.is_valid());
+	const std::string copy_view(copy.view());
+	const auto copy_bytes = [&] {
+		auto raw = resources.fetch_data(res::tag{ copy_view });
+		BOOST_REQUIRE(raw);
+		raw->wait();
+		BOOST_REQUIRE(raw->is_ready());
+		return raw->data;
+	};
+	const std::vector<std::byte> copy_before = copy_bytes();
+	BOOST_REQUIRE(!copy_before.empty());
+
+	// Same stem, another folder, and no level: the load fails.
+	const std::string junk = "not a level";
+	std::vector<std::byte> junk_bytes(junk.size());
+	std::transform(junk.begin(), junk.end(), junk_bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+	BOOST_REQUIRE(resources.store_sync(res::tag::make("other/smoke_level.desc"), junk_bytes));
+	BOOST_CHECK(invoke_as_agent("file.open", boost::json::object{ { "path", "other/smoke_level.desc" } }).ok);
+	pump_level_load();
+
+	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+	BOOST_CHECK_EQUAL(std::string(editor().current_editor_tag().view()), copy_view);
+	BOOST_CHECK(copy_bytes() == copy_before);
+}
+
 BOOST_FIXTURE_TEST_CASE(AnAgentOpeningAFileThatIsNoLevel_LeavesTheDocumentOnItsOldLevel, agent_editor_fixture)
 {
 	const auto pump_level_load = [this] {
