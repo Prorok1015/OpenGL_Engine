@@ -69,7 +69,7 @@ void scn::context_manager::update(std::chrono::duration<float> dt)
 
 scn::scene_layer& scn::context_manager::create_layer(ds::task_system* tasks)
 {
-	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory, *m_channel_types, tasks));
+	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory, *m_channel_types, m_catalog, tasks));
 }
 
 void scn::context_manager::destroy_layer(scn::scene_layer& layer)

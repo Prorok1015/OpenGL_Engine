@@ -14,6 +14,7 @@
 #include <typeinfo>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace scn
 {
@@ -206,4 +207,18 @@ namespace scn
 		std::unordered_map<std::string, const component_entry*> m_by_name;
 		std::unordered_map<entt::id_type, const component_entry*> m_by_id;
 	};
+
+	// A storage of `reg` holding at least one component whose type `catalog` does not know. entt's own entity
+	// storage and storages left empty (a type no entity has any more) are not listed. `type` is entt's type name.
+	struct unregistered_storage
+	{
+		entt::id_type id = 0;
+		std::string type;
+	};
+
+	SNK_API std::vector<unregistered_storage> unregistered_storages(const entt::registry& reg, const component_catalog& catalog);
+
+	// Every runtime component of the engine (HOT_RELOAD_PLAY.md section 4.3): data types with their schema, derived
+	// ones marked as such. Registered once in the base catalog (scn::scene_init).
+	SNK_API void register_engine_components(component_catalog& catalog);
 }

@@ -131,6 +131,10 @@ namespace scn
 		// register theirs at init: `channels().add<my_message>()`.
 		ecs::channel_registry& channels() { return *m_channel_types; }
 
+		// The runtime types of the base (the engine's components, scene_init); every layer's catalog lies over it.
+		scn::component_catalog& catalog() { return m_catalog; }
+		const scn::component_catalog& catalog() const { return m_catalog; }
+
 		// Entry of code outside the phases (editor, game shell) into the channel of a set. The
 		// message is delivered at the next exchange of that set, before the contexts' own messages.
 		template <typename T>
@@ -157,6 +161,8 @@ namespace scn
 
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();
+		// Before the layers: theirs lie over it.
+		scn::component_catalog m_catalog;
 		scn::ecs_assembler& m_assembler;
 		ecs::system_factory& m_system_factory;
 		res::resource_system& m_resource;

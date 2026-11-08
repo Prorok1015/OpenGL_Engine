@@ -55,3 +55,15 @@ const scn::component_entry* scn::component_catalog::find(entt::id_type id) const
 	}
 	return m_parent ? m_parent->find(id) : nullptr;
 }
+
+std::vector<scn::unregistered_storage> scn::unregistered_storages(const entt::registry& reg, const component_catalog& catalog)
+{
+	std::vector<unregistered_storage> result;
+	for (const auto [id, storage] : reg.storage()) {
+		if (storage.empty() || catalog.find(id)) {
+			continue;
+		}
+		result.push_back({ id, std::string{ storage.type().name() } });
+	}
+	return result;
+}

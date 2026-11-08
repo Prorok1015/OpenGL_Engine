@@ -6,6 +6,7 @@
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/snk_api.h>
 #include <entt/meta/context.hpp>
@@ -30,7 +31,7 @@ namespace scn
 	public:
 		// `tasks`: the task system the layer's tasks run on; null when nothing is bound to tasks().
 		scene_layer(res::resource_system& base_resources, ecs_assembler& base_assembler, ecs::system_factory& base_systems,
-			const ecs::channel_registry& base_channels, ds::task_system* tasks);
+			const ecs::channel_registry& base_channels, const component_catalog& base_catalog, ds::task_system* tasks);
 		// Stops the layer's tasks, drops what it keeps, then stops the layer's loads before the desc system their
 		// adapters use goes away.
 		~scene_layer();
@@ -44,6 +45,9 @@ namespace scn
 		ecs_assembler& assembler() { return m_assembler; }
 		ecs::system_factory& systems() { return m_systems; }
 		ecs::component_registry& components() { return m_components; }
+		// The runtime types a snapshot of the layer's worlds knows: the engine's, then the module's (with their schemas).
+		component_catalog& catalog() { return m_catalog; }
+		const component_catalog& catalog() const { return m_catalog; }
 		// Never attached to a binary's entt::locator: module code passes it explicitly (ecs::register_component(meta()),
 		// entt::resolve(meta(), id)), and the engine finds it through ecs::find_meta.
 		entt::meta_ctx& meta() { return m_meta; }
@@ -80,6 +84,7 @@ namespace scn
 		ecs_assembler m_assembler;
 		ecs::system_factory m_systems;
 		ecs::component_registry m_components;
+		component_catalog m_catalog;
 		std::shared_ptr<hot_reload_manager> m_hot_reload;
 		std::shared_ptr<ecs::channel_registry> m_channels;
 		std::vector<std::shared_ptr<void>> m_kept;

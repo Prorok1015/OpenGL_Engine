@@ -6,6 +6,7 @@
 #include <snk/common/engine_assert.h>
 #include "edt_selection_wiring.h"
 #include "edt_prefab_document.h"
+#include "edt_editor_camera.h"
 #include <snk/editor/edt_document_manager.h>
 
 #include "edt_editor_layer.h"
@@ -267,6 +268,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Resolve services from data storage -> editor_services (the controllers were built on it already)
 	m_services.ctx_manager = data.require_shared<scn::context_manager>();
+	// The editor puts its cameras back itself after a restore; a snapshot leaves them out. The base outlives an editor,
+	// so a second editor on the same services finds them registered.
+	if (auto& catalog = m_services.ctx_manager.lock()->catalog(); !catalog.find("edt.editor_camera")) {
+		catalog.add_editor_only<edt::editor_camera_tag>("edt.editor_camera");
+		catalog.add_editor_only<edt::prefab_camera_tag>("edt.prefab_camera");
+	}
 	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
 	m_services.ctx_manager.lock()->level_set().set_mode(ecs::run_mode::edit);
 	m_services.base_descs     = &desc_system;
