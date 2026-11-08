@@ -126,7 +126,10 @@ namespace desc
 						return;
 					}
 				}
-				if constexpr (natural == field_kind::enumeration) {
+				if constexpr (natural == field_kind::entity) {
+					const auto raw = entity_traits<M>::to_raw(value);
+					out = raw ? json::value(*raw) : json::value(nullptr);
+				} else if constexpr (natural == field_kind::enumeration) {
 					const std::string_view name = enum_item_name<M>(value);
 					out = name.empty() ? json::value(static_cast<std::int64_t>(value)) : json::value(name);
 				} else if constexpr (natural == field_kind::array) {
@@ -246,6 +249,22 @@ namespace desc
 					}
 					value = in.as_string().empty() ? res::tag{} : res::tag{ std::string_view{ in.as_string() } };
 					return true;
+				} else if constexpr (natural == field_kind::entity) {
+					if (in.is_null()) {
+						value = entity_traits<M>::empty();
+						return true;
+					}
+					std::uint64_t raw = 0;
+					if (!json_to_uint64(in, raw) || raw > std::numeric_limits<std::uint32_t>::max()) {
+						return false;
+					}
+					if (!ctx.entities) {
+						egLOG_WARN("desc", "an entity reference is read only when a snapshot is restored, keeping the current one");
+						return false;
+					}
+					const auto restored = ctx.entities->find(static_cast<std::uint32_t>(raw));
+					value = restored ? entity_traits<M>::from_raw(*restored) : entity_traits<M>::empty();
+					return true;
 				} else if constexpr (natural == field_kind::enumeration) {
 					if (in.is_null() && ops.accepts_null && ops.enumeration && ops.enumeration->null_value) {
 						value = static_cast<M>(*ops.enumeration->null_value);
@@ -344,7 +363,7 @@ namespace desc
 			field_ops ops;
 			ops.kind = kind_of<M>;
 			ops.element = element_kind_of<M>();
-			if constexpr (std::is_enum_v<M>) {
+			if constexpr (kind_of<M> == field_kind::enumeration) {
 				ops.enumeration = std::make_shared<const enum_schema>(make_enum_schema<M>(attr ? attr->ref : std::string_view{}));
 			} else if constexpr (kind_of<M> == field_kind::array) {
 				ops.element_ops = std::make_shared<const field_ops>(make_value_context<typename detail::sequence_traits<M>::element>(nullptr));

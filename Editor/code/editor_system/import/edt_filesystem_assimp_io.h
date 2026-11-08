@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_model_file_access.h"
 #include <snk/common/common.h>
 #include <assimp/IOSystem.hpp>
 #include <filesystem>
@@ -14,7 +15,8 @@ namespace edt {
 	public:
 		filesystem_assimp_io(
 			const std::filesystem::path& root_path,
-			const std::vector<std::byte>& root_data);
+			const std::vector<std::byte>& root_data,
+			model_file_access* access = nullptr);
 
 		~filesystem_assimp_io() override = default;
 
@@ -27,6 +29,8 @@ namespace edt {
 		std::filesystem::path m_root_path;
 		std::filesystem::path m_base_dir;
 		const std::vector<std::byte>& m_root_data;
+		// Set for an agent's import: the files the model may read are decided there.
+		model_file_access* m_access;
 		// Cache for subsidiary files
 		std::unordered_map<std::string, std::vector<std::byte>> m_file_cache;
 	};
