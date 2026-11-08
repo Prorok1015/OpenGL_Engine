@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <optional>
@@ -47,11 +48,37 @@ namespace {
 		return static_cast<std::int64_t>(size.x) * size.y;
 	}
 
+	// The source scaled down, proportions kept, to a longest side of max_side and at most max_pixels; the source itself
+	// when it fits already.
+	glm::ivec2 fitted_size(glm::ivec2 source, const rnd::capture_limits& limits)
+	{
+		const std::int64_t longest = std::max(source.x, source.y);
+		std::int64_t width = source.x;
+		std::int64_t height = source.y;
+		if (longest > limits.max_side) {
+			width = std::max<std::int64_t>(1, width * limits.max_side / longest);
+			height = std::max<std::int64_t>(1, height * limits.max_side / longest);
+		}
+		if (width * height > limits.max_pixels) {
+			const double shrink = std::sqrt(static_cast<double>(limits.max_pixels) / static_cast<double>(width * height));
+			width = std::max<std::int64_t>(1, static_cast<std::int64_t>(static_cast<double>(width) * shrink));
+			height = std::max<std::int64_t>(1, static_cast<std::int64_t>(static_cast<double>(height) * shrink));
+			// The rounding of the square root may leave a pixel row or column too many.
+			while (width * height > limits.max_pixels && (width > 1 || height > 1)) {
+				(width >= height ? width : height) -= 1;
+			}
+		}
+		return { static_cast<int>(width), static_cast<int>(height) };
+	}
+
 	// The size a request asks for; a component that is 0 follows the aspect of the source. Nullopt when a side
 	// (the derived one included) or the pixel count is over the limits.
 	std::optional<glm::ivec2> requested_size(glm::ivec2 source, glm::ivec2 wanted, const rnd::capture_limits& limits)
 	{
 		if (wanted.x <= 0 && wanted.y <= 0) {
+			if (limits.fit) {
+				return fitted_size(source, limits);
+			}
 			// The target itself. Under the service defaults it was checked against the pixel budget already; a caller
 			// with tighter limits gets a refusal instead of a picture bigger than it asked for.
 			const bool tighter = limits.max_side < rnd::capture_service::max_side || limits.max_pixels < rnd::capture_service::max_pixels;
