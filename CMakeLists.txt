@@ -160,7 +160,7 @@ file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp")
 if(NOT SNK_WITH_ASSIMP)
     # These drive the assimp importers, or load the shipped levels that reference models.
-    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|desc_repo_roundtrip_tests)\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|edt_agent_model_scan_tests|desc_repo_roundtrip_tests)\\.cpp$")
 endif()
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
