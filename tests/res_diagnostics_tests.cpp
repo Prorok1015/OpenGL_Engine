@@ -340,6 +340,27 @@ BOOST_AUTO_TEST_CASE(ABlockThatIsADependencyAndAField_ReportsOneMismatch)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(AFailedOwner_DoesNotRunItsFieldChecks)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto material = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(material.is_ready());
+
+	static bool checked = false;
+	checked = false;
+	const res::child_link field{ {}, "/level", false, [](const res::resource_entry&) { checked = true; return false; }, "level_desc" };
+	auto owner = std::make_shared<core::res::res_resource_block>();
+	owner->diagnostics.set_resource("memory://t/owner.desc");
+	owner->diagnostics.add_child(material.get_control_block(), field);
+	owner->set_error("broken");
+
+	res::diagnostics_collector collector;
+	collector.collect(owner);
+	BOOST_TEST(!checked);
+	const auto items = collector.items();
+	BOOST_TEST(std::ranges::none_of(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }));
+}
+
 BOOST_AUTO_TEST_CASE(AKeyWithSlashAndTildeIsEscapedInThePath)
 {
 	put("keys.prefab.desc", R"({"__type":"prefab_desc","components":{"a/b~c":{"__type":"no_such_component_desc"}}})");

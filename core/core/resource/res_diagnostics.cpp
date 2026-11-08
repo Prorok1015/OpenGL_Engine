@@ -11,11 +11,22 @@ thread_local res::load_scope* t_current_scope = nullptr;
 // Deep enough for any real nesting of inline descs; a broken chain cannot loop forever.
 constexpr int k_max_origin_depth = 32;
 
+bool holds_data(const core::res::res_control_block_base& block)
+{
+	if (block.status.load(std::memory_order_acquire) != core::res::res_status::ready) {
+		return false;
+	}
+	const auto* typed = dynamic_cast<const core::res::res_resource_block*>(&block);
+	return typed && typed->data;
+}
+
 // The field's desc loaded fine, but as another type than the field asked for: its handle reads as failed (#615).
-std::optional<res::diagnostic> type_mismatch_of(const res::child_link& link,
+// `link.fits` is code of the binary that deserialized `owner`; only an owner that holds its data keeps that binary's
+// code in use, so a failed owner (kept alive by a dependent or a collector after its module is gone) is not checked.
+std::optional<res::diagnostic> type_mismatch_of(const res::child_link& link, const core::res::res_control_block_base& owner,
 	const core::res::res_control_block_base& child, const std::string& resource, const std::string& prefix)
 {
-	if (!link.fits || child.status.load(std::memory_order_acquire) != core::res::res_status::ready) {
+	if (!link.fits || !holds_data(owner) || child.status.load(std::memory_order_acquire) != core::res::res_status::ready) {
 		return std::nullopt;
 	}
 	const auto* block = dynamic_cast<const core::res::res_resource_block*>(&child);
@@ -235,7 +246,7 @@ void res::diagnostics_collector::collect(const std::shared_ptr<core::res::res_co
 
 		for (auto it = own.children.rbegin(); it != own.children.rend(); ++it) {
 			if (auto child = it->block.lock()) {
-				if (auto mismatch = type_mismatch_of(*it, *child, resource, prefix)) {
+				if (auto mismatch = type_mismatch_of(*it, *current, *child, resource, prefix)) {
 					found.push_back(std::move(*mismatch));
 				}
 				pending.push_back(std::move(child));
