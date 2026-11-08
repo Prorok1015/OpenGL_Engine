@@ -3,17 +3,21 @@
 #include <snk/editor/edt_action_registry.h>
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
+#include "test_temp_dir.hpp"
 #include "edt_editor_mode.h"
 #include <snk/command/cmd_json_schema.h>
 #include <imgui.h>
 #include <algorithm>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
+#include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -1040,6 +1044,312 @@ BOOST_AUTO_TEST_CASE(MenuClick_AndInvokeReachTheSameCode)
 	BOOST_CHECK(f.actions.invoke("file.save_as", json_of(R"({"path":"levels/b.desc"})")).ok);
 	BOOST_TEST((f.calls == clicked));
 	BOOST_TEST((clicked == std::vector<std::string>{ "load:/res/levels/a.desc", "save_as:levels/b.desc" }));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// The File menu again, with the paths of the project faked, called as a person (ui) or as an agent.
+struct agent_menu
+{
+	explicit agent_menu(file_menu_fixture& fixture)
+		: base(fixture)
+	{
+		hooks = fixture.hooks;
+		hooks.resources_path = "/proj/res";
+		hooks.level_file_state = [this](const std::string& path) {
+			const auto found = files.find(path);
+			return found == files.end() ? edt::level_file_state::missing : found->second;
+		};
+		menu = std::make_unique<edt::file_menu>(fixture.dialogs, actions, hooks);
+		menu->register_actions();
+	}
+
+	cmd::result as_agent(std::string_view id, std::string_view args)
+	{
+		cmd::call request;
+		request.args = boost::json::parse(args);
+		request.from = cmd::origin::agent("session-1");
+		return actions.invoke(id, request);
+	}
+
+	cmd::result as_person(std::string_view id, std::string_view args)
+	{
+		return actions.invoke(id, boost::json::parse(args));
+	}
+
+	file_menu_fixture& base;
+	edt::action_registry actions;
+	edt::file_menu_hooks hooks;
+	std::map<std::string, edt::level_file_state> files;
+	std::unique_ptr<edt::file_menu> menu;
+};
+
+const std::vector<std::string> bad_agent_paths{
+	"../x.desc", "levels/../../x.desc", "res://../x.desc", "/etc/x.desc", "C:/x.desc", "C:\\x.desc", "\\x.desc", "levels\\x.desc",
+	"memory://x.desc", "code://x.desc", "res://levels//x.desc", "levels/./x.desc", "levels/x.txt", "levels/.desc", "levels/x.desc/",
+	"levels/x\ny.desc", "res://", "x" };
+
+}
+
+BOOST_AUTO_TEST_SUITE(EdtFileMenuAgentTests)
+
+BOOST_AUTO_TEST_CASE(SaveSaveAsAndOpen_AreSceneEditCommandsForAgents)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	for (const char* id : { "file.save", "file.save_as", "file.open" }) {
+		const cmd::command_desc* command = m.actions.commands().find(id);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_REQUIRE(command != nullptr);
+			BOOST_CHECK((command->category == cmd::agent_category::scene_edit));
+		}
+	}
+	// Nothing else of the menu is open to an agent (#548 takes import_model).
+	for (const char* id : { "file.new", "file.import_model", "file.new_project", "file.open_project", "file.exit" }) {
+		const cmd::command_desc* command = m.actions.commands().find(id);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_REQUIRE(command != nullptr);
+			BOOST_CHECK((command->category == cmd::agent_category::unset));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_SavesTheLevelAndSavesItAsAnotherPath)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	BOOST_CHECK(m.as_agent("file.save", "{}").ok);
+	BOOST_CHECK(m.as_agent("file.save_as", R"({"path":"levels/new.desc"})").ok);
+	BOOST_CHECK(m.as_agent("file.save_as", R"({"path":"res://levels/other.desc"})").ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save", "save_as:levels/new.desc", "save_as:levels/other.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_OpensAnotherLevelByATagOrAProjectPath)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	m.files["levels/a.desc"] = edt::level_file_state::file;
+
+	const cmd::result by_path = m.as_agent("file.open", R"({"path":"levels/a.desc"})");
+	BOOST_REQUIRE_MESSAGE(by_path.ok, by_path.error);
+	BOOST_CHECK(by_path.value.as_object().at("level_loading").as_bool());
+	BOOST_CHECK(m.as_agent("file.open", R"({"path":"res://levels/a.desc"})").ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "load:/proj/res/levels/a.desc", "load:/proj/res/levels/a.desc" }));
+
+	BOOST_CHECK_EQUAL(m.as_agent("file.open", R"({"path":"levels/none.desc"})").code, "not_found");
+	m.files["levels/link.desc"] = edt::level_file_state::unsafe;
+	BOOST_CHECK_EQUAL(m.as_agent("file.open", R"({"path":"levels/link.desc"})").code, "invalid_args");
+	BOOST_CHECK_EQUAL(f.calls.size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_CannotNameAPathOutsideTheProject_ForSaveAsOrOpen)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	for (const std::string& path : bad_agent_paths) {
+		m.files[path] = edt::level_file_state::file; // even if the file state said it is fine
+		const std::string args = boost::json::serialize(boost::json::object{ { "path", path } });
+		BOOST_TEST_CONTEXT("path: " << path) {
+			BOOST_CHECK_EQUAL(m.as_agent("file.save_as", args).code, "invalid_args");
+			BOOST_CHECK_EQUAL(m.as_agent("file.open", args).code, "invalid_args");
+		}
+	}
+	BOOST_CHECK(f.calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_CannotSaveOverAnotherFile_ButMaySaveOverTheCurrentLevel)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	f.path = "levels/saved.desc";
+	m.files["levels/saved.desc"] = edt::level_file_state::file;
+	m.files["levels/other.desc"] = edt::level_file_state::file;
+	m.files["levels/link.desc"] = edt::level_file_state::unsafe;
+
+	const cmd::result other = m.as_agent("file.save_as", R"({"path":"levels/other.desc"})");
+	BOOST_CHECK(!other.ok);
+	BOOST_CHECK_EQUAL(other.code, "needs_input");
+	BOOST_CHECK_EQUAL(m.as_agent("file.save_as", R"({"path":"res://levels/other.desc"})").code, "needs_input");
+	BOOST_CHECK_EQUAL(m.as_agent("file.save_as", R"({"path":"levels/link.desc"})").code, "invalid_args");
+	BOOST_CHECK(f.calls.empty());
+
+	BOOST_CHECK(m.as_agent("file.save_as", R"({"path":"levels/saved.desc"})").ok);
+	BOOST_CHECK(m.as_agent("file.save_as", R"({"path":"levels/fresh.desc"})").ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/saved.desc", "save_as:levels/fresh.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_OpenOfADirtyLevelNeedsInput_AndDiscardUnsavedIsRejected)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	m.files["levels/a.desc"] = edt::level_file_state::file;
+	f.dirty = true;
+
+	const cmd::result dirty = m.as_agent("file.open", R"({"path":"levels/a.desc"})");
+	BOOST_CHECK(!dirty.ok);
+	BOOST_CHECK_EQUAL(dirty.code, "needs_input");
+	BOOST_CHECK(f.dirty);
+	BOOST_CHECK(f.calls.empty());
+
+	for (const char* args : { R"({"path":"levels/a.desc","discard_unsaved":true})" }) {
+		BOOST_TEST_CONTEXT(args) {
+			BOOST_CHECK_EQUAL(m.as_agent("file.open", args).code, "invalid_args");
+			f.dirty = false;
+			BOOST_CHECK_EQUAL(m.as_agent("file.open", args).code, "invalid_args"); // refused when clean too
+			f.dirty = true;
+		}
+	}
+	BOOST_CHECK(f.dirty);
+	BOOST_CHECK(f.calls.empty());
+
+	// Saved first, it opens.
+	BOOST_CHECK(m.as_agent("file.save", "{}").ok);
+	f.dirty = false;
+	BOOST_CHECK(m.as_agent("file.open", R"({"path":"levels/a.desc","discard_unsaved":false})").ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save", "load:/proj/res/levels/a.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_IsStillHeldByTheStartLevelBlocker)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	m.files["levels/a.desc"] = edt::level_file_state::file;
+	edt::action_registry actions;
+	edt::file_menu_hooks hooks = m.hooks;
+	hooks.level_change_blocker = [] { return std::optional<std::string>("the start level is loading"); };
+	edt::file_menu menu(f.dialogs, actions, hooks);
+	menu.register_actions();
+	cmd::call request;
+	request.args = boost::json::parse(R"({"path":"levels/a.desc"})");
+	request.from = cmd::origin::agent("session-1");
+	BOOST_CHECK_EQUAL(actions.invoke("file.open", request).code, "busy");
+	BOOST_CHECK(f.calls.empty());
+}
+
+// A person at the menu, a script that is not an agent: the behaviour of before.
+BOOST_AUTO_TEST_CASE(APerson_KeepsEveryPathAndTheDiscardFlag)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	f.dirty = true;
+	BOOST_CHECK_EQUAL(m.as_person("file.open", R"({"path":"/res/levels/a.desc"})").code, "needs_input");
+	BOOST_CHECK(m.as_person("file.open", R"({"path":"/res/levels/a.desc","discard_unsaved":true})").ok);
+	BOOST_CHECK(m.as_person("file.save_as", R"({"path":"../anything.desc"})").ok);
+	BOOST_CHECK(m.as_person("file.save_as", R"({"path":"levels/other.desc"})").ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "load:/res/levels/a.desc", "save_as:../anything.desc", "save_as:levels/other.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(CheckAgentLevelPath_StripsTheProtocolAndKeepsTheRest)
+{
+	BOOST_CHECK_EQUAL(edt::check_agent_level_path("res://levels/a.desc").path, "levels/a.desc");
+	BOOST_CHECK_EQUAL(edt::check_agent_level_path("levels/sub/a.desc").path, "levels/sub/a.desc");
+	BOOST_CHECK_EQUAL(edt::check_agent_level_path("a.desc").path, "a.desc");
+	for (const std::string& path : bad_agent_paths) {
+		BOOST_TEST_CONTEXT("path: " << path) {
+			const edt::agent_level_path checked = edt::check_agent_level_path(path);
+			BOOST_CHECK(!checked.ok());
+			BOOST_CHECK(!checked.error.empty());
+		}
+	}
+	BOOST_CHECK(!edt::check_agent_level_path(std::string(600, 'a') + ".desc").ok());
+}
+
+BOOST_AUTO_TEST_CASE(InspectLevelFile_SeesLinksFoldersAndMissingFiles)
+{
+	namespace fs = std::filesystem;
+	test_util::temp_dir dir{ "level_file_state" };
+	const fs::path root = dir.path() / "res";
+	dir.write("res/levels/a.desc", "{}");
+	dir.write("outside/target.desc", "{}");
+	fs::create_directories(root / "levels" / "folder.desc");
+
+	BOOST_CHECK((edt::inspect_level_file(root, "levels/a.desc") == edt::level_file_state::file));
+	BOOST_CHECK((edt::inspect_level_file(root, "levels/none.desc") == edt::level_file_state::missing));
+	BOOST_CHECK((edt::inspect_level_file(root, "nothing/deeper/none.desc") == edt::level_file_state::missing));
+	BOOST_CHECK((edt::inspect_level_file(root, "levels/folder.desc") == edt::level_file_state::unsafe));
+	BOOST_CHECK((edt::inspect_level_file(root, "levels/a.desc/inside.desc") == edt::level_file_state::unsafe));
+	BOOST_CHECK((edt::inspect_level_file({}, "levels/a.desc") == edt::level_file_state::missing));
+
+	std::error_code ec;
+	fs::create_symlink(dir.path() / "outside" / "target.desc", root / "levels" / "link.desc", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	fs::create_directory_symlink(dir.path() / "outside", root / "linkdir", ec);
+	BOOST_CHECK((edt::inspect_level_file(root, "levels/link.desc") == edt::level_file_state::unsafe));
+	if (!ec) BOOST_CHECK((edt::inspect_level_file(root, "linkdir/target.desc") == edt::level_file_state::unsafe));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtActionCallerTests)
+
+namespace {
+	edt::action_desc origin_action(std::vector<std::string>& seen)
+	{
+		edt::action_desc desc;
+		desc.id = "test.who";
+		desc.label = "Who";
+		desc.execute_call = [&seen](const cmd::call& request) {
+			seen.push_back(request.from.kind == cmd::origin_kind::agent ? "agent:" + request.from.session : "other");
+			return edt::action_result::success();
+		};
+		return desc;
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ExecuteCall_SeesWhoCalls)
+{
+	edt::action_registry actions;
+	std::vector<std::string> seen;
+	auto registration = actions.add(origin_action(seen));
+	BOOST_REQUIRE(registration.active());
+
+	BOOST_CHECK(actions.invoke("test.who", boost::json::object{}).ok);
+	cmd::call request;
+	request.from = cmd::origin::agent("s1");
+	BOOST_CHECK(actions.invoke("test.who", request).ok);
+	BOOST_TEST((seen == std::vector<std::string>{ "other", "agent:s1" }));
+}
+
+BOOST_AUTO_TEST_CASE(Execute_StillRunsForEveryCaller)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	edt::action_desc desc;
+	desc.id = "test.plain";
+	desc.label = "Plain";
+	desc.execute = [&runs](const boost::json::value&) {
+		++runs;
+		return edt::action_result::success();
+	};
+	auto registration = actions.add(std::move(desc));
+	BOOST_REQUIRE(registration.active());
+
+	BOOST_CHECK(actions.invoke("test.plain", boost::json::object{}).ok);
+	cmd::call request;
+	request.from = cmd::origin::agent("s1");
+	BOOST_CHECK(actions.invoke("test.plain", request).ok);
+	BOOST_CHECK_EQUAL(runs, 2);
+}
+
+BOOST_AUTO_TEST_CASE(AnAction_NeedsExactlyOneOfExecuteAndExecuteCall)
+{
+	edt::action_registry actions;
+	std::vector<std::string> seen;
+	edt::action_desc both = origin_action(seen);
+	both.execute = [](const boost::json::value&) { return edt::action_result::success(); };
+	BOOST_CHECK(!actions.add(std::move(both)).active());
+
+	edt::action_desc neither;
+	neither.id = "test.none";
+	neither.label = "None";
+	BOOST_CHECK(!actions.add(std::move(neither)).active());
+	BOOST_CHECK(!actions.contains("test.who"));
+	BOOST_CHECK(!actions.contains("test.none"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

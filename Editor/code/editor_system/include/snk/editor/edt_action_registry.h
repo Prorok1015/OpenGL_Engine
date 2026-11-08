@@ -96,6 +96,8 @@ namespace edt
 		bool yields_to_text_input = false;
 		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
 		action_fn execute{};
+		// Instead of `execute` when the action must know who calls (origin: ui, agent, ...). Exactly one of the two is set.
+		std::function<action_result(const cmd::call&)> execute_call{};
 		// JSON Schema (see cmd_json_schema.h) of the arguments (a top-level "type":"object") and of the result. Null: no_args_schema(). `invoke` validates the arguments
 		// before it calls `execute` and the result after it.
 		boost::json::value args_schema{};
