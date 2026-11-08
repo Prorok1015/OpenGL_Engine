@@ -53,8 +53,18 @@ void edt::level_controller::unwatch_level()
 
 // ─── New / Save / Quick-save ─────────────────────────────────────────────────
 
+namespace {
+	// Tells the coordinator that the worlds were replaced, on every way out of the function.
+	struct notify_worlds_replaced
+	{
+		const std::function<void()>& hook;
+		~notify_worlds_replaced() { if (hook) hook(); }
+	};
+}
+
 void edt::level_controller::new_level()
 {
+	const notify_worlds_replaced notify{ on_worlds_replaced };
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
 
@@ -161,6 +171,7 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 
 void edt::level_controller::detach_from_game_layer()
 {
+	const notify_worlds_replaced notify{ on_worlds_replaced };
 	unwatch_level();
 	m_detached_level.reset();
 	m_detached_world = m_state.active_world_idx;
@@ -187,6 +198,7 @@ void edt::level_controller::detach_from_game_layer()
 
 void edt::level_controller::attach_to_game_layer()
 {
+	const notify_worlds_replaced notify{ on_worlds_replaced };
 	if (!m_detached_level) return;
 	const boost::json::object level_json = std::move(*m_detached_level);
 	m_detached_level.reset();
@@ -295,6 +307,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 
 void edt::level_controller::resync_worlds_after_reload()
 {
+	const notify_worlds_replaced notify{ on_worlds_replaced };
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
 	scn::context_set& lvl = ctx_mgr->level_set();

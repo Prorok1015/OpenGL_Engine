@@ -22,6 +22,14 @@ namespace {
 		return "";
 	}
 
+	// The text between the first pair of single quotes of `message`, empty when there is none.
+	std::string first_quoted(const std::string& message)
+	{
+		const std::size_t open = message.find('\'');
+		const std::size_t close = open == std::string::npos ? open : message.find('\'', open + 1);
+		return close == std::string::npos ? std::string{} : message.substr(open + 1, close - open - 1);
+	}
+
 	bool same(const edt::problem& a, const edt::problem& b)
 	{
 		return a.severity == b.severity && a.file == b.file && a.code == b.code && a.message == b.message && a.notes == b.notes;
@@ -47,8 +55,15 @@ std::vector<edt::problem> edt::world_problem_publisher::collect(const scene_docu
 			item.file = file;
 			item.code = kind_name(diagnostic.kind);
 			item.message = std::format("world '{}': {}", scene.world_names[world], diagnostic.message);
-			for (std::size_t i = 0; i < listed.size(); ++i) {
-				if (diagnostic.message.find("'" + listed[i] + "'") != std::string::npos) {
+			// Only a fault of one name in the list has a place in the file; the message names it between quotes.
+			const bool names_one_system = diagnostic.kind == ecs::diagnostic_kind::unknown_system || diagnostic.kind == ecs::diagnostic_kind::duplicate_system;
+			if (names_one_system) {
+				const std::string name = first_quoted(diagnostic.message);
+				// A duplicate is skipped where it comes the second time.
+				std::size_t seen = 0;
+				for (std::size_t i = 0; i < listed.size(); ++i) {
+					if (listed[i] != name) continue;
+					if (diagnostic.kind == ecs::diagnostic_kind::duplicate_system && ++seen < 2) continue;
 					item.notes.push_back(std::format("/worlds/{}/systems/{}", world, i));
 					break;
 				}

@@ -1077,6 +1077,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});
+	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.

@@ -300,4 +300,117 @@ BOOST_AUTO_TEST_CASE(AnUnknownSystem_IsAProblemOfTheLevel_NotASilentSkip)
 	BOOST_TEST(problems.size() == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(ASystemsEdit_LeavesTheNodeSelectionAlone)
+{
+	edt::selection picked;
+	picked.world = "w0";
+	picked.path = { 0xa4 };
+	selection.select(picked);
+	BOOST_REQUIRE(selection.has_selection());
+	BOOST_REQUIRE(call("world.systems.add", R"({"system":"game::fade"})").ok);
+	BOOST_REQUIRE(call("world.systems.move", R"({"system":"game::fade","to":0})").ok);
+	BOOST_REQUIRE(call("world.systems.remove", R"({"system":"game::spin"})").ok);
+	BOOST_TEST(selection.has_selection());
+	// A node edit still clears it.
+	BOOST_REQUIRE(call("scene.node.create", R"({"parent":{"context":"w0","path":[]},"name":"Box"})").ok);
+	BOOST_TEST(!selection.has_selection());
+}
+
+BOOST_AUTO_TEST_CASE(ANodeEditAndASystemsEdit_AreUndoneAndRedoneInTheirOwnOrder)
+{
+	BOOST_REQUIRE(call("world.systems.add", R"({"system":"game::fade"})").ok);
+	BOOST_REQUIRE(call("scene.node.create", R"({"parent":{"context":"w0","path":[]},"name":"Box"})").ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children.size() == 1u);
+	BOOST_TEST((systems_of() == names{ "game::spin", "gone::system", "game::fade" }));
+
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(scene.world_descs[0].get_root().children.size() == 0u);
+	BOOST_TEST((systems_of() == names{ "game::spin", "gone::system", "game::fade" }));
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST((systems_of() == names{ "game::spin", "gone::system" }));
+	BOOST_REQUIRE(scene.redo());
+	BOOST_TEST((systems_of() == names{ "game::spin", "gone::system", "game::fade" }));
+	BOOST_TEST(scene.world_descs[0].get_root().children.size() == 0u);
+	BOOST_REQUIRE(scene.redo());
+	BOOST_TEST(scene.world_descs[0].get_root().children.size() == 1u);
+
+	// One commit that changes both is one record and comes back as one.
+	scene.world_descs[0].set_systems({ "game::fade" });
+	scene.world_descs[0].get_root().children.clear();
+	scene.commit("both");
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST((systems_of() == names{ "game::spin", "gone::system", "game::fade" }));
+	BOOST_TEST(scene.world_descs[0].get_root().children.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ARollbackOfTheAgentsGroup_StopsAtAHumansLaterEditOfTheSameList)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	BOOST_REQUIRE(call("world.systems.add", R"({"system":"game::fade"})").ok);
+	scene.world_descs[0].set_systems({ "game::spin" });
+	scene.commit("human edit of the systems");
+
+	const auto result = scene.rollback_group(group);
+	BOOST_TEST(result.rolled_back == 0u);
+	BOOST_TEST(result.remaining == 1u);
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "world:0:systems");
+	BOOST_TEST(result.conflict_label == "human edit of the systems");
+	BOOST_TEST((systems_of() == names{ "game::spin" }));
+}
+
+BOOST_AUTO_TEST_CASE(ALayerRegistry_MergesWithItsParent_AndTheCommandsSeeTheLayersSystem)
+{
+	ecs::system_factory layer(&sfactory);
+	layer.register_system<&spin>("mod::only", { .phase = ecs::phase::update });
+	BOOST_TEST((layer.registry().names() == names{ "game::fade", "game::spin", "mod::only" }));
+	BOOST_TEST((sfactory.registry().names() == names{ "game::fade", "game::spin" }));
+	services.base_sfactory = &layer;
+
+	const auto listed = call("world.systems.list", R"({"world":"w1"})");
+	BOOST_REQUIRE(listed.ok);
+	BOOST_TEST(listed.value.at("available").as_array().size() == 3u);
+	const auto added = call("world.systems.add", R"({"world":"w1","system":"mod::only"})");
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+	BOOST_TEST((systems_of(1) == names{ "mod::only" }));
+	BOOST_TEST(call("world.systems.add", R"({"world":"w1","system":"mod::absent"})").error.find("mod::only") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheProblem_ComesBackWhenAnUndoPutsTheNameBack_AndOnlyTheNamedSystemsGetAPointer)
+{
+	scn::context_set level("level", nullptr, nullptr, scn::set_options{ .hot_reload = false });
+	scn::world_context& context = level.create_context("w0", 1);
+	level.add_systems(context, systems_of(), sfactory);
+	scene.level_tag = res::tag("res://levels/main.desc");
+	edt::problem_list problems;
+	edt::world_problem_publisher publisher;
+	const auto rebuild = [&] {
+		level.add_systems(level.get("w0"), systems_of(), sfactory);
+		publisher.refresh(problems, scene, &level);
+	};
+
+	publisher.refresh(problems, scene, &level);
+	BOOST_TEST(problems.size() == 1u);
+	BOOST_REQUIRE(call("world.systems.remove", R"({"system":"gone::system"})").ok);
+	rebuild();
+	BOOST_TEST(problems.size() == 0u);
+	BOOST_REQUIRE(scene.undo());
+	rebuild();
+	BOOST_TEST(problems.size() == 1u);
+	BOOST_REQUIRE(scene.redo());
+	rebuild();
+	BOOST_TEST(problems.size() == 0u);
+
+	// A duplicate points at the second entry; a fault that names no one entry of the list has no pointer.
+	scene.world_descs[0].set_systems({ "game::spin", "game::fade", "game::spin" });
+	scene.commit("duplicate");
+	level.add_systems(level.get("w0"), systems_of(), sfactory);
+	const std::vector<edt::problem> duplicate = edt::world_problem_publisher::collect(scene, &level);
+	BOOST_REQUIRE_EQUAL(duplicate.size(), 1u);
+	BOOST_TEST(duplicate[0].code == "duplicate_system");
+	BOOST_REQUIRE_EQUAL(duplicate[0].notes.size(), 1u);
+	BOOST_TEST(duplicate[0].notes[0] == "/worlds/0/systems/2");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

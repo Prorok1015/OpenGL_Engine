@@ -225,7 +225,7 @@ namespace {
 		using edit_fn = std::function<cmd::result(edt::scene_document&, const json::object& args, json::object& out,
 			const std::function<void()>& changing)>;
 
-		cmd::result run(const cmd::call& call, std::string_view label, const edit_fn& apply)
+		cmd::result run(const cmd::call& call, std::string_view label, const edit_fn& apply, bool keeps_selection = false)
 		{
 			const json::object& args = call.args.as_object();
 			edt::scene_document& scene = sources.documents.scene();
@@ -260,8 +260,8 @@ namespace {
 			json::object out;
 			cmd::result outcome = apply(scene, args, out, [&] {
 				if (!changed) {
-					// The panels point into the nodes that are about to move.
-					sources.selection.clear();
+					// The panels point into the nodes that are about to move; an edit of a world's systems moves none.
+					if (!keeps_selection) sources.selection.clear();
 					changed = true;
 				}
 			});
@@ -700,7 +700,7 @@ namespace {
 			world->set_systems(systems);
 			out["systems"] = names_json(world->get_systems());
 			return cmd::result::success();
-		});
+		}, true);
 	}
 
 	cmd::result world_systems_remove(context& ctx, const cmd::call& call)
@@ -722,7 +722,7 @@ namespace {
 			world->set_systems(systems);
 			out["systems"] = names_json(world->get_systems());
 			return cmd::result::success();
-		});
+		}, true);
 	}
 
 	cmd::result world_systems_move(context& ctx, const cmd::call& call)
@@ -752,7 +752,7 @@ namespace {
 			world->set_systems(systems);
 			out["systems"] = names_json(world->get_systems());
 			return cmd::result::success();
-		});
+		}, true);
 	}
 
 	// ---- registration -----------------------------------------------------------------------------------------
