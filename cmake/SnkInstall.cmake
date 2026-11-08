@@ -7,16 +7,18 @@
 #                                       snk_component_headers(), #109): include/ installs to include/
 #   include/snk/lib3dparty/...          headers of the bundled submodule libraries (glm, imgui, ...)
 #   include/snk/boost/                  the Boost headers the engine needs, merged into one tree
-#   lib/snk/*.a                         a shared build: the components and bundled third-party libraries
-#                                       (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...) behind snk_engine
-#   lib/snk/static/*.a                  a static build: the same, compiled without the DLL export side
+#   lib/snk/*.lib                       a shared build on Windows: Boost.JSON and what it links, for game modules
+#                                       (the components are inside snk_engine and exported usage-only, #581)
+#   lib/snk/static/*.a                  a static build: the components and bundled third-party libraries
+#                                       (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...)
 #   lib/libsnk_engine.so                a shared build
 #   bin/snk_engine.dll, lib/snk/snk_engine.lib   a shared build on Windows
 #   lib/cmake/snake_sdk/                snake_sdkConfig.cmake, ...ConfigVersion.cmake,
 #                                       snake_sdk_{shared,static}Targets[-<config>].cmake
 #
 # One prefix holds both engines, installed from two builds of the same sources (#223): a shared build
-# exports snk::engine (the editor and game modules link it with snk::engine_api), a static build
+# exports snk::engine (the editor and game modules link it with snk::engine_api; every other target of the set is an
+# INTERFACE facade with the usage requirements only, see _snk_sdk_make_facade), a static build
 # exports snk::engine_static (Shipping, #23). The two builds compile the same component sources
 # differently (SNK_API dllexport vs nothing), so each has its own export set, file names and target
 # names (snk::static_<name>): installing one never overwrites the other. Debug libraries carry a "d"
@@ -236,6 +238,136 @@ function(_snk_sdk_bare_system_libs tgt)
 	endforeach()
 endfunction()
 
+# The shared set exports usage-only stand-ins of the components (#581). snk_engine carries their code, and a
+# consumer reaches them only through snk::engine_api's $<COMPILE_ONLY:...>, so their archives would be installed and
+# never linked (~1.5 GiB in the Windows Release package). Each target of the export closure but snk_engine and the
+# archives a module links itself becomes an INTERFACE facade with the same exported name: its include directories,
+# compile definitions, options and features, and its interface links remapped to other facades, without a link
+# step. The real targets are not touched: the build tree links as before.
+function(_snk_sdk_facade_name out tgt)
+	set(${out} "snk_sdk_facade_${tgt}" PARENT_SCOPE)
+endfunction()
+
+# One INTERFACE_LINK_LIBRARIES item of a facade. `faceted`: the targets that have a facade; `kept`: the real
+# targets exported as they are (their archives stay). A facade never links: $<LINK_ONLY:...> and plain library names
+# are dropped, a kept archive is used through $<COMPILE_ONLY:...>, and an item that was $<COMPILE_ONLY:...> stays
+# so: unwrapped, the consumer would inherit the plain links of what it names (Threads::Threads, ...).
+function(_snk_sdk_facade_link_item out item faceted kept)
+	set(${out} "" PARENT_SCOPE)
+	if(item STREQUAL "" OR item MATCHES "^\\$<LINK_ONLY:")
+		return()
+	endif()
+	set(_wrapped FALSE)
+	if(item MATCHES "^\\$<COMPILE_ONLY:([^$<>]+)>$")
+		set(item "${CMAKE_MATCH_1}")
+		set(_wrapped TRUE)
+	endif()
+	if(item MATCHES "\\$<")
+		# The build-tree-only ones vanish on export. Any other (nested $<COMPILE_ONLY:$<...>>, $<$<CONFIG:..>:tgt>, ...)
+		# would be exported unmapped and could link an archive, so it is refused until the mapping handles it.
+		if(NOT item MATCHES "^\\$<BUILD(_LOCAL)?_INTERFACE:")
+			message(FATAL_ERROR "snake_sdk: a facade cannot map the link item '${item}' (#581): only a target, "
+				"$<COMPILE_ONLY:target>, $<LINK_ONLY:...> and $<BUILD_INTERFACE:...> are understood")
+		endif()
+		return()
+	endif()
+	if(NOT TARGET ${item})
+		return() # a system library: the facade does not link
+	endif()
+	_snk_sdk_real_target(_real ${item})
+	if(_real IN_LIST faceted)
+		_snk_sdk_facade_name(_facade ${_real})
+		if(_wrapped)
+			set(${out} "$<COMPILE_ONLY:${_facade}>" PARENT_SCOPE)
+		else()
+			set(${out} "${_facade}" PARENT_SCOPE)
+		endif()
+	elseif(_real IN_LIST kept)
+		get_target_property(_type ${_real} TYPE)
+		if(_type STREQUAL "INTERFACE_LIBRARY" AND NOT _wrapped)
+			set(${out} "${_real}" PARENT_SCOPE)
+		else()
+			set(${out} "$<COMPILE_ONLY:${_real}>" PARENT_SCOPE)
+		endif()
+	else()
+		# An imported target is found on the consumer side (Threads::Threads); any other is build-only (sanitizers).
+		get_target_property(_imported ${_real} IMPORTED)
+		if(_imported AND _wrapped)
+			set(${out} "$<COMPILE_ONLY:${item}>" PARENT_SCOPE)
+		elseif(_imported)
+			set(${out} "${item}" PARENT_SCOPE)
+		endif()
+	endif()
+endfunction()
+
+# A property value as get_target_property gives it is set when it is neither unset (<var>-NOTFOUND) nor empty;
+# `if(<var>)` would also drop the values CMake reads as false (0, OFF, N, ...).
+function(_snk_sdk_property_set out value)
+	if("${value}" STREQUAL "" OR "${value}" MATCHES "-NOTFOUND$")
+		set(${out} FALSE PARENT_SCOPE)
+	else()
+		set(${out} TRUE PARENT_SCOPE)
+	endif()
+endfunction()
+
+function(_snk_sdk_make_facade tgt faceted kept)
+	# Every usage requirement a consumer can inherit, but INTERFACE_LINK_LIBRARIES (remapped below). The link-side
+	# ones reach a consumer only through a plain link to the facade, as they reached it through the real target.
+	set(_properties
+		INTERFACE_INCLUDE_DIRECTORIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES INTERFACE_COMPILE_DEFINITIONS
+		INTERFACE_COMPILE_OPTIONS INTERFACE_COMPILE_FEATURES INTERFACE_PRECOMPILE_HEADERS INTERFACE_SOURCES
+		INTERFACE_POSITION_INDEPENDENT_CODE INTERFACE_LINK_OPTIONS INTERFACE_LINK_DIRECTORIES INTERFACE_LINK_DEPENDS
+		INTERFACE_AUTOUIC_OPTIONS INTERFACE_AUTOMOC_MACRO_NAMES COMPATIBLE_INTERFACE_BOOL COMPATIBLE_INTERFACE_STRING
+		COMPATIBLE_INTERFACE_NUMBER_MIN COMPATIBLE_INTERFACE_NUMBER_MAX EXPORT_PROPERTIES)
+	# Custom properties a target exports (EXPORT_PROPERTIES) go along with it.
+	get_target_property(_exported ${tgt} EXPORT_PROPERTIES)
+	_snk_sdk_property_set(_has_exported "${_exported}")
+	if(_has_exported)
+		list(APPEND _properties ${_exported})
+	endif()
+	# A COMPATIBLE_INTERFACE_* list names properties whose values a consumer compares as INTERFACE_<name>.
+	foreach(_kind BOOL STRING NUMBER_MIN NUMBER_MAX)
+		get_target_property(_compatible ${tgt} COMPATIBLE_INTERFACE_${_kind})
+		_snk_sdk_property_set(_has_compatible "${_compatible}")
+		if(_has_compatible)
+			foreach(_name IN LISTS _compatible)
+				list(APPEND _properties INTERFACE_${_name})
+			endforeach()
+		endif()
+	endforeach()
+	list(REMOVE_DUPLICATES _properties)
+	_snk_sdk_facade_name(_facade ${tgt})
+	add_library(${_facade} INTERFACE)
+	get_target_property(_name ${tgt} EXPORT_NAME)
+	_snk_sdk_property_set(_has_name "${_name}")
+	if(NOT _has_name)
+		set(_name ${tgt})
+	endif()
+	set_property(TARGET ${_facade} PROPERTY EXPORT_NAME ${_name})
+	foreach(_prop IN LISTS _properties)
+		get_target_property(_value ${tgt} ${_prop})
+		_snk_sdk_property_set(_has "${_value}")
+		if(_has)
+			set_property(TARGET ${_facade} PROPERTY ${_prop} "${_value}")
+		endif()
+	endforeach()
+	get_target_property(_links ${tgt} INTERFACE_LINK_LIBRARIES)
+	_snk_sdk_property_set(_has_links "${_links}")
+	set(_new "")
+	if(_has_links)
+		foreach(_item IN LISTS _links)
+			_snk_sdk_facade_link_item(_mapped "${_item}" "${faceted}" "${kept}")
+			if(NOT "${_mapped}" STREQUAL "")
+				list(APPEND _new "${_mapped}")
+			endif()
+		endforeach()
+	endif()
+	if(NOT "${_new}" STREQUAL "")
+		list(REMOVE_DUPLICATES _new)
+		set_property(TARGET ${_facade} PROPERTY INTERFACE_LINK_LIBRARIES "${_new}")
+	endif()
+endfunction()
+
 # Call once, after the last add_subdirectory() and after snk_isolate_third_party_warnings().
 function(snk_install_sdk)
 	if(NOT SNK_INSTALL_SDK)
@@ -306,14 +438,45 @@ function(snk_install_sdk)
 		endif()
 	endforeach()
 
+	# 3. The shared set: snk_engine, what a module links itself, and facades for the rest (see _snk_sdk_make_facade).
 	if(SNK_ENGINE_SHARED)
 		set(_archive_dir lib/snk)
+		# MSVC: snk_engine.dll exports only SNK_API, so a module that instantiates the desc (de)serialization
+		# templates links its own Boost.JSON (SPIKE-218 §3.6, as tests/module_dll does). On Linux the engine's copy
+		# is used. Kept with everything it links (Boost.Container and header-only Boost).
+		set(_kept "")
+		if(MSVC)
+			set(_kept_todo Boost::json)
+			while(_kept_todo)
+				list(POP_FRONT _kept_todo _name)
+				_snk_sdk_real_target(_real ${_name})
+				if(_real IN_LIST _kept OR NOT _real IN_LIST _closure)
+					continue()
+				endif()
+				list(APPEND _kept ${_real})
+				_snk_sdk_link_deps(_deps ${_real})
+				list(APPEND _kept_todo ${_deps})
+			endwhile()
+		endif()
+		set(_faceted "")
+		foreach(_t IN LISTS _closure)
+			if(NOT _t STREQUAL "snk_engine" AND NOT _t IN_LIST _kept)
+				list(APPEND _faceted ${_t})
+			endif()
+		endforeach()
+		set(_export snk_engine ${_kept})
+		foreach(_t IN LISTS _faceted)
+			_snk_sdk_make_facade(${_t} "${_faceted}" "${_kept}")
+			_snk_sdk_facade_name(_facade ${_t})
+			list(APPEND _export ${_facade})
+		endforeach()
 	else()
 		set(_archive_dir lib/snk/static)
+		set(_export ${_closure})
 	endif()
 	# COMPONENT after an artifact kind applies to that kind only: each kind names it, or `--component snake_sdk`
 	# leaves the libraries out.
-	install(TARGETS ${_closure} EXPORT ${SNK_SDK_EXPORT_SET}
+	install(TARGETS ${_export} EXPORT ${SNK_SDK_EXPORT_SET}
 		ARCHIVE DESTINATION ${_archive_dir} COMPONENT snake_sdk
 		LIBRARY DESTINATION lib COMPONENT snake_sdk
 		RUNTIME DESTINATION bin COMPONENT snake_sdk)
@@ -368,7 +531,7 @@ function(snk_install_sdk)
 
 	# Builds exactly what `cmake --install` copies (INTERFACE libraries have nothing to build).
 	set(_buildable "")
-	foreach(_t IN LISTS _closure)
+	foreach(_t IN LISTS _export)
 		get_target_property(_type ${_t} TYPE)
 		if(NOT _type STREQUAL "INTERFACE_LIBRARY")
 			list(APPEND _buildable ${_t})

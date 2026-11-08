@@ -922,6 +922,12 @@ jobs:
       - name: Check the package has no absolute paths
         run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
 
+      # The shared set exports the components usage-only: no archive next to snk_engine (#581).
+      - name: Check the shared set links no archive besides the engine
+        run: |
+          python3 tools/ci/check_sdk_shared_set.py --self-test
+          python3 tools/ci/check_sdk_shared_set.py "${SDK_PREFIX}"
+
       - name: Build and run the consumer against each engine
         run: |
           for engine in static shared; do
