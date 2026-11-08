@@ -10,6 +10,7 @@
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <format>
 #include <memory>
@@ -132,11 +133,33 @@ namespace {
 			return file.found && file.layer + 1 == layers().size();
 		}
 
-		bool in_open_level(const std::string& relative) const
+		// Whether `target` is the file of the open level or one of the world files that level refers to: the same file on
+		// disk (links, case, short names resolved), not the same text.
+		bool belongs_to_open_level(const located_file& target) const
 		{
-			if (!m_deps.open_level_files) return false;
-			const std::vector<std::string> open = m_deps.open_level_files();
-			return std::find(open.begin(), open.end(), relative) != open.end();
+			if (!m_deps.open_level_files || !target.found) return false;
+			const auto same_file = [&target](const located_file& other) {
+				std::error_code ec;
+				return other.found && fs::equivalent(other.file, target.file, ec) && !ec;
+			};
+			for (const std::string& open : m_deps.open_level_files()) {
+				const located_file level = locate(open);
+				if (!level.found) continue;
+				if (same_file(level)) return true;
+				const read_result text = read_fresh(open, level);
+				if (!text.ok()) continue;
+				boost::system::error_code parse_error;
+				const json::value parsed = json::parse(text_of(text.bytes), parse_error);
+				if (parse_error || !parsed.is_object()) continue;
+				const json::value* worlds = parsed.as_object().if_contains("worlds");
+				if (!worlds || !worlds->is_array()) continue;
+				for (const json::value& world : worlds->as_array()) {
+					if (!world.is_string()) continue;
+					const edt::agent_level_path named = edt::check_agent_folder(view_of(world.as_string()));
+					if (named.ok() && same_file(locate(named.path))) return true;
+				}
+			}
+			return false;
 		}
 
 		static res::tag tag_of(const std::string& relative)
@@ -194,7 +217,12 @@ namespace {
 	request_path path_of(const cmd::call& call)
 	{
 		const edt::agent_level_path named = edt::check_agent_level_path(view_of(call.args.as_object().at("path").as_string()));
-		if (!named.ok()) return { {}, named.error };
+		if (!named.ok()) {
+			std::string why = named.error;
+			constexpr std::string_view level_file = "a level file (*.desc)";
+			if (const std::size_t at = why.find(level_file); at != std::string::npos) why.replace(at, level_file.size(), "a desc file (*.desc)");
+			return { {}, std::move(why) };
+		}
 		return { named.path, {} };
 	}
 
@@ -279,14 +307,14 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
-			if (m_files.in_open_level(path.relative)) {
-				return cmd::result::failure(cmd::codes::busy,
-					std::format("'res://{}' is the file of the open level: change the level with the scene commands and save it with file.save", path.relative));
-			}
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
 			if (!found.found) {
 				return cmd::result::failure(cmd::codes::not_found, std::format("no file 'res://{}': desc.create makes a new one", path.relative));
+			}
+			if (m_files.belongs_to_open_level(found)) {
+				return cmd::result::failure(cmd::codes::busy,
+					std::format("'res://{}' belongs to the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", path.relative));
 			}
 			if (!m_files.is_top_layer(found)) {
 				return cmd::result::failure(cmd::codes::invalid_args,
@@ -315,10 +343,10 @@ namespace {
 			const auto refused = [](const std::string& why) { return std::optional<std::string>("This request will be refused: " + why); };
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
-			if (m_files.in_open_level(path.relative)) return refused(std::format("'res://{}' is the file of the open level", path.relative));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return refused(found.error);
 			if (!found.found) return refused(std::format("no file 'res://{}'", path.relative));
+			if (m_files.belongs_to_open_level(found)) return refused(std::format("'res://{}' belongs to the open level", path.relative));
 			if (!m_files.is_top_layer(found)) return refused(std::format("'res://{}' belongs to a lower layer, not to the project's own res/", path.relative));
 			const auto current = m_files.read_fresh(path.relative, found);
 			if (!current.ok()) return refused(current.error);
@@ -339,16 +367,48 @@ namespace {
 	};
 }
 
+namespace {
+	// The keys with "__" a desc file may carry; any other would hide an object from the check.
+	bool is_allowed_header_key(std::string_view key)
+	{
+		return key == "__type" || key == "__version" || key == "__guid" || key == "__id" || key == "__parent";
+	}
+
+	// Empty when `text` is no tag with a protocol, or a res:// tag with a path inside the project.
+	std::string tag_problem(std::string_view text)
+	{
+		std::size_t end = 0;
+		while (end < text.size() && (std::isalnum(static_cast<unsigned char>(text[end])) || text[end] == '+' || text[end] == '.' || text[end] == '-')) ++end;
+		if (end == 0 || !std::isalpha(static_cast<unsigned char>(text[0])) || text.substr(end, 3) != "://") return {};
+		if (text.substr(0, end) != "res") {
+			return std::format("'{}://' is not a place a project file may refer to: only res:// tags are written", std::string(text.substr(0, end)).substr(0, 40));
+		}
+		return edt::check_agent_folder(text).error;
+	}
+}
+
 std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource)
 {
 	std::vector<res::diagnostic> out;
+	std::size_t errors = 0;
+	std::size_t warnings = 0;
 	std::unordered_set<std::string> unchecked;
+	// Errors and warnings are counted apart: a pile of warnings cannot push an error out of the list.
 	const auto add = [&](std::string kind, std::string pointer, std::string reason, res::diagnostic_severity severity = res::diagnostic_severity::error) {
-		if (out.size() >= k_max_reported) return;
+		std::size_t& count = severity == res::diagnostic_severity::error ? errors : warnings;
+		if (count >= k_max_reported) return;
+		++count;
 		out.push_back({ severity, std::move(kind), std::string(resource), std::move(pointer), std::move(reason) });
+	};
+	const auto schema_error = [&](std::string pointer, std::string reason) {
+		add(std::string(res::diagnostic_kind::schema), std::move(pointer), std::move(reason));
 	};
 
 	const auto walk = [&](const auto& self, const json::value& value, const std::string& pointer) -> void {
+		if (value.is_string()) {
+			if (std::string problem = tag_problem(view_of(value.as_string())); !problem.empty()) schema_error(pointer, std::move(problem));
+			return;
+		}
 		if (value.is_array()) {
 			std::size_t index = 0;
 			for (const json::value& element : value.as_array()) self(self, element, std::format("{}/{}", pointer, index++));
@@ -356,6 +416,21 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		}
 		if (!value.is_object()) return;
 		const json::object& object = value.as_object();
+		for (const auto& member : object) {
+			const std::string_view key(member.key().data(), member.key().size());
+			if (key.starts_with("__") && !is_allowed_header_key(key)) {
+				schema_error(pointer + "/" + res::json_pointer_token(key), "a key with \"__\" other than __type, __version, __guid, __id and __parent is not allowed");
+			}
+		}
+		if (const json::value* parent = object.if_contains("__parent")) {
+			if (!parent->is_string()) {
+				schema_error(pointer + "/__parent", "`__parent` must be a string tag");
+			} else if (const edt::agent_level_path named = edt::check_agent_level_path(view_of(parent->as_string())); !named.ok()) {
+				schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project (res://... or a relative path): " + named.error);
+			} else if (std::string problem = tag_problem(view_of(parent->as_string())); !problem.empty()) {
+				schema_error(pointer + "/__parent", std::move(problem));
+			}
+		}
 		if (const json::value* type_value = object.if_contains("__type")) {
 			if (!type_value->is_string()) {
 				add(std::string(res::diagnostic_kind::unknown_type), pointer + "/__type", "`__type` must be a string");
@@ -372,9 +447,9 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 						}
 						if (type == "level_desc") {
 							const json::value* worlds = object.if_contains("worlds");
-							if (worlds && !worlds->is_array()) add(std::string(res::diagnostic_kind::schema), pointer + "/worlds", "`worlds` must be an array");
+							if (worlds && !worlds->is_array()) schema_error(pointer + "/worlds", "`worlds` must be an array");
 							const json::value* level_name = object.if_contains("name");
-							if (level_name && !level_name->is_string()) add(std::string(res::diagnostic_kind::schema), pointer + "/name", "`name` must be a string");
+							if (level_name && !level_name->is_string()) schema_error(pointer + "/name", "`name` must be a string");
 						}
 					}
 				} else {
@@ -382,8 +457,7 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 					if (const json::value* version = object.if_contains("__version")) {
 						std::int64_t number = 0;
 						if (!desc::json_to_int64(*version, number) || number != descs.current_version(type)) {
-							add(std::string(res::diagnostic_kind::schema), pointer + "/__version",
-								std::format("`__version` is written by the editor (now {}): leave it out", descs.current_version(type)));
+							schema_error(pointer + "/__version", std::format("`__version` is written by the editor (now {}): leave it out", descs.current_version(type)));
 							fits = false;
 						}
 					}
@@ -394,9 +468,33 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 						}
 						const desc::override_failure bad = desc::check_override_object(*schema, patch, nullptr, &descs.schemas());
 						if (bad.status != desc::override_status::valid) {
-							add(std::string(res::diagnostic_kind::schema), pointer + bad.pointer,
+							schema_error(pointer + bad.pointer,
 								bad.status == desc::override_status::stale ? std::format("'{}' has no such field", type)
 									: std::format("the value does not fit the field of '{}'", type));
+						}
+						// The fields the schema says hold a tag: a path inside the project, whatever it looks like.
+						for (const desc::field_schema& field : schema->fields) {
+							// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
+							const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
+								|| field.kind == desc::field_kind::custom
+								|| (field.kind == desc::field_kind::array && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
+							if (!tag_field) continue;
+							const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
+							const json::value* held = patch.if_contains(key);
+							if (!held) continue;
+							const auto check_tag = [&](const json::value& tag, const std::string& at) {
+								if (!tag.is_string() || tag.as_string().empty()) return;
+								if (const std::string problem = edt::check_agent_folder(view_of(tag.as_string())).error; !problem.empty()) {
+									schema_error(at, "a tag must be a res:// tag or a path inside the project: " + problem);
+								}
+							};
+							const std::string at = pointer + "/" + res::json_pointer_token(key);
+							if (held->is_array()) {
+								std::size_t index = 0;
+								for (const json::value& element : held->as_array()) check_tag(element, std::format("{}/{}", at, index++));
+							} else {
+								check_tag(*held, at);
+							}
 						}
 					}
 				}

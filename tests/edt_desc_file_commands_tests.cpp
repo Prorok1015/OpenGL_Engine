@@ -37,7 +37,8 @@ struct desc_fixture : test_util::scene_env
 		fs::create_directories(res_root / "materials");
 		fs::create_directories(lower / "materials");
 		rs->unregistrate_resolver(res::tag::default_protocol());
-		rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ res_root },
+		// The lower layer first, the project's own top layer last (it receives the writes), as the editor mounts them.
+		rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
 			res::mount_access::read_write, res::write_policy::allow_all());
 		seen = events.agent_action.subscribe([this](const edt::agent_action_info& info) { actions.push_back(info); });
 		edt::desc_file_deps deps{ *rs, *descs };
@@ -297,18 +298,142 @@ BOOST_AUTO_TEST_CASE(TheQuestion_NamesTheFileTheSizesAndTheHotReload)
 	BOOST_TEST(commands.find("desc.write")->describe(invalid)->rfind("This request will be refused", 0) == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(TheFileOfTheOpenLevel_IsBusy)
+BOOST_AUTO_TEST_CASE(TheFileOfTheOpenLevel_AndItsWorldFiles_AreBusy)
 {
 	fs::create_directories(res_root / "levels");
-	dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":[]})");
+	fs::create_directories(res_root / "worlds");
+	dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":["res://worlds/main.desc"]})");
+	dir.write("res/worlds/main.desc", R"({"__type":"world_desc"})");
+	dir.write("res/worlds/other.desc", R"({"__type":"world_desc"})");
 	open_level = { "levels/open.desc" };
-	const std::string before = read_file(res_root / "levels" / "open.desc");
-	const auto busy = call("desc.write", write_args("levels/open.desc", version_of("levels/open.desc"), R"({"__type":"level_desc","name":"x","worlds":[]})"));
-	BOOST_TEST(busy.code == cmd::codes::busy);
-	BOOST_TEST(read_file(res_root / "levels" / "open.desc") == before);
+	const std::string level_before = read_file(res_root / "levels" / "open.desc");
+	const std::string world_before = read_file(res_root / "worlds" / "main.desc");
+
+	const auto level = call("desc.write", write_args("levels/open.desc", version_of("levels/open.desc"), R"({"__type":"level_desc","name":"x","worlds":[]})"));
+	BOOST_TEST(level.code == cmd::codes::busy);
+	BOOST_TEST(read_file(res_root / "levels" / "open.desc") == level_before);
+
+	const auto world = call("desc.write", write_args("worlds/main.desc", version_of("worlds/main.desc"), R"({"__type":"world_desc"})"));
+	BOOST_TEST(world.code == cmd::codes::busy);
+	BOOST_TEST(read_file(res_root / "worlds" / "main.desc") == world_before);
+
+	// A file the open level does not use is written as usual.
+	const auto other = call("desc.write", write_args("worlds/other.desc", version_of("worlds/other.desc"), R"({"__type":"world_desc"})"));
+	BOOST_TEST_MESSAGE(other.error);
+	BOOST_TEST(other.code != cmd::codes::busy);
 
 	const cmd::call request = call_of(write_args("levels/open.desc", "v", R"({"__type":"level_desc"})"));
 	BOOST_TEST(commands.find("desc.write")->describe(request)->rfind("This request will be refused", 0) == 0u);
+	const cmd::call world_request = call_of(write_args("worlds/main.desc", "v", R"({"__type":"world_desc"})"));
+	BOOST_TEST(commands.find("desc.write")->describe(world_request)->rfind("This request will be refused", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagField)
+{
+	for (const char* content : {
+		R"({"__type":"material_desc","__parent":"user://secret.desc"})",
+		R"({"__type":"material_desc","__parent":"edt://base.desc"})",
+		R"({"__type":"material_desc","__parent":"../x.desc"})",
+		R"({"__type":"material_desc","__parent":"res://a/../../x.desc"})",
+		R"({"__type":"material_desc","__parent":"res://a/x.png"})",
+		R"({"__type":"material_desc","__parent":5})",
+		R"({"__type":"material_desc","shader_fragment":"user://x.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"engine://x.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"cache://x.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"../../x.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"C:/x.frag"})",
+		R"({"__type":"material_desc","defines":["code://x"]})",
+		R"({"__type":"material_desc","samplers":["../../x.png"]})",
+		R"({"__type":"material_desc","samplers":["user://x.png"]})",
+		R"({"__type":"level_desc","worlds":["memory://x"]})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/t.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "t.mat.desc"));
+		}
+	}
+	for (const char* content : {
+		R"({"__type":"material_desc","__parent":"res://base_material.desc"})",
+		R"({"__type":"material_desc","__parent":"materials/other.mat.desc"})",
+		R"({"__type":"material_desc","shader_fragment":"res://shaders/a.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"shaders/a.frag"})",
+		R"({"__type":"material_desc","samplers":["res://textures/a.png",null]})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto made = call("desc.create", desc_args("materials/ok.mat.desc", content));
+			BOOST_TEST_MESSAGE(made.error);
+			BOOST_TEST(made.ok);
+			fs::remove(res_root / "materials" / "ok.mat.desc");
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AnUnknownKeyWithTwoUnderscores_IsRefused_SoNoObjectHidesFromTheCheck)
+{
+	const auto hidden = call("desc.create", desc_args("materials/h.mat.desc", R"({"__type":"material_desc","__x":{"__type":"no_such_desc"}})"));
+	BOOST_TEST(hidden.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(hidden.value.is_object());
+	BOOST_TEST(std::string(hidden.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/__x"));
+	BOOST_TEST(!fs::exists(res_root / "materials" / "h.mat.desc"));
+
+	const auto kept = call("desc.create", desc_args("materials/k.mat.desc", R"({"__type":"material_desc","__guid":"g","__id":3})"));
+	BOOST_TEST_MESSAGE(kept.error);
+	BOOST_TEST(kept.ok);
+}
+
+BOOST_AUTO_TEST_CASE(ManyProblems_AreCappedWithoutLettingTheFilePass)
+{
+	std::string worlds;
+	for (int i = 0; i < 30; ++i) worlds += std::string(i ? "," : "") + R"({"__type":"material_desc","bogus":1})";
+	const std::string content = R"({"__type":"level_desc","worlds":[)" + worlds + "]}";
+	const std::vector<res::diagnostic> found = edt::validate_desc_tree(*descs, json::parse(content), "res://levels/x.desc");
+	std::size_t errors = 0;
+	std::size_t warnings = 0;
+	for (const res::diagnostic& item : found) (item.severity == res::diagnostic_severity::error ? errors : warnings)++;
+	BOOST_TEST(errors == 20u);
+	BOOST_TEST(warnings == 1u);
+
+	fs::create_directories(res_root / "levels");
+	const auto refused = call("desc.create", json::object{ { "path", "levels/many.desc" }, { "desc", json::parse(content) } });
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_TEST(!fs::exists(res_root / "levels" / "many.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)
+{
+	const fs::path outside = dir.path() / "outside";
+	fs::create_directories(outside / "folder");
+	dir.write("outside/target.mat.desc", k_material);
+	std::error_code ec;
+	fs::create_symlink(outside / "target.mat.desc", res_root / "materials" / "link.mat.desc", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no symlinks here: " << ec.message());
+		return;
+	}
+	fs::create_directory_symlink(outside / "folder", res_root / "linked", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no folder links here: " << ec.message());
+		return;
+	}
+	const std::string target_before = read_file(outside / "target.mat.desc");
+
+	BOOST_TEST(call("desc.read", json::object{ { "path", "materials/link.mat.desc" } }).code == cmd::codes::invalid_args);
+	BOOST_TEST(call("desc.write", write_args("materials/link.mat.desc", "v", k_material)).code == cmd::codes::invalid_args);
+	BOOST_TEST(call("desc.create", desc_args("materials/link.mat.desc", k_material)).code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(outside / "target.mat.desc") == target_before);
+
+	BOOST_TEST(call("desc.create", desc_args("linked/new.mat.desc", k_material)).code == cmd::codes::invalid_args);
+	BOOST_TEST(!fs::exists(outside / "folder" / "new.mat.desc"));
+	dir.write("outside/folder/in.mat.desc", k_material);
+	BOOST_TEST(call("desc.read", json::object{ { "path", "linked/in.mat.desc" } }).code == cmd::codes::invalid_args);
+	BOOST_TEST(call("desc.write", write_args("linked/in.mat.desc", "v", k_material)).code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(ANonDescPath_IsRefusedWithATextAboutDescFiles)
+{
+	const auto refused = call("desc.read", json::object{ { "path", "materials/x.json" } });
+	BOOST_TEST(!refused.ok);
+	BOOST_TEST(refused.error.find("desc file") != std::string::npos);
+	BOOST_TEST(refused.error.find("level file") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(ABigFile_IsNotReadNorWritten)
@@ -338,6 +463,10 @@ BOOST_AUTO_TEST_CASE(TheWritePolicyOfTheResolver_RefusesAndTheReasonIsShown)
 		res::mount_access::read_write, res::write_policy(res::tag::default_protocol(), { "res://levels/**" }));
 	const auto refused = call("desc.create", desc_args("materials/denied.mat.desc", k_material));
 	BOOST_TEST(refused.code == cmd::codes::failed);
+	const std::string marker = "was not created: ";
+	const std::size_t at = refused.error.find(marker);
+	BOOST_REQUIRE(at != std::string::npos);
+	BOOST_TEST(refused.error.size() > at + marker.size());
 	BOOST_TEST(!fs::exists(res_root / "materials" / "denied.mat.desc"));
 }
 
