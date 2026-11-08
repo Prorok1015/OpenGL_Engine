@@ -5,13 +5,38 @@
 #include <snk/window/wnd_window_system.h>
 #include <filesystem>
 #include <functional>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace edt
 {
+	// What a level file below the resource root is: an agent may open or overwrite only a plain file.
+	enum class level_file_state : std::uint8_t
+	{
+		missing,
+		file,
+		unsafe,	// a link, a folder or anything else on the way or at the end
+	};
+
+	// Looks at `relative_path` (already checked by agent_level_path) below `root` without following links.
+	level_file_state inspect_level_file(const std::filesystem::path& root, const std::string& relative_path);
+
+	// The level path an agent may name: `res://levels/a.desc` or `levels/a.desc`. A path with another protocol, a drive
+	// letter, a leading '/', a backslash, a control character, an empty, '.' or '..' segment, or not ending in `.desc`
+	// is refused (`error` says why); so is a name Windows treats as a device (CON, NUL, COM1, ... with any extension), a
+	// segment ending in '.' or ' ' and the characters <>\"|?*; otherwise `path` is the project-relative path without the protocol.
+	struct agent_level_path
+	{
+		std::string path;
+		std::string error;
+		bool ok() const { return error.empty(); }
+	};
+	agent_level_path check_agent_level_path(std::string_view text);
+
 	// What the File menu needs from the rest of the editor. Plain callbacks, so the menu flow can run
 	// without a level, a resource system or ImGui.
 	struct file_menu_hooks
@@ -24,6 +49,17 @@ namespace edt
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
+		// Starts loading the level at a project-relative path (`levels/a.desc`) without a round trip through a file
+		// system path: what the commands an agent calls use. Null: those commands answer `failed`.
+		// Returns the reason when the file cannot be loaded (it is not a level).
+		std::function<std::optional<std::string>(const std::string&)> load_level_tag;
+		// What the level file at a project-relative path is, for the commands an agent calls: looked at in every layer of
+		// the resources (a lower content root, the engine), not only the top one. Null: looked at below `resources_path`
+		// with inspect_level_file.
+		std::function<level_file_state(const std::string&)> inspect_level;
+		// Why the level may not be written now (a level is loading: the document does not belong to its file yet):
+		// file.save and file.save_as answer `busy` with it, whoever calls. Null or nullopt: they run.
+		std::function<std::optional<std::string>()> level_write_blocker;
 		// Why the level may not be replaced now (the start level of --game is loading, #518): file.new and file.open
 		// answer `busy` with it, whoever calls. Null or nullopt: they run.
 		std::function<std::optional<std::string>()> level_change_blocker;

@@ -535,10 +535,17 @@ namespace res
 		void start_loading(const res::tag& tag, const std::shared_ptr<resource_handle>& block, adapter ad);
 		void collect_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad);
 		void deserialize_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad, const res_deps& deps);
+		// What a failed dependency means to its dependent (res_dep::failure_kind / json_path), for its diagnostic.
+		struct dependency_role {
+			std::string_view kind;
+			std::string json_path;
+		};
 		// Calls `on_done` (any thread) once every block has settled without error, and fails `owner` if any failed.
 		// The waits go through the wait graph, which fails the blocks of a cycle instead of letting them wait forever.
+		// `roles` (empty, or one per block) describe the failure on the owner's diagnostics.
 		void await_blocks(const std::shared_ptr<resource_handle>& owner, const res::tag& owner_tag,
-			std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks, std::function<void()> on_done);
+			std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks, std::function<void()> on_done,
+			std::vector<dependency_role> roles = {});
 		void wait_for_block(const std::shared_ptr<resource_handle>& block) const;
 
 		// T, then its base_type, and so on: the type levels an adapter is looked up for, on the stack.

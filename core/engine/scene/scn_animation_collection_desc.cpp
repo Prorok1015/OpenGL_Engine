@@ -1,13 +1,16 @@
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/scn_model.h>
+#include <cstddef>
+#include <string>
 
 void scn::animation_collection_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	if (auto const* p = data.if_contains("clips")) {
 		auto const& arr = p->get_array();
 		clips.reserve(arr.size());
+		std::size_t index = 0;
 		for (auto const& item : arr) {
-			clips.push_back(desc_system.get_field_desc<animation_clip_desc>(*this, item));
+			clips.push_back(desc_system.get_field_desc<animation_clip_desc>(*this, item, "/clips/" + std::to_string(index++)));
 		}
 	}
 }

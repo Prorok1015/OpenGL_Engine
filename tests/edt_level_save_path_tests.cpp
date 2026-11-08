@@ -4,6 +4,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include "edt_file_menu.h"
 #include "edt_level_controller.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
@@ -136,6 +137,55 @@ BOOST_AUTO_TEST_CASE(SaveAs_RefusesALevelFileThatIsASymlink)
 
 	BOOST_TEST(!level_ctrl.save_level_as("levels/link.desc"));
 	BOOST_TEST(read_file(dir.path() / "outside" / "target.desc") == "original");
+}
+
+// The resolver's write policy is the second wall behind the argument check an agent's file.save_as goes through
+// (edt::check_agent_level_path): a path the check lets through but the policy does not allow is not written either.
+BOOST_AUTO_TEST_CASE(SaveAs_TheWritePolicyRefusesWhatTheArgumentCheckAllows)
+{
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ content },
+		res::mount_access::read_write, res::write_policy(res::tag::default_protocol(), { "res://levels/**", "!res://levels/locked/**" }));
+
+	for (const char* path : { "other/x.desc", "levels/locked/x.desc", "x.desc" }) {
+		BOOST_TEST_INFO("path: " << path);
+		BOOST_TEST(edt::check_agent_level_path(path).ok());
+		BOOST_TEST(!level_ctrl.save_level_as(path));
+		BOOST_TEST(!fs::exists(content / path));
+	}
+	BOOST_TEST(!state.level_tag.is_valid());
+
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/ok.desc"));
+	BOOST_TEST(fs::exists(content / "levels" / "ok.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_TheResolverRefusesWhatTheArgumentCheckRefuses)
+{
+	const fs::path absolute = dir.path() / "absolute.desc";
+	for (const std::string& path : { std::string{ "../escape.desc" }, std::string{ "levels/../../escape.desc" },
+			absolute.generic_string(), std::string{ "memory://levels/x.desc" } }) {
+		BOOST_TEST_INFO("path: " << path);
+		BOOST_TEST(!edt::check_agent_level_path(path).ok());
+		BOOST_TEST(!level_ctrl.save_level_as(path));
+	}
+	BOOST_TEST(!fs::exists(dir.path() / "escape.desc"));
+	BOOST_TEST(!fs::exists(absolute));
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_RefusesALevelBehindALinkedFolder)
+{
+	dir.write("outside/keep.txt", "keep");
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "outside", content / "linked", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	BOOST_TEST(edt::check_agent_level_path("linked/x.desc").ok());
+	BOOST_TEST((edt::inspect_level_file(content, "linked/x.desc") == edt::level_file_state::unsafe));
+	BOOST_TEST(!level_ctrl.save_level_as("linked/x.desc"));
+	BOOST_TEST(!fs::exists(dir.path() / "outside" / "x.desc"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

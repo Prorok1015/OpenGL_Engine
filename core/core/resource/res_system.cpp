@@ -441,6 +441,7 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
 
   auto [block, is_new] = find_or_insert_cache(cache_key{tag, type});
   if (is_new) {
+    block->diagnostics.set_resource(std::string{tag.view()});
     start_loading(tag, block, std::move(found));
   }
   if (sync) {
@@ -509,12 +510,16 @@ void res::resource_system::collect_stage(const res::tag &tag,
     }
 
     std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks;
+    std::vector<dependency_role> roles;
     blocks.reserve(declared.size());
+    roles.reserve(declared.size());
     for (const auto &dep : declared) {
       if (!dep.request) {
         throw std::runtime_error("dependency '" + std::string{dep.target.view()} + "' was not made with make_dep");
       }
       blocks.emplace_back(dep.request(*this, dep.target), dep.target);
+      block->diagnostics.add_child(blocks.back().first);
+      roles.push_back(dependency_role{dep.failure_kind, dep.json_path});
     }
 
     // The waiting runs nothing: the dependencies load on their own tasks, and this block goes on once they are done.
@@ -529,7 +534,12 @@ void res::resource_system::collect_stage(const res::tag &tag,
                          deserialize_stage(tag, block, raw, ad, ready);
                        },
                        block);
-                 });
+                 },
+                 std::move(roles));
+  } catch (const res::load_error &e) {
+    res::add_while_unsettled(*block, e.what_diagnostic());
+    block->set_error(std::string{"Adapter error: "} + e.what());
+    egLOG_ERROR("res/adapter", "Failed to collect dependencies of {0}: {1}", tag.view(), e.what());
   } catch (const std::exception &e) {
     block->set_error(std::string{"Adapter error: "} + e.what());
     egLOG_ERROR("res/adapter", "Failed to collect dependencies of {0}: {1}", tag.view(), e.what());
@@ -547,7 +557,12 @@ void res::resource_system::deserialize_stage(const res::tag &tag,
     return;
   }
   try {
+    const res::load_scope scope(block);
     block->set_ready(ad->deserialize(tag, raw->data, deps));
+  } catch (const res::load_error &e) {
+    res::add_while_unsettled(*block, e.what_diagnostic());
+    block->set_error(std::string{"Adapter error: "} + e.what());
+    egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
   } catch (const std::exception &e) {
     block->set_error(std::string{"Adapter error: "} + e.what());
     egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
@@ -564,12 +579,35 @@ struct res::resource_system::await_state {
   std::atomic<std::size_t> pending{0};
   std::mutex mutex;
   std::string failure; // the first failed dependency
+  std::size_t failed_index = 0;
+  // What the failed dependency recorded, with its resource: nobody keeps a failed dependency, so the owner carries it.
+  std::vector<res::diagnostic> failed_diagnostics;
+  std::vector<dependency_role> roles; // empty, or one per block
 };
+
+namespace {
+// The diagnostics a settled block recorded, each with its resource; a failure it did not describe as kind `load`.
+std::vector<res::diagnostic> own_diagnostics(const core::res::res_control_block_base &block) {
+  auto snapshot = block.diagnostics.read();
+  bool error_recorded = false;
+  for (auto &item : snapshot.items) {
+    error_recorded = error_recorded || item.severity == res::diagnostic_severity::error;
+    if (item.resource.empty()) {
+      item.resource = snapshot.resource;
+    }
+  }
+  if (block.status.load(std::memory_order_acquire) == core::res::res_status::error && !error_recorded) {
+    snapshot.items.push_back(res::diagnostic{res::diagnostic_severity::error, std::string{res::diagnostic_kind::load},
+                                             snapshot.resource, {}, block.error_msg});
+  }
+  return std::move(snapshot.items);
+}
+} // namespace
 
 void res::resource_system::await_blocks(
     const std::shared_ptr<resource_handle> &owner, const res::tag &owner_tag,
     std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks,
-    std::function<void()> on_done) {
+    std::function<void()> on_done, std::vector<dependency_role> roles) {
   if (blocks.empty()) {
     on_done();
     return;
@@ -580,6 +618,7 @@ void res::resource_system::await_blocks(
   state->blocks = std::move(blocks);
   state->on_done = std::move(on_done);
   state->pending = state->blocks.size();
+  state->roles = std::move(roles);
   // The dependencies (a parent's blocks too) hold only this id, never the state with its continuation.
   const std::uint64_t id = register_await(state);
 
@@ -588,8 +627,18 @@ void res::resource_system::await_blocks(
       block->set_error(message);
     }
   };
+  // Recorded before the block settles (add_while_unsettled), so whoever sees the failure sees its diagnostic too.
+  const auto describe = [](const std::shared_ptr<resource_handle> &block, std::string_view kind, std::string json_path,
+                           const std::string &message) {
+    res::add_while_unsettled(*block, res::diagnostic{res::diagnostic_severity::error,
+                                                     std::string{kind.empty() ? res::diagnostic_kind::load : kind}, {},
+                                                     std::move(json_path), message});
+  };
+  const auto role_of = [](const await_state &s, std::size_t i) {
+    return i < s.roles.size() ? s.roles[i] : dependency_role{};
+  };
   // The owner may have failed meanwhile (a cycle), and then nobody is left to continue. The last one drops the wait.
-  const auto one_settled = [fail_owner, id](resource_system &self, const std::shared_ptr<await_state> &s) {
+  const auto one_settled = [fail_owner, describe, role_of, id](resource_system &self, const std::shared_ptr<await_state> &s) {
     if (--s->pending != 0) {
       return;
     }
@@ -598,13 +647,22 @@ void res::resource_system::await_blocks(
       return;
     }
     std::string failure;
+    std::size_t failed_index = 0;
+    std::vector<res::diagnostic> carried;
     {
       std::lock_guard lock(s->mutex);
       failure = s->failure;
+      failed_index = s->failed_index;
+      carried = s->failed_diagnostics;
     }
     if (failure.empty()) {
       s->on_done();
     } else {
+      const dependency_role role = role_of(*s, failed_index);
+      describe(s->owner, role.kind, role.json_path, failure);
+      for (auto &item : carried) {
+        res::add_while_unsettled(*s->owner, std::move(item));
+      }
       fail_owner(s->owner, failure);
     }
   };
@@ -616,6 +674,7 @@ void res::resource_system::await_blocks(
         std::lock_guard lock(state->mutex);
         if (state->failure.empty()) {
           state->failure = "Dependency failed: invalid handle";
+          state->failed_index = i;
         }
       }
       one_settled(*this, state);
@@ -626,7 +685,20 @@ void res::resource_system::await_blocks(
     if (added.result == wait_graph::verdict::cycle) {
       const std::string message = "dependency cycle: " + added.path;
       egLOG_ERROR("res/graph", "{}", message);
+      // Every member waits on the next one through the same kind of edge (a desc: its __parent). Each member carries
+      // the entry of every other one too: nobody keeps a failed member alive for a walk to reach it.
+      const dependency_role role = role_of(*state, i);
+      std::vector<std::string> resources;
+      resources.reserve(added.members.size());
       for (const auto &member : added.members) {
+        resources.push_back(member->diagnostics.read().resource);
+      }
+      for (const auto &member : added.members) {
+        for (const auto &resource : resources) {
+          res::add_while_unsettled(*member, res::diagnostic{res::diagnostic_severity::error,
+                                                            std::string{res::diagnostic_kind::cycle}, resource,
+                                                            role.json_path, message});
+        }
         fail_owner(member, message);
       }
       drop_await(id);
@@ -636,6 +708,7 @@ void res::resource_system::await_blocks(
       const std::string message = "dependency chain of '" + std::string{owner_tag.view()} + "' is deeper than " +
                                   std::to_string(k_max_dependency_depth);
       egLOG_ERROR("res/graph", "{}", message);
+      describe(owner, res::diagnostic_kind::load, role_of(*state, i).json_path, message);
       fail_owner(owner, message);
       drop_await(id);
       return;
@@ -650,9 +723,12 @@ void res::resource_system::await_blocks(
         }
         self.m_graph->remove_edge(s->owner.get(), &settled);
         if (settled.has_error()) {
+          auto carried = own_diagnostics(settled);
           std::lock_guard lock(s->mutex);
           if (s->failure.empty()) {
             s->failure = "Dependency failed: " + std::string{s->blocks[i].second.view()} + ": " + settled.error_msg;
+            s->failed_index = i;
+            s->failed_diagnostics = std::move(carried);
           }
         }
         one_settled(self, s);

@@ -1,6 +1,7 @@
 #include "edt_file_menu.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_project.h>
+#include <cctype>
 #include <cstddef>
 #include <format>
 #include <string_view>
@@ -13,10 +14,14 @@ namespace {
 	constexpr const char* DEFAULT_LEVEL_PATH = "levels/my_level.desc";
 
 	// {name: non-empty string}, plus the optional discard_unsaved flag when `with_discard`.
-	json::value path_schema(bool with_discard)
+	json::value path_schema(bool with_discard, std::string_view path_description = {})
 	{
 		json::object properties{ { "path", json::object{ { "type", "string" }, { "minLength", 1 } } } };
-		if (with_discard) properties["discard_unsaved"] = json::object{ { "type", "boolean" } };
+		if (!path_description.empty()) properties["path"].as_object()["description"] = json::string(path_description);
+		if (with_discard) {
+			properties["discard_unsaved"] = json::object{ { "type", "boolean" },
+				{ "description", "Drop the level's unsaved changes. Only for a person; an agent saves first" } };
+		}
 		return json::object{
 			{ "type", "object" },
 			{ "properties", std::move(properties) },
@@ -44,6 +49,22 @@ namespace {
 		return std::filesystem::path(std::u8string(text.begin(), text.end()));
 	}
 
+	std::filesystem::path from_utf8(std::string_view text)
+	{
+		return std::filesystem::path(std::u8string(text.begin(), text.end()));
+	}
+
+	bool is_reserved_device_name(std::string_view segment)
+	{
+		const std::string_view stem = segment.substr(0, segment.find('.'));
+		std::string upper;
+		upper.reserve(stem.size());
+		for (const char character : stem) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
+		while (!upper.empty() && upper.back() == ' ') upper.pop_back();
+		if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") return true;
+		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0' && upper[3] <= '9';
+	}
+
 	bool wants_discard(const json::value& args)
 	{
 		const json::value* flag = args.as_object().if_contains("discard_unsaved");
@@ -51,6 +72,10 @@ namespace {
 	}
 
 	constexpr const char* UNSAVED_MESSAGE = "the level has unsaved changes: pass discard_unsaved to drop them";
+	constexpr std::string_view LEVEL_PATH_DESCRIPTION = "Level file inside the project: res://levels/a.desc or levels/a.desc (a *.desc "
+		"path without '..', a drive or a link on the way). An agent may not overwrite another existing file";
+	constexpr const char* AGENT_UNSAVED_MESSAGE = "the level has unsaved changes: save it first (file.save or file.save_as); "
+		"dropping unsaved changes is done by a person in the editor";
 	constexpr std::string_view LEVEL_NOT_SAVED = "The level was not saved (the changes are kept)";
 	constexpr std::string_view PROJECT_NOT_OPENED = "The project was not opened";
 
@@ -95,6 +120,56 @@ namespace {
 		const json::value* value = args.as_object().if_contains(key);
 		return value && value->as_bool();
 	}
+}
+
+edt::level_file_state edt::inspect_level_file(const std::filesystem::path& root, const std::string& relative_path)
+{
+	if (root.empty()) return level_file_state::missing;
+	std::filesystem::path current = root;
+	std::size_t start = 0;
+	while (start <= relative_path.size()) {
+		const std::size_t end = relative_path.find('/', start);
+		const bool last = end == std::string::npos;
+		current /= from_utf8(std::string_view(relative_path).substr(start, last ? std::string_view::npos : end - start));
+		std::error_code ec;
+		const std::filesystem::file_status status = std::filesystem::symlink_status(current, ec);
+		if (ec || status.type() == std::filesystem::file_type::not_found) return level_file_state::missing;
+		if (last) return status.type() == std::filesystem::file_type::regular ? level_file_state::file : level_file_state::unsafe;
+		if (status.type() != std::filesystem::file_type::directory) return level_file_state::unsafe;
+		start = end + 1;
+	}
+	return level_file_state::missing;
+}
+
+edt::agent_level_path edt::check_agent_level_path(std::string_view text)
+{
+	constexpr std::string_view scheme = "res://";
+	constexpr std::string_view extension = ".desc";
+	const auto refuse = [](std::string why) { return agent_level_path{ {}, std::move(why) }; };
+	if (text.starts_with(scheme)) text.remove_prefix(scheme.size());
+	if (text.empty()) return refuse("the path is empty");
+	if (text.size() > 512) return refuse("the path is too long");
+	if (text.find(':') != std::string_view::npos) return refuse("the path must be a res:// tag or a path inside the project, without another protocol or a drive");
+	if (text.find('\\') != std::string_view::npos) return refuse("the path must use '/' as the separator");
+	if (text.front() == '/') return refuse("the path must be inside the project, not absolute");
+	for (const char character : text) {
+		if (static_cast<unsigned char>(character) < 0x20 || character == 0x7f) return refuse("the path has a control character");
+		if (std::string_view("<>\"|?*").find(character) != std::string_view::npos) return refuse("the path has a character a file name cannot have");
+	}
+	std::size_t start = 0;
+	while (true) {
+		const std::size_t end = text.find('/', start);
+		const std::string_view segment = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+		if (segment.empty() || segment == "." || segment == "..") return refuse("the path must not have empty, '.' or '..' segments");
+		// Windows drops a trailing dot or space and opens a device for CON, NUL, COM1... (with any extension).
+		if (segment.back() == '.' || segment.back() == ' ') return refuse("a name must not end in '.' or ' '");
+		if (is_reserved_device_name(segment)) return refuse("the path has a name Windows reserves for a device");
+		if (end == std::string_view::npos) break;
+		start = end + 1;
+	}
+	const std::string_view name = text.substr(text.rfind('/') == std::string_view::npos ? 0 : text.rfind('/') + 1);
+	if (name.size() <= extension.size() || !name.ends_with(extension)) return refuse("the path must name a level file (*.desc)");
+	return { std::string(text), {} };
 }
 
 edt::file_menu::file_menu(dialog_service& dialogs, action_registry& actions, file_menu_hooks hooks)
@@ -302,34 +377,91 @@ void edt::file_menu::register_actions()
 		.args_schema = discard_schema(),
 		.activate = [this] { new_level(); } });
 
+	// Anyone but a person at the menu (an agent, a test, a game) names its files with check_agent_level_path and
+	// never overwrites another file nor drops unsaved changes.
+	const auto restricted = [](const cmd::call& request) { return request.from.kind != cmd::origin_kind::ui; };
+	const auto file_state = [this](const std::string& relative) {
+		return m_hooks.inspect_level ? m_hooks.inspect_level(relative) : inspect_level_file(m_hooks.resources_path, relative);
+	};
+
 	add({ .id = "file.open", .label = "Open Level...", .menu_path = "File",
-		.execute = [this, level_change_busy](const json::value& args) {
+		.execute_call = [this, level_change_busy, restricted, file_state](const cmd::call& request) {
+			const json::value& args = request.args;
 			if (auto busy = level_change_busy()) return *busy;
-			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
-			m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
-			return action_result::success();
+			if (!restricted(request)) {
+				if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+				m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
+				return action_result::success(json::object{ { "level_loading", true } });
+			}
+			if (wants_discard(args)) {
+				return action_result::failure(cmd::codes::invalid_args, "discard_unsaved is not available here: save the level first, a person drops unsaved changes in the editor");
+			}
+			const agent_level_path named = check_agent_level_path(args.as_object().at("path").as_string());
+			if (!named.ok()) return action_result::failure(cmd::codes::invalid_args, named.error);
+			switch (file_state(named.path)) {
+			case level_file_state::missing: return action_result::failure(cmd::codes::not_found, "no such level: " + named.path);
+			case level_file_state::unsafe: return action_result::failure(cmd::codes::invalid_args, "'" + named.path + "' is not a plain file inside the project");
+			case level_file_state::file: break;
+			}
+			if (m_hooks.is_dirty()) return action_result::failure("needs_input", AGENT_UNSAVED_MESSAGE);
+			if (!m_hooks.load_level_tag) return action_result::failure("failed", "opening a level by its path is not available");
+			if (const std::optional<std::string> refused = m_hooks.load_level_tag(named.path)) {
+				return action_result::failure(cmd::codes::invalid_args, *refused);
+			}
+			return action_result::success(json::object{ { "level_loading", true } });
 		},
-		.args_schema = path_schema(true),
-		.activate = [this] { open_level(); } });
+		.args_schema = path_schema(true, LEVEL_PATH_DESCRIPTION),
+		.result_schema = json::object{
+			{ "type", "object" },
+			{ "properties", json::object{ { "level_loading", json::object{ { "type", "boolean" } } } } },
+			{ "additionalProperties", false } },
+		.activate = [this] { open_level(); },
+		.category = cmd::agent_category::scene_edit });
+
+	// The document does not belong to its file while a level is loading: a save then would write the old worlds over the
+	// level being opened.
+	const auto level_write_busy = [this]() -> std::optional<action_result> {
+		if (!m_hooks.level_write_blocker) return std::nullopt;
+		if (std::optional<std::string> why = m_hooks.level_write_blocker()) return action_result::failure(cmd::codes::busy, *why);
+		return std::nullopt;
+	};
 
 	add({ .id = "file.save", .label = "Save Level", .menu_path = "File", .shortcut = "Ctrl+S",
-		.execute = [this](const json::value&) {
+		.execute = [this, level_write_busy](const json::value&) {
+			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
 			if (!m_hooks.quick_save()) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
 		},
-		.activate = [this] { quick_save(); } });
+		.activate = [this] { quick_save(); },
+		.category = cmd::agent_category::scene_edit });
 
 	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File", .shortcut = "Ctrl+Shift+S",
-		.execute = [this](const json::value& args) {
+		.execute_call = [this, restricted, file_state, level_write_busy](const cmd::call& request) {
+			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
-			if (!m_hooks.save_level_as(std::string(args.as_object().at("path").as_string())))
-				return action_result::failure("failed", "the level could not be written");
+			std::string target(request.args.as_object().at("path").as_string());
+			if (restricted(request)) {
+				const agent_level_path named = check_agent_level_path(target);
+				if (!named.ok()) return action_result::failure(cmd::codes::invalid_args, named.error);
+				switch (file_state(named.path)) {
+				case level_file_state::unsafe: return action_result::failure(cmd::codes::invalid_args, "'" + named.path + "' is not a plain file inside the project");
+				case level_file_state::file:
+					if (named.path != m_hooks.level_path()) {
+						return action_result::failure("needs_input", "'" + named.path + "' exists and is not this level: choose a path that does not exist, or ask a person to overwrite it in the editor");
+					}
+					break;
+				case level_file_state::missing: break;
+				}
+				target = named.path;
+			}
+			if (!m_hooks.save_level_as(target)) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
 		},
-		.args_schema = path_schema(false),
-		.activate = [this] { save_level(); } });
+		.args_schema = path_schema(false, LEVEL_PATH_DESCRIPTION),
+		.activate = [this] { save_level(); },
+		.category = cmd::agent_category::scene_edit });
 
 	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
 		.disabled_tooltip = "Model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF).",

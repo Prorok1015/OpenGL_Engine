@@ -48,6 +48,7 @@ edt::job_service::job_info edt::job_service::describe(job_id id, const record& j
 	out.fraction = job.handle.progress();
 	out.note = job.handle.progress_text();
 	out.cancel_requested = m_cancelled.contains(id);
+	if (job.diagnostics) out.diagnostics = job.diagnostics->items();
 	return out;
 }
 
