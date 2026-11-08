@@ -22,6 +22,12 @@ namespace scn {
 		boost::json::object local_overrides;
 	};
 
+	// A free function next to the type (the struct stays as it is): what a snapshot compares two trackers with.
+	inline bool operator==(const tracked_component_info& a, const tracked_component_info& b)
+	{
+		return a.type_name == b.type_name && a.source_desc == b.source_desc && a.local_overrides == b.local_overrides;
+	}
+
 	struct component_tracker {
 		std::unordered_map<std::string, tracked_component_info> tracked_components;
 	};

@@ -1,17 +1,13 @@
-#include <snk/scene/scn_component_catalog.h>
-#include <snk/common/engine_assert.h>
+#include "scn_engine_components_detail.h"
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
-#include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
-#include <snk/scene/scn_animation_collection_desc.h>
-#include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/level/scn_node_index.h>
-#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_screen_anchor.h>
 
-// The engine's runtime components in the base catalog (HOT_RELOAD_PLAY.md section 4.3). Each schema is described here,
-// from outside the component: no member, base or virtual function is added to it.
+// The engine's runtime components in the base catalog (HOT_RELOAD_PLAY.md section 4.3). Each schema is described next
+// to its registration, from outside the component: no member, base or virtual function is added to it. The render and
+// the animation components are in scn_engine_components_render.cpp and scn_engine_components_animation.cpp.
 
 namespace scn
 {
@@ -29,61 +25,27 @@ namespace scn
 	BOOST_DESCRIBE_STRUCT(screen_anchor_component, (), (target, offset))
 }
 
-namespace
-{
-	template<typename T>
-	void add(scn::component_catalog& catalog, std::string_view name)
-	{
-		const auto* entry = catalog.add<T>(std::string{ name }, desc::bind_described<T>(name, 1, desc::schema_kind::component));
-		ASSERT_MSG(entry, "engine component '{}' is registered twice", name);
-	}
-
-	template<typename T>
-	void add_derived(scn::component_catalog& catalog, std::string_view name)
-	{
-		const auto* entry = catalog.add_derived<T>(std::string{ name });
-		ASSERT_MSG(entry, "engine component '{}' is registered twice", name);
-	}
-
-	// Registered so that a snapshot knows them, without a schema until #599 PR 3 describes them: a snapshot reports
-	// them as lost until then.
-	template<typename T>
-	void add_pending(scn::component_catalog& catalog, std::string_view name)
-	{
-		catalog.add<T>(std::string{ name }, nullptr);
-	}
-}
-
 void scn::register_engine_components(component_catalog& catalog)
 {
-	add<local_transform>(catalog, "scn.local_transform");
-	add<name_component>(catalog, "scn.name");
-	add<node_id_component>(catalog, "scn.node_id");
-	add<parent_component>(catalog, "scn.parent");
-	add<children_component>(catalog, "scn.children");
-	add<object_component>(catalog, "scn.object");
-	add<renderable>(catalog, "scn.renderable");
-	add<scene_anchor_component>(catalog, "scn.scene_anchor");
-	add<directional_light>(catalog, "scn.directional_light");
-	add<mouse_controller_component>(catalog, "scn.mouse_controller");
-	add<screen_anchor_component>(catalog, "scn.screen_anchor");
+	using detail::add_engine_component;
+	using detail::add_engine_derived;
+	add_engine_component<local_transform>(catalog, "scn.local_transform");
+	add_engine_component<name_component>(catalog, "scn.name");
+	add_engine_component<node_id_component>(catalog, "scn.node_id");
+	add_engine_component<parent_component>(catalog, "scn.parent");
+	add_engine_component<children_component>(catalog, "scn.children");
+	add_engine_component<object_component>(catalog, "scn.object");
+	add_engine_component<renderable>(catalog, "scn.renderable");
+	add_engine_component<scene_anchor_component>(catalog, "scn.scene_anchor");
+	add_engine_component<directional_light>(catalog, "scn.directional_light");
+	add_engine_component<mouse_controller_component>(catalog, "scn.mouse_controller");
+	add_engine_component<screen_anchor_component>(catalog, "scn.screen_anchor");
 
-	add_derived<world_transform>(catalog, "scn.world_transform");
-	add_derived<depth_level>(catalog, "scn.depth_level");
-	add_derived<screen_anchor_result>(catalog, "scn.screen_anchor_result");
-	add_derived<bone_matrices_component>(catalog, "scn.bone_matrices");
+	add_engine_derived<world_transform>(catalog, "scn.world_transform");
+	add_engine_derived<depth_level>(catalog, "scn.depth_level");
+	add_engine_derived<screen_anchor_result>(catalog, "scn.screen_anchor_result");
+	add_engine_derived<bone_matrices_component>(catalog, "scn.bone_matrices");
 
-	add_pending<mesh_component>(catalog, "scn.mesh");
-	add_pending<geometry_component>(catalog, "scn.geometry");
-	add_pending<material_desc_component>(catalog, "scn.material_desc");
-	add_pending<skeleton_component>(catalog, "scn.skeleton");
-	add_pending<skinning_component>(catalog, "scn.skinning");
-	add_pending<bone_component>(catalog, "scn.bone");
-	add_pending<sky_component>(catalog, "scn.sky");
-	add_pending<camera_component>(catalog, "scn.camera");
-	add_pending<animation_controller_component>(catalog, "scn.animation_controller");
-	add_pending<animation_collection_component>(catalog, "scn.animation_collection");
-	add_pending<animated_node_component>(catalog, "scn.animated_node");
-	add_pending<prefab_instance>(catalog, "scn.prefab_instance");
-	add_pending<component_tracker>(catalog, "scn.component_tracker");
+	detail::register_render_components(catalog);
+	detail::register_animation_components(catalog);
 }
