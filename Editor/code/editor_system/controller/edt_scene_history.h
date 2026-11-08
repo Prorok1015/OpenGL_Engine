@@ -45,6 +45,14 @@ namespace edt
 		bool moved_among_siblings = false;
 	};
 
+	// What one commit changed in a world besides its nodes: the list of its systems (world_desc::get_systems).
+	struct scene_world_change
+	{
+		std::size_t world = 0;
+		std::vector<std::string> before;
+		std::vector<std::string> after;
+	};
+
 	class scene_history_index
 	{
 	public:
@@ -70,12 +78,16 @@ namespace edt
 		// Takes the depth of every node of `world` from `desc`, whose structure the index already holds.
 		void refresh_depths(std::size_t world, const scn::world_desc& desc);
 
+		// Brings the systems of `world` to `names` in the index; used when a change is applied.
+		void set_systems(std::size_t world, std::vector<std::string> names);
+
 		// The worlds changes were applied to since the last call: their contexts have to be rebuilt.
 		std::vector<std::size_t> take_touched();
 		void touch(std::size_t world);
 
 	private:
 		std::vector<std::unordered_map<std::uint64_t, scene_node_state>> m_worlds;
+		std::vector<std::vector<std::string>> m_systems; // parallel to m_worlds
 		std::vector<std::size_t> m_touched;
 		bool m_valid = false;
 	};

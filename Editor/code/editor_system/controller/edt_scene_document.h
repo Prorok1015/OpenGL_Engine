@@ -139,6 +139,8 @@ namespace edt
 		void finish_apply();
 		// Rebuilds the contexts of the worlds changed since the last call; document_changed if any was rebuilt.
 		void reload_touched();
+		// worlds_systems_list follows the systems of the world descs, which an edit or an undo changes.
+		void refresh_systems_cache();
 
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
 		bool m_unrecorded = false;

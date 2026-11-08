@@ -24,6 +24,8 @@ namespace scn
 		virtual void serialize(json::object&) const override;
 
 		const std::vector<std::string>& get_systems() const { return systems; }
+		// The names of the systems the world runs, in the order they are scheduled within a phase.
+		void set_systems(std::vector<std::string> names) { systems = std::move(names); }
 		std::string_view get_name() const { return name; }
 		// Input stacking of the context (higher is on top, UI = 1); see gs::route_input.
 		int get_input_layer() const { return input_layer; }

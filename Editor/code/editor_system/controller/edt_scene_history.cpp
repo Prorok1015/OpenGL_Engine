@@ -147,9 +147,15 @@ namespace {
 	class scene_change final : public edt::history_change
 	{
 	public:
-		scene_change(std::vector<scn::world_desc>& worlds, edt::scene_history_index& index, std::vector<edt::scene_node_change> changes)
-			: m_worlds(worlds), m_index(index), m_changes(std::move(changes))
+		scene_change(std::vector<scn::world_desc>& worlds, edt::scene_history_index& index, std::vector<edt::scene_node_change> changes,
+			std::vector<edt::scene_world_change> world_changes)
+			: m_worlds(worlds), m_index(index), m_changes(std::move(changes)), m_world_changes(std::move(world_changes))
 		{
+			// The list of systems of a world is one thing a commit can change: two edits of it conflict.
+			for (const auto& change : m_world_changes) {
+				m_keys.push_back(std::format("world:{}:systems", change.world));
+				m_marks.push_back(m_keys.back());
+			}
 			for (const auto& change : m_changes) {
 				m_keys.push_back(node_key(change.world, change.id));
 				// A node that only moved is the agent's edit when the agent moved it, not when a sibling went.
@@ -160,8 +166,16 @@ namespace {
 			}
 		}
 
-		void undo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, true); }
-		void redo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, false); }
+		void undo() override
+		{
+			edt::apply_scene_changes(m_worlds, m_index, m_changes, true);
+			apply_world_changes(true);
+		}
+		void redo() override
+		{
+			edt::apply_scene_changes(m_worlds, m_index, m_changes, false);
+			apply_world_changes(false);
+		}
 		const std::vector<std::string>& keys() const override { return m_keys; }
 		const std::vector<std::string>& marks() const override { return m_marks; }
 
@@ -207,9 +221,23 @@ namespace {
 		}
 
 	private:
+		void apply_world_changes(bool undo)
+		{
+			for (const auto& change : m_world_changes) {
+				if (change.world >= m_worlds.size()) {
+					continue;
+				}
+				const std::vector<std::string>& names = undo ? change.before : change.after;
+				m_worlds[change.world].set_systems(names);
+				m_index.set_systems(change.world, names);
+				m_index.touch(change.world);
+			}
+		}
+
 		std::vector<scn::world_desc>& m_worlds;
 		edt::scene_history_index& m_index;
 		std::vector<edt::scene_node_change> m_changes;
+		std::vector<edt::scene_world_change> m_world_changes;
 		std::vector<std::string> m_keys;
 		std::vector<std::string> m_marks;
 	};
@@ -272,6 +300,10 @@ edt::scene_node_state edt::placement_of(const scene_node_state& state, std::uint
 bool edt::scene_history_index::rebuild(const std::vector<scn::world_desc>& worlds)
 {
 	m_worlds.assign(worlds.size(), {});
+	m_systems.clear();
+	for (const auto& world : worlds) {
+		m_systems.push_back(world.get_systems());
+	}
 	m_valid = false;
 	for (std::size_t w = 0; w < worlds.size(); ++w) {
 		auto& index = m_worlds[w];
@@ -383,9 +415,20 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 	for (const auto& [depth, index] : removed_order) {
 		changes.push_back(std::move(removed[index]));
 	}
-	stats.changes = changes.size();
-	if (changes.empty()) {
+	// What a world holds besides its nodes: the nodes are compared above, these are compared here.
+	std::vector<scene_world_change> world_changes;
+	for (std::size_t w = 0; w < worlds.size() && w < m_systems.size(); ++w) {
+		if (worlds[w].get_systems() != m_systems[w]) {
+			world_changes.push_back({ w, m_systems[w], worlds[w].get_systems() });
+		}
+	}
+	stats.changes = changes.size() + world_changes.size();
+	if (changes.empty() && world_changes.empty()) {
 		return diff_result::unchanged;
+	}
+	for (const auto& entry : world_changes) {
+		m_systems[entry.world] = entry.after;
+		touch(entry.world);
 	}
 	for (const auto& entry : changes) {
 		touch(entry.world);
@@ -395,7 +438,7 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 			set(entry.world, entry.id, entry.after);
 		}
 	}
-	change = std::make_unique<scene_change>(worlds, *this, std::move(changes));
+	change = std::make_unique<scene_change>(worlds, *this, std::move(changes), std::move(world_changes));
 	return diff_result::changed;
 }
 
@@ -437,6 +480,13 @@ void edt::scene_history_index::touch(std::size_t world)
 {
 	if (std::find(m_touched.begin(), m_touched.end(), world) == m_touched.end()) {
 		m_touched.push_back(world);
+	}
+}
+
+void edt::scene_history_index::set_systems(std::size_t world, std::vector<std::string> names)
+{
+	if (world < m_systems.size()) {
+		m_systems[world] = std::move(names);
 	}
 }
 
