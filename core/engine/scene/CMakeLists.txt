@@ -9,6 +9,11 @@ if(NOT SNK_WITH_ASSIMP)
 	list(FILTER SE_SCENE_SOURCES EXCLUDE REGEX "/adapters/scn_(model_importer_adapter|assimp_resource_system_wrapper)\\.cpp$")
 endif()
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SCENE_SOURCES})
+if(MSVC)
+	# The component schemas of the snapshot catalog (scn_engine_components*.cpp) instantiate a binding per described
+	# type: one file holds more sections than a default MSVC object file allows (C1128).
+	target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+endif()
 snk_component_headers(${PROJECT_NAME})
 
 # scene does NOT use gui (verified: zero gui includes / gui:: usage) — the link was dead and is a
