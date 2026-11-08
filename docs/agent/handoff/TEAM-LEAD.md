@@ -27,7 +27,7 @@
 - Сессии пишут в `wip/*`, открывают draft PR в `aibranch`. Перед каждой задачей — DISCOVER→PLAN, план согласует координатор; архитектурные развилки — владельцу с рекомендацией.
 - Агенты не собирают и не запускают локально: проверка — CI на PR.
 - Независимое ревью каждого PR отдельным агентом (для политики, MCP, путей, конкурентности — ревью безопасности); раунд правок проверяется повторно.
-- Слияние: быстрый уровень CI (6 job) → снять draft → полный CI 12/12 → `git merge-tree --write-tree origin/aibranch <head>` без конфликтов → smoke «diff:» на baseline (1×0.000%, 4×0.146%, 1×1.370% — checklist.png вырос с 0.404% после #577: инспектор камеры без полей transform; 3D-виды не сдвинулись) → squash с `expectedHeadSha`, trailers `Co-Authored-By` + `Claude-Session` → закрыть issue, отметить AC → сообщить сессии.
+- Слияние: быстрый уровень CI (6 job) → снять draft → полный CI 12/12 → `git merge-tree --write-tree origin/aibranch <head>` без конфликтов → smoke «diff:» на baseline (1×0.000%, 4×0.139%, 1×1.218% — с #586 (2026-11-08, GCC 15 в CI); раньше 0.146%/1.370% на GCC 13; checklist.png вырос с 0.404% после #577 — инспектор камеры) → squash с `expectedHeadSha`, trailers `Co-Authored-By` + `Claude-Session` → закрыть issue, отметить AC → сообщить сессии.
 - Конфликт с `aibranch`: сессия вливает `aibranch` merge-коммитом (не rebase, не force-push), затем снова полный CI.
 - Эталонные PNG smoke меняются только решением владельца.
 - CodeRabbit игнорируется.

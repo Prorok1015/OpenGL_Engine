@@ -86,10 +86,15 @@ include(imgui)
 # in that case core/core/common/CMakeLists.txt wires the include dirs.
 if(NOT ENGINE_BOOST_NO_LIB)
     include(FetchContent)
+    # CI downloads the tarball itself (retries, cache: .github/actions/boost-tarball) and points SNK_BOOST_URL at it.
+    set(SNK_BOOST_URL "https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz")
+    if(DEFINED ENV{SNK_BOOST_URL} AND NOT "$ENV{SNK_BOOST_URL}" STREQUAL "")
+        set(SNK_BOOST_URL "$ENV{SNK_BOOST_URL}")
+    endif()
     FetchContent_Declare(
         Boost
-        URL https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz
-        URL_MD5 893b5203b862eb9bbd08553e24ff146a
+        URL "${SNK_BOOST_URL}"
+        URL_HASH SHA256=2e64e5d79a738d0fa6fb546c6e5c2bd28f88d268a2a080546f74e5ff98f29d0e
         DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
     set(BOOST_INCLUDE_LIBRARIES json asio program_options test describe mp11)
