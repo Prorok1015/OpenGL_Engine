@@ -2,13 +2,16 @@
 #include <assimp/MemoryIOWrapper.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_path_sanitize.h>
+#include <stdexcept>
 
 edt::filesystem_assimp_io::filesystem_assimp_io(
 	const std::filesystem::path& root_path,
-	const std::vector<std::byte>& root_data)
+	const std::vector<std::byte>& root_data,
+	model_file_access* access)
 	: m_root_path(root_path)
 	, m_base_dir(root_path.parent_path())
 	, m_root_data(root_data)
+	, m_access(access)
 {
 }
 
@@ -21,6 +24,8 @@ bool edt::filesystem_assimp_io::Exists(const char* pFile) const
 	std::error_code ec;
 	if (std::filesystem::equivalent(p, m_root_path, ec))
 		return true;
+
+	if (m_access) return m_access->resolve(pFile, model_file_kind::side_file).found();
 
 	// Model files name their dependencies (mtllib, buffer uris): never look outside the model directory.
 	const auto full = res::path_within_dir(m_base_dir, pFile, true);
@@ -42,6 +47,22 @@ Assimp::IOStream* edt::filesystem_assimp_io::Open(const char* pFile, const char*
 		return new Assimp::MemoryIOStream(
 			reinterpret_cast<const uint8_t*>(m_root_data.data()),
 			m_root_data.size());
+	}
+
+	if (m_access) {
+		const resolved_reference reference = m_access->resolve(pFile, model_file_kind::side_file);
+		if (!reference.error.empty()) {
+			egLOG_WARN("edt/import", "Refused to open '{}': {}", pFile, reference.error);
+			throw std::runtime_error(reference.error);
+		}
+		if (!reference.found()) return nullptr;
+		auto& cached = m_file_cache[reference.path.string()];
+		if (cached.empty()) {
+			auto bytes = m_access->read(reference);
+			if (!bytes) return nullptr;
+			cached = std::move(*bytes);
+		}
+		return new Assimp::MemoryIOStream(reinterpret_cast<const uint8_t*>(cached.data()), cached.size());
 	}
 
 	// Subsidiary file — read from model's directory

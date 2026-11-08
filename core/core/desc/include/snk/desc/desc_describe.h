@@ -147,6 +147,9 @@ namespace desc
 			return json::value(std::string_view{ value });
 		} else if constexpr (kind == field_kind::res_tag) {
 			return json::value(value.view());
+		} else if constexpr (kind == field_kind::entity) {
+			const auto raw = entity_traits<T>::to_raw(value);
+			return raw ? json::value(*raw) : json::value(nullptr);
 		} else if constexpr (kind == field_kind::enumeration) {
 			return json::value(enum_item_name<T>(value));
 		} else if constexpr (kind == field_kind::array) {
@@ -231,7 +234,7 @@ namespace desc
 					field.tooltip = std::string{ attr->tooltip };
 					field.filter = std::string{ attr->filter };
 				}
-				if constexpr (std::is_enum_v<member_type>) {
+				if constexpr (kind_of<member_type> == field_kind::enumeration) {
 					if (field.ref_type.empty()) {
 						field.ref_type = enum_type_name<member_type>();
 					}
@@ -252,7 +255,7 @@ namespace desc
 			const auto& table = field_attrs<T>;
 			for_each_data_member<T>([&](std::string_view member, auto pointer) {
 				using member_type = std::remove_cvref_t<decltype(defaults.*pointer)>;
-				if constexpr (std::is_enum_v<member_type>) {
+				if constexpr (kind_of<member_type> == field_kind::enumeration) {
 					const field_attr_data* attr = table.find(member);
 					enum_schema schema = make_enum_schema<member_type>(attr ? attr->ref : std::string_view{});
 					if (!schema.name.empty()) {

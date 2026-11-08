@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include "edt_agent_model_import.h"
 #include <snk/project/prj_create.h>
 #include <snk/window/wnd_window_system.h>
 #include <filesystem>
@@ -36,6 +37,10 @@ namespace edt
 		bool ok() const { return error.empty(); }
 	};
 	agent_level_path check_agent_level_path(std::string_view text);
+	// A folder below res://: the same rules, no extension.
+	agent_level_path check_agent_folder(std::string_view text);
+	// One name (an asset's): the same rules, a single segment.
+	agent_level_path check_agent_name(std::string_view text);
 
 	// What the File menu needs from the rest of the editor. Plain callbacks, so the menu flow can run
 	// without a level, a resource system or ImGui.
@@ -60,6 +65,8 @@ namespace edt
 		// Why the level may not be written now (a level is loading: the document does not belong to its file yet):
 		// file.save and file.save_as answer `busy` with it, whoever calls. Null or nullopt: they run.
 		std::function<std::optional<std::string>()> level_write_blocker;
+		// The import of a model an agent asks for, without a dialog (#548). Null: model import is not built in.
+		agent_model_import* agent_import = nullptr;
 		// Why the level may not be replaced now (the start level of --game is loading, #518): file.new and file.open
 		// answer `busy` with it, whoever calls. Null or nullopt: they run.
 		std::function<std::optional<std::string>()> level_change_blocker;

@@ -698,7 +698,7 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
 	for (const char* name : { "file_save", "file_save_as", "file_open" }) {
 		BOOST_TEST_CONTEXT(name) { BOOST_TEST(listed(name)); }
 	}
-	for (const char* name : { "file_new", "file_import_model", "file_exit", "file_open_project" }) {
+	for (const char* name : { "file_new", "file_exit", "file_open_project" }) {
 		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!listed(name)); }
 	}
 
@@ -1033,6 +1033,94 @@ BOOST_AUTO_TEST_CASE(ADeclinedCall_NeverRuns)
 	BOOST_TEST(answered->is_error);
 	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
 	BOOST_TEST(runs == 0);
+}
+
+// The model import of an agent through the policy gate: the person is asked about exactly the file, and a no reads nothing.
+namespace {
+
+struct import_question_fixture : question_fixture
+{
+	import_question_fixture()
+	{
+		dir.write("models/robot.glb", "glb");
+		edt::agent_import_options options;
+		options.import = [this](const edt::import_source&, ds::task_context*) {
+			++imports;
+			return edt::import_intermediate{};
+		};
+		options.scan = [](const edt::import_source&, ds::task_context*) { return edt::model_file_scan{}; };
+		options.resource_layers = [] { return std::vector<std::filesystem::path>{}; };
+		options.resources_path = [this] { return dir.path() / "res"; };
+		service = std::make_unique<edt::agent_model_import>(exporter, jobs, resources, std::move(options));
+		hooks.agent_import = service.get();
+		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);
+		menu->register_actions();
+	}
+
+	~import_question_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
+		menu.reset();
+		service.reset();
+	}
+
+	void ask_for_import(const std::string& extra = {})
+	{
+		answered.reset();
+		mcp::request_context context;
+		context.session_id = "session-1";
+		const std::string path = json::serialize(json::string((dir.path() / "models" / "robot.glb").string()));
+		bridge.call_tool(context, "file_import_model", json_of("{\"path\":" + path + extra + "}"), nullptr,
+			[this](mcp::call_result r) { answered = std::move(r); });
+		drain();
+	}
+
+	res::resource_system resources{ tasks };
+	edt::job_service jobs{ tasks };
+	edt::asset_exporter exporter{ resources };
+	edt::dialog_service dialogs;
+	edt::action_registry actions{ commands };
+	edt::file_menu_hooks hooks;
+	std::unique_ptr<edt::agent_model_import> service;
+	std::unique_ptr<edt::file_menu> menu;
+	int imports = 0;
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AModelImportAsksAboutExactlyThatFile_AndANoReadsNothing, import_question_fixture)
+{
+	ask_for_import();
+	BOOST_TEST(!answered.has_value());
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_TEST(waiting[0].command == "file.import_model");
+	BOOST_TEST(waiting[0].detail.find((dir.path() / "models" / "robot.glb").string()) != std::string::npos);
+	BOOST_TEST(waiting[0].detail.find("3 bytes") != std::string::npos);
+	BOOST_TEST(waiting[0].detail.find("assets/robot") != std::string::npos);
+	BOOST_TEST(!waiting[0].can_grant_session);
+
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::deny));
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(imports == 0);
+	BOOST_TEST(jobs.running_count() == 0u);
+	BOOST_TEST(!service->running());
+}
+
+BOOST_FIXTURE_TEST_CASE(AModelImportThePersonAllows_StartsOneJobForThatFile, import_question_fixture)
+{
+	ask_for_import();
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_REQUIRE(answered->structured.is_object());
+	BOOST_TEST(answered->structured.as_object().at("job").as_int64() > 0);
+	BOOST_TEST(service->running());
+	while (tasks.run_one(ds::lane::compute)) {}
+	drain();
+	BOOST_TEST(imports == 1);
 }
 
 BOOST_AUTO_TEST_CASE(NobodyToAsk_AnAskIsADenyAtOnce)

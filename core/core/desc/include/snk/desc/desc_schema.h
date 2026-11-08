@@ -231,6 +231,19 @@ namespace desc
 	template<typename T>
 	concept has_schema_generator = requires { sizeof(schema_generator<T>); };
 
+	// Specialized for an entity handle type (scn_component_schema.h does it for entt::entity) so that a member of
+	// that type is a field_kind::entity: written as its raw id (null when empty), read back only through
+	// read_context::entities, which maps the ids of a snapshot to the entities restored from it. The
+	// specialization must be visible wherever such a member is described. A specialization provides:
+	//       static std::optional<std::uint32_t> to_raw(T);   // nullopt for the empty handle
+	//       static T from_raw(std::uint32_t);
+	//       static T empty();
+	template<typename T>
+	struct entity_traits;
+
+	template<typename T>
+	concept is_entity_handle = requires { sizeof(entity_traits<T>); };
+
 	namespace detail
 	{
 		template<typename T>
@@ -270,6 +283,8 @@ namespace desc
 				return field_kind::f32;
 			} else if constexpr (std::is_same_v<T, double>) {
 				return field_kind::f64;
+			} else if constexpr (is_entity_handle<T>) {
+				return field_kind::entity;
 			} else if constexpr (std::is_enum_v<T>) {
 				return field_kind::enumeration;
 			} else if constexpr (std::is_same_v<T, glm::vec2>) {
