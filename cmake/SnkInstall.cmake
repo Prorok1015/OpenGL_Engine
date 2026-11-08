@@ -249,7 +249,8 @@ endfunction()
 
 # One INTERFACE_LINK_LIBRARIES item of a facade. `faceted`: the targets that have a facade; `kept`: the real
 # targets exported as they are (their archives stay). A facade never links: $<LINK_ONLY:...> and plain library names
-# are dropped, a kept archive is used through $<COMPILE_ONLY:...>.
+# are dropped, a kept archive is used through $<COMPILE_ONLY:...>, and an item that was $<COMPILE_ONLY:...> stays
+# so: unwrapped, the consumer would inherit the plain links of what it names (Threads::Threads, ...).
 function(_snk_sdk_facade_link_item out item faceted kept)
 	set(${out} "" PARENT_SCOPE)
 	if(item STREQUAL "" OR item MATCHES "^\\$<LINK_ONLY:")
@@ -274,7 +275,11 @@ function(_snk_sdk_facade_link_item out item faceted kept)
 	_snk_sdk_real_target(_real ${item})
 	if(_real IN_LIST faceted)
 		_snk_sdk_facade_name(_facade ${_real})
-		set(${out} "${_facade}" PARENT_SCOPE)
+		if(_wrapped)
+			set(${out} "$<COMPILE_ONLY:${_facade}>" PARENT_SCOPE)
+		else()
+			set(${out} "${_facade}" PARENT_SCOPE)
+		endif()
 	elseif(_real IN_LIST kept)
 		get_target_property(_type ${_real} TYPE)
 		if(_type STREQUAL "INTERFACE_LIBRARY" AND NOT _wrapped)
@@ -285,38 +290,66 @@ function(_snk_sdk_facade_link_item out item faceted kept)
 	else()
 		# An imported target is found on the consumer side (Threads::Threads); any other is build-only (sanitizers).
 		get_target_property(_imported ${_real} IMPORTED)
-		if(_imported)
+		if(_imported AND _wrapped)
+			set(${out} "$<COMPILE_ONLY:${item}>" PARENT_SCOPE)
+		elseif(_imported)
 			set(${out} "${item}" PARENT_SCOPE)
 		endif()
 	endif()
 endfunction()
 
+# A property value as get_target_property gives it is set when it is neither unset (<var>-NOTFOUND) nor empty;
+# `if(<var>)` would also drop the values CMake reads as false (0, OFF, N, ...).
+function(_snk_sdk_property_set out value)
+	if("${value}" STREQUAL "" OR "${value}" MATCHES "-NOTFOUND$")
+		set(${out} FALSE PARENT_SCOPE)
+	else()
+		set(${out} TRUE PARENT_SCOPE)
+	endif()
+endfunction()
+
 function(_snk_sdk_make_facade tgt faceted kept)
+	# Every usage requirement a consumer can inherit, but INTERFACE_LINK_LIBRARIES (remapped below). The link-side
+	# ones reach a consumer only through a plain link to the facade, as they reached it through the real target.
+	set(_properties
+		INTERFACE_INCLUDE_DIRECTORIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES INTERFACE_COMPILE_DEFINITIONS
+		INTERFACE_COMPILE_OPTIONS INTERFACE_COMPILE_FEATURES INTERFACE_PRECOMPILE_HEADERS INTERFACE_SOURCES
+		INTERFACE_POSITION_INDEPENDENT_CODE INTERFACE_LINK_OPTIONS INTERFACE_LINK_DIRECTORIES INTERFACE_LINK_DEPENDS
+		INTERFACE_AUTOUIC_OPTIONS INTERFACE_AUTOMOC_MACRO_NAMES COMPATIBLE_INTERFACE_BOOL COMPATIBLE_INTERFACE_STRING
+		COMPATIBLE_INTERFACE_NUMBER_MIN COMPATIBLE_INTERFACE_NUMBER_MAX EXPORT_PROPERTIES)
+	# Custom properties a target exports (EXPORT_PROPERTIES) go along with it.
+	get_target_property(_exported ${tgt} EXPORT_PROPERTIES)
+	_snk_sdk_property_set(_has_exported "${_exported}")
+	if(_has_exported)
+		list(APPEND _properties ${_exported})
+	endif()
 	_snk_sdk_facade_name(_facade ${tgt})
 	add_library(${_facade} INTERFACE)
 	get_target_property(_name ${tgt} EXPORT_NAME)
-	if(NOT _name)
+	_snk_sdk_property_set(_has_name "${_name}")
+	if(NOT _has_name)
 		set(_name ${tgt})
 	endif()
 	set_property(TARGET ${_facade} PROPERTY EXPORT_NAME ${_name})
-	foreach(_prop INTERFACE_INCLUDE_DIRECTORIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES INTERFACE_COMPILE_DEFINITIONS
-			INTERFACE_COMPILE_OPTIONS INTERFACE_COMPILE_FEATURES)
+	foreach(_prop IN LISTS _properties)
 		get_target_property(_value ${tgt} ${_prop})
-		if(_value)
+		_snk_sdk_property_set(_has "${_value}")
+		if(_has)
 			set_property(TARGET ${_facade} PROPERTY ${_prop} "${_value}")
 		endif()
 	endforeach()
 	get_target_property(_links ${tgt} INTERFACE_LINK_LIBRARIES)
+	_snk_sdk_property_set(_has_links "${_links}")
 	set(_new "")
-	if(_links)
+	if(_has_links)
 		foreach(_item IN LISTS _links)
 			_snk_sdk_facade_link_item(_mapped "${_item}" "${faceted}" "${kept}")
-			if(_mapped)
+			if(NOT "${_mapped}" STREQUAL "")
 				list(APPEND _new "${_mapped}")
 			endif()
 		endforeach()
 	endif()
-	if(_new)
+	if(NOT "${_new}" STREQUAL "")
 		list(REMOVE_DUPLICATES _new)
 		set_property(TARGET ${_facade} PROPERTY INTERFACE_LINK_LIBRARIES "${_new}")
 	endif()

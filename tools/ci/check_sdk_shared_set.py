@@ -9,7 +9,9 @@ usage-only (cmake/SnkInstall.cmake, _snk_sdk_make_facade). Linking one of their 
 second copy of its code and globals next to the DLL's. Checked in <prefix>/lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake:
   1. every STATIC IMPORTED target is on the allow list (--allow, without the snk:: namespace): on Windows the
      archives a game module links itself (Boost.JSON, SPIKE-218 section 3.6);
-  2. nothing a consumer of snk::engine and snk::engine_api links (plain and $<LINK_ONLY:...> items, transitively;
+  2. snk::engine has no interface links, and every interface link of snk::engine_api and snk::core_api is a
+     $<COMPILE_ONLY:...> item (the plan of #581: a consumer links the engine alone);
+  3. nothing a consumer of snk::engine and snk::engine_api links (plain and $<LINK_ONLY:...> items, transitively;
      $<COMPILE_ONLY:...> does not link) is a STATIC target;
 and <prefix>/lib/snk/ holds no archive but the engine's import library and the allowed ones.
 """
@@ -19,6 +21,7 @@ from pathlib import Path
 
 TARGETS_FILE = Path('lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake')
 ENTRY_POINTS = ('snk::engine', 'snk::engine_api')
+USAGE_ONLY = ('snk::engine_api', 'snk::core_api')
 ARCHIVE_SUFFIXES = ('.lib', '.a')
 
 
@@ -47,6 +50,16 @@ def check_targets(text, allowed):
     for name, kind in sorted(types.items()):
         if kind == 'STATIC' and name[len('snk::'):] not in allowed:
             errors.append(f'{name} is a STATIC target of the shared set (allowed: {", ".join(sorted(allowed)) or "none"})')
+    if 'snk::engine' not in types:
+        errors.append('snk::engine is not exported')
+    elif links.get('snk::engine'):
+        errors.append(f'snk::engine has interface links: {";".join(links["snk::engine"])}')
+    for name in USAGE_ONLY:
+        if name not in types:
+            errors.append(f'{name} is not exported')
+        for item in links.get(name, []):
+            if not item.startswith('$<COMPILE_ONLY:'):
+                errors.append(f'{name} links {item}, not $<COMPILE_ONLY:...>')
     seen = set()
     todo = [t for t in ENTRY_POINTS if t in types]
     while todo:
@@ -84,27 +97,58 @@ def check_archives(lib_dir, files, allowed):
 
 
 def self_test():
+    # As install(EXPORT) writes it: `$` escaped, include directories before the links, a facade's plain links
+    # (other facades, an imported system target) and a kept archive (MSVC) used compile-only.
     good = '''add_library(snk::engine SHARED IMPORTED)
+
 add_library(snk::engine_api INTERFACE IMPORTED)
+
 set_target_properties(snk::engine_api PROPERTIES
-  INTERFACE_LINK_LIBRARIES "\\$<COMPILE_ONLY:snk::scene>"
+  INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include"
+  INTERFACE_LINK_LIBRARIES "\\$<COMPILE_ONLY:snk::core_api>;\\$<COMPILE_ONLY:snk::scene>"
 )
+
+add_library(snk::core_api INTERFACE IMPORTED)
+
+set_target_properties(snk::core_api PROPERTIES
+  INTERFACE_LINK_LIBRARIES "\\$<COMPILE_ONLY:snk::ecs>"
+)
+
 add_library(snk::scene INTERFACE IMPORTED)
+
 set_target_properties(snk::scene PROPERTIES
-  INTERFACE_LINK_LIBRARIES "snk::thirdparty_glm;\\$<COMPILE_ONLY:snk::thirdparty_boost_json>"
+  INTERFACE_COMPILE_DEFINITIONS "GLM_FORCE_RADIANS"
+  INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include"
+  INTERFACE_LINK_LIBRARIES "snk::ecs;snk::thirdparty_glm;Threads::Threads;\\$<COMPILE_ONLY:snk::thirdparty_boost_json>"
 )
+
+add_library(snk::ecs INTERFACE IMPORTED)
+
 add_library(snk::thirdparty_glm INTERFACE IMPORTED)
+
 add_library(snk::thirdparty_boost_json STATIC IMPORTED)
 '''
+    assert parse_targets(good)[1]['snk::scene'][-1] == '$<COMPILE_ONLY:snk::thirdparty_boost_json>'
     assert check_targets(good, {'thirdparty_boost_json'}) == []
     assert len(check_targets(good, set())) == 1  # boost_json not allowed
-    # engine_api links scene plainly, and scene links the archive.
+    # A facade links the archive plainly, and engine_api reaches it plainly.
     linked = good.replace('\\$<COMPILE_ONLY:snk::scene>', 'snk::scene').replace(
         '\\$<COMPILE_ONLY:snk::thirdparty_boost_json>', 'snk::thirdparty_boost_json')
     assert linked != good
-    assert any('links the archive' in e for e in check_targets(linked, {'thirdparty_boost_json'}))
+    errors = check_targets(linked, {'thirdparty_boost_json'})
+    assert any('links the archive' in e for e in errors)
+    assert any('snk::engine_api links snk::scene' in e for e in errors)
     static_scene = good.replace('add_library(snk::scene INTERFACE', 'add_library(snk::scene STATIC')
     assert len(check_targets(static_scene, {'thirdparty_boost_json'})) == 1
+    engine_links = good.replace('add_library(snk::engine SHARED IMPORTED)\n', '''add_library(snk::engine SHARED IMPORTED)
+
+set_target_properties(snk::engine PROPERTIES
+  INTERFACE_LINK_LIBRARIES "Threads::Threads"
+)
+''')
+    assert any('snk::engine has interface links' in e for e in check_targets(engine_links, {'thirdparty_boost_json'}))
+    core_plain = good.replace('\\$<COMPILE_ONLY:snk::ecs>', 'snk::ecs')
+    assert any('snk::core_api links snk::ecs' in e for e in check_targets(core_plain, {'thirdparty_boost_json'}))
     config = '''set_target_properties(snk::thirdparty_boost_json PROPERTIES
   IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/lib/snk/libboost_json-vc145-mt-x64-1_84.lib"
   )
