@@ -114,6 +114,11 @@ namespace edt
 		std::function<bool()> enabled{};
 		// What the command is to an agent (cmd::command_desc::category); unset: closed to agents.
 		cmd::agent_category category = cmd::agent_category::unset;
+		// As on cmd::command_desc: what asks a person before an agent's call (`risk`), what the person is told about the
+		// call (`describe`), and a command that starts a job and answers `{job}` (`starts_job`).
+		cmd::danger risk = cmd::danger::none;
+		std::function<std::optional<std::string>(const cmd::call&)> describe{};
+		bool starts_job = false;
 	};
 
 	// One menu item as the main menu draws it.

@@ -31,6 +31,7 @@
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
 #include "edt_file_menu.h"
+#include "edt_agent_model_import.h"
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
@@ -322,6 +323,28 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
 	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs(), m_res);
+	{
+		edt::agent_import_options import_options;
+#if SNK_HAS_ASSIMP
+		import_options.import = [importer = m_model_importer.get()](const edt::import_source& source, ds::task_context* task) {
+			return importer->import_background(source, task);
+		};
+		import_options.scan = [](const edt::import_source& source, ds::task_context* task) {
+			return edt::model_importer::scan_files(source, task);
+		};
+#endif
+		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
+		import_options.resources_path = [this] { return m_res.get_resources_path(); };
+		import_options.blocker = [this]() -> std::optional<std::string> {
+			if (m_play && m_play->active()) return std::string{ "Stop Play to import." };
+			if (m_export_dialog_active) return std::string{ "an import is waiting in the editor's export dialog" };
+#if SNK_HAS_ASSIMP
+			if (m_importing) return std::string{ "an import is already running in the editor" };
+#endif
+			return std::nullopt;
+		};
+		m_agent_import = std::make_unique<edt::agent_model_import>(*m_asset_exporter, m_context->jobs(), m_res, std::move(import_options));
+	}
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});
@@ -502,6 +525,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 #if SNK_HAS_ASSIMP
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 #endif
+	hooks.agent_import = m_agent_import.get();
 	hooks.exit = m_exit_action;
 	hooks.resources_path = m_res.get_resources_path();
 	hooks.open_project = start_editor_on;
@@ -1311,6 +1335,10 @@ bool edt::editor_system::poll_import_pipeline()
 void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 {
 	if (m_importing) return;
+	if (m_agent_import && m_agent_import->running()) {
+		m_context->dialogs().message(message_level::info, "An import asked for by an agent is running: wait for it, or cancel it in the job list.");
+		return;
+	}
 	if (refused_during_play(m_play.get(), m_context->dialogs(), "Stop Play to import.")) return;
 
 	m_importing = true;

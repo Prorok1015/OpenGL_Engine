@@ -132,7 +132,10 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 	if (m_headless && command->desc.needs_display) {
 		return result::failure(codes::unavailable_headless, std::format("'{}' needs a display; this editor runs headless", id));
 	}
-	if (!command->is_enabled()) return result::failure(codes::disabled, std::format("command '{}' is disabled", id));
+	if (!command->is_enabled()) {
+		const std::string reason = command->desc.disabled_reason ? command->desc.disabled_reason() : std::string{};
+		return result::failure(codes::disabled, reason.empty() ? std::format("command '{}' is disabled", id) : std::format("command '{}' is disabled: {}", id, reason));
+	}
 	if (!request.args.is_object()) return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': expected an object", id));
 	// Before the schema: a call that is refused learns nothing about the arguments.
 	if (m_gate && request.from.kind == origin_kind::agent) {

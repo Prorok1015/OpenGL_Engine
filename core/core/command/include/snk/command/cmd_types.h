@@ -162,5 +162,7 @@ namespace cmd
 		std::function<result(const call&)> invoke;
 		// Null: always enabled.
 		std::function<bool()> enabled;
+		// Why the command is disabled right now, for the error of a call that is refused for it. Null: no reason given.
+		std::function<std::string()> disabled_reason;
 	};
 }

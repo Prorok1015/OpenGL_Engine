@@ -1114,8 +1114,8 @@ BOOST_AUTO_TEST_CASE(SaveSaveAsAndOpen_AreSceneEditCommandsForAgents)
 			BOOST_CHECK((command->category == cmd::agent_category::scene_edit));
 		}
 	}
-	// Nothing else of the menu is open to an agent (#548 takes import_model).
-	for (const char* id : { "file.new", "file.import_model", "file.new_project", "file.open_project", "file.exit" }) {
+	// Nothing else of the menu is open to an agent (file.import_model has its own tests, #548).
+	for (const char* id : { "file.new", "file.new_project", "file.open_project", "file.exit" }) {
 		const cmd::command_desc* command = m.actions.commands().find(id);
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_REQUIRE(command != nullptr);

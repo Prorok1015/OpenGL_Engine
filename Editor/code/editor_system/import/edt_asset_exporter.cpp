@@ -74,7 +74,10 @@ bool edt::asset_exporter::export_to_project(
 	const import_result& result,
 	const std::unordered_map<res::tag, res::tag>& remap,
 	export_progress* progress,
-	ds::task_context* ctx) const
+	ds::task_context* ctx,
+	std::vector<res::tag>* written,
+	bool wait_for_writes,
+	const std::function<void(int, int)>& on_file) const
 {
 	// Process tags in order: leaves first (textures, geometry), then prefab (root) last.
 	// root_tag is already known from import_result — no filename guessing needed.
@@ -93,6 +96,7 @@ bool edt::asset_exporter::export_to_project(
 		progress->done.store(0);
 	}
 
+	int files_done = 0;
 	for (const auto& mem_tag : ordered_tags) {
 		if (ctx) ctx->throw_if_stopped();
 		auto remap_it = remap.find(mem_tag);
@@ -137,9 +141,19 @@ bool edt::asset_exporter::export_to_project(
 		}
 
 		// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
-		m_res.store(res_tag, output_bytes);
+		if (wait_for_writes) {
+			if (!m_res.store_sync(res_tag, output_bytes)) {
+				egLOG_ERROR("edt/export", "'{}' could not be written", res_tag.view());
+				return false;
+			}
+		} else {
+			m_res.store(res_tag, output_bytes);
+		}
+		if (written) written->push_back(res_tag);
 
 		if (progress) progress->done.fetch_add(1);
+		++files_done;
+		if (on_file) on_file(files_done, static_cast<int>(ordered_tags.size()));
 
 		egLOG_INFO("edt/export", "Exported: {} → {}", mem_tag.view(), res_tag.view());
 	}
