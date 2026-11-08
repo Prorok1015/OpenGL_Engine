@@ -1403,6 +1403,8 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_level_ctrl.unwatch_level();
 
 	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
+	// A load that was never finished (begin_level_load called again): its copy goes.
+	if (m_loading_level) abandon_level_load();
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
 
@@ -1419,12 +1421,26 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_loading_level = true;
 }
 
-void edt::editor_system::abandon_level_load()
+void edt::editor_system::release_level_load()
 {
 	m_loading_editor_tag = res::tag{};
 	m_loading_level_tag = res::tag{};
 	m_loading_level = false;
 	m_loading_level_handle = {};
+}
+
+void edt::editor_system::erase_loading_copy(const res::tag& copy)
+{
+	constexpr std::string_view prefix = "memory://editor/loading/";
+	if (!copy.is_valid() || !copy.view().starts_with(prefix)) return;
+	m_services.writable_resources()->erase(copy);
+}
+
+void edt::editor_system::abandon_level_load()
+{
+	const res::tag copy = m_loading_editor_tag;
+	release_level_load();
+	erase_loading_copy(copy);
 }
 
 bool edt::editor_system::poll_level_load(bool* loaded_out)
@@ -1476,7 +1492,13 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 		m_state.level_tag = level_tag_before;
 		m_state.editor_tag = editor_tag_before;
 	}
-	abandon_level_load();
+	if (loaded) {
+		// The previous level's working copy has no user left: the level set was rebuilt from the new one.
+		release_level_load();
+		if (editor_tag_before != m_state.editor_tag) erase_loading_copy(editor_tag_before);
+	} else {
+		abandon_level_load();
+	}
 	if (loaded) {
 		egLOG_INFO("Editor/LoadLevel", "level loaded: {}", m_state.level_tag.view());
 		if (m_stop_after_level_loaded) {

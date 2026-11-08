@@ -222,8 +222,12 @@ namespace edt {
 		res::tag m_loading_level_tag;
 		res::tag m_loading_editor_tag;
 		std::uint32_t m_load_serial = 0;
-		// A load that ended without a level: the document keeps what it had.
+		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
 		void abandon_level_load();
+		// The load is over: forgets its tags and handle. The working copy stays (it is the document's now).
+		void release_level_load();
+		// Removes the working copy of a load (only `memory://editor/loading/...`; the document's other copies are not touched).
+		void erase_loading_copy(const res::tag& copy);
 		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
 		bool poll_level_load(bool* loaded = nullptr);
 
