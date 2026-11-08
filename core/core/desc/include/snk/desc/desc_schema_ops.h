@@ -27,10 +27,21 @@ namespace desc
 	// desc_system that loads them and the desc being read, whose tag names the memory:// copies of inline objects.
 	// Both stay null for a read that has no desc around (a runtime blob edit, a test); such a read cannot resolve a
 	// desc_ref and the field keeps its value.
+	// The entities a snapshot was taken from, by raw id, mapped to the ones restored from it (field_kind::entity of
+	// a C++ type). nullopt: the id was not in the snapshot, the reference reads back empty.
+	class entity_remap
+	{
+	public:
+		virtual ~entity_remap() = default;
+		virtual std::optional<std::uint32_t> find(std::uint32_t saved) const = 0;
+	};
+
 	struct read_context
 	{
 		desc_system* system = nullptr;
 		const desc_base* owner = nullptr;
+		// Only a snapshot restore sets it; without it an entity field cannot be read and keeps its value.
+		const entity_remap* entities = nullptr;
 	};
 
 	// obj is the address of the whole object (a T* for C++ bindings, a dyn_ref* for runtime ones).
