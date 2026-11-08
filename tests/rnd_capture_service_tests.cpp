@@ -291,6 +291,59 @@ BOOST_AUTO_TEST_CASE(Capture_FitScalesTheTargetDownToTheLimitsKeepingItsProporti
 	BOOST_CHECK_EQUAL(single.image.size.y, 1);
 }
 
+BOOST_AUTO_TEST_CASE(Capture_FitOfExtremeAspectsKeepsEverySideAtLeastOnePixel)
+{
+	auto strip = make_texture(drv, target_header(8192, 3));
+	auto pole = make_texture(drv, target_header(1, 8192));
+	cmd::registration strip_reg = service.add_target("strip", [&strip] { return strip.handle(); });
+	cmd::registration pole_reg = service.add_target("pole", [&pole] { return pole.handle(); });
+
+	rnd::capture_limits side;
+	side.max_side = 100;
+	side.fit = true;
+	const auto flat = service.capture("strip", { 0, 0 }, side);
+	BOOST_REQUIRE(flat.ok());
+	BOOST_CHECK_EQUAL(flat.image.size.x, 100);
+	BOOST_CHECK_EQUAL(flat.image.size.y, 1);
+	const auto thin = service.capture("pole", { 0, 0 }, side);
+	BOOST_REQUIRE(thin.ok());
+	BOOST_CHECK_EQUAL(thin.image.size.x, 1);
+	BOOST_CHECK_EQUAL(thin.image.size.y, 100);
+
+	rnd::capture_limits pixels;
+	pixels.max_pixels = 10;
+	pixels.fit = true;
+	const auto budget = service.capture("strip", { 0, 0 }, pixels);
+	BOOST_REQUIRE(budget.ok());
+	BOOST_CHECK_GE(budget.image.size.x, 1);
+	BOOST_CHECK_GE(budget.image.size.y, 1);
+	BOOST_CHECK_LE(static_cast<std::int64_t>(budget.image.size.x) * budget.image.size.y, 10);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitHonoursMaxSideAndMaxPixelsTogether)
+{
+	auto wide = make_texture(drv, target_header(40, 20));
+	cmd::registration wide_reg = service.add_target("wide", [&wide] { return wide.handle(); });
+
+	// The side limit alone gives 20 x 10 = 200 pixels, over the budget; the budget then takes it to 10 x 5.
+	rnd::capture_limits both;
+	both.max_side = 20;
+	both.max_pixels = 50;
+	both.fit = true;
+	const auto fitted = service.capture("wide", { 0, 0 }, both);
+	BOOST_REQUIRE(fitted.ok());
+	BOOST_CHECK_EQUAL(fitted.image.size.x, 10);
+	BOOST_CHECK_EQUAL(fitted.image.size.y, 5);
+
+	// The other way round: the budget is roomy, the side limit decides.
+	both.max_side = 8;
+	both.max_pixels = 1000;
+	const auto by_side = service.capture("wide", { 0, 0 }, both);
+	BOOST_REQUIRE(by_side.ok());
+	BOOST_CHECK_EQUAL(by_side.image.size.x, 8);
+	BOOST_CHECK_EQUAL(by_side.image.size.y, 4);
+}
+
 BOOST_AUTO_TEST_CASE(Capture_FitNeverEnlargesASmallTarget)
 {
 	rnd::capture_limits roomy;
@@ -525,6 +578,12 @@ BOOST_AUTO_TEST_CASE(Capture_WithoutASizeMaxSideScalesTheViewDown)
 	const auto native = capture(R"({"viewport":"wide"})");
 	BOOST_REQUIRE_MESSAGE(native.ok, native.error);
 	BOOST_CHECK_EQUAL(native.value.as_object().at("width").as_int64(), 64);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FitIsNotAnArgument)
+{
+	BOOST_CHECK_EQUAL(capture(R"({"fit":true})").code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"max_side":16,"fit":false})").code, cmd::codes::invalid_args);
 }
 
 BOOST_AUTO_TEST_CASE(Registered_DescribesHowSizeAndLimitsWork)

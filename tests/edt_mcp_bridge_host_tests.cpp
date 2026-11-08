@@ -607,6 +607,23 @@ BOOST_AUTO_TEST_CASE(CallTool_ACaptureSizeIsLimitedForAnAgent)
 	BOOST_TEST(seen[2] == R"({"max_side":1280,"max_pixels":4194304,"max_source_pixels":8388608})");
 }
 
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentCannotSwitchFitOnOrOffItself)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	// The schema has no `fit`: the command decides it from the arguments, so an argument of that name is refused.
+	BOOST_TEST(call_tool("viewport_capture", R"({"fit":true})").is_error);
+	BOOST_TEST(call_tool("viewport_capture", R"({"max_side":100,"fit":false})").is_error);
+	BOOST_TEST(seen.empty());
+}
+
 BOOST_AUTO_TEST_CASE(CallTool_ACaptureWithOnlyMaxSideIsFittedNotRefused)
 {
 	std::vector<std::string> seen;

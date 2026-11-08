@@ -1,9 +1,9 @@
 #include <snk/render/rnd_capture_service.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <cstring>
 #include <format>
 #include <optional>
