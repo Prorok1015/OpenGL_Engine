@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/resource/res_tag.h>
 #include <memory>
+#include <string_view>
 
 namespace res
 {
@@ -16,6 +17,9 @@ namespace res
 		bool operator== (const tag& tag) const { return m_tag == tag; }
 
 		const res::tag& get_tag() const { return m_tag; }
+
+		// What a type mismatch names as the actual type (#615); empty: unnamed.
+		virtual std::string_view kind_name() const { return {}; }
 	protected:
 		void set_tag(const tag& tag) {
 			m_tag = tag;

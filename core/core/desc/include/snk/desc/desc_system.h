@@ -244,7 +244,7 @@ namespace desc
 		{
 			if (data.is_string()) {
 				auto handle = m_res_system.require<T>(json::value_to<res::tag>(data));
-				res::note_field_load(handle.get_control_block(), json_path, false);
+				res::note_field_load(handle.get_control_block(), json_path, false, &core::res::holds<T>, core::res::handle_type_name<T>());
 				return handle;
 			}
 
@@ -257,7 +257,7 @@ namespace desc
 				m_res_system.store(mem_tag, serialize_to_bytes(data));
 			}
 			auto handle = m_res_system.require<T>(mem_tag);
-			res::note_field_load(handle.get_control_block(), json_path, true);
+			res::note_field_load(handle.get_control_block(), json_path, true, &core::res::holds<T>, core::res::handle_type_name<T>());
 			return handle;
 		}
 
