@@ -24,12 +24,12 @@ namespace catalog_test
 	};
 	BOOST_DESCRIBE_STRUCT(health, (), (hp, armor))
 
-	struct link
+	struct entity_link
 	{
 		entt::entity target = entt::null;
 		std::vector<entt::entity> others;
 	};
-	BOOST_DESCRIBE_STRUCT(link, (), (target, others))
+	BOOST_DESCRIBE_STRUCT(entity_link, (), (target, others))
 
 	struct pose
 	{
@@ -112,9 +112,9 @@ BOOST_AUTO_TEST_CASE(Catalog_ListsTheParentFirstAndRefusesTakenNamesAndTypes)
 
 	scn::component_catalog layer{ &base };
 	BOOST_REQUIRE(layer.add_ctx<score>("test.score", schema_of<score>("test.score")));
-	BOOST_CHECK(!layer.add<link>("test.health", schema_of<link>("test.link")));
+	BOOST_CHECK(!layer.add<entity_link>("test.health", schema_of<entity_link>("test.entity_link")));
 	BOOST_CHECK(!layer.add<health>("test.other_health", schema_of<health>("test.health")));
-	BOOST_CHECK(!layer.add<link>("test.link", schema_of<health>("test.health")));
+	BOOST_CHECK(!layer.add<entity_link>("test.entity_link", schema_of<health>("test.health")));
 
 	std::vector<std::string> names;
 	layer.for_each([&](const scn::component_entry& entry) { names.push_back(entry.name); });
@@ -159,14 +159,14 @@ BOOST_AUTO_TEST_CASE(Catalog_DataRoundTripsFieldByField)
 BOOST_AUTO_TEST_CASE(Catalog_EntityReferencesAreRemappedToTheRestoredEntities)
 {
 	scn::component_catalog catalog;
-	const scn::component_entry* entry = catalog.add<link>("test.link", schema_of<link>("test.link"));
+	const scn::component_entry* entry = catalog.add<entity_link>("test.entity_link", schema_of<entity_link>("test.entity_link"));
 	BOOST_REQUIRE(entry);
 
 	entt::registry source;
 	const entt::entity first = source.create();
 	const entt::entity second = source.create();
 	const entt::entity gone = source.create();
-	source.emplace<link>(second, link{ first, { first, second, gone, entt::null } });
+	source.emplace<entity_link>(second, entity_link{ first, { first, second, gone, entt::null } });
 	source.destroy(gone);
 	const json::object data = write(*entry, source, second);
 
@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(Catalog_EntityReferencesAreRemappedToTheRestoredEntities)
 	desc::read_context ctx;
 	ctx.entities = &remap;
 	entry->read(*entry->schema, target, second_restored, data, ctx);
-	const link& restored = target.get<link>(second_restored);
+	const entity_link& restored = target.get<entity_link>(second_restored);
 	BOOST_TEST(entt::to_integral(restored.target) == entt::to_integral(first_restored));
 	BOOST_REQUIRE_EQUAL(restored.others.size(), 4u);
 	BOOST_TEST(entt::to_integral(restored.others[0]) == entt::to_integral(first_restored));
@@ -192,8 +192,8 @@ BOOST_AUTO_TEST_CASE(Catalog_EntityReferencesAreRemappedToTheRestoredEntities)
 
 BOOST_AUTO_TEST_CASE(Catalog_EntityFieldIsNotReadWithoutARemap)
 {
-	const auto schema = schema_of<link>("test.link");
-	link value;
+	const auto schema = schema_of<entity_link>("test.entity_link");
+	entity_link value;
 	value.target = static_cast<entt::entity>(3);
 	json::object in;
 	in["target"] = 5;
@@ -299,12 +299,12 @@ BOOST_AUTO_TEST_CASE(Catalog_TheParentWinsANameItGetsAfterTheLayer)
 BOOST_AUTO_TEST_CASE(Catalog_AnEntityReferringToItselfComesBackToItself)
 {
 	scn::component_catalog catalog;
-	const scn::component_entry* entry = catalog.add<link>("test.link", schema_of<link>("test.link"));
+	const scn::component_entry* entry = catalog.add<entity_link>("test.entity_link", schema_of<entity_link>("test.entity_link"));
 	BOOST_REQUIRE(entry);
 
 	entt::registry source;
 	const entt::entity self = source.create();
-	source.emplace<link>(self, link{ self, { self } });
+	source.emplace<entity_link>(self, entity_link{ self, { self } });
 	const json::object data = write(*entry, source, self);
 
 	entt::registry target;
@@ -315,8 +315,8 @@ BOOST_AUTO_TEST_CASE(Catalog_AnEntityReferringToItselfComesBackToItself)
 	desc::read_context ctx;
 	ctx.entities = &remap;
 	BOOST_TEST(entry->read(*entry->schema, target, restored, data, ctx));
-	BOOST_TEST(entt::to_integral(target.get<link>(restored).target) == entt::to_integral(restored));
-	BOOST_TEST(entt::to_integral(target.get<link>(restored).others.at(0)) == entt::to_integral(restored));
+	BOOST_TEST(entt::to_integral(target.get<entity_link>(restored).target) == entt::to_integral(restored));
+	BOOST_TEST(entt::to_integral(target.get<entity_link>(restored).others.at(0)) == entt::to_integral(restored));
 }
 
 BOOST_AUTO_TEST_CASE(Catalog_Mat4SurvivesTextAndIsWrittenColumnByColumn)
