@@ -45,6 +45,8 @@ module_entry generated_entry()
 }
 
 std::uint32_t wrong_major_version() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
+// What a module built before the resource control block layout of #595 reports.
+std::uint32_t api_1_0() { return 0x0001'0000u; }
 std::uint32_t newer_minor_version() { return SNK_MODULE_API_VERSION + 1u; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
@@ -97,6 +99,14 @@ BOOST_AUTO_TEST_CASE(GeneratedFunctionsReportApiVersionAndBuildInfoOfThisBinary)
 	BOOST_TEST(info->compiler == host.compiler);
 	BOOST_TEST(info->flags == host.flags);
 	BOOST_TEST(host.compiler != 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstApi1IsRefused)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 2u);
+	auto entry = generated_entry();
+	entry.api_version = &api_1_0;
+	BOOST_TEST(app::modules::check_module_entry(entry).find("api major version 1") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(LoadThroughEntryCreatesRunsAndUnloads)

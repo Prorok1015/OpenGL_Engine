@@ -12,6 +12,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/snk_api.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/resources/res_resource_base.h>
 
 namespace core::res
@@ -28,6 +29,8 @@ namespace core::res
         std::string error_msg;
         std::atomic<res_status> status = res_status::pending;
         mutable std::mutex callback_mtx;
+        // What went wrong in this load, for res::diagnostics_collector (#595). Filled before the block settles.
+        ::res::load_diagnostics diagnostics;
 
         virtual ~res_control_block_base() = default;
     };

@@ -67,6 +67,12 @@ Rendering Pipeline:
   → core/engine/scene/include/snk/scene/level/scn_render_data_extractor.h (geometry→render_packet)
   → core/engine/scene/level/scn_render_data_extractor.cpp (also extracts lights→packet)
 
+Load diagnostics (#595):
+  → core/core/resource/include/snk/resource/res_diagnostics.h: res::diagnostic (resource + JSON pointer + reason),
+    recorded on the control block by adapters (res::load_error, report_load_warning) and the dependency graph;
+    res::diagnostics_collector walks a settled request (deps, field descs; inline memory:// copies reported at the
+    owner's file and path); edt::job_service::start_collecting binds one to a job
+
 Animation & Skinning:
   → core/engine/scene/scn_animation_* , scn_skinning_desc.* (EPIC-33)
   → core/engine/render/render_system/skinning/ (rnd::skinning_manager)

@@ -31,6 +31,9 @@ namespace desc
 	{
 		desc_system* system = nullptr;
 		const desc_base* owner = nullptr;
+		// The JSON pointer of the field being read, in the object deserialize got; an inline desc of a desc_ref field
+		// reports its load problems there (#595).
+		std::string_view field_pointer{};
 	};
 
 	// obj is the address of the whole object (a T* for C++ bindings, a dyn_ref* for runtime ones).
