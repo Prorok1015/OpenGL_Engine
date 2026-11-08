@@ -394,8 +394,10 @@ namespace {
 			auto& children = parent->children;
 			const auto original = std::ranges::find(children, at.path.back(), &prefab_node::node_id);
 			children.insert(original + 1, std::move(copy));
+			// pop_back + push_back, not back() = id: GCC 15 -O2 cannot see the path is never empty here (-Warray-bounds).
 			std::vector<std::uint64_t> path = at.path;
-			path.back() = id;
+			path.pop_back();
+			path.push_back(id);
 			out["ref"] = ref_json(at.world_name, path);
 			return cmd::result::success();
 		});
