@@ -16,8 +16,16 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       # Without sccache the build still works, just uncached (CMake only logs a status line).
+      # A transient refusal of the release download (403/504) is retried; after that the job goes on uncached.
       continue-on-error: true
-      run: choco install sccache --yes --no-progress
+      run: |
+        foreach ($wait in 0, 10, 30) {
+          Start-Sleep -Seconds $wait
+          choco install sccache --yes --no-progress
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+        }
+        Write-Output "::warning title=sccache::sccache could not be installed; this build runs without the compiler cache"
+        exit 0
 
     - name: Configure compiler cache
       shell: bash
