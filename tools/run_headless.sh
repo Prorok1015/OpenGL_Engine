@@ -9,7 +9,8 @@
 #   --config PATH      editor config                (default: Editor/config/editor.cfg)
 #   --actions FILE     action script, one command per line (see below)
 #   --seconds N        run time when no action script is given (default: 20)
-#   --shot PATH        final screenshot             (default: headless_out/final.png)
+#   --shot PATH        final screenshot             (default: headless_out/final.png); editor.log and
+#                      xvfb.log go next to it
 #   --size WxH         virtual screen size          (default: 1600x900)
 #   --frames N         deterministic time: the editor advances a constant --frame-dt per frame and freezes
 #                      scene time N frames after the level is instantiated; the script waits until that and all
@@ -70,33 +71,48 @@ for tool in Xvfb xdotool import; do
 	command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 2; }
 done
 
-DISPLAY_NUM=99
-while [[ -e "/tmp/.X${DISPLAY_NUM}-lock" ]]; do DISPLAY_NUM=$((DISPLAY_NUM + 1)); done
-export DISPLAY=":${DISPLAY_NUM}"
+mkdir -p "$(dirname "$SHOT")"
+LOG="$(dirname "$SHOT")/editor.log"
+XVFB_LOG="$(dirname "$SHOT")/xvfb.log"
+DISPLAY_FILE="$(mktemp)"
 
-Xvfb "$DISPLAY" -screen 0 "${SIZE}x24" -nolisten tcp >/dev/null 2>&1 &
+# -noreset: by default the server resets when its last client disconnects; the readiness probe below is that client,
+# and the editor connecting during the reset failed with "X11: Failed to open display" (#630). -displayfd: Xvfb picks
+# a free display itself and writes its number once it accepts connections (no race on /tmp/.X<N>-lock).
+Xvfb -displayfd 3 -noreset -screen 0 "${SIZE}x24" -nolisten tcp 3>"$DISPLAY_FILE" >"$XVFB_LOG" 2>&1 &
 XVFB_PID=$!
 EDITOR_PID=""
 cleanup() {
 	[[ -n "$EDITOR_PID" ]] && kill "$EDITOR_PID" 2>/dev/null || true
 	kill "$XVFB_PID" 2>/dev/null || true
 	wait 2>/dev/null || true
+	rm -f "$DISPLAY_FILE"
 }
 trap cleanup EXIT
-# Xvfb needs a moment before it accepts connections; a fixed pause lost the race on a slow runner (the editor
-# then died with "X11: Failed to open display"). Wait until the server answers, at most 20 s.
+
+xvfb_report() {
+	echo "Xvfb (pid $XVFB_PID, display ${DISPLAY:-?}): $(kill -0 "$XVFB_PID" 2>/dev/null && echo alive || echo exited); log: $XVFB_LOG" >&2
+	tail -20 "$XVFB_LOG" >&2 || true
+}
+
 for _ in $(seq 1 200); do
-	kill -0 "$XVFB_PID" 2>/dev/null || { echo "error: Xvfb exited before it was ready" >&2; exit 1; }
-	xdotool getdisplaygeometry >/dev/null 2>&1 && break
+	kill -0 "$XVFB_PID" 2>/dev/null || { echo "error: Xvfb exited before it was ready" >&2; xvfb_report; exit 1; }
+	[[ -s "$DISPLAY_FILE" ]] && break
 	sleep 0.1
 done
-xdotool getdisplaygeometry >/dev/null 2>&1 || { echo "error: Xvfb not ready on $DISPLAY after 20 s" >&2; exit 1; }
-
-mkdir -p "$(dirname "$SHOT")"
-LOG="$(dirname "$SHOT")/editor.log"
+DISPLAY_NUM="$(head -n 1 "$DISPLAY_FILE" 2>/dev/null || true)"
+[[ "$DISPLAY_NUM" =~ ^[0-9]+$ ]] || { echo "error: Xvfb gave no display number after 20 s" >&2; xvfb_report; exit 1; }
+export DISPLAY=":${DISPLAY_NUM}"
 
 if [[ -n "$FRAMES" ]]; then
 	EXTRA+=(--set app/fixed_frame_dt "$FRAME_DT" app/freeze_after_frames "$FRAMES")
+fi
+
+# Every run checks its display right before the editor starts: the editor aborts when it cannot open it.
+if ! kill -0 "$XVFB_PID" 2>/dev/null || ! xdotool getdisplaygeometry >/dev/null 2>&1; then
+	echo "error: Xvfb on $DISPLAY does not answer before the editor starts" >&2
+	xvfb_report
+	exit 1
 fi
 
 # Software rasterizer; vsync off so the virtual display does not throttle frames.
@@ -112,6 +128,15 @@ for _ in $(seq 1 60); do
 	xdotool search --onlyvisible --name . >/dev/null 2>&1 && break
 	sleep 0.5
 done
+if ! alive; then
+	rc=0
+	wait "$EDITOR_PID" 2>/dev/null || rc=$?
+	EDITOR_PID=""
+	echo "error: the editor exited before its window appeared (code $rc); log: $LOG" >&2
+	tail -20 "$LOG" >&2
+	xvfb_report
+	exit 1
+fi
 
 if [[ -n "$FRAMES" ]]; then
 	# Logged by app::loop_service once time is frozen and no loads are in flight; a slow runner just takes longer.
