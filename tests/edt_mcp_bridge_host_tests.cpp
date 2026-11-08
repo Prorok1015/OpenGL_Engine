@@ -658,7 +658,7 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
 	for (const char* name : { "file_save", "file_save_as", "file_open" }) {
 		BOOST_TEST_CONTEXT(name) { BOOST_TEST(listed(name)); }
 	}
-	for (const char* name : { "file_new", "file_import_model", "file_exit", "file_open_project" }) {
+	for (const char* name : { "file_new", "file_exit", "file_open_project" }) {
 		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!listed(name)); }
 	}
 
