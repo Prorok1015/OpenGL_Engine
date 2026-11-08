@@ -56,6 +56,9 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-package-${{ matrix.config }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
       - name: Version
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then ver="${GITHUB_REF_NAME}"; else ver="${GITHUB_SHA::8}"; fi

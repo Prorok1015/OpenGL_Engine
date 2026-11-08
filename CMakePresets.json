@@ -73,8 +73,8 @@
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
         "GLFW_BUILD_WAYLAND": "OFF",
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
+        "CMAKE_C_COMPILER": "gcc-15",
+        "CMAKE_CXX_COMPILER": "g++-15"
       }
     },
     {
@@ -93,10 +93,10 @@
       "name": "ci-linux-clang-debug",
       "inherits": "ci-linux",
       "displayName": "CI Linux Clang Debug (PCH off)",
-      "description": "PCH is off on purpose: this job catches headers that only compile thanks to the PCH. The one CI build of the static engine with the unit tests (no editor executable), the path Shipping (#23) uses (#223)",
+      "description": "PCH is off on purpose: this job catches headers that only compile thanks to the PCH. The one CI build of the static engine with the unit tests (no editor executable), the path Shipping (#23) uses (#223). Clang is pinned (clang-21): a new version is a deliberate change (#585)",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER": "clang-21",
+        "CMAKE_CXX_COMPILER": "clang++-21",
         "SNK_PCH": "OFF",
         "SNK_ENGINE_SHARED": "OFF"
       }
