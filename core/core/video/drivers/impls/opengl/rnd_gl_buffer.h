@@ -21,7 +21,6 @@ namespace rnd::driver::gl
 		bool isAllocatedMemory = false;
 		std::size_t allocated_size = 0;
 		GLuint buffer_id = 0;
-		GLint buffer_type = 0;
 		BufferLayout layout;
 	};
 }
