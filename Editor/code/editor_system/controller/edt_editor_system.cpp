@@ -90,6 +90,7 @@
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <boost/json/object.hpp>
+#include <boost/json/parse.hpp>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -198,6 +199,20 @@ namespace {
 #else
 		return {};
 #endif
+	}
+
+	// A desc file that says it is something else than a level (`"__type": "material_desc"`, a prefab...). Reading it as a level
+	// asserts in the desc adapter, so it is refused before. A file that is no JSON, or says nothing, fails the load as before.
+	bool names_another_desc_type(const std::vector<std::byte>& bytes)
+	{
+		boost::json::error_code ec;
+		boost::json::parse_options options;
+		options.max_depth = 64;
+		const boost::json::value parsed = boost::json::parse(
+			std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec, {}, options);
+		if (ec || !parsed.is_object()) return false;
+		const boost::json::value* type = parsed.as_object().if_contains("__type");
+		return type != nullptr && type->is_string() && std::string_view(type->as_string()) != scn::level_desc::__type;
 	}
 
 	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
@@ -455,13 +470,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
-		begin_level_load(res::tag::make(relative.string()));
-		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+		if (begin_level_load(res::tag::make(relative.string()))) {
+			editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+		}
 	};
 	// The commands an agent calls name a level by its project path: no file system path in between.
-	hooks.load_level_tag = [this](const std::string& relative) {
-		begin_level_load(res::tag::make(relative));
+	hooks.load_level_tag = [this](const std::string& relative) -> std::optional<std::string> {
+		if (!begin_level_load(res::tag::make(relative))) return "'" + relative + "' is not a level file";
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+		return std::nullopt;
 	};
 	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
 	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
@@ -683,7 +700,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// #518: a neutral loading screen until the load ends; every end of it (loaded, failed, Esc in its modal) passes
 		// through the poll below to finish_startup.
 		if (start_in_game && m_modes) m_modes->begin_startup(std::string(level.view()));
-		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { begin_level_load(level); },
+		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { static_cast<void>(begin_level_load(level)); },
 			[this, start_in_game] {
 				bool loaded = false;
 				if (poll_level_load(&loaded)) {
@@ -1396,8 +1413,20 @@ void edt::editor_system::run_implicit_callbacks()
 	if (editor_layer) editor_layer->process_implicit();
 }
 
-void edt::editor_system::begin_level_load(const res::tag& original_tag)
+bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 {
+	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
+	auto& game_resources = *m_services.resources();
+	std::optional<std::vector<std::byte>> level_bytes;
+	if (const auto raw = game_resources.fetch_data(original_tag)) {
+		raw->wait();
+		if (raw->is_ready()) level_bytes = raw->data;
+	}
+	if (level_bytes && names_another_desc_type(*level_bytes)) {
+		egLOG_ERROR("Editor/Load", "'{}' is not a level file (its __type is not '{}')", original_tag.view(), scn::level_desc::__type);
+		return false;
+	}
+
 	// Another level replaces the one Play was built from.
 	if (m_play && m_play->active()) m_play->stop();
 	m_level_ctrl.unwatch_level();
@@ -1408,17 +1437,11 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
 
-	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
-	auto& game_resources = *m_services.resources();
-	if (const auto raw = game_resources.fetch_data(original_tag)) {
-		raw->wait();
-		if (raw->is_ready()) {
-			m_services.writable_resources()->store(m_loading_editor_tag, raw->data);
-		}
-	}
+	if (level_bytes) m_services.writable_resources()->store(m_loading_editor_tag, *level_bytes);
 
 	m_loading_level_handle = game_resources.require<scn::level_desc>(m_loading_editor_tag);
 	m_loading_level = true;
+	return true;
 }
 
 void edt::editor_system::release_level_load()
@@ -1445,6 +1468,11 @@ void edt::editor_system::abandon_level_load()
 
 bool edt::editor_system::poll_level_load(bool* loaded_out)
 {
+	// The load was refused (not a level) or is gone: nothing to wait for.
+	if (!m_loading_level) {
+		if (loaded_out) *loaded_out = false;
+		return false;
+	}
 	if (m_loading_level_handle.has_error()) {
 		egLOG_ERROR("Editor/Load", "Failed to load level '{}'", m_loading_level_tag.view());
 		if (loaded_out) *loaded_out = false;

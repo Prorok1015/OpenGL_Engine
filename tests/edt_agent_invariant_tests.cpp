@@ -705,8 +705,12 @@ BOOST_FIXTURE_TEST_CASE(AnAgentOpeningAFileThatIsNoLevel_LeavesTheDocumentOnItsO
 	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
 	const std::vector<std::byte> material_before = bytes_of_resource(resources, "base_material.desc");
 
-	// A material is a .desc but not a level: the load fails and the document keeps its level.
-	BOOST_CHECK(invoke_as_agent("file.open", boost::json::object{ { "path", "base_material.desc" } }).ok);
+	// A material is a .desc but not a level: the open is refused before anything loads (reading it as a level asserts in the
+	// desc adapter), and the document keeps its level.
+	const cmd::result refused = invoke_as_agent("file.open", boost::json::object{ { "path", "base_material.desc" } });
+	BOOST_CHECK(!refused.ok);
+	BOOST_CHECK_EQUAL(refused.code, "invalid_args");
+	BOOST_CHECK(!editor().level_load_in_progress());
 	pump_level_load();
 	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
 

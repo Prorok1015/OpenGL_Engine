@@ -1059,7 +1059,10 @@ struct agent_menu
 	{
 		hooks = fixture.hooks;
 		hooks.resources_path = "/proj/res";
-		hooks.load_level_tag = [this](const std::string& path) { base.calls.push_back("load_tag:" + path); };
+		hooks.load_level_tag = [this](const std::string& path) -> std::optional<std::string> {
+			base.calls.push_back("load_tag:" + path);
+			return std::nullopt;
+		};
 		hooks.inspect_level = [this](const std::string& path) {
 			const auto found = files.find(path);
 			return found == files.end() ? edt::level_file_state::missing : found->second;
@@ -1264,6 +1267,27 @@ BOOST_AUTO_TEST_CASE(SaveAndSaveAs_AreBusyWhileALevelLoads)
 	BOOST_CHECK_EQUAL(call(cmd::origin::agent("s1"), "file.save", "{}"), "ok");
 	BOOST_CHECK_EQUAL(call(cmd::origin::ui(), "file.save_as", R"({"path":"levels/copy.desc"})"), "ok");
 	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save", "save_as:levels/copy.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentOpen_ALoadThatRefusesTheFileIsInvalidArgs)
+{
+	file_menu_fixture f;
+	agent_menu m(f);
+	m.files["prefabs/p.desc"] = edt::level_file_state::file;
+	m.hooks.load_level_tag = [&f](const std::string& path) -> std::optional<std::string> {
+		f.calls.push_back("load_tag:" + path);
+		return "'" + path + "' is not a level file";
+	};
+	edt::action_registry actions;
+	edt::file_menu menu(f.dialogs, actions, m.hooks);
+	menu.register_actions();
+	cmd::call request;
+	request.args = boost::json::parse(R"({"path":"prefabs/p.desc"})");
+	request.from = cmd::origin::agent("s1");
+	const cmd::result refused = actions.invoke("file.open", request);
+	BOOST_CHECK(!refused.ok);
+	BOOST_CHECK_EQUAL(refused.code, "invalid_args");
+	BOOST_CHECK(refused.error.find("not a level") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AnAgentOpen_NeedsTheLevelByTagHook)

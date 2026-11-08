@@ -51,7 +51,8 @@ namespace edt
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
 		// Starts loading the level at a project-relative path (`levels/a.desc`) without a round trip through a file
 		// system path: what the commands an agent calls use. Null: those commands answer `failed`.
-		std::function<void(const std::string&)> load_level_tag;
+		// Returns the reason when the file cannot be loaded (it is not a level).
+		std::function<std::optional<std::string>(const std::string&)> load_level_tag;
 		// What the level file at a project-relative path is, for the commands an agent calls: looked at in every layer of
 		// the resources (a lower content root, the engine), not only the top one. Null: looked at below `resources_path`
 		// with inspect_level_file.

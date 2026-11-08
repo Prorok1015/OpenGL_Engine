@@ -79,7 +79,9 @@ namespace edt {
 		// Created in init() and owned by the app_data_storage; null before init().
 		editor_context* context() const { return m_context; }
 
-		void begin_level_load(const res::tag& level_tag);
+		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
+		// would assert in the desc adapter.
+		bool begin_level_load(const res::tag& level_tag);
 		// True from begin_level_load until the level is loaded, failed or cancelled. The document still belongs to the
 		// level it had before; only a successful load makes it the new one.
 		bool level_load_in_progress() const { return m_loading_level; }

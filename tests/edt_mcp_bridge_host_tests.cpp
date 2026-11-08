@@ -644,7 +644,7 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
 	hooks.quick_save = [&] { calls.push_back("quick_save"); dirty = false; return true; };
 	hooks.save_level_as = [&](const std::string& path) { calls.push_back("save_as:" + path); dirty = false; return true; };
 	hooks.discard_changes = [&dirty] { dirty = false; };
-	hooks.load_level_tag = [&](const std::string& path) { calls.push_back("load_tag:" + path); };
+	hooks.load_level_tag = [&](const std::string& path) -> std::optional<std::string> { calls.push_back("load_tag:" + path); return std::nullopt; };
 	hooks.exit = [] {};
 	hooks.resources_path = "/proj/res";
 	hooks.inspect_level = [](const std::string& path) {

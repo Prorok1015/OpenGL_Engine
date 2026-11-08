@@ -405,7 +405,9 @@ void edt::file_menu::register_actions()
 			}
 			if (m_hooks.is_dirty()) return action_result::failure("needs_input", AGENT_UNSAVED_MESSAGE);
 			if (!m_hooks.load_level_tag) return action_result::failure("failed", "opening a level by its path is not available");
-			m_hooks.load_level_tag(named.path);
+			if (const std::optional<std::string> refused = m_hooks.load_level_tag(named.path)) {
+				return action_result::failure(cmd::codes::invalid_args, *refused);
+			}
 			return action_result::success(json::object{ { "level_loading", true } });
 		},
 		.args_schema = path_schema(true, LEVEL_PATH_DESCRIPTION),
