@@ -79,6 +79,8 @@ namespace scn
 		void write_fixed_time();
 		// Forgets the leftover fraction of a step (a fresh load); alpha and world_time go back to 0.
 		void reset_time();
+		// Puts the world's time back where a snapshot left it: world_time and the fixed step not yet taken.
+		void restore_time(double world_time, double fixed_accumulator);
 
 		// The owner keeps stepper and mode identical across the contexts of a set (lockstep).
 		void set_mode(ecs::run_mode mode) { m_mode = mode; }

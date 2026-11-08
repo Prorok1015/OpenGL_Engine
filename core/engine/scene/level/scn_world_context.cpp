@@ -55,6 +55,13 @@ void scn::world_context::reset_time()
 	m_state.ctx().insert_or_assign(scn::world_time{ 0.0 });
 }
 
+void scn::world_context::restore_time(double world_time, double fixed_accumulator)
+{
+	m_stepper.set_accumulator(fixed_accumulator);
+	m_state.ctx().insert_or_assign(scn::update_alpha{ m_stepper.alpha() });
+	m_state.ctx().insert_or_assign(scn::world_time{ world_time });
+}
+
 void scn::world_context::set_stepper(const ecs::fixed_stepper& stepper)
 {
 	m_stepper = stepper;
