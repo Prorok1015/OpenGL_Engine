@@ -54,6 +54,11 @@ def check_targets(text, allowed):
         errors.append('snk::engine is not exported')
     elif links.get('snk::engine'):
         errors.append(f'snk::engine has interface links: {";".join(links["snk::engine"])}')
+    # Without this a parse that stopped matching the export's format would pass every rule on empty link lists.
+    api_links = links.get('snk::engine_api', [])
+    if '$<COMPILE_ONLY:snk::core_api>' not in api_links:
+        errors.append('snk::engine_api does not link $<COMPILE_ONLY:snk::core_api>: the export changed its format, '
+                      'or its links were lost')
     for name in USAGE_ONLY:
         if name not in types:
             errors.append(f'{name} is not exported')
@@ -147,6 +152,9 @@ set_target_properties(snk::engine PROPERTIES
 )
 ''')
     assert any('snk::engine has interface links' in e for e in check_targets(engine_links, {'thirdparty_boost_json'}))
+    unparsed = re.sub(r'set_target_properties\(snk::engine_api PROPERTIES\n.*?\n\)\n', '', good, flags=re.S)
+    assert unparsed != good
+    assert any('does not link $<COMPILE_ONLY:snk::core_api>' in e for e in check_targets(unparsed, {'thirdparty_boost_json'}))
     core_plain = good.replace('\\$<COMPILE_ONLY:snk::ecs>', 'snk::ecs')
     assert any('snk::core_api links snk::ecs' in e for e in check_targets(core_plain, {'thirdparty_boost_json'}))
     config = '''set_target_properties(snk::thirdparty_boost_json PROPERTIES
