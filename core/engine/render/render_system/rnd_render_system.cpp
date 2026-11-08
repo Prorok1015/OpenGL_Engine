@@ -95,7 +95,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_textures(std::make_unique<rnd::texture_manager>(drv.get(), d, res_sys))
 	, m_targets(std::make_unique<rnd::render_targets::registry>(*drv))
 	, m_shaders(std::make_unique<rnd::ShaderManager>(drv.get(), res_sys))
-	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), d, res_sys))
+	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), res_sys))
 	, m_draw_data(std::make_unique<rnd::per_draw_data>(*drv))
 	, m_materials(std::make_unique<rnd::material_groups>(*drv, *m_textures))
 	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
