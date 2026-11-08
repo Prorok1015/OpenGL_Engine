@@ -1,5 +1,26 @@
 cmake_minimum_required(VERSION 3.27)
 
+# Before anything else, the compiler check included: the SDK tells generated headers from source headers by the
+# build tree (cmake/SnkInstall.cmake, _snk_sdk_include_dest), which breaks when the build tree holds the sources (#582).
+file(REAL_PATH "${CMAKE_SOURCE_DIR}" _snk_source_dir)
+file(REAL_PATH "${CMAKE_BINARY_DIR}" _snk_binary_dir)
+# A trailing "/" (a filesystem root: / or C:/) is dropped before one is appended; Windows paths ignore case.
+string(REGEX REPLACE "/+$" "" _snk_source_dir "${_snk_source_dir}")
+string(REGEX REPLACE "/+$" "" _snk_binary_dir "${_snk_binary_dir}")
+if(CMAKE_HOST_WIN32)
+    string(TOLOWER "${_snk_source_dir}" _snk_source_dir)
+    string(TOLOWER "${_snk_binary_dir}" _snk_binary_dir)
+endif()
+string(FIND "${_snk_source_dir}/" "${_snk_binary_dir}/" _snk_source_in_binary)
+if(_snk_source_in_binary EQUAL 0)
+    message(FATAL_ERROR "snake: in-source builds are not supported (#582): the build directory ${_snk_binary_dir} "
+        "contains the sources. Configure into a subdirectory, e.g. cmake --preset dev-debug or cmake -B build/dev. "
+        "Remove CMakeCache.txt and CMakeFiles/ that this attempt left in ${_snk_binary_dir}.")
+endif()
+unset(_snk_source_dir)
+unset(_snk_binary_dir)
+unset(_snk_source_in_binary)
+
 # SNK_COMPILER_CACHE / SNK_PCH. Before project(): the MSVC debug-info policy it sets must precede
 # it, and NO_POLICY_SCOPE keeps that policy in this scope.
 include(cmake/SnkBuildCache.cmake NO_POLICY_SCOPE)
