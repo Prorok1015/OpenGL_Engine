@@ -265,4 +265,92 @@ BOOST_AUTO_TEST_CASE(Catalog_TypeWithoutSchemaIsKnownButNotSaved)
 	BOOST_TEST(entry->contains(reg, entity));
 }
 
+BOOST_AUTO_TEST_CASE(Catalog_RemoveForgetsTheEntry)
+{
+	scn::component_catalog catalog;
+	BOOST_REQUIRE(catalog.add<health>("test.health", schema_of<health>("test.health")));
+	BOOST_REQUIRE(catalog.add<score>("test.score", schema_of<score>("test.score")));
+	BOOST_TEST(catalog.remove("test.health"));
+	BOOST_TEST(!catalog.find("test.health"));
+	BOOST_TEST(!catalog.find(entt::type_hash<health>::value()));
+	BOOST_TEST(catalog.size() == 1u);
+	std::size_t listed = 0;
+	catalog.for_each([&](const scn::component_entry&) { ++listed; });
+	BOOST_TEST(listed == 1u);
+	catalog.clear();
+	BOOST_TEST(catalog.size() == 0u);
+	BOOST_TEST(!catalog.find("test.score"));
+}
+
+BOOST_AUTO_TEST_CASE(Catalog_TheParentWinsANameItGetsAfterTheLayer)
+{
+	scn::component_catalog base;
+	scn::component_catalog layer{ &base };
+	BOOST_REQUIRE(layer.add<health>("test.health", schema_of<health>("test.health")));
+	BOOST_REQUIRE(base.add<health>("test.health", schema_of<health>("test.health")));
+
+	std::vector<const scn::component_entry*> listed;
+	layer.for_each([&](const scn::component_entry& entry) { listed.push_back(&entry); });
+	BOOST_REQUIRE_EQUAL(listed.size(), 1u);
+	BOOST_TEST(listed.front() == base.find("test.health"));
+	BOOST_TEST(layer.find("test.health") == base.find("test.health"));
+}
+
+BOOST_AUTO_TEST_CASE(Catalog_AnEntityReferringToItselfComesBackToItself)
+{
+	scn::component_catalog catalog;
+	const scn::component_entry* entry = catalog.add<link>("test.link", schema_of<link>("test.link"));
+	BOOST_REQUIRE(entry);
+
+	entt::registry source;
+	const entt::entity self = source.create();
+	source.emplace<link>(self, link{ self, { self } });
+	const json::object data = write(*entry, source, self);
+
+	entt::registry target;
+	(void)target.create();
+	const entt::entity restored = target.create();
+	id_remap remap;
+	remap.map(self, restored);
+	desc::read_context ctx;
+	ctx.entities = &remap;
+	BOOST_TEST(entry->read(*entry->schema, target, restored, data, ctx));
+	BOOST_TEST(entt::to_integral(target.get<link>(restored).target) == entt::to_integral(restored));
+	BOOST_TEST(entt::to_integral(target.get<link>(restored).others.at(0)) == entt::to_integral(restored));
+}
+
+BOOST_AUTO_TEST_CASE(Catalog_Mat4SurvivesTextAndIsWrittenColumnByColumn)
+{
+	glm::mat4 matrix{};
+	for (int column = 0; column < 4; ++column) {
+		for (int row = 0; row < 4; ++row) {
+			matrix[column][row] = 1.0f / 7.0f + static_cast<float>(column * 10 + row);
+		}
+	}
+	const json::value written = desc::json_codec<glm::mat4>::to_json(matrix);
+	BOOST_REQUIRE_EQUAL(written.as_array().size(), 16u);
+	BOOST_TEST(written.as_array()[1].to_number<double>() == static_cast<double>(matrix[0][1])); // column 0, row 1
+	BOOST_TEST(written.as_array()[4].to_number<double>() == static_cast<double>(matrix[1][0])); // column 1, row 0
+
+	const json::value parsed = json::parse(json::serialize(written));
+	glm::mat4 read{};
+	BOOST_REQUIRE(desc::json_codec<glm::mat4>::from_json(read, parsed));
+	BOOST_TEST(std::memcmp(&read, &matrix, sizeof(glm::mat4)) == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Catalog_ReadTellsAValueThatDoesNotFit)
+{
+	scn::component_catalog catalog;
+	const scn::component_entry* entry = catalog.add<health>("test.health", schema_of<health>("test.health"));
+	BOOST_REQUIRE(entry);
+	entt::registry reg;
+	const entt::entity entity = reg.create();
+	json::object in;
+	in["hp"] = "a lot";
+	in["armor"] = 2.0;
+	BOOST_TEST(!entry->read(*entry->schema, reg, entity, in, {}));
+	BOOST_TEST(reg.get<health>(entity).hp == 100); // kept its default
+	BOOST_TEST(reg.get<health>(entity).armor == 2.0f);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
