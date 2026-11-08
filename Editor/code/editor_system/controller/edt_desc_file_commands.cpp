@@ -11,6 +11,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <chrono>
 #include <format>
 #include <memory>
@@ -146,11 +147,12 @@ namespace {
 				const located_file level = locate(open);
 				if (!level.found) continue;
 				if (same_file(level)) return true;
+				// A level file that cannot be read or understood cannot be told from its worlds: everything is busy.
 				const read_result text = read_fresh(open, level);
-				if (!text.ok()) continue;
+				if (!text.ok()) return true;
 				boost::system::error_code parse_error;
 				const json::value parsed = json::parse(text_of(text.bytes), parse_error);
-				if (parse_error || !parsed.is_object()) continue;
+				if (parse_error || !parsed.is_object()) return true;
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
@@ -374,16 +376,44 @@ namespace {
 		return key == "__type" || key == "__version" || key == "__guid" || key == "__id" || key == "__parent";
 	}
 
-	// Empty when `text` is no tag with a protocol, or a res:// tag with a path inside the project.
-	std::string tag_problem(std::string_view text)
+	// res::tag takes the text up to the first ':' or '/' as the protocol, so "user/x.png" and "user:/x.png" are
+	// user://x.png: the protocol is read the way the tag reads it, not by looking for "://".
+	std::string_view leading_protocol(const std::string& text)
 	{
-		std::size_t end = 0;
-		while (end < text.size() && (std::isalnum(static_cast<unsigned char>(text[end])) || text[end] == '+' || text[end] == '.' || text[end] == '-')) ++end;
-		if (end == 0 || !std::isalpha(static_cast<unsigned char>(text[0])) || text.substr(end, 3) != "://") return {};
-		if (text.substr(0, end) != "res") {
-			return std::format("'{}://' is not a place a project file may refer to: only res:// tags are written", std::string(text.substr(0, end)).substr(0, 40));
-		}
+		const std::size_t end = text.find_first_of(":/\\");
+		return end == std::string::npos ? std::string_view{} : std::string_view(text).substr(0, end);
+	}
+
+	// A place a tag can name that is not the project's res/: every protocol the editor mounts.
+	bool is_other_protocol(std::string_view protocol)
+	{
+		constexpr std::string_view mounted[] = { "memory", "engine", "cache", "code", "user", "edt" };
+		return std::find(std::begin(mounted), std::end(mounted), protocol) != std::end(mounted);
+	}
+
+	// A tag a file refers to: literally "res://" and then a path inside the project. Nothing else is rewritten or guessed.
+	std::string strict_tag_problem(std::string_view text)
+	{
+		if (!text.starts_with("res://")) return "a tag must be written as res://<path> (a path inside the project)";
 		return edt::check_agent_folder(text).error;
+	}
+
+	// Empty when `text` as a plain string value cannot reach another protocol: it names none, or it is a good res:// tag.
+	std::string loose_tag_problem(std::string_view text)
+	{
+		const std::string normalized = [&] {
+			std::string copy(text);
+			std::replace(copy.begin(), copy.end(), '\\', '/');
+			return copy;
+		}();
+		const std::string_view protocol = leading_protocol(normalized);
+		if (protocol.empty()) return {};
+		if (protocol == "res") return strict_tag_problem(normalized);
+		const bool scheme = normalized.size() > protocol.size() + 2 && normalized.compare(protocol.size(), 3, "://") == 0;
+		if (is_other_protocol(protocol) || scheme) {
+			return std::format("'{}' is not a place a project file may refer to: only res://<path> tags are written", std::string(protocol).substr(0, 40));
+		}
+		return {};
 	}
 }
 
@@ -406,7 +436,7 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 
 	const auto walk = [&](const auto& self, const json::value& value, const std::string& pointer) -> void {
 		if (value.is_string()) {
-			if (std::string problem = tag_problem(view_of(value.as_string())); !problem.empty()) schema_error(pointer, std::move(problem));
+			if (std::string problem = loose_tag_problem(view_of(value.as_string())); !problem.empty()) schema_error(pointer, std::move(problem));
 			return;
 		}
 		if (value.is_array()) {
@@ -425,10 +455,10 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		if (const json::value* parent = object.if_contains("__parent")) {
 			if (!parent->is_string()) {
 				schema_error(pointer + "/__parent", "`__parent` must be a string tag");
+			} else if (std::string problem = strict_tag_problem(view_of(parent->as_string())); !problem.empty()) {
+				schema_error(pointer + "/__parent", "`__parent`: " + problem);
 			} else if (const edt::agent_level_path named = edt::check_agent_level_path(view_of(parent->as_string())); !named.ok()) {
-				schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project (res://... or a relative path): " + named.error);
-			} else if (std::string problem = tag_problem(view_of(parent->as_string())); !problem.empty()) {
-				schema_error(pointer + "/__parent", std::move(problem));
+				schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project: " + named.error);
 			}
 		}
 		if (const json::value* type_value = object.if_contains("__type")) {
@@ -482,19 +512,22 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 							const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
 							const json::value* held = patch.if_contains(key);
 							if (!held) continue;
-							const auto check_tag = [&](const json::value& tag, const std::string& at) {
-								if (!tag.is_string() || tag.as_string().empty()) return;
-								if (const std::string problem = edt::check_agent_folder(view_of(tag.as_string())).error; !problem.empty()) {
-									schema_error(at, "a tag must be a res:// tag or a path inside the project: " + problem);
+							// Inline descs (desc_ref objects) are walked as descs; the values of any other object are all tags.
+							const bool inline_descs_allowed = field.kind == desc::field_kind::desc_ref || field.element == desc::field_kind::desc_ref;
+							const auto check_tag = [&](const auto& self_tag, const json::value& tag, const std::string& at) -> void {
+								if (tag.is_string()) {
+									if (tag.as_string().empty()) return;
+									if (const std::string problem = strict_tag_problem(view_of(tag.as_string())); !problem.empty()) schema_error(at, problem);
+								} else if (tag.is_array()) {
+									std::size_t index = 0;
+									for (const json::value& element : tag.as_array()) self_tag(self_tag, element, std::format("{}/{}", at, index++));
+								} else if (tag.is_object() && !inline_descs_allowed) {
+									for (const auto& member : tag.as_object()) {
+										self_tag(self_tag, member.value(), at + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
+									}
 								}
 							};
-							const std::string at = pointer + "/" + res::json_pointer_token(key);
-							if (held->is_array()) {
-								std::size_t index = 0;
-								for (const json::value& element : held->as_array()) check_tag(element, std::format("{}/{}", at, index++));
-							} else {
-								check_tag(*held, at);
-							}
+							check_tag(check_tag, *held, pointer + "/" + res::json_pointer_token(key));
 						}
 					}
 				}

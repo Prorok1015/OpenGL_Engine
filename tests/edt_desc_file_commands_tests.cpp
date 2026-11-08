@@ -328,23 +328,54 @@ BOOST_AUTO_TEST_CASE(TheFileOfTheOpenLevel_AndItsWorldFiles_AreBusy)
 	BOOST_TEST(commands.find("desc.write")->describe(world_request)->rfind("This request will be refused", 0) == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(AnOpenLevelThatCannotBeReadOrParsed_MakesEveryWriteBusy)
+{
+	fs::create_directories(res_root / "levels");
+	make_material("materials/m.mat.desc");
+	const std::string version = version_of("materials/m.mat.desc");
+	dir.write("res/levels/broken.desc", "{ this is not json");
+	open_level = { "levels/broken.desc" };
+	const std::string before = read_file(res_root / "materials" / "m.mat.desc");
+	const auto busy = call("desc.write", write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST(busy.code == cmd::codes::busy);
+	BOOST_TEST(read_file(res_root / "materials" / "m.mat.desc") == before);
+
+	open_level = { "levels/not_there_yet.desc" };
+	const auto free = call("desc.write", write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST_MESSAGE(free.error);
+	BOOST_TEST(free.ok);
+}
+
 BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagField)
 {
 	for (const char* content : {
 		R"({"__type":"material_desc","__parent":"user://secret.desc"})",
 		R"({"__type":"material_desc","__parent":"edt://base.desc"})",
 		R"({"__type":"material_desc","__parent":"../x.desc"})",
+		R"({"__type":"material_desc","__parent":"user/xsave.desc"})",
+		R"({"__type":"material_desc","__parent":"user:/xsave.desc"})",
+		R"({"__type":"material_desc","__parent":"materials/other.mat.desc"})",
+		R"({"__type":"material_desc","__parent":"res/other.mat.desc"})",
 		R"({"__type":"material_desc","__parent":"res://a/../../x.desc"})",
 		R"({"__type":"material_desc","__parent":"res://a/x.png"})",
 		R"({"__type":"material_desc","__parent":5})",
 		R"({"__type":"material_desc","shader_fragment":"user://x.frag"})",
 		R"({"__type":"material_desc","shader_fragment":"engine://x.frag"})",
 		R"({"__type":"material_desc","shader_fragment":"cache://x.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"cache/xa.frag"})",
+		R"({"__type":"material_desc","shader_fragment":"shaders/a.frag"})",
 		R"({"__type":"material_desc","shader_fragment":"../../x.frag"})",
 		R"({"__type":"material_desc","shader_fragment":"C:/x.frag"})",
 		R"({"__type":"material_desc","defines":["code://x"]})",
 		R"({"__type":"material_desc","samplers":["../../x.png"]})",
 		R"({"__type":"material_desc","samplers":["user://x.png"]})",
+		R"({"__type":"material_desc","samplers":["engine/xx.png"]})",
+		R"({"__type":"material_desc","samplers":["user:/xa.png"]})",
+		R"({"__type":"material_desc","samplers":{"0":"user/xx.png"}})",
+		R"({"__type":"material_desc","samplers":{"0":{"slot":["code/xa.png"]}}})",
+		R"({"__type":"material_desc","defines":["user/x"]})",
+		R"({"__type":"level_desc","worlds":["code/xa.desc"]})",
+		R"({"__type":"level_desc","worlds":["user:/xa.desc"]})",
 		R"({"__type":"level_desc","worlds":["memory://x"]})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto refused = call("desc.create", desc_args("materials/t.mat.desc", content));
@@ -354,9 +385,8 @@ BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagFie
 	}
 	for (const char* content : {
 		R"({"__type":"material_desc","__parent":"res://base_material.desc"})",
-		R"({"__type":"material_desc","__parent":"materials/other.mat.desc"})",
+		R"({"__type":"material_desc","__parent":"res://materials/other.mat.desc"})",
 		R"({"__type":"material_desc","shader_fragment":"res://shaders/a.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"shaders/a.frag"})",
 		R"({"__type":"material_desc","samplers":["res://textures/a.png",null]})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto made = call("desc.create", desc_args("materials/ok.mat.desc", content));
