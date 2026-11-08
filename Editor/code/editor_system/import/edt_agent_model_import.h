@@ -114,6 +114,7 @@ namespace edt {
 		// calls again with the token, a person is shown those files, and that job imports exactly them.
 		started start(const agent_import_request& request, const cmd::origin& caller, bool confirmed);
 
+		// Per agent session: one session cannot push another one's questions or file lists out.
 		static constexpr std::size_t k_max_shown = 32;
 		static constexpr std::chrono::minutes k_shown_lifetime{ 5 };
 		static constexpr std::string_view k_model_extensions[] = { ".glb", ".gltf", ".obj", ".fbx" };
@@ -122,6 +123,7 @@ namespace edt {
 		struct shown_plan
 		{
 			std::string key;
+			std::string session;
 			agent_import_plan plan;
 			std::chrono::steady_clock::time_point at;
 		};
@@ -129,7 +131,7 @@ namespace edt {
 		std::chrono::steady_clock::time_point now() const;
 		std::string scan_key(const agent_import_request& request, const cmd::origin& caller) const;
 		std::string call_key(const agent_import_request& request, const cmd::origin& caller) const;
-		void remember(std::string key, agent_import_plan plan);
+		void remember(std::string key, std::string session, agent_import_plan plan);
 		std::optional<agent_import_plan> take(const std::string& key);
 
 		asset_exporter& m_exporter;

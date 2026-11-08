@@ -302,7 +302,7 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsOnlyThePathTheSizeAndTheDestination_AndParses
 	BOOST_REQUIRE(text.has_value());
 	BOOST_CHECK(text->find(source.string()) != std::string::npos);
 	BOOST_CHECK(text->find("skin.png") == std::string::npos);
-	BOOST_CHECK(text->find("not read until") != std::string::npos);
+	BOOST_CHECK(text->find("Nothing is copied into the project until") != std::string::npos);
 	BOOST_CHECK_EQUAL(scans, 0);
 	BOOST_CHECK_EQUAL(imports, 0);
 }
@@ -327,8 +327,10 @@ BOOST_AUTO_TEST_CASE(AModelWithFiles_EndsTheFirstJobWithTheirListAndWritesNothin
 	const json::object result = finished(started.job);
 	BOOST_CHECK(result.at("needs_files_approval").as_bool());
 	BOOST_CHECK(!std::string(result.at("files_token").as_string()).empty());
-	BOOST_CHECK_EQUAL(result.at("files").as_array().size(), 2u);
-	BOOST_CHECK_EQUAL(result.at("total_bytes").as_int64(), 4000);
+	BOOST_CHECK_EQUAL(result.at("file_count").as_int64(), 2);
+	BOOST_CHECK(!result.contains("files"));
+	BOOST_CHECK(!result.contains("total_bytes"));
+	BOOST_CHECK(json::serialize(result).find("skin.png") == std::string::npos);
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
 	BOOST_CHECK(!in_memory("memory://robot/robot.prefab.desc"));
@@ -384,6 +386,17 @@ BOOST_AUTO_TEST_CASE(TheSecondCall_WithoutAListOfItsOwn_IsRefused)
 	late.files_token = token;
 	BOOST_CHECK(service->describe(late, agent)->rfind("This request will be refused", 0) == 0u);
 	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(OneSessionCannotPushAnotherSessionsQuestionOut)
+{
+	const cmd::origin other = cmd::origin::agent("session-2");
+	BOOST_REQUIRE(service->describe(request("hero", "models"), agent).has_value());
+	for (std::size_t i = 0; i <= edt::agent_model_import::k_max_shown + 2; ++i) {
+		BOOST_REQUIRE(service->describe(request("n" + std::to_string(i), "models"), other).has_value());
+	}
+	const auto started = service->start(request("hero", "models"), agent, true);
+	BOOST_CHECK_MESSAGE(started.ok(), started.error);
 }
 
 BOOST_AUTO_TEST_CASE(ADeniedSecondQuestion_LeavesNothingInTheProject)

@@ -24,6 +24,7 @@ struct edt::agent_import_scans
 	{
 		std::string token;
 		std::string key;
+		std::string session;
 		edt::agent_import_plan plan;
 		std::chrono::steady_clock::time_point at;
 	};
@@ -117,6 +118,7 @@ namespace {
 		std::function<std::chrono::steady_clock::time_point()> now;
 		std::shared_ptr<edt::agent_import_scans> scans;
 		std::string scan_key;
+		std::string session;
 		std::chrono::seconds time_limit{ 60 };
 		// A person is asked a second time, about the files the model refers to, before any of them is read.
 		bool ask_about_files = true;
@@ -140,20 +142,18 @@ namespace {
 			std::erase_if(in.scans->items, [&](const auto& item) {
 				return item.key == in.scan_key || at - item.at > edt::agent_model_import::k_shown_lifetime;
 			});
-			if (in.scans->items.size() >= edt::agent_model_import::k_max_shown) in.scans->items.erase(in.scans->items.begin());
+			const auto of_session = [&](const auto& item) { return item.session == in.session; };
+			if (static_cast<std::size_t>(std::count_if(in.scans->items.begin(), in.scans->items.end(), of_session)) >= edt::agent_model_import::k_max_shown) {
+				in.scans->items.erase(std::find_if(in.scans->items.begin(), in.scans->items.end(), of_session));
+			}
 			token = std::format("files-{}", ++in.scans->counter);
-			in.scans->items.push_back({ token, in.scan_key, std::move(plan), at });
-		}
-		json::array listed;
-		for (const edt::referenced_file& file : found.files) {
-			listed.emplace_back(json::object{ { "path", to_utf8(file.path) }, { "size", static_cast<std::int64_t>(file.size) } });
+			in.scans->items.push_back({ token, in.scan_key, in.session, std::move(plan), at });
 		}
 		return json::object{
 			{ "needs_files_approval", true },
 			{ "files_token", token },
-			{ "files", std::move(listed) },
-			{ "total_bytes", static_cast<std::int64_t>(found.total_bytes) },
-			{ "next", "Nothing was imported or written. Call file.import_model again with the same arguments and files_token: a person is then shown these files and decides." } };
+			{ "file_count", static_cast<std::int64_t>(found.files.size()) },
+			{ "next", "Nothing was imported or written. Call file.import_model again with the same arguments and files_token: a person is then shown the list of files and decides." } };
 	}
 
 	json::value run_import(const import_job_inputs& in, ds::task_context& ctx)
@@ -268,12 +268,15 @@ std::string edt::agent_model_import::call_key(const agent_import_request& reques
 	return scan_key(request, caller) + "|" + request.files_token;
 }
 
-void edt::agent_model_import::remember(std::string key, agent_import_plan plan)
+void edt::agent_model_import::remember(std::string key, std::string session, agent_import_plan plan)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key || at - shown.at > k_shown_lifetime; });
-	if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
-	m_shown.push_back({ std::move(key), std::move(plan), at });
+	const auto of_session = [&](const shown_plan& shown) { return shown.session == session; };
+	if (static_cast<std::size_t>(std::count_if(m_shown.begin(), m_shown.end(), of_session)) >= k_max_shown) {
+		m_shown.erase(std::find_if(m_shown.begin(), m_shown.end(), of_session));
+	}
+	m_shown.push_back({ std::move(key), session, std::move(plan), at });
 }
 
 std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::string& key)
@@ -360,7 +363,7 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
 		to_utf8(plan.source), size_text(plan.size), plan.folder, plan.name, plan.prefab);
 	if (request.files_token.empty()) {
-		text += "The model is not read until you allow this. If it refers to other files, you are asked again, with their list, before any of them is read.";
+		text += "Allowing this reads the model, and the .bin/.mtl files it needs to be parsed, to list the files it refers to. Nothing is copied into the project until you approve that list in a second question (none, when the model is self-contained).";
 	} else {
 		const std::lock_guard lock(m_scans->mutex);
 		const std::string key = scan_key(request, caller);
@@ -377,7 +380,7 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		text += std::format("The model makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
 		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", to_utf8(file.path), size_text(file.size));
 	}
-	remember(call_key(request, caller), std::move(plan));
+	remember(call_key(request, caller), caller.session, std::move(plan));
 	return text;
 }
 
@@ -427,6 +430,7 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 	inputs.now = [clock = m_options.now] { return clock ? clock() : std::chrono::steady_clock::now(); };
 	inputs.scans = m_scans;
 	inputs.scan_key = scan_key(request, caller);
+	inputs.session = caller.session;
 	inputs.time_limit = m_options.parse_time_limit;
 	inputs.ask_about_files = caller.kind != cmd::origin_kind::ui;
 	inputs.limits = m_options.file_limits;

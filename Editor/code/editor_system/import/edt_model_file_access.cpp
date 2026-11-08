@@ -131,7 +131,7 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 	if (!bytes || bytes->size() != file.size) return std::nullopt;
 	if (file.kind == model_file_kind::texture) {
 		std::array<unsigned char, 18> head{};
-		std::copy_n(reinterpret_cast<const unsigned char*>(bytes->data()), std::min<std::size_t>(head.size(), bytes->size()), head.begin());
+		std::copy_n(reinterpret_cast<const unsigned char*>(bytes->data()), (std::min)(head.size(), bytes->size()), head.begin());
 		if (bytes->size() < head.size() || !looks_like_image(lowered_extension(file.path), head)) {
 			throw std::runtime_error(std::format("'{}' is no image", file.path.filename().string()));
 		}
