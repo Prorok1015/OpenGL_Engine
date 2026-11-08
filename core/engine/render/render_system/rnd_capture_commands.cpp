@@ -152,21 +152,28 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 {
 	cmd::command_desc desc;
 	desc.id = "viewport.capture";
-	desc.summary = "Capture the final render target of a viewport as a PNG (base64), optionally scaled";
+	desc.summary = "Capture the final render target of a viewport as a PNG (base64). Size: width and/or height scale it (the side "
+		"not given follows the view's proportions; a side over max_side is refused). Without width and height the view is returned "
+		"at its size, scaled down to fit max_side (longest side) and max_pixels when they are given, never up";
 	desc.category = cmd::agent_category::read;
 	desc.needs_display = true;
-	desc.args_schema = json::parse(R"({
+	desc.args_schema = json::parse(R"json({
 		"type": "object",
 		"properties": {
 			"viewport": { "type": "string", "minLength": 1 },
-			"width": { "type": "integer", "minimum": 1, "maximum": 8192 },
-			"height": { "type": "integer", "minimum": 1, "maximum": 8192 },
-			"max_side": { "type": "integer", "minimum": 1, "maximum": 8192 },
-			"max_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 },
-			"max_source_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 }
+			"width": { "type": "integer", "minimum": 1, "maximum": 8192,
+				"description": "Width of the picture in pixels; without height the height follows the view's proportions" },
+			"height": { "type": "integer", "minimum": 1, "maximum": 8192,
+				"description": "Height of the picture in pixels; without width the width follows the view's proportions" },
+			"max_side": { "type": "integer", "minimum": 1, "maximum": 8192,
+				"description": "Largest side of the picture in pixels. With width/height a picture over it is refused; without them the view is scaled down to fit it (proportions kept, never enlarged)" },
+			"max_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432,
+				"description": "Most pixels in the picture; handled like max_side" },
+			"max_source_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432,
+				"description": "Refuses a view with more pixels than this before reading it" }
 		},
 		"additionalProperties": false
-	})");
+	})json");
 	desc.result_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
@@ -203,6 +210,7 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 
 		// Optional ceilings on the picture, for a caller that serves an untrusted client; the derived side counts.
 		capture_limits limits;
+		limits.fit = *width == 0 && *height == 0 && (args.contains("max_side") || args.contains("max_pixels"));
 		if (const json::value* max_side = args.if_contains("max_side")) {
 			const auto number = cmd::json_schema::integer_of(*max_side);
 			if (!number || *number < 1 || *number > limits.max_side) {
