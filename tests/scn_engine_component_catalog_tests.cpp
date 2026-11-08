@@ -4,11 +4,8 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
-<<<<<<< HEAD
 #include <snk/scene/scn_ecs_assembler.h>
-=======
 #include <snk/scene/level/scn_screen_anchor.h>
->>>>>>> wip/599-engine-schemas-1
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <type_traits>
