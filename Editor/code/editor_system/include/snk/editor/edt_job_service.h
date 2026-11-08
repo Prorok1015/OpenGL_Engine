@@ -2,11 +2,13 @@
 #include "edt_editor_events.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
+#include <snk/resource/res_diagnostics.h>
 #include <boost/json/value.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -51,6 +53,8 @@ namespace edt
 			std::optional<boost::json::value> result;
 			// The result was dropped to keep the stored results under RESULT_BUDGET (the oldest go first).
 			bool result_dropped = false;
+			// Jobs started with start_collecting: what their collector holds (desc load problems, #595).
+			std::vector<res::diagnostic> diagnostics;
 		};
 
 		// Total bytes (serialized) of the results the finished history keeps; the newest one is always kept.
@@ -86,6 +90,30 @@ namespace edt
 			return launch(where, std::move(desc), owner, std::forward<F>(work), std::move(on_done), true);
 		}
 
+		// As start, with a res::diagnostics_collector bound to the job (#595): `work(task_context&, collector&)` fills it
+		// (collector.collect(handle.get_control_block()) after a load settled), `on_done` gets its items with the
+		// result, and job_info::diagnostics shows them, running or finished.
+		template<class F>
+		job_id start_collecting(ds::lane where, ds::task_desc desc, const ds::lifetime& owner, F&& work,
+			std::function<void(ds::task_result<std::invoke_result_t<F&, ds::task_context&, res::diagnostics_collector&>>&,
+				const std::vector<res::diagnostic>&)> on_done)
+		{
+			using result_t = std::invoke_result_t<F&, ds::task_context&, res::diagnostics_collector&>;
+			auto collector = std::make_shared<res::diagnostics_collector>();
+			auto bound = [collector, work = std::forward<F>(work)](ds::task_context& context) mutable -> result_t {
+				return work(context, *collector);
+			};
+			std::function<void(ds::task_result<result_t>&)> done;
+			if (on_done) {
+				done = [collector, on_done = std::move(on_done)](ds::task_result<result_t>& result) {
+					on_done(result, collector->items());
+				};
+			}
+			const job_id id = launch(where, std::move(desc), owner, std::move(bound), std::move(done), false);
+			m_jobs.at(id).diagnostics = std::move(collector);
+			return id;
+		}
+
 		// Cooperative: sets the stop token seen by `work`. A job that has not started never runs.
 		// Its result is discarded either way. False if the job is unknown or already delivered.
 		bool cancel(job_id id);
@@ -115,6 +143,8 @@ namespace edt
 			// What job_progress last reported.
 			float reported_fraction = 0.f;
 			std::string reported_note;
+			// start_collecting only.
+			std::shared_ptr<res::diagnostics_collector> diagnostics;
 		};
 
 		static constexpr std::size_t FINISHED_HISTORY = 64;
@@ -128,7 +158,7 @@ namespace edt
 			std::string label = desc.name;
 			auto handle = m_tasks.run(where, std::move(desc), owner, std::forward<F>(work));
 			const job_id id = handle.id();
-			m_jobs.emplace(id, record{ handle, label, 0.f, {} });
+			m_jobs.emplace(id, record{ handle, label, 0.f, {}, nullptr });
 			if (m_events) m_events->job_started.emit(id, label);
 			// Bound to m_life, not to `owner`: the bookkeeping must run even if the owner is gone.
 			handle.then_main(m_life, [this, id, keep_result, owner_token = owner.token(), on_done = std::move(on_done)](

@@ -1,6 +1,7 @@
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/resource/res_diagnostics.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -900,6 +901,9 @@ namespace desc
 			}
 			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value, ctx)) {
 				egLOG_WARN(log_category, "'{}': value of '{}' does not fit {}, keeping the current one", binding.schema->name, field.key, to_string(field.kind));
+				// The load goes on with the current value: a warning of the resource being loaded, if any (#595).
+				::res::report_load_warning(::res::diagnostic_kind::schema, field.key,
+					std::format("'{}': the value does not fit {}, the current one is kept", binding.schema->name, to_string(field.kind)));
 			}
 		}
 
