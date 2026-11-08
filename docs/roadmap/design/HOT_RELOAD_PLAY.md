@@ -1,6 +1,6 @@
 # ADR: hot reload игрового модуля во время Play (вариант C)
 
-**Issue:** #598 (S541-0) · эпик #541 · **Статус:** предложен, ждёт утверждения владельцем · Отменяет: решение 3 владельца от 2026-10-18 в `DISTRIBUTION.md` («Hot reload во время Play: Stop → reload → Start») и порядок #222 для Play · Основа: `DISTRIBUTION.md` §4–§5, `MODULE_LAYER.md`, `WORLD_CONTEXT.md` (Play, US-63-B), `WORLD_MESSAGING.md` §1, `WORLD_BUS.md` (#602), `DESC_SCHEMA.md`, `SPIKE-218-entt-dll.md`, `STAGE2_PLAN-2026-11.md` §2.6 · Код по ADR — #599 (сериализатор), #600 (reload в Play), #601 (несовместимые изменения и откат); писать его можно только после утверждения.
+**Issue:** #598 (S541-0) · эпик #541 · **Статус:** утверждён владельцем 2026-11-08 (все 7 рекомендаций §14, поэтапность — вариант (а)) · Отменяет: решение 3 владельца от 2026-10-18 в `DISTRIBUTION.md` («Hot reload во время Play: Stop → reload → Start») и порядок #222 для Play · Основа: `DISTRIBUTION.md` §4–§5, `MODULE_LAYER.md`, `WORLD_CONTEXT.md` (Play, US-63-B), `WORLD_MESSAGING.md` §1, `WORLD_BUS.md` (#602), `DESC_SCHEMA.md`, `SPIKE-218-entt-dll.md`, `STAGE2_PLAN-2026-11.md` §2.6 · Код по ADR — #599 (сериализатор), #600 (reload в Play), #601 (несовместимые изменения и откат); писать его можно только после утверждения.
 
 ## 1. Решение
 
