@@ -161,7 +161,7 @@ namespace {
 				return { {}, std::format("'{}' is {} bytes: at most {} go through desc.* in one call", relative, size, edt::k_desc_file_limit) };
 			}
 			const auto raw = m_deps.res.fetch_data(tag_of(relative));
-			if (!raw) return { {}, "res:// is not mounted" };
+			if (!raw) return { {}, "the project resources are not mounted" };
 			if (!raw->wait_for(k_read_timeout)) return { {}, std::format("'{}' could not be read in {} s", relative, k_read_timeout.count()) };
 			if (!raw->is_ready()) return { {}, std::format("'{}' could not be read", relative) };
 			if (raw->data.size() > edt::k_desc_file_limit) {
