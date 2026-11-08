@@ -494,7 +494,7 @@ void edt::file_menu::register_actions()
 			const json::value* value = args.if_contains(key);
 			return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string{};
 		};
-		return agent_import_request{ text_of("path"), text_of("name"), text_of("folder") };
+		return agent_import_request{ text_of("path"), text_of("name"), text_of("folder"), text_of("files_token") };
 	};
 	const auto import_available = [this] {
 		return static_cast<bool>(m_hooks.import_model) || (m_hooks.agent_import != nullptr && m_hooks.agent_import->available());
@@ -527,13 +527,15 @@ void edt::file_menu::register_actions()
 				{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
 					{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, imports without the dialog." } } },
 				{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an existing file." } } } } },
+					{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an existing file." } } },
+				{ "files_token", json::object{ { "type", "string" }, { "minLength", 1 },
+					{ "description", "Only for the second call: when the job of the first call ends with needs_files_approval (the model refers to other files), call again with the same arguments and this token; a person is shown those files and decides." } } } } },
 			{ "required", json::array{ "path" } },
 			{ "additionalProperties", false } },
 		.result_schema = json::object{
 			{ "type", "object" },
 			{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
-				{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}; job.cancel stops it and takes back what it wrote." } } } } },
+				{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}, or {needs_files_approval, files_token, files, total_bytes} when the model refers to other files (nothing is written then); job.cancel stops it and takes back what it wrote." } } } } },
 			{ "additionalProperties", false } },
 		.activate = [this] { import_model(); },
 		.enabled = import_available,

@@ -8,6 +8,8 @@
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <system_error>
 #include <unordered_map>
@@ -15,6 +17,21 @@
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
+
+struct edt::agent_import_scans
+{
+	struct found
+	{
+		std::string token;
+		std::string key;
+		edt::agent_import_plan plan;
+		std::chrono::steady_clock::time_point at;
+	};
+
+	std::mutex mutex;
+	std::vector<found> items;
+	std::uint64_t counter = 0;
+};
 
 namespace {
 	fs::path from_utf8(const std::string& text)
@@ -97,11 +114,47 @@ namespace {
 		res::resource_system* resources = nullptr;
 		std::function<edt::import_intermediate(const edt::import_source&, ds::task_context*)> import;
 		std::function<edt::model_file_scan(const edt::import_source&, ds::task_context*)> scan;
+		std::function<std::chrono::steady_clock::time_point()> now;
+		std::shared_ptr<edt::agent_import_scans> scans;
+		std::string scan_key;
+		std::chrono::seconds time_limit{ 60 };
+		// A person is asked a second time, about the files the model refers to, before any of them is read.
+		bool ask_about_files = true;
 		edt::model_file_limits limits;
 		std::vector<fs::path> layers;
 		fs::path top;
 		edt::agent_import_plan plan;
 	};
+
+	// The model refers to other files: nothing is imported. The list waits for the second call, whose question shows it.
+	json::value park_files(const import_job_inputs& in, const edt::model_file_scan& found)
+	{
+		edt::agent_import_plan plan = in.plan;
+		plan.files = found.files;
+		plan.files_bytes = found.total_bytes;
+		plan.scanned = true;
+		std::string token;
+		{
+			const std::lock_guard lock(in.scans->mutex);
+			const auto at = in.now();
+			std::erase_if(in.scans->items, [&](const auto& item) {
+				return item.key == in.scan_key || at - item.at > edt::agent_model_import::k_shown_lifetime;
+			});
+			if (in.scans->items.size() >= edt::agent_model_import::k_max_shown) in.scans->items.erase(in.scans->items.begin());
+			token = std::format("files-{}", ++in.scans->counter);
+			in.scans->items.push_back({ token, in.scan_key, std::move(plan), at });
+		}
+		json::array listed;
+		for (const edt::referenced_file& file : found.files) {
+			listed.emplace_back(json::object{ { "path", to_utf8(file.path) }, { "size", static_cast<std::int64_t>(file.size) } });
+		}
+		return json::object{
+			{ "needs_files_approval", true },
+			{ "files_token", token },
+			{ "files", std::move(listed) },
+			{ "total_bytes", static_cast<std::int64_t>(found.total_bytes) },
+			{ "next", "Nothing was imported or written. Call file.import_model again with the same arguments and files_token: a person is then shown these files and decides." } };
+	}
 
 	json::value run_import(const import_job_inputs& in, ds::task_context& ctx)
 	{
@@ -114,13 +167,16 @@ namespace {
 		source.path = in.plan.source;
 		source.preloaded = &source_bytes;
 		source.limits = in.limits;
+		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
 		std::vector<edt::referenced_file> files = in.plan.files;
 		if (!in.plan.scanned) {
 			const edt::model_file_scan found = in.scan(source, &ctx);
 			if (!found.ok()) throw std::runtime_error(found.error);
+			if (!found.files.empty() && in.ask_about_files) return park_files(in, found);
 			files = found.files;
 		}
 		source.allowed = &files;
+		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
 
 		edt::import_intermediate imported = in.import(source, &ctx);
 		const std::vector<res::tag> memory_copies = imported.created_tags;
@@ -185,7 +241,7 @@ bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 }
 
 edt::agent_model_import::agent_model_import(asset_exporter& exporter, job_service& jobs, res::resource_system& resources, agent_import_options options)
-	: m_exporter(exporter), m_jobs(jobs), m_resources(resources), m_options(std::move(options))
+	: m_exporter(exporter), m_jobs(jobs), m_resources(resources), m_options(std::move(options)), m_scans(std::make_shared<agent_import_scans>())
 {
 }
 
@@ -201,10 +257,15 @@ std::chrono::steady_clock::time_point edt::agent_model_import::now() const
 	return m_options.now ? m_options.now() : std::chrono::steady_clock::now();
 }
 
-std::string edt::agent_model_import::call_key(const agent_import_request& request, const cmd::origin& caller) const
+std::string edt::agent_model_import::scan_key(const agent_import_request& request, const cmd::origin& caller) const
 {
 	return std::format("{}:{}|{}:{}|{}:{}|{}:{}", caller.session.size(), caller.session, request.path.size(), request.path,
 		request.name.size(), request.name, request.folder.size(), request.folder);
+}
+
+std::string edt::agent_model_import::call_key(const agent_import_request& request, const cmd::origin& caller) const
+{
+	return scan_key(request, caller) + "|" + request.files_token;
 }
 
 void edt::agent_model_import::remember(std::string key, agent_import_plan plan)
@@ -296,31 +357,25 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 {
 	agent_import_plan plan = resolve(request);
 	if (!plan.ok()) return "This request will be refused: " + plan.error;
-	try {
-		const std::vector<std::byte> bytes = read_checked_source(plan);
-		import_source source;
-		source.path = plan.source;
-		source.preloaded = &bytes;
-		source.limits = m_options.file_limits;
-		const model_file_scan found = m_options.scan(source, nullptr);
-		if (!found.ok()) return "This request will be refused: " + found.error;
-		plan.files = found.files;
-		plan.files_bytes = found.total_bytes;
-		plan.scanned = true;
-	} catch (const std::exception& error) {
-		return std::string("This request will be refused: ") + error.what();
-	}
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
 		to_utf8(plan.source), size_text(plan.size), plan.folder, plan.name, plan.prefab);
-	if (plan.files.empty()) {
-		text += "The model refers to no other file.";
+	if (request.files_token.empty()) {
+		text += "The model is not read until you allow this. If it refers to other files, you are asked again, with their list, before any of them is read.";
 	} else {
-		text += std::format("The model also makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
-		constexpr std::size_t k_listed = 20;
-		for (std::size_t i = 0; i < plan.files.size() && i < k_listed; ++i) {
-			text += std::format("\n  {}  {}", to_utf8(plan.files[i].path), size_text(plan.files[i].size));
+		const std::lock_guard lock(m_scans->mutex);
+		const std::string key = scan_key(request, caller);
+		const auto found = std::find_if(m_scans->items.begin(), m_scans->items.end(), [&](const auto& item) {
+			return item.token == request.files_token && item.key == key && now() - item.at <= k_shown_lifetime;
+		});
+		if (found == m_scans->items.end()) {
+			return "This request will be refused: no list of files belongs to this token (too old, or from another call): import without files_token first";
 		}
-		if (plan.files.size() > k_listed) text += std::format("\n  ... and {} more", plan.files.size() - k_listed);
+		if (!found->plan.same_file_as(plan)) return "This request will be refused: the model changed since its files were listed";
+		plan.files = found->plan.files;
+		plan.files_bytes = found->plan.files_bytes;
+		plan.scanned = true;
+		text += std::format("The model makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
+		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", to_utf8(file.path), size_text(file.size));
 	}
 	remember(call_key(request, caller), std::move(plan));
 	return text;
@@ -338,11 +393,30 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 	}
 	agent_import_plan plan = resolve(request);
 	if (!plan.ok()) return { 0, plan.code, plan.error };
-	if (shown) {
-		if (!shown->same_file_as(plan)) return { 0, cmd::codes::denied, "the file changed since a person was shown it: ask again" };
-		plan.files = std::move(shown->files);
-		plan.files_bytes = shown->files_bytes;
-		plan.scanned = shown->scanned;
+	if (shown && !shown->same_file_as(plan)) return { 0, cmd::codes::denied, "the file changed since a person was shown it: ask again" };
+	if (!request.files_token.empty()) {
+		std::optional<agent_import_plan> listed;
+		{
+			const std::lock_guard lock(m_scans->mutex);
+			const std::string key = scan_key(request, caller);
+			const auto found = std::find_if(m_scans->items.begin(), m_scans->items.end(), [&](const auto& item) {
+				return item.token == request.files_token && item.key == key && now() - item.at <= k_shown_lifetime;
+			});
+			if (found != m_scans->items.end()) {
+				listed = std::move(found->plan);
+				m_scans->items.erase(found);
+			}
+		}
+		if (!listed || !listed->same_file_as(plan)) return { 0, cmd::codes::denied, "no list of files belongs to this token, or the model changed since it was made: ask again without files_token" };
+		const auto same_list = [](const std::vector<referenced_file>& a, const std::vector<referenced_file>& b) {
+			return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const referenced_file& x, const referenced_file& y) {
+				return x.path == y.path && x.size == y.size && x.modified == y.modified;
+			});
+		};
+		if (shown && !same_list(shown->files, listed->files)) return { 0, cmd::codes::denied, "the files changed since a person was shown them: ask again" };
+		plan.files = std::move(listed->files);
+		plan.files_bytes = listed->files_bytes;
+		plan.scanned = true;
 	}
 
 	import_job_inputs inputs;
@@ -350,6 +424,11 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 	inputs.resources = &m_resources;
 	inputs.import = m_options.import;
 	inputs.scan = m_options.scan;
+	inputs.now = [clock = m_options.now] { return clock ? clock() : std::chrono::steady_clock::now(); };
+	inputs.scans = m_scans;
+	inputs.scan_key = scan_key(request, caller);
+	inputs.time_limit = m_options.parse_time_limit;
+	inputs.ask_about_files = caller.kind != cmd::origin_kind::ui;
 	inputs.limits = m_options.file_limits;
 	inputs.layers = m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
 	inputs.top = m_options.resources_path ? m_options.resources_path() : fs::path{};

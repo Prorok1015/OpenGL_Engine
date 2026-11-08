@@ -68,6 +68,7 @@ edt::model_file_access::model_file_access(fs::path root_file, model_file_limits 
 edt::resolved_reference edt::model_file_access::resolve(std::string_view reference, model_file_kind kind)
 {
 	resolved_reference out;
+	out.kind = kind;
 	const auto refuse = [&](std::string why) {
 		out.path.clear();
 		out.error = std::format("the model refers to '{}': {}", std::string(reference).substr(0, 200), why);
@@ -93,6 +94,8 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	if (fs::symlink_status(*inside, ec).type() != fs::file_type::regular) return refuse("not a plain file");
 	out.size = fs::file_size(*inside, ec);
 	if (ec) return refuse("its size cannot be read");
+	out.modified = fs::last_write_time(*inside, ec);
+	if (ec) return refuse("its time cannot be read");
 	if (out.size > m_limits.max_file_bytes) return refuse(std::format("too big ({} bytes, the limit is {})", out.size, m_limits.max_file_bytes));
 
 	if (kind == model_file_kind::texture) {
@@ -106,14 +109,14 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	if (m_allowed) {
 		const auto listed = std::find_if(m_allowed->begin(), m_allowed->end(), [&](const referenced_file& file) { return file.path == *inside; });
 		if (listed == m_allowed->end()) return refuse("not among the files the person was shown");
-		if (listed->size != out.size) return refuse("the size of the file changed since the person was shown it");
+		if (listed->size != out.size || listed->modified != out.modified) return refuse("the file changed since the person was shown it");
 	} else if (m_seen.insert(key_of(*inside)).second) {
 		if (m_files.size() >= m_limits.max_files) return refuse(std::format("the model refers to more than {} files", m_limits.max_files));
 		if (m_listed_bytes + out.size > m_limits.max_total_bytes) {
 			return refuse(std::format("the files of the model together are bigger than {} bytes", m_limits.max_total_bytes));
 		}
 		m_listed_bytes += out.size;
-		m_files.push_back({ *inside, out.size });
+		m_files.push_back({ *inside, out.size, out.modified });
 	}
 	out.path = *inside;
 	return out;
@@ -126,6 +129,17 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 	if (m_bytes_read > m_limits.max_total_bytes) throw std::runtime_error("the import would read more bytes from the disk than it was allowed");
 	auto bytes = res::read_regular_file_capped(file.path, file.size);
 	if (!bytes || bytes->size() != file.size) return std::nullopt;
+	if (file.kind == model_file_kind::texture) {
+		std::array<unsigned char, 18> head{};
+		std::copy_n(reinterpret_cast<const unsigned char*>(bytes->data()), std::min<std::size_t>(head.size(), bytes->size()), head.begin());
+		if (bytes->size() < head.size() || !looks_like_image(lowered_extension(file.path), head)) {
+			throw std::runtime_error(std::format("'{}' is no image", file.path.filename().string()));
+		}
+	}
+	std::error_code ec;
+	if (fs::file_size(file.path, ec) != file.size || ec || fs::last_write_time(file.path, ec) != file.modified || ec) {
+		throw std::runtime_error(std::format("'{}' changed while it was read", file.path.filename().string()));
+	}
 	return bytes;
 }
 

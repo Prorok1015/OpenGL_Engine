@@ -14,6 +14,7 @@ namespace edt {
 	{
 		std::filesystem::path path;	// canonical
 		std::uintmax_t size = 0;
+		std::filesystem::file_time_type modified{};
 	};
 
 	struct model_file_limits
@@ -37,6 +38,8 @@ namespace edt {
 	{
 		std::filesystem::path path;
 		std::uintmax_t size = 0;
+		std::filesystem::file_time_type modified{};
+		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
 		bool found() const { return !path.empty() && error.empty(); }
 	};
@@ -44,7 +47,8 @@ namespace edt {
 	// What a model file may make the editor read from the disk for an agent's import: its own folder and the folders
 	// below it that are not hidden; images (checked by their first bytes) for textures, a .bin beside a .gltf and a .mtl
 	// beside an .obj; a bounded number of files and bytes. Without `allowed` it only collects what the model refers to
-	// (the scan the person is shown); with `allowed` it refuses everything the person was not shown, or whose size changed.
+	// (the scan the person is shown); with `allowed` it refuses everything the person was not shown, or whose size or
+	// modification time changed. `read` checks again what it read.
 	class model_file_access
 	{
 	public:

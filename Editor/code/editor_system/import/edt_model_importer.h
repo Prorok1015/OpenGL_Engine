@@ -7,6 +7,7 @@
 #include "edt_model_file_access.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <chrono>
 #include <filesystem>
 #include <vector>
 #include <memory>
@@ -27,6 +28,8 @@ namespace edt {
 		const std::vector<std::byte>*         preloaded = nullptr;
 		const std::vector<referenced_file>*   allowed = nullptr;
 		model_file_limits                     limits;
+		// Zero: no limit. Assimp is told to stop when it passes, and the import fails with a message.
+		std::chrono::steady_clock::time_point deadline{};
 	};
 
 	class model_importer {

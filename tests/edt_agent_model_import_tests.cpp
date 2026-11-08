@@ -60,8 +60,9 @@ struct import_fixture : test_util::scene_env
 	{
 		edt::agent_import_options result;
 		result.import = [this](const edt::import_source& source, ds::task_context* task) { return fake_import(source, task); };
-		result.scan = [this](const edt::import_source&, ds::task_context*) {
+		result.scan = [this](const edt::import_source& source, ds::task_context*) {
 			++scans;
+			deadline_was_set = source.deadline != std::chrono::steady_clock::time_point{};
 			edt::model_file_scan scan;
 			scan.error = scan_error;
 			scan.files = listed_files;
@@ -124,6 +125,16 @@ struct import_fixture : test_util::scene_env
 		return { source.string(), name, folder };
 	}
 
+	json::object finished(std::uint64_t job)
+	{
+		run_jobs();
+		const auto info = jobs.info(job);
+		BOOST_REQUIRE(info.has_value());
+		BOOST_REQUIRE_MESSAGE(info->status == edt::job_status::done, info->error);
+		BOOST_REQUIRE(info->result.has_value());
+		return info->result->as_object();
+	}
+
 	// The question, the person's yes, the start: as the registry does it for an agent.
 	edt::agent_model_import::started approved_start(const edt::agent_import_request& wanted, const cmd::origin& caller)
 	{
@@ -144,6 +155,7 @@ struct import_fixture : test_util::scene_env
 	bool fail_import = false;
 	int imports = 0;
 	int scans = 0;
+	bool deadline_was_set = false;
 	std::string scan_error;
 	std::vector<edt::referenced_file> listed_files;
 	std::vector<edt::referenced_file> seen_allowed;
@@ -283,52 +295,121 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 	BOOST_CHECK(refused->rfind("This request will be refused", 0) == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(Describe_ListsTheFilesTheModelReadsAndTheirTotal)
+BOOST_AUTO_TEST_CASE(Describe_ShowsOnlyThePathTheSizeAndTheDestination_AndParsesNothing)
 {
-	listed_files = { { dir.path() / "outside" / "skin.png", 1000 }, { dir.path() / "outside" / "mesh.bin", 3000 } };
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
 	const std::optional<std::string> text = service->describe(request("hero", "models"), agent);
 	BOOST_REQUIRE(text.has_value());
-	BOOST_CHECK(text->find((dir.path() / "outside" / "skin.png").string()) != std::string::npos);
-	BOOST_CHECK(text->find((dir.path() / "outside" / "mesh.bin").string()) != std::string::npos);
-	BOOST_CHECK(text->find("4000 bytes") != std::string::npos);
-	BOOST_CHECK(text->find("2 files") != std::string::npos);
-}
-
-BOOST_AUTO_TEST_CASE(Describe_WithoutOtherFiles_SaysSo)
-{
-	const std::optional<std::string> text = service->describe(request(), agent);
-	BOOST_REQUIRE(text.has_value());
-	BOOST_CHECK(text->find("no other file") != std::string::npos);
-}
-
-BOOST_AUTO_TEST_CASE(Describe_AModelThatTheScanRefuses_IsRefusedAndNotRemembered)
-{
-	scan_error = "the model refers to '.ssh/id_rsa': a hidden file or folder";
-	const std::optional<std::string> text = service->describe(request(), agent);
-	BOOST_REQUIRE(text.has_value());
-	BOOST_CHECK(text->rfind("This request will be refused", 0) == 0u);
-	BOOST_CHECK(text->find("hidden") != std::string::npos);
-
-	scan_error.clear();
-	const auto started = service->start(request(), agent, true);
-	BOOST_CHECK(!started.ok());
-	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	BOOST_CHECK(text->find(source.string()) != std::string::npos);
+	BOOST_CHECK(text->find("skin.png") == std::string::npos);
+	BOOST_CHECK(text->find("not read until") != std::string::npos);
+	BOOST_CHECK_EQUAL(scans, 0);
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
-BOOST_AUTO_TEST_CASE(Start_ImportsOnlyTheShownFiles_FromTheBytesItChecked)
+BOOST_AUTO_TEST_CASE(ASelfContainedModel_NeedsOnePrompt)
 {
-	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
-	const auto started = approved_start(request(), agent);
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	const json::object result = finished(started.job);
+	BOOST_CHECK(!result.contains("needs_files_approval"));
+	BOOST_CHECK_EQUAL(std::string(result.at("prefab").as_string()), "res://models/hero.prefab.desc");
+	BOOST_CHECK_EQUAL(scans, 1);
+	BOOST_CHECK_EQUAL(imports, 1);
+	BOOST_CHECK(deadline_was_set);
+}
+
+BOOST_AUTO_TEST_CASE(AModelWithFiles_EndsTheFirstJobWithTheirListAndWritesNothing)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 }, { dir.path() / "outside" / "mesh.bin", 3000 } };
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	const json::object result = finished(started.job);
+	BOOST_CHECK(result.at("needs_files_approval").as_bool());
+	BOOST_CHECK(!std::string(result.at("files_token").as_string()).empty());
+	BOOST_CHECK_EQUAL(result.at("files").as_array().size(), 2u);
+	BOOST_CHECK_EQUAL(result.at("total_bytes").as_int64(), 4000);
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+	BOOST_CHECK(!in_memory("memory://robot/robot.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(TheSecondCall_ShowsEveryFileWithTheTotal_AndImportsExactlyThose)
+{
+	for (int i = 0; i < 25; ++i) listed_files.push_back({ dir.path() / "outside" / ("tex" + std::to_string(i) + ".png"), 100 });
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	const std::string token(first.at("files_token").as_string());
+
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = token;
+	const std::optional<std::string> text = service->describe(second, agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK(text->rfind("This request will be refused", 0) != 0u);
+	for (const auto& file : listed_files) BOOST_TEST_CONTEXT(file.path.string()) { BOOST_CHECK(text->find(file.path.string()) != std::string::npos); }
+	BOOST_CHECK(text->find("25 files") != std::string::npos);
+	BOOST_CHECK(text->find("2500 bytes") != std::string::npos);
+
+	const auto started = service->start(second, agent, true);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	scan_error = "must not be asked again";
-	run_jobs();
-	BOOST_CHECK_EQUAL(imports, 1);
+	const json::object result = finished(started.job);
+	BOOST_CHECK_EQUAL(std::string(result.at("prefab").as_string()), "res://models/hero.prefab.desc");
 	BOOST_CHECK_EQUAL(scans, 1);
-	BOOST_REQUIRE_EQUAL(seen_allowed.size(), 1u);
-	BOOST_CHECK(seen_allowed[0].path == dir.path() / "outside" / "skin.png");
-	BOOST_CHECK_EQUAL(seen_allowed[0].size, 1000u);
+	BOOST_CHECK_EQUAL(imports, 1);
+	BOOST_REQUIRE_EQUAL(seen_allowed.size(), 25u);
 	BOOST_CHECK_EQUAL(seen_bytes, "glb bytes of the robot");
+}
+
+BOOST_AUTO_TEST_CASE(TheSecondCall_WithoutAListOfItsOwn_IsRefused)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	const std::string token(first.at("files_token").as_string());
+
+	edt::agent_import_request wrong_token = request("hero", "models");
+	wrong_token.files_token = "files-999";
+	BOOST_CHECK(service->describe(wrong_token, agent)->rfind("This request will be refused", 0) == 0u);
+	BOOST_CHECK_EQUAL(service->start(wrong_token, agent, true).code, cmd::codes::denied);
+
+	edt::agent_import_request other_name = request("villain", "models");
+	other_name.files_token = token;
+	BOOST_CHECK(service->describe(other_name, agent)->rfind("This request will be refused", 0) == 0u);
+
+	edt::agent_import_request other_session = request("hero", "models");
+	other_session.files_token = token;
+	BOOST_CHECK(service->describe(other_session, cmd::origin::agent("session-2"))->rfind("This request will be refused", 0) == 0u);
+
+	clock += std::chrono::minutes(6);
+	edt::agent_import_request late = request("hero", "models");
+	late.files_token = token;
+	BOOST_CHECK(service->describe(late, agent)->rfind("This request will be refused", 0) == 0u);
+	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(ADeniedSecondQuestion_LeavesNothingInTheProject)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = "whatever";
+	BOOST_CHECK_EQUAL(service->start(second, agent, false).code, cmd::codes::denied);
+	run_jobs();
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+BOOST_AUTO_TEST_CASE(AModelTheScanRefuses_FailsTheJobWithTheReason_AndWritesNothing)
+{
+	scan_error = "the model refers to '.ssh/id_rsa': a hidden file or folder";
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE(started.ok());
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK(info->error.find("hidden") != std::string::npos);
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
 }
 
 BOOST_AUTO_TEST_CASE(Start_WithoutAnApproval_LooksAtNoPath)

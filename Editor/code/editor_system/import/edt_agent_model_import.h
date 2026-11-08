@@ -11,8 +11,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace edt {
@@ -23,6 +25,9 @@ namespace edt {
 		std::string path;	// an absolute path on disk, anywhere
 		std::string name;	// the asset name; empty: the stem of the file
 		std::string folder;	// the folder below res://; empty: assets/<name>
+		// From the result of a first call whose model refers to other files: the second call, which shows a person
+		// exactly those files, carries it. Empty: the first call.
+		std::string files_token;
 	};
 
 	// What a request resolves to: the file the person is shown and approves, and the files the job will write. Resolved
@@ -35,7 +40,7 @@ namespace edt {
 		std::string name;
 		std::string folder;
 		std::string prefab;	// res:// tag of the prefab the import produces
-		// The files besides the model that the import may read: what the person was shown. Filled by `describe`.
+		// The files besides the model that the import may read: what the person was shown (the second question).
 		std::vector<referenced_file> files;
 		std::uintmax_t files_bytes = 0;
 		bool scanned = false;
@@ -61,11 +66,16 @@ namespace edt {
 		std::function<std::optional<std::string>()> blocker;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
-		// The largest model file an agent may import: `describe` parses it while the person's question is put.
+		// The largest model file an agent may import: the job reads it into memory and parses it.
 		std::uintmax_t max_source_bytes = 64ull * 1024ull * 1024ull;
+		// How long the job may parse a model before it fails.
+		std::chrono::seconds parse_time_limit{ 60 };
 		// What the model may make the import read besides itself.
 		model_file_limits file_limits;
 	};
+
+	// The file lists jobs found and a person has not been shown yet; defined in the .cpp.
+	struct agent_import_scans;
 
 	// The import of a model an agent asks for: no dialog, one background job that imports, exports into the project and
 	// cleans up after itself. The person approves exactly the file `describe` shows; the job imports exactly that file.
@@ -85,7 +95,9 @@ namespace edt {
 		// Resolves the request without running anything. Public for the tests; describe and start use it.
 		agent_import_plan resolve(const agent_import_request& request) const;
 
-		// What the person is asked: the full resolved path, the size and the destination, or why the call is refused.
+		// What the person is asked: the full resolved path, the size and the destination, or why the call is refused;
+		// only the file system is asked (a stat), the model is not read. With `files_token` (the second call, after a job
+		// found that the model refers to other files) it lists every one of those files with its size and the total.
 		// Remembers the plan for the start that follows the answer.
 		std::optional<std::string> describe(const agent_import_request& request, const cmd::origin& caller);
 
@@ -97,7 +109,9 @@ namespace edt {
 			bool ok() const { return code.empty(); }
 		};
 		// `confirmed`: a person approved this call (the call carries its ticket). Only a call whose plan was shown, still
-		// is the same file and is allowed now starts the job.
+		// is the same file and is allowed now starts the job. The job reads and parses the model; when it refers to other
+		// files the job ends with {needs_files_approval, files_token, files[], total_bytes} and writes nothing: the agent
+		// calls again with the token, a person is shown those files, and that job imports exactly them.
 		started start(const agent_import_request& request, const cmd::origin& caller, bool confirmed);
 
 		static constexpr std::size_t k_max_shown = 32;
@@ -113,6 +127,7 @@ namespace edt {
 		};
 
 		std::chrono::steady_clock::time_point now() const;
+		std::string scan_key(const agent_import_request& request, const cmd::origin& caller) const;
 		std::string call_key(const agent_import_request& request, const cmd::origin& caller) const;
 		void remember(std::string key, agent_import_plan plan);
 		std::optional<agent_import_plan> take(const std::string& key);
@@ -122,6 +137,7 @@ namespace edt {
 		res::resource_system& m_resources;
 		agent_import_options m_options;
 		std::vector<shown_plan> m_shown;
+		std::shared_ptr<agent_import_scans> m_scans;
 		std::uint64_t m_job = 0;
 		// Last: destroyed first, so a job callback cannot run on a half-destroyed service.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };

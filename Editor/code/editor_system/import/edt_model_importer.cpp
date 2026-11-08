@@ -17,6 +17,7 @@
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include <chrono>
 #include <fstream>
 #include <stdexcept>
 #include <optional>
@@ -38,11 +39,21 @@ void checkpoint(ds::task_context* ctx)
 class stop_progress_handler final : public Assimp::ProgressHandler
 {
 public:
-	explicit stop_progress_handler(ds::task_context& ctx) : m_ctx(ctx) {}
-	bool Update(float) override { return !m_ctx.stop.stop_requested(); }
+	stop_progress_handler(ds::task_context* ctx, std::chrono::steady_clock::time_point deadline) : m_ctx(ctx), m_deadline(deadline) {}
+	bool Update(float) override
+	{
+		if (m_ctx && m_ctx->stop.stop_requested()) return false;
+		return !past_deadline(m_deadline);
+	}
+
+	static bool past_deadline(std::chrono::steady_clock::time_point deadline)
+	{
+		return deadline != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() > deadline;
+	}
 
 private:
-	ds::task_context& m_ctx;
+	ds::task_context* m_ctx;
+	std::chrono::steady_clock::time_point m_deadline;
 };
 
 // `all`: every tag the import refers to. `created`: the ones this run stored itself, because they did not exist yet;
@@ -627,10 +638,14 @@ edt::model_file_scan edt::model_importer::scan_files(const import_source& source
 	}
 	model_file_access access(source.path, source.limits);
 	Assimp::Importer importer;
-	if (ctx) importer.SetProgressHandler(new stop_progress_handler(*ctx));
+	importer.SetProgressHandler(new stop_progress_handler(ctx, source.deadline));
 	importer.SetIOHandler(new edt::filesystem_assimp_io(source.path, *source.preloaded, &access));
 	const aiScene* scene = importer.ReadFile(source.path.string(), 0);
 	checkpoint(ctx);
+	if (stop_progress_handler::past_deadline(source.deadline)) {
+		scan.error = "the model took too long to read";
+		return scan;
+	}
 	if (!scene) {
 		scan.error = std::format("the model cannot be read: {}", importer.GetErrorString());
 		return scan;
@@ -693,12 +708,16 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 
 	// 2. Import via Assimp with filesystem IO
 	Assimp::Importer importer;
-	if (ctx) importer.SetProgressHandler(new stop_progress_handler(*ctx));
+	importer.SetProgressHandler(new stop_progress_handler(ctx, source.deadline));
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
 	importer.SetIOHandler(new edt::filesystem_assimp_io(abs_path, file_data, tags.files));
 	const aiScene* scene = importer.ReadFile(abs_path.string(), flags);
 	// An aborted parse also returns no scene: that is a cancel, not an import error.
 	checkpoint(ctx);
+	if (stop_progress_handler::past_deadline(source.deadline)) {
+		im.error = "the model took too long to read";
+		return im;
+	}
 
 	if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
 		im.error = std::format("ASSIMP error: {}", importer.GetErrorString());

@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include "edt_model_file_access.h"
+#include <chrono>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -170,6 +171,31 @@ BOOST_AUTO_TEST_CASE(TheJob_ReadsOnlyWhatWasShown_AtTheSizeItWasShown)
 	dir.write("models/skin.png", png_bytes + "longer now");
 	auto changed = make({}, &allowed);
 	BOOST_CHECK(!changed.resolve("skin.png", edt::model_file_kind::texture).error.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheJob_RefusesAFileWhoseTimeChanged_EvenAtTheSameSize)
+{
+	auto scan = make();
+	BOOST_REQUIRE(scan.resolve("skin.png", edt::model_file_kind::texture).found());
+	std::vector<edt::referenced_file> allowed = scan.files();
+
+	fs::last_write_time(dir.path() / "models" / "skin.png", fs::file_time_type::clock::now() + std::chrono::hours(1));
+	auto job = make({}, &allowed);
+	BOOST_CHECK(!job.resolve("skin.png", edt::model_file_kind::texture).error.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheBytesThatAreRead_AreCheckedAgainAsAnImage)
+{
+	auto access = make();
+	const auto skin = access.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(skin.found());
+	BOOST_CHECK(access.read(skin).has_value());
+
+	edt::resolved_reference swapped = skin;
+	swapped.path = dir.path() / "models" / "fake.png";
+	swapped.size = fs::file_size(swapped.path);
+	swapped.modified = fs::last_write_time(swapped.path);
+	BOOST_CHECK_THROW(access.read(swapped), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
