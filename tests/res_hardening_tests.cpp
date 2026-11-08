@@ -25,6 +25,8 @@ std::vector<std::byte> bytes_of(const std::string& str)
 
 struct hardening_test_desc : desc::desc_base
 {
+	// The resource system finds the desc adapter for require<hardening_test_desc> through it.
+	using base_type = desc::desc_base;
 	int value = 0;
 
 	void copy_to(desc::desc_base& other) const override
@@ -42,6 +44,7 @@ struct hardening_test_desc : desc::desc_base
 
 struct other_test_desc : desc::desc_base
 {
+	using base_type = desc::desc_base;
 	void deserialize(desc::desc_system&, const boost::json::object&) override {}
 	void serialize(boost::json::object&) const override {}
 };
