@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace edt {
@@ -22,6 +23,10 @@ namespace edt {
 	// What an agent asks of file.import_model (#548).
 	struct agent_import_request
 	{
+		agent_import_request() = default;
+		agent_import_request(std::string path_, std::string name_ = {}, std::string folder_ = {}, std::string files_token_ = {})
+			: path(std::move(path_)), name(std::move(name_)), folder(std::move(folder_)), files_token(std::move(files_token_)) {}
+
 		std::string path;	// an absolute path on disk, anywhere
 		std::string name;	// the asset name; empty: the stem of the file
 		std::string folder;	// the folder below res://; empty: assets/<name>
