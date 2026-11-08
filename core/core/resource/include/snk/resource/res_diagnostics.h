@@ -9,7 +9,6 @@
 #include <unordered_set>
 #include <vector>
 #include <snk/common/snk_api.h>
-#include <snk/common/ds/ds_type_id.hpp>
 
 namespace core::res { struct res_control_block_base; }
 
@@ -17,6 +16,8 @@ namespace core::res { struct res_control_block_base; }
 // own control block; diagnostics_collector gathers them over everything a request loaded.
 namespace res
 {
+	class resource_entry;
+
 	enum class diagnostic_severity : std::uint8_t { error, warning };
 
 	namespace diagnostic_kind
@@ -61,13 +62,15 @@ namespace res
 		diagnostic m_diagnostic;
 	};
 
-	// A load another one started. `expected` (id 0: any) is the type the field asked for, checked by the collector.
+	// A load another one started. `fits` (null: any) tells whether the loaded data is the type the field asked for; the
+	// collector calls it. It is code of the binary that deserialized the owner, whose blocks live in that binary's
+	// resource layer and go with it (MODULE_LAYER.md).
 	struct child_link
 	{
 		std::weak_ptr<core::res::res_control_block_base> block;
 		std::string json_path;
 		bool inline_copy = false;
-		ds::type_id expected;
+		bool (*fits)(const resource_entry&) = nullptr;
 		std::string expected_name;
 	};
 
@@ -138,10 +141,10 @@ namespace res
 
 	// A load started for a field at `json_path` of the resource deserialized on this thread: the collector walks into
 	// it, and when `inline_copy` (a memory:// copy of an inline desc) its problems are reported at the owner's file and
-	// path. The collector reports a `type_mismatch` there when the field's desc is not of `expected` (id 0: not checked).
+	// path. The collector reports a `type_mismatch` there when `fits` (null: not checked) rejects the field's data.
 	// Outside a load: nothing.
 	SNK_API void note_field_load(const std::shared_ptr<core::res::res_control_block_base>& child, std::string_view json_path,
-		bool inline_copy, ds::type_id expected = {}, std::string_view expected_name = {});
+		bool inline_copy, bool (*fits)(const resource_entry&) = nullptr, std::string_view expected_name = {});
 
 	// The diagnostics of settled requests and of everything they loaded (dependencies, field descs), each block once.
 	// A cached block gives the same diagnostics to every request. At most `limit` are kept; the rest show as one

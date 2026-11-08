@@ -15,11 +15,11 @@ constexpr int k_max_origin_depth = 32;
 std::optional<res::diagnostic> type_mismatch_of(const res::child_link& link,
 	const core::res::res_control_block_base& child, const std::string& resource, const std::string& prefix)
 {
-	if (link.expected.id == 0 || child.status.load(std::memory_order_acquire) != core::res::res_status::ready) {
+	if (!link.fits || child.status.load(std::memory_order_acquire) != core::res::res_status::ready) {
 		return std::nullopt;
 	}
 	const auto* block = dynamic_cast<const core::res::res_resource_block*>(&child);
-	if (!block || !block->data || block->data->is_kind_of(link.expected)) {
+	if (!block || !block->data || link.fits(*block->data)) {
 		return std::nullopt;
 	}
 	const std::string_view actual = block->data->kind_name().empty() ? std::string_view{ "another type" } : block->data->kind_name();
@@ -74,15 +74,23 @@ void res::load_diagnostics::add_child(const std::shared_ptr<core::res::res_contr
 	if (!child) {
 		return;
 	}
+	link.block = child;
 	std::lock_guard lock(m_mutex);
+	const auto same_block = [&](const child_link& c) { return !c.block.owner_before(child) && !child.owner_before(c.block); };
+	// One link per field: fields that share a block can ask for different types. A link that checks nothing (a
+	// dependency) adds nothing to a block already linked.
+	if (!link.fits) {
+		if (std::ranges::none_of(m_children, same_block)) {
+			m_children.push_back(std::move(link));
+		}
+		return;
+	}
 	const auto known = std::ranges::find_if(m_children, [&](const child_link& c) {
-		return !c.block.owner_before(child) && !child.owner_before(c.block);
+		return same_block(c) && (!c.fits || c.json_path == link.json_path);
 	});
 	if (known == m_children.end()) {
-		link.block = child;
 		m_children.push_back(std::move(link));
-	} else if (known->expected.id == 0 && link.expected.id != 0) {
-		link.block = child;
+	} else if (!known->fits) {
 		*known = std::move(link);
 	}
 }
@@ -140,14 +148,14 @@ void res::report_load_warning(std::string_view kind, std::string_view json_path,
 }
 
 void res::note_field_load(const std::shared_ptr<core::res::res_control_block_base>& child, std::string_view json_path,
-	bool inline_copy, ds::type_id expected, std::string_view expected_name)
+	bool inline_copy, bool (*fits)(const resource_entry&), std::string_view expected_name)
 {
 	const auto* scope = load_scope::current();
 	if (!scope || !scope->block() || !child || child == scope->block()) {
 		return;
 	}
 	scope->block()->diagnostics.add_child(child,
-		child_link{ {}, std::string{ json_path }, inline_copy, expected, std::string{ expected_name } });
+		child_link{ {}, std::string{ json_path }, inline_copy, fits, std::string{ expected_name } });
 	if (inline_copy) {
 		child->diagnostics.set_origin(scope->block(), std::string{ json_path });
 	}

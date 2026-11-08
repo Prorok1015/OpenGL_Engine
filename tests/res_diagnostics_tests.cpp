@@ -6,6 +6,9 @@
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_world_desc.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/scn_directional_light_desc.h>
@@ -28,6 +31,21 @@ namespace res {
 }
 
 namespace {
+
+// A field typed with a base desc type: a derived desc in it is what it asks for.
+struct prefab_holder_desc : desc::desc_base
+{
+	res::res_handle<scn::prefab_desc> prefab;
+
+	void copy_to(desc::desc_base& other) const override { copy_to_same(*this, other); }
+	void deserialize(desc::desc_system& system, const json::object& data) override
+	{
+		if (const auto* p = data.if_contains("prefab")) {
+			prefab = system.get_field_desc<scn::prefab_desc>(*this, *p, "/prefab");
+		}
+	}
+	void serialize(json::object&) const override {}
+};
 
 struct diagnostics_fixture : test_util::scene_env
 {
@@ -248,6 +266,78 @@ BOOST_AUTO_TEST_CASE(ADependencyOfAnotherTypeIsNotGivenOut)
 	BOOST_TEST(!deps.get<scn::level_desc>(tag_of("mat.desc")));
 	deps.add(res::make_dep<desc::desc_base>(tag_of("mat.desc")), material.get());
 	BOOST_TEST((deps.get<desc::desc_base>(tag_of("mat.desc")) == material.get()));
+}
+
+BOOST_AUTO_TEST_CASE(ADerivedDescInABaseTypedField_IsWhatItAsksFor)
+{
+	descs->register_desc<prefab_holder_desc>("prefab_holder_desc");
+	put("world.desc", R"({"__type":"world_desc"})");
+	put("holder.desc", R"({"__type":"prefab_holder_desc","prefab":"memory://t/world.desc"})");
+	auto holder = rs->require_sync<desc::desc_base>(tag_of("holder.desc"));
+	pump();
+	BOOST_REQUIRE(holder.is_ready());
+	const auto& prefab = std::dynamic_pointer_cast<prefab_holder_desc>(holder.get())->prefab;
+	BOOST_TEST(prefab.is_ready());
+	BOOST_TEST(!prefab.has_error());
+	BOOST_TEST(prefab.error_text().empty());
+
+	res::diagnostics_collector collector;
+	collector.collect(holder.get_control_block());
+	const auto items = collector.items();
+	BOOST_TEST(std::ranges::none_of(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }));
+}
+
+BOOST_AUTO_TEST_CASE(TwoFieldsSharingABlock_EachReportTheirMismatch)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	put("clips.desc", R"({"__type":"animation_collection_desc","clips":["memory://t/mat.desc","memory://t/mat.desc"]})");
+	auto collection = rs->require_sync<scn::animation_collection_desc>(tag_of("clips.desc"));
+	pump();
+	BOOST_REQUIRE(collection.is_ready());
+	const auto& clips = collection.get()->clips;
+	BOOST_REQUIRE_EQUAL(clips.size(), 2u);
+	BOOST_TEST((clips[0].get_control_block() == clips[1].get_control_block()));
+
+	res::diagnostics_collector collector;
+	collector.collect(collection.get_control_block());
+	const auto items = collector.items();
+	for (const std::string_view path : { "/clips/0", "/clips/1" }) {
+		BOOST_TEST_MESSAGE(path);
+		BOOST_TEST(std::ranges::count_if(items, [&](const res::diagnostic& d) {
+			return d.kind == res::diagnostic_kind::type_mismatch && d.json_path == path;
+		}) == 1);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ABlockThatIsADependencyAndAField_ReportsOneMismatch)
+{
+	put("mat.desc", R"({"__type":"material_desc"})");
+	auto material = rs->require_sync<desc::desc_base>(tag_of("mat.desc"));
+	BOOST_REQUIRE(material.is_ready());
+
+	const res::child_link field{ {}, "/level", false, &core::res::holds<scn::level_desc>, "level_desc" };
+	for (const bool field_first : { false, true }) {
+		auto owner = std::make_shared<core::res::res_resource_block>();
+		owner->diagnostics.set_resource("memory://t/owner.desc");
+		const auto child = material.get_control_block();
+		if (field_first) {
+			owner->diagnostics.add_child(child, field);
+			owner->diagnostics.add_child(child);
+		} else {
+			owner->diagnostics.add_child(child);
+			owner->diagnostics.add_child(child, field);
+		}
+		owner->set_ready(std::make_shared<res::resource_entry>());
+
+		res::diagnostics_collector collector;
+		collector.collect(owner);
+		const auto items = collector.items();
+		BOOST_TEST_MESSAGE(field_first);
+		BOOST_REQUIRE_EQUAL(std::ranges::count_if(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::type_mismatch; }), 1);
+		const auto* mismatch = find(items, res::diagnostic_kind::type_mismatch, "memory://t/owner.desc");
+		BOOST_REQUIRE(mismatch);
+		BOOST_TEST(mismatch->json_path == "/level");
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AKeyWithSlashAndTildeIsEscapedInThePath)

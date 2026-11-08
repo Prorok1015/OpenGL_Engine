@@ -25,6 +25,13 @@ namespace core::res
             std::shared_ptr<ds::detail::held_slot> slot);
     }
 
+    // Whether a loaded resource is a T: what a res_handle<T> accepts, also for the collector's field check (#615).
+    template<typename T>
+    bool holds(const ::res::resource_entry& entry)
+    {
+        return dynamic_cast<const T*>(&entry) != nullptr;
+    }
+
     // The name a type mismatch gives for T: its desc __type when it has one.
     template<typename T>
     std::string_view handle_type_name()
@@ -160,7 +167,7 @@ namespace core::res
     private:
         // Read only once the block is ready (its data is published then).
         bool holds_t() const {
-            return !m_block->data || std::dynamic_pointer_cast<T>(m_block->data) != nullptr;
+            return !m_block->data || holds<T>(*m_block->data);
         }
 
         std::string type_mismatch_text() const {

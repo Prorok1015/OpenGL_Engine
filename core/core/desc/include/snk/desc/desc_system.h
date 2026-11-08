@@ -244,7 +244,7 @@ namespace desc
 		{
 			if (data.is_string()) {
 				auto handle = m_res_system.require<T>(json::value_to<res::tag>(data));
-				res::note_field_load(handle.get_control_block(), json_path, false, ds::type_id::make<T>(), core::res::handle_type_name<T>());
+				res::note_field_load(handle.get_control_block(), json_path, false, &core::res::holds<T>, core::res::handle_type_name<T>());
 				return handle;
 			}
 
@@ -257,7 +257,7 @@ namespace desc
 				m_res_system.store(mem_tag, serialize_to_bytes(data));
 			}
 			auto handle = m_res_system.require<T>(mem_tag);
-			res::note_field_load(handle.get_control_block(), json_path, true, ds::type_id::make<T>(), core::res::handle_type_name<T>());
+			res::note_field_load(handle.get_control_block(), json_path, true, &core::res::holds<T>, core::res::handle_type_name<T>());
 			return handle;
 		}
 
@@ -453,11 +453,7 @@ namespace desc
 				return false;
 			}
 			ASSERT_MSG(!factory_map.contains(std::string{ type_name }), "That desc type is already registered!");
-			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> {
-				auto made = std::make_shared<T>();
-				made->m_kinds = desc::kind_chain_of<T>();
-				return made;
-			};
+			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
 			if constexpr (desc::is_described<T>) {
 				static_assert(desc::has_schema_generator<T>, "T is described with BOOST_DESCRIBE_CLASS: include <snk/desc/desc_describe.h> where it is registered");
 				for (auto& enumeration : desc::schema_generator<T>::enums()) {

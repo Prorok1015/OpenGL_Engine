@@ -9,40 +9,12 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/resource/resources/res_resource_base.h>
-#include <snk/common/ds/ds_type_id.hpp>
-#include <algorithm>
-#include <type_traits>
-#include <vector>
 
 namespace json = boost::json;
 
 namespace desc
 {
 	class desc_system;
-	class desc_base;
-
-	// T, its base_type, and so on down to desc_base: the types a require<> of T's file may ask for (#615).
-	template<typename T>
-	void append_kind_chain(std::vector<ds::type_id>& chain)
-	{
-		chain.push_back(ds::type_id::make<T>());
-		if constexpr (requires { typename T::base_type; }) {
-			if constexpr (!std::is_same_v<typename T::base_type, T>) {
-				append_kind_chain<typename T::base_type>(chain);
-			}
-		}
-	}
-
-	template<typename T>
-	std::vector<ds::type_id> kind_chain_of()
-	{
-		std::vector<ds::type_id> chain;
-		append_kind_chain<T>(chain);
-		if (chain.back() != ds::type_id::make<desc_base>()) {
-			chain.push_back(ds::type_id::make<desc_base>());
-		}
-		return chain;
-	}
 
 	class desc_base : public res::resource_entry
 	{
@@ -50,7 +22,7 @@ namespace desc
 	public:
 		desc_base() = default;
 		// Do not copy m_guid — a copy is a new file, so it must get its own __guid (same as m_tag).
-		desc_base(const desc_base& other) : res::resource_entry(), type(other.type), m_kinds(other.m_kinds) {};
+		desc_base(const desc_base& other) : res::resource_entry(), type(other.type) {};
 		desc_base(desc_base&&) = default;
 		desc_base& operator=(desc_base&&) = default;
 		virtual ~desc_base() = default;
@@ -65,17 +37,10 @@ namespace desc
 		{
 			// Do not copy m_tag or m_guid — resource identity is per-instance.
 			type = other.type;
-			m_kinds = other.m_kinds;
 			return *this;
 		}
 
 		std::string_view get_type() const { return type; }
-
-		// Made outside desc_system::create_instance (no kinds recorded): any.
-		bool is_kind_of(ds::type_id kind) const override
-		{
-			return m_kinds.empty() || std::ranges::find(m_kinds, kind) != m_kinds.end();
-		}
 		std::string_view kind_name() const override { return type; }
 
 		// UUID v4 in lowercase; empty for files without __guid (memory://, inline, not yet saved).
@@ -101,7 +66,6 @@ namespace desc
 
 	private:
 		std::string type;
-		std::vector<ds::type_id> m_kinds;
 		std::string m_guid;
 		desc_system* m_system = nullptr;
 	};

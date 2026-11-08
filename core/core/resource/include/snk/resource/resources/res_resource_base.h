@@ -1,6 +1,5 @@
 #pragma once
 #include <snk/resource/res_tag.h>
-#include <snk/common/ds/ds_type_id.hpp>
 #include <memory>
 #include <string_view>
 
@@ -19,9 +18,7 @@ namespace res
 
 		const res::tag& get_tag() const { return m_tag; }
 
-		// For res::diagnostics_collector, which knows a field's expected type only as an id (#615). An entry that does
-		// not record its kinds is taken for any.
-		virtual bool is_kind_of(ds::type_id) const { return true; }
+		// What a type mismatch names as the actual type (#615); empty: unnamed.
 		virtual std::string_view kind_name() const { return {}; }
 	protected:
 		void set_tag(const tag& tag) {
