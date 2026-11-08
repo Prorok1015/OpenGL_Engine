@@ -206,7 +206,9 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 		const json::object* components = entities[i].as_object().if_contains("components") ? entities[i].as_object().at("components").if_object() : nullptr;
 		if (node_id && node_id->saved() && components) {
 			if (const auto* path = components->if_contains(node_id->name); path && path->is_object()) {
-				node_id->read(*node_id->schema, reg, created[i], path->as_object(), read);
+				if (!node_id->read(*node_id->schema, reg, created[i], path->as_object(), read)) {
+					++report.partial[node_id->name];
+				}
 			}
 		}
 	}
@@ -228,7 +230,9 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 				return;
 			}
 			if (const auto* value = components.if_contains(entry.name); value && value->is_object()) {
-				entry.read(*entry.schema, reg, created[i], value->as_object(), read);
+				if (!entry.read(*entry.schema, reg, created[i], value->as_object(), read)) {
+					++report.partial[entry.name];
+				}
 			}
 		});
 	}
@@ -241,7 +245,9 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 				++report.unknown[std::string{ name }];
 				continue;
 			}
-			entry->read(*entry->schema, reg, entt::null, value.as_object(), read);
+			if (!entry->read(*entry->schema, reg, entt::null, value.as_object(), read)) {
+				++report.partial[entry->name];
+			}
 		}
 	}
 
@@ -272,6 +278,9 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 	rebuild_derived(reg);
 	for (const auto& [name, count] : report.unknown) {
 		egLOG_WARN("scene", "world '{}': {} of the snapshot is not a saved type any more ({} times), left out", world.get_name(), name, count);
+	}
+	for (const auto& [name, count] : report.partial) {
+		egLOG_WARN("scene", "world '{}': {} restored with a field reset to its default ({} times)", world.get_name(), name, count);
 	}
 	return true;
 }

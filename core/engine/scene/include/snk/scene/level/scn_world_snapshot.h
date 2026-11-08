@@ -19,6 +19,8 @@ namespace scn
 		std::map<std::string, std::size_t> unsaved;
 		// Restored: types the snapshot has and the catalog no longer knows.
 		std::map<std::string, std::size_t> unknown;
+		// Restored, but a value did not fit its field (a field changed its type): that field kept its default.
+		std::map<std::string, std::size_t> partial;
 		std::size_t entities = 0;
 	};
 

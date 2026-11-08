@@ -167,6 +167,7 @@ BOOST_AUTO_TEST_CASE(EverySavedComponentComesBackFieldByField)
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
 	BOOST_TEST(restored.unknown.empty());
+	BOOST_TEST(restored.partial.empty());
 	BOOST_TEST(restored.entities == captured.entities);
 
 	std::size_t compared = 0;
@@ -306,6 +307,25 @@ BOOST_AUTO_TEST_CASE(WhatCannotBeSavedOrPlacedIsReported)
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, catalog, read_context(), restored)); // the engine's only
 	BOOST_TEST(restored.unknown.at("test.bullet") == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)
+{
+	scn::world_context source{ 1, "main" };
+	const entt::entity shot = source.state().create();
+	source.state().emplace<bullet>(shot, bullet{ 7 });
+	scn::snapshot_report report;
+	json::object snapshot = scn::capture_world(source, layer, report);
+	snapshot.at("entities").as_array().at(0).as_object().at("components").as_object().at("test.bullet").as_object()["speed"] = "fast";
+
+	scn::world_context target{ 1, "main" };
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
+	BOOST_TEST(restored.partial.at("test.bullet") == 1u);
+	const auto view = target.state().view<bullet>();
+	BOOST_REQUIRE(view.size() == 1u);
+	BOOST_TEST(view.get<bullet>(view.front()).id == 7);
+	BOOST_TEST(view.get<bullet>(view.front()).speed == 0.f);
 }
 
 BOOST_AUTO_TEST_CASE(OnlyAnEmptyWorldTakesASnapshot)
