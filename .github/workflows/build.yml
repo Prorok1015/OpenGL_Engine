@@ -140,8 +140,8 @@ jobs:
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
         with:
-          # The same preset as the editor smoke job (shared engine, #223): one compiler cache for both.
-          key: cc-ci-linux-gcc-debug
+          # Not the smoke job's key, though it builds the same preset: two jobs saving one key in a run collide (#582).
+          key: cc-ci-linux-gcc-shared
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -378,6 +378,24 @@ jobs:
       # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.
       - name: Check the MCP server module is isolated
         run: tools/ci/check_mcp_isolation.sh
+
+      # #582: the root CMakeLists.txt refuses a build directory that holds the sources, before any configure work
+      # (no compiler check, no submodules needed). The guard's own text must be the reason; CMake reflows it.
+      - name: Check an in-source configure is refused
+        run: |
+          src="${RUNNER_TEMP}/insource/src"
+          mkdir -p "$src"
+          git archive HEAD | tar -x -C "$src"
+          for bin in "$src" "$(dirname "$src")"; do
+            if cmake -S "$src" -B "$bin" > "${RUNNER_TEMP}/insource.log" 2>&1; then
+              echo "::error::configuring $src into $bin succeeded"; cat "${RUNNER_TEMP}/insource.log"; exit 1
+            fi
+            if ! tr -s ' \n' ' ' < "${RUNNER_TEMP}/insource.log" | grep -qF "snake: in-source builds are not supported (#582)"; then
+              echo "::error::configuring $src into $bin failed, but not on the in-source guard"; cat "${RUNNER_TEMP}/insource.log"; exit 1
+            fi
+            echo "refused: -S $src -B $bin"
+            rm -rf "$bin/CMakeCache.txt" "$bin/CMakeFiles"
+          done
 
       - name: Install dependencies
         run: |

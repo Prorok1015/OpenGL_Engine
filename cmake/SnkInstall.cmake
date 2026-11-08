@@ -115,7 +115,8 @@ function(_snk_sdk_include_dest out abs)
 		endif()
 	endif()
 	# The build tree before the source tree: the presets put it inside the source tree (build/<preset>), and a
-	# generated header directory must land in the same place whichever configuration built it.
+	# generated header directory must land in the same place whichever configuration built it. Sound only because the
+	# build tree never holds the sources: the root CMakeLists.txt refuses an in-source configure (#582).
 	if(NOT _dest)
 		string(FIND "${abs}/" "${CMAKE_BINARY_DIR}/" _pos)
 		if(_pos EQUAL 0)
