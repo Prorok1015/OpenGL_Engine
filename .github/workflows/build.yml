@@ -134,6 +134,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
 
     steps:
@@ -216,6 +219,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
       SDK_PREFIX: ${{ github.workspace }}/sdk-install-no-assimp
 
@@ -441,7 +447,8 @@ jobs:
           # Product code only: engine/core libraries and the editor. Third-party code, the tests
           # themselves and build output are excluded. Multi-threaded tests can produce negative
           # hit counts and header templates repeat across TUs, hence the tolerance flags.
-          gcovr_args=(--root . --object-directory build/ci-linux-coverage
+          # gcov must match the compiler: the pinned GCC of the ci-linux presets (#585).
+          gcovr_args=(--root . --object-directory build/ci-linux-coverage --gcov-executable gcov-15
             --filter 'core/' --filter 'Editor/code/'
             --exclude 'lib3dparty/' --exclude 'tests/' --exclude 'build/' --exclude '.fetchcontent-cache/'
             --exclude-unreachable-branches --exclude-throw-branches
@@ -789,6 +796,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
       SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
       SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared

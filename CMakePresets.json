@@ -73,8 +73,8 @@
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
         "GLFW_BUILD_WAYLAND": "OFF",
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
+        "CMAKE_C_COMPILER": "gcc-15",
+        "CMAKE_CXX_COMPILER": "g++-15"
       }
     },
     {
