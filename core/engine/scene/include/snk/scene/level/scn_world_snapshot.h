@@ -32,8 +32,11 @@ namespace scn
 	// Rebuilds a world from capture_world into `world`, whose registry must hold no entity. Entities are created first
 	// (with their node path, so node_index is whole), then their components in catalog order with references mapped to
 	// the new entities; derived components (world transform, depth, bone matrices) are rebuilt and the transform
-	// events raised so that the first frame computes them. `context` reaches the desc system for desc references and
-	// inline descs (its `entities` is replaced). False, with the world left partly built, when the snapshot is not one.
+	// events raised so that the first frame computes them. `context.system` (the desc system of the world's layer) is
+	// what reads desc references and inline descs: without it materials, clips and remembered prefab nodes read back
+	// empty; without `context.owner` an owner named after the world stands in. Its `entities` is replaced. Handles
+	// come back loading: waiting for them is the caller's (HOT_RELOAD_PLAY.md section 6, step 6). False, with the
+	// world left partly built, when the snapshot is not one.
 	SNK_API bool restore_world(world_context& world, const json::object& snapshot, const component_catalog& catalog,
 		const desc::read_context& context, snapshot_report& report);
 }

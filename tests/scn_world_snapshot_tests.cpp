@@ -8,9 +8,17 @@
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_animation_clip_desc.h>
+#include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_material_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
+#include <snk/scene/scn_transform_system.h>
+#include <snk/ecs/ecs_system.h>
+#include <memory>
 #include <snk/ecs/ecs_random.hpp>
 #include <entt/entt.hpp>
 #include <cstdint>
+#include <cstring>
 #include <set>
 #include <string>
 #include <string_view>
@@ -326,6 +334,109 @@ BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)
 	BOOST_REQUIRE(view.size() == 1u);
 	BOOST_TEST(view.get<bullet>(view.front()).id == 7);
 	BOOST_TEST(view.get<bullet>(view.front()).speed == 0.f);
+}
+
+BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
+{
+	const auto material_tag = put("plain.material.desc", R"({"__type":"material_desc","queue":"transparent"})");
+	const auto sky_tag = put("sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	const auto clip_tag = put("run.clip.desc", R"({"__type":"animation_clip_desc","name":"Run","duration":2.0,"ticks_per_second":30.0,"channels":{}})");
+	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
+	BOOST_REQUIRE(sky && sky->material.is_valid());
+	BOOST_REQUIRE(desc::is_override_tag(sky->material.get_tag().view()));
+
+	scn::world_context source{ 1, "main" };
+	entt::registry& from = source.state();
+	const auto named = [&](std::string_view name) {
+		const entt::entity entity = from.create();
+		from.emplace<scn::name_component>(entity, scn::name_component{ std::string{ name } });
+		return entity;
+	};
+	from.emplace<scn::material_desc_component>(named("Tagged"), scn::material_desc_component{ require_loaded<scn::material_desc>(material_tag), false });
+	from.emplace<scn::material_desc_component>(named("Inline"), scn::material_desc_component{ sky->material, false });
+	scn::animation_collection_component clips;
+	clips.clips.push_back(require_loaded<scn::animation_clip_desc>(clip_tag));
+	from.emplace<scn::animation_collection_component>(named("Animator"), clips);
+	scn::prefab_instance instance;
+	instance.source_prefab = tag_of("p.prefab.desc");
+	instance.local_overrides.name = "Root";
+	scn::prefab_desc::prefab_node child;
+	child.name = "Child";
+	child.node_id = 0x42;
+	instance.local_overrides.children.push_back(child);
+	from.emplace<scn::prefab_instance>(named("Instance"), instance);
+
+	scn::snapshot_report report;
+	const json::object snapshot = scn::capture_world(source, layer, report);
+	scn::world_context target{ 1, "main" };
+	entt::registry& to = target.state();
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
+	BOOST_TEST(report.partial.empty());
+	pump();
+
+	const auto& tagged = to.get<scn::material_desc_component>(find_named(to, "Tagged"));
+	BOOST_TEST((tagged.mlt_desc.get_tag() == material_tag));
+	BOOST_TEST(tagged.dirty); // compiled again
+	BOOST_REQUIRE(tagged.mlt_desc.get_sync());
+	BOOST_TEST((tagged.mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+
+	const auto& inline_material = to.get<scn::material_desc_component>(find_named(to, "Inline"));
+	BOOST_TEST(desc::is_override_tag(inline_material.mlt_desc.get_tag().view()));
+	BOOST_TEST(inline_material.dirty);
+	BOOST_REQUIRE(inline_material.mlt_desc.get_sync());
+	BOOST_TEST(inline_material.mlt_desc.get_sync()->vertex_shader.string() == "res://shaders/sky.vert");
+
+	const auto& restored_clips = to.get<scn::animation_collection_component>(find_named(to, "Animator")).clips;
+	BOOST_REQUIRE_EQUAL(restored_clips.size(), 1u);
+	BOOST_TEST((restored_clips[0].get_tag() == clip_tag));
+
+	const auto& restored_instance = to.get<scn::prefab_instance>(find_named(to, "Instance"));
+	BOOST_TEST((restored_instance.source_prefab == instance.source_prefab));
+	BOOST_TEST(restored_instance.local_overrides.name == "Root");
+	BOOST_REQUIRE_EQUAL(restored_instance.local_overrides.children.size(), 1u);
+	BOOST_TEST(restored_instance.local_overrides.children[0].name == "Child");
+}
+
+BOOST_AUTO_TEST_CASE(TheFirstFrameAfterARestoreComputesTheSameTransforms)
+{
+	ecs::system_factory systems;
+	scn::init_transform_system(systems);
+	const auto world_of = [&](scn::context_set& set) -> scn::world_context& {
+		auto& world = set.create_context("main", 0);
+		set.add_systems(world, { "scn::depth_system", "scn::transform_system" }, systems);
+		return world;
+	};
+	scn::context_set source_set("play", nullptr);
+	scn::world_context& source = world_of(source_set);
+	spawn(source.state());
+	source_set.update(std::chrono::duration<float>(0.016f));
+
+	scn::snapshot_report report;
+	const json::object snapshot = scn::capture_world(source, layer, report);
+	scn::context_set target_set("play", nullptr);
+	scn::world_context& target = world_of(target_set);
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
+	target_set.update(std::chrono::duration<float>(0.016f));
+
+	const entt::registry& from = source.state();
+	entt::registry& to = target.state();
+	std::size_t checked = 0;
+	for (const auto [entity, world] : from.view<scn::world_transform>().each()) {
+		const entt::entity copy = counterpart(from, entity, to);
+		BOOST_REQUIRE(copy != entt::null);
+		BOOST_REQUIRE(to.all_of<scn::world_transform>(copy));
+		BOOST_TEST(std::memcmp(&to.get<scn::world_transform>(copy).world, &world.world, sizeof(glm::mat4)) == 0);
+		if (const auto* depth = from.try_get<scn::depth_level>(entity)) {
+			BOOST_REQUIRE(to.all_of<scn::depth_level>(copy));
+			BOOST_TEST(to.get<scn::depth_level>(copy).value == depth->value);
+		}
+		++checked;
+	}
+	BOOST_TEST(checked >= 5u);
+	// What the render extractor draws: a mesh with its geometry, transform and the renderable mark.
+	const entt::entity body = find_named(to, "Body");
+	BOOST_TEST((to.all_of<scn::renderable, scn::mesh_component, scn::world_transform>(body)));
 }
 
 BOOST_AUTO_TEST_CASE(OnlyAnEmptyWorldTakesASnapshot)

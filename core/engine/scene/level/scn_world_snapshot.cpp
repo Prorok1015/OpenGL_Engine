@@ -7,6 +7,9 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/ecs/ecs_random.hpp>
+#include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_system.h>
+#include <string>
 #include <boost/json/array.hpp>
 #include <cstdint>
 #include <optional>
@@ -38,6 +41,22 @@ namespace
 
 	private:
 		std::unordered_map<std::uint32_t, std::uint32_t> m_ids;
+	};
+
+	// Desc references are read with an owner desc (desc_ref_traits): its tag names the memory copies of inline descs.
+	// A component has no owner, so the restore stands one in, named after the world.
+	class snapshot_owner final : public desc::desc_base
+	{
+	public:
+		explicit snapshot_owner(std::string_view world)
+		{
+			std::string tag{ "memory://snapshot/" };
+			tag.append(world);
+			set_tag(res::tag{ std::move(tag) });
+		}
+
+		void deserialize(desc::desc_system&, const json::object&) override {}
+		void serialize(json::object&) const override {}
 	};
 
 	bool is_editor_only(const entt::registry& reg, entt::entity entity, const std::vector<const scn::component_entry*>& editor_only)
@@ -184,8 +203,12 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 	const json::array& entities = entities_value->as_array();
 
 	snapshot_ids ids;
+	snapshot_owner owner{ world.get_name() };
 	desc::read_context read = context;
 	read.entities = &ids;
+	if (read.system && !read.owner) {
+		read.owner = &owner;
+	}
 
 	node_index::get(reg);
 	const component_entry* node_id = catalog.find(k_node_id);
