@@ -1,0 +1,364 @@
+#include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
+#include "test_temp_dir.hpp"
+#include "edt_code_commands.h"
+#include "edt_desc_file_commands.h"
+#include <snk/command/cmd_policy.h>
+#include <snk/command/cmd_registry.h>
+#include <snk/editor/edt_editor_events.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <boost/json.hpp>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <string>
+#include <vector>
+
+// desc.read / desc.create / desc.write (#550): the paths, the schema check before a byte is written, the version
+// rechecked at the write, and the files that are not the project's own.
+namespace {
+
+namespace fs = std::filesystem;
+namespace json = boost::json;
+
+std::string read_file(const fs::path& p)
+{
+	std::ifstream in(p, std::ios::binary);
+	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+}
+
+const char* const k_material = R"({"__type":"material_desc","queue":"mix","defines":["A"]})";
+
+struct desc_fixture : test_util::scene_env
+{
+	desc_fixture()
+	{
+		fs::create_directories(res_root / "materials");
+		fs::create_directories(lower / "materials");
+		rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ res_root },
+			res::mount_access::read_write, res::write_policy::allow_all());
+		seen = events.agent_action.subscribe([this](const edt::agent_action_info& info) { actions.push_back(info); });
+		edt::desc_file_deps deps{ *rs, *descs };
+		deps.top_layer = [this] { return res_root; };
+		deps.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
+		deps.open_level_files = [this] { return open_level; };
+		deps.events = &events;
+		registrations = edt::register_desc_file_commands(commands, std::move(deps));
+	}
+
+	~desc_fixture()
+	{
+		registrations.clear();
+		rs->unregistrate_resolver(res::tag::default_protocol());
+	}
+
+	cmd::result call(const std::string& id, json::value args, cmd::origin from = cmd::origin::agent("s1"))
+	{
+		return commands.invoke(id, std::move(args), std::move(from));
+	}
+
+	static cmd::call call_of(json::object args)
+	{
+		cmd::call out;
+		out.args = std::move(args);
+		out.from = cmd::origin::agent("s1");
+		return out;
+	}
+
+	json::object desc_args(const std::string& path, const char* content) const
+	{
+		return json::object{ { "path", path }, { "desc", json::parse(content) } };
+	}
+
+	json::object write_args(const std::string& path, const std::string& version, const char* content) const
+	{
+		return json::object{ { "path", path }, { "version", version }, { "desc", json::parse(content) } };
+	}
+
+	static std::string text_of(const json::value& value)
+	{
+		return std::string(value.as_string());
+	}
+
+	std::string version_of(const std::string& path)
+	{
+		const auto read = call("desc.read", json::object{ { "path", path } });
+		BOOST_REQUIRE_MESSAGE(read.ok, read.error);
+		return std::string(read.value.at("version").as_string());
+	}
+
+	void make_material(const std::string& path, const char* content = k_material)
+	{
+		const auto made = call("desc.create", desc_args(path, content));
+		BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	}
+
+	test_util::temp_dir dir{ "edt_desc_file_commands" };
+	const fs::path res_root = dir.path() / "res";
+	const fs::path lower = dir.path() / "lower";
+	edt::editor_events events;
+	std::vector<edt::agent_action_info> actions;
+	edt::connection seen;
+	cmd::command_registry commands;
+	std::vector<edt::registration> registrations;
+	std::vector<std::string> open_level;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtDescFileCommands, desc_fixture)
+
+BOOST_AUTO_TEST_CASE(TheCommands_HaveTheirCategoriesAndOnlyAWriteAsksAPerson)
+{
+	BOOST_TEST((commands.find("desc.read")->category == cmd::agent_category::read));
+	BOOST_TEST((commands.find("desc.create")->category == cmd::agent_category::scene_edit));
+	BOOST_TEST((commands.find("desc.write")->category == cmd::agent_category::scene_edit));
+	BOOST_TEST((commands.find("desc.read")->risk == cmd::danger::none));
+	BOOST_TEST((commands.find("desc.create")->risk == cmd::danger::none));
+	BOOST_TEST((commands.find("desc.write")->risk == cmd::danger::confirm));
+	BOOST_TEST(static_cast<bool>(commands.find("desc.write")->describe));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentCreatesAMaterialAndChangesIt)
+{
+	const auto made = call("desc.create", desc_args("materials/red.mat.desc", k_material));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	BOOST_TEST(fs::exists(res_root / "materials" / "red.mat.desc"));
+	BOOST_TEST(read_file(res_root / "materials" / "red.mat.desc").find("\"__version\"") != std::string::npos);
+
+	const auto read = call("desc.read", json::object{ { "path", "res://materials/red.mat.desc" } });
+	BOOST_REQUIRE_MESSAGE(read.ok, read.error);
+	BOOST_TEST(std::string(read.value.at("type").as_string()) == std::string("material_desc"));
+	BOOST_TEST(std::string(read.value.at("version").as_string()) == std::string(made.value.at("version").as_string()));
+
+	const auto changed = call("desc.write", write_args("materials/red.mat.desc", std::string(read.value.at("version").as_string()),
+		R"({"__type":"material_desc","queue":"opaque","defines":["B","C"]})"));
+	BOOST_REQUIRE_MESSAGE(changed.ok, changed.error);
+	BOOST_TEST(std::string(changed.value.at("version").as_string()) != std::string(made.value.at("version").as_string()));
+	const std::string on_disk = read_file(res_root / "materials" / "red.mat.desc");
+	BOOST_TEST(on_disk.find("opaque") != std::string::npos);
+	BOOST_TEST(on_disk.find("\"B\"") != std::string::npos);
+	BOOST_TEST(on_disk.find("\"A\"") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentCreatesALevel_ItsTypeHasNoSchemaYetSoItIsWarnedAbout)
+{
+	fs::create_directories(res_root / "levels");
+	const auto made = call("desc.create", desc_args("levels/arena.desc", R"({"__type":"level_desc","name":"Arena","worlds":[]})"));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	BOOST_REQUIRE_EQUAL(made.value.at("warnings").as_array().size(), 1u);
+	BOOST_TEST(std::string(made.value.at("warnings").as_array()[0].at("kind").as_string()) == std::string("schema"));
+	BOOST_TEST(read_file(res_root / "levels" / "arena.desc").find("\"Arena\"") != std::string::npos);
+
+	const auto broken = call("desc.create", desc_args("levels/broken.desc", R"({"__type":"level_desc","worlds":5})"));
+	BOOST_TEST(broken.code == cmd::codes::invalid_args);
+	BOOST_TEST(!fs::exists(res_root / "levels" / "broken.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AContentThatBreaksItsSchema_IsRefusedWithThePointer_AndNothingChanges)
+{
+	const auto unknown_field = call("desc.create", desc_args("materials/a.mat.desc", R"({"__type":"material_desc","bogus":1})"));
+	BOOST_TEST(unknown_field.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(unknown_field.value.is_object());
+	const json::value& first = unknown_field.value.at("errors").as_array()[0];
+	BOOST_TEST(std::string(first.at("json_path").as_string()) == std::string("/bogus"));
+	BOOST_TEST(std::string(first.at("resource").as_string()) == std::string("res://materials/a.mat.desc"));
+	BOOST_TEST(std::string(first.at("kind").as_string()) == std::string("schema"));
+	BOOST_TEST(!fs::exists(res_root / "materials" / "a.mat.desc"));
+
+	const auto wrong_type = call("desc.create", desc_args("materials/b.mat.desc", R"({"__type":"material_desc","defines":5})"));
+	BOOST_TEST(wrong_type.code == cmd::codes::invalid_args);
+	BOOST_TEST(std::string(wrong_type.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/defines"));
+
+	make_material("materials/c.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "c.mat.desc");
+	const auto refused = call("desc.write", write_args("materials/c.mat.desc", version_of("materials/c.mat.desc"),
+		R"({"__type":"material_desc","bogus":true})"));
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(res_root / "materials" / "c.mat.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(AnUnknownTypeOrAMissingHeaderOrAWrongVersion_IsRefused)
+{
+	for (const char* content : { R"({"__type":"no_such_desc"})", R"({"name":"x"})", R"({"__type":5})",
+		R"({"__type":"material_desc","__version":99})", R"({"__type":"material_desc","queue":"mix","extra":{"__type":"no_such_desc"}})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/x.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "x.mat.desc"));
+		}
+	}
+	const auto not_an_object = call("desc.create", json::object{ { "path", "materials/x.mat.desc" }, { "desc", json::array{} } });
+	BOOST_TEST(!not_an_object.ok);
+}
+
+BOOST_AUTO_TEST_CASE(ANestedTypedObjectIsChecked_AtAnyDepth)
+{
+	const auto refused = call("desc.create", desc_args("materials/n.mat.desc",
+		R"({"__type":"material_desc","extra":[{"__type":"material_desc","bogus":1}]})"));
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	bool pointed = false;
+	for (const json::value& error : refused.value.at("errors").as_array()) {
+		if (error.at("json_path").as_string() == "/extra/0/bogus") pointed = true;
+	}
+	BOOST_TEST(pointed);
+}
+
+BOOST_AUTO_TEST_CASE(PathsOutsideTheProject_OrNotDescFiles_AreRefusedBeforeTheDisk)
+{
+	for (const char* path : { "../escape.desc", "materials/../../escape.desc", "/abs/x.desc", "C:/x.desc", "http://x/y.desc",
+		"materials\\x.desc", "materials/x.json", "materials/x.png", "materials/.desc", "", "materials/con.desc", "code://x.desc", "memory://x.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			for (const char* id : { "desc.create", "desc.read", "desc.write" }) {
+				json::object args{ { "path", path } };
+				if (std::string_view(id) != "desc.read") args["desc"] = json::parse(k_material);
+				if (std::string_view(id) == "desc.write") args["version"] = "v";
+				const auto refused = call(id, args);
+				BOOST_TEST(!refused.ok);
+			}
+		}
+	}
+	BOOST_TEST(!fs::exists(dir.path() / "escape.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(Create_NeverReplacesAFile_AlsoOneInALowerLayer)
+{
+	make_material("materials/once.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "once.mat.desc");
+	const auto again = call("desc.create", desc_args("materials/once.mat.desc", R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST(again.code == cmd::codes::needs_input);
+	BOOST_TEST(read_file(res_root / "materials" / "once.mat.desc") == before);
+
+	dir.write("lower/materials/engine.mat.desc", k_material);
+	const auto shadow = call("desc.create", desc_args("materials/engine.mat.desc", k_material));
+	BOOST_TEST(shadow.code == cmd::codes::needs_input);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "engine.mat.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(Write_RefusesAMissingFile_AndOneOfALowerLayer)
+{
+	const auto missing = call("desc.write", write_args("materials/none.mat.desc", "v", k_material));
+	BOOST_TEST(missing.code == cmd::codes::not_found);
+
+	dir.write("lower/materials/engine.mat.desc", k_material);
+	const auto lower_only = call("desc.write", write_args("materials/engine.mat.desc", "v", k_material));
+	BOOST_TEST(lower_only.code == cmd::codes::invalid_args);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "engine.mat.desc"));
+	BOOST_TEST(read_file(lower / "materials" / "engine.mat.desc") == k_material);
+}
+
+BOOST_AUTO_TEST_CASE(Write_WithAnotherVersion_IsStale_AndTheFileStays)
+{
+	make_material("materials/s.mat.desc");
+	const std::string version = version_of("materials/s.mat.desc");
+	dir.write("res/materials/s.mat.desc", R"({"__type":"material_desc","queue":"opaque"})");
+	const std::string changed_behind = read_file(res_root / "materials" / "s.mat.desc");
+
+	const auto stale = call("desc.write", write_args("materials/s.mat.desc", version, k_material));
+	BOOST_TEST(stale.code == cmd::codes::stale);
+	BOOST_TEST(std::string(stale.value.at("version").as_string()) != std::string(version));
+	BOOST_TEST(read_file(res_root / "materials" / "s.mat.desc") == changed_behind);
+}
+
+BOOST_AUTO_TEST_CASE(TheVersionIsCheckedAgainAtTheWrite_AfterThePersonSawTheQuestion)
+{
+	make_material("materials/q.mat.desc");
+	const std::string version = version_of("materials/q.mat.desc");
+	const cmd::call request = call_of(write_args("materials/q.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+
+	const std::optional<std::string> question = commands.find("desc.write")->describe(request);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->rfind("This request will be refused", 0) != 0u);
+
+	dir.write("res/materials/q.mat.desc", R"({"__type":"material_desc","defines":["changed meanwhile"]})");
+	const std::string behind = read_file(res_root / "materials" / "q.mat.desc");
+	const auto answered = commands.invoke("desc.write", request);
+	BOOST_TEST(answered.code == cmd::codes::stale);
+	BOOST_TEST(read_file(res_root / "materials" / "q.mat.desc") == behind);
+}
+
+BOOST_AUTO_TEST_CASE(TheQuestion_NamesTheFileTheSizesAndTheHotReload)
+{
+	make_material("materials/d.mat.desc");
+	const cmd::call request = call_of(write_args("materials/d.mat.desc", version_of("materials/d.mat.desc"), R"({"__type":"material_desc","queue":"opaque"})"));
+	const std::optional<std::string> question = commands.find("desc.write")->describe(request);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->find("res://materials/d.mat.desc") != std::string::npos);
+	BOOST_TEST(question->find("material_desc") != std::string::npos);
+	BOOST_TEST(question->find("bytes now") != std::string::npos);
+	BOOST_TEST(question->find("hot reload") != std::string::npos);
+	BOOST_TEST(question->find("undo") != std::string::npos);
+
+	const cmd::call bad = call_of(write_args("materials/d.mat.desc", "wrong", k_material));
+	BOOST_TEST(commands.find("desc.write")->describe(bad)->rfind("This request will be refused", 0) == 0u);
+	const cmd::call invalid = call_of(write_args("materials/d.mat.desc", version_of("materials/d.mat.desc"), R"({"__type":"material_desc","bogus":1})"));
+	BOOST_TEST(commands.find("desc.write")->describe(invalid)->rfind("This request will be refused", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheFileOfTheOpenLevel_IsBusy)
+{
+	fs::create_directories(res_root / "levels");
+	dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":[]})");
+	open_level = { "levels/open.desc" };
+	const std::string before = read_file(res_root / "levels" / "open.desc");
+	const auto busy = call("desc.write", write_args("levels/open.desc", version_of("levels/open.desc"), R"({"__type":"level_desc","name":"x","worlds":[]})"));
+	BOOST_TEST(busy.code == cmd::codes::busy);
+	BOOST_TEST(read_file(res_root / "levels" / "open.desc") == before);
+
+	const cmd::call request = call_of(write_args("levels/open.desc", "v", R"({"__type":"level_desc"})"));
+	BOOST_TEST(commands.find("desc.write")->describe(request)->rfind("This request will be refused", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ABigFile_IsNotReadNorWritten)
+{
+	dir.write("res/materials/big.mat.desc", std::string(edt::k_desc_file_limit + 1, ' '));
+	const auto read = call("desc.read", json::object{ { "path", "materials/big.mat.desc" } });
+	BOOST_TEST(read.code == cmd::codes::failed);
+
+	std::string huge = R"({"__type":"material_desc","defines":[)";
+	for (std::size_t size = 0; size < edt::k_desc_file_limit; size += 8) huge += "\"abcdef\",";
+	huge += "\"z\"]}";
+	const auto too_big = call("desc.create", json::object{ { "path", "materials/huge.mat.desc" }, { "desc", json::parse(huge) } });
+	BOOST_TEST(!too_big.ok);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "huge.mat.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AFileThatIsNoUtf8_IsNotRead)
+{
+	dir.write("res/materials/raw.mat.desc", "{\"a\":\"\xff\xfe\"}");
+	BOOST_TEST(call("desc.read", json::object{ { "path", "materials/raw.mat.desc" } }).code == cmd::codes::failed);
+}
+
+BOOST_AUTO_TEST_CASE(TheWritePolicyOfTheResolver_RefusesAndTheReasonIsShown)
+{
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ res_root },
+		res::mount_access::read_write, res::write_policy(res::tag::default_protocol(), { "res://levels/**" }));
+	const auto refused = call("desc.create", desc_args("materials/denied.mat.desc", k_material));
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "denied.mat.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AWrite_SignalsTheChange_SoTheHotReloadSeesIt)
+{
+	make_material("materials/h.mat.desc");
+	int reloads = 0;
+	int owner = 0;
+	rs->watch(res::tag("res://materials/h.mat.desc"), &owner, [&reloads](const res::tag&) { ++reloads; });
+	const auto changed = call("desc.write", write_args("materials/h.mat.desc", version_of("materials/h.mat.desc"), R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_REQUIRE_MESSAGE(changed.ok, changed.error);
+	tasks.drain_main();
+	BOOST_TEST(reloads >= 1);
+	rs->unwatch(res::tag("res://materials/h.mat.desc"), &owner);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsChange_IsAnnounced)
+{
+	make_material("materials/e.mat.desc");
+	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
+	BOOST_TEST(actions[0].command == "desc.create");
+	BOOST_TEST(actions[0].target == "materials/e.mat.desc");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
