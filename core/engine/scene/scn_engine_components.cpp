@@ -1,4 +1,5 @@
 #include <snk/scene/scn_component_catalog.h>
+#include <snk/common/engine_assert.h>
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
@@ -51,12 +52,6 @@ namespace scn
 	BOOST_DESCRIBE_STRUCT(animated_node_component, (), (node_name))
 	BOOST_DESCRIBE_STRUCT(prefab_instance, (), (source_prefab, local_overrides))
 	BOOST_DESCRIBE_STRUCT(component_tracker, (), (tracked_components))
-
-	// What the schema compares two trackers with; a free function, the struct stays as it is.
-	inline bool operator==(const tracked_component_info& a, const tracked_component_info& b)
-	{
-		return a.type_name == b.type_name && a.source_desc == b.source_desc && a.local_overrides == b.local_overrides;
-	}
 }
 
 namespace desc
@@ -172,7 +167,15 @@ namespace
 	template<typename T>
 	void add(scn::component_catalog& catalog, std::string_view name)
 	{
-		catalog.add<T>(std::string{ name }, desc::bind_described<T>(name, 1, desc::schema_kind::component));
+		const auto* entry = catalog.add<T>(std::string{ name }, desc::bind_described<T>(name, 1, desc::schema_kind::component));
+		ASSERT_MSG(entry, "engine component '{}' is registered twice", name);
+	}
+
+	template<typename T>
+	void add_derived(scn::component_catalog& catalog, std::string_view name)
+	{
+		const auto* entry = catalog.add_derived<T>(std::string{ name });
+		ASSERT_MSG(entry, "engine component '{}' is registered twice", name);
 	}
 }
 
@@ -190,10 +193,10 @@ void scn::register_engine_components(component_catalog& catalog)
 	add<mouse_controller_component>(catalog, "scn.mouse_controller");
 	add<screen_anchor_component>(catalog, "scn.screen_anchor");
 
-	catalog.add_derived<world_transform>("scn.world_transform");
-	catalog.add_derived<depth_level>("scn.depth_level");
-	catalog.add_derived<screen_anchor_result>("scn.screen_anchor_result");
-	catalog.add_derived<bone_matrices_component>("scn.bone_matrices");
+	add_derived<world_transform>(catalog, "scn.world_transform");
+	add_derived<depth_level>(catalog, "scn.depth_level");
+	add_derived<screen_anchor_result>(catalog, "scn.screen_anchor_result");
+	add_derived<bone_matrices_component>(catalog, "scn.bone_matrices");
 
 	add<mesh_component>(catalog, "scn.mesh");
 	add<geometry_component>(catalog, "scn.geometry");
