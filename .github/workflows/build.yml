@@ -93,6 +93,17 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-${{ matrix.preset }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
+      # The preset pins the compiler (#585): the runner image's default clang++ moved from 18 to 21 unannounced.
+      - name: Check the pinned Clang is installed
+        if: matrix.preset == 'ci-linux-clang-debug'
+        shell: bash
+        run: |
+          if ! command -v clang++-21 >/dev/null; then
+            echo "::error::clang++-21 (CMakePresets.json, ci-linux-clang-debug) is not on the runner; installed: $(ls /usr/bin/clang++-* 2>/dev/null | tr '\n' ' ')"
+            exit 1
+          fi
+          clang++-21 --version
+
       - name: Configure
         shell: bash
         run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
