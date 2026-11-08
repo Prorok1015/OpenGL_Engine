@@ -6,8 +6,12 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
+#include <cstddef>
+#include <format>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -88,12 +92,14 @@ namespace scn {
 			out = json::value_to<glm::vec3>(*value);
 		}
 
-		// `owner` names the memory:// copies of inline descs, so it has to be the desc the JSON came from.
-		prefab_comp_node parse_component(desc::desc_system& desc_system, const desc::desc_base& owner, const json::value& val, std::string_view explicit_type)
+		// `owner` names the memory:// copies of inline descs, so it has to be the desc the JSON came from. `json_path` is
+		// where the component is in the owner's file, for the diagnostics of a load (#595).
+		prefab_comp_node parse_component(desc::desc_system& desc_system, const desc::desc_base& owner, const json::value& val,
+			std::string_view explicit_type, std::string_view json_path = {})
 		{
 			if (val.is_string()) {
 				return prefab_comp_node{
-					.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, val)
+					.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, val, json_path)
 				};
 			}
 
@@ -110,7 +116,11 @@ namespace scn {
 			}
 
 			if (auto const* p = obj.if_contains("__parent")) {
-				cnode.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, *p);
+				cnode.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, *p, std::string{ json_path } + "/__parent");
+			} else if (!cnode.type_name.empty() && !desc_system.is_registered(cnode.type_name)) {
+				// The scene is still built, without this component (the assembler warns again when it skips it).
+				::res::report_load_warning(::res::diagnostic_kind::unknown_component, json_path,
+					std::format("no component type '{}' is registered; the component is skipped", cnode.type_name));
 			}
 
 			for (const auto& kv : obj) {
@@ -123,7 +133,8 @@ namespace scn {
 
 		// A node is { "__id", "name", "transform", "components", "overrides": [records], "children": [nodes] };
 		// the root has no name.
-		prefab_node parse_node(desc::desc_system& desc_system, const desc::desc_base& owner, const json::object& obj, bool is_root)
+		prefab_node parse_node(desc::desc_system& desc_system, const desc::desc_base& owner, const json::object& obj, bool is_root,
+			std::string_view json_path = {})
 		{
 			prefab_node result;
 			if (auto const* p = obj.if_contains("name"); p && p->is_string() && !is_root) {
@@ -145,7 +156,8 @@ namespace scn {
 			if (auto const* p = obj.if_contains("components"); p && p->is_object()) {
 				for (const auto& kv : p->as_object()) {
 					std::string_view comp_key = kv.key();
-					result.components[std::string(comp_key)] = parse_component(desc_system, owner, kv.value(), comp_key);
+					result.components[std::string(comp_key)] = parse_component(desc_system, owner, kv.value(), comp_key,
+						std::string{ json_path } + "/components/" + ::res::json_pointer_token(comp_key));
 				}
 			}
 
@@ -167,12 +179,14 @@ namespace scn {
 					egLOG_ERROR("desc", "node '{}': 'children' must be an array (format v1 needs migration), ignoring it", result.name);
 				} else {
 					result.children.reserve(p->as_array().size());
+					std::size_t index = 0;
 					for (const auto& child : p->as_array()) {
+						const std::string child_path = std::string{ json_path } + "/children/" + std::to_string(index++);
 						if (!child.is_object()) {
 							egLOG_WARN("desc", "node '{}': child is not an object, skipping", result.name);
 							continue;
 						}
-						result.children.push_back(parse_node(desc_system, owner, child.as_object(), false));
+						result.children.push_back(parse_node(desc_system, owner, child.as_object(), false, child_path));
 					}
 				}
 			}

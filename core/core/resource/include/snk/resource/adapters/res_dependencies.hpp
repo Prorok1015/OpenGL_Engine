@@ -5,6 +5,8 @@
 #include <snk/common/ds/ds_type_id.hpp>
 #include <snk/common/ds/ds_polymorphic_cast.hpp>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -19,6 +21,10 @@ namespace res
 		ds::type_id type;
 		// Starts (or joins) the load of `target` as `type` without waiting; what make_dep<T> binds to require<T>.
 		std::shared_ptr<core::res::res_resource_block> (*request)(resource_system&, const ::res::tag&) = nullptr;
+		// How the dependent's failure is reported when this one fails (#595): a res::diagnostic_kind and where the
+		// dependent names it. Empty kind: diagnostic_kind::load.
+		std::string_view failure_kind{};
+		std::string json_path{};
 	};
 
 	// The dependencies of one deserialize call, all ready, in the order collect_dependencies returned them.

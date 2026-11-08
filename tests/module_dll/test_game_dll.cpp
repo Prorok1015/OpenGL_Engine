@@ -10,7 +10,9 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/res_tag.h>
+#include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
 
 #include <boost/json.hpp>
@@ -65,6 +67,17 @@ void dll_move(entt::view<entt::get_t<dll_game::dll_component>> view)
 	}
 }
 
+void dll_animate(entt::registry& reg, entt::view<entt::get_t<scn::animation_controller_component>> models)
+{
+	for (auto&& [model, controller] : models.each()) {
+		if (controller.current_animation == "idle") {
+			scn::play_animation(reg, model, "walk");
+		} else if (controller.current_animation == "walk") {
+			scn::play_animation(reg, model, "jump", false);
+		}
+	}
+}
+
 class test_game_dll_module final : public gs::game_module
 {
 public:
@@ -99,6 +112,7 @@ private:
 			reg.emplace_or_replace<dll_game::dll_component>(e, dll_game::dll_component{ static_cast<const dll_desc&>(base).value });
 		});
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
+		layer.systems().register_system<&dll_animate>(std::string{ dll_game::animate_system_name });
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
 		ecs::register_component<dll_game::dll_component>(layer.meta());
 		auto& service = data.construct<dll_service>();

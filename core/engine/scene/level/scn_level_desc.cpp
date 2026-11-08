@@ -1,5 +1,7 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/desc/desc_system.h>
+#include <cstddef>
+#include <string>
 
 void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::object& obj)
 {
@@ -9,8 +11,9 @@ void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::ob
 
 	if (obj.contains("worlds")) {
 		worlds.clear();
+		std::size_t index = 0;
 		for (const auto& world_val : obj.at("worlds").as_array()) {
-			worlds.push_back(desc_system.get_field_desc<scn::world_desc>(*this, world_val));
+			worlds.push_back(desc_system.get_field_desc<scn::world_desc>(*this, world_val, "/worlds/" + std::to_string(index++)));
 		}
 	}
 }

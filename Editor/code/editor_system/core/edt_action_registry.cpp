@@ -105,8 +105,8 @@ edt::registration edt::action_registry::add_menu(std::string name)
 
 edt::registration edt::action_registry::add(action_desc desc)
 {
-	if (desc.id.empty() || desc.label.empty() || !desc.execute) {
-		egLOG_ERROR("Editor/Actions", "action '{}' not registered: it needs an id, a label and execute", desc.id);
+	if (desc.id.empty() || desc.label.empty() || static_cast<bool>(desc.execute) == static_cast<bool>(desc.execute_call)) {
+		egLOG_ERROR("Editor/Actions", "action '{}' not registered: it needs an id, a label and exactly one of execute and execute_call", desc.id);
 		return {};
 	}
 
@@ -118,7 +118,11 @@ edt::registration edt::action_registry::add(action_desc desc)
 	command.result_schema = std::move(desc.result_schema);
 	command.expose_as_tool = desc.expose_as_tool;
 	command.mutates = desc.mutates;
-	command.invoke = [execute = std::move(desc.execute)](const cmd::call& request) { return execute(request.args); };
+	if (desc.execute_call) {
+		command.invoke = std::move(desc.execute_call);
+	} else {
+		command.invoke = [execute = std::move(desc.execute)](const cmd::call& request) { return execute(request.args); };
+	}
 	command.enabled = std::move(desc.enabled);
 	command.category = desc.category;
 

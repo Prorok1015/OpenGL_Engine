@@ -1,7 +1,9 @@
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_diagnostics.h>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system&, ::desc::desc_system& desc_system)
 	: m_desc_system(desc_system)
@@ -31,7 +33,10 @@ std::vector<::res::res_dep> scn::worldwrap_adapter::collect_dependencies(const::
     if (!type || !type->is_string() || !parent || json::value_to<std::string>(*type) != scn::world_desc::__type) {
         return {};
     }
-    return { ::res::make_dep<::desc::desc_base>(json::value_to<::res::tag>(*parent)) };
+    auto dep = ::res::make_dep<::desc::desc_base>(json::value_to<::res::tag>(*parent));
+    dep.failure_kind = ::res::diagnostic_kind::missing_parent;
+    dep.json_path = "/__parent";
+    return { std::move(dep) };
 }
 
 std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
@@ -53,7 +58,8 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
     }
 
     if (!json_body.contains("__type")) {
-        throw std::runtime_error("world desc '" + std::string{ tag.view() } + "' does not contain __type field");
+        throw ::res::load_error(::res::diagnostic_kind::unknown_type, "/__type",
+            "world desc '" + std::string{ tag.view() } + "' does not contain __type field");
     }
 
     std::string type_id = json::value_to<std::string>(json_body.at("__type"));
@@ -65,7 +71,8 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
             auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
             const auto parent_desc = deps.get<::desc::desc_base>(parent_tag);
             if (!parent_desc) {
-                throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': failed to load '__parent' '" + std::string{ parent_tag.view() } + "'");
+                throw ::res::load_error(::res::diagnostic_kind::missing_parent, "/__parent",
+                    "world desc '" + std::string{ tag.view() } + "': failed to load '__parent' '" + std::string{ parent_tag.view() } + "'");
             }
             parent_desc->copy_to(*instance);
         }
