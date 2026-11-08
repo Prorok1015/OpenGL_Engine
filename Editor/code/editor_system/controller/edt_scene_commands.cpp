@@ -705,7 +705,7 @@ namespace {
 
 	cmd::result world_systems_remove(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Remove world system", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+		return ctx.run(call, "Remove world system", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
 			cmd::result error;
 			scn::world_desc* world = world_of(scene, args, error);
 			if (!world) return error;
@@ -727,7 +727,7 @@ namespace {
 
 	cmd::result world_systems_move(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Move world system", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+		return ctx.run(call, "Move world system", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
 			cmd::result error;
 			scn::world_desc* world = world_of(scene, args, error);
 			if (!world) return error;
