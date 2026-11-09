@@ -317,6 +317,28 @@ BOOST_AUTO_TEST_CASE(a_module_of_another_api_version_is_refused_and_the_host_goe
 	BOOST_TEST(!data.has_value<probe_service>());
 }
 
+BOOST_AUTO_TEST_CASE(a_required_module_that_is_refused_or_missing_has_failed_and_an_optional_one_has_not)
+{
+	open({ manifest_module("test_game"), manifest_module("needed_game"), manifest_module("extra_game", prj::module_kind::runtime, true) });
+	auto entry = probe_entry();
+	entry.api_version = &next_major_api;
+	core::project_module_host host(loader, data, compiled_in(entry));
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(host.failed_required(report) == (std::vector<std::string>{ "test_game", "needed_game" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(a_loaded_required_module_has_not_failed)
+{
+	open({ manifest_module("test_game") });
+	core::project_module_host host(loader, data, compiled_in(probe_entry()));
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.loaded == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(host.failed_required(report).empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_module_that_is_another_one_is_refused_before_it_registers)
 {
 	open({ manifest_module("test_game") });

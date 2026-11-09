@@ -11,7 +11,7 @@ namespace snk::game_host
 	// Above prj::k_exit_project_error (2) and prj::k_exit_engine_version (3).
 	inline constexpr int k_exit_no_start_level = 4;
 	inline constexpr int k_exit_level_failed = 5;
-	// A module the project requires is not compiled into this host.
+	// A module the project requires is not compiled into this host, or it did not load.
 	inline constexpr int k_exit_missing_module = 6;
 
 	// `compiled_in`: the game modules linked into the executable, by their manifest name. Returns the process exit code.

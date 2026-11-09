@@ -8,6 +8,9 @@
 # name the project's manifest gives the module, which its name() must return. The executable's main() is generated and
 # runs snk::game_host::run with that one module. Needs only the target snk::game_host, so it works in-tree and from
 # the SDK alike.
+#
+# Give each host its own OBJECT library and never link that library into a game.dll as well: built for the host, its
+# objects export no module entry. A second snk_add_game_host on the same library fails.
 function(snk_add_game_host target)
 	cmake_parse_arguments(PARSE_ARGV 1 _arg "" "MODULE;NAME" "")
 	if(NOT _arg_MODULE OR NOT _arg_NAME)
@@ -26,10 +29,24 @@ function(snk_add_game_host target)
 	if(NOT _type STREQUAL "OBJECT_LIBRARY")
 		message(FATAL_ERROR "snk_add_game_host(${target}): '${_arg_MODULE}' must be an OBJECT library, not ${_type}")
 	endif()
+	# The rule of prj_manifest.cpp (is_module_name): the name becomes a file name.
 	if(NOT _arg_NAME MATCHES "^[A-Za-z][A-Za-z0-9_-]*$")
 		message(FATAL_ERROR "snk_add_game_host(${target}): '${_arg_NAME}' is not a module name")
 	endif()
+	string(LENGTH "${_arg_NAME}" _name_length)
+	if(_name_length GREATER 64)
+		message(FATAL_ERROR "snk_add_game_host(${target}): '${_arg_NAME}' is not a module name")
+	endif()
 
+	# One OBJECT library per host, and only there: compiled with SNK_GAME_MODULE_STATIC its objects export nothing, so
+	# the same library linked into a game.dll would build a module the editor cannot open. snk_add_game_host marks it,
+	# and a second use fails here; a SHARED/MODULE target linking it is not detectable from here (documented instead).
+	get_target_property(_used_by ${_arg_MODULE} SNK_GAME_HOST)
+	if(_used_by)
+		message(FATAL_ERROR "snk_add_game_host(${target}): '${_arg_MODULE}' is already compiled into ${_used_by}; "
+			"give each host its own OBJECT library")
+	endif()
+	set_property(TARGET ${_arg_MODULE} PROPERTY SNK_GAME_HOST ${target})
 	target_compile_definitions(${_arg_MODULE} PRIVATE SNK_GAME_MODULE_STATIC "SNK_GAME_MODULE_NAME=\"${_arg_NAME}\"")
 	target_link_libraries(${_arg_MODULE} PRIVATE snk::game_host)
 

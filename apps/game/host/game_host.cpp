@@ -68,11 +68,12 @@ int snk::game_host::run(int argc, char* argv[], std::map<std::string, app::modul
 		// compiled in (#592); nothing is opened from the project's build output.
 		core::project_modules_options project_modules{ .compiled_in = std::move(compiled_in), .with_editor_modules = false,
 			.compiled_only = true };
-		const core::project_modules_report report =
-			app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules)).load_all();
+		auto& modules = app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules));
+		const core::project_modules_report report = modules.load_all();
 
-		if (!report.missing_required.empty()) {
-			egLOG_ERROR("app", "the project requires game modules this game is not built with: {}", join(report.missing_required));
+		// Missing (not built in) or refused (wrong name, failed to register): either way the game cannot run without it.
+		if (const auto failed = modules.failed_required(report); !failed.empty()) {
+			egLOG_ERROR("app", "the project requires game modules that did not load in this game: {}", join(failed));
 			result = k_exit_missing_module;
 		} else {
 			app::application game;

@@ -180,11 +180,14 @@ jobs:
             --set game/exit_after_level_loaded false app/exit_after_frames 120 app/headless_target_fps 60 \
             >game_out/static_game_stdout.txt 2>"$log" || rc=$?
           tail -20 "$log"
+          # What else the process wrote (an assert, a crash report) goes to stdout, not to the log.
+          trap 'if [ -s game_out/static_game_stdout.txt ]; then echo "stdout:"; tail -20 game_out/static_game_stdout.txt; fi' EXIT
           if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
           if ! grep -q "module 'static_game' loaded" "$log"; then echo "::error::the compiled-in module was not loaded"; exit 1; fi
           if ! grep -q "level loaded: .*main.desc" "$log"; then echo "::error::the start level did not load"; exit 1; fi
           if ! grep -q "static game system ran" "$log"; then echo "::error::the module's system did not run"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the static game host log"; exit 1; fi
+          trap - EXIT
 
   # The shared engine (snk_engine, the default since #223) with the project template's game module built against the
   # build tree SDK and loaded by the editor. Windows: the Windows package jobs below. FULL tier.
