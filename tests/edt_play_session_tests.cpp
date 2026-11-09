@@ -310,6 +310,23 @@ BOOST_AUTO_TEST_CASE(start_builds_the_play_set_from_copies_hides_the_level_and_c
 	BOOST_TEST(seen.size() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(the_play_twins_keep_the_input_stack_defaults_of_their_world_descs)
+{
+	open_level();
+	scn::input_stack_desc modal;
+	modal.block_below = true;
+	state.world_descs.at(0).set_input_stack(modal);
+
+	BOOST_REQUIRE(play.start());
+
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_REQUIRE(set->get("w0").input_stack().has_value());
+	BOOST_TEST(set->get("w0").input_stack()->block_below);
+	BOOST_TEST(!set->get("w1").input_stack().has_value());
+	BOOST_TEST(set->get("w0").desc_index() < set->get("w1").desc_index());
+}
+
 BOOST_AUTO_TEST_CASE(switching_the_active_world_during_play_moves_the_editor_camera_to_the_other_twin)
 {
 	open_level();

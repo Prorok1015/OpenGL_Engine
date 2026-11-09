@@ -2,10 +2,19 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/config/cfg_variables.h>
 #include <algorithm>
 #include <utility>
 
 namespace {
+	// Off in a shipped game (#591): the level desc is not watched, so the set "level" is never rebuilt from disk.
+	CFG_VAR_DEF_BOOL(cfg_scene_hot_reload, "scene/hot_reload", true);
+
+	scn::set_options level_set_options()
+	{
+		return scn::set_options{ .hot_reload = *cfg_scene_hot_reload };
+	}
+
 	// Names in desc order; false when a world desc failed to load.
 	bool collect_world_names(const scn::level_desc& desc, std::vector<std::string>& out)
 	{
@@ -30,8 +39,12 @@ scn::context_manager::context_manager(res::resource_system& resource,
 	, m_assembler(assembler)
 	, m_system_factory(system_factory)
 	, m_resource(resource)
-	, m_level_set(m_sets.emplace_back(make_set(level_set_name, nullptr)).get())
-{}
+	, m_level_set(m_sets.emplace_back(make_set(level_set_name, nullptr, level_set_options())).get())
+{
+	if (!*cfg_scene_hot_reload) {
+		egLOG_INFO("scene", "hot reload is off (scene/hot_reload)");
+	}
+}
 
 scn::context_manager::~context_manager()
 {
@@ -106,7 +119,7 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	m_pending_level_reload = res::tag{};
 	// The set "level" stays first in the update order and keeps how it runs; its worlds go with the old layer.
 	const auto it = std::ranges::find_if(m_sets, [this](const auto& set) { return set.get() == m_level_set; });
-	auto replacement = make_set(level_set_name, layer);
+	auto replacement = make_set(level_set_name, layer, level_set_options());
 	if (m_level_set->mode() == ecs::run_mode::step) {
 		replacement->step(m_level_set->pending_steps());
 	} else {
@@ -221,6 +234,8 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 		m_pending_level_reload = res::tag{};
 		set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
 		if (hot_reload) {
+			// CI reads it: the editor watches its level, the shipping host (scene/hot_reload off) must not.
+			egLOG_INFO("scene", "level '{}' watched for hot reload", level_tag.view());
 			hot_reload->watch_resource(level_tag, [this](const res::tag& changed_tag) {
 				if (!get_set(level_set_name).active()) {
 					// Play: the level is frozen and hidden; rebuilding it now would bring back its cameras.

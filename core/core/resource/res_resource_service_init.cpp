@@ -2,6 +2,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/project/prj_project.h>
+#include <snk/common/logger/engine_log.h>
 #include <filesystem>
 #include <format>
 #include <system_error>
@@ -9,6 +10,9 @@
 void core::res::resource_init(ds::app_data_storage& data)
 {
 	auto& tasks = data.require<ds::task_system>();
+	if (!::res::resource_system::watches_files()) {
+		egLOG_INFO("resource", "file watching is off (res/watch_files)");
+	}
 	if (data.has_value<prj::project_context>()) {
 		const auto& project = data.require<prj::project_context>();
 		const auto engine_base = ::res::resource_system::configured_engine_base();

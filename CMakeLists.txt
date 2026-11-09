@@ -151,6 +151,8 @@ if("${_snk_entt_flags} ${_snk_dir_defs} ${_snk_entt_defs}" MATCHES "ENTT_STANDAR
 endif()
 
 add_subdirectory(Editor)
+# The shipping host `game` (#591): static engine only, the counterpart of the editor's shared-only executable.
+add_subdirectory(apps/game)
 add_subdirectory(tools/desc_resave)
 snk_isolate_third_party_warnings()
 

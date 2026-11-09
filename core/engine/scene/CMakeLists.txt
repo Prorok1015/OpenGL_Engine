@@ -22,6 +22,8 @@ snk_component_headers(${PROJECT_NAME})
 # PUBLIC render: scn_material_desc.h names the material description that lives in render (#236).
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PUBLIC snk::render PRIVATE snk::resource_system PRIVATE snk::input_system PRIVATE snk::window PRIVATE snk::ecs PRIVATE snk::engine_logger)
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::desc_system)
+# scene/hot_reload (scn_context_manager.cpp) and the project's start level (scn_start_level.cpp, #591).
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::config_system PRIVATE snk::project)
 
 #temporary rilation. it will move to "import_component" in the future
 if(SNK_WITH_ASSIMP)

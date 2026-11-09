@@ -298,5 +298,7 @@ namespace scn
 		std::unordered_map<std::string, uint32_t> m_context_ids;
 		// Last: the tasks may touch the contexts.
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
+		// After every older field so the offsets of the inline accessors of a game module built earlier stay; a plain number, so it does not change the destruction order above.
+		uint32_t m_next_desc_index = 0;
 	};
 }

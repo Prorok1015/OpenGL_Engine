@@ -40,8 +40,10 @@ namespace res
 		// `policy` limits which paths store() may write (checked against the tag and against the file it resolves to);
 		// the default allows every path.
 		// `watch` says what the watcher reports and skips (changes_callback only with watch.report_changes).
+		// `watch_files` false: the watcher never starts, so no change on disk is signalled.
 		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access = mount_access::read_write,
-			write_policy policy = write_policy::allow_all(), watch_options watch = {}, bool file_operations = false);
+			write_policy policy = write_policy::allow_all(), watch_options watch = {}, bool file_operations = false,
+			bool watch_files = true);
 		~vfs_resolver();
 
 		std::optional<res::tag> path_mapper(const fs::path& path) const;

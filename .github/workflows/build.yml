@@ -52,12 +52,13 @@ jobs:
     strategy:
       fail-fast: false
       # PCH is off in the ci-linux-clang-debug preset: it catches headers that compile only thanks to the PCH.
-      # It is also the one static-engine build with the unit tests (#223); a static build has no editor executable.
+      # It is also the one static-engine build with the unit tests (#223); a static build has no editor executable, but it
+      # has the shipping host `game` (#591), which runs the sandbox's start level headless below.
       # The same two jobs in both tiers: the Windows Release builds moved to the Windows package jobs (#223).
       matrix:
         include:
           - { name: "Windows MSVC Debug", os: windows-latest, preset: ci-windows-msvc-debug }
-          - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests }
+          - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests game }
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -128,6 +129,40 @@ jobs:
         working-directory: build/${{ matrix.preset }}
         shell: bash
         run: ./unit_tests --log_level=test_suite
+
+      # #591: the shipping host on the static engine runs the project's start level (sandbox: levels/editor_level.desc)
+      # with no display. game/exit_after_level_loaded ends the run with 0 once "level loaded" is logged;
+      # app/exit_after_frames is only the cap. The host switches off file watching and hot reload itself.
+      - name: Game host headless run
+        if: matrix.preset == 'ci-linux-clang-debug'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          mkdir -p game_out
+          log=game_out/game.log
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 build/ci-linux-clang-debug/apps/game/game \
+            --config apps/game/config/game.cfg --headless --project projects/sandbox \
+            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
+            >game_out/stdout.txt 2>"$log" || rc=$?
+          tail -20 "$log"
+          if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
+          if ! grep -q "level loaded: .*editor_level.desc" "$log"; then
+            echo "::error::the start level did not load (exit_after_frames cap reached?)"; exit 1
+          fi
+          grep -q "exit after the level loaded (game/exit_after_level_loaded)" "$log"
+          grep -q "file watching is off (res/watch_files)" "$log"
+          grep -q "hot reload is off (scene/hot_reload)" "$log"
+          # The editor's headless run below requires both lines, so a renamed or dropped line cannot pass here unseen.
+          if grep -q "watching files under" "$log"; then echo "::error::a file watcher started"; exit 1; fi
+          if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
+          if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
+
+      # #591: the host links no editor, MCP or git code and does not load snk_engine (it is the static engine).
+      - name: Game host dependency check
+        if: matrix.preset == 'ci-linux-clang-debug'
+        shell: bash
+        run: bash tools/ci/check_game_deps.sh build/ci-linux-clang-debug/apps/game/game
 
   # The shared engine (snk_engine, the default since #223) with the project template's game module built against the
   # build tree SDK and loaded by the editor. Windows: the Windows package jobs below. FULL tier.
@@ -616,6 +651,9 @@ jobs:
             echo "::error::the startup level did not load (exit_after_frames cap reached?)"; exit 1
           fi
           grep -q "exit after the level loaded" "$err"
+          # #591: the positive control of the game host's checks (it must log neither).
+          grep -q "watching files under" "$err"
+          grep -q "level '.*smoke_level.desc' watched for hot reload" "$err"
           if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless log"; exit 1; fi
 
           rc=0

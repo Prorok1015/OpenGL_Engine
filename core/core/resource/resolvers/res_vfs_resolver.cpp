@@ -43,7 +43,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt)
 }
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy,
-	watch_options watch, bool file_operations)
+	watch_options watch, bool file_operations, bool watch_files)
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			if (m_closing) {
@@ -106,7 +106,10 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 			notify_changes(std::move(batch));
 		});
 	}
-	watcher.start();
+	if (watch_files) {
+		watcher.start();
+		egLOG("resource/resolver", "watching files under {}", entries_stack.top().string());
+	}
 	work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(boost::asio::make_work_guard(io));
 	io_thread = std::thread([this]() {
 		egLOG("resource/resolver", "io thread started");
