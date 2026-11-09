@@ -3,9 +3,17 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/project/prj_project.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
+#include <cstddef>
 #include <string>
+
+namespace {
+	// How many frames a loaded level may wait for the loads it started before it is reported loaded anyway (#656).
+	CFG_VAR_DEF_INT(cfg_scene_level_settle_frames, "scene/level_settle_frames", 600);
+}
 
 std::string scn::start_level_name(const ds::app_data_storage& data, std::string_view override_level)
 {
@@ -53,10 +61,21 @@ void scn::report_level_failed(const res::tag& level, const res::res_handle<scn::
 	}
 }
 
-scn::start_level_loader::start_level_loader(context_manager& contexts, res::resource_system& base_resources)
+scn::start_level_loader::start_level_loader(context_manager& contexts, res::resource_system& base_resources,
+	ds::task_system& tasks)
 	: m_contexts(contexts)
 	, m_base_resources(base_resources)
+	, m_tasks(tasks)
 {
+}
+
+std::size_t scn::start_level_loader::pending_work() const
+{
+	std::size_t pending = m_base_resources.pending_loads() + m_tasks.pending_main(ds::main_class::general);
+	if (auto* layer = m_contexts.game_layer()) {
+		pending += layer->resources().pending_loads();
+	}
+	return pending;
 }
 
 void scn::start_level_loader::begin(const res::tag& level)
@@ -65,24 +84,35 @@ void scn::start_level_loader::begin(const res::tag& level)
 	auto& resources = m_contexts.game_layer() ? m_contexts.game_layer()->resources() : m_base_resources;
 	m_level = level;
 	m_handle = resources.require<scn::level_desc>(level);
+	m_settle_polls = 0;
 	m_state = state::loading;
 }
 
 scn::start_level_loader::state scn::start_level_loader::poll()
 {
-	if (m_state != state::loading) {
-		return m_state;
-	}
-	if (m_handle.has_error()) {
-		report_level_failed(m_level, m_handle);
-		m_state = state::failed;
-	} else if (m_handle.is_ready()) {
-		if (m_contexts.load_level(m_level)) {
-			report_level_loaded(m_level);
-			m_state = state::loaded;
-		} else {
+	if (m_state == state::loading) {
+		if (m_handle.has_error()) {
 			report_level_failed(m_level, m_handle);
 			m_state = state::failed;
+		} else if (m_handle.is_ready()) {
+			if (m_contexts.load_level(m_level)) {
+				m_state = state::settling;
+			} else {
+				report_level_failed(m_level, m_handle);
+				m_state = state::failed;
+			}
+		}
+	}
+	if (m_state == state::settling) {
+		const std::size_t pending = pending_work();
+		if (pending == 0) {
+			report_level_loaded(m_level);
+			m_state = state::loaded;
+		} else if (++m_settle_polls >= *cfg_scene_level_settle_frames) {
+			egLOG_WARN("scene/level", "level '{}' loaded with {} loads still pending after {} frames (scene/level_settle_frames)",
+				m_level.view(), pending, m_settle_polls);
+			report_level_loaded(m_level);
+			m_state = state::loaded;
 		}
 	}
 	return m_state;
