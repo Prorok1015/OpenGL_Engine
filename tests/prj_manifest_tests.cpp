@@ -215,7 +215,7 @@ BOOST_AUTO_TEST_CASE(Parse_InputActionsIsAnOptionalResTagInsideTheProject)
 	BOOST_TEST(ok.warnings.empty());
 
 	for (const std::string_view tag : { R"(1)", R"("input/actions.desc")", R"("memory://a.desc")", R"("res://")",
-			R"("res://../a.desc")", R"("res:///abs.desc")", R"("res://input\a.desc")", R"("res://con.desc")" }) {
+			R"("res://../a.desc")", R"("res:///abs.desc")", R"("res://input\\a.desc")", R"("res://con.desc")" }) {
 		BOOST_TEST_INFO("input_actions: " << tag);
 		check_error(prj::parse_manifest(minimal_with("input_actions", tag)), "$.input_actions");
 	}

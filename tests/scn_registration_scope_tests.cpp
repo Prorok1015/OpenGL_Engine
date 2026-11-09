@@ -8,7 +8,7 @@ constexpr std::string_view scene_descs[] = {
 	"material_desc", "prefab_desc", "world_desc", "level_desc", "anchor_desc", "camera_desc",
 	"directional_light_desc", "screen_anchor_desc", "skybox_desc", "mesh_node_desc", "object_desc", "bone_desc",
 	"skinning_desc", "skin_weights_desc", "animation_controller_desc", "animated_node_desc",
-	"animation_clip_desc", "animation_collection_desc",
+	"animation_clip_desc", "animation_collection_desc", "input_actions_desc",
 };
 
 constexpr std::string_view scene_spawners[] = {
