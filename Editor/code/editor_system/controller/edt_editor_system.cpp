@@ -42,6 +42,7 @@
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
+#include "edt_world_systems_panel.h"
 #include "edt_vcs_service.h"
 #include "edt_forge_account_model.h"
 #include "edt_forge_account_panel.h"
@@ -466,6 +467,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	git_ports.cancel = [this](std::uint64_t job) { return m_context->jobs().cancel(job); };
 	m_git_panel = std::make_shared<git_panel>(m_context->events(), std::move(git_ports), m_context->dialogs(), m_res);
 	add_panel(m_git_panel, dock_slot::right, false);
+	world_systems_model::ports systems_ports;
+	systems_ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
+	systems_ports.playing = [this] { return m_play && m_play->active(); };
+	m_world_systems_panel = std::make_shared<world_systems_panel>(m_context->events(), std::move(systems_ports));
+	add_panel(m_world_systems_panel, dock_slot::right, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
