@@ -98,6 +98,8 @@ void engine::engine_module::shutdown_services(ds::app_data_storage& data)
 	}
 	m_content_scale_listener.reset();
 
+	// A load still in flight would deserialize into a type that is gone (#653).
+	scn::stop_scene_loads(data);
 	m_scene_types.reset();
 	data.destruct<app::modules::module_layer_factory>();
 	data.destruct<gs::input_actions>();

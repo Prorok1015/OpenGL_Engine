@@ -55,6 +55,9 @@ namespace scn
 		// Stops the layer's tasks, destroys its sets, then the layer. The game layer's set "level" goes back to the
 		// base, empty.
 		void destroy_layer(scn::scene_layer& layer);
+		// Every layer's tasks and resource loads stop (scene_layer::stop_tasks, resource_system::stop_loading); the
+		// layers stay. Shutdown, before the scene types go (#653).
+		void stop_layer_loads();
 		// The layer the set "level" and the previews belong to; null: the base services.
 		scn::scene_layer* game_layer() const { return m_game_layer; }
 		// Replaces the set "level" with an empty one on `layer` (null: the base) and makes it the game layer. Mode

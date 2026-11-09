@@ -309,15 +309,9 @@ res::resource_system::~resource_system() {
     std::lock_guard lock(m_gate->mutex);
     m_gate->self = nullptr;
   }
-  {
-    std::lock_guard lock(m_stop_mutex);
-    m_stopping = true;
-  }
-  m_lifetime.cancel_tasks();
-  m_tasks.wait_idle(m_lifetime);
   // The gate is closed: nothing parked runs any more, and what it holds (adapters, blocks) goes now, not when the root
   // settles what it waited for.
-  cancel_parked();
+  stop_loading();
   if (m_parent) {
     std::unique_lock lock(m_cache_mutex);
     for (const auto &[dependent, targets] : m_depends_on) {
@@ -353,6 +347,17 @@ struct unrun_guard {
   bool ran = false;
 };
 } // namespace
+
+void res::resource_system::stop_loading() {
+  {
+    std::lock_guard lock(m_stop_mutex);
+    m_stopping = true;
+  }
+  m_lifetime.refuse_new_tasks();
+  m_lifetime.cancel_tasks();
+  m_tasks.wait_idle(m_lifetime);
+  cancel_parked();
+}
 
 void res::resource_system::run_on_compute(std::function<void()> cb,
                                           std::shared_ptr<resource_handle> block) {
