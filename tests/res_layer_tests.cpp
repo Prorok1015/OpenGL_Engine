@@ -5,15 +5,19 @@
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <boost/json.hpp>
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -327,6 +331,58 @@ BOOST_AUTO_TEST_CASE(stop_loading_of_the_root_leaves_its_finished_resources)
 	rs->stop_loading();
 	BOOST_TEST(loaded.is_ready());
 	BOOST_TEST(loaded.get()->str() == "hello");
+}
+
+// #657: the warning of a destroyed layer names what is still held, so the holder can be found.
+BOOST_AUTO_TEST_CASE(a_destroyed_layer_names_the_resources_still_held)
+{
+	std::mutex m;
+	std::vector<std::string> warnings;
+	auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || message.find("still referenced") == std::string_view::npos) return;
+		std::lock_guard lock(m);
+		warnings.emplace_back(message);
+	});
+
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto tag = put("held.txt", "held");
+	const auto held = load<res::text_resource>(*layer, tag);
+	BOOST_REQUIRE(held.is_ready());
+	layer.reset();
+
+	std::lock_guard lock(m);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings.front().find("1 resources loaded through a destroyed layer are still referenced: ") == 0u);
+	BOOST_TEST(warnings.front().find(std::string{ tag.view() } + " (refs 1)") != std::string::npos);
+	BOOST_TEST(warnings.front().find("more)") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(a_destroyed_layer_names_eight_resources_and_counts_the_rest)
+{
+	std::mutex m;
+	std::vector<std::string> warnings;
+	auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || message.find("still referenced") == std::string_view::npos) return;
+		std::lock_guard lock(m);
+		warnings.emplace_back(message);
+	});
+
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	std::vector<res::res_handle<res::text_resource>> held;
+	for (int i = 0; i < 10; ++i) {
+		held.push_back(load<res::text_resource>(*layer, put("held" + std::to_string(i) + ".txt", "held")));
+		BOOST_REQUIRE(held.back().is_ready());
+	}
+	layer.reset();
+
+	std::lock_guard lock(m);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	const std::string& warning = warnings.front();
+	BOOST_TEST(warning.find("10 resources loaded through a destroyed layer are still referenced: ") == 0u);
+	BOOST_TEST(warning.ends_with(" (+2 more)"));
+	// Sorted by tag: held0..held7 are named, held8 and held9 are the two counted.
+	BOOST_TEST(warning.find(std::string{ tag_of("held7.txt").view() }) != std::string::npos);
+	BOOST_TEST(warning.find(std::string{ tag_of("held8.txt").view() }) == std::string::npos);
 }
 
 // The base's empty game layer has no limit: its writes go to the root's resolvers.
