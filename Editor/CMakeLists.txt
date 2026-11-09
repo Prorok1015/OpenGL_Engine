@@ -5,6 +5,8 @@ set(WITH_CONSOLE_MODE TRUE)
 # The MCP server module: no engine dependency, linked into the editor only (see cmake/SnkMcpIsolation.cmake).
 add_subdirectory("code/mcp_server")
 add_subdirectory("code/editor_system")
+# The model importer and its guards (editor_system links it; the decoder process of #647 will too).
+add_subdirectory("code/model_import")
 
 # The editor always runs on the shared engine (R11, #223). A static build keeps editor_system for the
 # unit tests, but there is no static editor to build or ship by accident.
