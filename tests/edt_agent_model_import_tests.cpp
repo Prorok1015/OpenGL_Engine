@@ -566,7 +566,7 @@ BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWer
 	BOOST_REQUIRE(service->describe(second, agent).has_value());
 
 	const auto time = fs::last_write_time(source);
-	dir.write("outside/robot.glb", "glb bytes of the robbed");
+	dir.write("outside/robot.glb", "glb bytes of the r0bot");
 	fs::last_write_time(source, time);
 	BOOST_REQUIRE_EQUAL(fs::file_size(source), std::string("glb bytes of the robot").size());
 
