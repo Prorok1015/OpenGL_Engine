@@ -42,7 +42,7 @@ namespace edt {
 		std::filesystem::path source;	// resolved: absolute, no link on the way
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
-		file_id id;
+		file_id id{};
 		// What the job that listed the files read: the job that imports them must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;

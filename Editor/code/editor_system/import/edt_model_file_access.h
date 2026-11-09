@@ -16,7 +16,7 @@ namespace edt {
 		std::filesystem::path path;	// canonical
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
-		file_id id;
+		file_id id{};
 		// Set by the scan from the bytes it read; the import that follows must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;
@@ -44,7 +44,7 @@ namespace edt {
 		std::filesystem::path path;
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
-		file_id id;
+		file_id id{};
 		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
 		bool found() const { return !path.empty() && error.empty(); }
