@@ -22,6 +22,11 @@ void edt::registration_scope::keep(connection handle)
 	m_connections.push_back(std::move(handle));
 }
 
+int edt::registration_scope::running_callbacks() const
+{
+	return ds::detail::running_callbacks(m_tasks);
+}
+
 void edt::registration_scope::stop_tasks()
 {
 	ASSERT_MSG(ds::detail::running_callbacks(m_tasks) == 0,

@@ -219,6 +219,35 @@ namespace {
 		return {};
 	}
 
+	// A source whose entry is checked right after it opens, before the module is created: the editor API version of an
+	// editor module (#588). When the check refuses, the source is closed again, as a failed open leaves it.
+	class checked_module_source final : public app::modules::module_source {
+	public:
+		using check_fn = std::function<std::string(const app::modules::module_entry&)>;
+
+		checked_module_source(std::unique_ptr<app::modules::module_source> inner, check_fn check)
+			: m_inner(std::move(inner)), m_check(std::move(check)) {}
+
+		std::string open() override
+		{
+			if (std::string problem = m_inner->open(); !problem.empty()) {
+				return problem;
+			}
+			if (std::string problem = m_check(m_inner->entry()); !problem.empty()) {
+				m_inner->close();
+				return problem;
+			}
+			return {};
+		}
+		const app::modules::module_entry& entry() const override { return m_inner->entry(); }
+		void close() override { m_inner->close(); }
+		std::string describe() const override { return m_inner->describe(); }
+
+	private:
+		std::unique_ptr<app::modules::module_source> m_inner;
+		check_fn m_check;
+	};
+
 	// Empty string once the module is loaded. The module is checked against the manifest's name before it gets a
 	// layer; when refused it is gone by the time this returns.
 	std::string load_module(app::modules::module_loader& loader, ds::app_data_storage& data,
@@ -401,19 +430,6 @@ core::project_modules_report core::project_module_host::load_all()
 	report.missing_required = resolution.missing_required;
 	report.missing_optional = resolution.missing_optional;
 
-	if (m_options.with_editor_modules) {
-		for (const auto& ref : project.data.modules) {
-			if (ref.kind != prj::module_kind::editor) {
-				continue;
-			}
-			if (ref.optional) {
-				egLOG_DEBUG("project", "optional editor module '{}' is not loaded: editor modules are not supported yet (#22)", ref.name);
-			} else {
-				egLOG_WARN("project", "editor module '{}' is not loaded: editor modules are not supported yet (#22)", ref.name);
-			}
-		}
-	}
-
 	for (const auto& ref : resolution.resolved) {
 		module_copy copy;
 		const std::string problem = guarded([&]() -> std::string {
@@ -533,6 +549,14 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		return { reload_status::refused, std::move(problem) };
 	}
 
+	// The editor modules registered into the editor on top of the running game module: they go first and come back after
+	// it, so a reload registers everything again with the old entries gone.
+	if (std::string why = unload_editor_modules(); !why.empty()) {
+		prepared.reset();
+		drop_copy();
+		egLOG_ERROR("project", "module '{}' not reloaded: the editor modules could not be unloaded: {}", name, why);
+		return { reload_status::refused, std::format("the editor modules could not be unloaded: {}", why) };
+	}
 	if (hooks.before_swap) {
 		hooks.before_swap();
 	}
@@ -542,6 +566,7 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		} else {
 			egLOG_ERROR("project", "module '{}' not reloaded: {}", name, report.message);
 		}
+		load_editor_modules();
 		if (hooks.after_swap) {
 			hooks.after_swap(report);
 		}
@@ -587,6 +612,100 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	}
 	m_copies.erase(name);
 	return finish({ reload_status::lost, std::format("the new build failed: {}; the previous one failed to load again: {}", problem, rollback) });
+}
+
+core::project_modules_report core::project_module_host::load_editor_modules()
+{
+	project_modules_report report;
+	if (!m_options.with_editor_modules || !m_options.check_editor_module || !m_data.has_value<prj::project_context>()) {
+		return report;
+	}
+	const auto& project = m_data.require<prj::project_context>();
+	for (const auto& ref : project.data.modules) {
+		if (ref.kind != prj::module_kind::editor || std::ranges::find(m_editor_loaded, ref.name) != m_editor_loaded.end()) {
+			continue;
+		}
+		const auto missing = [&] {
+			if (ref.optional) {
+				egLOG_DEBUG("project", "optional editor module '{}' is not loaded: not built", ref.name);
+				report.missing_optional.push_back(ref.name);
+			} else {
+				egLOG_WARN("project", "editor module '{}' is not loaded: not built", ref.name);
+				report.missing_required.push_back(ref.name);
+			}
+		};
+
+		module_copy copy;
+		const std::string problem = guarded([&]() -> std::string {
+			std::unique_ptr<app::modules::module_source> source;
+			if (const auto it = m_options.compiled_in.find(ref.name); it != m_options.compiled_in.end()) {
+				source = std::make_unique<app::modules::static_module_source>(ref.name, it->second);
+			} else if (m_options.compiled_only) {
+				return "the static host loads only compiled-in modules";
+			} else if (const auto found = find_library(project, ref.name)) {
+				if (std::string why = copy_library(project, *found, copy); !why.empty()) {
+					return why;
+				}
+				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
+			} else {
+				return {};
+			}
+			source = std::make_unique<checked_module_source>(std::move(source), m_options.check_editor_module);
+			return load_module(m_loader, m_data, std::move(source), ref.name);
+		});
+		if (problem.empty() && m_loader.state(ref.name) == app::modules::module_state::initialized) {
+			egLOG_INFO("project", "editor module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
+			if (!copy.folder.empty()) {
+				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time };
+			}
+			m_editor_loaded.push_back(ref.name);
+			report.loaded.push_back(ref.name);
+			continue;
+		}
+		if (problem.empty()) {
+			missing();
+			continue;
+		}
+		if (!copy.folder.empty()) {
+			std::error_code ec;
+			fs::remove_all(copy.folder, ec);
+		}
+		if (ref.optional) {
+			egLOG_WARN("project", "optional editor module '{}' is not loaded: {}", ref.name, problem);
+		} else {
+			egLOG_ERROR("project", "editor module '{}' is not loaded: {}", ref.name, problem);
+		}
+		report.refused.push_back(ref.name);
+	}
+	return report;
+}
+
+std::string core::project_module_host::unload_editor_modules()
+{
+	if (m_editor_loaded.empty()) {
+		return {};
+	}
+	if (m_options.editor_unload_refusal) {
+		if (std::string why = m_options.editor_unload_refusal(); !why.empty()) {
+			egLOG_ERROR("project", "editor modules not unloaded: {}", why);
+			return why;
+		}
+	}
+	while (!m_editor_loaded.empty()) {
+		const std::string name = m_editor_loaded.back();
+		const std::string problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
+		if (m_loader.state(name) == app::modules::module_state::initialized) {
+			// Still there (the loader refused): nothing more can be unloaded behind it.
+			egLOG_ERROR("project", "editor module '{}' not unloaded: {}", name, problem);
+			return problem.empty() ? "the module could not be unloaded" : problem;
+		}
+		if (!problem.empty()) {
+			// Unloaded, but it left services behind (logged by the loader).
+			egLOG_ERROR("project", "editor module '{}': {}", name, problem);
+		}
+		m_editor_loaded.pop_back();
+	}
+	return {};
 }
 
 core::project_modules_report core::load_project_modules(app::modules::module_loader& loader, ds::app_data_storage& data,

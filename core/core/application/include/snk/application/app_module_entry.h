@@ -141,6 +141,9 @@ namespace app::modules {
 		const struct snk_module_build_info* (*build_info)() = nullptr;
 		module_interface* (*create)() = nullptr;
 		void (*destroy)(module_interface*) = nullptr;
+		// Only an editor module (kind "editor", #588) has it: snk_editor_api_version, the editor API it was built against.
+		// The host that loads editor modules checks it before the module is created; a runtime module has none.
+		std::uint32_t (*editor_api_version)() = nullptr;
 	};
 
 	// Empty string when the module can be loaded by this host, otherwise the reason it cannot.
@@ -187,7 +190,7 @@ namespace app::modules {
 // The module_entry of the four functions SNK_DECLARE_MODULE_PREFIXED(prefix, ...) defines.
 #define SNK_MODULE_ENTRY(prefix) \
 	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
-		&prefix##destroy_module }
+		&prefix##destroy_module, nullptr }
 
 // The game module compiled into a static host (snk_add_game_host, #592): the host gets its entry from here, not from a
 // library it opens. Defined by SNK_DECLARE_MODULE when the module is built with SNK_GAME_MODULE_STATIC.

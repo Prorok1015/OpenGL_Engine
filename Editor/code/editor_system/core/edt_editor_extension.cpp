@@ -51,6 +51,8 @@ void edt::editor_extension::register_services(ds::app_data_storage& data)
 	auto& editor = data.require<editor_context>();
 	m_scope = std::make_unique<registration_scope>(editor.tasks());
 	m_context = std::make_unique<editor_module_context>(editor, *m_scope);
+	m_editor = &editor;
+	editor.track_module_scope(*m_scope);
 	register_editor(*m_context);
 }
 
@@ -64,6 +66,8 @@ void edt::editor_extension::shutdown_services(ds::app_data_storage&)
 	m_scope->stop_tasks();
 	shutdown_editor();
 	m_scope->clear();
+	m_editor->untrack_module_scope(*m_scope);
+	m_editor = nullptr;
 	m_context.reset();
 	m_scope.reset();
 }

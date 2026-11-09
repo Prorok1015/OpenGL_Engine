@@ -9,7 +9,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 // The version of the editor API a game_editor module is built against (major << 16 | minor), exported by the module as
 // snk_editor_api_version (SNK_DECLARE_EDITOR_MODULE) and checked by the host before it creates the module: the major
@@ -83,11 +85,15 @@ namespace edt
 		// is removed; the module's own state goes here. A task of the module must honour its stop token.
 		virtual void shutdown_editor() {}
 
+		// The editor module: it registers into the editor, so it loads after it and goes before it.
+		std::vector<std::string_view> depends_on() const override { return { "editor" }; }
+
 		void register_services(ds::app_data_storage& data) final;
 		void initialize_services(ds::app_data_storage& data) final;
 		void shutdown_services(ds::app_data_storage& data) final;
 
 	private:
+		editor_context* m_editor = nullptr;
 		std::unique_ptr<registration_scope> m_scope;
 		std::unique_ptr<editor_module_context> m_context;
 	};
@@ -107,3 +113,8 @@ namespace edt
 	}
 
 #define SNK_DECLARE_EDITOR_MODULE(Type) SNK_DECLARE_EDITOR_MODULE_PREFIXED(snk_, Type)
+
+// The module_entry of an editor module declared with SNK_DECLARE_EDITOR_MODULE_PREFIXED(prefix, ...): the five functions.
+#define SNK_EDITOR_MODULE_ENTRY(prefix) \
+	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
+		&prefix##destroy_module, &prefix##editor_api_version }

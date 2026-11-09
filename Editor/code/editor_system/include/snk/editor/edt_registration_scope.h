@@ -38,6 +38,9 @@ namespace edt
 		void clear();
 
 		std::size_t kept_count() const { return m_registrations.size() + m_connections.size(); }
+		// The module's callbacks (continuations of its tasks) that run now: unloading from inside one of them would
+		// destroy the code that runs it.
+		int running_callbacks() const;
 
 	private:
 		ds::task_system& m_tasks_system;
