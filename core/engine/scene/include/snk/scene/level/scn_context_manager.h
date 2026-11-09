@@ -173,6 +173,15 @@ namespace scn
 
 		// True inside update().
 		bool updating() const { return m_updating; }
+		// True while the manager or any of its sets updates (a system or a bus subscriber is on the stack).
+		bool any_updating() const
+		{
+			if (m_updating) return true;
+			for (const auto& s : m_sets) {
+				if (s->updating()) return true;
+			}
+			return false;
+		}
 
 		// A subscription of the engine or the editor to the worlds of the base's sets (a module subscribes through
 		// gs::module_context, which covers its layer's sets). The connection removes it; T must be an engine event type.

@@ -251,4 +251,102 @@ BOOST_AUTO_TEST_CASE(AWorldWhoseBusDoesNotKnowTheTypeIsSkipped)
 	BOOST_TEST(!w.state().ctx().contains<ecs::event_writer<marker>>());
 }
 
+BOOST_AUTO_TEST_CASE(StepDeliversOncePerStep_AndAppliesWhatSubscribersChange)
+{
+	auto& w = world("s", "w", { "post" });
+	const entt::entity target = w.state().create();
+	int calls = 0;
+	auto sub = mgr.subscribe<ping>({}, [&](ecs::bus_context& ctx, const ecs::envelope<ping>& e) {
+		if (calls++ == 0) ctx.changer().emplace<marker>(target, marker{ 10 + e.payload.value });
+	});
+	mgr.set_mode("s", ecs::run_mode::pause);
+	mgr.emit("s", "w", ping{ 1 });
+	frame();
+	frame();
+	BOOST_TEST(calls == 0);
+
+	mgr.step("s", 1);
+	frame();
+	BOOST_TEST(calls == 1);
+	BOOST_TEST((w.state().ctx().get<post_seen>().markers == std::vector<int>{ 11 }));
+	frame(); // Pause again
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(InEditASubscriberIsNotCalled)
+{
+	world("s", "w", {});
+	int calls = 0;
+	auto sub = mgr.subscribe<ping>({}, [&](ecs::bus_context&, const ecs::envelope<ping>&) { ++calls; });
+	mgr.set_mode("s", ecs::run_mode::edit);
+	mgr.emit("s", "w", ping{ 1 });
+	frame();
+	mgr.set_mode("s", ecs::run_mode::play);
+	frame();
+	BOOST_TEST(calls == 0); // dropped in Edit, nothing left to deliver in Play
+}
+
+BOOST_AUTO_TEST_CASE(ASetAndWorldFilterTellsThePlayTwinFromTheLevelWorld)
+{
+	world("level", "w0");
+	world("play", "w0");
+	lines heard;
+	auto sub = mgr.subscribe<ping>({ .set = "play", .world = "w0" }, [&](ecs::bus_context& ctx, const ecs::envelope<ping>&) {
+		heard.push_back(std::format("{}/{}", ctx.set(), ctx.world()));
+	});
+	frame();
+	BOOST_TEST((heard == lines{ "play/w0" }));
+}
+
+BOOST_AUTO_TEST_CASE(SubscribingAndDisconnectingAgainAndAgainLeavesNothingInTheWorld)
+{
+	auto& w = world("s", "w");
+	int calls = 0;
+	for (int i = 0; i < 50; ++i) {
+		auto c = mgr.subscribe<ping>({}, [&](ecs::bus_context&, const ecs::envelope<ping>&) { ++calls; });
+		frame();
+		BOOST_TEST(scn::event_subscriptions::connected_in(w.state()) == 1u);
+		c.disconnect();
+	}
+	frame();
+	BOOST_TEST(scn::event_subscriptions::connected_in(w.state()) == 0u);
+	BOOST_TEST(calls == 50);
+}
+
+BOOST_AUTO_TEST_CASE(SubscribersSendingBackAndForthStayWithinTheLimit)
+{
+	auto& w = world("s", "w", {});
+	auto& bus = w.state().ctx().get<ecs::world_bus>();
+	bus.set_event_limit(8);
+	auto sub = mgr.subscribe<ping>({}, [](ecs::bus_context& ctx, const ecs::envelope<ping>& e) {
+		ctx.writer<ping>().emit({ e.payload.value + 1 });
+		ctx.writer<ping>().emit({ e.payload.value + 1 });
+	});
+	mgr.emit("s", "w", ping{ 0 });
+	for (int i = 0; i < 10; ++i) {
+		frame();
+		BOOST_TEST(bus.queued() <= 8u);
+	}
+	BOOST_TEST(w.state().ctx().get<ecs::event_reader<ping>>().events().size() == 8u);
+}
+
+BOOST_AUTO_TEST_CASE(ASubscriptionSkippedForAnUnknownTypeIsConnectedOnceTheTypeIsThere)
+{
+	scn::event_subscriptions subs;
+	int calls = 0;
+	auto sub = subs.subscribe<marker>({}, [&](ecs::bus_context&, const ecs::envelope<marker>&) { ++calls; });
+	scn::context_set set("s", nullptr);
+	set.set_subscriptions(&subs);
+	auto& w = set.create_context("w", 0);
+	set.update(one_frame);
+	BOOST_TEST(scn::event_subscriptions::connected_in(w.state()) == 0u);
+
+	set.event_types().add<marker>();
+	set.update(one_frame);
+	BOOST_TEST(scn::event_subscriptions::connected_in(w.state()) == 1u);
+	set.post_event("w", marker{ 1 });
+	set.update(one_frame);
+	BOOST_TEST(calls == 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

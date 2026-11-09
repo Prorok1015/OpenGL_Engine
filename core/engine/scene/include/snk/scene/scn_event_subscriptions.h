@@ -60,10 +60,14 @@ namespace scn
 			return add(std::move(filter), std::move(attach), std::move(callback));
 		}
 
-		// Connects to the world every subscription it has not been offered yet that matches it.
+		// Brings the world up to date: connects every matching subscription it is not connected to (also one skipped
+		// before because the world's bus did not know its type yet) and drops the connections of removed ones. Does
+		// nothing when neither the list nor the world's bound types changed since the last call.
 		void attach(std::string_view set, std::string_view world, entt::registry& registry, ecs::world_bus& bus);
 
 		size_t size() const;
+		// Subscriptions connected in the world (tests: removed ones do not pile up).
+		static size_t connected_in(const entt::registry& registry);
 
 	private:
 		struct entry
@@ -77,6 +81,8 @@ namespace scn
 		{
 			std::vector<entry> entries;
 			uint64_t next_id = 1;
+			// Moves on every add and remove.
+			uint64_t generation = 0;
 		};
 
 		ecs::connection add(event_filter filter, attach_fn attach, std::shared_ptr<void> callback);

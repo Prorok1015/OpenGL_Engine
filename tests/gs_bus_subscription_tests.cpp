@@ -7,6 +7,8 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <chrono>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -22,6 +24,10 @@ struct module_event
 
 std::vector<int> g_heard_by_first;
 std::vector<int> g_heard_by_second;
+// Set by the test that unloads from inside a delivery.
+app::modules::module_loader* g_loader = nullptr;
+ds::app_data_storage* g_root = nullptr;
+std::string g_refusal;
 
 template <int N>
 class subscribing_game_module final : public gs::game_module
@@ -37,6 +43,13 @@ protected:
 		data.require<gs::module_context>().subscribe<module_event>({ .set = "level" }, [](ecs::bus_context& ctx, const ecs::envelope<module_event>& e) {
 			BOOST_TEST(ctx.world() == "w0");
 			(N == 0 ? g_heard_by_first : g_heard_by_second).push_back(e.payload.value);
+			if (g_loader) {
+				try {
+					g_loader->unload("subscribing_game", *g_root);
+				} catch (const std::logic_error& error) {
+					g_refusal = error.what();
+				}
+			}
 		});
 	}
 };
@@ -50,6 +63,9 @@ struct bus_module_fixture : test_util::module_env
 		root.attach(test_util::borrowed(tasks));
 		g_heard_by_first.clear();
 		g_heard_by_second.clear();
+		g_loader = nullptr;
+		g_root = nullptr;
+		g_refusal.clear();
 	}
 
 	void load_level()
@@ -123,6 +139,21 @@ BOOST_AUTO_TEST_CASE(ACodeReloadLeavesOnlyTheNewModulesSubscriptions)
 
 	BOOST_TEST((g_heard_by_first == std::vector<int>{ 1 }));
 	BOOST_TEST((g_heard_by_second == std::vector<int>{ 2 }));
+}
+
+BOOST_AUTO_TEST_CASE(AnUnloadFromInsideADeliveryIsRefused)
+{
+	loader.load(std::make_unique<subscribing_game_module<0>>(), root);
+	load_level();
+	g_loader = &loader;
+	g_root = &root;
+	send(1);
+	g_loader = nullptr;
+
+	BOOST_TEST(g_refusal.find("during the scene's update") != std::string::npos);
+	BOOST_TEST((loader.state("subscribing_game") == app::modules::module_state::initialized));
+	send(2); // the module, its layer and its subscription are all still there
+	BOOST_TEST((g_heard_by_first == std::vector<int>{ 1, 2 }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
