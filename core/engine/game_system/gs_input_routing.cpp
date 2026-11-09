@@ -1,12 +1,15 @@
 #include <snk/game/gs_input_routing.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/input/inp_action_state.h>
 #include <snk/input/inp_input_router.h>
 #include <snk/input/inp_input_stack.h>
 #include <snk/input/inp_events.hpp>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_world_context.h>
+#include <snk/ecs/ecs_system_registry.hpp>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -70,9 +73,47 @@ namespace
 		return layer;
 	}
 
+	constexpr std::string_view k_update_actions = "inp::update_actions";
+
+	bool lists_update_actions(const scn::world_context& context)
+	{
+		const auto& systems = context.systems();
+		return systems && std::ranges::find(*systems, k_update_actions) != systems->end();
+	}
+
+	bool warn_once(std::string key)
+	{
+		static std::set<std::string> warned;
+		return warned.insert(std::move(key)).second;
+	}
+
+	// Until the action masks of #624 one world of a set reads the actions: the first bound one in the level file
+	// (INPUT_STACK.md M6). The others, and a bound world that would not run inp::update_actions, are warned about once.
+	const entry* actions_reader(const std::vector<entry>& entries, std::string_view set, bool have_actions)
+	{
+		const entry* first = nullptr;
+		std::size_t readers = 0;
+		for (const auto& e : entries) {
+			// A prefab preview shows content, it plays no game.
+			if (!e.routed.focused || e.context->kind() == scn::context_kind::preview) continue;
+			if (!first || e.context->desc_index() < first->context->desc_index()) first = &e;
+			const bool runs = lists_update_actions(*e.context);
+			readers += runs ? 1 : 0;
+			if (have_actions && !runs && warn_once(std::string{ set } + "/" + std::string{ e.context->get_name() } + "#system")) {
+				egLOG_WARN("input", "world '{}' of '{}' gets the input but does not list {}: game actions do nothing in it",
+					e.context->get_name(), set, k_update_actions);
+			}
+		}
+		if (have_actions && readers > 1 && first && warn_once(std::string{ set } + "#readers")) {
+			egLOG_WARN("input", "set '{}': {} bound worlds run {}; only '{}', the first in the level, gets the actions (until #624)",
+				set, readers, k_update_actions, first->context->get_name());
+		}
+		return first;
+	}
+
 	// Mouse and keyboard parts of the full state are given out separately: a context may take the
 	// keyboard of a focused text field while the mouse belongs to someone else. The cursor position goes to everyone.
-	void write(const entry& e, const inp::world_input* in)
+	void write(const entry& e, const inp::world_input* in, const inp::input_bound& bound, std::shared_ptr<const inp::action_map> actions)
 	{
 		inp::input_state state = e.routed.state;
 		const inp::input_state neutral = inp::input_router::neutral(state);
@@ -92,9 +133,11 @@ namespace
 		auto& ctx = e.context->state().ctx();
 		ctx.insert_or_assign(state);
 		ctx.insert_or_assign(inp::input_focus{ in && (in->mouse_focus || in->keyboard_focus) });
+		ctx.insert_or_assign(bound);
+		ctx.insert_or_assign(inp::action_map_ref{ std::move(actions) });
 	}
 
-	void route_set(inp::input_router& router, scn::context_set& set)
+	void route_set(inp::input_router& router, scn::context_set& set, const std::shared_ptr<const inp::action_map>& actions)
 	{
 		const inp::input_state& raw = router.raw_state();
 		const glm::vec2 cursor = raw.mouse_pos;
@@ -134,16 +177,24 @@ namespace
 		const inp::drag_hold drag{ hold.active, hold.captured, hold.owner.set == set_name ? hold.owner.context : std::string{} };
 		const inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, drag);
 
+		const entry* reader = actions_reader(entries, set_name, actions != nullptr);
+		const bool stepping = set.mode() == ecs::run_mode::step;
 		for (const auto& e : entries) {
-			write(e, resolved.find(e.context->get_name()));
+			const inp::input_bound bound{ e.routed.focused, stepping && !e.routed.focused };
+			write(e, resolved.find(e.context->get_name()), bound, &e == reader ? actions : std::shared_ptr<const inp::action_map>{});
 		}
 	}
 }
 
 void gs::route_input(inp::input_router& router, scn::context_manager& contexts)
 {
-	contexts.for_each_set([&router](scn::context_set& set) {
-		route_set(router, set);
+	route_input(router, contexts, nullptr);
+}
+
+void gs::route_input(inp::input_router& router, scn::context_manager& contexts, const std::shared_ptr<const inp::action_map>& actions)
+{
+	contexts.for_each_set([&router, &actions](scn::context_set& set) {
+		route_set(router, set, actions);
 	});
 	// Cleared after the pass: on the frame the last button goes up the owner still sees it.
 	if (!any_mouse_button(router.raw_state())) {

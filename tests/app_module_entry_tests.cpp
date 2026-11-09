@@ -48,6 +48,8 @@ std::uint32_t wrong_major_version() { return SNK_MODULE_API_VERSION + 0x0001'000
 // What a module built before the resource control block layout of #595 reports.
 std::uint32_t api_1_0() { return 0x0001'0000u; }
 std::uint32_t newer_minor_version() { return SNK_MODULE_API_VERSION + 1u; }
+// A module built before the game actions of #604.
+std::uint32_t api_3_1() { return 0x0003'0001u; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -151,6 +153,16 @@ BOOST_AUTO_TEST_CASE(WrongApiMajorIsRefusedBeforeAnythingIsCreated)
 	BOOST_TEST(g_alive == 0);
 	BOOST_TEST(storage.size() == 0u);
 	BOOST_TEST(!loader.state("sample").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheGameActionsAreMinor3_2_AndAModuleBuiltFor3_1StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 2u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_1;
+	entry.build_info = +[]() { return info_with(api_3_1(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 
 BOOST_AUTO_TEST_CASE(ModuleNeedingNewerMinorIsRefused)

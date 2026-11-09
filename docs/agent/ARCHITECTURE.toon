@@ -106,6 +106,10 @@ world_bus: events inside one world (ecs_bus.hpp, docs/roadmap/design/WORLD_BUS.m
         Subscriptions: gs::module_context::subscribe<T>({set?, world?}, fn(bus_context&, envelope)) (kept by the
         layer: survive level reload, go on unload/code reload); engine/editor: context_manager::subscribe (base sets).
         A subscriber's emit goes to the next delivery, its changer()/spawner() edits land right after the delivery.
+game_actions: res/input/actions.desc (manifest input_actions) -> gs::input_actions (watch, rebuild) -> gs::route_input
+        writes inp::input_bound and inp::action_map_ref into each world (map only for the first bound world of a set by
+        desc_index until #624). System "inp::update_actions" (listed in the world's systems after inp::update_input_state)
+        keeps inp::action_state (held/pressed/released, armed rule) and emits inp::action_event on the world's bus.
 world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).
         context_set::for_each does NOT preserve desc order — see CONSTRAINTS [13C].
         Editor derives parallel world arrays from the ordered world_descs vector

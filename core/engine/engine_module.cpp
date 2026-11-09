@@ -14,6 +14,8 @@
 #include <snk/game/gs_capture_on_settled.h>
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/game/gs_input_actions.h>
+#include <snk/resource/res_system.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_consumable_listener.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
@@ -43,6 +45,7 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 	render::render_init(data);// engine
 	gui::gui_init(data);//engine
 	scn::scene_init(data);//engine
+	data.construct<gs::input_actions>(data.require<res::resource_system>());
 	// Game modules (layered()) get their layer from here (MODULE_LAYER.md).
 	data.construct<app::modules::module_layer_factory, gs::game_layer_factory>(data.require<scn::context_manager>(), &data.require<ds::task_system>());
 	auto& stages = data.require<app::frame_stage_registry>();
@@ -97,6 +100,7 @@ void engine::engine_module::shutdown_services(ds::app_data_storage& data)
 
 	m_scene_types.reset();
 	data.destruct<app::modules::module_layer_factory>();
+	data.destruct<gs::input_actions>();
 	scn::scene_term(data);
 	gui::gui_term(data);
 	render::render_term(data);

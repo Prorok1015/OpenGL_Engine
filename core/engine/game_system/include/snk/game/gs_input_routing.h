@@ -1,7 +1,8 @@
 #pragma once
 #include <snk/common/snk_api.h>
+#include <memory>
 
-namespace inp { class input_router; }
+namespace inp { class input_router; class action_map; }
 namespace scn { class context_manager; }
 
 namespace gs
@@ -19,4 +20,10 @@ namespace gs
 	// a layer holds or by a layer that blocks: a world below a region still gets the movement.
 	// Nothing taken: every world of the target gets the full state.
 	SNK_API void route_input(inp::input_router& router, scn::context_manager& contexts);
+
+	// The same, and the game actions (WORLD_BUS.md 4.2): every world gets `inp::input_bound` (fed this frame; frozen when
+	// not fed while its set steps) and `inp::action_map_ref`, which holds `actions` only for the first fed world of its set
+	// by `desc_index` (INPUT_STACK.md M6, until #624). Null `actions`: no world reads actions.
+	SNK_API void route_input(inp::input_router& router, scn::context_manager& contexts,
+		const std::shared_ptr<const inp::action_map>& actions);
 }
