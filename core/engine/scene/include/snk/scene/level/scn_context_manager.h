@@ -204,8 +204,6 @@ namespace scn
 		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();
 		std::shared_ptr<ecs::bus_registry> m_event_types = std::make_shared<ecs::bus_registry>();
 		bool m_updating = false;
-		// Before the sets: theirs point at it.
-		scn::event_subscriptions m_subscriptions;
 		// Before the layers: theirs lie over it.
 		scn::component_catalog m_catalog;
 		scn::ecs_assembler& m_assembler;
@@ -220,5 +218,8 @@ namespace scn
 		std::function<void()> m_on_reload;
 		res::tag m_pending_level_reload;
 		std::function<void(game_layer_change)> m_on_game_layer_change;
+		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.0). The base's sets
+		// point at it: the destructor clears them before any member goes.
+		scn::event_subscriptions m_subscriptions;
 	};
 }
