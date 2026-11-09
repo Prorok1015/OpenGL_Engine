@@ -136,7 +136,12 @@ BOOST_AUTO_TEST_CASE(EveryClassWithCodeInTheEditorCarriesTheExportMacro)
 BOOST_AUTO_TEST_CASE(TheExportMacroIsEmptyForAStaticBuild)
 {
 	const std::string text = read_all(api_dir() / "edt_api.h");
-	BOOST_TEST(text.find("#define SNK_EDITOR_API\n") != std::string::npos);
+	// The last definition is the empty one (a Windows checkout has CRLF line ends).
+	const std::string empty_define = "#define SNK_EDITOR_API";
+	const std::size_t at = text.rfind(empty_define);
+	BOOST_REQUIRE(at != std::string::npos);
+	const std::size_t end = at + empty_define.size();
+	BOOST_TEST((end >= text.size() || text[end] == '\r' || text[end] == '\n'));
 	BOOST_TEST(text.find("SNK_EDITOR_SHARED") != std::string::npos);
 	BOOST_TEST(text.find("SNK_EDITOR_BUILD") != std::string::npos);
 }
