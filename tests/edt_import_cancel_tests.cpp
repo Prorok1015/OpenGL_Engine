@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "edt_model_importer.h"
+#include "edt_agent_model_import.h"
 #include "edt_asset_exporter.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <filesystem>
@@ -72,6 +73,26 @@ struct cancel_fixture : test_util::scene_env
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtImportCancelTests, cancel_fixture)
+
+BOOST_AUTO_TEST_CASE(Import_OfAFileBeyondThePersonLimit_FailsBeforeReadingIt)
+{
+	const std::filesystem::path huge = dir / "huge.obj";
+	std::ofstream(huge) << OBJ_TRIANGLE;
+	std::error_code ec;
+	std::filesystem::resize_file(huge, edt::k_max_person_source_bytes + 1, ec);
+	if (ec) return;
+
+	edt::model_importer importer(*descs, *rs);
+	const edt::import_intermediate result = importer.import_background(huge, nullptr);
+	BOOST_CHECK(result.error.find("too big") != std::string::npos);
+	BOOST_CHECK(result.all_tags.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheLimits_AreSixtyFourMiBForAnAgentAnd256ForAPerson)
+{
+	BOOST_CHECK_EQUAL(edt::agent_import_options{}.max_source_bytes, 64ull * 1024ull * 1024ull);
+	BOOST_CHECK_EQUAL(edt::k_max_person_source_bytes, 256ull * 1024ull * 1024ull);
+}
 
 BOOST_AUTO_TEST_CASE(Import_StoppedBeforeItStarts_ThrowsCancelledAndStoresNothing)
 {

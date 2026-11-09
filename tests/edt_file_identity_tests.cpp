@@ -63,4 +63,29 @@ BOOST_AUTO_TEST_CASE(FileId_IsTheSameForTheSameFile_AndAnotherAfterAReplacement)
 	BOOST_CHECK(!edt::file_id_of(dir.path() / "missing.bin").valid);
 }
 
+BOOST_AUTO_TEST_CASE(TwoIdsThatCouldNotBeRead_AreNotTheSameFile)
+{
+	const edt::file_id nothing;
+	BOOST_CHECK(nothing == edt::file_id{});
+	BOOST_CHECK(!nothing.same_as(edt::file_id{}));
+
+	test_util::temp_dir dir{ "file_identity_link" };
+	const fs::path file = dir.write("a.bin", "one");
+	const edt::file_id real = edt::file_id_of(file);
+	BOOST_CHECK(real.same_as(edt::file_id_of(file)));
+	BOOST_CHECK(!real.same_as(nothing));
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(FileId_OfALink_IsTheLinkItselfNotItsTarget)
+{
+	test_util::temp_dir dir{ "file_identity_symlink" };
+	const fs::path file = dir.write("a.bin", "one");
+	std::error_code ec;
+	fs::create_symlink(file, dir.path() / "link.bin", ec);
+	if (ec) return;
+	BOOST_CHECK(edt::file_id_of(dir.path() / "link.bin") != edt::file_id_of(file));
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()

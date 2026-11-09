@@ -64,6 +64,8 @@ namespace edt {
 		resolved_reference resolve(std::string_view reference, model_file_kind kind);
 		// The bytes of a resolved file; throws std::runtime_error when the import would read more than it was allowed.
 		std::optional<std::vector<std::byte>> read(const resolved_reference& file);
+		// The scan: reads a listed file and records the SHA-256 of its bytes (once per file) that the import must match.
+		void hash_listed(const resolved_reference& file);
 		// The name below the model folder of a resolved file: one name for every spelling of the same path.
 		std::string relative_name(const resolved_reference& file) const;
 

@@ -81,7 +81,7 @@ namespace {
 		if (ec || resolved != plan.source) return "the file is reached by another path now";
 		if (fs::file_size(plan.source, ec) != plan.size || ec) return "the size of the file changed";
 		if (fs::last_write_time(plan.source, ec) != plan.modified || ec) return "the file was modified";
-		if (edt::file_id_of(plan.source) != plan.id) return "the path reaches another file now";
+		if (!edt::file_id_of(plan.source).same_as(plan.id)) return "the path reaches another file now";
 		return {};
 	}
 
@@ -242,7 +242,7 @@ namespace {
 
 bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 {
-	return source == other.source && size == other.size && modified == other.modified && id == other.id && name == other.name && folder == other.folder;
+	return source == other.source && size == other.size && modified == other.modified && id.same_as(other.id) && name == other.name && folder == other.folder;
 }
 
 edt::agent_model_import::agent_model_import(asset_exporter& exporter, job_service& jobs, res::resource_system& resources, agent_import_options options)
@@ -336,6 +336,7 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	plan.modified = fs::last_write_time(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the time of the source cannot be read");
 	plan.id = file_id_of(resolved);
+	if (!plan.id.valid) return refuse(cmd::codes::invalid_args, "the identity of the source on the disk cannot be read");
 
 	const std::string wanted_name = request.name.empty() ? to_utf8(resolved.stem()) : request.name;
 	const agent_level_path name = check_agent_name(wanted_name);

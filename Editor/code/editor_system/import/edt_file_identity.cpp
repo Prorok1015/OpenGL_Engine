@@ -33,10 +33,17 @@ edt::file_id edt::file_id_of(const std::filesystem::path& path)
 {
 	file_id id;
 #ifdef _WIN32
-	const HANDLE handle = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+	const HANDLE handle = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 	if (handle == INVALID_HANDLE_VALUE) return id;
+	FILE_ID_INFO wide{};
 	BY_HANDLE_FILE_INFORMATION info{};
-	if (GetFileInformationByHandle(handle, &info)) {
+	if (GetFileInformationByHandleEx(handle, FileIdInfo, &wide, sizeof(wide))) {
+		std::memcpy(&id.index, wide.FileId.Identifier, sizeof(id.index));
+		std::memcpy(&id.index_high, wide.FileId.Identifier + sizeof(id.index), sizeof(id.index_high));
+		id.volume = wide.VolumeSerialNumber;
+		id.valid = true;
+	} else if (GetFileInformationByHandle(handle, &info)) {
 		id.volume = info.dwVolumeSerialNumber;
 		id.index = (static_cast<std::uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
 		id.valid = true;
@@ -44,7 +51,7 @@ edt::file_id edt::file_id_of(const std::filesystem::path& path)
 	CloseHandle(handle);
 #else
 	struct stat info{};
-	if (::stat(path.c_str(), &info) == 0) {
+	if (::lstat(path.c_str(), &info) == 0) {
 		id.volume = static_cast<std::uint64_t>(info.st_dev);
 		id.index = static_cast<std::uint64_t>(info.st_ino);
 		id.valid = true;

@@ -97,6 +97,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	out.modified = fs::last_write_time(*inside, ec);
 	if (ec) return refuse("its time cannot be read");
 	out.id = file_id_of(*inside);
+	if (!out.id.valid) return refuse("its identity on the disk cannot be read");
 	if (out.size > m_limits.max_file_bytes) return refuse(std::format("too big ({} bytes, the limit is {})", out.size, m_limits.max_file_bytes));
 
 	if (kind == model_file_kind::texture) {
@@ -110,7 +111,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	if (m_allowed) {
 		const auto listed = std::find_if(m_allowed->begin(), m_allowed->end(), [&](const referenced_file& file) { return file.path == *inside; });
 		if (listed == m_allowed->end()) return refuse("not among the files the person was shown");
-		if (listed->size != out.size || listed->modified != out.modified || listed->id != out.id) return refuse("the file changed since the person was shown it");
+		if (listed->size != out.size || listed->modified != out.modified || !listed->id.same_as(out.id)) return refuse("the file changed since the person was shown it");
 	} else if (m_seen.insert(key_of(*inside)).second) {
 		if (m_files.size() >= m_limits.max_files) return refuse(std::format("the model refers to more than {} files", m_limits.max_files));
 		if (m_listed_bytes + out.size > m_limits.max_total_bytes) {
@@ -138,13 +139,16 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 		}
 	}
 	std::error_code ec;
-	if (fs::file_size(file.path, ec) != file.size || ec || fs::last_write_time(file.path, ec) != file.modified || ec || file_id_of(file.path) != file.id) {
+	if (fs::file_size(file.path, ec) != file.size || ec || fs::last_write_time(file.path, ec) != file.modified || ec || !file_id_of(file.path).same_as(file.id)) {
 		throw std::runtime_error(std::format("'{}' changed while it was read", file.path.filename().string()));
 	}
 	const content_digest digest = digest_of(*bytes);
 	if (m_allowed) {
 		const auto listed = std::find_if(m_allowed->begin(), m_allowed->end(), [&](const referenced_file& entry) { return entry.path == file.path; });
-		if (listed != m_allowed->end() && listed->hashed && listed->digest != digest) {
+		if (listed == m_allowed->end() || !listed->hashed) {
+			throw std::runtime_error(std::format("'{}' was listed without its bytes being hashed", file.path.filename().string()));
+		}
+		if (listed->digest != digest) {
 			throw std::runtime_error(std::format("'{}' is not the file the person was shown: its content changed", file.path.filename().string()));
 		}
 	} else {
@@ -155,6 +159,14 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 		}
 	}
 	return bytes;
+}
+
+void edt::model_file_access::hash_listed(const resolved_reference& file)
+{
+	if (!file.found() || m_allowed) return;
+	const auto listed = std::find_if(m_files.begin(), m_files.end(), [&](const referenced_file& entry) { return entry.path == file.path; });
+	if (listed == m_files.end() || listed->hashed) return;
+	if (!read(file)) throw std::runtime_error(std::format("'{}' cannot be read", file.path.filename().string()));
 }
 
 std::string edt::model_file_access::relative_name(const resolved_reference& file) const

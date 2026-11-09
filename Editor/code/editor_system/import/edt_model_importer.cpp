@@ -663,6 +663,7 @@ edt::model_file_scan edt::model_importer::scan_files(const import_source& source
 					scan.error = reference.error;
 					return scan;
 				}
+				access.hash_listed(reference);
 			}
 		}
 	}
