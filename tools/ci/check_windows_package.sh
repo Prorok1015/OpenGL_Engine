@@ -65,6 +65,8 @@ done
 
 # ---- 2. layout ----
 for f in bin/editor.exe bin/editor.pdb bin/snk_engine.dll bin/snk_engine.pdb bin/snk_engined.dll bin/snk_engined.pdb \
+	bin/snk_editor_api.dll bin/snk_editor_api.pdb bin/snk_editor_apid.dll bin/snk_editor_apid.pdb \
+	lib/snk/snk_editor_api.lib lib/snk/snk_editor_apid.lib include/snk/editor/edt_api.h \
 	bin/vcruntime140.dll bin/msvcp140.dll lib/snk/snk_engine.lib lib/snk/snk_engined.lib \
 	lib/cmake/snake_sdk/snake_sdkConfig.cmake lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake \
 	lib/cmake/snake_sdk/snake_sdk_staticTargets.cmake lib/cmake/snake_sdk/snake_sdk_sharedTargets-release.cmake \
@@ -80,7 +82,7 @@ fi
 ls -l "${root}/bin"
 
 # ---- 3. dependencies ----
-bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_engine.dll || status=1
+bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_engine.dll snk_editor_api.dll || status=1
 [[ $status -eq 0 ]] || exit 1
 
 # ---- 4. consumer, both engines, both configurations ----

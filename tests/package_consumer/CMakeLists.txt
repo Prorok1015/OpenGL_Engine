@@ -19,6 +19,10 @@ find_package(snake_sdk 0.2 CONFIG REQUIRED)
 message(STATUS "snake_sdk ${snake_sdk_VERSION} (shared: ${snake_sdk_HAS_SHARED}, static: ${snake_sdk_HAS_STATIC}) from ${snake_sdk_DIR}; linking the ${SNK_CONSUMER_ENGINE} engine")
 if(SNK_CONSUMER_ENGINE STREQUAL "shared")
 	set(_engine snk::engine snk::engine_api)
+	# The editor API (#587) is part of the shared set only.
+	if(TARGET snk::editor_api)
+		list(APPEND _engine snk::editor_api)
+	endif()
 elseif(SNK_CONSUMER_ENGINE STREQUAL "static")
 	set(_engine snk::engine_static)
 else()
@@ -38,6 +42,10 @@ target_link_libraries(package_consumer PRIVATE ${_engine})
 # jobs turn it on. Add a component to SNK_CONSUMER_HEADER_COMPONENTS when it gains public headers.
 option(SNK_CONSUMER_HEADER_CHECK "Compile one TU per installed public header of the migrated components" OFF)
 set(SNK_CONSUMER_HEADER_COMPONENTS application core_input window driver ecs desc resource common config input image game gui render scene core engine)
+if(snake_sdk_HAS_SHARED AND SNK_CONSUMER_ENGINE STREQUAL "shared")
+	# snk/editor: the headers of the editor API library (#587), in the shared set.
+	list(APPEND SNK_CONSUMER_HEADER_COMPONENTS editor)
+endif()
 if(snake_sdk_HAS_STATIC)
 	# The shipping host library (snk::game_host, #592) is installed with the static engine only.
 	list(APPEND SNK_CONSUMER_HEADER_COMPONENTS game_host)
