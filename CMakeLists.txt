@@ -191,6 +191,11 @@ if(MSVC)
 	target_compile_options(unit_tests PRIVATE /bigobj)
 endif()
 # desc_repo_roundtrip_tests loads the descs the repository ships.
+if(TARGET snk_model_decoder)
+	# The process tests (edt_decode_runner_tests) start the real decoder.
+	add_dependencies(unit_tests snk_model_decoder)
+	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>")
+endif()
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/projects/sandbox")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")

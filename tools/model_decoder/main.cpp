@@ -12,6 +12,7 @@
 #include "edt_model_importer.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -23,6 +24,7 @@
 #include <new>
 #include <optional>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -173,6 +175,7 @@ int main(int argc, char** argv)
 	ds::task_system tasks(tasks_config);
 	res::resource_system res_sys(tasks);
 	desc::desc_system desc_sys(res_sys);
+	res_sys.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(res_sys), std::ref(desc_sys));
 	scn::ecs_assembler assembler(desc_sys, res_sys);
 	rnd::skinning_manager skinning;
 	auto scene_types = scn::register_scene_types(desc_sys, assembler, skinning);
