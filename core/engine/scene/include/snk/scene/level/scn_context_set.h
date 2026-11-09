@@ -247,7 +247,6 @@ namespace scn
 		res::tag m_tag;
 		scene_layer* m_layer = nullptr;
 		std::vector<std::string> m_desc_world_names;
-		uint32_t m_next_desc_index = 0;
 		bool m_active = true;
 		set_options m_options;
 		// Null when the set takes no part in hot reload.
@@ -270,5 +269,7 @@ namespace scn
 		std::unordered_map<std::string, uint32_t> m_context_ids;
 		// Last: the tasks may touch the contexts.
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
+		// After every older field so the offsets of the inline accessors of a game module built earlier stay; a plain number, so it does not change the destruction order above.
+		uint32_t m_next_desc_index = 0;
 	};
 }
