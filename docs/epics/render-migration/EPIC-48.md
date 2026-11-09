@@ -184,7 +184,7 @@ draw_call_t {
 - [ ] Нет `entt::entity` ссылок между костями/мешами и skeleton root
 
 ### US-48-5: Обновить импортёры — генерация skeleton_tag и skeleton_desc
-**Файлы:** `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`
+**Файлы:** `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/model_import/edt_model_importer.cpp`
 **Зависимости:** US-48-2, US-48-3
 
 Импортёры генерируют `skeleton_desc` на корне и `skeleton_tag` в `bone_desc`, `skinning_desc`, `animated_node_desc`.

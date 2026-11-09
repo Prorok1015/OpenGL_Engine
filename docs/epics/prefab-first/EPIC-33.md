@@ -82,7 +82,7 @@ prefab_root (skeleton_root)
 - [x] `obj_owner_component` не используется в анимационном/скиннинг pipeline (если не используется нигде — удалён)
 
 ### US-33-3: skinning_tag при assemble + skin_weights_desc
-**Файлы:** `core/engine/scene/include/snk/scene/scn_skinning_desc.h`, `core/engine/scene/scn_skinning_desc.cpp`, `core/engine/scene/include/snk/scene/scn_skin_weights_desc.h` (новый), `core/engine/scene/scn_skin_weights_desc.cpp` (новый), `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_skinning_desc.h`, `core/engine/scene/scn_skinning_desc.cpp`, `core/engine/scene/include/snk/scene/scn_skin_weights_desc.h` (новый), `core/engine/scene/scn_skin_weights_desc.cpp` (новый), `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/model_import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
 
 Сейчас `skinning_component::skinning_tag` остаётся пустым после assemble. Тег должен прописываться из дескриптора при импорте. Skinning weights должны быть desc-driven (а не регистрироваться только при импорте).
 
@@ -119,7 +119,7 @@ struct animation_controller_component {
 - [x] `playable_animation_component` удалён
 
 ### US-33-5: Animation clip как shared ресурс
-**Файлы:** `core/engine/scene/include/snk/scene/scn_animation_clip_desc.h` (новый), `core/engine/scene/scn_animation_clip_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_animation_collection_desc.h` (новый), `core/engine/scene/scn_animation_collection_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_animated_node_desc.h` (новый), `core/engine/scene/scn_animated_node_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_animation_clip_desc.h` (новый), `core/engine/scene/scn_animation_clip_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_animation_collection_desc.h` (новый), `core/engine/scene/scn_animation_collection_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_animated_node_desc.h` (новый), `core/engine/scene/scn_animated_node_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/model_import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
 **Зависимости:** US-33-4
 
 Keyframes дублировались в каждой bone-entity. Вынесены в shared-ресурс — один `animation_clip_desc` на анимацию. `animation_collection_desc` — контейнер клипов с поддержкой inline и file-based ресурсов через `desc_system::get_field_desc`. `animated_node_desc` — маркер для нод с анимационными каналами, проставляется при импорте.
