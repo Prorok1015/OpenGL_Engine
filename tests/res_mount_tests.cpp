@@ -16,6 +16,7 @@
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <system_error>
 #include <chrono>
@@ -434,8 +435,12 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject
 	BOOST_TEST((sys.mount_roots(res::tag::user) == std::vector<fs::path>{ user }));
 	const auto scratch = sys.mount_roots(res::tag::memory);
 	BOOST_REQUIRE(scratch.size() == 1u);
-	BOOST_TEST(scratch.front() == core::res::scratch_dir_for("Read Only", platform::current_process_id()));
+	const std::string own_prefix = "snk-Read Only-" + std::to_string(platform::current_process_id()) + "-";
+	BOOST_TEST(scratch.front().filename().string().starts_with(own_prefix));
 	BOOST_TEST(fs::is_directory(scratch.front()));
+#ifndef _WIN32
+	BOOST_TEST((fs::status(scratch.front()).permissions() & fs::perms::all) == fs::perms::owner_all);
+#endif
 	BOOST_TEST(sys.mount_roots(res::tag::cache).empty());
 
 	BOOST_TEST(sys.exists(res::tag{ "res://levels/main.desc" }));
@@ -449,34 +454,114 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject
 	BOOST_TEST(fs::is_directory(user));
 }
 
-BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndReplacesTheRest)
+BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndLetters_ReplacesTheRest)
 {
 	BOOST_TEST(core::res::safe_folder_name("My Game_2.0-beta") == "My Game_2.0-beta");
 	BOOST_TEST(core::res::safe_folder_name("a/b\\c:d*e") == "a_b_c_d_e");
 	BOOST_TEST(core::res::safe_folder_name("Game. ") == "Game");
 	BOOST_TEST(core::res::safe_folder_name("") == "game");
 	BOOST_TEST(core::res::safe_folder_name("..") == "game");
+	// Letters outside ASCII stay: two such names are two folders.
+	BOOST_TEST(core::res::safe_folder_name("\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0") == "\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0");
+	BOOST_TEST(core::res::safe_folder_name("\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0") != core::res::safe_folder_name("\xD0\x9C\xD0\xB0\xD0\xBC\xD0\xB0"));
 }
 
-BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyTheFoldersOfEndedRuns)
+BOOST_AUTO_TEST_CASE(SafeFolderName_ReservedWindowsNamesAreChanged)
+{
+	BOOST_TEST(core::res::safe_folder_name("CON") == "CON_");
+	BOOST_TEST(core::res::safe_folder_name("nul") == "nul_");
+	BOOST_TEST(core::res::safe_folder_name("Aux.txt") == "Aux.txt_");
+	BOOST_TEST(core::res::safe_folder_name("COM1") == "COM1_");
+	BOOST_TEST(core::res::safe_folder_name("lpt9.save") == "lpt9.save_");
+	BOOST_TEST(core::res::safe_folder_name("COM0") == "COM0");
+	BOOST_TEST(core::res::safe_folder_name("CONSOLE") == "CONSOLE");
+}
+
+BOOST_AUTO_TEST_CASE(SafeFolderName_IsAtMost64Bytes_CutOnACharacter)
+{
+	BOOST_TEST(core::res::safe_folder_name(std::string(100, 'a')) == std::string(64, 'a'));
+	// 63 ASCII bytes, then a two-byte letter that would straddle byte 64: it goes whole.
+	const std::string straddling = std::string(63, 'a') + "\xD0\x98" + "bc";
+	BOOST_TEST(core::res::safe_folder_name(straddling) == std::string(63, 'a'));
+	BOOST_TEST(core::res::safe_folder_name(std::string(63, 'a') + " x") == std::string(63, 'a'));
+}
+
+namespace {
+// A scratch folder of `name` for process `pid`, as make_scratch_dir names it, private to this user.
+fs::path planted_scratch(const std::string& name, std::int64_t pid)
+{
+	std::string error;
+	const fs::path base = core::res::scratch_base_dir(error);
+	BOOST_REQUIRE_MESSAGE(!base.empty(), error);
+	const fs::path folder = base / ("snk-" + name + "-" + std::to_string(pid) + "-0123456789abcdef");
+	fs::create_directories(folder / "objects");
+	fs::permissions(folder, fs::perms::owner_all, fs::perm_options::replace);
+	return folder;
+}
+}
+
+BOOST_AUTO_TEST_CASE(MakeScratchDir_MakesANewPrivateFolderEachTime)
+{
+	const auto first = core::res::make_scratch_dir("res_mount_tests_make");
+	const auto second = core::res::make_scratch_dir("res_mount_tests_make");
+	BOOST_REQUIRE_MESSAGE(!first.path.empty(), first.error);
+	BOOST_REQUIRE_MESSAGE(!second.path.empty(), second.error);
+	BOOST_TEST(first.path != second.path);
+	BOOST_TEST(fs::is_directory(first.path));
+#ifndef _WIN32
+	BOOST_TEST((fs::status(first.path).permissions() & fs::perms::all) == fs::perms::owner_all);
+#endif
+	std::error_code ec;
+	fs::remove_all(first.path, ec);
+	fs::remove_all(second.path, ec);
+}
+
+BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyThePrivateFoldersOfEndedRuns)
 {
 	const std::string name = "res_mount_tests_stale";
 	// No process has this id on Linux (pid_max <= 4194304) or Windows (ids are multiples of 4).
-	const fs::path ended = core::res::scratch_dir_for(name, 2147483647);
-	const fs::path own = core::res::scratch_dir_for(name, platform::current_process_id());
-	const fs::path other_game = core::res::scratch_dir_for("res_mount_tests_other", 2147483647);
-	for (const auto& folder : { ended, own, other_game }) {
-		fs::create_directories(folder / "objects");
-	}
+	constexpr std::int64_t ended_pid = 2147483647;
+	const fs::path ended = planted_scratch(name, ended_pid);
+	const fs::path own = planted_scratch(name, platform::current_process_id());
+	const fs::path other_game = planted_scratch("res_mount_tests_other", ended_pid);
+	std::string error;
+	const fs::path base = core::res::scratch_base_dir(error);
+	const fs::path not_a_scratch_name = base / ("snk-" + name + "-" + std::to_string(ended_pid));
+	fs::create_directories(not_a_scratch_name);
+#ifndef _WIN32
+	// Readable by others: not one this game made, so it is not walked.
+	const fs::path open_folder = base / ("snk-" + name + "-" + std::to_string(ended_pid) + "-fedcba9876543210");
+	fs::create_directories(open_folder);
+	fs::permissions(open_folder, fs::perms::owner_all | fs::perms::group_read | fs::perms::others_read, fs::perm_options::replace);
+	// A link to a folder of the player: neither it nor what it points at goes.
+	test_util::temp_dir victim{ "res_mount_tests_victim" };
+	victim.write("keep.txt", "player data");
+	const fs::path link = base / ("snk-" + name + "-" + std::to_string(ended_pid) + "-00000000000000aa");
+	std::error_code link_ec;
+	fs::create_directory_symlink(victim.path(), link, link_ec);
+#endif
 
 	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 1u);
 	BOOST_TEST(!fs::exists(ended));
 	BOOST_TEST(fs::is_directory(own));
 	BOOST_TEST(fs::is_directory(other_game));
+	BOOST_TEST(fs::is_directory(not_a_scratch_name));
+#ifndef _WIN32
+	BOOST_TEST(fs::is_directory(open_folder));
+	if (!link_ec) {
+		BOOST_TEST(fs::is_symlink(link));
+		BOOST_TEST(read_file(victim.path() / "keep.txt") == "player data");
+	}
+#endif
 
 	std::error_code ec;
-	fs::remove_all(own, ec);
-	fs::remove_all(other_game, ec);
+	for (const auto& folder : { own, other_game, not_a_scratch_name }) {
+		fs::remove_all(folder, ec);
+	}
+#ifndef _WIN32
+	fs::remove_all(open_folder, ec);
+	fs::remove(link, ec);
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

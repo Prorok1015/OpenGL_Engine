@@ -146,10 +146,11 @@ jobs:
           user_dir="$RUNNER_TEMP/game_user"
           tmp_root="${TMPDIR:-/tmp}"
           tree_hash() {
-            (cd "$1" && { find . -printf '%y %p %s %T@\n' | LC_ALL=C sort; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum; }) | sha256sum
+            (cd "$1" && { find . -printf '%y %m %p %s %T@\n' | LC_ALL=C sort; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum; }) | sha256sum
           }
           rm -rf "$project" "$user_dir"
           cp -a projects/sandbox "$project"
+          # Under root chmod protects nothing; the hash (permission bits included) still catches any write.
           chmod -R a-w "$project"
           trap 'chmod -R u+w "$project"' EXIT
           before=$(tree_hash "$project")

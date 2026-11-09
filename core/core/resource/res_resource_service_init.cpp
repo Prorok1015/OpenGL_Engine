@@ -2,7 +2,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_shipping_dirs.h>
 #include <snk/config/cfg_variables.h>
-#include <snk/platform/plt_process.h>
+#include <snk/common/fs_paths.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/project/prj_project.h>
 #include <snk/common/logger/engine_log.h>
@@ -27,7 +27,8 @@ namespace {
 		std::error_code ec;
 		std::filesystem::create_directories(dir, ec);
 		if (ec) {
-			throw prj::project_error(std::format("project '{}': cannot create '{}': {}", project.data.name, dir.string(), ec.message()));
+			throw prj::project_error(std::format("project '{}': cannot create '{}': {}", project.data.name,
+				fs_paths::utf8_of(dir), ec.message()));
 		}
 	}
 
@@ -37,7 +38,7 @@ namespace {
 	{
 		std::filesystem::path user_dir = cfg_res_user_path->empty()
 			? core::res::player_data_dir(project.data.name)
-			: std::filesystem::absolute(cfg_res_user_path->string());
+			: std::filesystem::absolute(*cfg_res_user_path);
 		if (user_dir.empty()) {
 			throw prj::project_error(std::format("project '{}': no folder for user:// (LOCALAPPDATA, XDG_DATA_HOME and HOME "
 				"are not set); set resource/user_path", project.data.name));
@@ -45,13 +46,16 @@ namespace {
 		if (const std::size_t stale = core::res::remove_stale_scratch_dirs(project.data.name); stale > 0) {
 			egLOG_INFO("resource", "removed {} scratch folder(s) of ended runs", stale);
 		}
-		const std::filesystem::path scratch = core::res::scratch_dir_for(project.data.name, platform::current_process_id());
 		create_folder(project, user_dir);
-		create_folder(project, scratch);
+		const core::res::scratch_folder_result scratch_dir = core::res::make_scratch_dir(project.data.name);
+		if (scratch_dir.path.empty()) {
+			throw prj::project_error(std::format("project '{}': no folder for memory://: {}", project.data.name, scratch_dir.error));
+		}
+		const std::filesystem::path& scratch = scratch_dir.path;
 		data.construct<scratch_folder>(scratch);
 		data.construct<::res::resource_system>(std::ref(data.require<ds::task_system>()),
 			::res::resource_system::shipping_mount_table(engine_base, project.content_roots, user_dir, scratch));
-		egLOG_INFO("resource", "project '{}' mounted read-only; user:// in {}", project.data.name, user_dir.string());
+		egLOG_INFO("resource", "project '{}' mounted read-only; user:// in {}", project.data.name, fs_paths::utf8_of(user_dir));
 	}
 }
 
@@ -109,7 +113,8 @@ void core::res::resource_term(ds::app_data_storage& data)
 		std::error_code ec;
 		std::filesystem::remove_all(data.require<scratch_folder>().path, ec);
 		if (ec) {
-			egLOG_WARN("resource", "cannot remove the scratch folder '{}': {}", data.require<scratch_folder>().path.string(), ec.message());
+			egLOG_WARN("resource", "cannot remove the scratch folder '{}': {}", fs_paths::utf8_of(data.require<scratch_folder>().path),
+				ec.message());
 		}
 		data.destruct<scratch_folder>();
 	}
