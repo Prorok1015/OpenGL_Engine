@@ -20,11 +20,13 @@ scn::context_set::current_scope::~current_scope()
 }
 
 scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
-							  std::shared_ptr<ecs::channel_registry> channel_types, set_options options)
+							  std::shared_ptr<ecs::channel_registry> channel_types, set_options options,
+							  std::shared_ptr<ecs::bus_registry> event_types)
 	: m_name(std::move(name))
 	, m_options(options)
 	, m_hot_reload_manager(options.hot_reload ? std::move(hot_manager) : std::shared_ptr<scn::hot_reload_manager>{})
 	, m_channel(m_name, std::move(channel_types))
+	, m_event_types(event_types ? std::move(event_types) : std::make_shared<ecs::bus_registry>())
 {
 }
 
@@ -62,6 +64,13 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 {
 	PROFILE_SCOPE("LevelUpdate");
 	const current_scope as_current(*this);
+	ASSERT_MSG(!m_updating, "set '{}': update re-entered", m_name);
+	m_updating = true;
+	struct updating_reset
+	{
+		bool& flag;
+		~updating_reset() { flag = false; }
+	} reset{ m_updating };
 
 	const ecs::run_mode mode = m_mode;
 	begin_frame_channel(mode);
@@ -137,9 +146,21 @@ void scn::context_set::set_time_scale(float scale)
 
 void scn::context_set::sync_context_mode()
 {
+	const auto bus_mode = m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue;
 	for (const auto& [id, context] : m_contexts) {
 		context->set_mode(m_mode);
+		if (auto* bus = context->state().ctx().find<ecs::world_bus>()) bus->set_mode(bus_mode);
 	}
+}
+
+ecs::world_bus& scn::context_set::bind_events(world_context& context)
+{
+	auto& bus = context.state().ctx().emplace<ecs::world_bus>();
+	if (bus.bound_types() < m_event_types->size()) {
+		ASSERT_MSG(!ds::task_system::on_worker(), "set '{}': world buses are bound on the main thread only", m_name);
+		bus.bind(*m_event_types, context.state(), context.get_name());
+	}
+	return bus;
 }
 
 ecs::runtime_context scn::context_set::create_runtime_context(size_t own_id)
@@ -149,6 +170,8 @@ ecs::runtime_context scn::context_set::create_runtime_context(size_t own_id)
 
 void scn::context_set::update_context(uint32_t id, world_context& context, ecs::run_mode mode)
 {
+	auto& bus = bind_events(context);
+	const bool delivers = mode == ecs::run_mode::play || mode == ecs::run_mode::step;
 	for (size_t p = 0; p < m_phase_order.size(); ++p) {
 		if (m_phase_order[p].builtin() == ecs::phase::fixed_update) {
 			PROFILE_SCOPE("ECS.fixed_update");
@@ -159,7 +182,14 @@ void scn::context_set::update_context(uint32_t id, world_context& context, ecs::
 		} else {
 			run_context_phase(id, context, p, mode);
 		}
+		// The delivery point (WORLD_BUS 3.2): after the builtin update and its commands, before every later phase.
+		if (delivers && m_phase_order[p].builtin() == ecs::phase::update) {
+			PROFILE_SCOPE("ECS.bus_delivery");
+			bus.deliver();
+			bus.set_after_delivery(true);
+		}
 	}
+	bus.set_after_delivery(false);
 }
 
 void scn::context_set::run_context_phase(uint32_t id, world_context& context, size_t order_index, ecs::run_mode mode)
@@ -191,6 +221,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 		w.set_meta(&m_layer->meta());
 	}
 	m_channel.attach(id, w.get_name(), w.state());
+	bind_events(w).set_mode(m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue);
 	w.seed(m_seed);
 	w.set_mode(m_mode);
 	w.set_time_scale(m_time_scale);

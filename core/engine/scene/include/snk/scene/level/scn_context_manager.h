@@ -6,6 +6,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/common/engine_assert.h>
@@ -131,6 +132,12 @@ namespace scn
 		// register theirs at init: `channels().add<my_message>()`.
 		ecs::channel_registry& channels() { return *m_channel_types; }
 
+		// Event types of the worlds' buses (WORLD_BUS.md 3). The engine registers its own here at init (the input
+		// stack: `events().add<inp::action_event>()`, written by systems through ecs::event_writer<inp::action_event>&);
+		// a layer created afterwards sees them and adds the module's in its own `events()`. The base's sets take a type
+		// registered later at their next update.
+		ecs::bus_registry& events() { return *m_event_types; }
+
 		// The runtime types of the base (the engine's components, scene_init); every layer's catalog lies over it.
 		scn::component_catalog& catalog() { return m_catalog; }
 		const scn::component_catalog& catalog() const { return m_catalog; }
@@ -142,6 +149,15 @@ namespace scn
 		{
 			get_set(set).channel().post_external<T>(std::move(to), std::move(payload));
 		}
+		// An event from outside the phases (editor, game shell, a test) into the bus of world `context` of `set`: first
+		// in that world's next delivery, `from` empty. Main thread only and never while the set updates (a task posts
+		// through then_main); asserts when the type is not an event type of the set.
+		template <typename T>
+		void emit(std::string_view set, std::string_view context, T payload)
+		{
+			get_set(set).post_event<T>(context, std::move(payload));
+		}
+
 		// Writer for values from outside the phases; visible after the next exchange of the set.
 		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
 
@@ -161,6 +177,7 @@ namespace scn
 
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();
+		std::shared_ptr<ecs::bus_registry> m_event_types = std::make_shared<ecs::bus_registry>();
 		// Before the layers: theirs lie over it.
 		scn::component_catalog m_catalog;
 		scn::ecs_assembler& m_assembler;

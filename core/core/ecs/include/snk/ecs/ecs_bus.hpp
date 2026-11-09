@@ -45,6 +45,8 @@ struct bus_state
 	size_t limit = default_event_limit;
 	uint64_t deliveries = 0;
 	bool delivering = false;
+	// Set by the world between its delivery and the end of its frame: an emit then waits a frame.
+	bool after_delivery = false;
 	std::thread::id owner = std::this_thread::get_id();
 
 	bool on_owner_thread() const { return std::this_thread::get_id() == owner; }
@@ -113,6 +115,13 @@ public:
 	{
 		ASSERT_MSG(m_state->on_owner_thread(), "event_writer<{}>::emit of world '{}': main thread only", entt::type_name<T>::value(), m_state->world);
 		if (m_state->mode == bus_mode::discard) return;
+#if SNK_ASSERTS_ENABLED
+		if (m_state->after_delivery && !m_state->delivering && !m_late_warned) {
+			egLOG_WARN("scene", "world '{}': {} emitted after the delivery point waits a frame for the next delivery (WORLD_BUS 3.2)",
+					   m_state->world, entt::type_name<T>::value());
+			m_late_warned = true;
+		}
+#endif
 		if (queued() >= m_state->limit) {
 			++m_dropped;
 			return;
@@ -213,6 +222,8 @@ private:
 	uint64_t m_window_delivery = 0;
 	size_t m_dropped = 0;
 	size_t m_reported_dropped = 0;
+	// Kept in every build type: a module and the engine may be built with and without asserts.
+	bool m_late_warned = false;
 	signal<const envelope<T>&> m_subscribers;
 	std::optional<typename signal<const envelope<T>&>::frozen> m_frozen;
 };
@@ -350,6 +361,11 @@ public:
 	size_t event_limit() const;
 
 	const std::string& world() const;
+	// Types bound so far.
+	size_t bound_types() const;
+	// The world says its delivery point is behind it this frame (true) or ahead (false). An emit while true is a
+	// late sender: in a build with asserts it is warned about once per type.
+	void set_after_delivery(bool after);
 	uint64_t deliveries() const;
 	bool delivering() const;
 	// Events waiting for the next delivery, all types.

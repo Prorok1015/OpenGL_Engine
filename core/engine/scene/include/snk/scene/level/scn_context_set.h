@@ -5,6 +5,7 @@
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_set_channel.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <snk/ecs/ecs_invoker.hpp>
 #include <snk/ecs/ecs_random.hpp>
@@ -43,10 +44,12 @@ namespace scn
 	class SNK_API context_set
 	{
 	public:
-		// `channel_types` is the registry of message types shared by the sets of a manager; null gives
-		// the set a registry of its own. With `options.hot_reload` false `hot_manager` is not kept.
+		// `channel_types` and `event_types` are the registries of message and event types shared by the sets of a
+		// manager (or of a layer); null gives the set a registry of its own. With `options.hot_reload` false
+		// `hot_manager` is not kept.
 		context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
-					std::shared_ptr<ecs::channel_registry> channel_types = nullptr, set_options options = {});
+					std::shared_ptr<ecs::channel_registry> channel_types = nullptr, set_options options = {},
+					std::shared_ptr<ecs::bus_registry> event_types = nullptr);
 		~context_set();
 		context_set(const context_set&) = delete;
 		context_set& operator=(const context_set&) = delete;
@@ -100,6 +103,27 @@ namespace scn
 		// the blackboard survives reload_context, the reloaded context's inbox and outbox do not.
 		scn::set_channel& channel() { return m_channel; }
 		const scn::set_channel& channel() const { return m_channel; }
+
+		// The event types of the set's worlds (WORLD_BUS.md 3). Every world has an ecs::world_bus in its ctx, bound
+		// to them; a type registered later is bound at the next update(). Delivery: right after the builtin `update`
+		// phase and its commands, in Play and Step. Pause queues, Edit drops.
+		ecs::bus_registry& event_types() { return *m_event_types; }
+
+		// An event from outside the phases into the bus of world `context`: first in its next delivery, with an empty
+		// `from`. Main thread, never during update() (it would get ahead of the world's own events).
+		template <class T>
+		void post_event(std::string_view context, T payload)
+		{
+			ASSERT_MSG(!ds::task_system::on_worker(), "set '{}': post_event from a task, use then_main", m_name);
+			ASSERT_MSG(!m_updating, "set '{}': post_event during the set's update", m_name);
+			auto* world = find(context);
+			ASSERT_MSG(world, "set '{}': post_event to a world that does not exist: '{}'", m_name, context);
+			if (!world) return;
+			bind_events(*world).template post<T>(std::move(payload));
+		}
+
+		// True inside update().
+		bool updating() const { return m_updating; }
 
 		// One frame of ECS for every context: the phases in order, fixed_update stepped by the
 		// accumulator, the command buffer applied after every phase. What runs depends on the mode.
@@ -239,6 +263,8 @@ namespace scn
 		void run_context_phase(uint32_t id, world_context& context, size_t order_index, ecs::run_mode mode);
 		void destroy_by_id(uint32_t id);
 		void begin_frame_channel(ecs::run_mode mode);
+		// The world's bus, with every type of m_event_types bound.
+		ecs::world_bus& bind_events(world_context& context);
 		// Contexts keep their own mode; the set only mirrors its mode into them.
 		void sync_context_mode();
 		ecs::runtime_context create_runtime_context(size_t own_id);
@@ -254,6 +280,9 @@ namespace scn
 		// Before the contexts: their ctx holds pointers into it, so it must outlive them.
 		scn::set_channel m_channel;
 		std::vector<ecs::channel_participant> m_participants;
+		// Before the contexts: their buses' slots are made by these types.
+		std::shared_ptr<ecs::bus_registry> m_event_types;
+		bool m_updating = false;
 
 		ecs::run_mode m_mode = ecs::run_mode::play;
 		uint32_t m_pending_steps = 0;
