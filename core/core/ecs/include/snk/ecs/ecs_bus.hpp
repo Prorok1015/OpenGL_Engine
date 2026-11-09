@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -44,6 +45,9 @@ struct bus_state
 	size_t limit = default_event_limit;
 	uint64_t deliveries = 0;
 	bool delivering = false;
+	std::thread::id owner = std::this_thread::get_id();
+
+	bool on_owner_thread() const { return std::this_thread::get_id() == owner; }
 };
 
 class bus_slot
@@ -53,7 +57,9 @@ public:
 	virtual entt::id_type hash() const = 0;
 	// Moves the queue into the window, numbered by seq.
 	virtual void fill_window() = 0;
-	virtual void notify_subscribers() const = 0;
+	// Taken for every type before any subscriber runs: a subscription made during a delivery starts with the next.
+	virtual void freeze_subscribers() = 0;
+	virtual void notify_subscribers() = 0;
 	virtual size_t queued() const = 0;
 	virtual size_t window_size() const = 0;
 	virtual void clear() = 0;
@@ -105,16 +111,30 @@ public:
 
 	void push_from_world(T payload)
 	{
+		ASSERT_MSG(m_state->on_owner_thread(), "event_writer<{}>::emit of world '{}': main thread only", entt::type_name<T>::value(), m_state->world);
 		if (m_state->mode == bus_mode::discard) return;
-		if (!has_room()) return;
+		if (queued() >= m_state->limit) {
+			++m_dropped;
+			return;
+		}
 		auto& queue = m_state->delivering ? m_from_subscribers : m_from_systems;
 		queue.push_back(std::move(payload));
 	}
 
+	// External posts come first in a delivery, so on overflow the latest queued event of the world gives way.
 	void post(T payload)
 	{
+		ASSERT_MSG(m_state->on_owner_thread(), "world_bus::post<{}> to world '{}': main thread only", entt::type_name<T>::value(), m_state->world);
 		if (m_state->mode == bus_mode::discard) return;
-		if (!has_room()) return;
+		if (m_external.size() >= m_state->limit) {
+			++m_dropped;
+			return;
+		}
+		if (queued() >= m_state->limit) {
+			auto& victim = m_from_systems.empty() ? m_from_subscribers : m_from_systems;
+			victim.pop_back();
+			++m_dropped;
+		}
 		m_external.push_back(std::move(payload));
 	}
 
@@ -124,8 +144,13 @@ public:
 		m_window.clear();
 		m_window.reserve(queued());
 		uint32_t seq = 0;
+		// The limit may have been lowered after the events were queued.
 		auto take = [&](std::vector<T>& queue, std::string_view from) {
 			for (auto& payload : queue) {
+				if (m_window.size() >= m_state->limit) {
+					++m_dropped;
+					continue;
+				}
 				m_window.push_back(envelope<T>{ std::string{ from }, address{ m_state->world }, seq++, std::move(payload) });
 			}
 			queue.clear();
@@ -134,13 +159,20 @@ public:
 		take(m_from_subscribers, m_state->world);
 		take(m_from_systems, m_state->world);
 		m_window_delivery = m_state->deliveries;
-		m_overflow_warned = false;
+		report_dropped();
 	}
 
-	void notify_subscribers() const override
+	void freeze_subscribers() override
 	{
-		if (m_subscribers.subscriber_count() == 0) return;
-		for (const auto& e : m_window) m_subscribers.emit(e);
+		if (m_subscribers.subscriber_count() > 0) m_frozen = m_subscribers.freeze();
+	}
+
+	void notify_subscribers() override
+	{
+		if (!m_frozen) return;
+		const auto frozen = std::move(*m_frozen);
+		m_frozen.reset();
+		for (const auto& e : m_window) frozen.emit(e);
 	}
 
 	size_t queued() const override { return m_external.size() + m_from_subscribers.size() + m_from_systems.size(); }
@@ -153,7 +185,8 @@ public:
 		m_from_systems.clear();
 		m_window.clear();
 		m_window_delivery = 0;
-		m_overflow_warned = false;
+		m_dropped = 0;
+		m_reported_dropped = 0;
 	}
 
 	[[nodiscard]] connection subscribe(std::function<void(const envelope<T>&)> fn) { return m_subscribers.subscribe(std::move(fn)); }
@@ -162,14 +195,14 @@ public:
 	uint64_t window_delivery() const { return m_window_delivery; }
 
 private:
-	bool has_room()
+	// A world that overflows every frame by the same count warns once, not every frame.
+	void report_dropped()
 	{
-		if (queued() < m_state->limit) return true;
-		if (!m_overflow_warned) {
-			egLOG_WARN("scene", "world '{}': more than {} events of {} for one delivery, dropping", m_state->world, m_state->limit, entt::type_name<T>::value());
-			m_overflow_warned = true;
+		if (m_dropped > 0 && m_dropped != m_reported_dropped) {
+			egLOG_WARN("scene", "world '{}': {} events of {} dropped, more than {} per delivery", m_state->world, m_dropped, entt::type_name<T>::value(), m_state->limit);
 		}
-		return false;
+		m_reported_dropped = m_dropped;
+		m_dropped = 0;
 	}
 
 	const bus_state* m_state = nullptr;
@@ -178,8 +211,10 @@ private:
 	std::vector<T> m_from_systems;
 	std::vector<envelope<T>> m_window;
 	uint64_t m_window_delivery = 0;
-	bool m_overflow_warned = false;
+	size_t m_dropped = 0;
+	size_t m_reported_dropped = 0;
 	signal<const envelope<T>&> m_subscribers;
+	std::optional<typename signal<const envelope<T>&>::frozen> m_frozen;
 };
 
 class bus_type
@@ -301,14 +336,16 @@ public:
 	world_bus& operator=(const world_bus&) = delete;
 
 	// Gives the registry a writer and a reader of every type of `types` not bound yet; a second call with a registry
-	// that grew binds only the new types. `types` must keep the same order (the same registry or a layer over it).
-	void bind(const bus_registry& types, entt::registry& registry, std::string_view world);
+	// that grew binds only the new types. `types` must keep the same order (the same registry or a layer over it):
+	// otherwise nothing more is bound, an error is logged and the result is false.
+	bool bind(const bus_registry& types, entt::registry& registry, std::string_view world);
 
-	// Switching to discard drops the queue and the windows.
+	// Switching to discard drops the queue and the windows (reader delivery() reads 0 again).
 	void set_mode(bus_mode mode);
 	bus_mode mode() const;
 
-	// Events of one type a delivery takes; more are dropped with a warning. Default default_event_limit.
+	// Events of one type a delivery takes, 1..UINT32_MAX (seq is 32 bits); more are dropped with a warning when the
+	// dropped count changes. 0 is refused with an error. Default default_event_limit.
 	void set_event_limit(size_t limit);
 	size_t event_limit() const;
 
@@ -338,14 +375,16 @@ public:
 		return slot ? slot->subscribe(std::move(fn)) : connection{};
 	}
 
-	// Fills every window (types in registration order), then calls the subscribers type by type.
-	// Does nothing in discard mode.
+	// Fills every window (types in registration order), then calls the subscribers type by type: those subscribed
+	// when the delivery began. Does nothing in discard mode.
 	void deliver();
 
-	// Drops the queue and the windows (code reload); returns how many events were dropped.
+	// Drops the queue and the windows (code reload); returns how many events were dropped. Not from a subscriber.
 	size_t clear();
 
 private:
+	detail::bus_state& state() const;
+
 	template <class T>
 	detail::bus_slot_impl<T>* find() const
 	{

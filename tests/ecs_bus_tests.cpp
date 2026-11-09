@@ -1,7 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_signal.hpp>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <entt/entt.hpp>
+#include <format>
+#include <limits>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -36,6 +39,28 @@ std::vector<record> records_of(std::span<const ecs::envelope<T>> events, F paylo
 	for (const auto& e : events) out.emplace_back(e.from, e.to.context, e.seq, payload_of(e.payload));
 	return out;
 }
+
+struct log_capture
+{
+	log_capture()
+	{
+		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn || level == engine::log_level::error) lines.push_back(std::format("{}: {}", category, message));
+		});
+	}
+
+	size_t count(std::string_view part) const
+	{
+		size_t n = 0;
+		for (const auto& l : lines) {
+			if (l.find(part) != std::string::npos) ++n;
+		}
+		return n;
+	}
+
+	std::vector<std::string> lines;
+	engine::log_sink_handle sink; // last: removed first
+};
 
 std::vector<record> coins(const entt::registry& reg)
 {
@@ -92,6 +117,28 @@ BOOST_AUTO_TEST_CASE(a_slot_removed_during_an_emit_is_not_called_and_an_added_on
 	log.clear();
 	sig.emit();
 	BOOST_TEST(log == (std::vector<std::string>{ "first", "late" }));
+}
+
+BOOST_AUTO_TEST_CASE(a_frozen_list_keeps_slots_added_after_it_out_and_skips_removed_ones)
+{
+	ecs::signal<int> sig;
+	std::vector<std::string> log;
+	ecs::connection b;
+	ecs::connection late;
+	auto a = sig.subscribe([&](int v) {
+		log.push_back("a" + std::to_string(v));
+		b.disconnect();
+		if (!late.connected()) late = sig.subscribe([&](int l) { log.push_back("late" + std::to_string(l)); });
+	});
+	b = sig.subscribe([&](int v) { log.push_back("b" + std::to_string(v)); });
+
+	const auto frozen = sig.freeze();
+	frozen.emit(1);
+	frozen.emit(2);
+	BOOST_TEST(log == (std::vector<std::string>{ "a1", "a2" }));
+	log.clear();
+	sig.emit(3);
+	BOOST_TEST(log == (std::vector<std::string>{ "a3", "late3" }));
 }
 
 BOOST_AUTO_TEST_CASE(a_slot_can_disconnect_itself)
@@ -242,6 +289,51 @@ BOOST_AUTO_TEST_CASE(subscribing_and_unsubscribing_inside_a_delivery)
 	BOOST_TEST(log == (std::vector<std::string>{ "first:2", "late:2" }));
 }
 
+BOOST_AUTO_TEST_CASE(a_subscription_made_during_a_delivery_starts_with_the_next_delivery)
+{
+	std::vector<std::string> log;
+	std::vector<ecs::connection> late;
+	auto first = bus().subscribe<coin>([&](const ecs::envelope<coin>& e) {
+		log.push_back("coin:" + std::to_string(e.payload.value));
+		if (!late.empty()) return;
+		late.push_back(bus().subscribe<coin>([&](const ecs::envelope<coin>& l) { log.push_back("late coin:" + std::to_string(l.payload.value)); }));
+		late.push_back(bus().subscribe<hit>([&](const ecs::envelope<hit>& l) { log.push_back("late hit:" + std::to_string(l.payload.damage)); }));
+	});
+
+	coin_out().emit({ 1 });
+	coin_out().emit({ 2 });
+	hit_out().emit({ 7 });
+	hit_out().emit({ 8 });
+	bus().deliver();
+	BOOST_TEST(log == (std::vector<std::string>{ "coin:1", "coin:2" }));
+
+	log.clear();
+	coin_out().emit({ 3 });
+	hit_out().emit({ 9 });
+	bus().deliver();
+	BOOST_TEST(log == (std::vector<std::string>{ "coin:3", "late coin:3", "late hit:9" }));
+}
+
+BOOST_AUTO_TEST_CASE(an_event_a_subscriber_sends_of_its_own_type_waits_for_the_next_delivery)
+{
+	int calls = 0;
+	auto echo = bus().subscribe<coin>([&](const ecs::envelope<coin>& e) {
+		++calls;
+		if (e.payload.value < 3) coin_out().emit({ e.payload.value + 1 });
+	});
+	coin_out().emit({ 1 });
+	bus().deliver();
+	BOOST_TEST(calls == 1);
+	BOOST_TEST((coins(reg) == std::vector<record>{ { "World0", "World0", 0u, 1 } }));
+	bus().deliver();
+	BOOST_TEST(calls == 2);
+	BOOST_TEST((coins(reg) == std::vector<record>{ { "World0", "World0", 0u, 2 } }));
+	bus().deliver();
+	bus().deliver();
+	BOOST_TEST(calls == 3);
+	BOOST_TEST(coins(reg).empty());
+}
+
 BOOST_AUTO_TEST_CASE(the_window_is_replaced_only_by_the_next_delivery)
 {
 	coin_out().emit({ 1 });
@@ -274,16 +366,66 @@ BOOST_AUTO_TEST_CASE(a_delivery_takes_at_most_the_limit_per_type)
 	BOOST_TEST(bus().queued() == 4u);
 
 	bus().deliver();
+	// The post goes first, so the latest event of the world gave way to it.
 	BOOST_TEST((coins(reg) == std::vector<record>{
-		{ "World0", "World0", 0u, 0 },
-		{ "World0", "World0", 1u, 1 },
-		{ "World0", "World0", 2u, 2 },
+		{ "", "World0", 0u, 100 },
+		{ "World0", "World0", 1u, 0 },
+		{ "World0", "World0", 2u, 1 },
 	}));
 	BOOST_TEST(reg.ctx().get<ecs::event_reader<hit>>().events().size() == 1u);
 
 	for (int i = 0; i < 3; ++i) coin_out().emit({ i });
 	bus().deliver();
 	BOOST_TEST(coins(reg).size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(posts_beyond_the_limit_are_dropped_when_only_posts_are_queued)
+{
+	bus().set_event_limit(2);
+	bus().post(coin{ 1 });
+	bus().post(coin{ 2 });
+	bus().post(coin{ 3 });
+	coin_out().emit({ 4 });
+	bus().deliver();
+	BOOST_TEST((coins(reg) == std::vector<record>{ { "", "World0", 0u, 1 }, { "", "World0", 1u, 2 } }));
+}
+
+BOOST_AUTO_TEST_CASE(a_lowered_limit_cuts_what_is_already_queued)
+{
+	for (int i = 0; i < 4; ++i) coin_out().emit({ i });
+	bus().set_event_limit(2);
+	bus().deliver();
+	BOOST_TEST(coins(reg).size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(an_overflow_warns_once_and_again_only_when_the_dropped_count_changes)
+{
+	log_capture logs;
+	bus().set_event_limit(2);
+	auto frame = [&](int events) {
+		for (int i = 0; i < events; ++i) coin_out().emit({ i });
+		bus().deliver();
+	};
+	frame(5);
+	BOOST_TEST(logs.count("3 events of") == 1u);
+	frame(5);
+	frame(5);
+	BOOST_TEST(logs.count("dropped, more than 2") == 1u);
+	frame(6);
+	BOOST_TEST(logs.count("4 events of") == 1u);
+	frame(2);
+	frame(5);
+	BOOST_TEST(logs.count("dropped, more than 2") == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(a_limit_of_zero_is_refused_and_a_huge_one_is_clamped)
+{
+	log_capture logs;
+	bus().set_event_limit(0);
+	BOOST_TEST(bus().event_limit() == ecs::default_event_limit);
+	BOOST_TEST(logs.count("limit of 0") == 1u);
+	bus().set_event_limit(std::numeric_limits<size_t>::max());
+	BOOST_TEST(bus().event_limit() == size_t{ std::numeric_limits<uint32_t>::max() });
 }
 
 BOOST_AUTO_TEST_CASE(discard_mode_drops_everything_and_does_not_deliver)
@@ -295,6 +437,7 @@ BOOST_AUTO_TEST_CASE(discard_mode_drops_everything_and_does_not_deliver)
 	bus().set_mode(ecs::bus_mode::discard);
 	BOOST_TEST(coins(reg).empty());
 	BOOST_TEST(bus().queued() == 0u);
+	BOOST_TEST(reg.ctx().get<ecs::event_reader<coin>>().delivery() == 0u);
 
 	coin_out().emit({ 3 });
 	bus().post(coin{ 4 });
@@ -307,6 +450,7 @@ BOOST_AUTO_TEST_CASE(discard_mode_drops_everything_and_does_not_deliver)
 	coin_out().emit({ 5 });
 	bus().deliver();
 	BOOST_TEST((coins(reg) == std::vector<record>{ { "World0", "World0", 0u, 5 } }));
+	BOOST_TEST(reg.ctx().get<ecs::event_reader<coin>>().delivery() == 2u);
 }
 
 BOOST_AUTO_TEST_CASE(clear_drops_the_queue_and_the_window_and_counts_them)
@@ -359,15 +503,36 @@ BOOST_AUTO_TEST_CASE(binding_again_binds_only_the_new_types)
 	types.add<coin>();
 	entt::registry reg;
 	auto& bus = reg.ctx().emplace<ecs::world_bus>();
-	bus.bind(types, reg, "World0");
+	BOOST_TEST(bus.bind(types, reg, "World0"));
 	reg.ctx().get<ecs::event_writer<coin>>().emit({ 1 });
 
 	types.add<hit>();
-	bus.bind(types, reg, "World0");
+	BOOST_TEST(bus.bind(types, reg, "World0"));
 	BOOST_TEST(reg.ctx().get<ecs::event_writer<hit>>().bound());
 	BOOST_TEST(bus.queued() == 1u);
 	bus.deliver();
 	BOOST_TEST(coins(reg).size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(binding_to_a_registry_of_other_types_is_refused)
+{
+	log_capture logs;
+	ecs::bus_registry first;
+	first.add<coin>();
+	entt::registry reg;
+	auto& bus = reg.ctx().emplace<ecs::world_bus>();
+	BOOST_TEST(bus.bind(first, reg, "World0"));
+
+	ecs::bus_registry other;
+	other.add<hit>();
+	other.add<coin>();
+	BOOST_TEST(!bus.bind(other, reg, "World0"));
+	BOOST_TEST(!reg.ctx().contains<ecs::event_writer<hit>>());
+	BOOST_TEST(logs.count("not the type bound before") == 1u);
+
+	ecs::bus_registry empty;
+	BOOST_TEST(!bus.bind(empty, reg, "World0"));
+	BOOST_TEST(logs.count("the registry now has 0") == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(two_runs_deliver_the_same_sequence)

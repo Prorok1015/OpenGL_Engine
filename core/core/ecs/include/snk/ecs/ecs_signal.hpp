@@ -72,11 +72,36 @@ private:
 };
 
 // Slots run in subscription order. A slot removed during an emit is not called afterwards; one added during an
-// emit first runs on the next emit. The list is copied for the length of one emit only.
+// emit first runs on the next emit. The list is copied for the length of one emit (or one freeze) only.
 template <class... Args>
 class signal
 {
 public:
+	// The slots as they were when it was taken: one taken before a series of emits keeps a slot added meanwhile
+	// out of the whole series. A slot disconnected meanwhile is still skipped.
+	class frozen
+	{
+	public:
+		void emit(Args... args) const
+		{
+			ASSERT_MSG(m_owner == std::this_thread::get_id(), "ecs::signal::frozen::emit: owner thread only");
+			for (const auto& s : m_slots) {
+				if (s->alive) s->fn(args...);
+			}
+		}
+
+	private:
+		friend class signal;
+		std::vector<std::shared_ptr<detail::signal_slot<Args...>>> m_slots;
+		std::thread::id m_owner;
+	};
+
+	signal() = default;
+	signal(const signal&) = delete;
+	signal& operator=(const signal&) = delete;
+	signal(signal&&) = delete;
+	signal& operator=(signal&&) = delete;
+
 	[[nodiscard]] connection subscribe(std::function<void(Args...)> fn)
 	{
 		ASSERT_MSG(m_state->on_owner_thread(), "ecs::signal::subscribe: owner thread only");
@@ -103,6 +128,15 @@ public:
 		for (const auto& s : snapshot) {
 			if (s->alive) s->fn(args...);
 		}
+	}
+
+	[[nodiscard]] frozen freeze() const
+	{
+		ASSERT_MSG(m_state->on_owner_thread(), "ecs::signal::freeze: owner thread only");
+		frozen out;
+		out.m_slots = m_state->slots;
+		out.m_owner = m_state->owner;
+		return out;
 	}
 
 	std::size_t subscriber_count() const { return m_state->slots.size(); }

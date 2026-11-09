@@ -14,6 +14,7 @@
 // destroys it (snk_destroy_module), so allocation never crosses a heap boundary.
 
 // 2.0 (#595): resource control blocks and res_dep, which inline engine code compiled into a module uses, changed layout.
+// The world bus (#603) is inline too: changing the layout of ecs::detail::bus_state, bus_slot_impl or event_writer/event_reader is a major bump.
 #define SNK_MODULE_API_VERSION 0x0002'0000u // major << 16 | minor
 
 #if defined(_WIN32)
