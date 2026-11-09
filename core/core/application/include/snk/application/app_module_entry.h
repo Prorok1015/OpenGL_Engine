@@ -18,7 +18,9 @@
 // bus_slot_impl or event_writer/event_reader is a major bump. Also changed in 3.0: the layouts of scn::context_set,
 // context_manager and scene_layer (#603) and the fields #638 appended to world_context, world_desc and context_set.
 // 3.1 (#603): gs::module_context::subscribe; a module that uses it needs an engine of 3.1 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'0001u // major << 16 | minor
+// 3.2 (#604): game actions. New ctx types inp::action_state, inp::action_map_ref, inp::input_bound and the engine event
+// inp::action_event; the bus and every existing type keep their layout, so a module built for 3.0 or 3.1 still loads.
+#define SNK_MODULE_API_VERSION 0x0003'0002u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)
