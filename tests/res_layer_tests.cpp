@@ -110,6 +110,28 @@ struct layer_node_adapter : core::res::adapter_interface {
 	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
 };
 
+struct slow_node : res::text_resource {
+	explicit slow_node(const res::tag& tag) : res::text_resource(tag, {}) {}
+};
+
+// Holds its deserialize on a worker until `release`: a load that is already running when the loads are stopped.
+struct blocking_adapter : core::res::adapter_interface {
+	static inline auto INFO = res::adapter_info::make<slow_node>({ "slow" });
+	static inline std::atomic<bool> entered{ false };
+	static inline std::atomic<bool> release{ false };
+	static inline std::atomic<bool> finished{ false };
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>&) const override
+	{
+		entered = true;
+		for (int waited_ms = 0; !release && waited_ms < 10'000; ++waited_ms) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		finished = true;
+		return std::make_shared<slow_node>(tag);
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+};
+
 // One adapter per type level, to see which one built the resource.
 struct item_base : res::resource_entry {
 	std::string made_by;
@@ -592,6 +614,42 @@ BOOST_AUTO_TEST_CASE(destroying_a_layer_during_threaded_loads)
 			root.signal_changed(x); // a fresh x for the next round
 		}
 	}
+	threaded.drain_main(std::chrono::milliseconds(50));
+}
+
+// #653: stop_loading returns only once a deserialize running on a worker has finished, so the types it builds may go
+// right after it.
+BOOST_AUTO_TEST_CASE(stop_loading_waits_for_a_deserialize_already_running)
+{
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	root.registrate_resolver<test_util::ram_resolver>(res::tag::memory);
+	root.registrate_adapter<blocking_adapter>(blocking_adapter::INFO);
+	blocking_adapter::entered = false;
+	blocking_adapter::release = false;
+	blocking_adapter::finished = false;
+	const res::tag tag{ "memory://threaded/a.slow" };
+	BOOST_REQUIRE(root.store(tag, test_util::to_bytes("a")));
+
+	[[maybe_unused]] const auto pending = root.require<slow_node>(tag);
+	for (int waited_ms = 0; !blocking_adapter::entered && waited_ms < 10'000; ++waited_ms) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	BOOST_REQUIRE(blocking_adapter::entered);
+
+	std::atomic<bool> stopped{ false };
+	std::atomic<bool> stopped_while_running{ false };
+	std::thread releaser([&] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		stopped_while_running = stopped.load();
+		blocking_adapter::release = true;
+	});
+	root.stop_loading();
+	stopped = true;
+	releaser.join();
+
+	BOOST_TEST(!stopped_while_running);
+	BOOST_TEST(blocking_adapter::finished);
 	threaded.drain_main(std::chrono::milliseconds(50));
 }
 

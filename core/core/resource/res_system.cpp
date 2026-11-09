@@ -353,6 +353,7 @@ void res::resource_system::stop_loading() {
     std::lock_guard lock(m_stop_mutex);
     m_stopping = true;
   }
+  m_lifetime.refuse_new_tasks();
   m_lifetime.cancel_tasks();
   m_tasks.wait_idle(m_lifetime);
   cancel_parked();

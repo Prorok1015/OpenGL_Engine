@@ -85,6 +85,7 @@ namespace res
 		// What the destructor does to the loads, without destroying: the queued load tasks are cancelled, the running
 		// ones waited for, the parked steps failed ("Load cancelled"), and every later load is cancelled too. Main
 		// thread, idempotent. Shutdown calls it before the types the loads deserialize into are unregistered (#653).
+		// File changes are still delivered to the watchers; whatever they request is cancelled.
 		void stop_loading();
 		resource_system(const resource_system&) = delete;
 		resource_system& operator= (const resource_system&) = delete;
