@@ -4,10 +4,8 @@
 
 namespace edt
 {
-	// View > World Systems (#549): the systems of the active world in the order they run within a phase; Add offers
-	// the registered ones that are not in the list (a game module's included), a name that is not registered is marked
-	// "unknown" and can only be removed. Everything goes through world_systems_model, so it is undone like any edit;
-	// locked while Play runs.
+	// View > World Systems (#549): a view of world_systems_model; locked while Play runs. A name that is not
+	// registered is marked "unknown" and can only be removed.
 	class world_systems_panel final : public panel_base
 	{
 	public:

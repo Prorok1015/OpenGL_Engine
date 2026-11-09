@@ -8,9 +8,8 @@
 #include <string_view>
 #include <vector>
 
-// What the World Systems panel shows and does (#549), without ImGui: the list and every edit are the world.systems.*
-// commands run through `invoke` as the person's calls, so an edit is one undo step exactly as the agent's is. The
-// list is read again when the document or the active world changed since the last read. Main thread only.
+// The World Systems panel's logic without ImGui (#549). Edits are world.systems.* commands run as the person's
+// calls, so each is one undo step like the agent's. Main thread only.
 namespace edt
 {
 	class world_systems_model
@@ -27,7 +26,7 @@ namespace edt
 		struct item
 		{
 			std::string name;
-			// Registered in the system registry; a name that is not is kept in the list and marked.
+			// A name that is no longer registered stays in the list.
 			bool known = true;
 			std::string phase;
 			bool run_in_edit = false;
@@ -36,7 +35,7 @@ namespace edt
 		world_systems_model(editor_events& events, ports ports);
 
 		void refresh();
-		// Reads the list again only when something changed since the last read.
+		// Only when the document or the active world changed since the last read.
 		void refresh_if_changed();
 
 		const std::string& world() const { return m_world; }
@@ -44,8 +43,8 @@ namespace edt
 		// The registered systems that are not in the list yet.
 		const std::vector<item>& available() const { return m_available; }
 		bool locked() const { return m_ports.playing && m_ports.playing(); }
-		// The last refusal or failure of a command, empty when the last one went through.
-		const std::string& error() const { return m_error; }
+		// A command's refusal, else why the list could not be read (no level yet); empty when neither.
+		const std::string& error() const { return m_error.empty() ? m_list_error : m_error; }
 
 		bool add(const std::string& name);
 		bool remove(const std::string& name);
@@ -60,6 +59,7 @@ namespace edt
 		std::vector<item> m_systems;
 		std::vector<item> m_available;
 		std::string m_error;
+		std::string m_list_error;
 		bool m_dirty = true;
 		connection m_document;
 		connection m_active_world;

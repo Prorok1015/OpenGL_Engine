@@ -61,14 +61,14 @@ void edt::world_systems_panel::on_render()
 			ImGui::TextDisabled("%s", system.known ? system.phase.c_str() : "-");
 			ImGui::TableSetColumnIndex(2);
 			ImGui::BeginDisabled(locked);
-			ImGui::BeginDisabled(i == 0);
+			ImGui::BeginDisabled(i == 0 || !system.known);
 			if (ImGui::SmallButton("Up")) {
 				pending_move = system.name;
 				pending_to = i - 1;
 			}
 			ImGui::EndDisabled();
 			ImGui::SameLine();
-			ImGui::BeginDisabled(i + 1 == systems.size());
+			ImGui::BeginDisabled(i + 1 == systems.size() || !system.known);
 			if (ImGui::SmallButton("Down")) {
 				pending_move = system.name;
 				pending_to = i + 1;

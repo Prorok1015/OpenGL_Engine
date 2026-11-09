@@ -48,9 +48,10 @@ void edt::world_systems_model::refresh()
 	if (!m_ports.invoke) return;
 	const cmd::result listing = m_ports.invoke("world.systems.list", json::object{});
 	if (!listing.ok || !listing.value.is_object()) {
-		m_error = listing.error;
+		m_list_error = listing.error;
 		return;
 	}
+	m_list_error.clear();
 	const json::object& object = listing.value.as_object();
 	m_world = text_of(object, "world");
 	m_systems = items_of(object, "systems");

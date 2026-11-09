@@ -23,6 +23,7 @@ struct model_fixture
 	std::vector<call> calls;
 	bool playing = false;
 	bool refuse = false;
+	bool no_world = false;
 	int lists = 0;
 	edt::world_systems_model model{ events, ports() };
 
@@ -33,6 +34,7 @@ struct model_fixture
 			calls.push_back({ std::string(id), args });
 			if (id == "world.systems.list") {
 				++lists;
+				if (no_world) return cmd::result::failure(cmd::codes::not_found, "the scene has no world");
 				return cmd::result::success(json::object{ { "world", "main" },
 					{ "systems", json::array{ json::object{ { "name", "physics" }, { "known", true }, { "phase", "update" }, { "run_in_edit", false } },
 						json::object{ { "name", "gone" }, { "known", false } } } },
@@ -103,6 +105,21 @@ BOOST_FIXTURE_TEST_CASE(ARefusedEdit_KeepsItsReason_UntilTheNextOneGoesThrough, 
 	refuse = false;
 	BOOST_CHECK(model.add("audio"));
 	BOOST_CHECK(model.error().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(AListError_GoesAwayWhenTheListIsReadAgain_ButARefusalIsNotWipedByTheRead, model_fixture)
+{
+	no_world = true;
+	model.refresh();
+	BOOST_CHECK_EQUAL(model.error(), "the scene has no world");
+	BOOST_CHECK(model.systems().empty());
+	no_world = false;
+	model.refresh();
+	BOOST_CHECK(model.error().empty());
+	BOOST_CHECK_EQUAL(model.systems().size(), 2u);
+	refuse = true;
+	BOOST_CHECK(!model.add("audio"));
+	BOOST_CHECK_EQUAL(model.error(), "Stop Play first");
 }
 
 BOOST_FIXTURE_TEST_CASE(Locked_FollowsPlay, model_fixture)
