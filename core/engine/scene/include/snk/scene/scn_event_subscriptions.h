@@ -18,8 +18,8 @@ namespace scn
 	// twin repeats the level's world names, so name the set together with the world.
 	struct event_filter
 	{
-		std::string set;
-		std::string world;
+		std::string set{};
+		std::string world{};
 
 		bool matches(std::string_view set_name, std::string_view world_name) const
 		{
