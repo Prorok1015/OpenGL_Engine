@@ -77,6 +77,9 @@ namespace edt
 		std::uint32_t pending_steps() const;
 		// Frames the set "play" simulated since Start (context_set::frames_run); 0 when stopped.
 		std::uint64_t frames_run() const;
+		// Which Start this is (1 for the first of the editor's life): a mark that outlives a Stop, for anything that must
+		// not be taken over by the next session (a runtime.query cursor).
+		std::uint64_t run_number() const { return m_run_number; }
 		// The worlds of the set "play" in its order; empty when stopped.
 		std::vector<std::string> world_names() const;
 
@@ -112,6 +115,7 @@ namespace edt
 		bool m_resume_after_swap = false;
 		bool m_paused_before_swap = false;
 		bool m_stopping = false;
+		std::uint64_t m_run_number = 0;
 
 		// The copies the set "play" was built from; they live as long as it.
 		std::vector<scn::world_desc> m_worlds_copy;
