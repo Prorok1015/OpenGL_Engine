@@ -179,6 +179,7 @@ void inp::fixed_action_state::set_map(std::shared_ptr<const action_map> map)
 	std::vector<slot> fresh(map ? map->size() : 0);
 	for (action_id id = 0; id < m_slots.size(); ++id) {
 		if (!m_slots[id].shown_down) continue;
+		// The old map may be longer: the slot exists only to hand that released over.
 		if (id >= fresh.size()) fresh.resize(static_cast<std::size_t>(id) + 1);
 		fresh[id].queue.push_back(action_edge::released);
 	}

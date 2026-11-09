@@ -53,7 +53,8 @@ namespace inp
 		bool held(action_id id) const;
 		bool pressed(action_id id) const;
 		bool released(action_id id) const;
-		// Through the map of the world: slower than by id; false for a name the map does not have (warned once).
+		// Through the map of the world: slower than by id; false for a name the map does not have (warned once). Main
+		// thread only (the map remembers the names it warned about): take the ids by name once at init and keep them.
 		bool held(std::string_view name) const;
 		bool pressed(std::string_view name) const;
 		bool released(std::string_view name) const;
@@ -81,7 +82,9 @@ namespace inp
 	// The actions as fixed_update systems read them (WORLD_BUS.md 4.4). A frame may run 0 fixed steps or several: the
 	// frame's edges wait in a short queue per action and each step takes at most one, in order, so a press is seen by
 	// exactly one step and a press let go before any step still gives one step with pressed, then one with released.
-	// held() is the frame's level in every step. world_context starts each step (begin_step).
+	// held() is the frame's level in every step, so a step's edge may disagree with it (pressed and let go in one frame:
+	// the step with pressed sees held() false): test the edge or the level, not both together. The edge of a step lasts
+	// until the next begin_step, so it means something only inside fixed_update. world_context starts each step.
 	class SNK_API fixed_action_state
 	{
 	public:
@@ -90,6 +93,7 @@ namespace inp
 		bool held(action_id id) const;
 		bool pressed(action_id id) const;
 		bool released(action_id id) const;
+		// Main thread only, like action_state: take the ids by name once at init.
 		bool held(std::string_view name) const;
 		bool pressed(std::string_view name) const;
 		bool released(std::string_view name) const;
