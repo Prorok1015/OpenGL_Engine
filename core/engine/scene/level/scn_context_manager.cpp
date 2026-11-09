@@ -65,6 +65,7 @@ std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_vie
 	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types), options,
 												  std::move(event_types));
 	set->set_layer(layer);
+	set->set_subscriptions(layer ? &layer->subscriptions() : &m_subscriptions);
 	return set;
 }
 

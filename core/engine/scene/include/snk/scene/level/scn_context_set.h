@@ -5,6 +5,7 @@
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_set_channel.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_event_subscriptions.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <snk/ecs/ecs_invoker.hpp>
@@ -124,6 +125,10 @@ namespace scn
 
 		// True inside update().
 		bool updating() const { return m_updating; }
+
+		// The bus subscriptions the set's worlds hear (their layer's, or the base's): connected to each world when its
+		// bus is bound, before a delivery. Set by the context_manager; null: none. Outlives the set.
+		void set_subscriptions(event_subscriptions* subscriptions) { m_subscriptions = subscriptions; }
 
 		// One frame of ECS for every context: the phases in order, fixed_update stepped by the
 		// accumulator, the command buffer applied after every phase. What runs depends on the mode.
@@ -300,5 +305,6 @@ namespace scn
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
 		// After every older field so the offsets of the inline accessors of a game module built earlier stay; a plain number, so it does not change the destruction order above.
 		uint32_t m_next_desc_index = 0;
+		event_subscriptions* m_subscriptions = nullptr;
 	};
 }

@@ -160,6 +160,7 @@ ecs::world_bus& scn::context_set::bind_events(world_context& context)
 		ASSERT_MSG(!ds::task_system::on_worker(), "set '{}': world buses are bound on the main thread only", m_name);
 		bus.bind(*m_event_types, context.state(), context.get_name());
 	}
+	if (m_subscriptions) m_subscriptions->attach(m_name, context.get_name(), context.state(), bus);
 	return bus;
 }
 

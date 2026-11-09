@@ -103,6 +103,9 @@ world_bus: events inside one world (ecs_bus.hpp, docs/roadmap/design/WORLD_BUS.m
         ecs::event_writer<T>& / const ecs::event_reader<T>&; types via context_manager::add_event<T>() (engine, before the first layer) or
         scene_layer::events() (module). Delivered right after the builtin update phase in Play/Step (Pause queues,
         Edit drops); systems before that point see the events a frame later. Outside code: context_manager::emit.
+        Subscriptions: gs::module_context::subscribe<T>({set?, world?}, fn(bus_context&, envelope)) (kept by the
+        layer: survive level reload, go on unload/code reload); engine/editor: context_manager::subscribe (base sets).
+        A subscriber's emit goes to the next delivery, its changer()/spawner() edits land right after the delivery.
 world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).
         context_set::for_each does NOT preserve desc order — see CONSTRAINTS [13C].
         Editor derives parallel world arrays from the ordered world_descs vector
