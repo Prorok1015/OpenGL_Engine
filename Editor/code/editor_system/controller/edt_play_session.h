@@ -3,6 +3,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/scene/level/scn_input_stack_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <boost/json/array.hpp>
@@ -141,15 +142,21 @@ namespace edt
 
 		// The copies the set "play" was built from; they live as long as it.
 		std::vector<scn::world_desc> m_worlds_copy;
-		// The worlds' names and systems Start used: a restore builds the same worlds, by name, in the new layer.
-		std::vector<std::string> m_play_names;
-		std::vector<std::vector<std::string>> m_play_systems;
-
 		// What a module reload keeps (HOT_RELOAD_PLAY.md 4): plain data, nothing of the module's binary.
+		struct saved_world
+		{
+			std::string name;
+			std::vector<std::string> systems;
+			int input_layer = 0;
+			std::optional<scn::input_stack_desc> input_stack{};
+			boost::json::object state;
+		};
 		struct reload_snapshot
 		{
-			std::vector<std::pair<std::string, boost::json::object>> worlds;
+			std::vector<saved_world> worlds;
 			boost::json::array blackboard;
+			// Written in the last frame, visible from the next one: put back as pending.
+			boost::json::array blackboard_pending;
 			ecs::run_mode mode = ecs::run_mode::play;
 			std::uint64_t frames_run = 0;
 			std::uint32_t pending_steps = 0;

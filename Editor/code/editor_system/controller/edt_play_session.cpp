@@ -94,8 +94,6 @@ bool edt::play_session::start(play_reason reason)
 	m_worlds_copy = m_document.world_descs;
 	const std::vector<std::string> names = m_document.world_names;
 	const std::vector<std::vector<std::string>> systems = m_document.worlds_systems_list;
-	m_play_names.clear();
-	m_play_systems.clear();
 	scn::context_set& play = contexts->create_set(k_play_set, contexts->game_layer(), scn::set_options{ .hot_reload = false });
 	// Before the contexts: a context takes the mode, seed and time scale of its set when it is created.
 	play.set_mode(ecs::run_mode::play);
@@ -108,9 +106,8 @@ bool edt::play_session::start(play_reason reason)
 		for (std::size_t i = 0; i < m_worlds_copy.size(); ++i) {
 			const scn::world_desc& copy = m_worlds_copy[i];
 			const std::string name = i < names.size() ? names[i] : std::string{ copy.get_name() };
-			m_play_names.push_back(name);
-			m_play_systems.push_back(i < systems.size() ? systems[i] : copy.get_systems());
-			scn::world_context& world = contexts->create_context(k_play_set, name, scn::context_kind::play, m_play_systems.back());
+			scn::world_context& world = contexts->create_context(k_play_set, name, scn::context_kind::play,
+				i < systems.size() ? systems[i] : copy.get_systems());
 			world.set_input_layer(copy.get_input_layer());
 			world.set_input_stack(copy.get_input_stack());
 			const entt::entity root = world.state().create();
@@ -233,6 +230,24 @@ void edt::play_session::set_seed(std::uint64_t seed)
 	}
 }
 
+namespace {
+	void merge_into(scn::snapshot_report& total, const scn::snapshot_report& part)
+	{
+		for (const auto& [type, count] : part.unsaved) total.unsaved[type] += count;
+		for (const auto& [type, count] : part.unknown) total.unknown[type] += count;
+		for (const auto& [type, count] : part.partial) total.partial[type] += count;
+		total.entities += part.entities;
+	}
+
+	// The pending map read as a committed one, so capture_blackboard and restore_blackboard serve both.
+	ecs::blackboard_data pending_as_committed(const ecs::blackboard_data& board)
+	{
+		ecs::blackboard_data view;
+		for (const auto& [key, entry] : board.pending()) view.restore(key, entry.type, entry.type_name, entry.value);
+		return view;
+	}
+}
+
 std::string edt::play_session::capture_for_reload()
 {
 	m_reload.reset();
@@ -242,28 +257,45 @@ std::string edt::play_session::capture_for_reload()
 	scn::scene_layer* layer = play->layer();
 	if (!layer) return "the set 'play' has no layer";
 
-	reload_snapshot snapshot;
-	for (const std::string& name : m_play_names) {
-		scn::world_context* world = play->find(name);
-		if (!world) continue;
+	// Every world of the set, also one the game added while playing.
+	std::string refusal;
+	play->for_each([&](scn::world_context& world) {
 		// Commands queued for after another world's next phase land now: they hold the module's code.
-		world->apply_commands();
-		const auto strays = scn::unregistered_storages(world->state(), layer->catalog());
-		if (!strays.empty()) return std::format("the world '{}' holds {}, which no snapshot can save", name, strays.front().type);
+		world.apply_commands();
+		const auto strays = scn::unregistered_storages(world.state(), layer->catalog());
+		if (!strays.empty() && refusal.empty()) {
+			refusal = std::format("the world '{}' holds {}, which no snapshot can save", world.get_name(), strays.front().type);
+		}
+	});
+	if (!refusal.empty()) return refusal;
+
+	reload_snapshot snapshot;
+	play->for_each([&](scn::world_context& world) {
+		saved_world saved;
+		saved.name = std::string{ world.get_name() };
+		saved.systems = world.systems().value_or(std::vector<std::string>{});
+		saved.input_layer = world.input_layer();
+		saved.input_stack = world.input_stack();
+		if (const auto* bus = world.state().ctx().find<ecs::world_bus>()) snapshot.bus_events += bus->queued();
+		scn::snapshot_report report;
+		saved.state = scn::capture_world(world, layer->catalog(), report);
+		for (const auto& [type, count] : report.unsaved) {
+			egLOG_WARN("play", "the module reload drops {} ({}) of the world '{}': it has no schema", type, count, saved.name);
+		}
+		merge_into(snapshot.report, report);
+		snapshot.worlds.push_back(std::move(saved));
+	});
+	const ecs::blackboard_data& board = play->channel().blackboard();
+	scn::snapshot_report board_report;
+	snapshot.blackboard = scn::capture_blackboard(board, layer->blackboard_types(), board_report);
+	snapshot.blackboard_pending = scn::capture_blackboard(pending_as_committed(board), layer->blackboard_types(), board_report);
+	for (const auto& [type, count] : board_report.unsaved) {
+		egLOG_WARN("play", "the module reload drops {} blackboard value(s) of {}: the type has no schema", count, type);
 	}
-	for (const std::string& name : m_play_names) {
-		scn::world_context* world = play->find(name);
-		if (!world) continue;
-		if (const auto* bus = world->state().ctx().find<ecs::world_bus>()) snapshot.bus_events += bus->queued();
-		snapshot.worlds.emplace_back(name, scn::capture_world(*world, layer->catalog(), snapshot.report));
-	}
-	snapshot.blackboard = scn::capture_blackboard(play->channel().blackboard(), layer->blackboard_types(), snapshot.report);
+	merge_into(snapshot.report, board_report);
 	snapshot.mode = play->mode();
 	snapshot.frames_run = play->frames_run();
 	snapshot.pending_steps = play->pending_steps();
-	for (const auto& [type, count] : snapshot.report.unsaved) {
-		egLOG_WARN("play", "the module reload drops {} ({}): it has no schema", type, count);
-	}
 	m_reload = std::move(snapshot);
 	return {};
 }
@@ -304,22 +336,31 @@ bool edt::play_session::restore_after_swap()
 		// The entities existed already: the module's observers must not count them again (HOT_RELOAD_PLAY.md 6, step 4).
 		const auto muted = layer->subscriptions().mute_observers();
 		const scn::context_set::current_scope as_current(play);
-		for (const auto& [name, world_state] : saved.worlds) {
-			const auto at = std::ranges::find(m_play_names, name);
-			const auto index = static_cast<std::size_t>(at - m_play_names.begin());
-			scn::world_context& world = contexts->create_context(k_play_set, name, scn::context_kind::play,
-				index < m_play_systems.size() ? m_play_systems[index] : std::vector<std::string>{});
-			const auto authored = std::ranges::find(m_document.world_names, name);
-			if (const auto i = static_cast<std::size_t>(authored - m_document.world_names.begin()); i < m_worlds_copy.size()) {
-				world.set_input_layer(m_worlds_copy[i].get_input_layer());
-				world.set_input_stack(m_worlds_copy[i].get_input_stack());
+		for (const saved_world& world_saved : saved.worlds) {
+			scn::world_context& world = contexts->create_context(k_play_set, world_saved.name, scn::context_kind::play, world_saved.systems);
+			world.set_input_layer(world_saved.input_layer);
+			world.set_input_stack(world_saved.input_stack);
+			scn::snapshot_report world_report;
+			const bool restored = scn::restore_world(world, world_saved.state, layer->catalog(), read, world_report);
+			for (const auto& [type, count] : world_report.unknown) {
+				egLOG_WARN("play", "the new module no longer knows {} ({}) of the world '{}': dropped", type, count, world_saved.name);
 			}
-			if (!scn::restore_world(world, world_state, layer->catalog(), read, report)) {
-				egLOG_ERROR("play", "the world '{}' could not be restored after the module reload", name);
+			for (const auto& [type, count] : world_report.partial) {
+				egLOG_WARN("play", "{} ({}) of the world '{}' changed: a field kept its default", type, count, world_saved.name);
+			}
+			merge_into(report, world_report);
+			if (!restored) {
+				egLOG_ERROR("play", "the world '{}' could not be restored after the module reload", world_saved.name);
 				return false;
 			}
 		}
-		scn::restore_blackboard(play.channel().restorable_blackboard(), saved.blackboard, layer->blackboard_types(), read, report);
+		ecs::blackboard_data& board = play.channel().restorable_blackboard();
+		scn::restore_blackboard(board, saved.blackboard, layer->blackboard_types(), read, report);
+		ecs::blackboard_data pending;
+		scn::restore_blackboard(pending, saved.blackboard_pending, layer->blackboard_types(), read, report);
+		for (const auto& [key, entry] : pending.committed()) {
+			board.write(key, entry.type, entry.type_name, entry.value, ecs::blackboard_data::external_writer);
+		}
 	}
 	if (saved.mode == ecs::run_mode::step && saved.pending_steps > 0) {
 		play.step(saved.pending_steps);
@@ -334,8 +375,6 @@ bool edt::play_session::restore_after_swap()
 	level.for_each([](scn::world_context& world) { world.set_extract(false); });
 	follow_active_world();
 
-	for (const auto& [type, count] : report.unknown) egLOG_WARN("play", "the new module no longer knows {} ({}): dropped", type, count);
-	for (const auto& [type, count] : report.partial) egLOG_WARN("play", "{} ({}) changed: a field kept its default", type, count);
 	egLOG_INFO("play", "Play kept its world across the module reload: {} world(s), {} entities, {} bus event(s) and the mail "
 		"in flight dropped (count unknown, #668)", saved.worlds.size(), report.entities, saved.bus_events);
 	return true;

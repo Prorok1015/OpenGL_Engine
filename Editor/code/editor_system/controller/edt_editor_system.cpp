@@ -637,10 +637,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<core::project_module_host>().build_output(module);
 	};
 	reload_options.reload = [this, &data](const std::string& module) {
-		if (!data.has_value<core::project_module_host>()) {
-			return core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
-		}
-		core::reload_report report = data.require<core::project_module_host>().reload(module, m_swap_gate.hooks());
+		core::reload_report report = data.has_value<core::project_module_host>()
+			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks())
+			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
+		// A snapshot before_reload took and no swap used goes, whatever the outcome.
 		if (m_play) m_play->end_reload();
 		return report;
 	};
