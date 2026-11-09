@@ -2,10 +2,51 @@
     "__type" : "input_actions_desc",
     "__version" : 1,
     "actions" : [
-        { "name" : "MoveLeft", "bindings" : [ { "key" : "A" }, { "key" : "LEFT" } ] },
-        { "name" : "MoveRight", "bindings" : [ { "key" : "D" }, { "key" : "RIGHT" } ] },
-        { "name" : "Jump", "bindings" : [ { "key" : "SPACE" } ] },
-        { "name" : "Restart", "bindings" : [ { "key" : "R" } ] },
-        { "name" : "Fire", "bindings" : [ { "mouse" : "LEFT" } ] }
+        {
+            "name" : "MoveLeft",
+            "bindings" : [
+                {
+                    "key" : "A"
+                },
+                {
+                    "key" : "LEFT"
+                }
+            ]
+        },
+        {
+            "name" : "MoveRight",
+            "bindings" : [
+                {
+                    "key" : "D"
+                },
+                {
+                    "key" : "RIGHT"
+                }
+            ]
+        },
+        {
+            "name" : "Jump",
+            "bindings" : [
+                {
+                    "key" : "SPACE"
+                }
+            ]
+        },
+        {
+            "name" : "Restart",
+            "bindings" : [
+                {
+                    "key" : "R"
+                }
+            ]
+        },
+        {
+            "name" : "Fire",
+            "bindings" : [
+                {
+                    "mouse" : "LEFT"
+                }
+            ]
+        }
     ]
 }
