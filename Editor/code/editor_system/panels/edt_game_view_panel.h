@@ -21,6 +21,8 @@ namespace edt
 		using registry_visitor = std::function<void(entt::registry&)>;
 
 		void set_registry_getter(std::function<entt::registry*()> getter) { m_get_registry = std::move(getter); }
+		// The worlds were rebuilt (play_session_options::forget_runtime_entities).
+		void forget_runtime_entities() { m_selection.forget(); }
 		// Visits every world's registry: the overlay worlds of a set draw into the picked camera's texture, and the
 		// game cameras of everything else must be switched off.
 		void set_all_registries(std::function<void(const registry_visitor&)> for_each) { m_for_each_registry = std::move(for_each); }

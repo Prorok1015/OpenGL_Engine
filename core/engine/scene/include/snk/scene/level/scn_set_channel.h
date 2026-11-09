@@ -67,6 +67,9 @@ namespace scn
 		// The committed blackboard (state of the last exchange), sorted by key.
 		const ecs::blackboard_data& blackboard() const { return m_board; }
 		ecs::blackboard_reader reader() const { return ecs::blackboard_reader{ &m_board }; }
+		// The committed blackboard to put back after a reload of the set's module (scn::restore_blackboard); nothing else
+		// writes it outside an exchange.
+		ecs::blackboard_data& restorable_blackboard() { return m_board; }
 
 		// Exchanges done so far (a frozen frame is not one).
 		uint64_t exchange_count() const { return m_exchanges; }

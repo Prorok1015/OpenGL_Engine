@@ -28,6 +28,8 @@ namespace edt
 
 		void set_registry_getter(std::function<entt::registry*()> getter);
 		void set_selected_entity(ecs::entity ent) { m_selected = ent; }
+		// The worlds were rebuilt (play_session_options::forget_runtime_entities): the ring held an id of the old one.
+		void forget_runtime_entities() { m_rotate_ent = entt::null; }
 
 		// The viewport feeds the context `target` names (the active world of the level) while hovered.
 		void set_input_router(inp::input_router* router, input_target_getter target) {
