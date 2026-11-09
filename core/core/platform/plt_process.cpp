@@ -422,6 +422,10 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	handle_owner job{ CreateJobObjectW(nullptr, nullptr) };
 	JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
 	limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+	if (options.memory_limit_bytes != 0) {
+		limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+		limits.ProcessMemoryLimit = static_cast<SIZE_T>(options.memory_limit_bytes);
+	}
 	if (job.get() == nullptr
 		|| !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits))
 		|| !AssignProcessToJobObject(job.get(), process_handle.get())) {

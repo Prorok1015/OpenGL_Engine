@@ -118,4 +118,38 @@ BOOST_AUTO_TEST_CASE(ADigest_RoundTripsThroughHex_AndRefusesBadText)
 	BOOST_CHECK(!edt::digest_from_hex(std::string(64, 'g')).has_value());
 }
 
+BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
+{
+	edt::decode_request request;
+	request.mode = edt::decode_request::mode_kind::import;
+	request.source_path = std::filesystem::path("some") / "model.obj";
+	request.allowed.push_back(sample_file());
+	request.limits.max_files = 7;
+	request.limits.max_file_bytes = 18446744073709551000ull;
+	request.deadline_ms = 90000;
+	request.memory_limit_bytes = 2147483648ull;
+
+	const auto back = edt::decode_request_from_json(edt::to_json(request));
+	BOOST_REQUIRE(back.has_value());
+	BOOST_CHECK(back->mode == edt::decode_request::mode_kind::import);
+	BOOST_CHECK(back->source_path == request.source_path);
+	BOOST_REQUIRE_EQUAL(back->allowed.size(), 1u);
+	BOOST_CHECK(back->allowed[0].digest == request.allowed[0].digest);
+	BOOST_CHECK_EQUAL(back->limits.max_files, 7u);
+	BOOST_CHECK_EQUAL(back->limits.max_file_bytes, request.limits.max_file_bytes);
+	BOOST_CHECK_EQUAL(back->deadline_ms, 90000u);
+	BOOST_CHECK_EQUAL(back->memory_limit_bytes, request.memory_limit_bytes);
+
+	boost::json::object bad_mode = edt::to_json(request);
+	bad_mode["mode"] = "run";
+	BOOST_CHECK(!edt::decode_request_from_json(bad_mode).has_value());
+	boost::json::object no_source = edt::to_json(request);
+	no_source["source_path"] = "";
+	BOOST_CHECK(!edt::decode_request_from_json(no_source).has_value());
+	boost::json::object number_limit = edt::to_json(request);
+	number_limit["deadline_ms"] = 5;
+	BOOST_CHECK(!edt::decode_request_from_json(number_limit).has_value());
+	BOOST_CHECK(!edt::decode_request_from_json(boost::json::value(3)).has_value());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

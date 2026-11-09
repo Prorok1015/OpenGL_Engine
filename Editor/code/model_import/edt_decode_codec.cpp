@@ -244,3 +244,63 @@ std::optional<edt::import_intermediate> edt::import_intermediate_from_json(const
 	}
 	return out;
 }
+
+boost::json::object edt::to_json(const decode_request& request)
+{
+	json::object out;
+	out["mode"] = request.mode == decode_request::mode_kind::scan ? "scan" : "import";
+	out["source_path"] = path_text(request.source_path);
+	json::array allowed;
+	for (const referenced_file& file : request.allowed) allowed.emplace_back(to_json(file));
+	out["allowed"] = std::move(allowed);
+	json::object limits;
+	limits["max_total_bytes"] = u64_to(request.limits.max_total_bytes);
+	limits["max_file_bytes"] = u64_to(request.limits.max_file_bytes);
+	limits["max_files"] = u64_to(request.limits.max_files);
+	out["limits"] = std::move(limits);
+	out["deadline_ms"] = u64_to(request.deadline_ms);
+	out["memory_limit_bytes"] = u64_to(request.memory_limit_bytes);
+	return out;
+}
+
+std::optional<edt::decode_request> edt::decode_request_from_json(const boost::json::value& value)
+{
+	if (!value.is_object()) return std::nullopt;
+	const json::object& object = value.as_object();
+	decode_request request;
+
+	const auto mode = string_from(object.if_contains("mode"));
+	if (!mode) return std::nullopt;
+	if (*mode == "scan") request.mode = decode_request::mode_kind::scan;
+	else if (*mode == "import") request.mode = decode_request::mode_kind::import;
+	else return std::nullopt;
+
+	const auto source = string_from(object.if_contains("source_path"));
+	if (!source || source->empty()) return std::nullopt;
+	request.source_path = path_from(*source);
+
+	const json::value* allowed = object.if_contains("allowed");
+	if (!allowed || !allowed->is_array() || allowed->as_array().size() > k_max_items) return std::nullopt;
+	for (const json::value& item : allowed->as_array()) {
+		auto file = referenced_file_from_json(item);
+		if (!file) return std::nullopt;
+		request.allowed.push_back(std::move(*file));
+	}
+
+	const json::value* limits = object.if_contains("limits");
+	if (!limits || !limits->is_object()) return std::nullopt;
+	const auto total = u64_from(limits->as_object().if_contains("max_total_bytes"));
+	const auto per_file = u64_from(limits->as_object().if_contains("max_file_bytes"));
+	const auto files = u64_from(limits->as_object().if_contains("max_files"));
+	if (!total || !per_file || !files || *files > std::numeric_limits<std::size_t>::max()) return std::nullopt;
+	request.limits.max_total_bytes = *total;
+	request.limits.max_file_bytes = *per_file;
+	request.limits.max_files = static_cast<std::size_t>(*files);
+
+	const auto deadline = u64_from(object.if_contains("deadline_ms"));
+	const auto memory = u64_from(object.if_contains("memory_limit_bytes"));
+	if (!deadline || !memory) return std::nullopt;
+	request.deadline_ms = *deadline;
+	request.memory_limit_bytes = *memory;
+	return request;
+}
