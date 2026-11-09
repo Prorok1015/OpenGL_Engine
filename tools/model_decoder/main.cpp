@@ -210,8 +210,11 @@ int main(int argc, char** argv)
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (!args->self_test_spawn_pid_file.empty()) {
 		// A helper for the test that kills its parent: starts a sleeping copy of this program, writes its process id, then
-		// sleeps. The copy must not outlive this process.
-		const auto child = platform::spawn_detached(platform::current_executable(), { "--self-test-sleep", "120000" });
+		// sleeps. The copy must not outlive this process. It is told its parent like the runner tells the decoder: a sanitizer
+		// build starts slowly enough for the parent to die before the copy sets its death signal, and only the pid check
+		// in harden_process sees that.
+		const auto child = platform::spawn_detached(platform::current_executable(),
+			{ "--self-test-sleep", "120000", "--parent-pid", std::to_string(platform::current_process_id()) });
 		std::ofstream(args->self_test_spawn_pid_file) << child.process_id;
 		std::this_thread::sleep_for(std::chrono::minutes(2));
 		return 0;
