@@ -2,7 +2,7 @@
 #include "edt_problems_panel.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_problem_list.h>
-#include <snk/editor/edt_service_commands.h>
+#include "edt_service_commands.h"
 #include <snk/command/cmd_json_schema.h>
 #include <boost/json/parse.hpp>
 #include <filesystem>

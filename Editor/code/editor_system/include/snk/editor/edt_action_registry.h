@@ -16,7 +16,7 @@ namespace edt
 {
 	// A key with modifiers, e.g. "Ctrl+Shift+S". The key is a single letter or digit, F1-F12 or a name such as
 	// "Delete"; it is stored upper-case. Modifiers must match exactly.
-	struct shortcut
+	struct SNK_EDITOR_API shortcut
 	{
 		bool ctrl = false;
 		bool shift = false;

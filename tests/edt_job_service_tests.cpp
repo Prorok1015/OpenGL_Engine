@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_dialog_service.h>
-#include <snk/editor/edt_service_commands.h>
+#include "edt_service_commands.h"
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 #include <algorithm>

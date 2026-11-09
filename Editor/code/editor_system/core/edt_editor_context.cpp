@@ -1,6 +1,6 @@
 #include <snk/editor/edt_editor_context.h>
-#include <snk/editor/edt_service_commands.h>
-#include <snk/editor/edt_state_commands.h>
+#include "edt_service_commands.h"
+#include "edt_state_commands.h"
 #include <snk/resource/res_system.h>
 #include <snk/common/engine_assert.h>
 #include "edt_scene_document.h"

@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_registration.h"
+#include <snk/editor/edt_registration.h>
 #include <snk/command/cmd_registry.h>
 #include <filesystem>
 #include <functional>

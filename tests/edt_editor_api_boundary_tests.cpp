@@ -43,8 +43,17 @@ std::string read_all(const fs::path& path)
 	return text.str();
 }
 
-// Classes that are whole in their header (no member is defined in a source file), so there is nothing to export.
+// The headers of the API: a new one is added here on purpose (and one that is only plumbing stays out of the directory).
+const std::set<std::string> k_headers = {
+	"edt_action_registry.h", "edt_api.h", "edt_asset_kind_registry.h", "edt_dialog_service.h", "edt_document.h", "edt_document_history.h",
+	"edt_document_manager.h", "edt_editor_context.h", "edt_editor_events.h", "edt_editor_services.h", "edt_inspector_registry.h",
+	"edt_job_service.h", "edt_panel_registry.h", "edt_problem_list.h", "edt_registration.h", "edt_selection_service.h", "editor_module.h",
+};
+
+// Classes and structs that are whole in their header (no member is defined in a source file), so there is nothing to
+// export; every other class, and the structs listed in k_structs_with_code, carries the macro.
 const std::set<std::string> k_header_only = { "connection", "history_change", "editor_events" };
+const std::set<std::string> k_structs_with_code = { "shortcut", "editor_services" };
 
 // The registries and the context: what a module registers into. No template across them.
 const std::vector<std::string> k_template_free = {
@@ -55,10 +64,12 @@ const std::vector<std::string> k_template_free = {
 
 BOOST_AUTO_TEST_SUITE(EdtEditorApiBoundaryTests)
 
-BOOST_AUTO_TEST_CASE(TheApiHeadersAreFound)
+BOOST_AUTO_TEST_CASE(TheApiHeadersAreExactlyTheListedOnes)
 {
 	BOOST_REQUIRE(fs::is_directory(api_dir()));
-	BOOST_TEST(api_headers().size() >= 18u);
+	std::set<std::string> found;
+	for (const fs::path& header : api_headers()) found.insert(header.filename().string());
+	BOOST_TEST((found == k_headers));
 }
 
 BOOST_AUTO_TEST_CASE(ApiHeadersIncludeOnlyEachOtherAndTheEngineNeverAnInternalEditorHeaderOrTheMcpServer)
@@ -94,23 +105,32 @@ BOOST_AUTO_TEST_CASE(TheRegistriesAndTheContextHaveNoTemplateAtTheirBoundary)
 
 BOOST_AUTO_TEST_CASE(EveryClassWithCodeInTheEditorCarriesTheExportMacro)
 {
-	const std::regex declaration(R"(^\t(class|struct) (SNK_EDITOR_API )?(\w+)\b([^;]*)$)");
+	// A declaration with a body at namespace level, whatever its indent, `alignas` or attribute.
+	const std::regex declaration(R"(^\s*(class|struct)\s+(?:alignas\([^)]*\)\s+|\[\[[^\]]*\]\]\s+)*(SNK_EDITOR_API\s+)?(\w+)\b([^;]*)$)");
+	std::set<std::string> seen_structs;
 	for (const fs::path& header : api_headers()) {
 		std::istringstream lines(read_all(header));
 		std::string line;
 		std::string previous;
+		int depth = 0;
 		while (std::getline(lines, line)) {
+			const std::string code = line.substr(0, line.find("//"));
 			std::smatch match;
 			const bool templated = previous.find("template") != std::string::npos;
-			if (!templated && std::regex_match(line, match, declaration) && match[1] == "class") {
+			if (depth == 1 && !templated && std::regex_match(code, match, declaration)) {
+				const std::string kind = match[1];
 				const std::string name = match[3];
-				if (!k_header_only.contains(name)) {
-					BOOST_CHECK_MESSAGE(!match[2].str().empty(), header.filename().string() << ": class " << name << " has no SNK_EDITOR_API");
+				const bool needs = kind == "class" ? !k_header_only.contains(name) : k_structs_with_code.contains(name);
+				if (kind == "struct") seen_structs.insert(name);
+				if (needs) {
+					BOOST_CHECK_MESSAGE(!match[2].str().empty(), header.filename().string() << ": " << kind << " " << name << " has no SNK_EDITOR_API");
 				}
 			}
-			previous = line;
+			depth += static_cast<int>(std::ranges::count(code, '{')) - static_cast<int>(std::ranges::count(code, '}'));
+			if (!code.empty() && code.find_first_not_of(" \t\r") != std::string::npos) previous = code;
 		}
 	}
+	for (const std::string& name : k_structs_with_code) BOOST_CHECK_MESSAGE(seen_structs.contains(name), "struct " << name << " is not in the API headers any more");
 }
 
 BOOST_AUTO_TEST_CASE(TheExportMacroIsEmptyForAStaticBuild)

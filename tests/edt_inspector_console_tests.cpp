@@ -41,7 +41,7 @@ BOOST_AUTO_TEST_CASE(RegisterRenderer_DoesNotCrash)
 {
 	edt::inspector_registry registry;
 	bool renderer_called = false;
-	auto reg = registry.add(std::string(scn::camera_desc::__type), 
+	auto reg = registry.add(std::string(scn::camera_desc::__type),
 		[&](scn::prefab_desc::prefab_comp_node&) -> bool {
 			renderer_called = true;
 			return false;
