@@ -12,6 +12,7 @@
 #include "edt_decode_codec.h"
 #include "edt_model_importer.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_process.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
@@ -236,6 +237,8 @@ int main(int argc, char** argv)
 		return fail("request: the model bytes are missing");
 	}
 
+	// No watcher threads in the child.
+	cfg::set_variable("res/watch_files", "false");
 	std::error_code ec;
 	fs::create_directories("./res", ec);
 	fs::create_directories("./sandbox", ec);
@@ -244,7 +247,16 @@ int main(int argc, char** argv)
 	ds::task_system_config tasks_config;
 	tasks_config.mode = ds::policy::manual;
 	ds::task_system tasks(tasks_config);
-	res::resource_system res_sys(tasks);
+	// res:// is the empty ./res of this run folder, read-only: the decoder reads no project and writes nothing there.
+	// memory:// is ./sandbox, where the import stores what it makes. Nothing else is mounted (no user://, engine://, cache://).
+	res::mount_table mounts;
+	mounts.push_back(res::mount{ .protocol = res::tag::default_protocol(), .roots = { fs::absolute("./res") },
+		.access = res::mount_access::read_only, .writable = res::write_policy::allow_all(), .watch = res::watch_options{},
+		.file_operations = false });
+	mounts.push_back(res::mount{ .protocol = res::tag::memory, .roots = { fs::absolute("./sandbox") },
+		.access = res::mount_access::read_write, .writable = res::write_policy::allow_all(), .watch = res::watch_options{},
+		.file_operations = false });
+	res::resource_system res_sys(tasks, std::move(mounts));
 	desc::desc_system desc_sys(res_sys);
 	res_sys.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(res_sys), std::ref(desc_sys));
 	scn::ecs_assembler assembler(desc_sys, res_sys);
