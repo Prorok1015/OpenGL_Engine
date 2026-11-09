@@ -186,6 +186,8 @@ void scn::context_set::update_context(uint32_t id, world_context& context, ecs::
 		if (delivers && m_phase_order[p].builtin() == ecs::phase::update) {
 			PROFILE_SCOPE("ECS.bus_delivery");
 			bus.deliver();
+			// What subscribers queued (entity_changer/spawner) lands in one go, before any later phase.
+			context.apply_commands();
 			bus.set_after_delivery(true);
 		}
 	}

@@ -100,7 +100,7 @@ set_channel: contexts of one set exchange data only through scn::set_channel (ec
         outbox/inbox), exchanged at the start of the set's update with a one-frame lag. Design and
         rules: docs/roadmap/design/WORLD_MESSAGING.md. Sets do not see each other's channels.
 world_bus: events inside one world (ecs_bus.hpp, docs/roadmap/design/WORLD_BUS.md): systems take
-        ecs::event_writer<T>& / const ecs::event_reader<T>&; types in context_manager::events() (engine) or
+        ecs::event_writer<T>& / const ecs::event_reader<T>&; types via context_manager::add_event<T>() (engine, before the first layer) or
         scene_layer::events() (module). Delivered right after the builtin update phase in Play/Step (Pause queues,
         Edit drops); systems before that point see the events a frame later. Outside code: context_manager::emit.
 world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).

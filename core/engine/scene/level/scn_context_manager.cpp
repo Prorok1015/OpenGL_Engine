@@ -57,6 +57,13 @@ std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_vie
 
 void scn::context_manager::update(std::chrono::duration<float> dt)
 {
+	ASSERT_MSG(!m_updating, "context_manager::update re-entered");
+	m_updating = true;
+	struct updating_reset
+	{
+		bool& flag;
+		~updating_reset() { flag = false; }
+	} reset{ m_updating };
 	for (const auto& set : m_sets) {
 		if (set->active()) set->update(dt);
 	}

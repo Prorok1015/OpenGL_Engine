@@ -372,21 +372,21 @@ public:
 	size_t queued() const;
 
 	// An event from outside the world (editor, game shell, a test); it goes first in the next delivery and its
-	// envelope's `from` is empty. The type must be bound.
+	// envelope's `from` is empty. The type must be registered in the registry of the last bind().
 	template <class T>
 	void post(T payload)
 	{
-		auto* slot = find<T>();
+		auto* slot = find_or_bind<T>();
 		ASSERT_MSG(slot, "world_bus::post<{}>: event type is not bound to world '{}'", entt::type_name<T>::value(), world());
 		if (slot) slot->post(std::move(payload));
 	}
 
 	// Called during each delivery, per event of T, in subscription order. What a subscriber emits goes to the next
-	// delivery. The type must be bound.
+	// delivery. The type must be registered in the registry of the last bind().
 	template <class T>
 	[[nodiscard]] connection subscribe(std::function<void(const envelope<T>&)> fn)
 	{
-		auto* slot = find<T>();
+		auto* slot = find_or_bind<T>();
 		ASSERT_MSG(slot, "world_bus::subscribe<{}>: event type is not bound to world '{}'", entt::type_name<T>::value(), world());
 		return slot ? slot->subscribe(std::move(fn)) : connection{};
 	}
@@ -400,6 +400,16 @@ public:
 
 private:
 	detail::bus_state& state() const;
+	// Binds the types the registry of the last bind() got since (a type registered after this world was made).
+	void bind_new();
+
+	template <class T>
+	detail::bus_slot_impl<T>* find_or_bind()
+	{
+		if (auto* slot = find<T>()) return slot;
+		bind_new();
+		return find<T>();
+	}
 
 	template <class T>
 	detail::bus_slot_impl<T>* find() const
@@ -413,6 +423,9 @@ private:
 
 	std::unique_ptr<detail::bus_state> m_state;
 	std::vector<std::unique_ptr<detail::bus_slot>> m_slots;
+	// Of the last bind(): the registry outlives the world (its set holds it), the entt registry holds this bus.
+	const bus_registry* m_types = nullptr;
+	entt::registry* m_registry = nullptr;
 };
 
 } // namespace ecs

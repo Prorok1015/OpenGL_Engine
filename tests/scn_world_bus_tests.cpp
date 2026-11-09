@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_entity_changer.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
@@ -98,7 +99,7 @@ struct bus_fixture : test_util::scene_env
 		sf.register_system<&sys_read_game_after>("read_game_after", { .phase = "test::after_update" });
 		sf.register_system<&sys_read_post>("read_post", { .phase = ecs::phase::post_update });
 		sf.register_system<&sys_read_in_edit>("read_in_edit", { .phase = ecs::phase::pre_update, .run_in_edit = true });
-		mgr.events().add<ping>();
+		mgr.add_event<ping>();
 	}
 
 	scn::world_context& world(std::string_view set_name, std::vector<std::string> systems, std::string_view name = "w")
@@ -187,6 +188,34 @@ BOOST_AUTO_TEST_CASE(Edit_DropsEventsAndLeavesTheWindowEmpty)
 	BOOST_TEST((calls<2>(w).back() == "d2:[1]"));
 }
 
+BOOST_AUTO_TEST_CASE(PauseThenResume_TheQueueIsDeliveredOnResume)
+{
+	auto& w = world("s", { "emit", "read_post" });
+	frames("s", 1);
+	mgr.set_mode("s", ecs::run_mode::pause);
+	mgr.emit("s", "w", ping{ 100 });
+	frames("s", 2);
+	BOOST_TEST((calls<2>(w) == lines{ "d1:[0]" }));
+	BOOST_TEST(w.state().ctx().get<ecs::world_bus>().queued() == 1u);
+
+	mgr.set_mode("s", ecs::run_mode::play);
+	frames("s", 1);
+	BOOST_TEST((calls<2>(w) == lines{ "d1:[0]", "d2:[100,1]" }));
+}
+
+BOOST_AUTO_TEST_CASE(WhatSubscribersChangeIsAppliedRightAfterTheDelivery)
+{
+	auto& w = world("s", { "emit", "read_post" });
+	auto& reg = w.state();
+	const auto target = reg.create();
+	auto sub = reg.ctx().get<ecs::world_bus>().subscribe<ping>([&](const ecs::envelope<ping>& e) {
+		reg.ctx().emplace<ecs::entity_changer>().emplace<ping>(target, ping{ e.payload.value + 1 });
+	});
+	frames("s", 1);
+	BOOST_TEST(reg.all_of<ping>(target));
+	BOOST_TEST(reg.get<ping>(target).value == 1);
+}
+
 BOOST_AUTO_TEST_CASE(AWorldCreatedInEditDropsFromTheStart)
 {
 	mgr.create_set("s").set_mode(ecs::run_mode::edit);
@@ -239,11 +268,66 @@ BOOST_AUTO_TEST_CASE(AnEmitInsideTheUpdatePhaseIsNotLate)
 	BOOST_TEST(logs.count("emitted after the delivery point") == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(SubscribingToATypeRegisteredAfterTheWorldWasMadeBindsIt)
+{
+	auto& w = world("s", {});
+	BOOST_TEST(mgr.add_event<registered_later>());
+	int calls = 0;
+	auto sub = w.state().ctx().get<ecs::world_bus>().subscribe<registered_later>([&](const ecs::envelope<registered_later>&) { ++calls; });
+	BOOST_TEST(sub.connected());
+	BOOST_TEST(w.state().ctx().get<ecs::event_writer<registered_later>>().bound());
+	mgr.emit("s", "w", registered_later{ 1 });
+	frames("s", 1);
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AnEngineEventTypeAddedAfterALayerExistsIsRefused)
+{
+	log_capture logs;
+	mgr.create_layer();
+	BOOST_TEST(!mgr.add_event<registered_later>());
+	BOOST_TEST(!mgr.events().contains<registered_later>());
+	BOOST_TEST(logs.count("registered after a layer exists") == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AReloadedWorldStartsWithAnEmptyBus)
+{
+	const auto level = put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[{"__type":"world_desc","name":"w0","systems":[]}]})");
+	BOOST_REQUIRE(mgr.load_level(level));
+	auto& set = mgr.level_set();
+	set.set_mode(ecs::run_mode::play);
+	mgr.emit("level", "w0", ping{ 1 });
+	set.update(one_frame);
+	mgr.emit("level", "w0", ping{ 2 });
+	BOOST_REQUIRE(set.get("w0").state().ctx().get<ecs::world_bus>().deliveries() == 1u);
+
+	const auto desc = rs->require_sync<scn::level_desc>(level);
+	BOOST_REQUIRE(desc.is_ready());
+	set.reload_context("w0", *desc->get_worlds()[0], sf, *assembler);
+	const auto& bus = set.get("w0").state().ctx().get<ecs::world_bus>();
+	BOOST_TEST(bus.deliveries() == 0u);
+	BOOST_TEST(bus.queued() == 0u);
+	BOOST_TEST(set.get("w0").state().ctx().get<ecs::event_reader<ping>>().events().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ThePlayTwinOfALayerGoesWithTheLayer)
+{
+	auto& layer = mgr.create_layer();
+	BOOST_TEST(layer.events().add<layer_event>());
+	auto& play = mgr.create_set("play", &layer, { .hot_reload = false });
+	auto& twin = play.create_context("w", 0, scn::context_kind::play);
+	BOOST_TEST(twin.state().ctx().get<ecs::event_writer<layer_event>>().bound());
+	mgr.emit("play", "w", layer_event{ 1 });
+
+	mgr.destroy_layer(layer);
+	BOOST_TEST(!mgr.find_set("play"));
+}
+
 BOOST_AUTO_TEST_CASE(AnEventTypeRegisteredLaterIsBoundAtTheNextUpdate)
 {
 	auto& w = world("s", {});
 	BOOST_TEST(!w.state().ctx().contains<ecs::event_writer<registered_later>>());
-	mgr.events().add<registered_later>();
+	BOOST_TEST(mgr.add_event<registered_later>());
 	frames("s", 1);
 	BOOST_TEST(w.state().ctx().get<ecs::event_writer<registered_later>>().bound());
 }
