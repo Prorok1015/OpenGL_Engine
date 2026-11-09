@@ -1046,9 +1046,13 @@ BOOST_AUTO_TEST_CASE(app_advance_hold_is_released_whenever_play_stops)
 
 namespace {
 
+// The test environment registers no engine component: the game layer gets them the way scene service init does it for
+// the editor.
 std::string catalog_name_of_name_component(scn::context_manager& manager)
 {
-	const scn::component_entry* entry = manager.game_layer()->catalog().find(entt::type_hash<scn::name_component>::value());
+	scn::component_catalog& catalog = manager.game_layer()->catalog();
+	if (!catalog.find(entt::type_hash<scn::name_component>::value())) scn::register_engine_components(catalog);
+	const scn::component_entry* entry = catalog.find(entt::type_hash<scn::name_component>::value());
 	return entry ? entry->name : std::string{};
 }
 
@@ -1057,11 +1061,12 @@ std::string catalog_name_of_name_component(scn::context_manager& manager)
 BOOST_AUTO_TEST_CASE(runtime_commands_fail_outside_play_with_a_pointer_to_the_document_commands)
 {
 	open_level();
-	for (const char* tool : { "runtime_query", "runtime_get" }) {
-		const mcp::call_result result = call_tool(tool, R"json({"entity":0})json");
-		BOOST_TEST(result.is_error);
-		BOOST_TEST(text_of_error(result).find("Play is not running") != std::string::npos);
-	}
+	const mcp::call_result query = call_tool("runtime_query", "{}");
+	BOOST_TEST(query.is_error);
+	BOOST_TEST(text_of_error(query).find("Play is not running") != std::string::npos);
+	const mcp::call_result get = call_tool("runtime_get", R"json({"entity":0})json");
+	BOOST_TEST(get.is_error);
+	BOOST_TEST(text_of_error(get).find("Play is not running") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(an_agent_sees_what_play_made_by_name_and_component_and_reads_its_components_without_asking)
@@ -1189,6 +1194,7 @@ BOOST_AUTO_TEST_CASE(a_component_without_a_schema_is_only_named_and_a_component_
 	open_level();
 	BOOST_REQUIRE(play.start());
 	const marker_registration markers(contexts());
+	const std::string name_key = catalog_name_of_name_component(contexts());
 	entt::registry& reg = play_set()->get("w0").state();
 	const entt::entity entity = reg.create();
 	reg.emplace<scn::name_component>(entity, std::string(edt::runtime_entity_max_bytes + 1024, 'x'));
@@ -1200,7 +1206,7 @@ BOOST_AUTO_TEST_CASE(a_component_without_a_schema_is_only_named_and_a_component_
 	BOOST_TEST(answer.at("unsaved").as_array().size() == 1u);
 	BOOST_TEST(answer.at("unsaved").as_array().at(0).as_string() == "test.opaque");
 	BOOST_TEST(answer.at("truncated").as_array().size() == 1u);
-	BOOST_TEST(answer.at("truncated").as_array().at(0).as_string() == catalog_name_of_name_component(contexts()));
+	BOOST_TEST(answer.at("truncated").as_array().at(0).as_string() == name_key);
 	BOOST_TEST(answer.at("components").as_object().empty());
 }
 
@@ -1208,13 +1214,13 @@ BOOST_AUTO_TEST_CASE(strings_of_a_component_that_are_not_utf8_reach_the_answer_c
 {
 	open_level();
 	BOOST_REQUIRE(play.start());
+	const std::string name_key = catalog_name_of_name_component(contexts());
 	entt::registry& reg = play_set()->get("w0").state();
 	const entt::entity entity = reg.create();
 	reg.emplace<scn::name_component>(entity, std::string("bad\xff\xfename"));
 
 	const mcp::call_result detail = call_tool("runtime_get", entity_arg(entity));
 	BOOST_REQUIRE(!detail.is_error);
-	const std::string name_key = catalog_name_of_name_component(contexts());
 	const json::value& value = detail.structured.as_object().at("components").as_object().at(name_key);
 	BOOST_TEST(json::serialize(value).find("bad??name") != std::string::npos);
 	BOOST_TEST(detail.structured.as_object().at("name").as_string() == "bad??name");
