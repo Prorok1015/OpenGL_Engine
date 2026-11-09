@@ -145,8 +145,11 @@ ownership: std::shared_ptr<T> or std::make_shared<T>()
 non_ownership: std::weak_ptr<T> (for cycles, caches)
 never: std::auto_ptr (deprecated), raw new/delete in code (use RAII)
 
+[AGGREGATE_INIT]
+member_defaults: Every member of a struct that tests or callers brace-init partially gets a default ({} or = value); otherwise GCC -Wmissing-field-initializers / Clang -Wmissing-designated-field-initializers fail CI under -Werror (hit in #644, #645, #648)
+
 [RAW_STRING_PATTERNS]
-json_in_raw_strings: Always R"json(...)json", never R"(...)" (a `)"` inside the text, e.g. "(4 to 64 hex digits)", ends R"(...)" early: hit twice, #475 and #501)
+json_in_raw_strings: Always R"json(...)json", never R"(...)" (a `)"` inside the text, e.g. "(4 to 64 hex digits)", ends R"(...)" early: hit in #475, #501, #607, #642, #649)
 
 [DESCRIPTOR_PATTERNS]
 files: snake_case.desc (e.g., backpack.desc, level.desc)
