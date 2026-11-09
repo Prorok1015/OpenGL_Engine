@@ -344,14 +344,15 @@ BOOST_AUTO_TEST_CASE(TheDescOnDisk_IsFollowedWithoutFalseEdges)
 	frame(actions.map());
 	BOOST_REQUIRE_EQUAL(count(inp::action_edge::pressed), 1u);
 
-	// Jump moves to J while SPACE is still held: the new map starts from the keys, no edge either way.
+	// Jump moves to J while SPACE is still held: what the old map held is let go once, the new one gives no press.
 	put("actions.desc", ACTIONS_J);
 	rs->signal_changed(tag);
 	pump();
 	load(actions, tag);
 	frame(actions.map());
 	frame(actions.map());
-	BOOST_TEST(seen.size() == 1u);
+	BOOST_TEST(count(inp::action_edge::released) == 1u);
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
 	BOOST_TEST(!held(a, "Jump"));
 
 	key(KB::J, KEY_ACTION::DOWN);

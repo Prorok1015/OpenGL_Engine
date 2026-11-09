@@ -71,16 +71,20 @@ bool inp::action_state::released(std::string_view name) const
 void inp::action_state::update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
 	ecs::event_writer<action_event>* events)
 {
+	const auto emit = [events](action_id id, action_edge edge) {
+		if (events && events->bound()) events->emit(action_event{ id, edge });
+	};
+
 	const bool fresh = actions.map != m_map;
 	if (fresh) {
+		// A subscriber that saw the press of the old map must also see its release.
+		for (action_id id = 0; id < m_slots.size(); ++id) {
+			if (m_slots[id].held) emit(id, action_edge::released);
+		}
 		m_map = actions.map;
 		m_slots.assign(m_map ? m_map->size() : 0, slot{});
 	}
 	if (!m_map) return;
-
-	const auto emit = [events](action_id id, action_edge edge) {
-		if (events && events->bound()) events->emit(action_event{ id, edge });
-	};
 
 	const auto list = m_map->actions();
 	for (action_id id = 0; id < m_slots.size(); ++id) {

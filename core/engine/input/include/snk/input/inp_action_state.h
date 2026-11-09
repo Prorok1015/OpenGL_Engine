@@ -38,7 +38,9 @@ namespace inp
 
 	// An action goes down (pressed) only once it was seen up while the input was bound ("armed", INPUT_STACK.md M4): coming
 	// back to the game view with a key held gives no press. Losing the binding lets every held action go (one released).
-	// A new map (live reload of actions.desc, a new world) starts from the current keys without edges.
+	// A new map (live reload of actions.desc, the reader moving to another world) first releases what the old one held;
+	// then every action starts up and disarmed, and arms once its keys are seen up, so a key held across the change gives
+	// no press. "Up" is what the world receives: a layer that takes a key (a text field) lets the action go and re-arms it.
 	class SNK_API action_state
 	{
 	public:
