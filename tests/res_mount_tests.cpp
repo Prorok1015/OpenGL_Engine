@@ -466,8 +466,20 @@ BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndLetters_ReplacesTheRest)
 	BOOST_TEST(core::res::safe_folder_name("\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0") != core::res::safe_folder_name("\xD0\x9C\xD0\xB0\xD0\xBC\xD0\xB0"));
 }
 
+BOOST_AUTO_TEST_CASE(SafeFolderName_InvalidUtf8BecomesUnderscores)
+{
+	BOOST_TEST(core::res::safe_folder_name("Caf\xE9") == "Caf_");          // Latin-1, not UTF-8
+	BOOST_TEST(core::res::safe_folder_name("a\xC0\xAF" "b") == "a__b");     // overlong '/'
+	BOOST_TEST(core::res::safe_folder_name("\xED\xA0\x80x") == "___x");    // a surrogate
+	BOOST_TEST(core::res::safe_folder_name("ab\xD0") == "ab_");             // cut in the middle of a letter
+	BOOST_TEST(core::res::safe_folder_name("\xF4\x90\x80\x80") == "____"); // above U+10FFFF
+	BOOST_TEST(core::res::safe_folder_name("\xF0\x9F\x8E\xAE") == "\xF0\x9F\x8E\xAE"); // a valid 4-byte character
+}
+
 BOOST_AUTO_TEST_CASE(SafeFolderName_ReservedWindowsNamesAreChanged)
 {
+	BOOST_TEST(core::res::safe_folder_name("COM\xC2\xB9") == "COM\xC2\xB9_");
+	BOOST_TEST(core::res::safe_folder_name("lpt\xC2\xB3.txt") == "lpt\xC2\xB3.txt_");
 	BOOST_TEST(core::res::safe_folder_name("CON") == "CON_");
 	BOOST_TEST(core::res::safe_folder_name("nul") == "nul_");
 	BOOST_TEST(core::res::safe_folder_name("Aux.txt") == "Aux.txt_");

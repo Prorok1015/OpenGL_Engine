@@ -91,7 +91,35 @@ namespace {
 		for (const auto reserved : plain) {
 			if (upper == reserved) return true;
 		}
-		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '1' && upper[3] <= '9';
+		if (!upper.starts_with("COM") && !upper.starts_with("LPT")) return false;
+		const std::string_view digit = std::string_view{ upper }.substr(3);
+		// COM1-9, and COM with a superscript 1, 2 or 3 (UTF-8 C2 B9, C2 B2, C2 B3), which Windows reserves too.
+		return (digit.size() == 1 && digit[0] >= '1' && digit[0] <= '9')
+			|| digit == "\xC2\xB9" || digit == "\xC2\xB2" || digit == "\xC2\xB3";
+	}
+
+	// Length of the valid UTF-8 character at the start of `text` (shortest form, no surrogate, at most U+10FFFF); 0 when
+	// it is not one.
+	std::size_t utf8_character_length(std::string_view text)
+	{
+		const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+		const auto continuation = [&](std::size_t i) { return i < text.size() && (byte(i) & 0xC0) == 0x80; };
+		const unsigned char lead = byte(0);
+		if (lead < 0x80) return 1;
+		if (lead >= 0xC2 && lead <= 0xDF) return continuation(1) ? 2 : 0;
+		if (lead >= 0xE0 && lead <= 0xEF) {
+			if (!continuation(1) || !continuation(2)) return 0;
+			if (lead == 0xE0 && byte(1) < 0xA0) return 0;
+			if (lead == 0xED && byte(1) >= 0xA0) return 0;
+			return 3;
+		}
+		if (lead >= 0xF0 && lead <= 0xF4) {
+			if (!continuation(1) || !continuation(2) || !continuation(3)) return 0;
+			if (lead == 0xF0 && byte(1) < 0x90) return 0;
+			if (lead == 0xF4 && byte(1) >= 0x90) return 0;
+			return 4;
+		}
+		return 0;
 	}
 
 	void strip_trailing_dots_and_spaces(std::string& name)
@@ -154,12 +182,20 @@ std::string core::res::safe_folder_name(std::string_view name)
 {
 	std::string out;
 	out.reserve(name.size());
-	for (const char c : name) {
-		const auto byte = static_cast<unsigned char>(c);
-		const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-			|| c == ' ' || c == '_' || c == '.' || c == '-';
-		// A byte of a multi-byte UTF-8 character: the name's letters stay, so "Игра" and "Мама" are two folders.
-		out.push_back(plain || byte >= 0x80 ? c : '_');
+	for (std::size_t i = 0; i < name.size();) {
+		const char c = name[i];
+		const std::size_t length = utf8_character_length(name.substr(i));
+		if (length > 1) {
+			// A letter outside ASCII stays, so "Игра" and "Мама" are two folders.
+			out.append(name.substr(i, length));
+			i += length;
+			continue;
+		}
+		const bool plain = length == 1 && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+			|| c == ' ' || c == '_' || c == '.' || c == '-');
+		// An invalid byte becomes '_' too: path_from_utf8 would throw on it on Windows.
+		out.push_back(plain ? c : '_');
+		++i;
 	}
 	if (out.size() > k_max_folder_name) {
 		std::size_t cut = k_max_folder_name;
@@ -194,18 +230,44 @@ fs::path core::res::player_data_dir(std::string_view project_name)
 #endif
 }
 
+#ifndef _WIN32
+namespace {
+	// stat, not lstat: a link to the folder is fine, only the folder it leads to is checked.
+	bool is_own_private_base(const fs::path& base)
+	{
+		struct stat info{};
+		return ::stat(base.c_str(), &info) == 0 && S_ISDIR(info.st_mode) && info.st_uid == ::geteuid()
+			&& (info.st_mode & 0022) == 0 && ::access(base.c_str(), W_OK | X_OK) == 0;
+	}
+
+	// Writable by others only with the sticky bit (as /tmp): else another user could rename our folder away and put
+	// theirs in its place between mkdir and the check.
+	bool is_safe_shared_base(const fs::path& base)
+	{
+		struct stat info{};
+		return ::stat(base.c_str(), &info) == 0 && S_ISDIR(info.st_mode)
+			&& ((info.st_mode & 0022) == 0 || (info.st_mode & S_ISVTX) != 0) && ::access(base.c_str(), W_OK | X_OK) == 0;
+	}
+}
+#endif
+
 fs::path core::res::scratch_base_dir(std::string& error)
 {
 #ifndef _WIN32
 	const fs::path runtime = environment_path("XDG_RUNTIME_DIR");
-	if (runtime.is_absolute()) {
-		struct stat info{};
-		if (::stat(runtime.c_str(), &info) == 0 && S_ISDIR(info.st_mode) && info.st_uid == ::geteuid()
-			&& (info.st_mode & 0022) == 0 && ::access(runtime.c_str(), W_OK | X_OK) == 0) {
-			return runtime;
+	if (runtime.is_absolute() && is_own_private_base(runtime)) {
+		return runtime;
+	}
+	std::error_code ec;
+	const fs::path temp = fs::temp_directory_path(ec);
+	for (const fs::path& candidate : { ec ? fs::path{} : temp, fs::path{ "/tmp" } }) {
+		if (!candidate.empty() && is_safe_shared_base(candidate)) {
+			return candidate;
 		}
 	}
-#endif
+	error = std::format("no temp folder that others cannot replace folders in (TMPDIR '{}', /tmp)", fs_paths::utf8_of(temp));
+	return {};
+#else
 	std::error_code ec;
 	const fs::path temp = fs::temp_directory_path(ec);
 	if (ec || temp.empty()) {
@@ -213,6 +275,7 @@ fs::path core::res::scratch_base_dir(std::string& error)
 		return {};
 	}
 	return temp;
+#endif
 }
 
 core::res::scratch_folder_result core::res::make_scratch_dir(std::string_view project_name)
@@ -252,6 +315,15 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 	if (base.empty()) {
 		return 0;
 	}
+#ifdef _WIN32
+	// A shared temp folder (C:\Windows\Temp for a service) holds other users' folders: only one of this user's profile
+	// is cleaned.
+	const fs::path profile_data = environment_path("LOCALAPPDATA");
+	if (profile_data.empty() || !fs_paths::is_inside(profile_data, base)) {
+		egLOG_DEBUG("resource", "no cleanup of ended runs: '{}' is not in this user's profile", fs_paths::utf8_of(base));
+		return 0;
+	}
+#endif
 	const std::string prefix = scratch_prefix(project_name);
 	const std::int64_t own = platform::current_process_id();
 	std::size_t removed = 0;
