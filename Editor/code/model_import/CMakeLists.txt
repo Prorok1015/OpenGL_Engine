@@ -8,7 +8,7 @@ project(model_import)
 add_library(${PROJECT_NAME} STATIC)
 add_library(snk::model_import ALIAS ${PROJECT_NAME})
 
-set(SE_MODEL_IMPORT_SOURCES edt_file_identity.cpp edt_model_file_access.cpp)
+set(SE_MODEL_IMPORT_SOURCES edt_decode_bundle.cpp edt_file_identity.cpp edt_model_file_access.cpp)
 if(SNK_WITH_ASSIMP)
 	list(APPEND SE_MODEL_IMPORT_SOURCES edt_filesystem_assimp_io.cpp edt_model_importer.cpp)
 endif()
@@ -26,6 +26,10 @@ if(SNK_WITH_ASSIMP AND SNK_ENGINE_SHARED AND MSVC)
 	set(_model_import_assimp assimp Boost::json)
 endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::engine_api PRIVATE snk::engine PRIVATE ${_model_import_assimp})
+if(SNK_ENGINE_SHARED AND MSVC)
+	# The bundle reader parses JSON: snk_engine.dll does not export Boost.JSON.
+	target_link_libraries(${PROJECT_NAME} PRIVATE Boost::json)
+endif()
 
 # The editor imports models through it (the sources moved here from editor_system/import).
 target_link_libraries(editor_system PUBLIC ${PROJECT_NAME})
