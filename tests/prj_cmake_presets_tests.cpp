@@ -251,7 +251,7 @@ BOOST_AUTO_TEST_CASE(Apply_UnknownConfiguration_IsAnError)
 {
 	const auto main = parse_main(k_main);
 	json::value doc;
-	BOOST_TEST(prj::apply_user_presets_edits(doc, main, { prj::set_define{ "shipping", "A", "1" } }).has_value());
+	BOOST_TEST(prj::apply_user_presets_edits(doc, main, { prj::set_define{ "no_such_configuration", "A", "1" } }).has_value());
 	BOOST_TEST(prj::apply_user_presets_edits(doc, main, { prj::set_jobs{ "debuggame", 0 } }).has_value());
 }
 
