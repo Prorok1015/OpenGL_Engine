@@ -12,6 +12,7 @@ void edt::scene_document::commit(std::string_view label, commit_mode mode)
 	}
 	egLOG_TRACE("Editor/Commit", "{}", label);
 	touch_descs();
+	refresh_systems_cache();
 	if (mode == commit_mode::state_only) {
 		// The world list changed: the edits before cannot be undone into it.
 		m_unrecorded = true;
@@ -234,7 +235,18 @@ void edt::scene_document::rebase_history()
 void edt::scene_document::finish_apply()
 {
 	touch_descs();
+	refresh_systems_cache();
 	reload_touched();
+}
+
+void edt::scene_document::refresh_systems_cache()
+{
+	if (worlds_systems_list.size() != world_descs.size()) {
+		return;
+	}
+	for (std::size_t world = 0; world < world_descs.size(); ++world) {
+		worlds_systems_list[world] = world_descs[world].get_systems();
+	}
 }
 
 void edt::scene_document::reload_touched()

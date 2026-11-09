@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_world_problems.h"
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -303,5 +304,9 @@ namespace edt {
 		std::chrono::steady_clock::time_point m_policy_refreshed{};
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
+		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
+		void refresh_world_problems();
+		world_problem_publisher m_world_problems;
+		std::vector<connection> m_world_problem_connections;
 	};
 }

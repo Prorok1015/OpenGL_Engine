@@ -2,6 +2,7 @@
 #include <snk/ecs/ecs_phase.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_interface.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -101,6 +102,19 @@ public:
 	}
 
 	[[nodiscard]] const system_registry* parent() const noexcept { return m_parent; }
+
+	// The names of every system visible from this layer (the parent's and this layer's own), in name order. A name is
+	// never in both: add() refuses a name the parent has.
+	[[nodiscard]] std::vector<std::string> names() const
+	{
+		std::vector<std::string> out = m_parent ? m_parent->names() : std::vector<std::string>{};
+		out.reserve(out.size() + m_entries.size());
+		for (const auto& entry : m_entries) {
+			out.push_back(entry.first);
+		}
+		std::sort(out.begin(), out.end());
+		return out;
+	}
 
 	[[nodiscard]] phase_table& phases() noexcept { return m_phases; }
 	[[nodiscard]] const phase_table& phases() const noexcept { return m_phases; }

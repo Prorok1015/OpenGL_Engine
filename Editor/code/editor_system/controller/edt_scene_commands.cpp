@@ -10,6 +10,7 @@
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
+#include <snk/ecs/ecs_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <boost/json.hpp>
@@ -224,7 +225,7 @@ namespace {
 		using edit_fn = std::function<cmd::result(edt::scene_document&, const json::object& args, json::object& out,
 			const std::function<void()>& changing)>;
 
-		cmd::result run(const cmd::call& call, std::string_view label, const edit_fn& apply)
+		cmd::result run(const cmd::call& call, std::string_view label, const edit_fn& apply, bool keeps_selection = false)
 		{
 			const json::object& args = call.args.as_object();
 			edt::scene_document& scene = sources.documents.scene();
@@ -259,8 +260,8 @@ namespace {
 			json::object out;
 			cmd::result outcome = apply(scene, args, out, [&] {
 				if (!changed) {
-					// The panels point into the nodes that are about to move.
-					sources.selection.clear();
+					// The panels point into the nodes that are about to move; an edit of a world's systems moves none.
+					if (!keeps_selection) sources.selection.clear();
 					changed = true;
 				}
 			});
@@ -599,6 +600,161 @@ namespace {
 		});
 	}
 
+	// ---- world.systems.* ----------------------------------------------------------------------------------------
+
+	// The world named by `world`, else the active one.
+	scn::world_desc* world_of(edt::scene_document& scene, const json::object& args, cmd::result& error)
+	{
+		std::string wanted;
+		if (const json::value* given = args.if_contains("world")) {
+			wanted = std::string(given->as_string());
+		} else if (const std::string* active = scene.active_world_name()) {
+			wanted = *active;
+		} else {
+			error = failure(cmd::codes::not_found, "the scene has no world");
+			return nullptr;
+		}
+		const std::size_t count = std::min(scene.world_names.size(), scene.world_descs.size());
+		for (std::size_t i = 0; i < count; ++i) {
+			if (scene.world_names[i] == wanted) return &scene.world_descs[i];
+		}
+		std::string names;
+		for (std::size_t i = 0; i < count; ++i) names += (i ? ", " : "") + scene.world_names[i];
+		error = failure(cmd::codes::not_found, std::format("no world '{}' (the worlds: {})", wanted, names));
+		return nullptr;
+	}
+
+	// The registered system names a message can hold (at most 60), as "a, b, c".
+	std::string registered_names(const ecs::system_factory* factory)
+	{
+		if (!factory) return "none";
+		const std::vector<std::string> names = factory->registry().names();
+		std::string text;
+		for (std::size_t i = 0; i < names.size() && i < 60; ++i) text += (i ? ", " : "") + names[i];
+		if (names.size() > 60) text += std::format(", ... ({} more)", names.size() - 60);
+		return text.empty() ? "none" : text;
+	}
+
+	json::array names_json(const std::vector<std::string>& names)
+	{
+		json::array out;
+		out.reserve(names.size());
+		for (const std::string& name : names) out.emplace_back(json::string(name));
+		return out;
+	}
+
+	std::string system_arg(const json::object& args)
+	{
+		return std::string(args.at("system").as_string());
+	}
+
+	cmd::result world_systems_list(context& ctx, const cmd::call& call)
+	{
+		const json::object& args = call.args.as_object();
+		edt::scene_document& scene = ctx.sources.documents.scene();
+		cmd::result error;
+		scn::world_desc* world = world_of(scene, args, error);
+		if (!world) return error;
+		const ecs::system_factory* factory = ctx.sources.services.sfactory();
+		json::array listed;
+		for (const std::string& name : world->get_systems()) {
+			const ecs::system_entry* entry = factory ? factory->registry().find(name) : nullptr;
+			json::object item{ { "name", json::string(name) }, { "known", entry != nullptr } };
+			if (entry) {
+				item["phase"] = json::string(entry->desc.phase.name());
+				item["run_in_edit"] = entry->desc.run_in_edit;
+			}
+			listed.push_back(std::move(item));
+		}
+		json::array available;
+		if (factory) {
+			for (const std::string& name : factory->registry().names()) {
+				if (std::ranges::find(world->get_systems(), name) != world->get_systems().end()) continue;
+				const ecs::system_entry* entry = factory->registry().find(name);
+				available.push_back(json::object{ { "name", json::string(name) }, { "phase", json::string(entry->desc.phase.name()) },
+					{ "run_in_edit", entry->desc.run_in_edit } });
+			}
+		}
+		return cmd::result::success(json::object{ { "world", json::string(world->get_name()) }, { "generation", scene.generation() },
+			{ "systems", std::move(listed) }, { "available", std::move(available) } });
+	}
+
+	cmd::result world_systems_add(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Add world system", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			cmd::result error;
+			scn::world_desc* world = world_of(scene, args, error);
+			if (!world) return error;
+			const std::string name = system_arg(args);
+			const ecs::system_factory* factory = ctx.sources.services.sfactory();
+			if (!factory || !factory->registry().find(name)) {
+				return failure(cmd::codes::invalid_args, std::format("no system '{}' is registered (the registered systems: {})", name, registered_names(factory)));
+			}
+			std::vector<std::string> systems = world->get_systems();
+			if (std::ranges::find(systems, name) != systems.end()) {
+				return failure(cmd::codes::invalid_args, std::format("'{}' is already in the systems of this world", name));
+			}
+			const std::size_t at = index_arg(args, systems.size());
+			systems.insert(systems.begin() + static_cast<std::ptrdiff_t>(at), name);
+			changing();
+			world->set_systems(systems);
+			out["systems"] = names_json(world->get_systems());
+			return cmd::result::success();
+		}, true);
+	}
+
+	cmd::result world_systems_remove(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Remove world system", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			cmd::result error;
+			scn::world_desc* world = world_of(scene, args, error);
+			if (!world) return error;
+			const std::string name = system_arg(args);
+			std::vector<std::string> systems = world->get_systems();
+			const auto found = std::ranges::find(systems, name);
+			if (found == systems.end()) {
+				std::string current;
+				for (std::size_t i = 0; i < systems.size() && i < 60; ++i) current += (i ? ", " : "") + systems[i];
+				return failure(cmd::codes::not_found, std::format("'{}' is not in the systems of this world (they are: {})", name, current.empty() ? "none" : current));
+			}
+			systems.erase(found);
+			changing();
+			world->set_systems(systems);
+			out["systems"] = names_json(world->get_systems());
+			return cmd::result::success();
+		}, true);
+	}
+
+	cmd::result world_systems_move(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Move world system", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			cmd::result error;
+			scn::world_desc* world = world_of(scene, args, error);
+			if (!world) return error;
+			const std::string name = system_arg(args);
+			std::vector<std::string> systems = world->get_systems();
+			const auto found = std::ranges::find(systems, name);
+			if (found == systems.end()) {
+				return failure(cmd::codes::not_found, std::format("'{}' is not in the systems of this world", name));
+			}
+			const auto target = cmd::json_schema::integer_of(args.at("to"));
+			if (!target || *target < 0 || static_cast<std::size_t>(*target) >= systems.size()) {
+				return failure(cmd::codes::invalid_args, std::format("`to` is a place 0..{} in the list of this world", systems.size() - 1));
+			}
+			const std::size_t from = static_cast<std::size_t>(found - systems.begin());
+			const std::size_t to = static_cast<std::size_t>(*target);
+			out["systems"] = names_json(systems);
+			if (from == to) return cmd::result::success();
+			std::string moved = std::move(systems[from]);
+			systems.erase(systems.begin() + static_cast<std::ptrdiff_t>(from));
+			systems.insert(systems.begin() + static_cast<std::ptrdiff_t>(to), std::move(moved));
+			changing();
+			world->set_systems(systems);
+			out["systems"] = names_json(world->get_systems());
+			return cmd::result::success();
+		}, true);
+	}
+
 	// ---- registration -----------------------------------------------------------------------------------------
 
 	constexpr std::string_view common_args = R"("document":{"type":"integer","minimum":1,"description":"the scene document's id; default: the scene"},
@@ -613,6 +769,9 @@ namespace {
 	constexpr std::string_view generation_result = R"({"type":"object","properties":{"generation":{"type":"integer"},
 		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
 	constexpr std::string_view ref_result = R"({"type":"object","properties":{"generation":{"type":"integer"},"ref":@REF@,
+		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
+	constexpr std::string_view systems_result = R"({"type":"object","properties":{"generation":{"type":"integer"},
+		"systems":{"type":"array","items":{"type":"string"},"description":"the systems of the world now, in order"},
 		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
 	constexpr std::string_view index_arg_schema = R"("index":{"type":"integer","minimum":0,"description":"place among the children; past the end (or none): last"})";
 }
@@ -660,5 +819,28 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		args_with(R"("ref":@REF@,"position":{"type":"array","items":{"type":"number"}},"rotation":{"type":"array","items":{"type":"number"}},"scale":{"type":"array","items":{"type":"number"}})",
 			R"("ref")"),
 		generation_result, &transform_set);
+	add("world.systems.add", "Add a registered system (game module systems included) to a world's list at `index` (default: last); an unknown name is refused with the registered ones, a system already in the list too",
+		args_with(R"("world":{"type":"string","description":"world name; default the active world"},"system":{"type":"string","minLength":1},)" + std::string(index_arg_schema),
+			R"("system")"),
+		systems_result, &world_systems_add);
+	add("world.systems.remove", "Remove a system from a world's list (also one that is no longer registered)",
+		args_with(R"("world":{"type":"string"},"system":{"type":"string","minLength":1})", R"("system")"), systems_result, &world_systems_remove);
+	add("world.systems.move", "Move a system of a world's list to place `to` (0..n-1); the order is the order within a phase",
+		args_with(R"("world":{"type":"string"},"system":{"type":"string","minLength":1},"to":{"type":"integer","minimum":0})", R"("system","to")"),
+		systems_result, &world_systems_move);
+	{
+		cmd::command_desc list;
+		list.id = "world.systems.list";
+		list.summary = "The systems of a world in order, each with `known` (registered or not), its phase and run_in_edit, and the registered systems that are not in the list (`available`)";
+		list.args_schema = parse_schema(R"({"type":"object","properties":{"world":{"type":"string","description":"world name; default the active world"}},"additionalProperties":false})");
+		list.result_schema = parse_schema(R"({"type":"object","properties":{"world":{"type":"string"},"generation":{"type":"integer"},
+			"systems":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"known":{"type":"boolean"},"phase":{"type":"string"},"run_in_edit":{"type":"boolean"}},"required":["name","known"]}},
+			"available":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"phase":{"type":"string"},"run_in_edit":{"type":"boolean"}},"required":["name"]}}},
+			"required":["world","generation","systems","available"]})");
+		list.category = cmd::agent_category::read;
+		list.invoke = [ctx](const cmd::call& call) { return world_systems_list(*ctx, call); };
+		registration added = commands.add(std::move(list));
+		if (added.active()) out.push_back(std::move(added));
+	}
 	return out;
 }
