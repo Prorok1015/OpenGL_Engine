@@ -192,6 +192,9 @@ if(MSVC)
 	target_compile_options(unit_tests PRIVATE /bigobj)
 endif()
 # desc_repo_roundtrip_tests loads the descs the repository ships.
+if(SNK_WITH_ASSIMP AND NOT TARGET snk_model_decoder)
+	message(FATAL_ERROR "snk_model_decoder is not configured: the decoder process tests would silently not run (#647)")
+endif()
 if(TARGET snk_model_decoder)
 	# The process tests (edt_decode_runner_tests) start the real decoder, and the test build of it for the self-test flags.
 	add_dependencies(unit_tests snk_model_decoder snk_model_decoder_selftest)

@@ -13,7 +13,11 @@
 #include <sys/types.h>
 #endif
 
-#if SNK_HAS_ASSIMP && defined(SNK_MODEL_DECODER_PATH) && defined(SNK_MODEL_DECODER_SELFTEST_PATH)
+#if SNK_HAS_ASSIMP
+
+#if !defined(SNK_MODEL_DECODER_PATH) || !defined(SNK_MODEL_DECODER_SELFTEST_PATH)
+#error "the decoder process tests need the decoder paths from CMake; an empty suite would hide a decoder that is not built"
+#endif
 
 // The decoder process (#647): a model is read in a child that is killed when it hangs, runs over its memory or the
 // import is cancelled, and whose scratch folder is gone on every path.
