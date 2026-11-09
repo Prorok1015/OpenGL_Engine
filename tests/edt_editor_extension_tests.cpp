@@ -8,6 +8,11 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_asset_kind_registry.h>
+#include <snk/application/app_module_loader.hpp>
+#include <snk/application/app_module_source.h>
+#include <snk/core/core_project_modules.h>
+#include <snk/project/prj_project.h>
+#include "test_temp_dir.hpp"
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/editor/edt_editor_services.h>
@@ -18,6 +23,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <filesystem>
 #include <memory>
 
 // What a game_editor module (#588) leaves behind: nothing. A module registers only through its context; unloading it
@@ -43,14 +49,21 @@ struct probe_state
 	int continuations_run = 0;
 	int shutdowns = 0;
 	bool shut_down = false;
+	// What editor_context::module_unload_refusal said from inside the module's own continuation.
+	std::string refusal_inside_a_callback;
+	bool saw_refusal_inside_a_callback = false;
 	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then.
 	int callbacks_after_shutdown = 0;
 };
+
+probe_state* g_probe_state = nullptr;
+edt::editor_context* g_probe_editor = nullptr;
 
 class probe_extension final : public edt::editor_extension
 {
 public:
 	explicit probe_extension(probe_state& state) : m_state(state) {}
+	probe_extension() : m_state(*g_probe_state) {}
 
 	std::string_view name() const override { return "probe_editor"; }
 
@@ -80,10 +93,13 @@ public:
 		kind.open = [](edt::editor_context&, const res::tag&) {};
 		context.add_asset_kind(std::move(kind));
 
+		edt::problem item;
+		item.message = "from the module";
+		context.set_problems("ext.problems", { item });
 		context.subscribe(context.events().document_changed, [this](edt::document_id, std::uint64_t) { ++m_state.document_changes; });
 
 		probe_state& state = m_state;
-		context.jobs().start(ds::lane::compute, ds::task_desc{ "probe job" }, context.tasks(),
+		context.start_job(ds::lane::compute, ds::task_desc{ "probe job" },
 			[&state](ds::task_context&) {
 				++state.job_bodies_run;
 				return 0;
@@ -98,6 +114,10 @@ public:
 			.then_main(context.tasks(), [&state](ds::task_result<void>&) {
 				++state.continuations_run;
 				if (state.shut_down) ++state.callbacks_after_shutdown;
+				if (g_probe_editor) {
+					state.refusal_inside_a_callback = g_probe_editor->module_unload_refusal();
+					state.saw_refusal_inside_a_callback = true;
+				}
 			});
 	}
 
@@ -109,6 +129,14 @@ public:
 
 private:
 	probe_state& m_state;
+};
+
+struct ext_game_module final : app::modules::module_interface
+{
+	void register_services(ds::app_data_storage&) override {}
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage&) override {}
+	std::string_view name() const override { return "ext_game"; }
 };
 
 struct extension_fixture : test_util::null_engine_fixture
@@ -124,11 +152,39 @@ struct extension_fixture : test_util::null_engine_fixture
 			gui, services, tasks, commands, scene, edt::prefab_preview(services)))
 	{
 		host_data.attach(std::shared_ptr<edt::editor_context>(context.get(), [](edt::editor_context*) {}));
+		g_probe_state = &state;
+		g_probe_editor = context.get();
 	}
 
 	~extension_fixture()
 	{
+		loader.shutdown_all_services(host_data);
+		g_probe_state = nullptr;
+		g_probe_editor = nullptr;
 		context.reset();
+	}
+
+	// A project whose manifest names a game module and a game_editor, and a host that loads them from compiled-in entries.
+	std::unique_ptr<core::project_module_host> make_host()
+	{
+		std::filesystem::create_directories(dir.path() / "game");
+		prj::project_context project;
+		project.root = std::filesystem::canonical(dir.path() / "game");
+		project.data.name = "Game";
+		prj::module_ref game;
+		game.name = "ext_game";
+		prj::module_ref editor;
+		editor.name = "ext_editor";
+		editor.kind = prj::module_kind::editor;
+		project.data.modules = { game, editor };
+		host_data.construct<prj::project_context>(std::move(project));
+		core::project_modules_options options;
+		options.with_editor_modules = true;
+		options.check_editor_module = [](const app::modules::module_entry& entry) { return edt::check_editor_api_version(entry.editor_api_version); };
+		options.editor_unload_refusal = [this] { return context->module_unload_refusal(); };
+		options.compiled_in.emplace("ext_editor", SNK_EDITOR_MODULE_ENTRY(ext_probe_));
+		options.compiled_in.emplace("ext_game", SNK_MODULE_ENTRY(ext_game_));
+		return std::make_unique<core::project_module_host>(loader, host_data, std::move(options));
 	}
 
 	struct counts
@@ -155,10 +211,15 @@ struct extension_fixture : test_util::null_engine_fixture
 	edt::scene_document scene;
 	std::unique_ptr<edt::editor_context> context;
 	ds::app_data_storage host_data;
+	app::modules::module_loader loader;
+	test_util::temp_dir dir{ "edt_editor_extension" };
 	probe_state state;
 };
 
 }
+
+SNK_DECLARE_EDITOR_MODULE_PREFIXED(ext_probe_, probe_extension)
+SNK_DECLARE_MODULE_PREFIXED(ext_game_, ext_game_module)
 
 BOOST_FIXTURE_TEST_SUITE(EdtEditorExtensionTests, extension_fixture)
 
@@ -296,6 +357,51 @@ BOOST_AUTO_TEST_CASE(ARefusedModule_TouchesNothing_SoTheGameKeepsWorking)
 	const std::string reason = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
 	BOOST_CHECK(!reason.empty());
 	BOOST_CHECK(snapshot() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AGameEditorLoadedThroughTheHost_RegistersAfterTheGame_AndUnloadsToTheSameEditor)
+{
+	const counts before = snapshot();
+	auto host = make_host();
+	const auto game_report = host->load_all();
+	BOOST_REQUIRE(game_report.loaded == std::vector<std::string>{ "ext_game" });
+	BOOST_CHECK(!context->panels().contains("ext.panel"));
+
+	const auto editor_report = host->load_editor_modules();
+	BOOST_REQUIRE(editor_report.loaded == std::vector<std::string>{ "ext_editor" });
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK_EQUAL(context->problems().sources().size(), 1u);
+
+	BOOST_CHECK(host->unload_editor_modules().empty());
+	BOOST_CHECK(snapshot() == before);
+	BOOST_CHECK(context->problems().sources().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AGameReload_RegistersTheGameEditorAgain_WithoutClashingWithTheOldEntries)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	const counts loaded = snapshot();
+
+	const auto report = host->reload("ext_game",
+		std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)),
+		[] { return std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)); });
+	BOOST_CHECK_EQUAL(core::to_string(report.status), "reloaded");
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK(snapshot() == loaded);
+}
+
+BOOST_AUTO_TEST_CASE(UnloadingFromInsideAModuleCallback_IsRefusedNotAttempted)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	test_util::pump(tasks);
+	BOOST_REQUIRE(state.saw_refusal_inside_a_callback);
+	BOOST_CHECK(!state.refusal_inside_a_callback.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+	BOOST_CHECK(host->unload_editor_modules().empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

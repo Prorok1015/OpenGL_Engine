@@ -8,6 +8,13 @@ edt::editor_module_context::editor_module_context(editor_context& editor, regist
 {
 }
 
+void edt::editor_module_context::set_problems(std::string source, std::vector<problem> items)
+{
+	m_editor.problems().set(source, std::move(items));
+	problem_list& list = m_editor.problems();
+	m_scope.keep_cleanup([&list, source = std::move(source)] { list.clear(source); });
+}
+
 void edt::editor_module_context::add_panel(panel_desc desc)
 {
 	m_scope.keep(m_editor.panels().add(std::move(desc)));

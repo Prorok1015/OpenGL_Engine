@@ -4,6 +4,7 @@
 #include "edt_registration.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 namespace edt
@@ -21,6 +22,9 @@ namespace edt
 
 		void keep(registration handle);
 		void keep(connection handle);
+		// Something the module changed that is not a handle (a problems source it set): runs at clear(), after the
+		// registrations.
+		void keep_cleanup(std::function<void()> cleanup);
 
 		// The owner of the jobs and continuations the module starts (job_service::start*, task::then_main): clear() stops
 		// them.
@@ -33,7 +37,7 @@ namespace edt
 		// gs::game_module::shutdown_services; the host calls it before the module's own shutdown_editor.
 		void stop_tasks();
 
-		// stop_tasks(), then the subscriptions and then the registrations, each the last made first. Must not be called
+		// stop_tasks(), then the subscriptions, then the registrations and then the cleanups, each the last made first. Must not be called
 		// from inside one of the module's own callbacks.
 		void clear();
 
@@ -47,5 +51,6 @@ namespace edt
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
 		std::vector<registration> m_registrations;
 		std::vector<connection> m_connections;
+		std::vector<std::function<void()>> m_cleanups;
 	};
 }

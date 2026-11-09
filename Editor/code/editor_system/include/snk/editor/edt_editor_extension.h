@@ -4,11 +4,13 @@
 #include "edt_registration_scope.h"
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
+#include <boost/json/value.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -21,8 +23,9 @@
 
 namespace edt
 {
-	// What a game_editor module (#588) gets: the editor's services, and the registries only through functions that keep
-	// what they register in the module's scope. Unloading the module undoes all of it, so the editor is as it was
+	// What a game_editor module (#588) gets: the editor's services, and the registries, jobs and problems only through
+	// functions that keep what they register in the module's scope. Not handed out: dialog_service (its callbacks would
+	// outlive the module; a wrapper comes with the first module that needs a dialog). Unloading the module undoes all of it, so the editor is as it was
 	// before the load (and a reload registers again without clashing with the old entries).
 	class SNK_EDITOR_API editor_module_context
 	{
@@ -49,6 +52,24 @@ namespace edt
 		const ds::lifetime& tasks() const { return m_scope.tasks(); }
 		ds::task_system& task_system() const { return m_editor.tasks(); }
 
+		// Jobs of the module: bound to tasks(), so unloading stops them. The job_service is read-only for a module
+		// (job.list, job_info), starting goes through here.
+		template<class F>
+		job_service::job_id start_job(ds::lane where, ds::task_desc desc, F&& work,
+			std::function<void(ds::task_result<std::invoke_result_t<F&, ds::task_context&>>&)> on_done)
+		{
+			return m_editor.jobs().start(where, std::move(desc), m_scope.tasks(), std::forward<F>(work), std::move(on_done));
+		}
+		template<class F>
+		job_service::job_id start_job_with_result(ds::lane where, ds::task_desc desc, F&& work,
+			std::function<void(ds::task_result<boost::json::value>&)> on_done = {})
+		{
+			return m_editor.jobs().start_with_result(where, std::move(desc), m_scope.tasks(), std::forward<F>(work), std::move(on_done));
+		}
+
+		// The problems of `source`, cleared when the module unloads.
+		void set_problems(std::string source, std::vector<problem> items);
+
 		res::resource_system& resources() const { return m_editor.resources(); }
 		rnd::render_system& render() const { return m_editor.render(); }
 		gui::gui_system& gui() const { return m_editor.gui(); }
@@ -56,9 +77,8 @@ namespace edt
 		document_manager& documents() { return m_editor.documents(); }
 		editor_events& events() { return m_editor.events(); }
 		selection_service& selection() { return m_editor.selection(); }
-		dialog_service& dialogs() { return m_editor.dialogs(); }
-		job_service& jobs() { return m_editor.jobs(); }
-		problem_list& problems() { return m_editor.problems(); }
+		const job_service& jobs() const { return m_editor.jobs(); }
+		const problem_list& problems() const { return m_editor.problems(); }
 
 	private:
 		editor_context& m_editor;
@@ -69,8 +89,9 @@ namespace edt
 	// writes register_editor. Declare it with SNK_DECLARE_EDITOR_MODULE. The host always calls shutdown_services before
 	// it destroys the module, also when shutdown_editor throws: destroying the module first would run its queued
 	// callbacks over members that are already gone. The module's DLL must not touch edt:: from a static initializer.
-	// Not yet behind the context (PR 2 of #588): services() (the engine registries), dialogs() callbacks, jobs().start
-	// with an owner other than tasks(), the raw signals of events() and the sources of problems().
+	// Still not tracked by the context: services() (the engine's own registries, which a module reaches through its
+	// game layer anyway) and the raw signals of events() (use editor_module_context::subscribe: a connection made
+	// by hand must be dropped in shutdown_editor).
 	class SNK_EDITOR_API editor_extension : public app::modules::module_interface
 	{
 	public:
