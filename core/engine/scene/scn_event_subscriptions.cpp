@@ -79,6 +79,8 @@ std::shared_ptr<scn::observer_slot> scn::event_subscriptions::keep_slot(entt::re
 void scn::event_subscriptions::notify_observer(observer_slot& slot, entt::registry& registry, entt::entity entity)
 {
 	if (const auto muted = slot.muted.lock(); !muted || *muted > 0) return;
+	// Edit, as for a bus subscriber: the world's bus discards.
+	if (const auto* bus = registry.ctx().find<ecs::world_bus>(); bus && bus->mode() == ecs::bus_mode::discard) return;
 	const auto fn = slot.fn.lock();
 	if (!fn) return;
 	ecs::bus_context context{ slot.set, slot.world, registry };

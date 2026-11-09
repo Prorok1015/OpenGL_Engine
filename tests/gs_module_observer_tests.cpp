@@ -2,6 +2,7 @@
 #include "test_module_env.hpp"
 #include <snk/ecs/ecs_bus_context.hpp>
 #include <snk/ecs/ecs_signal.hpp>
+#include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/game/gs_game_module.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_event_subscriptions.h>
@@ -9,6 +10,7 @@
 #include <entt/entity/registry.hpp>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -118,6 +120,56 @@ BOOST_AUTO_TEST_CASE(MutedObserversHearNothing_AndGuardsNest)
 	BOOST_TEST(g_constructed.empty());
 	mark(3);
 	BOOST_TEST((g_constructed == std::vector<int>{ 3 }));
+}
+
+// 2b keeps the guard for the length of a restore that spans calls: it has to move into a member or an optional.
+BOOST_AUTO_TEST_CASE(AMovedMuteGuardKeepsTheMuteUntilItIsReleased)
+{
+	loader.load(std::make_unique<observing_game_module>(), root);
+	load_level();
+	auto& subscriptions = contexts().game_layer()->subscriptions();
+	std::optional<scn::event_subscriptions::mute_guard> held;
+	{
+		auto guard = subscriptions.mute_observers();
+		held.emplace(std::move(guard));
+	}
+	BOOST_TEST(subscriptions.observers_muted());
+	mark(1);
+	scn::event_subscriptions::mute_guard moved_again = std::move(*held);
+	held.reset(); // a moved-from guard unmutes nothing
+	BOOST_TEST(subscriptions.observers_muted());
+	moved_again.release();
+	BOOST_TEST(!subscriptions.observers_muted());
+	mark(2);
+	BOOST_TEST((g_constructed == std::vector<int>{ 2 }));
+}
+
+// As a bus subscriber: nothing while the set is in Edit (a level load, an editor edit).
+BOOST_AUTO_TEST_CASE(AnObserverHearsNothingInEdit)
+{
+	loader.load(std::make_unique<observing_game_module>(), root);
+	load_level();
+	contexts().level_set().set_mode(ecs::run_mode::edit);
+	mark(1);
+	contexts().level_set().set_mode(ecs::run_mode::play);
+	mark(2);
+	BOOST_TEST((g_constructed == std::vector<int>{ 2 }));
+}
+
+// One observed after the world exists is connected at the world's next update; on_update is heard like the others.
+BOOST_AUTO_TEST_CASE(AnObserverAddedToALiveWorldIsConnectedAtItsNextUpdate)
+{
+	loader.load(std::make_unique<observing_game_module>(), root);
+	load_level();
+	std::vector<int> updated;
+	const ecs::connection observer = contexts().game_layer()->subscriptions().observe<module_marker>({ .set = "level" }, scn::observed::update,
+		[&updated](ecs::bus_context& ctx, entt::entity entity) { updated.push_back(ctx.registry().get<module_marker>(entity).value); });
+	const entt::entity entity = mark(1);
+	world().patch<module_marker>(entity, [](module_marker& marker) { marker.value = 10; });
+	BOOST_TEST(updated.empty());
+	contexts().update(std::chrono::duration<float>(0.016f));
+	world().patch<module_marker>(entity, [](module_marker& marker) { marker.value = 11; });
+	BOOST_TEST((updated == std::vector<int>{ 11 }));
 }
 
 BOOST_AUTO_TEST_CASE(ADisconnectedObserverIsSilentInEveryWorld)

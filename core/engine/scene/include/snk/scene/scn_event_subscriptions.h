@@ -35,7 +35,10 @@ namespace scn
 		destroy,
 	};
 
-	// One observer slot of a world (kept in its ctx while the world lives): what entt calls, never module code.
+	// One observer slot of a world, kept in its ctx while the world lives. entt's thunk for it and the control block
+	// its `fn` points to are made where observe<T> is instantiated, which is a module's binary for a module's observer:
+	// that is safe only because a layer's worlds go before the layer and the module (context_manager::destroy_layer
+	// asserts it).
 	struct observer_slot
 	{
 		std::weak_ptr<std::function<void(ecs::bus_context&, entt::entity)>> fn;
@@ -77,10 +80,12 @@ namespace scn
 			return add(std::move(filter), std::move(attach), std::move(callback));
 		}
 
-		// Called on `what` of T in each matching world (entt's on_construct / on_update / on_destroy), from the moment the
-		// world is created, so it also sees the entities a level or Play spawns. The registry is read-only to `fn`: it
-		// changes the world through bus_context::changer()/spawner(), applied after the current phase. Silent while
-		// mute_observers() holds; the returned connection removes it.
+		// Called on `what` of T in each matching world (entt's on_construct / on_update / on_destroy). It is connected to a
+		// world when the world is created, so it sees the entities a level or Play spawns; one observed after a world
+		// exists is connected to it at that world's next update. Like a bus subscriber it hears nothing while the world's
+		// set is in Edit (its bus discards), so a level load or an editor edit does not reach it. The registry is
+		// read-only to `fn`: it changes the world through bus_context::changer()/spawner(), applied after the current
+		// phase. Silent while mute_observers() holds; the returned connection removes it.
 		template <class T>
 		[[nodiscard]] ecs::connection observe(event_filter filter, observed what, std::function<void(ecs::bus_context&, entt::entity)> fn)
 		{
@@ -103,17 +108,32 @@ namespace scn
 		class mute_guard
 		{
 		public:
+			mute_guard() = default;
 			explicit mute_guard(std::weak_ptr<int> muted)
 				: m_muted(std::move(muted))
 			{
 				if (const auto depth = m_muted.lock()) ++*depth;
 			}
-			~mute_guard()
-			{
-				if (const auto depth = m_muted.lock()) --*depth;
-			}
+			~mute_guard() { release(); }
 			mute_guard(const mute_guard&) = delete;
 			mute_guard& operator=(const mute_guard&) = delete;
+			mute_guard(mute_guard&& other) noexcept
+				: m_muted(std::exchange(other.m_muted, {}))
+			{
+			}
+			mute_guard& operator=(mute_guard&& other) noexcept
+			{
+				if (this != &other) {
+					release();
+					m_muted = std::exchange(other.m_muted, {});
+				}
+				return *this;
+			}
+			// Unmutes now (once); a default or moved-from guard holds nothing.
+			void release()
+			{
+				if (const auto depth = std::exchange(m_muted, {}).lock()) --*depth;
+			}
 
 		private:
 			std::weak_ptr<int> m_muted;
@@ -151,9 +171,10 @@ namespace scn
 		ecs::connection add(event_filter filter, attach_fn attach, std::shared_ptr<void> callback);
 
 		// The world's ctx owns the slot: entt keeps a pointer to it until the registry goes, and is never asked to
-		// release it (a world's storages may already be gone when its ctx is destroyed).
+		// release it (a world's storages may already be gone when its ctx is destroyed). So the slots of a world only
+		// grow: one per observer connected to it, a removed one silent, until the world goes.
 		static std::shared_ptr<observer_slot> keep_slot(entt::registry& registry, observer_slot slot);
-		// Engine code, so no signal of a world points into a module's binary.
+		// What every observer slot calls: checks the mute, the world's run mode and the callback, then calls it.
 		static void notify_observer(observer_slot& slot, entt::registry& registry, entt::entity entity);
 		// Disconnecting silences the slot; it stays connected and does nothing.
 		static ecs::connection observer_connection(std::shared_ptr<observer_slot> slot);

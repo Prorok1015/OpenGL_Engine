@@ -113,6 +113,10 @@ void scn::context_manager::destroy_layer(scn::scene_layer& layer)
 		set_game_layer(nullptr);
 	}
 	std::erase_if(m_sets, [&layer](const auto& set) { return set->layer() == &layer; });
+	// A world of the layer that outlived it would call into the module's binary: observer thunks and control blocks
+	// (event_subscriptions::observe), systems, bus subscribers.
+	ASSERT_MSG(std::ranges::none_of(m_sets, [&layer](const auto& set) { return set->layer() == &layer; }),
+		"destroy_layer: a world of the layer outlives it");
 	layer.catalog().clear();
 	const auto it = std::ranges::find_if(m_layers, [&layer](const auto& owned) { return owned.get() == &layer; });
 	ASSERT_MSG(it != m_layers.end(), "destroy_layer: the layer was not created by this manager");

@@ -97,8 +97,9 @@ namespace gs
 		}
 
 		// An observer of component T (module API 3.4): `fn` runs on `what` (construct, update, destroy) of T in the worlds
-		// of the layer's sets that `filter` matches, from the moment each world is created. Kept by the layer like a
-		// subscription. A hot reload in Play (HOT_RELOAD_PLAY.md 6) puts back entities that already existed with these
+		// of the layer's sets that `filter` matches. It is connected to a world when the world is created (to one that
+		// already exists, at its next update), and like a bus subscriber it hears nothing while the set is in Edit (a
+		// level load, an editor edit). Kept by the layer like a subscription. A hot reload in Play (HOT_RELOAD_PLAY.md 6) puts back entities that already existed with these
 		// observers muted, so a counter they keep is not counted twice. Connecting to registry.on_construct<T>() directly
 		// is not muted and outlives nothing safely: use this instead.
 		template <class T>

@@ -371,6 +371,7 @@ void scn::restore_blackboard(ecs::blackboard_data& board, const json::array& val
 		const json::object* value = value_field ? value_field->if_object() : nullptr;
 		if (!key || !name || !value) {
 			egLOG_WARN("scene", "restore_blackboard: an entry is not {{key, type, value}}, skipped");
+			++report.unknown["<malformed blackboard entry>"];
 			continue;
 		}
 		const blackboard_type* type = types.find(std::string_view{ *name });
