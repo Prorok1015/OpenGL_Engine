@@ -40,7 +40,10 @@ void edt::editor_module_context::add_asset_kind(asset_kind_desc desc)
 
 edt::editor_extension::editor_extension() = default;
 
-edt::editor_extension::~editor_extension() = default;
+edt::editor_extension::~editor_extension()
+{
+	ASSERT_MSG(!m_scope, "editor_extension destroyed without shutdown_services: the module's own members are gone and its queued callbacks may still run");
+}
 
 void edt::editor_extension::register_services(ds::app_data_storage& data)
 {
@@ -58,6 +61,7 @@ void edt::editor_extension::initialize_services(ds::app_data_storage&)
 void edt::editor_extension::shutdown_services(ds::app_data_storage&)
 {
 	if (!m_scope) return;
+	m_scope->stop_tasks();
 	shutdown_editor();
 	m_scope->clear();
 	m_context.reset();

@@ -26,9 +26,14 @@ namespace edt
 		// them.
 		const ds::lifetime& tasks() const { return m_tasks; }
 
-		// Tasks first: new ones are refused, running ones are asked to stop and waited for, and the main-thread
-		// continuations queued meanwhile run now (with a cancelled result), so none of them runs the module's code
-		// after it is gone. Then the subscriptions and the registrations, the last made first.
+		// Stops the module's tasks: new ones are refused, running ones are asked to stop and waited for, and the
+		// main-thread continuations queued so far run now (a cancelled job delivers nothing), so none of them runs the
+		// module's code after this returns. The module's tasks must honour the stop token. Same order as
+		// gs::game_module::shutdown_services; the host calls it before the module's own shutdown_editor.
+		void stop_tasks();
+
+		// stop_tasks(), then the subscriptions and then the registrations, each the last made first. Must not be called
+		// from inside one of the module's own callbacks.
 		void clear();
 
 		std::size_t kept_count() const { return m_registrations.size() + m_connections.size(); }

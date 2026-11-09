@@ -42,6 +42,9 @@ struct probe_state
 	int job_results_delivered = 0;
 	int continuations_run = 0;
 	int shutdowns = 0;
+	bool shut_down = false;
+	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then.
+	int callbacks_after_shutdown = 0;
 };
 
 class probe_extension final : public edt::editor_extension
@@ -84,10 +87,24 @@ public:
 				++state.job_bodies_run;
 				return 0;
 			},
-			[&state](ds::task_result<int>&) { ++state.job_results_delivered; });
+			[&state](ds::task_result<int>&) {
+				++state.job_results_delivered;
+				if (state.shut_down) ++state.callbacks_after_shutdown;
+			});
+
+		context.task_system().run(ds::lane::compute, ds::task_desc{ "probe task" }, context.tasks(),
+			[](ds::task_context&) {})
+			.then_main(context.tasks(), [&state](ds::task_result<void>&) {
+				++state.continuations_run;
+				if (state.shut_down) ++state.callbacks_after_shutdown;
+			});
 	}
 
-	void shutdown_editor() override { ++m_state.shutdowns; }
+	void shutdown_editor() override
+	{
+		++m_state.shutdowns;
+		m_state.shut_down = true;
+	}
 
 private:
 	probe_state& m_state;
@@ -188,10 +205,11 @@ BOOST_AUTO_TEST_CASE(TheJobsOfALoadedModule_Run_SoTheUnloadTestBelowCanFail)
 	test_util::pump(tasks);
 	BOOST_CHECK_EQUAL(state.job_bodies_run, 1);
 	BOOST_CHECK_EQUAL(state.job_results_delivered, 1);
+	BOOST_CHECK_EQUAL(state.continuations_run, 1);
 	module.shutdown_services(host_data);
 }
 
-BOOST_AUTO_TEST_CASE(TheJobsOfAModule_AreStoppedOnUnload_AndNothingOfThemRunsAfterwards)
+BOOST_AUTO_TEST_CASE(TheTasksOfAModule_NeverStartAfterAnUnload_WhenItIsUnloadedBeforeTheyRan)
 {
 	{
 		probe_extension module(state);
@@ -199,9 +217,26 @@ BOOST_AUTO_TEST_CASE(TheJobsOfAModule_AreStoppedOnUnload_AndNothingOfThemRunsAft
 		module.shutdown_services(host_data);
 	}
 	test_util::pump(tasks);
-	test_util::pump(tasks);
 	BOOST_CHECK_EQUAL(state.job_bodies_run, 0);
 	BOOST_CHECK_EQUAL(state.job_results_delivered, 0);
+	BOOST_CHECK_EQUAL(state.continuations_run, 0);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AResultQueuedBeforeTheUnload_IsNotDeliveredToTheModuleAfterItsShutdown)
+{
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		// The bodies ran on the pool; their results wait in the main queue when the module goes.
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.job_bodies_run, 1);
+		BOOST_REQUIRE_EQUAL(state.continuations_run, 0);
+		module.shutdown_services(host_data);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+	BOOST_CHECK_EQUAL(state.shutdowns, 1);
 }
 
 BOOST_AUTO_TEST_CASE(ASubscriptionOfAModule_IsGoneAfterUnload_SoTheEventNoLongerReachesIt)
@@ -217,14 +252,23 @@ BOOST_AUTO_TEST_CASE(ASubscriptionOfAModule_IsGoneAfterUnload_SoTheEventNoLonger
 	BOOST_CHECK_EQUAL(state.document_changes, 1);
 }
 
-BOOST_AUTO_TEST_CASE(AModuleThatIsDestroyedWithoutShutdown_StillLeavesNoTrace)
+BOOST_AUTO_TEST_CASE(AScope_CountsWhatItKeeps_AndClearsItAll)
 {
-	const counts before = snapshot();
-	{
-		probe_extension module(state);
-		module.register_services(host_data);
-	}
-	BOOST_CHECK(snapshot() == before);
+	edt::registration_scope scope(tasks);
+	edt::panel_desc panel;
+	panel.id = "scope.panel";
+	panel.title = "Scope";
+	panel.open_by_default = false;
+	panel.show_in_view_menu = false;
+	panel.panel = std::make_shared<probe_panel>();
+	const std::size_t panels_before = context->panels().size();
+	scope.keep(context->panels().add(std::move(panel)));
+	scope.keep(context->events().document_changed.subscribe([](edt::document_id, std::uint64_t) {}));
+	BOOST_CHECK_EQUAL(scope.kept_count(), 2u);
+	BOOST_CHECK_EQUAL(context->panels().size(), panels_before + 1);
+	scope.clear();
+	BOOST_CHECK_EQUAL(scope.kept_count(), 0u);
+	BOOST_CHECK_EQUAL(context->panels().size(), panels_before);
 }
 
 BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItCanServe)

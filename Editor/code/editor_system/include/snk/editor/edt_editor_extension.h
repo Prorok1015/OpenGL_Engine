@@ -45,6 +45,7 @@ namespace edt
 		// The owner of the jobs and task continuations the module starts: they are stopped when it unloads, and none
 		// runs after shutdown_editor.
 		const ds::lifetime& tasks() const { return m_scope.tasks(); }
+		ds::task_system& task_system() const { return m_editor.tasks(); }
 
 		res::resource_system& resources() const { return m_editor.resources(); }
 		rnd::render_system& render() const { return m_editor.render(); }
@@ -63,7 +64,11 @@ namespace edt
 	};
 
 	// The base of a game_editor module. The host puts the editor_context in the storage it hands over; the module only
-	// writes register_editor. Declare it with SNK_DECLARE_EDITOR_MODULE.
+	// writes register_editor. Declare it with SNK_DECLARE_EDITOR_MODULE. The host always calls shutdown_services before
+	// it destroys the module, also when shutdown_editor throws: destroying the module first would run its queued
+	// callbacks over members that are already gone. The module's DLL must not touch edt:: from a static initializer.
+	// Not yet behind the context (PR 2 of #588): services() (the engine registries), dialogs() callbacks, jobs().start
+	// with an owner other than tasks(), the raw signals of events() and the sources of problems().
 	class SNK_EDITOR_API editor_extension : public app::modules::module_interface
 	{
 	public:
@@ -74,7 +79,8 @@ namespace edt
 		editor_extension& operator=(const editor_extension&) = delete;
 
 		virtual void register_editor(editor_module_context& context) = 0;
-		// Before everything the module registered is removed; the module's own state goes here.
+		// Called after the module's tasks are stopped (none runs or delivers from here on) and before what it registered
+		// is removed; the module's own state goes here. A task of the module must honour its stop token.
 		virtual void shutdown_editor() {}
 
 		void register_services(ds::app_data_storage& data) final;
