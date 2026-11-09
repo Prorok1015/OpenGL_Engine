@@ -67,6 +67,44 @@ jobs:
       - name: Build, install and pack (static and shared engine)
         run: bash tools/ci/package_windows.sh "${{ matrix.config }}" "${GITHUB_WORKSPACE}/package_out" "${SNK_VERSION}"
 
+      # #591: the shipping host `game` on the static engine, the Windows counterpart of the Linux Clang Debug steps
+      # (build.yml). The package step above built this static tree (snk_sdk), so only the host is left to compile.
+      - name: Build the game host (static engine)
+        run: cmake --build "build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}" --target game --parallel
+
+      # No display and no GPU: --headless selects the null window and the null renderer. The same checks as on Linux:
+      # the start level loads, file watching and hot reload stay off, nothing is logged as an error.
+      - name: Game host headless run (static engine)
+        timeout-minutes: 5
+        run: |
+          game_dir="build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}/apps/game"
+          mkdir -p game_out
+          log=game_out/game.log
+          rc=0
+          timeout 120 "${game_dir}/game.exe" \
+            --config apps/game/config/game.cfg --headless --project projects/sandbox \
+            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
+            >game_out/stdout.txt 2>"$log" || rc=$?
+          tail -20 "$log"
+          if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
+          if ! grep -q "level loaded: .*editor_level.desc" "$log"; then
+            echo "::error::the start level did not load (exit_after_frames cap reached?)"; exit 1
+          fi
+          grep -q "exit after the level loaded (game/exit_after_level_loaded)" "$log"
+          grep -q "file watching is off (res/watch_files)" "$log"
+          grep -q "hot reload is off (scene/hot_reload)" "$log"
+          if grep -q "watching files under" "$log"; then echo "::error::a file watcher started"; exit 1; fi
+          if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
+          if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
+
+      # The host imports no snk_engine.dll (it is the static engine) and no DLL beyond Windows: an editor or git library
+      # would not sit next to it and fails the check. The MSVC runtime is not required next to it: the host has no
+      # package yet (stage 7, #46). Its link graph is checked at configure (SnkMcpIsolation) and its symbols on Linux.
+      - name: Game host dependency check (static engine)
+        run: |
+          bash tools/ci/check_windows_deps.sh --runtime-elsewhere \
+            "build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}/apps/game" game.exe
+
       # The unit tests on the shared Release engine (what the removed "Windows MSVC Shared Release" job ran).
       # Built in the package's shared tree (only the test sources and Boost.Test are left to compile), with no step
       # limit, as the build matrix does: a cold compiler cache makes it ~30 minutes. The run has the matrix's limit.
