@@ -10,6 +10,7 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 	: m_resources(resources)
 	, m_render(render)
 	, m_gui(gui)
+	, m_tasks(tasks)
 	, m_services(services)
 	, m_documents(scene, std::move(make_preview), m_events)
 	, m_jobs(tasks, &m_events)
