@@ -27,7 +27,20 @@ struct actions_fixture
 {
 	void frame()
 	{
-		state.update(ref, keys, bound, nullptr);
+		state.update(ref, keys, bound, nullptr, &fixed);
+	}
+
+	// One fixed step; what it sees of Jump.
+	struct seen_step
+	{
+		bool pressed = false;
+		bool released = false;
+		bool held = false;
+	};
+	seen_step step()
+	{
+		fixed.begin_step();
+		return { fixed.pressed(JUMP), fixed.released(JUMP), fixed.held(JUMP) };
 	}
 
 	void set(KB key, bool down) { keys.keyboard[static_cast<std::size_t>(key)] = down; }
@@ -39,6 +52,7 @@ struct actions_fixture
 	inp::input_state keys{};
 	inp::input_bound bound{ .bound = true, .frozen = false };
 	inp::action_state state{};
+	inp::fixed_action_state fixed{};
 };
 
 }
@@ -206,6 +220,122 @@ BOOST_AUTO_TEST_CASE(TheInputSystemsAreRegisteredTogether)
 	BOOST_REQUIRE(actions != nullptr);
 	BOOST_TEST((actions->desc.phase == ecs::phase::input));
 	BOOST_TEST(!actions->desc.run_in_edit);
+}
+
+// ---------------------------------------------------------------- fixed_action_state
+
+BOOST_AUTO_TEST_CASE(Fixed_AFrameWithoutSteps_KeepsTheEdgeForTheNextStep)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	frame(); // no step in these frames (time_scale 0, a short frame, Pause)
+	const auto first = step();
+	BOOST_TEST(first.pressed);
+	BOOST_TEST(first.held);
+	const auto second = step();
+	BOOST_TEST(!second.pressed);
+	BOOST_TEST(!second.released);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_SeveralStepsInAFrame_SeeThePressOnce_AndTheLevelInEach)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	int presses = 0;
+	for (int i = 0; i < 3; ++i) {
+		const auto s = step();
+		presses += s.pressed ? 1 : 0;
+		BOOST_TEST(s.held);
+	}
+	BOOST_TEST(presses == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_APressLetGoBeforeAnyStep_IsAStepWithPressedThenOneWithReleased)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	set(KB::SPACE, false);
+	frame();
+	frame();
+	const auto first = step();
+	BOOST_TEST(first.pressed);
+	BOOST_TEST(!first.held); // the frame's level
+	const auto second = step();
+	BOOST_TEST(second.released);
+	BOOST_TEST(!second.pressed);
+	const auto third = step();
+	BOOST_TEST(!third.pressed);
+	BOOST_TEST(!third.released);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_AFullQueue_DropsTheOldestPairs_SoTheStepsStayBalanced)
+{
+	frame();
+	// Ten edges with no step: press, release, ... The queue holds eight.
+	for (int i = 0; i < 5; ++i) {
+		set(KB::SPACE, true);
+		frame();
+		set(KB::SPACE, false);
+		frame();
+	}
+	int presses = 0;
+	int releases = 0;
+	bool expect_press = true;
+	for (std::size_t i = 0; i < inp::fixed_action_state::queue_limit + 2; ++i) {
+		const auto s = step();
+		if (!s.pressed && !s.released) continue;
+		BOOST_TEST(s.pressed == expect_press);
+		expect_press = !expect_press;
+		presses += s.pressed ? 1 : 0;
+		releases += s.released ? 1 : 0;
+	}
+	BOOST_TEST(presses == 4);
+	BOOST_TEST(releases == 4);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_AMapChange_GivesTheStepsTheReleaseOfWhatTheySawPressed)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	BOOST_REQUIRE(step().pressed);
+
+	ref.map = make_map(); // the key stays held
+	frame();
+	frame(); // a frame without a step
+	const auto first = step();
+	BOOST_TEST(first.released);
+	BOOST_TEST(!first.pressed);
+	const auto second = step();
+	BOOST_TEST(!second.released);
+	BOOST_TEST(!second.pressed);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_AMapChange_DropsAPressTheStepsNeverSaw)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	ref.map = make_map();
+	frame();
+	const auto s = step();
+	BOOST_TEST(!s.pressed);
+	BOOST_TEST(!s.released);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_ByNameIsById)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	fixed.begin_step();
+	BOOST_TEST(fixed.pressed("Jump"));
+	BOOST_TEST(fixed.held("Jump"));
+	BOOST_TEST(!fixed.pressed("Fire"));
+	BOOST_TEST(!fixed.released("Dash"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

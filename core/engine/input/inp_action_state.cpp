@@ -1,4 +1,5 @@
 #include <snk/input/inp_action_state.h>
+#include <snk/common/logger/engine_log.h>
 #include <type_traits>
 #include <variant>
 
@@ -69,21 +70,24 @@ bool inp::action_state::released(std::string_view name) const
 }
 
 void inp::action_state::update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-	ecs::event_writer<action_event>* events)
+	ecs::event_writer<action_event>* events, fixed_action_state* fixed)
 {
-	const auto emit = [events](action_id id, action_edge edge) {
+	const auto emit = [events, fixed](action_id id, action_edge edge) {
 		if (events && events->bound()) events->emit(action_event{ id, edge });
+		if (fixed) fixed->push(id, edge);
 	};
 
 	const bool fresh = actions.map != m_map;
 	if (fresh) {
-		// A subscriber that saw the press of the old map must also see its release.
+		// A subscriber that saw the press of the old map must also see its release. The fixed steps get theirs from
+		// set_map below, after what they were last shown.
 		for (action_id id = 0; id < m_slots.size(); ++id) {
-			if (m_slots[id].held) emit(id, action_edge::released);
+			if (m_slots[id].held && events && events->bound()) events->emit(action_event{ id, action_edge::released });
 		}
 		m_map = actions.map;
 		m_slots.assign(m_map ? m_map->size() : 0, slot{});
 	}
+	if (fixed && fixed->map() != m_map) fixed->set_map(m_map);
 	if (!m_map) return;
 
 	const auto list = m_map->actions();
@@ -112,11 +116,99 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		} else if (!down) {
 			s.armed = true;
 		}
+		if (fixed) fixed->set_held(id, s.held);
 	}
 }
 
-void inp::update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-	const input_bound& bound, const action_map_ref& actions, action_state& out)
+const inp::fixed_action_state::slot* inp::fixed_action_state::at(action_id id) const
 {
-	out.update(actions, state, bound, &events);
+	return id < m_slots.size() ? &m_slots[id] : nullptr;
+}
+
+inp::action_id inp::fixed_action_state::find(std::string_view name) const
+{
+	return m_map ? m_map->id(name) : invalid_action;
+}
+
+bool inp::fixed_action_state::held(action_id id) const
+{
+	const slot* s = at(id);
+	return s && s->held;
+}
+
+bool inp::fixed_action_state::pressed(action_id id) const
+{
+	const slot* s = at(id);
+	return s && s->has_step_edge && s->step_edge == action_edge::pressed;
+}
+
+bool inp::fixed_action_state::released(action_id id) const
+{
+	const slot* s = at(id);
+	return s && s->has_step_edge && s->step_edge == action_edge::released;
+}
+
+bool inp::fixed_action_state::held(std::string_view name) const
+{
+	return held(find(name));
+}
+
+bool inp::fixed_action_state::pressed(std::string_view name) const
+{
+	return pressed(find(name));
+}
+
+bool inp::fixed_action_state::released(std::string_view name) const
+{
+	return released(find(name));
+}
+
+void inp::fixed_action_state::begin_step()
+{
+	for (slot& s : m_slots) {
+		s.has_step_edge = !s.queue.empty();
+		if (!s.has_step_edge) continue;
+		s.step_edge = s.queue.front();
+		s.queue.pop_front();
+		s.shown_down = s.step_edge == action_edge::pressed;
+	}
+}
+
+void inp::fixed_action_state::set_map(std::shared_ptr<const action_map> map)
+{
+	std::vector<slot> fresh(map ? map->size() : 0);
+	for (action_id id = 0; id < m_slots.size(); ++id) {
+		if (!m_slots[id].shown_down) continue;
+		if (id >= fresh.size()) fresh.resize(static_cast<std::size_t>(id) + 1);
+		fresh[id].queue.push_back(action_edge::released);
+	}
+	m_map = std::move(map);
+	m_slots = std::move(fresh);
+}
+
+void inp::fixed_action_state::push(action_id id, action_edge edge)
+{
+	if (id >= m_slots.size()) return;
+	slot& s = m_slots[id];
+	if (s.queue.size() >= queue_limit) {
+		s.queue.pop_front();
+		s.queue.pop_front();
+		if (!s.warned) {
+			s.warned = true;
+			egLOG_WARN("input", "action {}: more than {} edges waited for a fixed step, the oldest pairs are dropped",
+				m_map && m_map->find(id) ? m_map->find(id)->name : std::string{ "?" }, queue_limit);
+		}
+	}
+	s.queue.push_back(edge);
+}
+
+void inp::fixed_action_state::set_held(action_id id, bool held)
+{
+	if (id < m_slots.size()) m_slots[id].held = held;
+}
+
+void inp::update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
+	const input_bound& bound, const action_map_ref& actions, action_state& out, fixed_action_state& fixed)
+{
+	out.update(actions, state, bound, &events, &fixed);
 }

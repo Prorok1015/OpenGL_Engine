@@ -3,7 +3,9 @@
 #include <snk/input/inp_events.hpp>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/common/snk_api.h>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -15,6 +17,8 @@ namespace inp
 {
 	enum class action_edge : std::uint8_t { pressed, released };
 
+	// `action` is an id of the map the world reads. The released sent when the map changes carries the id of the old map:
+	// keep the ids taken by name at start, do not turn this id into a name through the new map in that frame.
 	struct action_event
 	{
 		action_id action = invalid_action;
@@ -36,6 +40,8 @@ namespace inp
 		bool frozen = false;
 	};
 
+	class fixed_action_state;
+
 	// An action goes down (pressed) only once it was seen up while the input was bound ("armed", INPUT_STACK.md M4): coming
 	// back to the game view with a key held gives no press. Losing the binding lets every held action go (one released).
 	// A new map (live reload of actions.desc, the reader moving to another world) first releases what the old one held;
@@ -54,7 +60,7 @@ namespace inp
 
 		// One frame of inp::update_actions; the edges also go to `events` when it is given.
 		void update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-			ecs::event_writer<action_event>* events);
+			ecs::event_writer<action_event>* events, fixed_action_state* fixed = nullptr);
 
 	private:
 		struct slot
@@ -72,7 +78,53 @@ namespace inp
 		std::vector<slot> m_slots{};
 	};
 
+	// The actions as fixed_update systems read them (WORLD_BUS.md 4.4). A frame may run 0 fixed steps or several: the
+	// frame's edges wait in a short queue per action and each step takes at most one, in order, so a press is seen by
+	// exactly one step and a press let go before any step still gives one step with pressed, then one with released.
+	// held() is the frame's level in every step. world_context starts each step (begin_step).
+	class SNK_API fixed_action_state
+	{
+	public:
+		static constexpr std::size_t queue_limit = 8;
+
+		bool held(action_id id) const;
+		bool pressed(action_id id) const;
+		bool released(action_id id) const;
+		bool held(std::string_view name) const;
+		bool pressed(std::string_view name) const;
+		bool released(std::string_view name) const;
+
+		// Before each fixed step: every action takes the next edge of its queue, if any.
+		void begin_step();
+
+		// Fed by action_state::update. A new map drops the queues; an action the fixed steps saw pressed under the old
+		// one gets one released (old id) for the next step.
+		void set_map(std::shared_ptr<const action_map> map);
+		const std::shared_ptr<const action_map>& map() const { return m_map; }
+		// A full queue drops its two oldest edges (a press and its release): the steps still see them in pairs.
+		void push(action_id id, action_edge edge);
+		void set_held(action_id id, bool held);
+
+	private:
+		struct slot
+		{
+			std::deque<action_edge> queue{};
+			bool has_step_edge = false;
+			action_edge step_edge = action_edge::pressed;
+			bool held = false;
+			// What the steps were last shown: pressed and not yet released.
+			bool shown_down = false;
+			bool warned = false;
+		};
+
+		const slot* at(action_id id) const;
+		action_id find(std::string_view name) const;
+
+		std::shared_ptr<const action_map> m_map{};
+		std::vector<slot> m_slots{};
+	};
+
 	// The system "inp::update_actions": phase input, after inp::update_input_state, not run in Edit or Pause.
 	SNK_API void update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-		const input_bound& bound, const action_map_ref& actions, action_state& out);
+		const input_bound& bound, const action_map_ref& actions, action_state& out, fixed_action_state& fixed);
 }
