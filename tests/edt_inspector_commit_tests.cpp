@@ -53,7 +53,7 @@ BOOST_AUTO_TEST_CASE(RendererChange_NoActiveItem_CommitsOnce)
 {
 	imgui_ctx imgui;
 	edt::inspector_registry registry;
-	auto reg = registry.add<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node&) { return true; });
+	auto reg = registry.add(std::string(scn::camera_desc::__type), [](scn::prefab_desc::prefab_comp_node&) { return true; });
 
 	auto node = make_node_with_camera();
 	edt::inspector_panel panel;
@@ -71,7 +71,7 @@ BOOST_AUTO_TEST_CASE(RendererChange_WhileItemActive_CommitsOnceOnRelease)
 	imgui_ctx imgui;
 	edt::inspector_registry registry;
 	bool hold = true;
-	auto reg = registry.add<scn::camera_desc>([&](scn::prefab_desc::prefab_comp_node&) {
+	auto reg = registry.add(std::string(scn::camera_desc::__type), [&](scn::prefab_desc::prefab_comp_node&) {
 		if (hold) {
 			// Simulates a drag in progress: item is active and reports "changed" every frame.
 			ImGuiID id = ImGui::GetID("drag");
@@ -106,7 +106,7 @@ BOOST_AUTO_TEST_CASE(NoChange_NeverCommits)
 {
 	imgui_ctx imgui;
 	edt::inspector_registry registry;
-	auto reg = registry.add<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node&) { return false; });
+	auto reg = registry.add(std::string(scn::camera_desc::__type), [](scn::prefab_desc::prefab_comp_node&) { return false; });
 
 	auto node = make_node_with_camera();
 	edt::inspector_panel panel;

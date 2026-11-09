@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_registration.h"
 #include <snk/resource/res_tag.h>
 #include <cstddef>
@@ -31,7 +32,7 @@ namespace edt
 	// Asset kinds in registration order. For a path the kind with the longest matching suffix that has the
 	// wanted action (open / drop_into_scene) handles it; on a tie the earlier registration wins. Built-in kinds
 	// go through the same add() as extensions. Main thread only.
-	class asset_kind_registry
+	class SNK_EDITOR_API asset_kind_registry
 	{
 	public:
 		asset_kind_registry();

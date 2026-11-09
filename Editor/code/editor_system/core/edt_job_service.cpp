@@ -1,5 +1,6 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_dialog_service.h>
+#include "edt_service_commands.h"
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/serialize.hpp>
 #include <algorithm>

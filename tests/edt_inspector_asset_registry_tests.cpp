@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_SUITE(EditorInspectorRegistryTests)
 BOOST_AUTO_TEST_CASE(AddFindInvoke)
 {
 	edt::inspector_registry registry;
-	auto reg = registry.add<scn::camera_desc>(returning(true));
+	auto reg = registry.add(std::string(scn::camera_desc::__type), returning(true));
 	BOOST_CHECK(reg.active());
 	BOOST_CHECK(registry.contains(scn::camera_desc::__type));
 	BOOST_CHECK(registry.find(scn::camera_desc::__type) != nullptr);
@@ -279,7 +279,7 @@ BOOST_AUTO_TEST_CASE(Panel_UsesTheRegisteredRenderer_AndTheFallbackOtherwise)
 	imgui_ctx imgui;
 	edt::inspector_registry registry;
 	int camera_calls = 0;
-	auto reg = registry.add<scn::camera_desc>(returning(true, &camera_calls));
+	auto reg = registry.add(std::string(scn::camera_desc::__type), returning(true, &camera_calls));
 
 	auto node = node_with(std::string(scn::camera_desc::__type));
 	const auto plain = node_with("plain_desc");

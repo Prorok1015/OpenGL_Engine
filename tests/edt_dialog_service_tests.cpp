@@ -3,7 +3,7 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_dialog_service.h>
-#include <snk/editor/edt_service_commands.h>
+#include "edt_service_commands.h"
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/window/wnd_null_window_system.h>
 #include <boost/json/parse.hpp>

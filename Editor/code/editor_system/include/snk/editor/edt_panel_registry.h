@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_registration.h"
 #include <cstddef>
 #include <cstdint>
@@ -41,7 +42,7 @@ namespace edt
 
 	// Panels of the editor in registration order. That order is the render order, the order of the View menu
 	// and of the tabs docked into one slot. Built-in panels go through the same add() as extensions. Main thread only.
-	class panel_registry
+	class SNK_EDITOR_API panel_registry
 	{
 	public:
 		panel_registry();

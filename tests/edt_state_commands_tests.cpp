@@ -9,7 +9,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
-#include <snk/editor/edt_state_commands.h>
+#include "edt_state_commands.h"
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <cmath>

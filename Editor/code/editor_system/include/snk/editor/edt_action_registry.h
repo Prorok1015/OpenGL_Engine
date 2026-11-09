@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_registration.h"
 #include <snk/command/cmd_registry.h>
 #include <boost/json/value.hpp>
@@ -15,7 +16,7 @@ namespace edt
 {
 	// A key with modifiers, e.g. "Ctrl+Shift+S". The key is a single letter or digit, F1-F12 or a name such as
 	// "Delete"; it is stored upper-case. Modifiers must match exactly.
-	struct shortcut
+	struct SNK_EDITOR_API shortcut
 	{
 		bool ctrl = false;
 		bool shift = false;
@@ -138,7 +139,7 @@ namespace edt
 	// order. A command is one registration: dropping the handle removes the command and its UI together.
 	// Built-in actions go through the same add() as extensions. Main thread only; actions may add and remove
 	// registrations while they run.
-	class action_registry
+	class SNK_EDITOR_API action_registry
 	{
 	public:
 		// Owns a registry of its own.

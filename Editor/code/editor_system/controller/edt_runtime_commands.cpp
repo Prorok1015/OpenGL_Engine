@@ -6,7 +6,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/common/engine_assert.h>
 #include <snk/editor/edt_editor_events.h>
-#include <snk/editor/edt_state_commands.h>
+#include "edt_state_commands.h"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/scene/level/scn_world_snapshot.h>

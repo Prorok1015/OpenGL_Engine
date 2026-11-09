@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_editor_events.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
@@ -32,7 +33,7 @@ namespace edt
 	// Background work of the editor (import, export, ...) on top of ds::task_system. The work runs on a pool
 	// lane; its result is delivered by the task system's main drain (the `tasks` frame stage), so there is no
 	// polling and no second drain. Main thread only.
-	class job_service
+	class SNK_EDITOR_API job_service
 	{
 	public:
 		using job_id = std::uint64_t;
@@ -198,9 +199,4 @@ namespace edt
 		// Last: destroyed first, so continuations that still hold `this` are dropped before the maps die.
 		ds::lifetime m_life;
 	};
-
-	// A job that threw is logged and shown to the person as an error message dialog (the dialog is skipped while the
-	// dialog service has no registrar). Cancelled and finished jobs are not reported. `jobs` and `dialogs` must
-	// outlive the returned subscription.
-	[[nodiscard]] connection report_failed_jobs(editor_events& events, const job_service& jobs, dialog_service& dialogs);
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_registration.h"
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <cstddef>
@@ -18,7 +19,7 @@ namespace edt
 
 	// Custom inspector renderers by desc `__type`. A type without one is drawn by the inspector's generic JSON
 	// renderer. Built-in renderers go through the same add() as extensions. Main thread only.
-	class inspector_registry
+	class SNK_EDITOR_API inspector_registry
 	{
 	public:
 		inspector_registry();
@@ -29,12 +30,6 @@ namespace edt
 		// An empty type, a null renderer or a type that already has a renderer is an error: it is logged and
 		// nothing is registered (the returned registration is not active).
 		[[nodiscard]] registration add(std::string type, inspector_renderer renderer);
-		// The type is T::__type.
-		template<typename T>
-		[[nodiscard]] registration add(inspector_renderer renderer)
-		{
-			return add(std::string(T::__type), std::move(renderer));
-		}
 
 		// Drops the renderer of `type` whoever registered it; its registration turns into a no-op. False if there was none.
 		bool remove(std::string_view type);

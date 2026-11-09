@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include <memory>
 
 namespace scn { class context_manager; class context_set; class ecs_assembler; class scene_layer; }
@@ -17,7 +18,7 @@ namespace edt
 	// loads or unloads. Take the game services from the accessors below at the moment of use and never keep the
 	// references: a reference taken earlier may belong to a destroyed layer. The base_* services are the ones of the
 	// app_data_storage, used when there is no game layer (tests that build the editor on the base services alone).
-	struct editor_services
+	struct SNK_EDITOR_API editor_services
 	{
 		std::weak_ptr<scn::context_manager> ctx_manager;
 		desc::desc_system* base_descs = nullptr;

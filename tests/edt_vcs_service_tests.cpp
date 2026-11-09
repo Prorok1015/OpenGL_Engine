@@ -5,7 +5,7 @@
 #include "edt_git_panel_model.h"
 #include "edt_repository_watcher.h"
 #include <snk/editor/edt_job_service.h>
-#include <snk/editor/edt_service_commands.h>
+#include "edt_service_commands.h"
 #include <snk/platform/plt_process.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>

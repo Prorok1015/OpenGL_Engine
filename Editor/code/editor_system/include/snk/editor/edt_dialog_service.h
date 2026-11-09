@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include <snk/command/cmd_types.h>
 #include <boost/json/value.hpp>
 #include <cstddef>
@@ -41,7 +42,7 @@ namespace edt
 	// each has its own id (also its ImGui popup id), a kind and a JSON Schema of its answer (list()), so a script or
 	// an agent can answer what a person would click (answer()). The service draws inside a gui implicit callback, so the
 	// ImGui context and popup id stack stay as they were. Main thread only.
-	class dialog_service
+	class SNK_EDITOR_API dialog_service
 	{
 	public:
 		using dialog_id = std::uint64_t;

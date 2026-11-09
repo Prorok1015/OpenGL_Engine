@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_document.h"
 #include <snk/resource/res_tag.h>
 #include <functional>
@@ -15,7 +16,7 @@ namespace edt
 	// by the editor, which builds its controllers on it before the editor_context exists; the manager gives it
 	// its id, binds its document_changed to `events` and owns the preview. `services` (also the editor's) is what
 	// the preview works through; it outlives the manager's use of it.
-	class document_manager
+	class SNK_EDITOR_API document_manager
 	{
 	public:
 		document_manager(scene_document& scene, editor_services& services, editor_events& events);
