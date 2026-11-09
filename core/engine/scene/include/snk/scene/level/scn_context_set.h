@@ -119,6 +119,9 @@ namespace scn
 		uint32_t pending_steps() const { return m_pending_steps; }
 		// Frames update() ran in Play or Step since the set was made (Edit and Pause frames are not counted).
 		uint64_t frames_run() const { return m_frames_run; }
+		// The counters of a set restored from a snapshot (the mode is set first): the frames run and, in Step, the
+		// frames of the step still to run.
+		void restore_run_state(uint64_t frames_run, uint32_t pending_steps);
 
 		// At 60 fps a frame of scale s needs about s fixed steps, and fixed_stepper runs at most 8 a frame (its
 		// default max_steps): beyond 8 simulated time would be dropped, so the scale is capped there.

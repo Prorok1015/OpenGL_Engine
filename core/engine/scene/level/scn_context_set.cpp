@@ -106,6 +106,12 @@ void scn::context_set::set_mode(ecs::run_mode mode)
 	sync_context_mode();
 }
 
+void scn::context_set::restore_run_state(uint64_t frames_run, uint32_t pending_steps)
+{
+	m_frames_run = frames_run;
+	m_pending_steps = m_mode == ecs::run_mode::step ? pending_steps : 0;
+}
+
 void scn::context_set::step(uint32_t frames)
 {
 	if (!ENGINE_VERIFY(frames >= 1, "set '{}': step of 0 frames, running one", m_name)) {

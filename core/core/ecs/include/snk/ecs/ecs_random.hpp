@@ -32,6 +32,21 @@ public:
 
 	[[nodiscard]] uint64_t seed() const noexcept { return m_seed; }
 
+	// The stream where it stands, to put it back there (a snapshot of a live world); from_state starts a new one.
+	struct position
+	{
+		uint64_t state = 0;
+		uint64_t inc = 1;
+		uint64_t seed = default_seed;
+	};
+	[[nodiscard]] position save() const noexcept { return { m_state, m_inc, m_seed }; }
+	void load(const position& saved) noexcept
+	{
+		m_state = saved.state;
+		m_inc = saved.inc;
+		m_seed = saved.seed;
+	}
+
 	[[nodiscard]] uint32_t next_u32() noexcept
 	{
 		const uint64_t old = m_state;

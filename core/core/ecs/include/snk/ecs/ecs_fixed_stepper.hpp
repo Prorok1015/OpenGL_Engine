@@ -36,6 +36,9 @@ public:
 	}
 
 	void reset() noexcept { m_accumulator = 0.0; }
+	// The time not yet stepped, exact (alpha() is the rounded fraction); a snapshot saves and restores it.
+	[[nodiscard]] double accumulator() const noexcept { return m_accumulator; }
+	void set_accumulator(double accumulator) noexcept { m_accumulator = accumulator; }
 
 	[[nodiscard]] float step() const noexcept { return static_cast<float>(m_step); }
 	// Position inside the current step in [0, 1), for interpolating rendering.
