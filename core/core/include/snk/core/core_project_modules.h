@@ -24,8 +24,15 @@ namespace core
 	{
 		// Modules compiled into the host, by manifest name; looked up before the project's build output.
 		std::map<std::string, app::modules::module_entry> compiled_in;
-		// Whether the manifest's editor modules count. None is loaded yet (Extension API, #22): they are only reported.
+		// Whether the manifest's editor modules (kind "editor", #588) are loaded, after the runtime ones: only with
+		// `check_editor_module`, which the editor gives. Without it they are only reported.
 		bool with_editor_modules = false;
+		// Checks an editor module's entry (its editor api version, module_entry::editor_api_version) before its module is
+		// created: empty when the editor can serve it, else why not. A module it refuses is not loaded and the rest runs.
+		std::function<std::string(const app::modules::module_entry&)> check_editor_module;
+		// Why the editor modules cannot be unloaded now (one of their callbacks is on the stack: unloading would
+		// destroy code that runs); empty when they can. Asked before every unload and before a reload swaps the game.
+		std::function<std::string()> editor_unload_refusal;
 		// A static host (the shipping `game`, #591): only `compiled_in` modules run, nothing is opened from the
 		// project's build output, and reload() from it is refused.
 		bool compiled_only = false;
@@ -113,6 +120,17 @@ namespace core
 		// The copy in use was made from the library the build output has now (same file, size and write time). True
 		// for a compiled-in module; false for one that runs from no copy.
 		bool is_current(const std::string& name) const;
+		// Loads the manifest's editor modules (#588), each from <root>/build/bin like a runtime module (copied, checked
+		// with options.check_editor_module, its name against the manifest's). Call it after load_all: a module of kind
+		// "editor" is loaded after `game`. One that is missing, refused or fails to register is reported and logged; the
+		// editor keeps running without it. reload() unloads them before the game module goes and loads them again after it.
+		project_modules_report load_editor_modules();
+		// Unloads the loaded editor modules, the last loaded first (each one's registrations go with it). Empty when
+		// done (or none was loaded); otherwise why nothing was unloaded.
+		std::string unload_editor_modules();
+		bool has_editor_modules() const { return !m_editor_loaded.empty(); }
+		// `name` is a module of kind "editor" (loaded, or named so by the manifest).
+		bool is_editor_module(const std::string& name) const;
 		// The runtime modules the project requires (not optional) that `report` did not load: missing or refused.
 		std::vector<std::string> failed_required(const project_modules_report& report) const;
 
@@ -143,6 +161,8 @@ namespace core
 		ds::app_data_storage& m_data;
 		project_modules_options m_options;
 		std::map<std::string, module_copies> m_copies;
+		// Editor modules in the order they were loaded.
+		std::vector<std::string> m_editor_loaded;
 		// A reload runs: one asked for from inside it (a hook, the module's own code) is refused.
 		bool m_reloading = false;
 	};

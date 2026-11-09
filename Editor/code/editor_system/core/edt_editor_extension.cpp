@@ -8,6 +8,13 @@ edt::editor_module_context::editor_module_context(editor_context& editor, regist
 {
 }
 
+void edt::editor_module_context::set_problems(std::string source, std::vector<problem> items)
+{
+	m_editor.problems().set(source, std::move(items));
+	problem_list& list = m_editor.problems();
+	m_scope.keep_cleanup([&list, source = std::move(source)] { list.clear(source); });
+}
+
 void edt::editor_module_context::add_panel(panel_desc desc)
 {
 	m_scope.keep(m_editor.panels().add(std::move(desc)));
@@ -51,6 +58,8 @@ void edt::editor_extension::register_services(ds::app_data_storage& data)
 	auto& editor = data.require<editor_context>();
 	m_scope = std::make_unique<registration_scope>(editor.tasks());
 	m_context = std::make_unique<editor_module_context>(editor, *m_scope);
+	m_editor = &editor;
+	editor.track_module_scope(*m_scope);
 	register_editor(*m_context);
 }
 
@@ -61,11 +70,24 @@ void edt::editor_extension::initialize_services(ds::app_data_storage&)
 void edt::editor_extension::shutdown_services(ds::app_data_storage&)
 {
 	if (!m_scope) return;
+	// Whatever shutdown_editor does (it may throw), the scope is cleared and untracked before this returns: the host
+	// unloads the module next, and the editor must not keep a pointer into it.
+	struct finish_unload
+	{
+		editor_extension& self;
+		~finish_unload()
+		{
+			self.m_scope->clear();
+			self.m_editor->untrack_module_scope(*self.m_scope);
+			self.m_editor = nullptr;
+			self.m_context.reset();
+			self.m_scope.reset();
+		}
+	} finish{ *this };
 	m_scope->stop_tasks();
+	// From here the host's refusal check must not look at this module's callbacks any more.
+	m_editor->untrack_module_scope(*m_scope);
 	shutdown_editor();
-	m_scope->clear();
-	m_context.reset();
-	m_scope.reset();
 }
 
 std::string edt::check_editor_api_version(std::uint32_t (*module_api_version)())

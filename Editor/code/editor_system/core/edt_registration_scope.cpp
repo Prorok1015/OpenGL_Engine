@@ -17,9 +17,19 @@ void edt::registration_scope::keep(registration handle)
 	m_registrations.push_back(std::move(handle));
 }
 
+void edt::registration_scope::keep_cleanup(std::function<void()> cleanup)
+{
+	m_cleanups.push_back(std::move(cleanup));
+}
+
 void edt::registration_scope::keep(connection handle)
 {
 	m_connections.push_back(std::move(handle));
+}
+
+int edt::registration_scope::running_callbacks() const
+{
+	return ds::detail::running_callbacks(m_tasks);
 }
 
 void edt::registration_scope::stop_tasks()
@@ -40,5 +50,10 @@ void edt::registration_scope::clear()
 	}
 	while (!m_registrations.empty()) {
 		m_registrations.pop_back();
+	}
+	while (!m_cleanups.empty()) {
+		const auto cleanup = std::move(m_cleanups.back());
+		m_cleanups.pop_back();
+		cleanup();
 	}
 }
