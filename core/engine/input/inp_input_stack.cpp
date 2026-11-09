@@ -150,6 +150,7 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 			if (!hit || name != hit->world) give(&world_input::buttons, name);
 		}
 	} else if (!orphaned && hit) {
+		// A region's click is its world's alone, as it was before layers; a modal's is also seen by the layers above it.
 		give(&world_input::buttons, hit->world);
 		if (hit->layer.block_below) {
 			for (std::size_t i = 0; i < hit_at; ++i) give(&world_input::buttons, layers[i]->world);

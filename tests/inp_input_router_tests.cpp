@@ -809,6 +809,23 @@ BOOST_AUTO_TEST_CASE(Stack_EqualInputLayersAreOrderedByTheLevelFileNotByTheWorld
 	BOOST_TEST(!left_of(lower_id));
 }
 
+BOOST_AUTO_TEST_CASE(Stack_TheOrderOfALevelDefaultBeatsTheInputLayerOfTheWorld)
+{
+	auto& by_layer = make_ui("by_layer", 3, { BUTTON });
+	auto& by_default = make_ui("by_default", 0, { BUTTON });
+	scn::input_stack_desc above;
+	above.order = 7;
+	by_default.set_input_stack(above);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	move_to({ 120, 120 });
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST(left_of(by_default));
+	BOOST_TEST(!left_of(by_layer));
+}
+
 BOOST_AUTO_TEST_CASE(Stack_MovementOverAUiRegionStillReachesThe3DWorld_ButAClickOverItDoesNot)
 {
 	auto& world = make("level", "3d");

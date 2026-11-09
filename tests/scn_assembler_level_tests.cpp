@@ -708,6 +708,31 @@ BOOST_FIXTURE_TEST_CASE(Level_DescIndexFollowsTheFileAndWorldsMadeLaterComeAfter
 	BOOST_TEST(lvl.get("and_another").desc_index() > lvl.get("made_while_running").desc_index());
 }
 
+BOOST_FIXTURE_TEST_CASE(Level_AFullReloadKeepsTheWorldsMadeWhileRunningAfterTheNewFileWorldsInTheirOldOrder, level_fixture)
+{
+	auto first = load<scn::level_desc>(put("full1.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"old_a","systems":[]},
+		{"__type":"world_desc","name":"old_b","systems":[]}]})"));
+	BOOST_REQUIRE(first);
+	scn::context_set lvl("level", manager);
+	lvl.load_from_desc(*first, sf, *assembler);
+	lvl.create_context("made_first", lvl.acquire_free_id());
+	lvl.create_context("made_second", lvl.acquire_free_id());
+
+	// what scn::context_manager does on a level reload that changes the worlds
+	lvl.destroy_context("old_a");
+	lvl.destroy_context("old_b");
+	auto second = load<scn::level_desc>(put("full2.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"new_a","systems":[]},
+		{"__type":"world_desc","name":"new_b","systems":[]}]})"));
+	BOOST_REQUIRE(second);
+	lvl.load_from_desc(*second, sf, *assembler);
+
+	BOOST_TEST(lvl.get("new_a").desc_index() < lvl.get("new_b").desc_index());
+	BOOST_TEST(lvl.get("new_b").desc_index() < lvl.get("made_first").desc_index());
+	BOOST_TEST(lvl.get("made_first").desc_index() < lvl.get("made_second").desc_index());
+}
+
 BOOST_FIXTURE_TEST_CASE(Level_ReloadingAWorldKeepsItsDescIndex_AndTheInputStackDefaultsFollowTheDesc, level_fixture)
 {
 	auto lv_desc = load<scn::level_desc>(put("keep.desc", R"({"__type":"level_desc","name":"lv","worlds":[

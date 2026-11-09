@@ -228,6 +228,14 @@ void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factor
 		entt::entity e = world.state().create();
 		assambler.spawn_from_desc(world.state(), e, *world_desc, world_desc->get_name());
 	}
+
+	// A world that outlived a reload was made while running: it stays after every world of the file, in its old order.
+	std::vector<scn::world_context*> survivors;
+	for (const auto& [id, context] : m_contexts) {
+		if (std::ranges::find(m_desc_world_names, std::string{ context->get_name() }) == m_desc_world_names.end()) survivors.push_back(context.get());
+	}
+	std::ranges::sort(survivors, [](const scn::world_context* a, const scn::world_context* b) { return a->desc_index() < b->desc_index(); });
+	for (scn::world_context* context : survivors) context->set_desc_index(m_next_desc_index++);
 }
 
 void scn::context_set::reload_context(

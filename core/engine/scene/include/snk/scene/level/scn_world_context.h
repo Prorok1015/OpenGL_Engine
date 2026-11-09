@@ -109,8 +109,6 @@ namespace scn
 		context_kind m_kind = context_kind::runtime;
 		bool m_extract = true;
 		int m_input_layer = 0;
-		uint32_t m_desc_index = 0;
-		std::optional<input_stack_desc> m_input_stack;
 		const entt::meta_ctx* m_meta = nullptr;
 		entt::registry m_state;
 
@@ -123,5 +121,8 @@ namespace scn
 		ecs::run_mode m_mode = ecs::run_mode::play;
 		float m_time_scale = 1.0f;
 		int m_fixed_steps = 0;
+		// After the older fields: inline accessors (state()) of a game module built earlier keep their offsets.
+		uint32_t m_desc_index = 0;
+		std::optional<input_stack_desc> m_input_stack;
 	};
 } // namespace scn

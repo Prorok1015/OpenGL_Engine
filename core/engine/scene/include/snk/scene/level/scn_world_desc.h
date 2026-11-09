@@ -32,10 +32,12 @@ namespace scn
 		int get_input_layer() const { return input_layer; }
 		// Defaults of the world's base input layer; none: the layer behaves as before the field existed.
 		const std::optional<input_stack_desc>& get_input_stack() const { return input_stack; }
+		void set_input_stack(std::optional<input_stack_desc> stack) { input_stack = std::move(stack); }
 	private:
 		std::string name;
 		int input_layer = 0;
-		std::optional<input_stack_desc> input_stack;
 		std::vector<std::string> systems;
+		// After the older fields: inline accessors of a game module built earlier keep their offsets.
+		std::optional<input_stack_desc> input_stack;
 	};
 }
