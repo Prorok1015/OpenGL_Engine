@@ -70,7 +70,7 @@ jobs:
       # #591: the shipping host `game` on the static engine, the Windows counterpart of the Linux Clang Debug steps
       # (build.yml). The package step above built this static tree (snk_sdk), so only the host is left to compile.
       - name: Build the game host (static engine)
-        run: cmake --build "build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}" --target game --parallel
+        run: cmake --build "build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}" --target game test_static_game_host --parallel
 
       # No display and no GPU: --headless selects the null window and the null renderer. The same checks as on Linux:
       # the start level loads, file watching and hot reload stay off, nothing is logged as an error.
@@ -107,6 +107,27 @@ jobs:
         run: |
           bash tools/ci/check_windows_deps.sh --runtime-elsewhere \
             "build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}/apps/game" game.exe
+
+      # #592: the game module compiled into the host (tests/static_game), the counterpart of the Linux step (build.yml).
+      - name: Static game module headless run (static engine)
+        timeout-minutes: 5
+        run: |
+          host_dir="build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}/tests/static_game"
+          mkdir -p game_out
+          log=game_out/static_game.log
+          rc=0
+          timeout 120 "${host_dir}/test_static_game_host.exe" \
+            --config apps/game/config/game.cfg --headless --project tests/static_game/project \
+            --set game/exit_after_level_loaded false app/exit_after_frames 120 app/headless_target_fps 60 \
+            >game_out/static_game_stdout.txt 2>"$log" || rc=$?
+          tail -20 "$log"
+          trap 'if [ -s game_out/static_game_stdout.txt ]; then echo "stdout:"; tail -20 game_out/static_game_stdout.txt; fi' EXIT
+          if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
+          if ! grep -q "module 'static_game' loaded" "$log"; then echo "::error::the compiled-in module was not loaded"; exit 1; fi
+          if ! grep -q "level loaded: .*main.desc" "$log"; then echo "::error::the start level did not load"; exit 1; fi
+          if ! grep -q "static game system ran" "$log"; then echo "::error::the module's system did not run"; exit 1; fi
+          if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the static game host log"; exit 1; fi
+          trap - EXIT
 
       # The unit tests on the shared Release engine (what the removed "Windows MSVC Shared Release" job ran).
       # Built in the package's shared tree (only the test sources and Boost.Test are left to compile), with no step

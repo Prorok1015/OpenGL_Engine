@@ -62,7 +62,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - **Files:** `prefix_name.hpp/.cpp` (e.g. `scn_context_set.cpp`, `res_system.h`)
 - **Private members:** `m_` prefix (`m_worlds`)
 - **Components:** POD structs, optional `_component` suffix
-- **Systems:** Inherit `ecs::system_interface` (auto-registered)
+- **Systems:** registered explicitly (`layer.systems().register_system<&fn>(name)` in `gs::game_module::register_content`); worlds list them by name
 
 ## 🎫 Task Tracking — GitHub Issues (primary)
 

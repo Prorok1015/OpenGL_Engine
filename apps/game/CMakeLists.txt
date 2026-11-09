@@ -8,5 +8,7 @@ if(SNK_ENGINE_SHARED)
 	return()
 endif()
 
-add_executable(${PROJECT_NAME} main.cpp game_host_module.cpp game_host_module.h)
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::sanitizers)
+add_subdirectory(host)
+
+add_executable(${PROJECT_NAME} main.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::game_host PRIVATE snk::sanitizers)

@@ -348,8 +348,7 @@ public:
 	std::string describe() const override { return "closing"; }
 
 private:
-	app::modules::module_entry m_entry{ &observed_test_module_api_version, &observed_test_module_build_info,
-		&observed_test_create_module, &observed_test_destroy_module };
+	app::modules::module_entry m_entry = SNK_MODULE_ENTRY(observed_test_);
 };
 
 // A module whose task continuations use its own service, which its shutdown_content destroys (#579): the unload has

@@ -1,0 +1,23 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "7c3e9a51-2b84-4d0f-9e6a-1f5b8d2c4a90",
+    "name" : "static_game_level",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 4,
+            "name" : "main",
+            "systems" : [
+                "static_game::tick"
+            ],
+            "__id" : "4d2a7f19c8e3b601",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            }
+        }
+    ]
+}

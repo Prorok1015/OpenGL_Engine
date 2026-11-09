@@ -131,6 +131,8 @@ include(SnkPch)
 include(SnkInstall)
 # snk_check_mcp_isolation(): the MCP server module stays out of the engine, games and the SDK.
 include(SnkMcpIsolation)
+# snk_add_game_host(): a shipping executable with its game module compiled in (#592).
+include(SnkGameHost)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -209,6 +211,9 @@ add_test(NAME unit_tests COMMAND unit_tests)
 if(SNK_ENGINE_SHARED)
     # A game module loaded from disk by unit_tests (tests/module_dll).
     add_subdirectory(tests/module_dll)
+else()
+    # A game module compiled into a static host (snk_add_game_host, #592), run headless by CI.
+    add_subdirectory(tests/static_game)
 endif()
 
 snk_pch_create_owner()

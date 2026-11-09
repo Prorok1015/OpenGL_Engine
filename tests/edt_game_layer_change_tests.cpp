@@ -81,20 +81,17 @@ std::unique_ptr<app::modules::module_source> build_of(app::modules::module_entry
 
 app::modules::module_entry v1_entry()
 {
-	return { &editor_game_v1_module_api_version, &editor_game_v1_module_build_info, &editor_game_v1_create_module,
-		&editor_game_v1_destroy_module };
+	return SNK_MODULE_ENTRY(editor_game_v1_);
 }
 
 app::modules::module_entry v2_entry()
 {
-	return { &editor_game_v2_module_api_version, &editor_game_v2_module_build_info, &editor_game_v2_create_module,
-		&editor_game_v2_destroy_module };
+	return SNK_MODULE_ENTRY(editor_game_v2_);
 }
 
 app::modules::module_entry failing_entry()
 {
-	return { &editor_game_failing_module_api_version, &editor_game_failing_module_build_info,
-		&editor_game_failing_create_module, &editor_game_failing_destroy_module };
+	return SNK_MODULE_ENTRY(editor_game_failing_);
 }
 
 // A level with a component of the module's desc type.

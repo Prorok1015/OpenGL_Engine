@@ -50,12 +50,12 @@ namespace {
 
 app::modules::module_entry source_module_entry()
 {
-	return { &source_test_module_api_version, &source_test_module_build_info, &source_test_create_module, &source_test_destroy_module };
+	return SNK_MODULE_ENTRY(source_test_);
 }
 
 app::modules::module_entry second_module_entry()
 {
-	return { &second_test_module_api_version, &second_test_module_build_info, &second_test_create_module, &second_test_destroy_module };
+	return SNK_MODULE_ENTRY(second_test_);
 }
 
 // This host's build info with other bits set, as a module built in another EnTT mode reports it.
