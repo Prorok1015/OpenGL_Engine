@@ -105,6 +105,9 @@ world_bus: events inside one world (ecs_bus.hpp, docs/roadmap/design/WORLD_BUS.m
         Edit drops); systems before that point see the events a frame later. Outside code: context_manager::emit.
         Subscriptions: gs::module_context::subscribe<T>({set?, world?}, fn(bus_context&, envelope)) (kept by the
         layer: survive level reload, go on unload/code reload); engine/editor: context_manager::subscribe (base sets).
+        Component observers (#600, module API 3.4): gs::module_context::observe<T>(filter, scn::observed::construct|
+        update|destroy, fn(bus_context&, entity)), connected from a world's creation, silent under
+        event_subscriptions::mute_observers() (restore in Play); never registry.on_construct<T>() directly in a module.
         A subscriber's emit goes to the next delivery, its changer()/spawner() edits land right after the delivery.
 game_actions: res/input/actions.desc (manifest input_actions) -> gs::input_actions (watch, rebuild) -> gs::route_input
         writes inp::input_bound and inp::action_map_ref into each world (map only for the first world of a set by desc_index

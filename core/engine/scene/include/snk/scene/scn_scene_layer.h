@@ -7,6 +7,7 @@
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_event_subscriptions.h>
@@ -66,6 +67,10 @@ namespace scn
 		// Bus subscriptions heard in the worlds of the layer's sets (a module subscribes through
 		// gs::module_context::subscribe, which keeps them here until the layer goes).
 		event_subscriptions& subscriptions() { return m_subscriptions; }
+		// The blackboard value types a snapshot of the layer's sets can save (optional: `blackboard_types().add<T>(name,
+		// schema)`); a value of any other type is reported as lost.
+		blackboard_catalog& blackboard_types() { return m_blackboard_types; }
+		const blackboard_catalog& blackboard_types() const { return m_blackboard_types; }
 
 		// Owner of the module's tasks: run them with task_system::run(lane, desc, layer.tasks(), fn).
 		const ds::lifetime& tasks() const { return m_tasks; }
@@ -102,5 +107,7 @@ namespace scn
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
 		std::shared_ptr<ecs::bus_registry> m_events;
 		event_subscriptions m_subscriptions;
+		// Last, so the members above keep their place (module API 3.4).
+		blackboard_catalog m_blackboard_types;
 	};
 }

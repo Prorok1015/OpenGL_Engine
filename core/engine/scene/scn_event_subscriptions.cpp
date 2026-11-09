@@ -20,6 +20,18 @@ namespace {
 		bool synced = false;
 		std::map<uint64_t, ecs::connection> connections;
 	};
+
+	// The observer slots of a world, append-only: entt holds pointers to them until the registry goes.
+	struct world_observer_slots
+	{
+		world_observer_slots() = default;
+		world_observer_slots(const world_observer_slots&) = delete;
+		world_observer_slots& operator=(const world_observer_slots&) = delete;
+		world_observer_slots(world_observer_slots&&) noexcept = default;
+		world_observer_slots& operator=(world_observer_slots&&) noexcept = default;
+
+		std::vector<std::shared_ptr<scn::observer_slot>> slots;
+	};
 }
 
 scn::event_subscriptions::event_subscriptions() : m_state(std::make_shared<state>()) {}
@@ -56,6 +68,36 @@ void scn::event_subscriptions::attach(std::string_view set, std::string_view wor
 	// knows<T>() may have bound new types during the loop.
 	links.bound_types = bus.bound_types();
 	links.synced = true;
+}
+
+std::shared_ptr<scn::observer_slot> scn::event_subscriptions::keep_slot(entt::registry& registry, observer_slot slot)
+{
+	auto& kept = registry.ctx().emplace<world_observer_slots>();
+	return kept.slots.emplace_back(std::make_shared<observer_slot>(std::move(slot)));
+}
+
+void scn::event_subscriptions::notify_observer(observer_slot& slot, entt::registry& registry, entt::entity entity)
+{
+	if (const auto muted = slot.muted.lock(); !muted || *muted > 0) return;
+	const auto fn = slot.fn.lock();
+	if (!fn) return;
+	ecs::bus_context context{ slot.set, slot.world, registry };
+	(*fn)(context, entity);
+}
+
+ecs::connection scn::event_subscriptions::observer_connection(std::shared_ptr<observer_slot> slot)
+{
+	return ecs::connection([slot = std::move(slot)] { slot->fn.reset(); });
+}
+
+std::weak_ptr<int> scn::event_subscriptions::mute_token() const
+{
+	return std::shared_ptr<int>(m_state, &m_state->muted);
+}
+
+bool scn::event_subscriptions::observers_muted() const
+{
+	return m_state->muted > 0;
 }
 
 size_t scn::event_subscriptions::size() const

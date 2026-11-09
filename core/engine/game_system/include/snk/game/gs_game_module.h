@@ -96,6 +96,17 @@ namespace gs
 			return m_layer.keep(m_layer.subscriptions().subscribe<T>(std::move(filter), std::move(fn)));
 		}
 
+		// An observer of component T (module API 3.4): `fn` runs on `what` (construct, update, destroy) of T in the worlds
+		// of the layer's sets that `filter` matches, from the moment each world is created. Kept by the layer like a
+		// subscription. A hot reload in Play (HOT_RELOAD_PLAY.md 6) puts back entities that already existed with these
+		// observers muted, so a counter they keep is not counted twice. Connecting to registry.on_construct<T>() directly
+		// is not muted and outlives nothing safely: use this instead.
+		template <class T>
+		ecs::connection& observe(scn::event_filter filter, scn::observed what, std::function<void(ecs::bus_context&, entt::entity)> fn)
+		{
+			return m_layer.keep(m_layer.subscriptions().observe<T>(std::move(filter), what, std::move(fn)));
+		}
+
 	private:
 		scn::scene_layer& m_layer;
 		cmd::command_registry* m_commands = nullptr;

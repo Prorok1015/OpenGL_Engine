@@ -27,6 +27,23 @@ namespace scn
 		}
 	};
 
+	// Which signal of a component's storage an observer hears.
+	enum class observed : std::uint8_t
+	{
+		construct,
+		update,
+		destroy,
+	};
+
+	// One observer slot of a world (kept in its ctx while the world lives): what entt calls, never module code.
+	struct observer_slot
+	{
+		std::weak_ptr<std::function<void(ecs::bus_context&, entt::entity)>> fn;
+		std::weak_ptr<int> muted;
+		std::string set;
+		std::string world;
+	};
+
 	// Bus subscriptions that outlive the worlds they hear (WORLD_BUS.md 3.4): one list per layer (and one of the
 	// base's). The sets of that layer connect every matching world at its next update, before the delivery, so a world
 	// created later (level reload, Play start) hears them too and a subscription made during a delivery fires from
@@ -60,6 +77,50 @@ namespace scn
 			return add(std::move(filter), std::move(attach), std::move(callback));
 		}
 
+		// Called on `what` of T in each matching world (entt's on_construct / on_update / on_destroy), from the moment the
+		// world is created, so it also sees the entities a level or Play spawns. The registry is read-only to `fn`: it
+		// changes the world through bus_context::changer()/spawner(), applied after the current phase. Silent while
+		// mute_observers() holds; the returned connection removes it.
+		template <class T>
+		[[nodiscard]] ecs::connection observe(event_filter filter, observed what, std::function<void(ecs::bus_context&, entt::entity)> fn)
+		{
+			auto callback = std::make_shared<std::function<void(ecs::bus_context&, entt::entity)>>(std::move(fn));
+			attach_fn attach = [what, weak = std::weak_ptr(callback), muted = mute_token()](ecs::world_bus& bus,
+				entt::registry& registry, std::string_view set) {
+				std::shared_ptr<observer_slot> slot = keep_slot(registry, observer_slot{ weak, muted, std::string{ set }, std::string{ bus.world() } });
+				switch (what) {
+				case observed::construct: registry.on_construct<T>().template connect<&notify_observer>(*slot); break;
+				case observed::update: registry.on_update<T>().template connect<&notify_observer>(*slot); break;
+				case observed::destroy: registry.on_destroy<T>().template connect<&notify_observer>(*slot); break;
+				}
+				return observer_connection(std::move(slot));
+			};
+			return add(std::move(filter), std::move(attach), std::move(callback));
+		}
+
+		// While the returned guard lives, no observer of this list is called (a restore puts back entities that already
+		// existed: HOT_RELOAD_PLAY.md 6, step 4). Guards nest.
+		class mute_guard
+		{
+		public:
+			explicit mute_guard(std::weak_ptr<int> muted)
+				: m_muted(std::move(muted))
+			{
+				if (const auto depth = m_muted.lock()) ++*depth;
+			}
+			~mute_guard()
+			{
+				if (const auto depth = m_muted.lock()) --*depth;
+			}
+			mute_guard(const mute_guard&) = delete;
+			mute_guard& operator=(const mute_guard&) = delete;
+
+		private:
+			std::weak_ptr<int> m_muted;
+		};
+		[[nodiscard]] mute_guard mute_observers() { return mute_guard{ mute_token() }; }
+		bool observers_muted() const;
+
 		// Brings the world up to date: connects every matching subscription it is not connected to (also one skipped
 		// before because the world's bus did not know its type yet) and drops the connections of removed ones. Does
 		// nothing when neither the list nor the world's bound types changed since the last call.
@@ -83,9 +144,22 @@ namespace scn
 			uint64_t next_id = 1;
 			// Moves on every add and remove.
 			uint64_t generation = 0;
+			// Depth of mute_observers(); last, so the fields above keep their place (module API 3.4).
+			int muted = 0;
 		};
 
 		ecs::connection add(event_filter filter, attach_fn attach, std::shared_ptr<void> callback);
+
+		// The world's ctx owns the slot: entt keeps a pointer to it until the registry goes, and is never asked to
+		// release it (a world's storages may already be gone when its ctx is destroyed).
+		static std::shared_ptr<observer_slot> keep_slot(entt::registry& registry, observer_slot slot);
+		// Engine code, so no signal of a world points into a module's binary.
+		static void notify_observer(observer_slot& slot, entt::registry& registry, entt::entity entity);
+		// Disconnecting silences the slot; it stays connected and does nothing.
+		static ecs::connection observer_connection(std::shared_ptr<observer_slot> slot);
+
+		// Out of line, so a module never reads the layout of `state`.
+		std::weak_ptr<int> mute_token() const;
 
 		std::shared_ptr<state> m_state;
 	};
