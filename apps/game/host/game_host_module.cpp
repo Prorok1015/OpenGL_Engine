@@ -1,6 +1,7 @@
 #include "game_host_module.h"
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service_interface.h>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/desc/desc_system.h>
@@ -57,7 +58,8 @@ namespace {
 				stop(data, snk::game_host::k_exit_no_start_level);
 				return;
 			}
-			state.loader.emplace(data.require<scn::context_manager>(), data.require<res::resource_system>());
+			state.loader.emplace(data.require<scn::context_manager>(), data.require<res::resource_system>(),
+				data.require<ds::task_system>());
 			state.loader->begin(*level);
 		}
 		switch (state.loader->poll()) {
@@ -74,6 +76,7 @@ namespace {
 			break;
 		case scn::start_level_loader::state::idle:
 		case scn::start_level_loader::state::loading:
+		case scn::start_level_loader::state::settling:
 			break;
 		}
 	}

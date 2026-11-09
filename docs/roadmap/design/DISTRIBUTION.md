@@ -185,6 +185,14 @@ wasm — инструмент разработки; при упаковке дв
 - **Шаблон проекта.** Пресет `shipping` (наследует `base`, флаги Release, `SNK_SHIPPING=ON`; отдельной конфигурации и LTO нет — LTO в #594): требует `snake_sdk_HAS_STATIC`, собирает `src/` как OBJECT-библиотеку `game_objects` и `snk_add_game_host(game ...)` → `../build/shipping/<имя модуля>(.exe)`, не в `../build/bin`, где лежит `game.dll`. Без `SNK_SHIPPING` всё как раньше (SHARED `game.dll`, DebugGame). Редактор пресет `shipping` не показывает и не собирает: модель Build Settings пропускает пресеты, у которых `SNK_SHIPPING` истинно для CMake (`edt::is_shipping_preset`); `hidden: true` в CMake не используется — он запретил бы `cmake --preset shipping`.
 - **CI (только сборка).** «SDK package (Linux)» собирает шаблон с `--preset shipping` против общего префикса и проверяет `readelf -d` (нет `NEEDED` `snk_engine`); «Windows package check» (шаг 5) — против распакованного пакета, `game.exe` проверяется `check_windows_deps.sh --runtime-elsewhere` (никаких DLL, кроме системных и рантайма MSVC, `snk_engine.dll` в том числе). Запуск хоста с вкомпилированным модулем — `tests/static_game` (Linux Clang Debug, Windows package). Ресурсы из папки — #593 (ниже), pack/LTO — этап 7 (#46, #594).
 
+## Стартовый уровень хоста: «level loaded» (#656)
+- `scn::start_level_loader` строит набор «level», когда готов `level_desc`. Затем он ждёт в состоянии `settling` и сообщает `level loaded: <tag>`, только когда стихли загрузки, которые уровень запустил:
+  - `pending_loads() == 0` у слоя игры и у корня;
+  - нет очереди продолжений `then_main` класса `general`.
+- **Продолжения `main_class::gpu_upload` отдельно не считаются.** Загрузка, чей блок ждёт своей выгрузки на GPU, остаётся в `pending_loads()` и ждётся.
+- **Предохранитель — по времени, не по кадрам** (headless без ограничения fps делает сотни кадров в секунду): через `scene/level_settle_seconds` (по умолчанию 10 с) в `settling` уровень сообщается загруженным в любом случае, с одним предупреждением `level '<tag>' loaded with <k> loads still pending after <t> s`.
+- `game/exit_after_level_loaded` выходит после этого. Редактор (`editor/exit_after_level_loaded`) пока выходит раньше — #669.
+
 ## Ресурсы Shipping: проект только для чтения (#593)
 - **Переключатель.** Хост `game` выставляет `res/read_only_project=true`. `core::res::resource_init` тогда монтирует `resource_system::shipping_mount_table`, а не `project_mount_table`. Редактор и Play не меняются.
 - **Протоколы:**
