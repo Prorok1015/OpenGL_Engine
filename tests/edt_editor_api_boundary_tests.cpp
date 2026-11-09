@@ -40,7 +40,10 @@ std::string read_all(const fs::path& path)
 	std::ifstream in(path, std::ios::binary);
 	std::ostringstream text;
 	text << in.rdbuf();
-	return text.str();
+	// A Windows checkout has CRLF line ends: the scans read LF text.
+	std::string out = text.str();
+	std::erase(out, '\r');
+	return out;
 }
 
 // The headers of the API: a new one is added here on purpose (and one that is only plumbing stays out of the directory).
