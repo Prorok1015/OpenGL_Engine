@@ -15,7 +15,8 @@
 
 // 2.0 (#595): resource control blocks and res_dep, which inline engine code compiled into a module uses, changed layout.
 // 3.0 (#603): the world bus is inline too (late-sender fields added); any change to the layout of ecs::detail::bus_state,
-// bus_slot_impl or event_writer/event_reader is a major bump.
+// bus_slot_impl or event_writer/event_reader is a major bump. Also changed in 3.0: the layouts of scn::context_set,
+// context_manager and scene_layer (#603) and the fields #638 appended to world_context, world_desc and context_set.
 #define SNK_MODULE_API_VERSION 0x0003'0000u // major << 16 | minor
 
 #if defined(_WIN32)
