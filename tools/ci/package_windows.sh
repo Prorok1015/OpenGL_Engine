@@ -41,7 +41,7 @@ cmake --preset "$shared_preset" "${extra[@]}" "-DFETCHCONTENT_BASE_DIR=${fc}/${s
 	"-DFETCHCONTENT_SOURCE_DIR_BOOST=${fc}/boost-src"
 cmake --build "build/${static_preset}" --target snk_sdk --parallel
 if [[ "$config" == Release ]]; then
-	cmake --build "build/${shared_preset}" --target snk_sdk editor --parallel
+	cmake --build "build/${shared_preset}" --target snk_sdk editor snk_model_decoder --parallel
 else
 	cmake --build "build/${shared_preset}" --target snk_sdk --parallel
 fi
