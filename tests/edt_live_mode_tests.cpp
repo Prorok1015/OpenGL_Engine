@@ -95,10 +95,10 @@ struct live_mode_fixture
 		options.build.is_loaded_current = [this](const std::string& module) { return current.contains(module); };
 		options.build.modules = [] { return std::vector<std::string>{ "game" }; };
 		options.next_frame = [this](const std::string& id, std::function<void()> fn) { frames.emplace_back(id, std::move(fn)); };
-		options.reload_module = [this](const std::string& module) {
+		options.reload_module = [this](const std::string& module, std::function<void(const core::reload_report&)> done) {
 			reloads.push_back(module);
 			current.insert(module);
-			return core::reload_report{ core::reload_status::reloaded, {} };
+			done(core::reload_report{ core::reload_status::reloaded, {} });
 		};
 		options.unavailable_reason = [this] { return unavailable; };
 		options.store_enabled = [this](bool enabled) -> std::optional<std::string> {

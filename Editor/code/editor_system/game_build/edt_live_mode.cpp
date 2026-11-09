@@ -101,7 +101,7 @@ namespace {
 						done(core::reload_report{ core::reload_status::reloaded, "up to date" });
 						return;
 					}
-					done(reload(module));
+					reload(module, done);
 				});
 		};
 		return options;

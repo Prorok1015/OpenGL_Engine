@@ -41,9 +41,10 @@ int snk::game_host::run(int argc, char* argv[], std::map<std::string, app::modul
 	if (!cfg::initialize_configs(argc, argv)) {
 		return -1;
 	}
-	// Whatever the config files and --set say: a shipped game reloads nothing, cannot ask about a project of another
-	// engine version and cannot run without a project.
+	// Whatever the config files and --set say: a shipped game reloads nothing, writes nothing into its project (#593),
+	// cannot ask about a project of another engine version and cannot run without a project.
 	cfg::set_variable("res/watch_files", "false");
+	cfg::set_variable("res/read_only_project", "true");
 	cfg::set_variable("scene/hot_reload", "false");
 	cfg::set_variable("app/non_interactive", "true");
 	cfg::set_variable("project/required", "true");

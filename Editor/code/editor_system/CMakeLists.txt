@@ -16,9 +16,6 @@ add_library(snk_editor_api ${_edt_api_type})
 add_library(snk::editor_api ALIAS snk_editor_api)
 
 file(GLOB_RECURSE SE_EDT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-if(NOT SNK_WITH_ASSIMP)
-	list(FILTER SE_EDT_SOURCES EXCLUDE REGEX "/import/edt_(model_importer|filesystem_assimp_io)\\.cpp$")
-endif()
 set(SE_EDT_API_SOURCES
 	core/edt_action_registry.cpp core/edt_asset_kind_registry.cpp core/edt_dialog_service.cpp core/edt_document_history.cpp
 	core/edt_document_manager.cpp core/edt_editor_context.cpp core/edt_editor_extension.cpp core/edt_editor_services.cpp core/edt_inspector_registry.cpp

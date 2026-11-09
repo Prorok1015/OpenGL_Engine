@@ -22,7 +22,10 @@
 // inp::action_event; the bus and every existing type keep their layout, so a module built for 3.0 or 3.1 still loads.
 // 3.3 (#604): inp::fixed_action_state, a new ctx type; nothing else changes layout. action_state::update and
 // inp::update_actions_system changed signature: they are the engine's, a module reads the ctx types and never calls them.
-#define SNK_MODULE_API_VERSION 0x0003'0003u // major << 16 | minor
+// 3.4 (#600): gs::module_context::observe (component observers the hot reload in Play mutes). The mute depth is appended
+// to the private, heap-held state of scn::event_subscriptions, so no layout a module reads changes; a module that uses
+// observe needs an engine of 3.4 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0004u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)
