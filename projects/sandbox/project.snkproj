@@ -3,5 +3,6 @@
     "name": "Sandbox",
     "engine_version": "0.2.0",
     "start_scene": "res://levels/editor_level.desc",
+    "input_actions": "res://input/actions.desc",
     "content_roots": ["res"]
 }

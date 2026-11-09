@@ -174,7 +174,7 @@ input → pre_update → fixed_update ×N → update → [apply_commands] → Д
 
 ```json
 {
-  "__type": "input_actions", "__version": 1,
+  "__type": "input_actions_desc", "__version": 1,
   "actions": [
     { "name": "MoveLeft", "bindings": [ { "key": "A" }, { "key": "LEFT" } ] },
     { "name": "Restart",  "bindings": [ { "key": "R" } ] },
