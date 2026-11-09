@@ -52,6 +52,11 @@ void ecs::blackboard_data::commit()
 	m_pending.clear();
 }
 
+void ecs::blackboard_data::restore(std::string_view name, entt::id_type type, std::string_view type_name, std::shared_ptr<const void> value)
+{
+	m_committed.insert_or_assign(std::string{ name }, bb_entry{ type, type_name, std::move(value), external_writer, false });
+}
+
 void ecs::blackboard_data::clear()
 {
 	m_committed.clear();

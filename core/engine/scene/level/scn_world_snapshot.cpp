@@ -1,10 +1,12 @@
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/level/scn_world_context.h>
+#include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_time.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/desc/desc_base.hpp>
@@ -337,4 +339,49 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 		egLOG_WARN("scene", "world '{}': {} restored with a field reset to its default ({} times)", world.get_name(), name, count);
 	}
 	return true;
+}
+
+json::array scn::capture_blackboard(const ecs::blackboard_data& board, const blackboard_catalog& types, snapshot_report& report)
+{
+	json::array out;
+	for (const auto& [key, entry] : board.committed()) {
+		const blackboard_type* type = types.find(entry.type);
+		if (!type || !entry.value) {
+			++report.unsaved[std::string{ entry.type_name }];
+			continue;
+		}
+		json::object value;
+		type->write(*type->schema, entry.value.get(), value);
+		out.push_back(json::object{ { "key", key }, { "type", type->name }, { "value", std::move(value) } });
+	}
+	return out;
+}
+
+void scn::restore_blackboard(ecs::blackboard_data& board, const json::array& values, const blackboard_catalog& types,
+	const desc::read_context& context, snapshot_report& report)
+{
+	for (const json::value& item : values) {
+		const json::object* saved = item.if_object();
+		const auto field = [saved](std::string_view name) { return saved ? saved->if_contains(name) : nullptr; };
+		const json::value* key_field = field("key");
+		const json::value* type_field = field("type");
+		const json::value* value_field = field("value");
+		const json::string* key = key_field ? key_field->if_string() : nullptr;
+		const json::string* name = type_field ? type_field->if_string() : nullptr;
+		const json::object* value = value_field ? value_field->if_object() : nullptr;
+		if (!key || !name || !value) {
+			egLOG_WARN("scene", "restore_blackboard: an entry is not {{key, type, value}}, skipped");
+			++report.unknown["<malformed blackboard entry>"];
+			continue;
+		}
+		const blackboard_type* type = types.find(std::string_view{ *name });
+		if (!type) {
+			++report.unknown[std::string{ *name }];
+			continue;
+		}
+		bool fits = true;
+		std::shared_ptr<const void> restored = type->read(*type->schema, *value, context, fits);
+		if (!fits) ++report.partial[type->name];
+		board.restore(std::string_view{ *key }, type->id, type->type_name, std::move(restored));
+	}
 }
