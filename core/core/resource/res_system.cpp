@@ -330,7 +330,15 @@ res::resource_system::~resource_system() {
       m_pinned_resources = {};
     }
     if (const std::size_t live = live_resources(); live > 0) {
-      egLOG_WARN("resource/layer", "{} resources loaded through a destroyed layer are still referenced", live);
+      constexpr std::size_t k_named = 8;
+      const std::vector<std::string> named = live_resource_tags(k_named);
+      std::string list;
+      for (const auto &item : named) {
+        list += list.empty() ? item : ", " + item;
+      }
+      const std::string more = live > named.size() ? std::format(" (+{} more)", live - named.size()) : std::string{};
+      egLOG_WARN("resource/layer", "{} resources loaded through a destroyed layer are still referenced: {}{}", live, list,
+                 more);
     }
   }
 }
@@ -1270,6 +1278,28 @@ std::filesystem::path res::resource_system::configured_engine_base() {
 
 bool res::resource_system::watches_files() {
   return *cfg_res_watch_files;
+}
+
+std::vector<std::string> res::resource_system::live_resource_tags(std::size_t limit) const {
+  std::vector<std::pair<std::string, long>> live;
+  {
+    std::shared_lock lock(m_cache_mutex);
+    m_cache.for_each_entry([&live](const cache_key &key, const cache_entry &entry) {
+      if (const auto block = entry.lock()) {
+        live.emplace_back(std::string{key.tag.view()}, block.use_count() - 1);
+      }
+    });
+  }
+  std::ranges::sort(live);
+  std::vector<std::string> out;
+  out.reserve(std::min(limit, live.size()));
+  for (const auto &[tag, refs] : live) {
+    if (out.size() == limit) {
+      break;
+    }
+    out.push_back(std::format("{} (refs {})", tag, refs));
+  }
+  return out;
 }
 
 bool res::resource_system::read_only_project() {

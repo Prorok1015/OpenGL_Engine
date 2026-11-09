@@ -52,6 +52,14 @@ namespace res
 			}
 		}
 
+		template<class Fn>
+		void for_each_entry(Fn&& fn) const
+		{
+			for (const auto& entry : m_entries) {
+				fn(entry.first, entry.second);
+			}
+		}
+
 		// Each tag that has an entry, once.
 		template<class Fn>
 		void for_each_tag(Fn&& fn) const

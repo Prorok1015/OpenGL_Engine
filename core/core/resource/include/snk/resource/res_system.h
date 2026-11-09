@@ -233,6 +233,10 @@ namespace res
 			return count;
 		}
 
+		// Up to `limit` of the cached resources live_resources counts, sorted by tag, each "<tag> (refs <n>)": <n> is how
+		// many hold its block besides this call, read under the cache lock. For the warning of a destroyed layer (#657).
+		std::vector<std::string> live_resource_tags(std::size_t limit) const;
+
 		// Read-only: dependency targets this system keeps for its layers. For tests and diagnostics.
 		std::size_t layer_needs_count() const {
 			std::lock_guard lock(m_layer_needs_mutex);
