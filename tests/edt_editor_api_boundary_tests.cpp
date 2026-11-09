@@ -74,7 +74,7 @@ BOOST_AUTO_TEST_CASE(TheApiHeadersAreExactlyTheListedOnes)
 
 BOOST_AUTO_TEST_CASE(ApiHeadersIncludeOnlyEachOtherAndTheEngineNeverAnInternalEditorHeaderOrTheMcpServer)
 {
-	const std::regex quoted(R"(^\s*#\s*include\s+"([^"]+)")");
+	const std::regex quoted(R"re(^\s*#\s*include\s+"([^"]+)")re");
 	const std::regex angled(R"(^\s*#\s*include\s+<(snk/[^>]+)>)");
 	const std::set<std::string> forbidden_prefixes = { "snk/mcp/" };
 	for (const fs::path& header : api_headers()) {
