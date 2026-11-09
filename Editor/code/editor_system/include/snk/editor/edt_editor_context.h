@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_action_registry.h"
 #include "edt_asset_kind_registry.h"
 #include "edt_dialog_service.h"
@@ -33,7 +34,7 @@ namespace edt
 	// editor_services, which the context refers to: they live as long as the editor, so the context must not be used
 	// after the editor_system is gone. Game data (descs, levels, prefabs) goes through services() at the moment of use,
 	// since the game layer can change; resources() is the base resource system, for the editor's own assets.
-	class editor_context
+	class SNK_EDITOR_API editor_context
 	{
 	public:
 		editor_context(res::resource_system& resources, rnd::render_system& render,

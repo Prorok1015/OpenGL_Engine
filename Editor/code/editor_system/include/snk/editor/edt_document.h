@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include <snk/command/cmd_types.h>
 #include <snk/resource/res_tag.h>
 #include <cstdint>
@@ -32,7 +33,7 @@ namespace edt
 
 	// Something the editor edits and can show a title, a dirty mark and a source for. document_manager owns the
 	// documents and hands out their ids.
-	class document
+	class SNK_EDITOR_API document
 	{
 	public:
 		virtual ~document() = default;

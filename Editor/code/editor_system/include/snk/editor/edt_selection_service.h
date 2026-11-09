@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include "edt_editor_events.h"
 #include <snk/ecs/ecs_entity.h>
 #include <entt/fwd.hpp>
@@ -11,7 +12,7 @@ namespace edt
 	// The selection is a node-id path, so it survives the desc being rewritten; the entity behind it is
 	// looked up on demand. Any edit that rewrites the desc clears it first (scene_editor::on_before_modify),
 	// as does a change of the active world.
-	class selection_service
+	class SNK_EDITOR_API selection_service
 	{
 	public:
 		using registry_provider = std::function<entt::registry*(const std::string& world)>;

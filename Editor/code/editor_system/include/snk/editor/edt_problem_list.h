@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -43,7 +44,7 @@ namespace edt
 
 	// The editor's problems, grouped by source ("build", later "desc"); each source replaces its own set as a whole.
 	// Main thread only (the thread that created it), asserted by set() and clear(). Every change raises editor_events::problems_changed(source) and bumps generation().
-	class problem_list
+	class SNK_EDITOR_API problem_list
 	{
 	public:
 		// `events` (null: none) must outlive the list.

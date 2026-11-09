@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_api.h"
 #include <snk/command/cmd_types.h>
 #include <cstddef>
 #include <cstdint>
@@ -71,7 +72,7 @@ namespace edt
 	// Records are applied up to the current position; undo steps back, redo forward, a new record drops what was undone.
 	// A group gathers the edits of one origin (an agent's session) into one record while nobody else edits; an edit of
 	// another origin in between starts a new record of the group after it, so undo stays linear. Main thread only.
-	class document_history
+	class SNK_EDITOR_API document_history
 	{
 	public:
 		static constexpr std::size_t k_default_limit = 100;

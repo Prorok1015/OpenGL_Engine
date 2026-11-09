@@ -41,7 +41,7 @@ BOOST_AUTO_TEST_CASE(RegisterRenderer_DoesNotCrash)
 {
 	edt::inspector_registry registry;
 	bool renderer_called = false;
-	auto reg = registry.add<scn::camera_desc>(
+	auto reg = registry.add(std::string(scn::camera_desc::__type), 
 		[&](scn::prefab_desc::prefab_comp_node&) -> bool {
 			renderer_called = true;
 			return false;
@@ -52,16 +52,16 @@ BOOST_AUTO_TEST_CASE(RegisterRenderer_DoesNotCrash)
 BOOST_AUTO_TEST_CASE(RegisterMultipleRenderers_DoesNotCrash)
 {
 	edt::inspector_registry registry;
-	auto reg = registry.add<scn::camera_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
-	auto reg2 = registry.add<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node&) { return false; });
-	auto reg3 = registry.add<scn::skybox_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	auto reg = registry.add(std::string(scn::camera_desc::__type),            [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	auto reg2 = registry.add(std::string(scn::directional_light_desc::__type), [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	auto reg3 = registry.add(std::string(scn::skybox_desc::__type),            [](scn::prefab_desc::prefab_comp_node&) { return false; });
 	BOOST_CHECK(true);
 }
 
 BOOST_AUTO_TEST_CASE(InvokeRenderer_KnownType_ReturnsValue)
 {
 	edt::inspector_registry registry;
-	auto reg = registry.add<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node&) { return true; });
+	auto reg = registry.add(std::string(scn::camera_desc::__type), [](scn::prefab_desc::prefab_comp_node&) { return true; });
 	scn::prefab_desc::prefab_comp_node comp;
 	auto result = registry.invoke(scn::camera_desc::__type, comp);
 	BOOST_REQUIRE(result.has_value());

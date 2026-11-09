@@ -25,7 +25,7 @@ struct renderer_registrar {
 	template<typename T>
 	void add(inspector_renderer fn)
 	{
-		registrations.push_back(inspectors.add<T>(std::move(fn)));
+		registrations.push_back(inspectors.add(std::string(T::__type), std::move(fn)));
 	}
 };
 
