@@ -1,0 +1,8 @@
+{
+    "format_version": 1,
+    "name": "StaticGame",
+    "engine_version": "0.2.0",
+    "start_scene": "res://levels/main.desc",
+    "content_roots": ["res"],
+    "modules": [{ "name": "static_game", "kind": "runtime" }]
+}

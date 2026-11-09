@@ -32,7 +32,7 @@ namespace {
 
 	void stop(ds::app_data_storage& data, int exit_code)
 	{
-		data.require<game_host::run_outcome>().exit_code = exit_code;
+		data.require<snk::game_host::run_outcome>().exit_code = exit_code;
 		data.require<app::app_loop_service_interface>().request_stop();
 	}
 
@@ -42,7 +42,7 @@ namespace {
 			return;
 		}
 		if (!state.loader) {
-			// Held back for its engine version: main() reports it and exits with its code.
+			// Held back for its engine version: run() reports it and exits with its code.
 			if (data.has_value<prj::held_project>()) {
 				state.done = true;
 				data.require<app::app_loop_service_interface>().request_stop();
@@ -54,7 +54,7 @@ namespace {
 			if (!level) {
 				egLOG_ERROR("game", "no start level: the project names no start_scene and game/start_level is not set");
 				state.done = true;
-				stop(data, game_host::k_exit_no_start_level);
+				stop(data, snk::game_host::k_exit_no_start_level);
 				return;
 			}
 			state.loader.emplace(data.require<scn::context_manager>(), data.require<res::resource_system>());
@@ -70,7 +70,7 @@ namespace {
 			break;
 		case scn::start_level_loader::state::failed:
 			state.done = true;
-			stop(data, game_host::k_exit_level_failed);
+			stop(data, snk::game_host::k_exit_level_failed);
 			break;
 		case scn::start_level_loader::state::idle:
 		case scn::start_level_loader::state::loading:
@@ -79,7 +79,7 @@ namespace {
 	}
 }
 
-void game_host::game_host_module::register_services(ds::app_data_storage& data)
+void snk::game_host::game_host_module::register_services(ds::app_data_storage& data)
 {
 	data.construct<run_outcome>();
 	// Before `update`: the set "level" is built before the frame steps it.
@@ -88,7 +88,7 @@ void game_host::game_host_module::register_services(ds::app_data_storage& data)
 		app::stage_side::before, [state](app::stage_context& c) { step_start_level(*state, c.storage); });
 }
 
-void game_host::game_host_module::initialize_services(ds::app_data_storage& data)
+void snk::game_host::game_host_module::initialize_services(ds::app_data_storage& data)
 {
 #if SNK_HAS_ASSIMP
 	// Levels name .glb/.gltf/.obj/.fbx models directly; the editor registers the same adapter for itself.
@@ -101,7 +101,7 @@ void game_host::game_host_module::initialize_services(ds::app_data_storage& data
 #endif
 }
 
-void game_host::game_host_module::shutdown_services(ds::app_data_storage& data)
+void snk::game_host::game_host_module::shutdown_services(ds::app_data_storage& data)
 {
 	data.require<app::frame_stage_registry>().remove_stage(k_start_level_stage);
 #if SNK_HAS_ASSIMP

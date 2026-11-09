@@ -113,6 +113,8 @@ namespace core
 		// The copy in use was made from the library the build output has now (same file, size and write time). True
 		// for a compiled-in module; false for one that runs from no copy.
 		bool is_current(const std::string& name) const;
+		// The runtime modules the project requires (not optional) that `report` did not load: missing or refused.
+		std::vector<std::string> failed_required(const project_modules_report& report) const;
 
 	private:
 		struct loaded_copy

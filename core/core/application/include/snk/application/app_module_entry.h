@@ -179,29 +179,52 @@ namespace app::modules {
 
 }
 
-// Generates the four exported functions of a module binary under the given prefix:
-// <prefix>module_api_version, <prefix>module_build_info, <prefix>create_module, <prefix>destroy_module.
-// Use SNK_DECLARE_MODULE in a module binary; the prefixed form exists so one binary (a unit test) can
-// hold several declarations without clashing C symbols.
-#define SNK_DECLARE_MODULE_PREFIXED(prefix, Type) \
+// The module_entry of the four functions SNK_DECLARE_MODULE_PREFIXED(prefix, ...) defines.
+#define SNK_MODULE_ENTRY(prefix) \
+	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
+		&prefix##destroy_module }
+
+// The game module compiled into a static host (snk_add_game_host, #592): the host gets its entry from here, not from a
+// library it opens. Defined by SNK_DECLARE_MODULE when the module is built with SNK_GAME_MODULE_STATIC.
+app::modules::module_entry snk_static_module_entry();
+
+#define SNK_DETAIL_NO_EXPORT
+
+#define SNK_DETAIL_DECLARE_MODULE_FUNCTIONS(attr, prefix, Type) \
 	extern "C" { \
-	SNK_MODULE_EXPORT std::uint32_t prefix##module_api_version() \
+	attr std::uint32_t prefix##module_api_version() \
 	{ \
 		return SNK_MODULE_API_VERSION; \
 	} \
-	SNK_MODULE_EXPORT const struct snk_module_build_info* prefix##module_build_info() \
+	attr const struct snk_module_build_info* prefix##module_build_info() \
 	{ \
 		static const struct snk_module_build_info info = ::app::modules::make_build_info(); \
 		return &info; \
 	} \
-	SNK_MODULE_EXPORT ::app::modules::module_interface* prefix##create_module() \
+	attr ::app::modules::module_interface* prefix##create_module() \
 	{ \
 		return new Type(); \
 	} \
-	SNK_MODULE_EXPORT void prefix##destroy_module(::app::modules::module_interface* module) \
+	attr void prefix##destroy_module(::app::modules::module_interface* module) \
 	{ \
 		delete module; \
 	} \
 	}
 
+// Generates the four exported functions of a module binary under the given prefix:
+// <prefix>module_api_version, <prefix>module_build_info, <prefix>create_module, <prefix>destroy_module.
+// Use SNK_DECLARE_MODULE in a module binary; the prefixed form exists so one binary (a unit test) can
+// hold several declarations without clashing C symbols.
+#define SNK_DECLARE_MODULE_PREFIXED(prefix, Type) SNK_DETAIL_DECLARE_MODULE_FUNCTIONS(SNK_MODULE_EXPORT, prefix, Type)
+
+#if defined(SNK_GAME_MODULE_STATIC)
+// Linked into the host executable: nothing is exported, and the host takes the entry from snk_static_module_entry().
+#define SNK_DECLARE_MODULE(Type) \
+	SNK_DETAIL_DECLARE_MODULE_FUNCTIONS(SNK_DETAIL_NO_EXPORT, snk_, Type) \
+	::app::modules::module_entry snk_static_module_entry() \
+	{ \
+		return SNK_MODULE_ENTRY(snk_); \
+	}
+#else
 #define SNK_DECLARE_MODULE(Type) SNK_DECLARE_MODULE_PREFIXED(snk_, Type)
+#endif

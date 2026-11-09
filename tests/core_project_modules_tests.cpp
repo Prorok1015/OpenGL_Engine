@@ -123,38 +123,37 @@ std::uint32_t next_major_api() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
 
 app::modules::module_entry probe_entry()
 {
-	return { &project_probe_module_api_version, &project_probe_module_build_info, &project_probe_create_module, &project_probe_destroy_module };
+	return SNK_MODULE_ENTRY(project_probe_);
 }
 
 app::modules::module_entry other_entry()
 {
-	return { &project_other_module_api_version, &project_other_module_build_info, &project_other_create_module, &project_other_destroy_module };
+	return SNK_MODULE_ENTRY(project_other_);
 }
 
 app::modules::module_entry first_game_entry()
 {
-	return { &project_first_module_api_version, &project_first_module_build_info, &project_first_create_module, &project_first_destroy_module };
+	return SNK_MODULE_ENTRY(project_first_);
 }
 
 app::modules::module_entry second_game_entry()
 {
-	return { &project_second_module_api_version, &project_second_module_build_info, &project_second_create_module, &project_second_destroy_module };
+	return SNK_MODULE_ENTRY(project_second_);
 }
 
 app::modules::module_entry reload_v1_entry()
 {
-	return { &reload_v1_module_api_version, &reload_v1_module_build_info, &reload_v1_create_module, &reload_v1_destroy_module };
+	return SNK_MODULE_ENTRY(reload_v1_);
 }
 
 app::modules::module_entry reload_v2_entry()
 {
-	return { &reload_v2_module_api_version, &reload_v2_module_build_info, &reload_v2_create_module, &reload_v2_destroy_module };
+	return SNK_MODULE_ENTRY(reload_v2_);
 }
 
 app::modules::module_entry reload_failing_entry()
 {
-	return { &reload_failing_module_api_version, &reload_failing_module_build_info, &reload_failing_create_module,
-		&reload_failing_destroy_module };
+	return SNK_MODULE_ENTRY(reload_failing_);
 }
 
 std::unique_ptr<app::modules::module_source> compiled(app::modules::module_entry entry)
@@ -316,6 +315,28 @@ BOOST_AUTO_TEST_CASE(a_module_of_another_api_version_is_refused_and_the_host_goe
 	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
 	BOOST_TEST(!loader.state("test_game").has_value());
 	BOOST_TEST(!data.has_value<probe_service>());
+}
+
+BOOST_AUTO_TEST_CASE(a_required_module_that_is_refused_or_missing_has_failed_and_an_optional_one_has_not)
+{
+	open({ manifest_module("test_game"), manifest_module("needed_game"), manifest_module("extra_game", prj::module_kind::runtime, true) });
+	auto entry = probe_entry();
+	entry.api_version = &next_major_api;
+	core::project_module_host host(loader, data, compiled_in(entry));
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(host.failed_required(report) == (std::vector<std::string>{ "test_game", "needed_game" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(a_loaded_required_module_has_not_failed)
+{
+	open({ manifest_module("test_game") });
+	core::project_module_host host(loader, data, compiled_in(probe_entry()));
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.loaded == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(host.failed_required(report).empty());
 }
 
 BOOST_AUTO_TEST_CASE(a_module_that_is_another_one_is_refused_before_it_registers)

@@ -110,14 +110,12 @@ std::unique_ptr<app::modules::module_source> build_of(app::modules::module_entry
 
 app::modules::module_entry v1_entry()
 {
-	return { &play_game_v1_module_api_version, &play_game_v1_module_build_info, &play_game_v1_create_module,
-		&play_game_v1_destroy_module };
+	return SNK_MODULE_ENTRY(play_game_v1_);
 }
 
 app::modules::module_entry v2_entry()
 {
-	return { &play_game_v2_module_api_version, &play_game_v2_module_build_info, &play_game_v2_create_module,
-		&play_game_v2_destroy_module };
+	return SNK_MODULE_ENTRY(play_game_v2_);
 }
 
 constexpr std::uint64_t cam_id = 0xa1;

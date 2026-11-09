@@ -290,6 +290,20 @@ std::optional<std::filesystem::path> core::project_module_host::build_output(con
 	return find_library(m_data.require<prj::project_context>(), name);
 }
 
+std::vector<std::string> core::project_module_host::failed_required(const project_modules_report& report) const
+{
+	std::vector<std::string> failed;
+	if (!m_data.has_value<prj::project_context>()) {
+		return failed;
+	}
+	for (const auto& ref : m_data.require<prj::project_context>().data.modules) {
+		if (ref.kind == prj::module_kind::runtime && !ref.optional && std::ranges::find(report.loaded, ref.name) == report.loaded.end()) {
+			failed.push_back(ref.name);
+		}
+	}
+	return failed;
+}
+
 bool core::project_module_host::is_current(const std::string& name) const
 {
 	if (m_options.compiled_in.contains(name)) {

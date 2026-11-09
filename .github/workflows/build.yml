@@ -58,7 +58,7 @@ jobs:
       matrix:
         include:
           - { name: "Windows MSVC Debug", os: windows-latest, preset: ci-windows-msvc-debug }
-          - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests game }
+          - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests game test_static_game_host }
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -163,6 +163,31 @@ jobs:
         if: matrix.preset == 'ci-linux-clang-debug'
         shell: bash
         run: bash tools/ci/check_game_deps.sh build/ci-linux-clang-debug/apps/game/game
+
+      # #592: a game module compiled into the host (snk_add_game_host, tests/static_game). The project's manifest requires
+      # it; its system, listed by the start level's world, logs once on its first frame. The run ends after
+      # app/exit_after_frames (exit 0) at the default 60 frames per second, so the level has two seconds to load.
+      - name: Static game module headless run
+        if: matrix.preset == 'ci-linux-clang-debug'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          mkdir -p game_out
+          log=game_out/static_game.log
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 build/ci-linux-clang-debug/tests/static_game/test_static_game_host \
+            --config apps/game/config/game.cfg --headless --project tests/static_game/project \
+            --set game/exit_after_level_loaded false app/exit_after_frames 120 app/headless_target_fps 60 \
+            >game_out/static_game_stdout.txt 2>"$log" || rc=$?
+          tail -20 "$log"
+          # What else the process wrote (an assert, a crash report) goes to stdout, not to the log.
+          trap 'if [ -s game_out/static_game_stdout.txt ]; then echo "stdout:"; tail -20 game_out/static_game_stdout.txt; fi' EXIT
+          if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
+          if ! grep -q "module 'static_game' loaded" "$log"; then echo "::error::the compiled-in module was not loaded"; exit 1; fi
+          if ! grep -q "level loaded: .*main.desc" "$log"; then echo "::error::the start level did not load"; exit 1; fi
+          if ! grep -q "static game system ran" "$log"; then echo "::error::the module's system did not run"; exit 1; fi
+          if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the static game host log"; exit 1; fi
+          trap - EXIT
 
   # The shared engine (snk_engine, the default since #223) with the project template's game module built against the
   # build tree SDK and loaded by the editor. Windows: the Windows package jobs below. FULL tier.

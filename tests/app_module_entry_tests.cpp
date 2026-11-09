@@ -41,7 +41,7 @@ using app::modules::module_entry;
 
 module_entry generated_entry()
 {
-	return module_entry{ &snk_module_api_version, &snk_module_build_info, &snk_create_module, &snk_destroy_module };
+	return SNK_MODULE_ENTRY(snk_);
 }
 
 std::uint32_t wrong_major_version() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
