@@ -150,6 +150,13 @@ struct stub_editor_module final : app::modules::module_interface
 	std::string_view name() const override { return "editor"; }
 };
 
+}
+
+SNK_DECLARE_EDITOR_MODULE_PREFIXED(ext_probe_, probe_extension)
+SNK_DECLARE_MODULE_PREFIXED(ext_game_, ext_game_module)
+
+namespace {
+
 struct extension_fixture : test_util::null_engine_fixture
 {
 	extension_fixture()
@@ -229,9 +236,6 @@ struct extension_fixture : test_util::null_engine_fixture
 };
 
 }
-
-SNK_DECLARE_EDITOR_MODULE_PREFIXED(ext_probe_, probe_extension)
-SNK_DECLARE_MODULE_PREFIXED(ext_game_, ext_game_module)
 
 BOOST_FIXTURE_TEST_SUITE(EdtEditorExtensionTests, extension_fixture)
 
