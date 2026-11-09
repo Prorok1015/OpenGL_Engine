@@ -122,7 +122,8 @@ namespace edt
 		// Between before_module_swap and after_module_swap with a snapshot.
 		bool suspended() const { return m_suspended; }
 		// A module reload is under way: suspended, or the restored set waits (inactive, paused) for the resources its
-		// components refer to (HOT_RELOAD_PLAY.md 6, step 6). Play's commands answer busy, the views show nothing.
+		// components refer to (HOT_RELOAD_PLAY.md 6, step 6). Play's commands answer busy, the views show nothing;
+		// pause()/resume() (the editor layout's) change the mode the set gets once the wait ends.
 		bool reloading() const { return m_suspended || m_waiting.has_value(); }
 		// What the restored set still waits for; 0 when it does not wait.
 		std::size_t reloading_resources() const;

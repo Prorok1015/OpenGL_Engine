@@ -1936,6 +1936,30 @@ BOOST_AUTO_TEST_CASE(a_stop_in_editor_mode_drops_the_note_and_the_game_starts_a_
 	BOOST_TEST(play_set() != nullptr);
 }
 
+// #294 during a resource wait (#600): the editor layout's pause is the one the set gets once the wait ends, and the
+// game layout's resume brings it back.
+BOOST_AUTO_TEST_CASE(a_switch_to_the_editor_during_a_resource_wait_pauses_play_once_it_ends)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_REQUIRE((play.state() == edt::play_state::playing));
+	const auto pending = restore_waiting("slow.txt");
+
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
+	BOOST_TEST(modes.holds_pause());
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	settle();
+	BOOST_TEST(!play.reloading());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::pause));
+
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::play));
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_after_a_module_reload_is_not_the_controllers_pause)
 {
 	open_level();

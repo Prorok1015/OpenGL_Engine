@@ -190,7 +190,7 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	cmd::command_desc resume = play_command("play.resume", "Resume paused Play. Returns the play status");
 	resume.enabled = [session] {
 		const play_session* play = session();
-		return play && play->state() == play_state::paused;
+		return play && !play->reloading() && play->state() == play_state::paused;
 	};
 	resume.invoke = [session, unavailable, reloading](const cmd::call& call) {
 		play_session* play = session();

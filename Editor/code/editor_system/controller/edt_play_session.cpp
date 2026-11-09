@@ -159,6 +159,14 @@ void edt::play_session::stop(play_reason reason)
 
 bool edt::play_session::pause(play_reason reason)
 {
+	// During a resource wait the set stays held; the mode it gets afterwards changes (the editor layout pauses, #294).
+	if (m_waiting && !m_suspended) {
+		if (m_state == play_state::paused && m_waiting->pending_steps == 0) return false;
+		m_waiting->mode = ecs::run_mode::pause;
+		m_waiting->pending_steps = 0;
+		set_state(play_state::paused, reason);
+		return true;
+	}
 	const auto contexts = m_services.ctx_manager.lock();
 	scn::context_set* play = contexts && active() && !reloading() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play || (m_state == play_state::paused && play->pending_steps() == 0)) return false;
@@ -169,6 +177,13 @@ bool edt::play_session::pause(play_reason reason)
 
 bool edt::play_session::resume(play_reason reason)
 {
+	if (m_waiting && !m_suspended) {
+		if (m_state == play_state::playing) return false;
+		m_waiting->mode = ecs::run_mode::play;
+		m_waiting->pending_steps = 0;
+		set_state(play_state::playing, reason);
+		return true;
+	}
 	const auto contexts = m_services.ctx_manager.lock();
 	scn::context_set* play = contexts && active() && !reloading() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play || m_state == play_state::playing) return false;
