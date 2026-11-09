@@ -4,6 +4,7 @@
 #include "edt_agent_policy.h"
 #include "edt_main_menu.h"
 #include "edt_scene_document.h"
+#include "edt_document_cast.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document_manager.h>
@@ -53,7 +54,7 @@ struct edit_menu_fixture
 	edt::scene_document scene;
 	edt::editor_services services;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events };
+	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
 	edt::action_registry actions;
 	edt::dialog_service dialogs;
 	bool gesture = false;

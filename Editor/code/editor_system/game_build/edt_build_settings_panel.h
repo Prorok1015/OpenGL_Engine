@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include "edt_build_settings_model.h"
 #include <chrono>
 #include <filesystem>

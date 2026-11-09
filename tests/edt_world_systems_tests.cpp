@@ -3,6 +3,7 @@
 #include "edt_scene_commands.h"
 #include "edt_scene_document.h"
 #include "edt_world_problems.h"
+#include "edt_document_cast.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/editor/edt_document_manager.h>
@@ -74,7 +75,7 @@ struct systems_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events };
+	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
 	edt::selection_service selection{ events };
 	cmd::command_registry commands;
 	int pushes = 0;

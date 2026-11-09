@@ -14,6 +14,7 @@
 #include "edt_prefab_document.h"
 #include "edt_scene_editor.h"
 #include "edt_scene_document.h"
+#include "edt_document_cast.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -84,7 +85,7 @@ struct document_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events };
+	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
 	std::vector<edt::connection> connections;
 	std::vector<std::string> log;
 	std::vector<std::pair<edt::document_id, std::uint64_t>> changed;
@@ -107,7 +108,7 @@ BOOST_AUTO_TEST_CASE(Scene_IsTheOnlyDocumentAndTheActiveOne)
 
 BOOST_AUTO_TEST_CASE(OpenPrefab_AddsAPreviewAndMakesItActive)
 {
-	auto& prefab = documents.open_prefab(prefab_a);
+	auto& prefab = edt::open_prefab(documents, prefab_a);
 
 	BOOST_REQUIRE(prefab.is_open());
 	BOOST_TEST(prefab.id() != 0u);
@@ -125,7 +126,7 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_AddsAPreviewAndMakesItActive)
 
 BOOST_AUTO_TEST_CASE(PrefabDocument_CannotBeSaved)
 {
-	auto& prefab = documents.open_prefab(prefab_a);
+	auto& prefab = edt::open_prefab(documents, prefab_a);
 	BOOST_REQUIRE(prefab.is_open());
 
 	BOOST_TEST(!prefab.save().saved);
@@ -134,7 +135,7 @@ BOOST_AUTO_TEST_CASE(PrefabDocument_CannotBeSaved)
 
 BOOST_AUTO_TEST_CASE(OpenPrefab_OwnsThePreviewSetAndCloseDestroysIt)
 {
-	auto& prefab = documents.open_prefab(prefab_a);
+	auto& prefab = edt::open_prefab(documents, prefab_a);
 	BOOST_REQUIRE(prefab.is_open());
 	const std::string set_name = prefab.set_name();
 	BOOST_TEST(set_name == "preview:" + std::string{ prefab_a.view() });
@@ -148,10 +149,10 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_OwnsThePreviewSetAndCloseDestroysIt)
 
 BOOST_AUTO_TEST_CASE(OpenPrefab_ASecondOneReplacesTheFirst)
 {
-	const auto first = documents.open_prefab(prefab_a).id();
+	const auto first = edt::open_prefab(documents, prefab_a).id();
 	log.clear();
 
-	auto& second = documents.open_prefab(prefab_b);
+	auto& second = edt::open_prefab(documents, prefab_b);
 
 	BOOST_REQUIRE(second.is_open());
 	BOOST_TEST(second.id() != first);
@@ -164,7 +165,7 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_ASecondOneReplacesTheFirst)
 
 BOOST_AUTO_TEST_CASE(Close_Preview_ReturnsTheActiveDocumentToTheScene)
 {
-	const auto id = documents.open_prefab(prefab_a).id();
+	const auto id = edt::open_prefab(documents, prefab_a).id();
 	log.clear();
 
 	documents.close(id);
@@ -177,7 +178,7 @@ BOOST_AUTO_TEST_CASE(Close_Preview_ReturnsTheActiveDocumentToTheScene)
 
 BOOST_AUTO_TEST_CASE(Close_TheSceneOrAnUnknownIdChangesNothing)
 {
-	const auto id = documents.open_prefab(prefab_a).id();
+	const auto id = edt::open_prefab(documents, prefab_a).id();
 	log.clear();
 
 	documents.close(scene.id());
@@ -190,7 +191,7 @@ BOOST_AUTO_TEST_CASE(Close_TheSceneOrAnUnknownIdChangesNothing)
 
 BOOST_AUTO_TEST_CASE(SetActive_SwitchesBetweenOpenDocumentsAndIgnoresOthers)
 {
-	const auto id = documents.open_prefab(prefab_a).id();
+	const auto id = edt::open_prefab(documents, prefab_a).id();
 	log.clear();
 
 	documents.set_active(scene.id());
@@ -203,7 +204,7 @@ BOOST_AUTO_TEST_CASE(SetActive_SwitchesBetweenOpenDocumentsAndIgnoresOthers)
 
 BOOST_AUTO_TEST_CASE(OpenPrefab_OfAMissingPrefabOpensNothing)
 {
-	auto& prefab = documents.open_prefab(res::tag::make("prefabs/missing.prefab.desc"));
+	auto& prefab = edt::open_prefab(documents, res::tag::make("prefabs/missing.prefab.desc"));
 
 	BOOST_TEST(!prefab.is_open());
 	BOOST_TEST(documents.preview() == nullptr);
@@ -214,7 +215,7 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_OfAMissingPrefabOpensNothing)
 
 BOOST_AUTO_TEST_CASE(ForEach_VisitsTheSceneFirst)
 {
-	documents.open_prefab(prefab_a);
+	edt::open_prefab(documents, prefab_a);
 
 	std::vector<std::string> kinds;
 	documents.for_each([&kinds](edt::document& doc) { kinds.emplace_back(doc.kind()); });
@@ -317,7 +318,7 @@ BOOST_AUTO_TEST_CASE(SceneEditorEdit_ThatDoesNothing_LeavesTheGenerationAndTheDo
 
 BOOST_AUTO_TEST_CASE(Shutdown_ClosesThePreviewAndLetsGoOfTheScene)
 {
-	const auto id = documents.open_prefab(prefab_a).id();
+	const auto id = edt::open_prefab(documents, prefab_a).id();
 	const std::string set_name = "preview:" + std::string{ prefab_a.view() };
 	BOOST_REQUIRE(mgr->find_set(set_name));
 
@@ -345,7 +346,7 @@ BOOST_AUTO_TEST_CASE(MarkClean_ClearsTheDirtyFlag)
 
 BOOST_AUTO_TEST_CASE(PreviewDocument_IsNeverDirtyAndItsCommitsAreTheScenesAlone)
 {
-	auto& prefab = documents.open_prefab(prefab_a);
+	auto& prefab = edt::open_prefab(documents, prefab_a);
 	scene.commit("Create world", edt::commit_mode::state_only);
 
 	BOOST_TEST(scene.is_dirty());
@@ -370,7 +371,7 @@ BOOST_AUTO_TEST_CASE(EditUndo_FollowsTheActiveDocument)
 	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
 
 	// The preview has no history: while it is the active document there is nothing to undo.
-	auto& prefab = documents.open_prefab(prefab_a);
+	auto& prefab = edt::open_prefab(documents, prefab_a);
 	BOOST_REQUIRE(prefab.is_open());
 	BOOST_REQUIRE(documents.active() == &prefab);
 	BOOST_TEST(!actions.is_enabled("edit.undo"));

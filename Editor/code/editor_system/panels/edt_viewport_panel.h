@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include <snk/ecs/ecs_entity.h>
 #include <snk/resource/res_tag.h>
 

@@ -113,7 +113,7 @@ namespace edt
 		// Reloads world `index` (not the active one) from its desc after undo/redo changed it; set by scene_editor.
 		void set_world_reloader(std::function<bool(std::size_t index)> reloader) { m_world_reloader = std::move(reloader); }
 		// Where document_changed goes; set by document_manager.
-		void bind_events(editor_events* events) { m_events = events; }
+		void bind_events(editor_events* events) override { m_events = events; }
 		// How the level reaches the disk; set by the editor, which owns the level controller.
 		void set_save_handlers(std::function<bool()> save, std::function<bool(const res::tag&)> save_as)
 		{

@@ -1,7 +1,7 @@
 #define BOOST_TEST_DYN_LINK
 #include <boost/test/unit_test.hpp>
 #include <snk/editor/edt_panel_registry.h>
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include "edt_scene_hierarchy_panel.h"
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_editor_layer.h"

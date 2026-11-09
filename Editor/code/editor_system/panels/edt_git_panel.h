@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include "edt_forge_pr_dialog_model.h"
 #include "edt_git_panel_model.h"
 #include "edt_history_model.h"

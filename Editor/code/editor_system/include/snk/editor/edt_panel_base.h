@@ -1,5 +1,7 @@
 #pragma once
+#include "edt_api.h"
 #include <string>
+#include <string_view>
 // ImGuiWindowFlags is an imgui integer typedef (int). Re-declared here to keep <imgui.h>
 // out of this header, which leaks into every panel (EPIC-49 US-49-4). Same-type redefinition
 // is legal alongside <imgui.h>; the .cpp includes the full header for the ImGui API.
@@ -7,7 +9,7 @@ using ImGuiWindowFlags = int;
 
 namespace edt
 {
-	class panel_base
+	class SNK_EDITOR_API panel_base
 	{
 	public:
 		panel_base(std::string_view id, std::string_view title);

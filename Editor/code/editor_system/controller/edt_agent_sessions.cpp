@@ -1,6 +1,7 @@
 #include "edt_agent_sessions.h"
 #include "edt_scene_document.h"
 #include "edt_scene_history.h"
+#include "edt_document_cast.h"
 #include <snk/editor/edt_document_manager.h>
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_node_id.h>
@@ -80,7 +81,7 @@ std::vector<edt::registration> edt::agent_sessions::register_commands(cmd::comma
 		desc.mutates = mutates;
 		desc.category = cmd::agent_category::scene_edit;
 		desc.invoke = [this, body, mutates](const cmd::call& call) {
-			if (mutates && m_documents.scene().edits_locked()) {
+			if (mutates && scene_of(m_documents).edits_locked()) {
 				return cmd::result::failure(cmd::codes::busy, "the scene is playing: stop play first");
 			}
 			return (this->*body)(call);
@@ -117,7 +118,7 @@ edt::agent_sessions::session* edt::agent_sessions::find(const cmd::origin& from)
 	const auto it = m_sessions.find(key_of(from));
 	if (it == m_sessions.end()) return nullptr;
 	// A boundary of the history (a level loaded, a world added) forgot the groups: the session is over.
-	if (it->second.groups.empty() || m_documents.scene().history().open_group(from) != it->second.groups.back()) {
+	if (it->second.groups.empty() || scene_of(m_documents).history().open_group(from) != it->second.groups.back()) {
 		m_sessions.erase(it);
 		return nullptr;
 	}
@@ -128,7 +129,7 @@ void edt::agent_sessions::end_session(const std::string& key, const cmd::origin&
 {
 	const auto it = m_sessions.find(key);
 	if (it == m_sessions.end()) return;
-	auto& history = m_documents.scene().history();
+	auto& history = scene_of(m_documents).history();
 	if (!it->second.groups.empty() && history.open_group(from) == it->second.groups.back()) {
 		history.end_group(it->second.groups.back());
 	}
@@ -150,7 +151,7 @@ cmd::result edt::agent_sessions::begin(const cmd::call& call)
 	end_session(key, call.from);
 	session opened;
 	opened.label = std::string(call.args.as_object().at("label").as_string());
-	opened.groups.push_back(m_documents.scene().history().begin_group(opened.label, call.from));
+	opened.groups.push_back(scene_of(m_documents).history().begin_group(opened.label, call.from));
 	m_sessions[key] = opened;
 	return get(call);
 }
@@ -159,7 +160,7 @@ cmd::result edt::agent_sessions::checkpoint(const cmd::call& call)
 {
 	session* current = find(call.from);
 	if (!current) return cmd::result::failure(cmd::codes::failed, "no session is open: agent.session.begin first");
-	auto& history = m_documents.scene().history();
+	auto& history = scene_of(m_documents).history();
 	history.end_group(current->groups.back());
 	const json::value* label = call.args.as_object().if_contains("label");
 	current->groups.push_back(history.begin_group(label ? std::string(label->as_string()) : current->label, call.from));
@@ -177,7 +178,7 @@ cmd::result edt::agent_sessions::rollback(const cmd::call& call)
 {
 	session* current = find(call.from);
 	if (!current) return cmd::result::failure(cmd::codes::failed, "no session is open");
-	scene_document& scene = m_documents.scene();
+	scene_document& scene = scene_of(m_documents);
 
 	json::object out;
 	std::size_t rolled_back = 0;
@@ -248,7 +249,7 @@ cmd::result edt::agent_sessions::get(const cmd::call& call)
 	const session* current = find(call.from);
 	if (!current) return cmd::result::success(json::object{ { "open", false } });
 	std::size_t records = 0;
-	for (const history_record& record : m_documents.scene().history().records()) {
+	for (const history_record& record : scene_of(m_documents).history().records()) {
 		if (std::ranges::find(current->groups, record.group) != current->groups.end()) ++records;
 	}
 	return cmd::result::success(json::object{
