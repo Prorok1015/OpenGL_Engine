@@ -19,7 +19,7 @@ namespace {
 	namespace json = boost::json;
 
 	// What the shipped template has (Editor/data/templates/projects/empty/code/CMakePresets.json).
-	constexpr std::string_view k_main = R"({
+	constexpr std::string_view k_main = R"json({
     "version": 3,
     "configurePresets": [
         {
@@ -55,7 +55,7 @@ namespace {
         { "name": "shipping", "configurePreset": "shipping" }
     ]
 }
-)";
+)json";
 
 	// Hand-written: a comment, a vendor field, a preset of the person's own and extra keys in the editor's preset.
 	constexpr std::string_view k_hand_user = R"({
