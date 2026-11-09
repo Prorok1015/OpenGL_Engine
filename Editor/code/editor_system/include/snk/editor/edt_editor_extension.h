@@ -67,7 +67,11 @@ namespace edt
 	class SNK_EDITOR_API editor_extension : public app::modules::module_interface
 	{
 	public:
+		editor_extension();
 		~editor_extension() override;
+		// Explicit: dllexport on MSVC would otherwise generate copies of the move-only members.
+		editor_extension(const editor_extension&) = delete;
+		editor_extension& operator=(const editor_extension&) = delete;
 
 		virtual void register_editor(editor_module_context& context) = 0;
 		// Before everything the module registered is removed; the module's own state goes here.
