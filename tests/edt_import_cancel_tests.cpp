@@ -4,8 +4,11 @@
 #include "edt_agent_model_import.h"
 #include "edt_asset_exporter.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <vector>
 #include <stop_token>
 #include <string>
 
@@ -86,6 +89,29 @@ BOOST_AUTO_TEST_CASE(Import_OfAFileBeyondThePersonLimit_FailsBeforeReadingIt)
 	const edt::import_intermediate result = importer.import_background(huge, nullptr);
 	BOOST_CHECK(result.error.find("too big") != std::string::npos);
 	BOOST_CHECK(result.all_tags.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Scan_HashesEveryFileItLists_TheModelsOwnFilesAndItsTextures)
+{
+	const std::filesystem::path obj = dir / "textured.obj";
+	std::ofstream(obj) << "mtllib textured.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl skinned\nf 1/1 2/2 3/3\n";
+	std::ofstream(dir / "textured.mtl") << "newmtl skinned\nKd 1 1 1\nmap_Kd skin.png\n";
+	std::ofstream(dir / "skin.png", std::ios::binary) << std::string("\x89PNG\r\n\x1a\n", 8) << std::string(32, 'x');
+
+	std::ifstream in(obj, std::ios::binary);
+	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	std::vector<std::byte> bytes(text.size());
+	std::memcpy(bytes.data(), text.data(), text.size());
+	edt::import_source source;
+	source.path = obj;
+	source.preloaded = &bytes;
+
+	const edt::model_file_scan scan = edt::model_importer::scan_files(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(scan.ok(), scan.error);
+	BOOST_REQUIRE_EQUAL(scan.files.size(), 2u);
+	for (const edt::referenced_file& file : scan.files) {
+		BOOST_TEST_CONTEXT(file.path.string()) { BOOST_CHECK(file.hashed); }
+	}
 }
 
 BOOST_AUTO_TEST_CASE(TheLimits_AreSixtyFourMiBForAnAgentAnd256ForAPerson)

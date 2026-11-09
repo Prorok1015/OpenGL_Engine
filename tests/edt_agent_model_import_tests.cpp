@@ -66,6 +66,7 @@ struct import_fixture : test_util::scene_env
 			edt::model_file_scan scan;
 			scan.error = scan_error;
 			scan.files = listed_files;
+			for (auto& file : scan.files) file.hashed = !scan_leaves_unhashed;
 			for (const auto& file : listed_files) scan.total_bytes += file.size;
 			return scan;
 		};
@@ -158,6 +159,7 @@ struct import_fixture : test_util::scene_env
 	bool deadline_was_set = false;
 	std::string scan_error;
 	std::vector<edt::referenced_file> listed_files;
+	bool scan_leaves_unhashed = false;
 	std::vector<edt::referenced_file> seen_allowed;
 	std::string seen_bytes;
 	std::optional<res::tag> foreign_tag;
@@ -360,6 +362,20 @@ BOOST_AUTO_TEST_CASE(TheSecondCall_ShowsEveryFileWithTheTotal_AndImportsExactlyT
 	BOOST_CHECK_EQUAL(imports, 1);
 	BOOST_REQUIRE_EQUAL(seen_allowed.size(), 25u);
 	BOOST_CHECK_EQUAL(seen_bytes, "glb bytes of the robot");
+}
+
+BOOST_AUTO_TEST_CASE(AListWithAFileThatWasNotHashed_IsNeverParked)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	scan_leaves_unhashed = true;
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE(started.ok());
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK(info->error.find("hashed") != std::string::npos);
+	BOOST_CHECK_EQUAL(imports, 0);
 }
 
 BOOST_AUTO_TEST_CASE(TheSecondCall_WithoutAListOfItsOwn_IsRefused)

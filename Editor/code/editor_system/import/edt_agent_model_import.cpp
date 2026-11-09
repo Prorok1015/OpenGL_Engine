@@ -132,6 +132,9 @@ namespace {
 	// The model refers to other files: nothing is imported. The list waits for the second call, whose question shows it.
 	json::value park_files(const import_job_inputs& in, const edt::model_file_scan& found, const edt::content_digest& digest)
 	{
+		for (const edt::referenced_file& file : found.files) {
+			if (!file.hashed) throw std::runtime_error(std::format("'{}' was listed without its bytes being hashed", to_utf8(file.path.filename())));
+		}
 		edt::agent_import_plan plan = in.plan;
 		plan.digest = digest;
 		plan.hashed = true;
