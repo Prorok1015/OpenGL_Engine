@@ -86,6 +86,8 @@ jobs:
             --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
             >game_out/stdout.txt 2>"$log" || rc=$?
           tail -20 "$log"
+          # What else the process wrote (a CRT assert, a crash report) goes to stdout, not to the log.
+          trap 'if [ -s game_out/stdout.txt ]; then echo "stdout:"; tail -20 game_out/stdout.txt; fi' EXIT
           if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
           if ! grep -q "level loaded: .*editor_level.desc" "$log"; then
             echo "::error::the start level did not load (exit_after_frames cap reached?)"; exit 1
@@ -96,6 +98,7 @@ jobs:
           if grep -q "watching files under" "$log"; then echo "::error::a file watcher started"; exit 1; fi
           if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
+          trap - EXIT
 
       # The host imports no snk_engine.dll (it is the static engine) and no DLL beyond Windows: an editor or git library
       # would not sit next to it and fails the check. The MSVC runtime is not required next to it: the host has no

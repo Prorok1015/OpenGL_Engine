@@ -47,7 +47,8 @@ for f in "$@"; do
 		lower="${dep,,}"
 		if [[ -f "${bin}/${dep}" ]]; then
 			echo "  ${dep}: in the package"
-		elif [[ "$lower" =~ ^(vcruntime|msvcp|concrt|vccorlib|vcomp) ]]; then
+		elif [[ "$lower" =~ ^(vcruntime|msvcp|concrt|vccorlib|vcomp) || ( $runtime_elsewhere -eq 1 && "$lower" =~ ^ucrtbase ) ]]; then
+			# ucrtbased.dll: a /MDd build imports the debug UCRT by name; it is never part of a package.
 			if [[ $runtime_elsewhere -eq 1 ]]; then
 				echo "  ${dep}: MSVC runtime (not checked here: --runtime-elsewhere)"
 			else
