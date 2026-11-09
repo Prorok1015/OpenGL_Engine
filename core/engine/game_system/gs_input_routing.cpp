@@ -1,10 +1,14 @@
 #include <snk/game/gs_input_routing.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/input/inp_input_router.h>
+#include <snk/input/inp_input_stack.h>
 #include <snk/input/inp_events.hpp>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,43 +29,77 @@ namespace
 		return std::ranges::any_of(state.mouse, [](bool down) { return down; });
 	}
 
-	bool hits(const entry& e, glm::vec2 pos)
+	inp::input_target target_of(std::string_view set, std::string_view world)
 	{
-		if (!e.capture) return false;
-		return std::ranges::any_of(e.capture->regions, [pos](const glm::ivec4& r) {
-			return pos.x >= r.x && pos.x <= r.z && pos.y >= r.y && pos.y <= r.w;
-		});
+		return { std::string{ set }, std::string{ world } };
 	}
 
-	inp::input_target target_of(std::string_view set, const entry& e)
+	std::vector<inp::KEYBOARD_BUTTONS> keys_of(const scn::world_context& context, const std::vector<std::string>& names)
 	{
-		return { std::string{ set }, std::string{ e.context->get_name() } };
+		static std::set<std::string> reported;
+		std::vector<inp::KEYBOARD_BUTTONS> keys;
+		for (const std::string& name : names) {
+			if (const auto key = inp::key_from_name(name)) {
+				keys.push_back(*key);
+			} else if (reported.insert(std::string{ context.get_name() } + "/" + name).second) {
+				egLOG_WARN("input", "world '{}': input_stack names no key '{}', ignored", context.get_name(), name);
+			}
+		}
+		return keys;
+	}
+
+	// The layer every world has: what its UI laid out last frame plus the level's defaults.
+	inp::stack_layer_desc base_layer(const entry& e)
+	{
+		inp::stack_layer_desc layer;
+		layer.name = "world";
+		layer.order = e.context->input_layer();
+		if (e.capture) {
+			layer.regions = e.capture->regions;
+			layer.whole_keyboard = e.capture->keyboard;
+		}
+		if (const auto& defaults = e.context->input_stack()) {
+			if (defaults->order) layer.order = *defaults->order;
+			layer.active = defaults->active;
+			layer.block_below = defaults->block_below;
+			layer.text_keys = defaults->text_keys;
+			layer.keys = keys_of(*e.context, defaults->keys);
+			layer.actions = defaults->actions;
+			layer.listen = defaults->listen;
+		}
+		return layer;
 	}
 
 	// Mouse and keyboard parts of the full state are given out separately: a context may take the
-	// keyboard of a focused text field while the mouse belongs to someone else.
-	void write(const entry& e, bool mouse, bool keyboard, bool focused)
+	// keyboard of a focused text field while the mouse belongs to someone else. The cursor position goes to everyone.
+	void write(const entry& e, const inp::world_input* in)
 	{
 		inp::input_state state = e.routed.state;
 		const inp::input_state neutral = inp::input_router::neutral(state);
-		if (!mouse) {
+		const bool buttons = in && in->buttons;
+		const bool motion = in && in->motion;
+		if (!buttons) {
 			state.mouse = neutral.mouse;
-			state.mouse_prev = neutral.mouse_prev;
-			state.mouse_dir = neutral.mouse_dir;
 			state.scroll = neutral.scroll;
 		}
-		if (!keyboard) {
-			state.keyboard = neutral.keyboard;
+		if (!motion) {
+			state.mouse_prev = neutral.mouse_prev;
+			state.mouse_dir = neutral.mouse_dir;
+		}
+		for (std::size_t k = 0; k < state.keyboard.size(); ++k) {
+			state.keyboard[k] = state.keyboard[k] && in && in->keys[k];
 		}
 		auto& ctx = e.context->state().ctx();
 		ctx.insert_or_assign(state);
-		ctx.insert_or_assign(inp::input_focus{ focused });
+		ctx.insert_or_assign(inp::input_focus{ in && (in->mouse_focus || in->keyboard_focus) });
 	}
 
 	void route_set(inp::input_router& router, scn::context_set& set)
 	{
-		const glm::vec2 cursor = router.raw_state().mouse_pos;
-		const bool button_down = any_mouse_button(router.raw_state());
+		const inp::input_state& raw = router.raw_state();
+		const glm::vec2 cursor = raw.mouse_pos;
+		const bool button_down = any_mouse_button(raw);
+		const bool engaged = button_down || raw.scroll != glm::vec2{ 0.f };
 
 		std::vector<entry> entries;
 		set.for_each([&](scn::world_context& context) {
@@ -70,63 +108,34 @@ namespace
 			entries.push_back(std::move(e));
 		});
 
-		// Contexts the router handed the full state to; the rest stay neutral as before.
-		std::vector<const entry*> group;
+		inp::input_stack& stack = router.stack(set.name());
+		std::vector<std::string> present;
+		std::vector<std::string> fed;
 		for (const auto& e : entries) {
-			if (e.routed.focused) group.push_back(&e);
+			const std::string name{ e.context->get_name() };
+			stack.put(name, e.context->desc_index(), base_layer(e));
+			present.push_back(name);
+			// Contexts the router handed the full state to; the rest stay neutral as before.
+			if (e.routed.focused) fed.push_back(name);
 		}
-		// Top layer first; equal layers keep the id order.
-		std::stable_sort(group.begin(), group.end(), [](const entry* a, const entry* b) {
-			return a->context->input_layer() > b->context->input_layer();
-		});
-
-		const auto hit_it = std::ranges::find_if(group, [cursor](const entry* e) { return hits(*e, cursor); });
-		const entry* hit = hit_it != group.end() ? *hit_it : nullptr;
+		stack.retain_worlds(present);
 
 		const std::string_view set_name = set.name();
 		inp::input_router::mouse_hold hold = router.hold(set_name);
-		if (!group.empty() && button_down && !hold.active) {
+		if (!fed.empty() && button_down && !hold.active) {
 			// The press (or the first sight of an already pressed button) decides who owns the drag.
-			hold = { true, hit != nullptr, hit ? target_of(set_name, *hit) : inp::input_target{} };
+			const std::optional<std::string> taker = inp::mouse_taker(stack, fed, cursor);
+			hold = { true, taker.has_value(), taker ? target_of(set_name, *taker) : inp::input_target{} };
 			router.set_hold(set_name, hold);
 		}
 
 		// An owner that is gone (destroyed, or no longer fed by the target) leaves the held
 		// button with nobody until it is released: it must not fall through to the others.
-		const entry* holder = nullptr;
-		if (hold.active && hold.captured) {
-			const auto it = std::ranges::find_if(group, [&](const entry* e) { return target_of(set_name, *e) == hold.owner; });
-			if (it != group.end()) holder = *it;
-		}
-		const bool orphaned_drag = hold.active && hold.captured && !holder;
-		const bool drag_from_outside = hold.active && !hold.captured;
-
-		const entry* keyboard_owner = nullptr;
-		for (const entry* e : group) {
-			if (e->capture && e->capture->keyboard) {
-				keyboard_owner = e;
-				break;
-			}
-		}
+		const inp::drag_hold drag{ hold.active, hold.captured, hold.owner.set == set_name ? hold.owner.context : std::string{} };
+		const inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, drag);
 
 		for (const auto& e : entries) {
-			if (!e.routed.focused) {
-				write(e, false, false, false);
-				continue;
-			}
-			bool mouse = true;
-			if (orphaned_drag) {
-				mouse = false;
-			} else if (holder) {
-				mouse = &e == holder;
-			} else if (drag_from_outside) {
-				mouse = &e != hit;
-			} else if (hit) {
-				mouse = &e == hit;
-			}
-			const bool keyboard = keyboard_owner ? &e == keyboard_owner : true;
-			// input_focus gates the mouse-driven camera: it follows the mouse, or an explicit keyboard owner
-			write(e, mouse, keyboard, mouse || (keyboard_owner && keyboard));
+			write(e, resolved.find(e.context->get_name()));
 		}
 	}
 }

@@ -885,6 +885,52 @@ BOOST_AUTO_TEST_CASE(WorldDesc_InputLayerRoundTripsAndTheDefaultIsNotWritten)
 	BOOST_TEST(!ser(plain).contains("input_layer")); // levels saved before the field stay byte-identical
 }
 
+BOOST_AUTO_TEST_CASE(WorldDesc_InputStackRoundTripsAndAWorldWithoutOneStaysByteIdentical)
+{
+	scn::world_desc menu;
+	menu.deserialize(*descs, parse(R"({"__type":"world_desc","name":"menu","systems":[],"input_stack":
+		{"order":5,"active":false,"block_below":true,"text_keys":true,"keys":["ESCAPE","W"],"actions":["Jump"],"listen":["Fire"]},"children":[]})"));
+	const auto& stack = menu.get_input_stack();
+	BOOST_REQUIRE(stack.has_value());
+	BOOST_TEST(stack->order.value_or(-1) == 5);
+	BOOST_TEST(!stack->active);
+	BOOST_TEST(stack->block_below);
+	BOOST_TEST(stack->text_keys);
+	BOOST_TEST(stack->keys.size() == 2u);
+	BOOST_TEST(stack->actions.size() == 1u);
+	BOOST_TEST(stack->listen.size() == 1u);
+	scn::world_desc back;
+	back.deserialize(*descs, ser(menu));
+	BOOST_TEST((back.get_input_stack() == stack));
+
+	scn::world_desc plain;
+	plain.deserialize(*descs, parse(R"({"__type":"world_desc","name":"w","systems":[],"children":[]})"));
+	BOOST_TEST(!plain.get_input_stack().has_value());
+	BOOST_TEST(!ser(plain).contains("input_stack"));
+}
+
+BOOST_AUTO_TEST_CASE(WorldDesc_InputStackKeepsTheDefaultsOfAnEmptyObject_AndIgnoresWhatItDoesNotKnow)
+{
+	scn::world_desc empty;
+	empty.deserialize(*descs, parse(R"({"__type":"world_desc","name":"w","systems":[],"input_stack":{},"children":[]})"));
+	BOOST_REQUIRE(empty.get_input_stack().has_value());
+	BOOST_TEST((*empty.get_input_stack() == scn::input_stack_desc{}));
+	BOOST_TEST(ser(empty).contains("input_stack"));
+
+	scn::world_desc odd;
+	odd.deserialize(*descs, parse(R"({"__type":"world_desc","name":"w","systems":[],"children":[],
+		"input_stack":{"nonsense":1,"order":"high","active":"yes","keys":"W","block_below":true}})"));
+	BOOST_REQUIRE(odd.get_input_stack().has_value());
+	BOOST_TEST(!odd.get_input_stack()->order.has_value());
+	BOOST_TEST(odd.get_input_stack()->active);
+	BOOST_TEST(odd.get_input_stack()->keys.empty());
+	BOOST_TEST(odd.get_input_stack()->block_below);
+
+	scn::world_desc not_an_object;
+	not_an_object.deserialize(*descs, parse(R"({"__type":"world_desc","name":"w","systems":[],"children":[],"input_stack":3})"));
+	BOOST_TEST(!not_an_object.get_input_stack().has_value());
+}
+
 // ---------------------------------------------------------------- material_desc (#131-c, #321)
 
 namespace {

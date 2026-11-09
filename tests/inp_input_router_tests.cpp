@@ -791,6 +791,169 @@ BOOST_AUTO_TEST_CASE(EditorTargets_ViewportPrefersThePlayTwinThenTheLevelThenNot
 	BOOST_TEST(!edt::active_play_input_target(services, state).has_value());
 }
 
+// ---------------------------------------------------------------- input stack (#623)
+
+BOOST_AUTO_TEST_CASE(Stack_EqualInputLayersAreOrderedByTheLevelFileNotByTheWorldId)
+{
+	auto& lower_id = make_ui("lower_id", 0, { BUTTON });
+	auto& earlier_in_file = make_ui("earlier_in_file", 0, { BUTTON });
+	lower_id.set_desc_index(5);
+	earlier_in_file.set_desc_index(1);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	move_to({ 120, 120 });
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST(left_of(earlier_in_file));
+	BOOST_TEST(!left_of(lower_id));
+}
+
+BOOST_AUTO_TEST_CASE(Stack_TheOrderOfALevelDefaultBeatsTheInputLayerOfTheWorld)
+{
+	auto& by_layer = make_ui("by_layer", 3, { BUTTON });
+	auto& by_default = make_ui("by_default", 0, { BUTTON });
+	scn::input_stack_desc above;
+	above.order = 7;
+	by_default.set_input_stack(above);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	move_to({ 120, 120 });
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST(left_of(by_default));
+	BOOST_TEST(!left_of(by_layer));
+}
+
+BOOST_AUTO_TEST_CASE(Stack_MovementOverAUiRegionStillReachesThe3DWorld_ButAClickOverItDoesNot)
+{
+	auto& world = make("level", "3d");
+	auto& ui = make_ui("ui", 1, { BUTTON });
+	router.bind({ "level", "" }, { 0, 0, 400, 200 });
+	move_to({ 110, 120 });
+	gs::route_input(router, mgr);
+	move_to({ 120, 125 }); // hovering the button, nothing pressed
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST((state_of(world).mouse_dir != glm::vec2{ 0 }));
+	BOOST_TEST(focus_of(world));
+	BOOST_TEST(focus_of(ui));
+	BOOST_TEST(!left_of(world));
+
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+	gs::route_input(router, mgr);
+	BOOST_TEST(left_of(ui));
+	BOOST_TEST(!left_of(world));
+	BOOST_TEST(!focus_of(world));
+}
+
+BOOST_AUTO_TEST_CASE(Stack_ALevelDefaultThatBlocksBelowTakesEverythingFromTheWorldsBelow)
+{
+	auto& world = make("level", "3d");
+	auto& menu = make("level", "menu");
+	menu.set_input_layer(2);
+	scn::input_stack_desc modal;
+	modal.block_below = true;
+	menu.set_input_stack(modal);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	move_to({ 300, 150 });
+	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST(w_of(menu));
+	BOOST_TEST(left_of(menu));
+	BOOST_TEST(focus_of(menu));
+	BOOST_TEST(!w_of(world));
+	BOOST_TEST(!left_of(world));
+	BOOST_TEST(!focus_of(world));
+	BOOST_TEST((state_of(world).mouse_pos == glm::vec2{ 300, 150 }));
+}
+
+BOOST_AUTO_TEST_CASE(Stack_ALevelDefaultKeyIsTakenFromTheWorldsBelow_AndAnUnknownKeyNameIsIgnored)
+{
+	auto& world = make("level", "3d");
+	auto& hud = make("level", "hud");
+	hud.set_input_layer(1);
+	scn::input_stack_desc keys;
+	keys.keys = { "W", "NOT_A_KEY" };
+	hud.set_input_stack(keys);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	move_to({ 300, 150 });
+	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
+	key(KEYBOARD_BUTTONS::S, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST(w_of(hud));
+	BOOST_TEST(!w_of(world));
+	BOOST_TEST(state_of(world).keyboard[idx(KEYBOARD_BUTTONS::S)]);
+	BOOST_TEST(state_of(hud).keyboard[idx(KEYBOARD_BUTTONS::S)]);
+}
+
+BOOST_AUTO_TEST_CASE(Stack_AnInactiveDefaultLayerReceivesNothingAndTakesNothing)
+{
+	auto& world = make("level", "3d");
+	auto& menu = make("level", "menu");
+	menu.set_input_layer(2);
+	scn::input_stack_desc closed;
+	closed.block_below = true;
+	closed.active = false;
+	menu.set_input_stack(closed);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST(w_of(world));
+	BOOST_TEST(left_of(world));
+	BOOST_TEST(!w_of(menu));
+	BOOST_TEST(!left_of(menu));
+	BOOST_TEST(!focus_of(menu));
+}
+
+BOOST_AUTO_TEST_CASE(Stack_InAnEditSetTheStackStillLimitsTheRawInput)
+{
+	auto& world = make("level", "3d");
+	auto& menu = make("level", "menu");
+	mgr.find_set("level")->set_mode(ecs::run_mode::edit);
+	menu.set_input_layer(2);
+	scn::input_stack_desc modal;
+	modal.block_below = true;
+	menu.set_input_stack(modal);
+	router.set_default_target(inp::input_target{ .set = "level" });
+	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
+	click(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN);
+
+	gs::route_input(router, mgr);
+
+	BOOST_TEST((mgr.find_set("level")->mode() == ecs::run_mode::edit));
+	BOOST_TEST(w_of(menu));
+	BOOST_TEST(!w_of(world));
+	BOOST_TEST(!left_of(world));
+}
+
+BOOST_AUTO_TEST_CASE(Stack_HoldsTheBaseLayerOfEveryWorldOfTheSetAndForgetsTheWorldsThatAreGoneAndTheSet)
+{
+	make("level", "3d");
+	make("level", "ui");
+	router.set_default_target(inp::input_target{ .set = "level" });
+	gs::route_input(router, mgr);
+	BOOST_TEST(router.stack("level").size() == 2u);
+	BOOST_TEST(router.stack("level").find("ui", "world") != nullptr);
+
+	mgr.find_set("level")->destroy_context("ui");
+	gs::route_input(router, mgr);
+	BOOST_TEST(router.stack("level").size() == 1u);
+
+	router.forget_set("level");
+	BOOST_TEST(router.stack("level").size() == 0u);
+}
+
 // ---------------------------------------------------------------- update stage
 
 BOOST_AUTO_TEST_CASE(UpdateStage_RoutesBeforeTheContextsRunAndRebuildsTheBindingsEveryFrame)

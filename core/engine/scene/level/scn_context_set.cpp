@@ -187,6 +187,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	auto& w = *(m_contexts[id] = std::make_unique<scn::world_context>(id, name));
 	m_context_ids[std::string{ name }] = id;
 	w.set_kind(kind);
+	w.set_desc_index(m_next_desc_index++);
 	if (m_layer) {
 		w.set_meta(&m_layer->meta());
 	}
@@ -221,11 +222,20 @@ void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factor
 		m_desc_world_names.emplace_back(world_desc->get_name());
 		auto& world = create_context(world_desc->get_name(), acquire_free_id(), kind);
 		world.set_input_layer(world_desc->get_input_layer());
+		world.set_input_stack(world_desc->get_input_stack());
 		add_systems(world, world_desc->get_systems(), sfactory);
 
 		entt::entity e = world.state().create();
 		assambler.spawn_from_desc(world.state(), e, *world_desc, world_desc->get_name());
 	}
+
+	// A world that outlived a reload was made while running: it stays after every world of the file, in its old order.
+	std::vector<scn::world_context*> survivors;
+	for (const auto& [id, context] : m_contexts) {
+		if (std::ranges::find(m_desc_world_names, std::string{ context->get_name() }) == m_desc_world_names.end()) survivors.push_back(context.get());
+	}
+	std::ranges::sort(survivors, [](const scn::world_context* a, const scn::world_context* b) { return a->desc_index() < b->desc_index(); });
+	for (scn::world_context* context : survivors) context->set_desc_index(m_next_desc_index++);
 }
 
 void scn::context_set::reload_context(
@@ -241,11 +251,14 @@ void scn::context_set::reload_context(
 	const context_kind kind = m_contexts.at(old_id)->kind();
 	// a structural edit of one world does not restart its shader animations (#544)
 	const scn::world_time time = m_contexts.at(old_id)->state().ctx().get<scn::world_time>();
+	const uint32_t desc_index = m_contexts.at(old_id)->desc_index();
 	destroy_by_id(old_id);
 
 	auto& w = create_context(name, old_id, kind);
 	w.state().ctx().get<scn::world_time>() = time;
 	w.set_input_layer(desc.get_input_layer());
+	w.set_input_stack(desc.get_input_stack());
+	w.set_desc_index(desc_index);
 	add_systems(w, desc.get_systems(), sf);
 
 	entt::entity e = w.state().create();
@@ -274,6 +287,7 @@ void scn::context_set::load_systems_from_desc(const level_desc& desc, ecs::syste
 		if (auto* context = find(world_desc->get_name())) {
 			context->set_systems(world_desc->get_systems());
 			context->set_input_layer(world_desc->get_input_layer());
+			context->set_input_stack(world_desc->get_input_stack());
 		}
 	}
 	rebuild_all_plans(system_factory);

@@ -104,6 +104,7 @@ bool edt::play_session::start(play_reason reason)
 			scn::world_context& world = contexts->create_context(k_play_set, name, scn::context_kind::play,
 				i < systems.size() ? systems[i] : copy.get_systems());
 			world.set_input_layer(copy.get_input_layer());
+			world.set_input_stack(copy.get_input_stack());
 			const entt::entity root = world.state().create();
 			m_services.assembler()->spawn_from_desc(world.state(), root, copy, name);
 		}

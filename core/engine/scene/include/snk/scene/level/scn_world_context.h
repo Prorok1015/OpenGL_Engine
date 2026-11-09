@@ -3,6 +3,7 @@
 #include <snk/ecs/ecs_invoker.hpp>
 #include <snk/ecs/ecs_system_plan.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/scene/level/scn_input_stack_desc.h>
 #include <snk/scene/scn_time.h>
 #include <snk/common/snk_api.h>
 #include <entt/entity/registry.hpp>
@@ -10,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +47,14 @@ namespace scn
 		// Input stacking order (not inp::input_layer, the window processor stack): the higher layer gets the mouse first (UI = 1, the rest 0).
 		int input_layer() const { return m_input_layer; }
 		void set_input_layer(int layer) { m_input_layer = layer; }
+
+		// Where the world stands among the worlds of its set: the order of the level file, worlds made while it runs after
+		// all of them. Never reused (a world id is), so it orders equal input layers (INPUT_STACK.md §3.1).
+		uint32_t desc_index() const { return m_desc_index; }
+		void set_desc_index(uint32_t index) { m_desc_index = index; }
+		// The level's defaults for the base input layer; none when the file has no `input_stack` for the world.
+		const std::optional<input_stack_desc>& input_stack() const { return m_input_stack; }
+		void set_input_stack(std::optional<input_stack_desc> stack) { m_input_stack = std::move(stack); }
 
 		// Reseeds the context's `ecs::rng` from the base seed and its id.
 		void seed(uint64_t base_seed);
@@ -111,5 +121,8 @@ namespace scn
 		ecs::run_mode m_mode = ecs::run_mode::play;
 		float m_time_scale = 1.0f;
 		int m_fixed_steps = 0;
+		// After the older fields: inline accessors (state()) of a game module built earlier keep their offsets.
+		uint32_t m_desc_index = 0;
+		std::optional<input_stack_desc> m_input_stack;
 	};
 } // namespace scn
