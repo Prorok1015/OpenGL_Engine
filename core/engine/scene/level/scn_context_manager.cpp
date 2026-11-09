@@ -225,6 +225,8 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 		m_pending_level_reload = res::tag{};
 		set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
 		if (hot_reload) {
+			// CI reads it: the editor watches its level, the shipping host (scene/hot_reload off) must not.
+			egLOG_INFO("scene", "level '{}' watched for hot reload", level_tag.view());
 			hot_reload->watch_resource(level_tag, [this](const res::tag& changed_tag) {
 				if (!get_set(level_set_name).active()) {
 					// Play: the level is frozen and hidden; rebuilding it now would bring back its cameras.

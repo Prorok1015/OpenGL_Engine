@@ -27,13 +27,18 @@ if [ -n "$bad_needed" ]; then
 	status=1
 fi
 
-symbols="$(nm -C --defined-only "$bin")"
+symbols="$(nm -C --defined-only "$bin" || true)"
+# A stripped binary or a failing nm would make the checks below pass on nothing.
+if ! grep -qE ' [A-Za-z] scn::' <<<"$symbols"; then
+	echo "::error::nm found no engine symbol (scn::) in '$bin': the symbol check cannot run"
+	exit 2
+fi
 pattern=' [A-Za-z] ((vtable|typeinfo name|typeinfo|VTT|construction vtable|guard variable) for )?(edt|editor|components|mcp)::'
 bad_symbols="$(echo "$symbols" | grep -E "$pattern" || true)"
 if [ -n "$bad_symbols" ]; then
 	count="$(echo "$bad_symbols" | wc -l)"
 	echo "::error::the game host defines ${count} editor or MCP symbols (first 50):"
-	echo "$bad_symbols" | head -50
+	echo "$bad_symbols" | head -50 || true
 	status=1
 fi
 

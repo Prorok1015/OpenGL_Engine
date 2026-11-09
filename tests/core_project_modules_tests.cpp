@@ -440,6 +440,18 @@ BOOST_AUTO_TEST_CASE(copies_of_ended_processes_are_removed_and_only_those)
 	BOOST_TEST(left == (std::vector<std::string>{ std::format("{}-3", k_running_pid), "notes" }), boost::test_tools::per_element());
 }
 
+BOOST_AUTO_TEST_CASE(a_static_host_leaves_the_copies_in_the_project_alone)
+{
+	open({ manifest_module("test_game") });
+	const fs::path cache = root / ".cache" / "modules";
+	dir.write(cache / std::format("{}-0", k_dead_pid) / library_file("test_game"), "an editor that ended");
+	core::project_modules_options options;
+	options.compiled_only = true;
+	load(options);
+
+	BOOST_TEST(files_in(cache) == (std::vector<std::string>{ std::format("{}-0", k_dead_pid) }), boost::test_tools::per_element());
+}
+
 BOOST_AUTO_TEST_CASE(a_build_output_linked_out_of_the_project_is_refused)
 {
 	open({ manifest_module("test_game") });

@@ -318,6 +318,10 @@ bool core::project_module_host::is_current(const std::string& name) const
 
 void core::project_module_host::remove_unused_copies() const
 {
+	// A static host makes no copies and writes nothing into the project.
+	if (m_options.compiled_only) {
+		return;
+	}
 	if (!m_data.has_value<prj::project_context>()) {
 		return;
 	}

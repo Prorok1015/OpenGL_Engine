@@ -153,7 +153,9 @@ jobs:
           grep -q "exit after the level loaded (game/exit_after_level_loaded)" "$log"
           grep -q "file watching is off (res/watch_files)" "$log"
           grep -q "hot reload is off (scene/hot_reload)" "$log"
+          # The editor's headless run below requires both lines, so a renamed or dropped line cannot pass here unseen.
           if grep -q "watching files under" "$log"; then echo "::error::a file watcher started"; exit 1; fi
+          if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
 
       # #591: the host links no editor, MCP or git code and does not load snk_engine (it is the static engine).
@@ -649,6 +651,9 @@ jobs:
             echo "::error::the startup level did not load (exit_after_frames cap reached?)"; exit 1
           fi
           grep -q "exit after the level loaded" "$err"
+          # #591: the positive control of the game host's checks (it must log neither).
+          grep -q "watching files under" "$err"
+          grep -q "level '.*smoke_level.desc' watched for hot reload" "$err"
           if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless log"; exit 1; fi
 
           rc=0
