@@ -7,6 +7,7 @@
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
+#include <edt_decode_runner.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
 #include <string_view>
@@ -95,6 +96,8 @@ int main(int argc, char* argv[])
 		project_modules.with_editor_modules = true;
 		// In the storage, so the editor can reload a module from a new build (#435).
 		app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules)).load_all();
+		// The run folders of model decoders whose editor crashed (#647).
+		edt::decode_runner::remove_stale_folders();
 
 		app::application editor;
 		result = editor.run(app_storage);

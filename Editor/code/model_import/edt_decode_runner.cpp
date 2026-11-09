@@ -1,6 +1,7 @@
 #include "edt_decode_runner.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_process.h>
+#include <snk/resource/res_shipping_dirs.h>
 #include <atomic>
 #include <charconv>
 #include <condition_variable>
@@ -14,7 +15,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::atomic<unsigned> g_run_counter{ 0 };
+// One folder per run, snk-model_decoder-<pid>-<random> in the private scratch base of the user.
+constexpr const char* k_scratch_name = "model_decoder";
 
 struct folder_guard
 {
@@ -87,16 +89,6 @@ std::string utf8_text(const fs::path& path)
 	return std::string(text.begin(), text.end());
 }
 
-std::optional<std::int64_t> pid_of_folder(const std::string& name)
-{
-	const std::size_t dash = name.find('-');
-	if (dash == std::string::npos || dash == 0) return std::nullopt;
-	std::int64_t pid = 0;
-	const auto [end, error] = std::from_chars(name.data(), name.data() + dash, pid);
-	if (error != std::errc{} || end != name.data() + dash) return std::nullopt;
-	return pid;
-}
-
 } // namespace
 
 edt::decode_runner::decode_runner(decode_runner_config config)
@@ -115,23 +107,15 @@ edt::decode_runner::decode_runner(decode_runner_config config)
 edt::decode_outcome edt::decode_runner::run(const decode_request& request, const std::vector<std::byte>& source, std::stop_token stop) const
 {
 	decode_outcome outcome;
-	std::error_code ec;
-	fs::create_directories(m_config.scratch_root, ec);
-	if (ec) {
-		outcome.error = "cannot create the scratch folder: " + ec.message();
+	// A folder this call made itself, private to this user (exclusive, random name, 0700 / owner-only): the same helper
+	// the shipped game uses for memory://. Never an existing one.
+	const core::res::scratch_folder_result made = core::res::make_scratch_dir(k_scratch_name);
+	if (made.path.empty()) {
+		outcome.error = "cannot make the run folder: " + made.error;
 		return outcome;
 	}
-	fs::permissions(m_config.scratch_root, fs::perms::owner_all, fs::perm_options::replace, ec);
-
-	const fs::path folder = m_config.scratch_root
-		/ (std::to_string(platform::current_process_id()) + "-" + std::to_string(g_run_counter.fetch_add(1)));
+	const fs::path folder = made.path;
 	folder_guard guard{ folder };
-	fs::create_directories(folder, ec);
-	if (ec) {
-		outcome.error = "cannot create the run folder: " + ec.message();
-		return outcome;
-	}
-	fs::permissions(folder, fs::perms::owner_all, fs::perm_options::replace, ec);
 
 	decode_request sent = request;
 	const auto timeout_ms = static_cast<std::uint64_t>(m_config.timeout.count());
@@ -209,22 +193,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	return outcome;
 }
 
-std::size_t edt::decode_runner::remove_stale_folders(const fs::path& scratch_root)
+std::size_t edt::decode_runner::remove_stale_folders()
 {
-	std::error_code ec;
-	if (!fs::is_directory(scratch_root, ec)) return 0;
-	std::size_t removed = 0;
-	std::vector<fs::path> stale;
-	for (const auto& entry : fs::directory_iterator(scratch_root, ec)) {
-		if (!entry.is_directory(ec)) continue;
-		const auto pid = pid_of_folder(entry.path().filename().string());
-		if (pid && !platform::process_is_running(*pid)) {
-			stale.push_back(entry.path());
-		}
-	}
-	for (const fs::path& path : stale) {
-		std::error_code remove_ec;
-		if (fs::remove_all(path, remove_ec) != static_cast<std::uintmax_t>(-1) && !remove_ec) ++removed;
-	}
-	return removed;
+	return core::res::remove_stale_scratch_dirs(k_scratch_name);
 }

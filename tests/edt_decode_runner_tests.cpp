@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <snk/platform/plt_process.h>
+#include <snk/resource/res_shipping_dirs.h>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -43,7 +44,6 @@ struct runner_fixture
 	{
 		edt::decode_runner_config result;
 		result.decoder = SNK_MODEL_DECODER_PATH;
-		result.scratch_root = dir.path() / "scratch";
 		return result;
 	}
 
@@ -70,11 +70,18 @@ struct runner_fixture
 		return bytes;
 	}
 
+	// No run folder of this process is left: the runner makes one per run under the private scratch base of the user.
 	bool scratch_is_empty() const
 	{
+		std::string error;
+		const fs::path base = core::res::scratch_base_dir(error);
+		if (base.empty()) return true;
+		const std::string prefix = "snk-model_decoder-" + std::to_string(platform::current_process_id()) + "-";
 		std::error_code ec;
-		const fs::path root = dir.path() / "scratch";
-		return !fs::exists(root, ec) || fs::directory_iterator(root) == fs::directory_iterator();
+		for (const auto& entry : fs::directory_iterator(base, fs::directory_options::skip_permission_denied, ec)) {
+			if (entry.path().filename().string().starts_with(prefix)) return false;
+		}
+		return true;
 	}
 };
 
@@ -211,17 +218,29 @@ BOOST_AUTO_TEST_CASE(AMissingDecoder_IsAFailure_NotACrash)
 	BOOST_CHECK(scratch_is_empty());
 }
 
-BOOST_AUTO_TEST_CASE(StaleFolders_OfADeadProcess_AreRemoved_AndLiveOnesKept)
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(StaleFolders_OfADeadDecoderRun_AreRemoved_AndTheRestKept)
 {
-	const fs::path root = dir.path() / "scratch";
-	fs::create_directories(root / "2147483646-0");
-	fs::create_directories(root / (std::to_string(platform::current_process_id()) + "-9"));
-	fs::create_directories(root / "not-a-run-folder");
-	BOOST_CHECK_EQUAL(edt::decode_runner::remove_stale_folders(root), 1u);
-	BOOST_CHECK(!fs::exists(root / "2147483646-0"));
-	BOOST_CHECK(fs::exists(root / (std::to_string(platform::current_process_id()) + "-9")));
-	BOOST_CHECK(fs::exists(root / "not-a-run-folder"));
+	std::string error;
+	const fs::path base = core::res::scratch_base_dir(error);
+	BOOST_REQUIRE_MESSAGE(!base.empty(), error);
+	const std::string own = std::to_string(platform::current_process_id());
+	const fs::path dead = base / "snk-model_decoder-2147483000-0123456789abcdef";
+	const fs::path other_game = base / "snk-other_game_for_decode_test-2147483000-0123456789abcdef";
+	const fs::path alive = base / ("snk-model_decoder-" + own + "-0123456789abcdef");
+	for (const fs::path& folder : { dead, other_game, alive }) {
+		fs::create_directories(folder);
+		fs::permissions(folder, fs::perms::owner_all, fs::perm_options::replace);
+	}
+	BOOST_CHECK_GE(edt::decode_runner::remove_stale_folders(), 1u);
+	BOOST_CHECK(!fs::exists(dead));
+	BOOST_CHECK(fs::exists(other_game));
+	BOOST_CHECK(fs::exists(alive));
+	std::error_code ec;
+	fs::remove_all(other_game, ec);
+	fs::remove_all(alive, ec);
 }
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
 

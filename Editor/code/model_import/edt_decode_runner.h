@@ -15,8 +15,6 @@ namespace edt {
 	{
 		// snk_model_decoder; empty: the one next to the running program.
 		std::filesystem::path decoder;
-		// A folder only this user can enter, where each run gets a folder of its own for the bundles and memory://.
-		std::filesystem::path scratch_root;
 		// The child is killed when it runs longer. Also the deadline the child gets for its parse.
 		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
 		std::uint64_t memory_limit_bytes = 2ull * 1024ull * 1024ull * 1024ull;
@@ -47,9 +45,10 @@ namespace edt {
 
 		decode_outcome run(const decode_request& request, const std::vector<std::byte>& source, std::stop_token stop) const;
 
-		// Deletes the run folders under `scratch_root` whose process no longer runs (an editor that crashed mid-import).
-		// Returns how many it removed.
-		static std::size_t remove_stale_folders(const std::filesystem::path& scratch_root);
+		// Deletes the run folders of decoders whose editor process no longer runs (an editor that crashed mid-import):
+		// core::res::remove_stale_scratch_dirs, with its rules (only a private directory of this user, never a link).
+		// Call it once at startup. Returns how many it removed.
+		static std::size_t remove_stale_folders();
 
 	private:
 		decode_runner_config m_config;
