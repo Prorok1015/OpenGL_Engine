@@ -81,6 +81,7 @@ namespace {
 		if (ec || resolved != plan.source) return "the file is reached by another path now";
 		if (fs::file_size(plan.source, ec) != plan.size || ec) return "the size of the file changed";
 		if (fs::last_write_time(plan.source, ec) != plan.modified || ec) return "the file was modified";
+		if (edt::file_id_of(plan.source) != plan.id) return "the path reaches another file now";
 		return {};
 	}
 
@@ -129,9 +130,11 @@ namespace {
 	};
 
 	// The model refers to other files: nothing is imported. The list waits for the second call, whose question shows it.
-	json::value park_files(const import_job_inputs& in, const edt::model_file_scan& found)
+	json::value park_files(const import_job_inputs& in, const edt::model_file_scan& found, const edt::content_digest& digest)
 	{
 		edt::agent_import_plan plan = in.plan;
+		plan.digest = digest;
+		plan.hashed = true;
 		plan.files = found.files;
 		plan.files_bytes = found.total_bytes;
 		plan.scanned = true;
@@ -163,6 +166,8 @@ namespace {
 		if (const std::string why = identity_problem(in.plan); !why.empty()) throw std::runtime_error(why);
 
 		const std::vector<std::byte> source_bytes = read_checked_source(in.plan);
+		const edt::content_digest digest = edt::digest_of(source_bytes);
+		if (in.plan.hashed && digest != in.plan.digest) throw std::runtime_error("the content of the file changed since its files were listed");
 		edt::import_source source;
 		source.path = in.plan.source;
 		source.preloaded = &source_bytes;
@@ -172,7 +177,7 @@ namespace {
 		if (!in.plan.scanned) {
 			const edt::model_file_scan found = in.scan(source, &ctx);
 			if (!found.ok()) throw std::runtime_error(found.error);
-			if (!found.files.empty() && in.ask_about_files) return park_files(in, found);
+			if (!found.files.empty() && in.ask_about_files) return park_files(in, found, digest);
 			files = found.files;
 		}
 		source.allowed = &files;
@@ -237,7 +242,7 @@ namespace {
 
 bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 {
-	return source == other.source && size == other.size && modified == other.modified && name == other.name && folder == other.folder;
+	return source == other.source && size == other.size && modified == other.modified && id == other.id && name == other.name && folder == other.folder;
 }
 
 edt::agent_model_import::agent_model_import(asset_exporter& exporter, job_service& jobs, res::resource_system& resources, agent_import_options options)
@@ -330,6 +335,7 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	}
 	plan.modified = fs::last_write_time(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the time of the source cannot be read");
+	plan.id = file_id_of(resolved);
 
 	const std::string wanted_name = request.name.empty() ? to_utf8(resolved.stem()) : request.name;
 	const agent_level_path name = check_agent_name(wanted_name);
@@ -413,12 +419,14 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 		if (!listed || !listed->same_file_as(plan)) return { 0, cmd::codes::denied, "no list of files belongs to this token, or the model changed since it was made: ask again without files_token" };
 		const auto same_list = [](const std::vector<referenced_file>& a, const std::vector<referenced_file>& b) {
 			return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const referenced_file& x, const referenced_file& y) {
-				return x.path == y.path && x.size == y.size && x.modified == y.modified;
+				return x.path == y.path && x.size == y.size && x.modified == y.modified && x.id == y.id;
 			});
 		};
 		if (shown && !same_list(shown->files, listed->files)) return { 0, cmd::codes::denied, "the files changed since a person was shown them: ask again" };
 		plan.files = std::move(listed->files);
 		plan.files_bytes = listed->files_bytes;
+		plan.digest = listed->digest;
+		plan.hashed = listed->hashed;
 		plan.scanned = true;
 	}
 

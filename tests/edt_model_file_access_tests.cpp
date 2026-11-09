@@ -184,6 +184,42 @@ BOOST_AUTO_TEST_CASE(TheJob_RefusesAFileWhoseTimeChanged_EvenAtTheSameSize)
 	BOOST_CHECK(!job.resolve("skin.png", edt::model_file_kind::texture).error.empty());
 }
 
+BOOST_AUTO_TEST_CASE(TheJob_RefusesFileWhoseBytesChanged_EvenAtTheSameSizeAndTime)
+{
+	auto scan = make();
+	const auto listed = scan.resolve("mesh.bin", edt::model_file_kind::side_file);
+	BOOST_REQUIRE(listed.found());
+	BOOST_CHECK(scan.read(listed).has_value());
+	const std::vector<edt::referenced_file> allowed = scan.files();
+	BOOST_REQUIRE(allowed.size() == 1u && allowed[0].hashed);
+
+	const fs::path mesh = dir.path() / "models" / "mesh.bin";
+	const auto time = fs::last_write_time(mesh);
+	dir.write("models/mesh.bin", "buffer bytez");
+	fs::last_write_time(mesh, time);
+
+	auto job = make({}, &allowed);
+	const auto file = job.resolve("mesh.bin", edt::model_file_kind::side_file);
+	BOOST_REQUIRE_MESSAGE(file.found(), file.error);
+	BOOST_CHECK_THROW(job.read(file), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(TheJob_RefusesAnotherFileAtTheSamePathSizeAndTime)
+{
+	auto scan = make();
+	BOOST_REQUIRE(scan.resolve("skin.png", edt::model_file_kind::texture).found());
+	const std::vector<edt::referenced_file> allowed = scan.files();
+
+	const fs::path skin = dir.path() / "models" / "skin.png";
+	const auto time = fs::last_write_time(skin);
+	dir.write("models/skin.next", png_bytes);
+	fs::last_write_time(dir.path() / "models" / "skin.next", time);
+	fs::rename(dir.path() / "models" / "skin.next", skin);
+
+	auto job = make({}, &allowed);
+	BOOST_CHECK(!job.resolve("skin.png", edt::model_file_kind::texture).error.empty());
+}
+
 BOOST_AUTO_TEST_CASE(TheBytesThatAreRead_AreCheckedAgainAsAnImage)
 {
 	auto access = make();

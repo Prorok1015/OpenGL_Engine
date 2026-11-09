@@ -527,6 +527,44 @@ BOOST_AUTO_TEST_CASE(Start_RefusesAFileThatChangedSinceItWasShown)
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
+BOOST_AUTO_TEST_CASE(Start_RefusesAnotherFileAtTheSamePathSizeAndTime)
+{
+	BOOST_REQUIRE(service->describe(request(), agent).has_value());
+	const auto shown_time = fs::last_write_time(source);
+	dir.write("outside/replacement.glb", "glb bytes of the robot");
+	fs::last_write_time(dir.path() / "outside" / "replacement.glb", shown_time);
+	fs::rename(dir.path() / "outside" / "replacement.glb", source);
+	BOOST_REQUIRE_EQUAL(fs::last_write_time(source), shown_time);
+
+	const auto started = service->start(request(), agent, true);
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
+
+	const auto time = fs::last_write_time(source);
+	dir.write("outside/robot.glb", "glb bytes of the robbed");
+	fs::last_write_time(source, time);
+	BOOST_REQUIRE_EQUAL(fs::file_size(source), std::string("glb bytes of the robot").size());
+
+	const auto started = service->start(second, agent, true);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK(info->error.find("content") != std::string::npos);
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
 BOOST_AUTO_TEST_CASE(Job_RefusesAFileThatChangesWhileItIsImported_AndLeavesNothing)
 {
 	const auto started = approved_start(request(), agent);
