@@ -2,6 +2,7 @@
 #include "test_temp_dir.hpp"
 #include "edt_decode_bundle.h"
 #include <boost/json/object.hpp>
+#include <boost/json/serialize.hpp>
 #include <cstdint>
 #include <fstream>
 #include <string>
