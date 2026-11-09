@@ -9,6 +9,7 @@
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
+#include <algorithm>
 #include <string>
 #include <boost/json/array.hpp>
 #include <cstdint>
@@ -59,16 +60,6 @@ namespace
 		void serialize(json::object&) const override {}
 	};
 
-	bool is_editor_only(const entt::registry& reg, entt::entity entity, const std::vector<const scn::component_entry*>& editor_only)
-	{
-		for (const auto* entry : editor_only) {
-			if (entry->contains(reg, entity)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	std::optional<std::uint64_t> to_u64(const json::value* value)
 	{
 		std::uint64_t number = 0;
@@ -104,44 +95,84 @@ namespace
 	}
 }
 
+scn::entity_writer::entity_writer(const component_catalog& catalog)
+{
+	catalog.for_each([this](const component_entry& entry) {
+		if (entry.category == component_category::data) {
+			m_data.push_back(&entry);
+		} else if (entry.category == component_category::editor_only) {
+			m_editor_only.push_back(&entry);
+		}
+	});
+}
+
+bool scn::entity_writer::editor_only(const entt::registry& reg, entt::entity entity) const
+{
+	for (const auto* entry : m_editor_only) {
+		if (entry->contains(reg, entity)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+std::vector<std::string> scn::entity_writer::present(const entt::registry& reg, entt::entity entity) const
+{
+	std::vector<std::string> names;
+	for (const auto* entry : m_data) {
+		if (entry->contains(reg, entity)) {
+			names.push_back(entry->name);
+		}
+	}
+	return names;
+}
+
+scn::entity_writer::components scn::entity_writer::write(const entt::registry& reg, entt::entity entity, const std::vector<std::string>* only) const
+{
+	components out;
+	for (const auto* entry : m_data) {
+		if (only && std::ranges::find(*only, entry->name) == only->end()) {
+			continue;
+		}
+		if (!entry->contains(reg, entity)) {
+			continue;
+		}
+		if (!entry->saved()) {
+			out.unsaved.push_back(entry->name);
+			continue;
+		}
+		json::object value;
+		entry->write(*entry->schema, reg, entity, value);
+		out.saved[entry->name] = std::move(value);
+	}
+	return out;
+}
+
 json::object scn::capture_world(const world_context& world, const component_catalog& catalog, snapshot_report& report)
 {
 	const entt::registry& reg = world.state();
 
-	std::vector<const component_entry*> data;
+	const entity_writer writer(catalog);
 	std::vector<const component_entry*> ctx;
-	std::vector<const component_entry*> editor_only;
 	catalog.for_each([&](const component_entry& entry) {
-		switch (entry.category) {
-		case component_category::data: data.push_back(&entry); break;
-		case component_category::ctx: ctx.push_back(&entry); break;
-		case component_category::editor_only: editor_only.push_back(&entry); break;
-		case component_category::derived: break;
+		if (entry.category == component_category::ctx) {
+			ctx.push_back(&entry);
 		}
 	});
 
 	json::array entities;
 	if (const auto* storage = reg.storage<entt::entity>()) {
 		for (const entt::entity entity : *storage) {
-			if (!reg.valid(entity) || is_editor_only(reg, entity, editor_only)) {
+			if (!reg.valid(entity) || writer.editor_only(reg, entity)) {
 				continue;
 			}
-			json::object components;
-			for (const auto* entry : data) {
-				if (!entry->contains(reg, entity)) {
-					continue;
-				}
-				if (!entry->saved()) {
-					++report.unsaved[entry->name];
-					continue;
-				}
-				json::object value;
-				entry->write(*entry->schema, reg, entity, value);
-				components[entry->name] = std::move(value);
+			entity_writer::components parts = writer.write(reg, entity);
+			for (const std::string& name : parts.unsaved) {
+				++report.unsaved[name];
 			}
 			json::object item;
 			item["snap"] = static_cast<std::uint64_t>(entt::to_integral(entity));
-			item["components"] = std::move(components);
+			item["components"] = std::move(parts.saved);
 			entities.push_back(std::move(item));
 		}
 	}

@@ -52,6 +52,7 @@
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_play_commands.h"
+#include "edt_runtime_commands.h"
 #include "edt_play_session.h"
 #include "edt_editor_mode.h"
 #include "edt_editor_mode_commands.h"
@@ -1040,6 +1041,14 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// before m_registrations goes.
 	for (auto& command : register_play_commands(m_context->actions(),
 			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); } })) {
+		m_registrations.push_back(std::move(command));
+	}
+	// runtime.query / runtime.get (#552): the live entities of Play, read-only.
+	for (auto& command : register_runtime_commands(m_context->actions().commands(),
+			{ .play = [this] { return m_play.get(); }, .play_set = [this]() -> scn::context_set* {
+				const auto manager = m_services.ctx_manager.lock();
+				return manager ? manager->find_set(k_play_set) : nullptr;
+			} })) {
 		m_registrations.push_back(std::move(command));
 	}
 	// app.advance / app.resume step the editor's whole frame loop: an agent gets them only during Play.

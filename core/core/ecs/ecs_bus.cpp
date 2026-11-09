@@ -26,6 +26,8 @@ bool ecs::world_bus::bind(const bus_registry& types, entt::registry& registry, s
 	}
 
 	st.world = std::string{ world };
+	m_types = &types;
+	m_registry = &registry;
 	for (size_t i = m_slots.size(); i < types.size(); ++i) {
 		const auto& type = types.type(i);
 		auto slot = type.make_slot(&st);
@@ -33,6 +35,11 @@ bool ecs::world_bus::bind(const bus_registry& types, entt::registry& registry, s
 		m_slots.push_back(std::move(slot));
 	}
 	return true;
+}
+
+void ecs::world_bus::bind_new()
+{
+	if (m_types && m_registry && m_slots.size() < m_types->size()) bind(*m_types, *m_registry, state().world);
 }
 
 void ecs::world_bus::set_mode(bus_mode mode)
@@ -57,6 +64,8 @@ size_t ecs::world_bus::event_limit() const { return state().limit; }
 
 const std::string& ecs::world_bus::world() const { return state().world; }
 uint64_t ecs::world_bus::deliveries() const { return state().deliveries; }
+size_t ecs::world_bus::bound_types() const { return m_slots.size(); }
+void ecs::world_bus::set_after_delivery(bool after) { state().after_delivery = after; }
 bool ecs::world_bus::delivering() const { return state().delivering; }
 
 size_t ecs::world_bus::queued() const
