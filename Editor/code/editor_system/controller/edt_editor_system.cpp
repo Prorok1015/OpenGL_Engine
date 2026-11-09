@@ -656,6 +656,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	reload_options.each_frame = [this](const std::string& id, std::function<bool()> poll) {
 		editor_layer->register_implicit(id, std::move(poll));
 	};
+	reload_options.defer = [this] { return load_in_progress().value_or(std::string{}); };
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
 
 	create_live_mode(data);
@@ -957,7 +958,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 			return false;
 		});
 	};
-	live.reload_module = [this](const std::string& module) { return m_game_reloader->reload_quiet(module); };
+	live.reload_module = [this](const std::string& module, std::function<void(const core::reload_report&)> done) {
+		m_game_reloader->reload_quiet_when_ready(module, std::move(done));
+	};
 	live.unavailable_reason = [this, has_code] {
 		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
@@ -1026,11 +1029,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	}
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
-	options.start_blocker = [this]() -> std::optional<std::string> {
-		if (m_loading_level) return std::string{ "a level is loading" };
-		if (m_pending_desc_handle.is_valid()) return std::string{ "an asset is being added to the scene" };
-		return std::nullopt;
-	};
+	options.start_blocker = [this] { return load_in_progress(); };
 	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
 	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] {
 		if (m_play) m_play->after_module_swap();
@@ -1616,6 +1615,13 @@ void edt::editor_system::refresh_world_problems()
 {
 	if (!m_context) return;
 	m_world_problems.refresh(m_context->problems(), m_state, m_services.level_set());
+}
+
+std::optional<std::string> edt::editor_system::load_in_progress() const
+{
+	if (m_loading_level) return std::string{ "a level is loading" };
+	if (m_pending_desc_handle.is_valid()) return std::string{ "an asset is being added to the scene" };
+	return std::nullopt;
 }
 
 bool edt::editor_system::poll_pending_desc()

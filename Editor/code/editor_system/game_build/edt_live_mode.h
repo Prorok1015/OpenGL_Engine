@@ -38,9 +38,10 @@ namespace edt
 		live_build_deps build;
 		// Runs `fn` once on the next UI frame under `id` (editor_layer::register_implicit, as game_reloader_options).
 		std::function<void(const std::string& id, std::function<void()> fn)> next_frame;
-		// game_reloader::reload_quiet. With next_frame: build.reload asks for it on the next UI frame (k_reload_frame_id
-		// + module), never inside tick(), and hands its report to live_build.
-		std::function<core::reload_report(const std::string& module)> reload_module;
+		// game_reloader::reload_quiet_when_ready: calls `done` with the report, now or once the reload may run. With
+		// next_frame: build.reload asks for it on the next UI frame (k_reload_frame_id + module), never inside tick(), and
+		// hands its report to live_build.
+		std::function<void(const std::string& module, std::function<void(const core::reload_report&)> done)> reload_module;
 		// Why live mode cannot be turned on now; empty: it can. Null: it always can.
 		std::function<std::string()> unavailable_reason;
 		// Writes live_enabled into build.json; the error, nullopt when it is stored. Null: not stored.
