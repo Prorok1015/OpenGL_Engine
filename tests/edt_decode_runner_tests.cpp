@@ -4,9 +4,15 @@
 #include <chrono>
 #include <filesystem>
 #include <snk/platform/plt_process.h>
+#include <fstream>
+#include <string>
 #include <thread>
+#if !defined(_WIN32)
+#include <csignal>
+#include <sys/types.h>
+#endif
 
-#if SNK_HAS_ASSIMP && defined(SNK_MODEL_DECODER_PATH)
+#if SNK_HAS_ASSIMP && defined(SNK_MODEL_DECODER_PATH) && defined(SNK_MODEL_DECODER_SELFTEST_PATH)
 
 // The decoder process (#647): a model is read in a child that is killed when it hangs, runs over its memory or the
 // import is cancelled, and whose scratch folder is gone on every path.
@@ -38,6 +44,14 @@ struct runner_fixture
 		edt::decode_runner_config result;
 		result.decoder = SNK_MODEL_DECODER_PATH;
 		result.scratch_root = dir.path() / "scratch";
+		return result;
+	}
+
+	// The test build of the decoder, which has the --self-test-* flags the shipped one does not.
+	edt::decode_runner_config selftest_config() const
+	{
+		edt::decode_runner_config result = config();
+		result.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
 		return result;
 	}
 
@@ -98,7 +112,7 @@ BOOST_AUTO_TEST_CASE(AnImport_OfAnObj_ReturnsEveryCreatedResourceAsABlob)
 
 BOOST_AUTO_TEST_CASE(AChildThatRunsTooLong_IsKilledAtTheDeadline_AndTheFolderIsGone)
 {
-	auto cfg = config();
+	auto cfg = selftest_config();
 	cfg.timeout = std::chrono::milliseconds(400);
 	cfg.extra_arguments = { "--self-test-sleep", "60000" };
 	const edt::decode_runner runner(cfg);
@@ -112,7 +126,7 @@ BOOST_AUTO_TEST_CASE(AChildThatRunsTooLong_IsKilledAtTheDeadline_AndTheFolderIsG
 
 BOOST_AUTO_TEST_CASE(ARequestToStop_KillsTheChild_AndTheFolderIsGone)
 {
-	auto cfg = config();
+	auto cfg = selftest_config();
 	cfg.extra_arguments = { "--self-test-sleep", "60000" };
 	const edt::decode_runner runner(cfg);
 	std::stop_source stop;
@@ -132,7 +146,7 @@ BOOST_AUTO_TEST_CASE(AChildThatWantsMoreThanItsMemoryLimit_FailsAndTheEditorGoes
 		BOOST_TEST_MESSAGE("skipped: a sanitizer build cannot limit the address space");
 		return;
 	}
-	auto cfg = config();
+	auto cfg = selftest_config();
 	cfg.memory_limit_bytes = 256ull * 1024ull * 1024ull;
 	cfg.extra_arguments = { "--self-test-alloc", std::to_string(2ull * 1024ull * 1024ull * 1024ull) };
 	const edt::decode_runner runner(cfg);
@@ -141,6 +155,50 @@ BOOST_AUTO_TEST_CASE(AChildThatWantsMoreThanItsMemoryLimit_FailsAndTheEditorGoes
 	BOOST_CHECK(!outcome.timed_out);
 	BOOST_CHECK(scratch_is_empty());
 }
+
+#if defined(__linux__)
+namespace {
+
+// Alive and not a zombie: a child whose parent died and whose reaper is slow still shows to kill(pid, 0).
+bool is_running_process(std::int64_t pid)
+{
+	if (!platform::process_is_running(pid)) {
+		return false;
+	}
+	std::ifstream stat("/proc/" + std::to_string(pid) + "/stat");
+	std::string line;
+	std::getline(stat, line);
+	const std::size_t close = line.rfind(')');
+	return close == std::string::npos || close + 2 >= line.size() || line[close + 2] != 'Z';
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AChild_DoesNotOutliveTheProcessThatStartedIt)
+{
+	const fs::path pid_file = dir.path() / "child.pid";
+	const auto helper = platform::spawn_detached(SNK_MODEL_DECODER_SELFTEST_PATH, { "--self-test-spawn", pid_file.string() });
+	BOOST_REQUIRE_MESSAGE(helper, helper.error);
+
+	std::int64_t child_pid = 0;
+	for (int i = 0; i < 200 && child_pid == 0; ++i) {
+		std::ifstream in(pid_file);
+		in >> child_pid;
+		if (child_pid == 0) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	}
+	BOOST_REQUIRE(child_pid > 0);
+	BOOST_REQUIRE(is_running_process(child_pid));
+
+	::kill(static_cast<pid_t>(helper.process_id), SIGKILL);
+	bool gone = false;
+	for (int i = 0; i < 200 && !gone; ++i) {
+		gone = !is_running_process(child_pid);
+		if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	}
+	BOOST_CHECK_MESSAGE(gone, "the child of a killed parent still runs");
+	if (!gone) ::kill(static_cast<pid_t>(child_pid), SIGKILL);
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(AMissingDecoder_IsAFailure_NotACrash)
 {

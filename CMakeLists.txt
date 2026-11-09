@@ -192,9 +192,10 @@ if(MSVC)
 endif()
 # desc_repo_roundtrip_tests loads the descs the repository ships.
 if(TARGET snk_model_decoder)
-	# The process tests (edt_decode_runner_tests) start the real decoder.
-	add_dependencies(unit_tests snk_model_decoder)
-	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>")
+	# The process tests (edt_decode_runner_tests) start the real decoder, and the test build of it for the self-test flags.
+	add_dependencies(unit_tests snk_model_decoder snk_model_decoder_selftest)
+	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>"
+		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
 endif()
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/projects/sandbox")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")

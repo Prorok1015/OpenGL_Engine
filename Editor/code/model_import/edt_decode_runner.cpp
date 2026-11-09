@@ -4,6 +4,7 @@
 #include <atomic>
 #include <charconv>
 #include <condition_variable>
+#include <format>
 #include <cstdlib>
 #include <mutex>
 #include <string_view>
@@ -25,12 +26,31 @@ struct folder_guard
 	}
 };
 
+std::optional<std::string> environment_value(const char* name)
+{
+#if defined(_WIN32)
+	// std::getenv is C4996 under /WX; the wide value keeps a path with other letters intact.
+	const std::wstring wide_name(name, name + std::char_traits<char>::length(name));
+	wchar_t* value = nullptr;
+	std::size_t size = 0;
+	if (_wdupenv_s(&value, &size, wide_name.c_str()) != 0 || !value) {
+		return std::nullopt;
+	}
+	const std::u8string text = fs::path(value).u8string();
+	std::free(value);
+	return std::string(text.begin(), text.end());
+#else
+	const char* value = std::getenv(name);
+	return value ? std::optional<std::string>(value) : std::nullopt;
+#endif
+}
+
 std::vector<std::string> clean_environment()
 {
 	std::vector<std::string> env;
 	const auto keep = [&env](const char* name) {
-		if (const char* value = std::getenv(name)) {
-			env.push_back(std::string(name) + "=" + value);
+		if (const auto value = environment_value(name)) {
+			env.push_back(std::string(name) + "=" + *value);
 		}
 	};
 #if defined(_WIN32)
@@ -42,6 +62,23 @@ std::vector<std::string> clean_environment()
 	env.push_back("PATH=/usr/bin:/bin");
 #endif
 	return env;
+}
+
+// What the child printed is the model's doing: a line with a control character must not forge log lines or move the
+// cursor of a terminal.
+std::string printable(std::string_view line)
+{
+	std::string out;
+	out.reserve(line.size());
+	for (const char c : line) {
+		const auto byte = static_cast<unsigned char>(c);
+		if ((byte < 0x20 && c != '\t') || byte == 0x7f) {
+			out += std::format("\\x{:02x}", byte);
+		} else {
+			out.push_back(c);
+		}
+	}
+	return out;
 }
 
 std::string utf8_text(const fs::path& path)
@@ -131,11 +168,11 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	options.environment = clean_environment();
 	options.low_priority = true;
 	options.memory_limit_bytes = m_config.memory_limit_bytes;
-	options.on_stderr_line = [](std::string_view line) { egLOG_WARN("edt/decoder", "{}", line); };
+	options.on_stderr_line = [](std::string_view line) { egLOG_WARN("edt/decoder", "{}", printable(line)); };
 	std::vector<std::string> arguments{ "--request", utf8_text(request_file), "--out", utf8_text(out_file) };
 	arguments.insert(arguments.end(), m_config.extra_arguments.begin(), m_config.extra_arguments.end());
 	const platform::process_result result = platform::run_process(m_config.decoder, arguments,
-		options, [](std::string_view line) { egLOG_INFO("edt/decoder", "{}", line); }, child_stop.get_token());
+		options, [](std::string_view line) { egLOG_INFO("edt/decoder", "{}", printable(line)); }, child_stop.get_token());
 
 	{
 		std::lock_guard lock(timer_mutex);
