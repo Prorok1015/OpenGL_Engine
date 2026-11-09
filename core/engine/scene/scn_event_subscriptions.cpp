@@ -6,8 +6,15 @@
 
 namespace {
 	// Kept in a world's ctx: its connection per subscription id, and what it was last brought up to date with.
+	// Move-only on purpose: entt's ctx copies a type it believes copyable, and a map of connections only looks so.
 	struct world_subscriptions
 	{
+		world_subscriptions() = default;
+		world_subscriptions(const world_subscriptions&) = delete;
+		world_subscriptions& operator=(const world_subscriptions&) = delete;
+		world_subscriptions(world_subscriptions&&) noexcept = default;
+		world_subscriptions& operator=(world_subscriptions&&) noexcept = default;
+
 		uint64_t generation = 0;
 		size_t bound_types = 0;
 		bool synced = false;
