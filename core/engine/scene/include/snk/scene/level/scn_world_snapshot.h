@@ -2,13 +2,16 @@
 #include <snk/common/snk_api.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <boost/json/object.hpp>
+#include <entt/entity/registry.hpp>
 #include <cstddef>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace scn
 {
 	class component_catalog;
+	struct component_entry;
 	class world_context;
 
 	// What a snapshot left behind, by catalog name (or entt type name for a type the catalog does not know), with the
@@ -22,6 +25,34 @@ namespace scn
 		// Restored, but a value did not fit its field (a field changed its type): that field kept its default.
 		std::map<std::string, std::size_t> partial;
 		std::size_t entities = 0;
+	};
+
+	// The components of one entity as capture_world writes them, so that other readers of a live world (the Play
+	// inspector, #552) show the same values the same way. Built once per pass: it collects the catalog's entries, which
+	// must outlive it.
+	class SNK_API entity_writer
+	{
+	public:
+		struct components
+		{
+			// By catalog name, as desc JSON through the schema.
+			json::object saved;
+			// Present, but the type has no schema: its value cannot be shown.
+			std::vector<std::string> unsaved;
+		};
+
+		explicit entity_writer(const component_catalog& catalog);
+
+		// Carries an editor-only component (the editor's cameras): a snapshot leaves the entity out.
+		bool editor_only(const entt::registry& reg, entt::entity entity) const;
+		// The catalog names of every component the entity has, with a schema or without.
+		std::vector<std::string> present(const entt::registry& reg, entt::entity entity) const;
+		// `only`: just these names (null: all).
+		components write(const entt::registry& reg, entt::entity entity, const std::vector<std::string>* only = nullptr) const;
+
+	private:
+		std::vector<const component_entry*> m_data;
+		std::vector<const component_entry*> m_editor_only;
 	};
 
 	// The live state of one world as plain data (HOT_RELOAD_PLAY.md section 4.1): every entity by its raw id, the

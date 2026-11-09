@@ -12,6 +12,7 @@
 #include "edt_module_swap_gate.h"
 #include "edt_play_commands.h"
 #include "edt_play_session.h"
+#include "edt_runtime_commands.h"
 #include "edt_agent_access.h"
 #include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
@@ -45,6 +46,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
@@ -844,6 +846,8 @@ struct play_commands_fixture : play_fixture
 		{ .play = [this] { return &play; }, .person_is_editing = [this] { return editing; } });
 	std::vector<edt::registration> scene_commands = edt::register_scene_commands(commands,
 		{ documents, selection, services, [this] { return editing; } });
+	std::vector<edt::registration> runtime_commands = edt::register_runtime_commands(commands,
+		{ .play = [this] { return &play; }, .play_set = [this] { return play_set(); } });
 	app::frame_control frame_control;
 	app::frame_command_registrations core_frame_commands = app::register_frame_commands(commands, frame_control);
 	edt::play_frame_commands frame_commands = edt::register_play_frame_commands(core_frame_commands, commands,
@@ -1036,6 +1040,137 @@ BOOST_AUTO_TEST_CASE(app_advance_hold_is_released_whenever_play_stops)
 	play.after_module_swap();
 	BOOST_TEST(play.active());
 	BOOST_TEST(!frame_control.holding());
+}
+
+// ---------------------------------------------------------------- runtime.query / runtime.get (#552)
+
+namespace {
+
+std::string catalog_name_of_name_component(scn::context_manager& manager)
+{
+	const scn::component_entry* entry = manager.game_layer()->catalog().find(entt::type_hash<scn::name_component>::value());
+	return entry ? entry->name : std::string{};
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(runtime_commands_fail_outside_play_with_a_pointer_to_the_document_commands)
+{
+	open_level();
+	for (const char* tool : { "runtime_query", "runtime_get" }) {
+		const mcp::call_result result = call_tool(tool, R"json({"entity":0})json");
+		BOOST_TEST(result.is_error);
+		BOOST_TEST(text_of_error(result).find("Play is not running") != std::string::npos);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(an_agent_sees_what_play_made_by_name_and_component_and_reads_its_components_without_asking)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity coin = reg.create();
+	reg.emplace<scn::name_component>(coin, "Coin");
+	const entt::entity clone = reg.create();
+	reg.emplace<scn::name_component>(clone, "Coin clone");
+	const std::string name_key = catalog_name_of_name_component(contexts());
+	BOOST_REQUIRE(!name_key.empty());
+
+	const mcp::call_result found = call_tool("runtime_query", R"json({"filter":{"name_glob":"coin*"}})json");
+	BOOST_REQUIRE(!found.is_error);
+	const json::object& answer = found.structured.as_object();
+	BOOST_TEST(answer.at("source").as_string() == "play");
+	BOOST_TEST(answer.at("world").as_string() == "w0");
+	BOOST_REQUIRE_EQUAL(answer.at("items").as_array().size(), 2u);
+	const json::object& first = answer.at("items").as_array().at(0).as_object();
+	BOOST_TEST(first.at("name").as_string() == "Coin");
+	BOOST_TEST(first.at("entity").to_number<std::uint64_t>() == static_cast<std::uint64_t>(entt::to_integral(coin)));
+
+	const mcp::call_result with_component = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "has_component", json::array{ json::string(name_key) } }, { "name_glob", "clone" } } } }));
+	BOOST_REQUIRE(!with_component.is_error);
+	BOOST_TEST(with_component.structured.as_object().at("items").as_array().size() == 1u);
+
+	const mcp::call_result detail = call_tool("runtime_get", json::serialize(json::object{ { "entity", static_cast<std::uint64_t>(entt::to_integral(coin)) } }));
+	BOOST_REQUIRE(!detail.is_error);
+	const json::object& entity = detail.structured.as_object();
+	BOOST_TEST(entity.at("name").as_string() == "Coin");
+	BOOST_TEST(entity.at("components").as_object().contains(name_key));
+	BOOST_TEST(entity.at("parent").is_null());
+	BOOST_TEST(entity.at("source").as_string() == "play");
+}
+
+BOOST_AUTO_TEST_CASE(a_reused_entity_slot_is_not_found_by_the_old_id)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity old_entity = reg.create();
+	reg.emplace<scn::name_component>(old_entity, "Old");
+	const auto old_id = static_cast<std::uint64_t>(entt::to_integral(old_entity));
+	reg.destroy(old_entity);
+	const entt::entity reused = reg.create();
+	reg.emplace<scn::name_component>(reused, "New");
+	BOOST_REQUIRE(entt::to_entity(reused) == entt::to_entity(old_entity));
+
+	const mcp::call_result stale = call_tool("runtime_get", json::serialize(json::object{ { "entity", old_id } }));
+	BOOST_TEST(stale.is_error);
+	const mcp::call_result fresh = call_tool("runtime_get", json::serialize(json::object{ { "entity", static_cast<std::uint64_t>(entt::to_integral(reused)) } }));
+	BOOST_REQUIRE(!fresh.is_error);
+	BOOST_TEST(fresh.structured.as_object().at("name").as_string() == "New");
+}
+
+BOOST_AUTO_TEST_CASE(a_query_page_continues_by_cursor_and_the_cursor_of_another_frame_is_stale)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	for (int i = 0; i < 5; ++i) reg.emplace<scn::name_component>(reg.create(), "spawn");
+	BOOST_REQUIRE(play.pause());
+
+	const mcp::call_result page = call_tool("runtime_query", R"json({"filter":{"name_glob":"spawn"},"page_size":2})json");
+	BOOST_REQUIRE(!page.is_error);
+	BOOST_TEST(page.structured.as_object().at("items").as_array().size() == 2u);
+	const std::string cursor(page.structured.as_object().at("next_cursor").as_string());
+
+	const mcp::call_result next = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "name_glob", "spawn" } } }, { "page_size", 10 }, { "cursor", json::string(cursor) } }));
+	BOOST_REQUIRE(!next.is_error);
+	BOOST_TEST(next.structured.as_object().at("items").as_array().size() == 3u);
+	BOOST_TEST(!next.structured.as_object().contains("next_cursor"));
+
+	BOOST_REQUIRE(play.step(1));
+	run_frames(1);
+	const mcp::call_result stale = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "name_glob", "spawn" } } }, { "cursor", json::string(cursor) } }));
+	BOOST_TEST(stale.is_error);
+	BOOST_TEST(text_of_error(stale).find("another frame") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answers_the_same_twice)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	reg.emplace<scn::name_component>(reg.create(), "Coin");
+	BOOST_REQUIRE(play.pause());
+	scn::world_context& world = play_set()->get("w0");
+	const scn::component_catalog& catalog = contexts().game_layer()->catalog();
+	scn::snapshot_report before_report;
+	const std::string before = json::serialize(scn::capture_world(world, catalog, before_report));
+
+	const mcp::call_result first = call_tool("runtime_query", "{}");
+	const mcp::call_result second = call_tool("runtime_query", "{}");
+	BOOST_REQUIRE(!first.is_error);
+	BOOST_TEST(json::serialize(first.structured) == json::serialize(second.structured));
+	const json::array& items = first.structured.as_object().at("items").as_array();
+	for (const json::value& item : items) {
+		const mcp::call_result detail = call_tool("runtime_get", json::serialize(json::object{ { "entity", item.as_object().at("entity") } }));
+		BOOST_REQUIRE(!detail.is_error);
+	}
+
+	scn::snapshot_report after_report;
+	BOOST_TEST(json::serialize(scn::capture_world(world, catalog, after_report)) == before);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
