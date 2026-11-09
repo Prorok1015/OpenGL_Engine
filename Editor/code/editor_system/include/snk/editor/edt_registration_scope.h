@@ -28,7 +28,8 @@ namespace edt
 
 		// Stops the module's tasks: new ones are refused, running ones are asked to stop and waited for, and the
 		// main-thread continuations queued so far run now (a cancelled job delivers nothing), so none of them runs the
-		// module's code after this returns. The module's tasks must honour the stop token. Same order as
+		// module's code after this returns. A continuation of a cancelled task still runs here, with a cancelled result
+		// (before shutdown_editor, never after). The module's tasks must honour the stop token. Same order as
 		// gs::game_module::shutdown_services; the host calls it before the module's own shutdown_editor.
 		void stop_tasks();
 
