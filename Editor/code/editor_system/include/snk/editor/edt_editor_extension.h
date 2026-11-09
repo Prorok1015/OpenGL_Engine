@@ -4,14 +4,13 @@
 #include "edt_registration_scope.h"
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
-#include <boost/json/value.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -25,7 +24,8 @@ namespace edt
 {
 	// What a game_editor module (#588) gets: the editor's services, and the registries, jobs and problems only through
 	// functions that keep what they register in the module's scope. Not handed out: dialog_service (its callbacks would
-	// outlive the module; a wrapper comes with the first module that needs a dialog). Unloading the module undoes all of it, so the editor is as it was
+	// outlive the module; a wrapper comes with the first module that needs a dialog). Unloading the module undoes all
+	// of it, so the editor is as it was
 	// before the load (and a reload registers again without clashing with the old entries).
 	class SNK_EDITOR_API editor_module_context
 	{

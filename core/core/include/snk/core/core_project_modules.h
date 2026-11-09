@@ -129,6 +129,8 @@ namespace core
 		// done (or none was loaded); otherwise why nothing was unloaded.
 		std::string unload_editor_modules();
 		bool has_editor_modules() const { return !m_editor_loaded.empty(); }
+		// `name` is a module of kind "editor" (loaded, or named so by the manifest).
+		bool is_editor_module(const std::string& name) const;
 		// The runtime modules the project requires (not optional) that `report` did not load: missing or refused.
 		std::vector<std::string> failed_required(const project_modules_report& report) const;
 

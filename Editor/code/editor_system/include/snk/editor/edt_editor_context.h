@@ -74,7 +74,9 @@ namespace edt
 		// it unloads one.
 		void track_module_scope(const registration_scope& scope);
 		void untrack_module_scope(const registration_scope& scope);
-		// Empty when the modules can be unloaded now; otherwise why not (one of their callbacks is running).
+		// Empty when the modules can be unloaded now; otherwise why not: one of their task continuations is running. Only
+		// those are counted: a reload started from a module's panel draw, action or inspector callback is not seen (the
+		// registries do not count their callbacks), so such code must not ask for a reload.
 		std::string module_unload_refusal() const;
 
 	private:

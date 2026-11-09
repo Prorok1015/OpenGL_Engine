@@ -473,6 +473,9 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	if (m_reloading) {
 		return refused("a reload is already running");
 	}
+	if (is_editor_module(name)) {
+		return refused("it is an editor module: it reloads with the game module, not on its own");
+	}
 	const reloading_scope scope{ m_reloading };
 	if (!m_data.has_value<prj::project_context>()) {
 		return refused("no project is open");
@@ -517,6 +520,10 @@ core::reload_report core::project_module_host::reload(const std::string& name, s
 		egLOG_ERROR("project", "module '{}' not reloaded: a reload is already running", name);
 		return { reload_status::refused, "a reload is already running" };
 	}
+	if (is_editor_module(name)) {
+		egLOG_ERROR("project", "module '{}' not reloaded: it is an editor module", name);
+		return { reload_status::refused, "it is an editor module: it reloads with the game module, not on its own" };
+	}
 	const reloading_scope scope{ m_reloading };
 	return swap(name, std::move(next), previous, hooks, std::nullopt);
 }
@@ -549,6 +556,14 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		return { reload_status::refused, std::move(problem) };
 	}
 
+	// Everything that can refuse is asked before anything is touched: the game module's layer (one of its callbacks is on
+	// the stack) and the editor's modules (idem).
+	if (std::string why = m_loader.layer_unload_refusal(name); !why.empty()) {
+		prepared.reset();
+		drop_copy();
+		egLOG_ERROR("project", "module '{}' not reloaded: the running module could not be unloaded: {}", name, why);
+		return { reload_status::refused, std::format("the running module could not be unloaded: {}", why) };
+	}
 	// The editor modules registered into the editor on top of the running game module: they go first and come back after
 	// it, so a reload registers everything again with the old entries gone.
 	if (std::string why = unload_editor_modules(); !why.empty()) {
@@ -566,7 +581,11 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		} else {
 			egLOG_ERROR("project", "module '{}' not reloaded: {}", name, report.message);
 		}
-		load_editor_modules();
+		if (report.status == reload_status::lost) {
+			egLOG_WARN("project", "editor modules not loaded again: no game module runs");
+		} else {
+			load_editor_modules();
+		}
 		if (hooks.after_swap) {
 			hooks.after_swap(report);
 		}
@@ -612,6 +631,18 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	}
 	m_copies.erase(name);
 	return finish({ reload_status::lost, std::format("the new build failed: {}; the previous one failed to load again: {}", problem, rollback) });
+}
+
+bool core::project_module_host::is_editor_module(const std::string& name) const
+{
+	if (std::ranges::find(m_editor_loaded, name) != m_editor_loaded.end()) {
+		return true;
+	}
+	if (!m_data.has_value<prj::project_context>()) {
+		return false;
+	}
+	const auto& modules = m_data.require<prj::project_context>().data.modules;
+	return std::ranges::any_of(modules, [&](const auto& ref) { return ref.kind == prj::module_kind::editor && ref.name == name; });
 }
 
 core::project_modules_report core::project_module_host::load_editor_modules()
@@ -695,8 +726,9 @@ std::string core::project_module_host::unload_editor_modules()
 		const std::string name = m_editor_loaded.back();
 		const std::string problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
 		if (m_loader.state(name) == app::modules::module_state::initialized) {
-			// Still there (the loader refused): nothing more can be unloaded behind it.
+			// Still there (the loader refused): the ones unloaded before it come back, so a refusal leaves the editor as it was.
 			egLOG_ERROR("project", "editor module '{}' not unloaded: {}", name, problem);
+			load_editor_modules();
 			return problem.empty() ? "the module could not be unloaded" : problem;
 		}
 		if (!problem.empty()) {

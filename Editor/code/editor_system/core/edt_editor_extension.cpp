@@ -70,13 +70,24 @@ void edt::editor_extension::initialize_services(ds::app_data_storage&)
 void edt::editor_extension::shutdown_services(ds::app_data_storage&)
 {
 	if (!m_scope) return;
+	// Whatever shutdown_editor does (it may throw), the scope is cleared and untracked before this returns: the host
+	// unloads the module next, and the editor must not keep a pointer into it.
+	struct finish_unload
+	{
+		editor_extension& self;
+		~finish_unload()
+		{
+			self.m_scope->clear();
+			self.m_editor->untrack_module_scope(*self.m_scope);
+			self.m_editor = nullptr;
+			self.m_context.reset();
+			self.m_scope.reset();
+		}
+	} finish{ *this };
 	m_scope->stop_tasks();
-	shutdown_editor();
-	m_scope->clear();
+	// From here the host's refusal check must not look at this module's callbacks any more.
 	m_editor->untrack_module_scope(*m_scope);
-	m_editor = nullptr;
-	m_context.reset();
-	m_scope.reset();
+	shutdown_editor();
 }
 
 std::string edt::check_editor_api_version(std::uint32_t (*module_api_version)())

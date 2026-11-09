@@ -50,6 +50,7 @@ struct probe_state
 	int shutdowns = 0;
 	bool shut_down = false;
 	// What editor_context::module_unload_refusal said from inside the module's own continuation.
+	bool throw_in_shutdown = false;
 	std::string refusal_inside_a_callback;
 	bool saw_refusal_inside_a_callback = false;
 	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then.
@@ -125,6 +126,7 @@ public:
 	{
 		++m_state.shutdowns;
 		m_state.shut_down = true;
+		if (m_state.throw_in_shutdown) throw std::runtime_error("shutdown_editor failed");
 	}
 
 private:
@@ -137,6 +139,15 @@ struct ext_game_module final : app::modules::module_interface
 	void initialize_services(ds::app_data_storage&) override {}
 	void shutdown_services(ds::app_data_storage&) override {}
 	std::string_view name() const override { return "ext_game"; }
+};
+
+// The host's own "editor" module, which a game_editor depends on.
+struct stub_editor_module final : app::modules::module_interface
+{
+	void register_services(ds::app_data_storage&) override {}
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage&) override {}
+	std::string_view name() const override { return "editor"; }
 };
 
 struct extension_fixture : test_util::null_engine_fixture
@@ -154,6 +165,7 @@ struct extension_fixture : test_util::null_engine_fixture
 		host_data.attach(std::shared_ptr<edt::editor_context>(context.get(), [](edt::editor_context*) {}));
 		g_probe_state = &state;
 		g_probe_editor = context.get();
+		loader.load(std::make_unique<stub_editor_module>(), host_data);
 	}
 
 	~extension_fixture()
@@ -402,6 +414,22 @@ BOOST_AUTO_TEST_CASE(UnloadingFromInsideAModuleCallback_IsRefusedNotAttempted)
 	BOOST_CHECK(!state.refusal_inside_a_callback.empty());
 	BOOST_CHECK(context->module_unload_refusal().empty());
 	BOOST_CHECK(host->unload_editor_modules().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AShutdownEditorThatThrows_StillClearsTheScopeAndLeavesNothingTracked)
+{
+	const counts before = snapshot();
+	state.throw_in_shutdown = true;
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		BOOST_CHECK_THROW(module.shutdown_services(host_data), std::runtime_error);
+	}
+	BOOST_CHECK(snapshot() == before);
+	BOOST_CHECK(context->problems().sources().empty());
+	// Reads a dangling scope pointer under ASan if the module were still tracked.
+	BOOST_CHECK(context->module_unload_refusal().empty());
+	BOOST_CHECK_EQUAL(state.shutdowns, 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

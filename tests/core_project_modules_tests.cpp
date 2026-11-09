@@ -115,6 +115,24 @@ struct editor_probe_module final : app::modules::module_interface
 	std::string_view name() const override { return "test_editor"; }
 };
 
+// A game module whose task continuation asks the host for a reload of its own module (from inside its callback).
+std::function<void()> g_reload_from_a_callback;
+
+class self_reload_game_module final : public gs::game_module
+{
+public:
+	std::string_view name() const override { return "reload_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		data.require<gs::module_context>()
+			.run(ds::lane::compute, ds::task_desc{ .name = "game.self_reload" }, [](ds::task_context&) {})
+			.then_main([](ds::task_result<void>&) { if (g_reload_from_a_callback) g_reload_from_a_callback(); });
+	}
+};
+
 using reload_v1 = reload_game_module<1>;
 using reload_v2 = reload_game_module<2>;
 using reload_failing = reload_game_module<-1>;
@@ -122,6 +140,7 @@ using reload_failing = reload_game_module<-1>;
 }
 
 SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_probe_, editor_probe_module)
+SNK_DECLARE_MODULE_PREFIXED(self_reload_, self_reload_game_module)
 SNK_DECLARE_MODULE_PREFIXED(reload_v1_, reload_v1)
 SNK_DECLARE_MODULE_PREFIXED(reload_v2_, reload_v2)
 SNK_DECLARE_MODULE_PREFIXED(reload_failing_, reload_failing)
@@ -162,6 +181,11 @@ app::modules::module_entry editor_probe_entry()
 std::string check_editor_entry(const app::modules::module_entry& entry)
 {
 	return edt::check_editor_api_version(entry.editor_api_version);
+}
+
+app::modules::module_entry self_reload_entry()
+{
+	return SNK_MODULE_ENTRY(self_reload_);
 }
 
 app::modules::module_entry reload_v1_entry()
@@ -808,6 +832,51 @@ BOOST_AUTO_TEST_CASE(an_unload_the_editor_refuses_stops_the_reload_before_anythi
 	BOOST_TEST(editor_runs());
 	BOOST_TEST(host.has_editor_modules());
 	BOOST_TEST(!host.unload_editor_modules().empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_reload_asked_for_from_inside_a_game_callback_is_refused_before_the_editor_modules_are_touched)
+{
+	root.attach(test_util::borrowed(tasks));
+	loader.unload("reload_game", root);
+	loader.load(compiled(self_reload_entry()), root);
+	host.load_editor_modules();
+	g_editor_events.clear();
+
+	core::reload_report report;
+	g_reload_from_a_callback = [&] {
+		report = host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(self_reload_entry()), hooks);
+	};
+	tasks.run_one(ds::lane::compute);
+	tasks.drain_main();
+	g_reload_from_a_callback = nullptr;
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("callbacks") != std::string::npos);
+	BOOST_TEST(g_editor_events.empty());
+	BOOST_TEST(editor_runs());
+}
+
+BOOST_AUTO_TEST_CASE(an_editor_module_is_not_reloaded_on_its_own)
+{
+	host.load_editor_modules();
+	g_editor_events.clear();
+	const auto report = host.reload("test_editor", compiled(editor_probe_entry()), rollback_to(editor_probe_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("editor module") != std::string::npos);
+	BOOST_TEST(g_editor_events.empty());
+	BOOST_TEST(editor_runs());
+}
+
+BOOST_AUTO_TEST_CASE(when_no_game_module_runs_after_a_reload_the_editor_modules_stay_unloaded)
+{
+	host.load_editor_modules();
+	g_editor_events.clear();
+	const auto report = host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_failing_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::lost));
+	BOOST_TEST(!editor_runs());
+	BOOST_TEST((g_editor_events == std::vector<std::string>{ "editor:shutdown", "before", "after:lost" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
