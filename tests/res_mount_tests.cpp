@@ -222,6 +222,81 @@ BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_f
 	BOOST_TEST(!sys.store(res::tag{ "user://../../escape.txt" }, to_bytes("x")));
 }
 
+BOOST_FIXTURE_TEST_CASE(ShippingMountTable_ContentAndEngineReadOnly_OnlyUserAndMemoryWritable, layers_fixture)
+{
+	const fs::path shared = dir.path() / "project" / "shared";
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+
+	const auto table = res::resource_system::shipping_mount_table(engine, { project, shared }, user, scratch);
+
+	BOOST_REQUIRE(table.size() == 4u);
+	BOOST_TEST(table[0].protocol == res::tag::default_protocol());
+	BOOST_TEST((table[0].roots == std::vector<fs::path>{ engine, shared, project }));
+	BOOST_TEST((table[0].access == res::mount_access::read_only));
+	BOOST_TEST(!table[0].watch.report_changes);
+	BOOST_TEST(table[1].protocol == res::tag::memory);
+	BOOST_TEST((table[1].roots == std::vector<fs::path>{ scratch }));
+	BOOST_TEST((table[1].access == res::mount_access::read_write));
+	BOOST_TEST(table[2].protocol == res::tag::user);
+	BOOST_TEST((table[2].roots == std::vector<fs::path>{ user }));
+	BOOST_TEST((table[2].access == res::mount_access::read_write));
+	BOOST_TEST(table[3].protocol == res::tag::engine);
+	BOOST_TEST((table[3].access == res::mount_access::read_only));
+	for (const auto& mount : table) {
+		BOOST_TEST(mount.protocol != res::tag::cache);
+		BOOST_TEST(mount.protocol != res::tag::code);
+		BOOST_TEST(!mount.file_operations);
+	}
+	BOOST_TEST(!fs::exists(user));
+	BOOST_TEST(!fs::exists(scratch));
+}
+
+BOOST_FIXTURE_TEST_CASE(ShippingMounts_RefuseWritesToTheProjectAndTheEngine_AcceptUserAndMemory, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+	fs::create_directories(user);
+	fs::create_directories(scratch);
+	res::resource_system sys(tasks, res::resource_system::shipping_mount_table(engine, { project }, user, scratch));
+
+	BOOST_TEST(sys.exists(res::tag{ "res://levels/main.desc" }));
+	BOOST_TEST(sys.exists(res::tag{ "res://shaders/only_engine.frag" }));
+	BOOST_TEST(!sys.store_sync(res::tag{ "res://levels/main.desc" }, to_bytes("x")));
+	BOOST_TEST(!sys.store_sync(res::tag{ "res://levels/new.desc" }, to_bytes("x")));
+	BOOST_TEST(!sys.create_sync(res::tag{ "res://levels/created.desc" }, to_bytes("x")));
+	BOOST_TEST(!sys.store_sync(res::tag{ "engine://shaders/pbr.frag" }, to_bytes("x")));
+	BOOST_TEST(read_file(project / "levels" / "main.desc") == "project-level");
+	BOOST_TEST(!fs::exists(project / "levels" / "new.desc"));
+	BOOST_TEST(!fs::exists(project / "levels" / "created.desc"));
+	BOOST_TEST(read_file(engine / "shaders" / "pbr.frag") == "engine-pbr");
+
+	BOOST_TEST(sys.store_sync(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
+	BOOST_TEST(sys.store_sync(res::tag{ "memory://objects/a.desc" }, to_bytes("scratch")));
+	BOOST_TEST(read_file(user / "saves" / "slot1.json") == "save");
+	BOOST_TEST(read_file(scratch / "objects" / "a.desc") == "scratch");
+	BOOST_TEST(!sys.exists(res::tag{ "res://saves/slot1.json" }));
+}
+
+BOOST_FIXTURE_TEST_CASE(NotMountedProtocol_TheErrorNamesTheMountedOnes, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+	fs::create_directories(user);
+	fs::create_directories(scratch);
+	res::resource_system sys(tasks, res::resource_system::shipping_mount_table(engine, { project }, user, scratch));
+
+	const std::string expected = "'cache://' is not mounted in this run (mounted: engine, memory, res, user)";
+	BOOST_TEST(sys.not_mounted_error("cache") == expected);
+	BOOST_TEST(!sys.exists(res::tag{ "cache://thumbs/a.png" }));
+	const res::file_operation created = sys.create_sync(res::tag{ "cache://thumbs/a.png" }, to_bytes("x"));
+	BOOST_TEST(!created);
+	BOOST_TEST(created.error == expected);
+	BOOST_TEST(sys.remove(res::tag{ "cache://thumbs/a.png" }).error == expected);
+}
+
 BOOST_FIXTURE_TEST_CASE(Store_OverAnEngineOnlyFileIsLogged, layers_fixture)
 {
 	std::mutex m;

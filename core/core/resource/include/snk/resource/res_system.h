@@ -106,15 +106,26 @@ namespace res
 		static mount_table project_mount_table(const std::filesystem::path& engine_base,
 			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& cache_dir,
 			const std::filesystem::path& user_dir, const std::filesystem::path& code_dir = {});
+		// A shipped game (#593): res:// over `engine_base` (empty: none) and `content_roots` (highest priority first) and
+		// engine:// on `engine_base`, both read-only and unwatched; user:// in `user_dir` and memory:// in `scratch_dir`,
+		// the only writable mounts. No cache://, code:// or the editor's protocols. Only builds the table.
+		static mount_table shipping_mount_table(const std::filesystem::path& engine_base,
+			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& user_dir,
+			const std::filesystem::path& scratch_dir);
+		// res/read_only_project: a project is mounted with shipping_mount_table (the game host sets it).
+		static bool read_only_project();
 		// resource/base_path as configured, empty when not set; not checked.
 		static std::filesystem::path configured_engine_base();
 		// res/watch_files: whether the mounts watch their files for changes (hot reload, the asset browser).
 		static bool watches_files();
 
+		// Why a request to `protocol` fails when this run has no resolver for it: the protocols it has instead.
+		std::string not_mounted_error(std::string_view protocol) const;
+
 		bool exists(const tag& tag) const {
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/exists", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/exists", "{}", not_mounted_error(tag.protocol()));
 				return false;
 			}
 			return resolvers.at(tag.protocol())->exists(tag);
@@ -125,7 +136,7 @@ namespace res
 			check_writable(tag);
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/store", "{}", not_mounted_error(tag.protocol()));
 				return false;
 			}
 
@@ -137,7 +148,7 @@ namespace res
 			check_writable(tag);
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/store", "{}", not_mounted_error(tag.protocol()));
 				return false;
 			}
 			return resolvers.at(tag.protocol())->store_sync(tag, data);
@@ -149,8 +160,9 @@ namespace res
 			check_writable(tag);
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
-				return file_operation::failure("protocol is not supported");
+				std::string error = not_mounted_error(tag.protocol());
+				egLOG_WARN("resource/store", "{}", error);
+				return file_operation::failure(std::move(error));
 			}
 			auto result = resolvers.at(tag.protocol())->create_sync(tag, data);
 			// Whatever was loaded under the tag meanwhile is dropped, created or refused.
@@ -330,7 +342,7 @@ namespace res
 		{
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/require", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/require", "{}", not_mounted_error(tag.protocol()));
 				return data{};
 			}
 

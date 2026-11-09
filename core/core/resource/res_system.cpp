@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@ CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 CFG_VAR_DEF_PATH(cfg_res_base_path, "resource/base_path", "");
 // Off in a shipped game (#591): nothing on disk is expected to change while it runs.
 CFG_VAR_DEF_BOOL(cfg_res_watch_files, "res/watch_files", true);
+CFG_VAR_DEF_BOOL(cfg_res_read_only_project, "res/read_only_project", false);
 
 void core::res::detail::then_on_main(const std::shared_ptr<res_resource_block>& block, ds::task_system& tasks,
                                      std::shared_ptr<ds::detail::held_slot> slot) {
@@ -462,8 +464,9 @@ void res::resource_system::start_loading(const res::tag &tag,
     const auto &resolvers = root().m_resolvers;
     auto resolver_it = resolvers.find(tag.protocol());
     if (resolver_it == resolvers.end()) {
-      egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
-      block->set_error(std::string{"Unsupported protocol: "} + std::string{tag.protocol()});
+      std::string error = not_mounted_error(tag.protocol());
+      egLOG_ERROR("res/resolver", "cannot load {}: {}", tag.view(), error);
+      block->set_error(std::move(error));
       return;
     }
 
@@ -1053,7 +1056,7 @@ bool res::resource_system::erase(const res::tag &tag) {
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(tag.protocol());
   if (found == resolvers.end()) {
-    egLOG_WARN("resource/erase", "Protocol '{}' is not supported!", tag.protocol());
+    egLOG_WARN("resource/erase", "{}", not_mounted_error(tag.protocol()));
     return false;
   }
   if (!found->second->erase(tag)) {
@@ -1070,8 +1073,9 @@ res::file_operation res::resource_system::remove(const res::tag &tag) {
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(tag.protocol());
   if (found == resolvers.end()) {
-    egLOG_WARN("resource/remove", "Protocol '{}' is not supported!", tag.protocol());
-    return file_operation::failure("protocol is not supported");
+    std::string error = not_mounted_error(tag.protocol());
+    egLOG_WARN("resource/remove", "{}", error);
+    return file_operation::failure(std::move(error));
   }
   auto result = found->second->remove(tag);
   if (!result) {
@@ -1091,8 +1095,9 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(from.protocol());
   if (found == resolvers.end()) {
-    egLOG_WARN("resource/rename", "Protocol '{}' is not supported!", from.protocol());
-    return file_operation::failure("protocol is not supported");
+    std::string error = not_mounted_error(from.protocol());
+    egLOG_WARN("resource/rename", "{}", error);
+    return file_operation::failure(std::move(error));
   }
   auto result = found->second->rename(from, to);
   if (!result) {
@@ -1262,6 +1267,24 @@ bool res::resource_system::watches_files() {
   return *cfg_res_watch_files;
 }
 
+bool res::resource_system::read_only_project() {
+  return *cfg_res_read_only_project;
+}
+
+std::string res::resource_system::not_mounted_error(std::string_view protocol) const {
+  std::vector<std::string_view> mounted;
+  mounted.reserve(root().m_resolvers.size());
+  for (const auto &entry : root().m_resolvers) {
+    mounted.push_back(entry.first);
+  }
+  std::ranges::sort(mounted);
+  std::string list;
+  for (const auto name : mounted) {
+    list += list.empty() ? std::string{name} : std::format(", {}", name);
+  }
+  return std::format("'{}://' is not mounted in this run (mounted: {})", protocol, list.empty() ? "none" : list);
+}
+
 res::mount_table res::resource_system::config_mount_table() {
   egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
         fs::absolute("./").string(), cfg_res_path->string());
@@ -1315,6 +1338,28 @@ res::mount_table res::resource_system::project_mount_table(
                                         [](std::string_view name) { return prj::is_code_file(name); }},
                           true});
   }
+  add_engine_mount(table, engine_base);
+  return table;
+}
+
+res::mount_table res::resource_system::shipping_mount_table(
+    const std::filesystem::path &engine_base,
+    const std::vector<std::filesystem::path> &content_roots,
+    const std::filesystem::path &user_dir, const std::filesystem::path &scratch_dir) {
+  ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
+  if (engine_base.empty()) {
+    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
+  }
+
+  std::vector<fs::path> layers;
+  if (!engine_base.empty())
+    layers.push_back(engine_base);
+  layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
+
+  mount_table table;
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_only});
+  table.push_back(mount{tag::memory, {scratch_dir}, mount_access::read_write});
+  table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
   add_engine_mount(table, engine_base);
   return table;
 }
