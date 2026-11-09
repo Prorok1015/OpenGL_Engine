@@ -33,6 +33,15 @@ void inp::input_router::forget_set(std::string_view set)
 	if (const auto it = m_holds.find(set); it != m_holds.end()) {
 		m_holds.erase(it);
 	}
+	if (const auto it = m_stacks.find(set); it != m_stacks.end()) {
+		m_stacks.erase(it);
+	}
+}
+
+inp::input_stack& inp::input_router::stack(std::string_view set)
+{
+	const auto it = m_stacks.find(set);
+	return it != m_stacks.end() ? it->second : m_stacks.emplace(std::string{ set }, input_stack{}).first->second;
 }
 
 inp::input_state inp::input_router::neutral(const inp::input_state& raw)

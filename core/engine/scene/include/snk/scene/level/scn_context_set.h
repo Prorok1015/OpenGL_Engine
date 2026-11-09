@@ -247,6 +247,7 @@ namespace scn
 		res::tag m_tag;
 		scene_layer* m_layer = nullptr;
 		std::vector<std::string> m_desc_world_names;
+		uint32_t m_next_desc_index = 0;
 		bool m_active = true;
 		set_options m_options;
 		// Null when the set takes no part in hot reload.

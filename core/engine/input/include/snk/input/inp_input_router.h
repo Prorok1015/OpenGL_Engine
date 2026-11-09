@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_events.hpp>
+#include <snk/input/inp_input_stack.h>
 #include <snk/common/snk_api.h>
 #include <glm/glm.hpp>
 #include <cstddef>
@@ -73,8 +74,10 @@ namespace inp
 		}
 		void set_hold(std::string_view set, mouse_hold hold) { m_holds.insert_or_assign(std::string{ set }, std::move(hold)); }
 		void clear_holds() { m_holds.clear(); }
+		// The layers of a set (INPUT_STACK.md); gs::route_input keeps the base layer of every world in it.
+		input_stack& stack(std::string_view set);
 		std::size_t hold_count() const { return m_holds.size(); }
-		// The set went away (Play stopped): its bindings and its mouse hold are dropped, the default target stays.
+		// The set went away (Play stopped): its bindings, its mouse hold and its stack are dropped, the default target stays.
 		void forget_set(std::string_view set);
 
 		// Buttons released, deltas zero, the cursor where it last was.
@@ -91,5 +94,6 @@ namespace inp
 		std::vector<binding> m_bindings;
 		std::optional<input_target> m_default;
 		std::map<std::string, mouse_hold, std::less<>> m_holds;
+		std::map<std::string, input_stack, std::less<>> m_stacks;
 	};
 }
