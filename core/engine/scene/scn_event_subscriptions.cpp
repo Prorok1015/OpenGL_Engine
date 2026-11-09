@@ -64,6 +64,12 @@ void scn::event_subscriptions::attach(std::string_view set, std::string_view wor
 		if (links.connections.contains(e.id) || !e.filter.matches(set, world)) continue;
 		if (auto c = e.attach(bus, registry, set); c.connected()) links.connections.emplace(e.id, std::move(c));
 	}
+	// An observer's slot takes the world's name from the bus, which has none until it is bound to an event type.
+	if (auto* kept = registry.ctx().find<world_observer_slots>()) {
+		for (const auto& slot : kept->slots) {
+			if (slot->world.empty()) slot->world = std::string{ world };
+		}
+	}
 	links.generation = m_state->generation;
 	// knows<T>() may have bound new types during the loop.
 	links.bound_types = bus.bound_types();
