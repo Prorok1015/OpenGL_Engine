@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(GeneratedFunctionsReportApiVersionAndBuildInfoOfThisBinary)
 
 BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstApi1IsRefused)
 {
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 2u);
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
 	auto entry = generated_entry();
 	entry.api_version = &api_1_0;
 	BOOST_TEST(app::modules::check_module_entry(entry).find("api major version 1") != std::string::npos);

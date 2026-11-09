@@ -61,13 +61,22 @@ std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_vie
 {
 	auto hot_reload = layer ? layer->hot_reload() : m_hot_reload_manager;
 	auto channel_types = layer ? layer->channel_types() : m_channel_types;
-	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types), options);
+	auto event_types = layer ? layer->event_types() : m_event_types;
+	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types), options,
+												  std::move(event_types));
 	set->set_layer(layer);
 	return set;
 }
 
 void scn::context_manager::update(std::chrono::duration<float> dt)
 {
+	ASSERT_MSG(!m_updating, "context_manager::update re-entered");
+	m_updating = true;
+	struct updating_reset
+	{
+		bool& flag;
+		~updating_reset() { flag = false; }
+	} reset{ m_updating };
 	for (const auto& set : m_sets) {
 		if (set->active()) set->update(dt);
 	}
@@ -82,7 +91,7 @@ void scn::context_manager::update(std::chrono::duration<float> dt)
 
 scn::scene_layer& scn::context_manager::create_layer(ds::task_system* tasks)
 {
-	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory, *m_channel_types, m_catalog, tasks));
+	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory, *m_channel_types, *m_event_types, m_catalog, tasks));
 }
 
 void scn::context_manager::destroy_layer(scn::scene_layer& layer)

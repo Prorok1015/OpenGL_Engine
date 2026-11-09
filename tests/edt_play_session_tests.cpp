@@ -12,6 +12,7 @@
 #include "edt_module_swap_gate.h"
 #include "edt_play_commands.h"
 #include "edt_play_session.h"
+#include "edt_runtime_commands.h"
 #include "edt_agent_access.h"
 #include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
@@ -45,6 +46,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
@@ -859,6 +861,8 @@ struct play_commands_fixture : play_fixture
 		{ .play = [this] { return &play; }, .person_is_editing = [this] { return editing; } });
 	std::vector<edt::registration> scene_commands = edt::register_scene_commands(commands,
 		{ documents, selection, services, [this] { return editing; } });
+	std::vector<edt::registration> runtime_commands = edt::register_runtime_commands(commands,
+		{ .play = [this] { return &play; }, .play_set = [this] { return play_set(); } });
 	app::frame_control frame_control;
 	app::frame_command_registrations core_frame_commands = app::register_frame_commands(commands, frame_control);
 	edt::play_frame_commands frame_commands = edt::register_play_frame_commands(core_frame_commands, commands,
@@ -1051,6 +1055,317 @@ BOOST_AUTO_TEST_CASE(app_advance_hold_is_released_whenever_play_stops)
 	play.after_module_swap();
 	BOOST_TEST(play.active());
 	BOOST_TEST(!frame_control.holding());
+}
+
+// ---------------------------------------------------------------- runtime.query / runtime.get (#552)
+
+namespace {
+
+// The test environment registers no engine component: the game layer gets them the way scene service init does it for
+// the editor.
+std::string catalog_name_of_name_component(scn::context_manager& manager)
+{
+	scn::component_catalog& catalog = manager.game_layer()->catalog();
+	if (!catalog.find(entt::type_hash<scn::name_component>::value())) scn::register_engine_components(catalog);
+	const scn::component_entry* entry = catalog.find(entt::type_hash<scn::name_component>::value());
+	return entry ? entry->name : std::string{};
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(runtime_commands_fail_outside_play_with_a_pointer_to_the_document_commands)
+{
+	open_level();
+	const mcp::call_result query = call_tool("runtime_query", "{}");
+	BOOST_TEST(query.is_error);
+	BOOST_TEST(text_of_error(query).find("Play is not running") != std::string::npos);
+	const mcp::call_result get = call_tool("runtime_get", R"json({"entity":0})json");
+	BOOST_TEST(get.is_error);
+	BOOST_TEST(text_of_error(get).find("Play is not running") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(an_agent_sees_what_play_made_by_name_and_component_and_reads_its_components_without_asking)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity coin = reg.create();
+	reg.emplace<scn::name_component>(coin, "Coin");
+	const entt::entity clone = reg.create();
+	reg.emplace<scn::name_component>(clone, "Coin clone");
+	const std::string name_key = catalog_name_of_name_component(contexts());
+	BOOST_REQUIRE(!name_key.empty());
+
+	const mcp::call_result found = call_tool("runtime_query", R"json({"filter":{"name_glob":"coin*"}})json");
+	BOOST_REQUIRE(!found.is_error);
+	const json::object& answer = found.structured.as_object();
+	BOOST_TEST(answer.at("source").as_string() == "play");
+	BOOST_TEST(answer.at("world").as_string() == "w0");
+	BOOST_REQUIRE_EQUAL(answer.at("items").as_array().size(), 2u);
+	const json::object& first = answer.at("items").as_array().at(0).as_object();
+	BOOST_TEST(first.at("name").as_string() == "Coin");
+	BOOST_TEST(first.at("entity").to_number<std::uint64_t>() == static_cast<std::uint64_t>(entt::to_integral(coin)));
+
+	const mcp::call_result with_component = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "has_component", json::array{ json::string(name_key) } }, { "name_glob", "clone" } } } }));
+	BOOST_REQUIRE(!with_component.is_error);
+	BOOST_TEST(with_component.structured.as_object().at("items").as_array().size() == 1u);
+
+	const mcp::call_result detail = call_tool("runtime_get", json::serialize(json::object{ { "entity", static_cast<std::uint64_t>(entt::to_integral(coin)) } }));
+	BOOST_REQUIRE(!detail.is_error);
+	const json::object& entity = detail.structured.as_object();
+	BOOST_TEST(entity.at("name").as_string() == "Coin");
+	BOOST_TEST(entity.at("components").as_object().contains(name_key));
+	BOOST_TEST(entity.at("parent").is_null());
+	BOOST_TEST(entity.at("source").as_string() == "play");
+}
+
+BOOST_AUTO_TEST_CASE(a_reused_entity_slot_is_not_found_by_the_old_id)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity old_entity = reg.create();
+	reg.emplace<scn::name_component>(old_entity, "Old");
+	const auto old_id = static_cast<std::uint64_t>(entt::to_integral(old_entity));
+	reg.destroy(old_entity);
+	const entt::entity reused = reg.create();
+	reg.emplace<scn::name_component>(reused, "New");
+	BOOST_REQUIRE(entt::to_entity(reused) == entt::to_entity(old_entity));
+
+	const mcp::call_result stale = call_tool("runtime_get", json::serialize(json::object{ { "entity", old_id } }));
+	BOOST_TEST(stale.is_error);
+	const mcp::call_result fresh = call_tool("runtime_get", json::serialize(json::object{ { "entity", static_cast<std::uint64_t>(entt::to_integral(reused)) } }));
+	BOOST_REQUIRE(!fresh.is_error);
+	BOOST_TEST(fresh.structured.as_object().at("name").as_string() == "New");
+}
+
+BOOST_AUTO_TEST_CASE(a_query_page_continues_by_cursor_and_the_cursor_of_another_frame_is_stale)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	for (int i = 0; i < 5; ++i) reg.emplace<scn::name_component>(reg.create(), "spawn");
+	BOOST_REQUIRE(play.pause());
+
+	const mcp::call_result page = call_tool("runtime_query", R"json({"filter":{"name_glob":"spawn"},"page_size":2})json");
+	BOOST_REQUIRE(!page.is_error);
+	BOOST_TEST(page.structured.as_object().at("items").as_array().size() == 2u);
+	const std::string cursor(page.structured.as_object().at("next_cursor").as_string());
+
+	const mcp::call_result next = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "name_glob", "spawn" } } }, { "page_size", 10 }, { "cursor", json::string(cursor) } }));
+	BOOST_REQUIRE(!next.is_error);
+	BOOST_TEST(next.structured.as_object().at("items").as_array().size() == 3u);
+	BOOST_TEST(!next.structured.as_object().contains("next_cursor"));
+
+	BOOST_REQUIRE(play.step(1));
+	run_frames(1);
+	const mcp::call_result stale = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "name_glob", "spawn" } } }, { "cursor", json::string(cursor) } }));
+	BOOST_TEST(stale.is_error);
+	BOOST_TEST(text_of_error(stale).find("another frame") != std::string::npos);
+}
+
+namespace {
+
+struct opaque_marker
+{
+	int value = 0;
+};
+
+struct hidden_marker
+{
+};
+
+// Two types of the game layer's catalog for a test: one without a schema, one the editor puts back itself.
+struct marker_registration
+{
+	explicit marker_registration(scn::context_manager& manager)
+		: catalog(manager.game_layer()->catalog())
+	{
+		catalog.add<opaque_marker>("test.opaque", nullptr);
+		catalog.add_editor_only<hidden_marker>("test.hidden");
+	}
+
+	~marker_registration()
+	{
+		catalog.remove("test.opaque");
+		catalog.remove("test.hidden");
+	}
+
+	scn::component_catalog& catalog;
+};
+
+std::string entity_arg(entt::entity entity)
+{
+	return json::serialize(json::object{ { "entity", static_cast<std::uint64_t>(entt::to_integral(entity)) } });
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(a_component_without_a_schema_is_only_named_and_a_component_over_the_cap_is_truncated)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	const marker_registration markers(contexts());
+	const std::string name_key = catalog_name_of_name_component(contexts());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity entity = reg.create();
+	reg.emplace<scn::name_component>(entity, std::string(edt::runtime_entity_max_bytes + 1024, 'x'));
+	reg.emplace<opaque_marker>(entity, 7);
+
+	const mcp::call_result detail = call_tool("runtime_get", entity_arg(entity));
+	BOOST_REQUIRE(!detail.is_error);
+	const json::object& answer = detail.structured.as_object();
+	BOOST_TEST(answer.at("unsaved").as_array().size() == 1u);
+	BOOST_TEST(answer.at("unsaved").as_array().at(0).as_string() == "test.opaque");
+	BOOST_TEST(answer.at("truncated").as_array().size() == 1u);
+	BOOST_TEST(answer.at("truncated").as_array().at(0).as_string() == name_key);
+	BOOST_TEST(answer.at("components").as_object().empty());
+}
+
+BOOST_AUTO_TEST_CASE(strings_of_a_component_that_are_not_utf8_reach_the_answer_cleaned)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	const std::string name_key = catalog_name_of_name_component(contexts());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity entity = reg.create();
+	reg.emplace<scn::name_component>(entity, std::string("bad\xff\xfename"));
+
+	const mcp::call_result detail = call_tool("runtime_get", entity_arg(entity));
+	BOOST_REQUIRE(!detail.is_error);
+	const json::value& value = detail.structured.as_object().at("components").as_object().at(name_key);
+	BOOST_TEST(json::serialize(value).find("bad??name") != std::string::npos);
+	BOOST_TEST(detail.structured.as_object().at("name").as_string() == "bad??name");
+}
+
+BOOST_AUTO_TEST_CASE(a_query_page_stops_at_its_byte_cap_and_the_cursor_continues_from_there)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	for (int i = 0; i < 4; ++i) reg.emplace<scn::name_component>(reg.create(), "big" + std::string(100 * 1024, 'x'));
+	BOOST_REQUIRE(play.pause());
+
+	const std::string query = R"json({"filter":{"name_glob":"big*"}})json";
+	const mcp::call_result first = call_tool("runtime_query", query);
+	BOOST_REQUIRE(!first.is_error);
+	BOOST_TEST(first.structured.as_object().at("items").as_array().size() == 3u);
+	const std::string cursor(first.structured.as_object().at("next_cursor").as_string());
+
+	const mcp::call_result second = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "name_glob", "big*" } } }, { "cursor", json::string(cursor) } }));
+	BOOST_REQUIRE(!second.is_error);
+	BOOST_TEST(second.structured.as_object().at("items").as_array().size() == 1u);
+	BOOST_TEST(!second.structured.as_object().contains("next_cursor"));
+}
+
+BOOST_AUTO_TEST_CASE(a_query_walks_one_subtree_and_the_parent_and_children_of_an_entity_are_listed)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	const marker_registration markers(contexts());
+	entt::registry& reg = play_set()->get("w0").state();
+	const entt::entity root = reg.create();
+	reg.emplace<scn::name_component>(root, "Root");
+	const entt::entity child = reg.create();
+	reg.emplace<scn::name_component>(child, "Child");
+	reg.emplace<scn::parent_component>(child, root);
+	const entt::entity hidden = reg.create();
+	reg.emplace<scn::name_component>(hidden, "Hidden");
+	reg.emplace<scn::parent_component>(hidden, root);
+	reg.emplace<hidden_marker>(hidden);
+	reg.emplace<scn::children_component>(root, std::vector<entt::entity>{ child, hidden });
+	const entt::entity stranger = reg.create();
+	reg.emplace<scn::name_component>(stranger, "Stranger");
+
+	const mcp::call_result under = call_tool("runtime_query",
+		json::serialize(json::object{ { "filter", json::object{ { "under", static_cast<std::uint64_t>(entt::to_integral(root)) } } } }));
+	BOOST_REQUIRE(!under.is_error);
+	std::vector<std::string> names;
+	for (const json::value& item : under.structured.as_object().at("items").as_array()) names.emplace_back(item.as_object().at("name").as_string());
+	BOOST_TEST((names == std::vector<std::string>{ "Root", "Child" }));
+
+	const mcp::call_result of_root = call_tool("runtime_get", entity_arg(root));
+	BOOST_REQUIRE(!of_root.is_error);
+	const json::object& root_answer = of_root.structured.as_object();
+	BOOST_TEST(root_answer.at("child_count").as_int64() == 1);
+	BOOST_TEST(root_answer.at("children").as_array().at(0).as_object().at("name").as_string() == "Child");
+	const mcp::call_result of_child = call_tool("runtime_get", entity_arg(child));
+	BOOST_REQUIRE(!of_child.is_error);
+	BOOST_TEST(of_child.structured.as_object().at("parent").as_object().at("name").as_string() == "Root");
+
+	BOOST_TEST(call_tool("runtime_get", entity_arg(hidden)).is_error);
+	BOOST_TEST(call_tool("runtime_get", json::serialize(json::object{ { "entity", static_cast<std::uint64_t>(entt::to_integral(child)) },
+		{ "components", json::array{ "not.a.component" } } })).is_error);
+}
+
+BOOST_AUTO_TEST_CASE(a_cursor_is_good_for_one_query_of_one_play_session_and_continues_after_its_entity_even_when_entities_come_and_go)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	std::vector<entt::entity> made;
+	for (int i = 0; i < 6; ++i) {
+		made.push_back(reg.create());
+		reg.emplace<scn::name_component>(made.back(), "spawn");
+	}
+	BOOST_REQUIRE(play.pause());
+	const std::string filter = R"json("filter":{"name_glob":"spawn"})json";
+
+	const mcp::call_result page = call_tool("runtime_query", "{" + filter + R"json(,"page_size":2})json");
+	BOOST_REQUIRE(!page.is_error);
+	const std::string cursor(page.structured.as_object().at("next_cursor").as_string());
+
+	// Made and destroyed while the game is paused: no entity is skipped or repeated.
+	reg.destroy(made[0]);
+	reg.destroy(made[3]);
+	const mcp::call_result next = call_tool("runtime_query", "{" + filter + R"json(,"page_size":10,"cursor":")json" + cursor + "\"}");
+	BOOST_REQUIRE(!next.is_error);
+	std::vector<std::uint64_t> seen;
+	for (const json::value& item : page.structured.as_object().at("items").as_array()) seen.push_back(item.as_object().at("entity").to_number<std::uint64_t>());
+	for (const json::value& item : next.structured.as_object().at("items").as_array()) seen.push_back(item.as_object().at("entity").to_number<std::uint64_t>());
+	BOOST_TEST(seen.size() == 5u); // six made, one of them (made[3]) destroyed before it was reached; made[0] was already listed
+	BOOST_TEST((std::ranges::adjacent_find(seen) == seen.end()));
+
+	const mcp::call_result other_filter = call_tool("runtime_query", R"json({"filter":{"name_glob":"other"},"cursor":")json" + cursor + "\"}");
+	BOOST_TEST(other_filter.is_error);
+	BOOST_TEST(text_of_error(other_filter).find("another query") != std::string::npos);
+
+	// The same cursor in the next Start: frame 0 again, but not the same session.
+	play.stop();
+	BOOST_REQUIRE(play.start());
+	const mcp::call_result old_session = call_tool("runtime_query", "{" + filter + R"json(,"cursor":")json" + cursor + "\"}");
+	BOOST_TEST(old_session.is_error);
+	BOOST_TEST(text_of_error(old_session).find("now frame") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answers_the_same_twice)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	reg.emplace<scn::name_component>(reg.create(), "Coin");
+	BOOST_REQUIRE(play.pause());
+	scn::world_context& world = play_set()->get("w0");
+	const scn::component_catalog& catalog = contexts().game_layer()->catalog();
+	scn::snapshot_report before_report;
+	const std::string before = json::serialize(scn::capture_world(world, catalog, before_report));
+
+	const mcp::call_result first = call_tool("runtime_query", "{}");
+	const mcp::call_result second = call_tool("runtime_query", "{}");
+	BOOST_REQUIRE(!first.is_error);
+	BOOST_TEST(json::serialize(first.structured) == json::serialize(second.structured));
+	const json::array& items = first.structured.as_object().at("items").as_array();
+	for (const json::value& item : items) {
+		const mcp::call_result detail = call_tool("runtime_get", json::serialize(json::object{ { "entity", item.as_object().at("entity") } }));
+		BOOST_REQUIRE(!detail.is_error);
+	}
+
+	scn::snapshot_report after_report;
+	BOOST_TEST(json::serialize(scn::capture_world(world, catalog, after_report)) == before);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

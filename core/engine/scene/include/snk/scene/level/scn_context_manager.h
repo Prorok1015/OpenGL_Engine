@@ -6,6 +6,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/common/engine_assert.h>
@@ -131,6 +132,23 @@ namespace scn
 		// register theirs at init: `channels().add<my_message>()`.
 		ecs::channel_registry& channels() { return *m_channel_types; }
 
+		// Event types of the worlds' buses (WORLD_BUS.md 3): the engine's. A layer takes the base's types as they are
+		// when it is created and adds the module's in its own `events()`.
+		const ecs::bus_registry& events() const { return *m_event_types; }
+		// Registers an engine event type (the input stack: `add_event<inp::action_event>()`, written by systems
+		// through ecs::event_writer<inp::action_event>&). Only before the first layer exists (scn_scene_service_init
+		// creates the game layer): a later type would never reach a layer's worlds, so it is refused with an error.
+		// False also when the type is already registered. The base's sets bind it at their next update.
+		template <typename T>
+		bool add_event(std::string schema = {})
+		{
+			if (!ENGINE_VERIFY(m_layers.empty(), "context_manager: event type {} is registered after a layer exists; "
+							   "register engine event types before the first create_layer", entt::type_name<T>::value())) {
+				return false;
+			}
+			return m_event_types->add<T>(std::move(schema));
+		}
+
 		// The runtime types of the base (the engine's components, scene_init); every layer's catalog lies over it.
 		scn::component_catalog& catalog() { return m_catalog; }
 		const scn::component_catalog& catalog() const { return m_catalog; }
@@ -142,6 +160,20 @@ namespace scn
 		{
 			get_set(set).channel().post_external<T>(std::move(to), std::move(payload));
 		}
+		// An event from outside the phases (editor, game shell, a test) into the bus of world `context` of `set`: first
+		// in that world's next delivery, `from` empty. Main thread only and never while the set updates (a task posts
+		// through then_main); asserts when the type is not an event type of the set.
+		template <typename T>
+		void emit(std::string_view set, std::string_view context, T payload)
+		{
+			// From a system of one set into another set the order would depend on the order the sets run in.
+			ASSERT_MSG(!m_updating, "context_manager::emit into set '{}' during the manager's update", set);
+			get_set(set).post_event<T>(context, std::move(payload));
+		}
+
+		// True inside update().
+		bool updating() const { return m_updating; }
+
 		// Writer for values from outside the phases; visible after the next exchange of the set.
 		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
 
@@ -161,6 +193,8 @@ namespace scn
 
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();
+		std::shared_ptr<ecs::bus_registry> m_event_types = std::make_shared<ecs::bus_registry>();
+		bool m_updating = false;
 		// Before the layers: theirs lie over it.
 		scn::component_catalog m_catalog;
 		scn::ecs_assembler& m_assembler;

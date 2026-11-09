@@ -120,6 +120,7 @@ bool edt::play_session::start(play_reason reason)
 	m_camera_world.clear();
 	follow_active_world();
 	egLOG_INFO("play", "Play started: {} world(s), seed {}", m_worlds_copy.size(), m_seed);
+	++m_run_number;
 	set_state(play_state::playing, reason);
 	return true;
 }

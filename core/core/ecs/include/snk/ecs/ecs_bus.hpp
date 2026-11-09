@@ -45,6 +45,8 @@ struct bus_state
 	size_t limit = default_event_limit;
 	uint64_t deliveries = 0;
 	bool delivering = false;
+	// Set by the world between its delivery and the end of its frame: an emit then waits a frame.
+	bool after_delivery = false;
 	std::thread::id owner = std::this_thread::get_id();
 
 	bool on_owner_thread() const { return std::this_thread::get_id() == owner; }
@@ -113,6 +115,13 @@ public:
 	{
 		ASSERT_MSG(m_state->on_owner_thread(), "event_writer<{}>::emit of world '{}': main thread only", entt::type_name<T>::value(), m_state->world);
 		if (m_state->mode == bus_mode::discard) return;
+#if SNK_ASSERTS_ENABLED
+		if (m_state->after_delivery && !m_state->delivering && !m_late_warned) {
+			egLOG_WARN("scene", "world '{}': {} emitted after the delivery point waits a frame for the next delivery (WORLD_BUS 3.2)",
+					   m_state->world, entt::type_name<T>::value());
+			m_late_warned = true;
+		}
+#endif
 		if (queued() >= m_state->limit) {
 			++m_dropped;
 			return;
@@ -213,6 +222,8 @@ private:
 	uint64_t m_window_delivery = 0;
 	size_t m_dropped = 0;
 	size_t m_reported_dropped = 0;
+	// Kept in every build type: a module and the engine may be built with and without asserts.
+	bool m_late_warned = false;
 	signal<const envelope<T>&> m_subscribers;
 	std::optional<typename signal<const envelope<T>&>::frozen> m_frozen;
 };
@@ -350,27 +361,32 @@ public:
 	size_t event_limit() const;
 
 	const std::string& world() const;
+	// Types bound so far.
+	size_t bound_types() const;
+	// The world says its delivery point is behind it this frame (true) or ahead (false). An emit while true is a
+	// late sender: in a build with asserts it is warned about once per type.
+	void set_after_delivery(bool after);
 	uint64_t deliveries() const;
 	bool delivering() const;
 	// Events waiting for the next delivery, all types.
 	size_t queued() const;
 
 	// An event from outside the world (editor, game shell, a test); it goes first in the next delivery and its
-	// envelope's `from` is empty. The type must be bound.
+	// envelope's `from` is empty. The type must be registered in the registry of the last bind().
 	template <class T>
 	void post(T payload)
 	{
-		auto* slot = find<T>();
+		auto* slot = find_or_bind<T>();
 		ASSERT_MSG(slot, "world_bus::post<{}>: event type is not bound to world '{}'", entt::type_name<T>::value(), world());
 		if (slot) slot->post(std::move(payload));
 	}
 
 	// Called during each delivery, per event of T, in subscription order. What a subscriber emits goes to the next
-	// delivery. The type must be bound.
+	// delivery. The type must be registered in the registry of the last bind().
 	template <class T>
 	[[nodiscard]] connection subscribe(std::function<void(const envelope<T>&)> fn)
 	{
-		auto* slot = find<T>();
+		auto* slot = find_or_bind<T>();
 		ASSERT_MSG(slot, "world_bus::subscribe<{}>: event type is not bound to world '{}'", entt::type_name<T>::value(), world());
 		return slot ? slot->subscribe(std::move(fn)) : connection{};
 	}
@@ -384,6 +400,16 @@ public:
 
 private:
 	detail::bus_state& state() const;
+	// Binds the types the registry of the last bind() got since (a type registered after this world was made).
+	void bind_new();
+
+	template <class T>
+	detail::bus_slot_impl<T>* find_or_bind()
+	{
+		if (auto* slot = find<T>()) return slot;
+		bind_new();
+		return find<T>();
+	}
 
 	template <class T>
 	detail::bus_slot_impl<T>* find() const
@@ -397,6 +423,9 @@ private:
 
 	std::unique_ptr<detail::bus_state> m_state;
 	std::vector<std::unique_ptr<detail::bus_slot>> m_slots;
+	// Of the last bind(): the registry outlives the world (its set holds it), the entt registry holds this bus.
+	const bus_registry* m_types = nullptr;
+	entt::registry* m_registry = nullptr;
 };
 
 } // namespace ecs
