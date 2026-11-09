@@ -49,8 +49,8 @@ std::string read_all(const fs::path& path)
 // The headers of the API: a new one is added here on purpose (and one that is only plumbing stays out of the directory).
 const std::set<std::string> k_headers = {
 	"edt_action_registry.h", "edt_api.h", "edt_asset_kind_registry.h", "edt_dialog_service.h", "edt_document.h", "edt_document_history.h",
-	"edt_document_manager.h", "edt_editor_context.h", "edt_editor_events.h", "edt_editor_services.h", "edt_inspector_registry.h",
-	"edt_job_service.h", "edt_panel_base.h", "edt_panel_registry.h", "edt_problem_list.h", "edt_registration.h", "edt_selection_service.h", "editor_module.h",
+	"edt_document_manager.h", "edt_editor_context.h", "edt_editor_events.h", "edt_editor_extension.h", "edt_editor_services.h", "edt_inspector_registry.h",
+	"edt_job_service.h", "edt_panel_base.h", "edt_panel_registry.h", "edt_problem_list.h", "edt_registration.h", "edt_registration_scope.h", "edt_selection_service.h", "editor_module.h",
 };
 
 // Classes and structs that are whole in their header (no member is defined in a source file), so there is nothing to
