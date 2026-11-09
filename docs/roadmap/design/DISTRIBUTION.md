@@ -183,5 +183,30 @@ wasm — инструмент разработки; при упаковке дв
 - **Хост из SDK.** Shipping = статический хост `snk::game_host` (`apps/game/host`, `snk::game_host::run(argc, argv, compiled_in)`) + модуль игры как OBJECT-библиотека, собранная с `SNK_GAME_MODULE_STATIC` (`SNK_DECLARE_MODULE` ничего не экспортирует и определяет `snk_static_module_entry()`). `snk_add_game_host(<exe> MODULE <OBJECT lib> NAME <имя модуля>)` (`cmake/SnkGameHost.cmake`) генерирует `main()` с одним вкомпилированным модулем. Один модуль на хост; одна OBJECT-библиотека — на один хост и никогда в `game.dll`.
 - **Установка.** Статическая половина SDK экспортирует `game_host` под именем `snk::game_host` (без префикса `static_`: в shared-половине его нет, а `snk_add_game_host` ищет одно и то же имя в дереве и в SDK), заголовок `snk/game_host/game_host.h` ставится как у компонентов. `SnkGameHost.cmake` ставится в `lib/cmake/snake_sdk/` только статической сборкой (вторая установка в тот же префикс его не перезаписывает) и кладётся в `<build>/snake_sdk` статического дерева; `snake_sdkConfig.cmake` подключает его, если есть `snk::game_host` (`snake_sdk_HAS_STATIC`).
 - **Шаблон проекта.** Пресет `shipping` (наследует `base`, флаги Release, `SNK_SHIPPING=ON`; отдельной конфигурации и LTO нет — LTO в #594): требует `snake_sdk_HAS_STATIC`, собирает `src/` как OBJECT-библиотеку `game_objects` и `snk_add_game_host(game ...)` → `../build/shipping/<имя модуля>(.exe)`, не в `../build/bin`, где лежит `game.dll`. Без `SNK_SHIPPING` всё как раньше (SHARED `game.dll`, DebugGame). Редактор пресет `shipping` не показывает и не собирает: модель Build Settings пропускает пресеты, у которых `SNK_SHIPPING` истинно для CMake (`edt::is_shipping_preset`); `hidden: true` в CMake не используется — он запретил бы `cmake --preset shipping`.
-- **CI (только сборка).** «SDK package (Linux)» собирает шаблон с `--preset shipping` против общего префикса и проверяет `readelf -d` (нет `NEEDED` `snk_engine`); «Windows package check» (шаг 5) — против распакованного пакета, `game.exe` проверяется `check_windows_deps.sh --runtime-elsewhere` (никаких DLL, кроме системных и рантайма MSVC, `snk_engine.dll` в том числе). Запуск хоста с вкомпилированным модулем — `tests/static_game` (Linux Clang Debug, Windows package). Ресурсы из папки — #593, pack/LTO — этап 7 (#46, #594).
+- **CI (только сборка).** «SDK package (Linux)» собирает шаблон с `--preset shipping` против общего префикса и проверяет `readelf -d` (нет `NEEDED` `snk_engine`); «Windows package check» (шаг 5) — против распакованного пакета, `game.exe` проверяется `check_windows_deps.sh --runtime-elsewhere` (никаких DLL, кроме системных и рантайма MSVC, `snk_engine.dll` в том числе). Запуск хоста с вкомпилированным модулем — `tests/static_game` (Linux Clang Debug, Windows package). Ресурсы из папки — #593 (ниже), pack/LTO — этап 7 (#46, #594).
+
+## Ресурсы Shipping: проект только для чтения (#593)
+- **Переключатель.** Хост `game` выставляет `res/read_only_project=true`. `core::res::resource_init` тогда монтирует `resource_system::shipping_mount_table`, а не `project_mount_table`. Редактор и Play не меняются.
+- **Протоколы:**
+
+  | Протокол | Где | Доступ |
+  |---|---|---|
+  | `res://` | движок + content roots | только чтение, без слежения |
+  | `engine://` | `resource/base_path` | только чтение |
+  | `user://` | папка игрока | запись |
+  | `memory://` | временная папка запуска | запись |
+
+  `cache://`, `code://` и протоколы редактора (`edt://`) не монтируются. Запрос к ним: `'<p>://' is not mounted in this run (mounted: …)`.
+- **В папке проекта ничего не создаётся** (`.cache` и прочее): игра может лежать в Program Files.
+- **`user://`** (решение владельца в #593):
+  - Windows: `%LOCALAPPDATA%\<имя проекта>`;
+  - иначе: `$XDG_DATA_HOME/<имя>`, а если не задано — `~/.local/share/<имя>`;
+  - имя проекта приводится к безопасному имени папки;
+  - `resource/user_path` переопределяет (CI, портативная сборка).
+- **`memory://`** (решение владельца): рантайм-scratch — импорт моделей, override-ы, данные модулей. Лежит в `<temp>/snk-<имя>-<pid>`, удаляется в `resource_term`. Папки упавших запусков той же игры (процесса нет) удаляются при старте.
+- **CI** (шаг «Game host headless run»):
+  - хост запускается на защищённой от записи копии `projects/sandbox`;
+  - хеш дерева копии до и после запуска совпадает;
+  - `user://` создан в `resource/user_path`;
+  - временная папка запуска не осталась.
 - Этим закрыт критерий #160 «собираются режимы DLL и STATIC»: шаблон собирает `game.dll` (DLL) и исполняемый файл со статическим движком (STATIC).

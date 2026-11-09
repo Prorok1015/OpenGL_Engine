@@ -3,6 +3,9 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_resource_service_init.h>
+#include <snk/resource/res_shipping_dirs.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -391,6 +394,89 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesASymlinkedCacheWithAProjectError, la
 	BOOST_CHECK_THROW(core::res::resource_init(data), prj::project_error);
 	BOOST_TEST(!data.has_value<res::resource_system>());
 	BOOST_TEST(!fs::exists(outside / "memory"));
+}
+
+namespace {
+// res/read_only_project and resource/user_path for one test, as the game host sets them.
+struct read_only_project_config
+{
+	explicit read_only_project_config(const fs::path& user)
+	{
+		cfg::set_variable("res/read_only_project", "true");
+		cfg::set_variable("resource/user_path", user.string());
+	}
+	~read_only_project_config()
+	{
+		cfg::set_variable("res/read_only_project", "false");
+		cfg::set_variable("resource/user_path", "");
+	}
+	read_only_project_config(const read_only_project_config&) = delete;
+	read_only_project_config& operator=(const read_only_project_config&) = delete;
+};
+}
+
+BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"json({ "format_version": 1, "name": "Read Only", "engine_version": "0.2.0" })json");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	const fs::path user = dir.path() / "player";
+	read_only_project_config config{ user };
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	core::res::resource_init(data);
+
+	const auto& project_ctx = data.require<prj::project_context>();
+	auto& sys = data.require<res::resource_system>();
+	BOOST_TEST(!fs::exists(project_ctx.cache_dir()));
+	BOOST_TEST((sys.mount_roots(res::tag::user) == std::vector<fs::path>{ user }));
+	const auto scratch = sys.mount_roots(res::tag::memory);
+	BOOST_REQUIRE(scratch.size() == 1u);
+	BOOST_TEST(scratch.front() == core::res::scratch_dir_for("Read Only", platform::current_process_id()));
+	BOOST_TEST(fs::is_directory(scratch.front()));
+	BOOST_TEST(sys.mount_roots(res::tag::cache).empty());
+
+	BOOST_TEST(sys.exists(res::tag{ "res://levels/main.desc" }));
+	BOOST_TEST(!sys.store_sync(res::tag{ "res://levels/main.desc" }, to_bytes("x")));
+	BOOST_TEST(read_file(project / "levels" / "main.desc") == "project-level");
+	BOOST_TEST(sys.store_sync(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
+	BOOST_TEST(read_file(user / "saves" / "slot1.json") == "save");
+
+	core::res::resource_term(data);
+	BOOST_TEST(!fs::exists(scratch.front()));
+	BOOST_TEST(fs::is_directory(user));
+}
+
+BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndReplacesTheRest)
+{
+	BOOST_TEST(core::res::safe_folder_name("My Game_2.0-beta") == "My Game_2.0-beta");
+	BOOST_TEST(core::res::safe_folder_name("a/b\\c:d*e") == "a_b_c_d_e");
+	BOOST_TEST(core::res::safe_folder_name("Game. ") == "Game");
+	BOOST_TEST(core::res::safe_folder_name("") == "game");
+	BOOST_TEST(core::res::safe_folder_name("..") == "game");
+}
+
+BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyTheFoldersOfEndedRuns)
+{
+	const std::string name = "res_mount_tests_stale";
+	// No process has this id on Linux (pid_max <= 4194304) or Windows (ids are multiples of 4).
+	const fs::path ended = core::res::scratch_dir_for(name, 2147483647);
+	const fs::path own = core::res::scratch_dir_for(name, platform::current_process_id());
+	const fs::path other_game = core::res::scratch_dir_for("res_mount_tests_other", 2147483647);
+	for (const auto& folder : { ended, own, other_game }) {
+		fs::create_directories(folder / "objects");
+	}
+
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 1u);
+	BOOST_TEST(!fs::exists(ended));
+	BOOST_TEST(fs::is_directory(own));
+	BOOST_TEST(fs::is_directory(other_game));
+
+	std::error_code ec;
+	fs::remove_all(own, ec);
+	fs::remove_all(other_game, ec);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
