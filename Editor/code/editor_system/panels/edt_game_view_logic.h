@@ -26,6 +26,13 @@ namespace edt::game_view
 		// the same registry, otherwise it falls back to the first camera (or none).
 		void refresh(const entt::registry* reg, std::vector<camera_entry> cameras);
 		void select(int index);
+		// The registry was rebuilt (a module reload in Play): a new one may reuse its address and its entity ids.
+		void forget()
+		{
+			m_registry = nullptr;
+			m_cameras.clear();
+			m_selected = entt::null;
+		}
 
 		[[nodiscard]] const std::vector<camera_entry>& cameras() const { return m_cameras; }
 		[[nodiscard]] int selected_index() const;

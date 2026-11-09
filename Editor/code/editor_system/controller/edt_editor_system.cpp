@@ -637,11 +637,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<core::project_module_host>().build_output(module);
 	};
 	reload_options.reload = [this, &data](const std::string& module) {
-		if (!data.has_value<core::project_module_host>()) {
-			return core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
-		}
-		return data.require<core::project_module_host>().reload(module, m_swap_gate.hooks());
+		core::reload_report report = data.has_value<core::project_module_host>()
+			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks())
+			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
+		// A snapshot before_reload took and no swap used goes, whatever the outcome.
+		if (m_play) m_play->end_reload();
+		return report;
 	};
+	// Play keeps its world across the swap (#600): the snapshot is taken after every check, right before it.
+	reload_options.before_reload = [this](const std::string&) { return m_play ? m_play->capture_for_reload() : std::string{}; };
 	reload_options.building = [this] { return m_game_builder && m_game_builder->is_manual_build_running(); };
 	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
 	reload_options.stop_background = [this] { stop_live_build(); };
@@ -1030,9 +1034,13 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };
+	options.forget_runtime_entities = [this] {
+		if (m_game_view_panel) m_game_view_panel->forget_runtime_entities();
+		if (m_viewport_panel) m_viewport_panel->forget_runtime_entities();
+	};
 	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
-	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] {
-		if (m_play) m_play->after_module_swap();
+	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this](const core::reload_report& report) {
+		if (m_play) m_play->after_module_swap(report);
 		if (m_modes) m_modes->after_module_swap();
 	});
 

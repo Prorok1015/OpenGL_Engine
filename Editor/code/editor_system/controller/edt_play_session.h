@@ -1,7 +1,14 @@
 #pragma once
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_editor_events.h>
+#include <snk/core/core_project_modules.h>
+#include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/scene/level/scn_input_stack_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
+#include <snk/scene/level/scn_world_snapshot.h>
+#include <boost/json/array.hpp>
+#include <boost/json/object.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -35,6 +42,9 @@ namespace edt
 		// Why Play cannot start now besides the session's own reasons (a level or an asset still loading: the document
 		// is about to change under it); nullopt: nothing. Null: nothing ever.
 		std::function<std::optional<std::string>()> start_blocker{};
+		// The raw entity ids the editor holds into Play's worlds (the Game view's pick, the gizmo's ring) go stale when
+		// a module reload rebuilds them: called right after the set "play" is gone. Null: nothing to forget.
+		std::function<void()> forget_runtime_entities{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
@@ -89,11 +99,21 @@ namespace edt
 		void set_seed(std::uint64_t seed);
 		std::uint64_t seed() const { return m_seed; }
 
-		// The game module is about to be swapped (module_swap_gate): a running session stops (stopped_for_reload)
-		// while the old layer is still there, and after_module_swap() starts it again (module_reloaded), paused if it
-		// was.
+		// Before a module reload (game_reloader_options::before_reload, HOT_RELOAD_PLAY.md 3.1): takes the snapshot that
+		// keeps Play's world across the swap. Empty: kept, or Play is not running; else why Play restarts instead (a type
+		// a snapshot cannot save).
+		std::string capture_for_reload();
+		// The reload call returned: a snapshot no swap used (the build was refused before the swap) is dropped.
+		void end_reload() { if (!m_suspended) m_reload.reset(); }
+
+		// The game module is swapped (module_swap_gate). With a snapshot the set "play" goes and the session stays
+		// playing or paused, with nothing announced; after_module_swap rebuilds it from the snapshot in the new layer
+		// (reloaded, rolled_back) or stops (stopped_for_reload) when that fails or the module is lost. Without one Play
+		// stops (stopped_for_reload) and starts again (module_reloaded), paused if it was.
 		void before_module_swap();
-		void after_module_swap();
+		void after_module_swap(const core::reload_report& report);
+		// Between before_module_swap and after_module_swap with a snapshot.
+		bool suspended() const { return m_suspended; }
 
 	private:
 		void set_state(play_state state, play_reason reason);
@@ -101,6 +121,9 @@ namespace edt
 		void follow_active_world();
 		void mount_user(const std::vector<std::filesystem::path>& roots, bool fresh);
 		void restore_editor();
+		void suspend_for_swap();
+		// False: the set "play" may be left half built (stop() takes it).
+		bool restore_after_swap();
 
 		scene_document& m_document;
 		editor_services& m_services;
@@ -119,6 +142,29 @@ namespace edt
 
 		// The copies the set "play" was built from; they live as long as it.
 		std::vector<scn::world_desc> m_worlds_copy;
+		// What a module reload keeps (HOT_RELOAD_PLAY.md 4): plain data, nothing of the module's binary.
+		struct saved_world
+		{
+			std::string name;
+			std::vector<std::string> systems;
+			int input_layer = 0;
+			std::optional<scn::input_stack_desc> input_stack{};
+			boost::json::object state;
+		};
+		struct reload_snapshot
+		{
+			std::vector<saved_world> worlds;
+			boost::json::array blackboard;
+			// Written in the last frame, visible from the next one: put back as pending.
+			boost::json::array blackboard_pending;
+			ecs::run_mode mode = ecs::run_mode::play;
+			std::uint64_t frames_run = 0;
+			std::uint32_t pending_steps = 0;
+			scn::snapshot_report report{};
+			std::size_t bus_events = 0;
+		};
+		std::optional<reload_snapshot> m_reload;
+		bool m_suspended = false;
 		// What Stop brings back.
 		struct snapshot
 		{

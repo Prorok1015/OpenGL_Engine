@@ -7,17 +7,22 @@
 #include <snk/editor/edt_selection_service.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/desc_schema_ops.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/input/inp_input_router.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/level/scn_world_snapshot.h>
+#include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -138,6 +143,8 @@ void edt::play_session::stop(play_reason reason)
 	}
 	m_worlds_copy.clear();
 	m_camera_world.clear();
+	m_reload.reset();
+	m_suspended = false;
 	if (m_options.input) m_options.input->forget_set(k_play_set);
 	m_document.set_edits_locked(false);
 	mount_user(m_options.editor_profile, false);
@@ -223,16 +230,181 @@ void edt::play_session::set_seed(std::uint64_t seed)
 	}
 }
 
+namespace {
+	void merge_into(scn::snapshot_report& total, const scn::snapshot_report& part)
+	{
+		for (const auto& [type, count] : part.unsaved) total.unsaved[type] += count;
+		for (const auto& [type, count] : part.unknown) total.unknown[type] += count;
+		for (const auto& [type, count] : part.partial) total.partial[type] += count;
+		total.entities += part.entities;
+	}
+
+	// The pending map read as a committed one, so capture_blackboard and restore_blackboard serve both.
+	ecs::blackboard_data pending_as_committed(const ecs::blackboard_data& board)
+	{
+		ecs::blackboard_data view;
+		for (const auto& [key, entry] : board.pending()) view.restore(key, entry.type, entry.type_name, entry.value);
+		return view;
+	}
+}
+
+std::string edt::play_session::capture_for_reload()
+{
+	m_reload.reset();
+	const auto contexts = m_services.ctx_manager.lock();
+	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
+	if (!play) return {};
+	scn::scene_layer* layer = play->layer();
+	if (!layer) return "the set 'play' has no layer";
+
+	// Every world of the set, also one the game added while playing.
+	std::string refusal;
+	play->for_each([&](scn::world_context& world) {
+		// Commands queued for after another world's next phase land now: they hold the module's code.
+		world.apply_commands();
+		const auto strays = scn::unregistered_storages(world.state(), layer->catalog());
+		if (!strays.empty() && refusal.empty()) {
+			refusal = std::format("the world '{}' holds {}, which no snapshot can save", world.get_name(), strays.front().type);
+		}
+	});
+	if (!refusal.empty()) return refusal;
+
+	reload_snapshot snapshot;
+	play->for_each([&](scn::world_context& world) {
+		saved_world saved;
+		saved.name = std::string{ world.get_name() };
+		saved.systems = world.systems().value_or(std::vector<std::string>{});
+		saved.input_layer = world.input_layer();
+		saved.input_stack = world.input_stack();
+		if (const auto* bus = world.state().ctx().find<ecs::world_bus>()) snapshot.bus_events += bus->queued();
+		scn::snapshot_report report;
+		saved.state = scn::capture_world(world, layer->catalog(), report);
+		for (const auto& [type, count] : report.unsaved) {
+			egLOG_WARN("play", "the module reload drops {} ({}) of the world '{}': it has no schema", type, count, saved.name);
+		}
+		merge_into(snapshot.report, report);
+		snapshot.worlds.push_back(std::move(saved));
+	});
+	const ecs::blackboard_data& board = play->channel().blackboard();
+	scn::snapshot_report board_report;
+	snapshot.blackboard = scn::capture_blackboard(board, layer->blackboard_types(), board_report);
+	snapshot.blackboard_pending = scn::capture_blackboard(pending_as_committed(board), layer->blackboard_types(), board_report);
+	for (const auto& [type, count] : board_report.unsaved) {
+		egLOG_WARN("play", "the module reload drops {} blackboard value(s) of {}: the type has no schema", count, type);
+	}
+	merge_into(snapshot.report, board_report);
+	snapshot.mode = play->mode();
+	snapshot.frames_run = play->frames_run();
+	snapshot.pending_steps = play->pending_steps();
+	m_reload = std::move(snapshot);
+	return {};
+}
+
+void edt::play_session::suspend_for_swap()
+{
+	const auto contexts = m_services.ctx_manager.lock();
+	if (scn::context_set* play = contexts ? contexts->find_set(k_play_set) : nullptr) {
+		if (scn::world_context* twin = m_camera_world.empty() ? nullptr : play->find(m_camera_world)) {
+			save_camera_state(twin->state(), m_play_camera);
+		}
+		contexts->destroy_set(k_play_set);
+	}
+	m_camera_world.clear();
+	// The copies hold descs of the module's types: they go before its binary does.
+	m_worlds_copy.clear();
+	if (m_options.input) m_options.input->forget_set(k_play_set);
+	if (m_options.forget_runtime_entities) m_options.forget_runtime_entities();
+	m_suspended = true;
+}
+
+bool edt::play_session::restore_after_swap()
+{
+	const auto contexts = m_services.ctx_manager.lock();
+	scn::scene_layer* layer = contexts ? contexts->game_layer() : nullptr;
+	if (!layer || !m_reload || contexts->find_set(k_play_set)) return false;
+	const reload_snapshot& saved = *m_reload;
+	m_worlds_copy = m_document.world_descs;
+
+	scn::context_set& play = contexts->create_set(k_play_set, layer, scn::set_options{ .hot_reload = false });
+	play.set_mode(ecs::run_mode::pause);
+	play.set_seed(m_seed);
+	play.set_time_scale(m_time_scale);
+	desc::read_context read;
+	read.system = &layer->descs();
+	scn::snapshot_report report;
+	{
+		// The entities existed already: the module's observers must not count them again (HOT_RELOAD_PLAY.md 6, step 4).
+		const auto muted = layer->subscriptions().mute_observers();
+		const scn::context_set::current_scope as_current(play);
+		for (const saved_world& world_saved : saved.worlds) {
+			scn::world_context& world = contexts->create_context(k_play_set, world_saved.name, scn::context_kind::play, world_saved.systems);
+			world.set_input_layer(world_saved.input_layer);
+			world.set_input_stack(world_saved.input_stack);
+			scn::snapshot_report world_report;
+			const bool restored = scn::restore_world(world, world_saved.state, layer->catalog(), read, world_report);
+			for (const auto& [type, count] : world_report.unknown) {
+				egLOG_WARN("play", "the new module no longer knows {} ({}) of the world '{}': dropped", type, count, world_saved.name);
+			}
+			for (const auto& [type, count] : world_report.partial) {
+				egLOG_WARN("play", "{} ({}) of the world '{}' changed: a field kept its default", type, count, world_saved.name);
+			}
+			merge_into(report, world_report);
+			if (!restored) {
+				egLOG_ERROR("play", "the world '{}' could not be restored after the module reload", world_saved.name);
+				return false;
+			}
+		}
+		ecs::blackboard_data& board = play.channel().restorable_blackboard();
+		scn::restore_blackboard(board, saved.blackboard, layer->blackboard_types(), read, report);
+		ecs::blackboard_data pending;
+		scn::restore_blackboard(pending, saved.blackboard_pending, layer->blackboard_types(), read, report);
+		for (const auto& [key, entry] : pending.committed()) {
+			board.write(key, entry.type, entry.type_name, entry.value, ecs::blackboard_data::external_writer);
+		}
+	}
+	if (saved.mode == ecs::run_mode::step && saved.pending_steps > 0) {
+		play.step(saved.pending_steps);
+	} else {
+		play.set_mode(saved.mode == ecs::run_mode::play ? ecs::run_mode::play : ecs::run_mode::pause);
+	}
+	play.restore_run_state(saved.frames_run, saved.pending_steps);
+
+	// The level was built again in the new layer: hidden, as Start left it.
+	scn::context_set& level = contexts->level_set();
+	level.set_active(false);
+	level.for_each([](scn::world_context& world) { world.set_extract(false); });
+	follow_active_world();
+
+	egLOG_INFO("play", "Play kept its world across the module reload: {} world(s), {} entities, {} bus event(s) and the mail "
+		"in flight dropped (count unknown, #668)", saved.worlds.size(), report.entities, saved.bus_events);
+	return true;
+}
+
 void edt::play_session::before_module_swap()
 {
 	if (!active()) return;
+	if (m_reload) {
+		suspend_for_swap();
+		return;
+	}
 	m_resume_after_swap = true;
 	m_paused_before_swap = m_state == play_state::paused;
 	stop(play_reason::stopped_for_reload);
 }
 
-void edt::play_session::after_module_swap()
+void edt::play_session::after_module_swap(const core::reload_report& report)
 {
+	if (std::exchange(m_suspended, false)) {
+		const bool built = report.status == core::reload_status::reloaded || report.status == core::reload_status::rolled_back;
+		if (!built || !restore_after_swap()) {
+			egLOG_WARN("play", "Play stopped: its world was not brought back after the module reload ({})",
+				built ? std::string{ "the restore failed" } : report.message);
+			stop(play_reason::stopped_for_reload);
+		}
+		m_reload.reset();
+		return;
+	}
+	m_reload.reset();
 	if (!std::exchange(m_resume_after_swap, false)) return;
 	const bool paused = std::exchange(m_paused_before_swap, false);
 	if (start(play_reason::module_reloaded)) {

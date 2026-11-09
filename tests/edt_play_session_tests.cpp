@@ -49,6 +49,9 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_component_schema.h>
+#include <snk/scene/scn_event_subscriptions.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
@@ -77,6 +80,20 @@ struct play_game_desc : desc::desc_base {
 	void serialize(json::object&) const override {}
 };
 
+}
+
+// A runtime component of the module, saved by its schema across a reload (#600).
+struct play_marker
+{
+	int value = 0;
+};
+BOOST_DESCRIBE_STRUCT(play_marker, (), (value))
+
+namespace {
+
+// What the module's observer of play_marker heard in Play: a restore must not add to it.
+int g_markers_seen = 0;
+
 // A build of the game module "play_game"; Build 2 registers one more type.
 template<int Build>
 class play_game_build final : public gs::game_module {
@@ -85,9 +102,13 @@ public:
 	std::vector<std::string_view> depends_on() const override { return {}; }
 
 protected:
-	void register_content(scn::scene_layer& layer, ds::app_data_storage&) override
+	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
 	{
 		layer.descs().register_component_desc<play_game_desc>("play_game_desc");
+		layer.catalog().add<play_marker>("test.play_marker", desc::bind_described<play_marker>("test.play_marker", 1, desc::schema_kind::component));
+		layer.blackboard_types().add<play_marker>("test.play_marker", desc::bind_described<play_marker>("test.play_marker", 1, desc::schema_kind::component));
+		data.require<gs::module_context>().observe<play_marker>({ .set = std::string{ edt::k_play_set } }, scn::observed::construct,
+			[](ecs::bus_context&, entt::entity) { ++g_markers_seen; });
 		if constexpr (Build > 1) {
 			layer.descs().register_component_desc<play_game_desc>("play_game_v2_desc");
 		}
@@ -165,6 +186,14 @@ constexpr const char* MODULE_LEVEL = R"({"__type":"level_desc","__version":2,"na
 
 using state_change = std::pair<edt::play_state, edt::play_reason>;
 
+const core::reload_report k_reloaded{ core::reload_status::reloaded, {} };
+
+// A component no catalog knows: a world holding one cannot be saved.
+struct unsaved_thing
+{
+	int value = 0;
+};
+
 struct play_fixture : test_util::module_env
 {
 	play_fixture()
@@ -186,8 +215,17 @@ struct play_fixture : test_util::module_env
 		contexts().set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
 			gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
-		gate.set_play_hooks([this] { play.before_module_swap(); }, [this] { play.after_module_swap(); });
+		gate.set_play_hooks([this] { play.before_module_swap(); }, [this](const core::reload_report& report) { play.after_module_swap(report); });
 		contexts().level_set().set_mode(ecs::run_mode::edit);
+		// What scene service init and editor_system register: the engine's types, and the editor's cameras, which the
+		// editor puts back itself.
+		auto& catalog = contexts().catalog();
+		if (!catalog.find(entt::type_hash<scn::name_component>::value())) scn::register_engine_components(catalog);
+		if (!catalog.find("edt.editor_camera")) {
+			catalog.add_editor_only<edt::editor_camera_tag>("edt.editor_camera");
+			catalog.add_editor_only<edt::prefab_camera_tag>("edt.prefab_camera");
+		}
+		g_markers_seen = 0;
 	}
 
 	~play_fixture()
@@ -243,7 +281,8 @@ struct play_fixture : test_util::module_env
 	// What editor_system's start_blocker says (a level or an asset loading); nullopt: nothing blocks.
 	std::optional<std::string> start_blocked;
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router,
-		.start_blocker = [this] { return start_blocked; } } };
+		.start_blocker = [this] { return start_blocked; }, .forget_runtime_entities = [this] { ++forgotten; } } };
+	int forgotten = 0;
 	std::vector<state_change> seen;
 	edt::connection seen_connection = events.play_state_changed.subscribe([this](edt::play_state s, edt::play_reason r) {
 		seen.emplace_back(s, r);
@@ -707,7 +746,208 @@ BOOST_AUTO_TEST_CASE(stop_cancels_the_tasks_of_the_play_set_and_the_level_tasks_
 	BOOST_TEST((level_task.status() == ds::task_status::ready));
 }
 
-BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)
+// #600: what the editor does (game_reloader_options::before_reload): the snapshot is taken right before the swap, and
+// Play comes back in the new layer with its world, its frame and its mode, without a Stop or a Start.
+BOOST_AUTO_TEST_CASE(a_module_reload_during_play_keeps_its_world)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	for (int i = 0; i < 3; ++i) contexts().update(std::chrono::duration<float>(0.016f));
+	entt::registry& before = play_set()->find("w0")->state();
+	before.emplace<play_marker>(before.create(), play_marker{ 7 });
+	BOOST_REQUIRE(g_markers_seen == 1);
+	const std::uint64_t frames = play.frames_run();
+
+	const std::string restart = play.capture_for_reload();
+	BOOST_REQUIRE_MESSAGE(restart.empty(), restart);
+	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST((seen == std::vector<state_change>{ { edt::play_state::playing, edt::play_reason::user } }));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	BOOST_TEST(!play.suspended());
+	BOOST_TEST(forgotten == 1);
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_TEST(set->layer()->descs().is_registered("play_game_v2_desc"));
+	BOOST_TEST((set->mode() == ecs::run_mode::play));
+	BOOST_TEST(play.frames_run() == frames);
+	entt::registry& after = set->find("w0")->state();
+	const auto markers = after.view<play_marker>();
+	BOOST_REQUIRE(markers.size() == 1u);
+	BOOST_TEST(markers.get<play_marker>(markers.front()).value == 7);
+	BOOST_TEST(g_markers_seen == 1); // the observer was muted while the marker came back
+	BOOST_TEST(editor_cameras(after) == 1u);
+	BOOST_TEST(!contexts().level_set().active());
+	BOOST_TEST(state.edits_locked());
+
+	// The mute ended with the restore, and the set runs on.
+	after.emplace<play_marker>(after.create(), play_marker{ 8 });
+	BOOST_TEST(g_markers_seen == 2);
+	contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_TEST(play.frames_run() == frames + 1);
+
+	play.stop();
+	BOOST_TEST(contexts().level_set().active());
+	loader.unload("play_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_reload_while_paused_keeps_play_paused)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_REQUIRE(play.pause());
+	const std::uint64_t frames = play.frames_run();
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::paused, edt::play_reason::user }));
+	BOOST_REQUIRE(play_set());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::pause));
+	BOOST_TEST(play.frames_run() == frames);
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+// A type no catalog knows cannot be saved: the reason names it and Play restarts (the path below).
+BOOST_AUTO_TEST_CASE(a_world_holding_an_unsaveable_type_restarts_play_and_names_it)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	entt::registry& world = play_set()->find("w0")->state();
+	world.emplace<unsaved_thing>(world.create());
+
+	const std::string restart = play.capture_for_reload();
+	BOOST_TEST(restart.find("unsaved_thing") != std::string::npos);
+	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::stopped, edt::play_reason::stopped_for_reload },
+		{ edt::play_state::playing, edt::play_reason::module_reloaded } }));
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+// A snapshot no swap used (the build was refused before it) is dropped; a swap that lost the module stops Play.
+BOOST_AUTO_TEST_CASE(a_snapshot_is_dropped_unused_and_a_lost_module_stops_play)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	play.end_reload();
+	play.before_module_swap();
+	BOOST_TEST(!play.suspended());
+	play.after_module_swap(k_reloaded);
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::playing, edt::play_reason::module_reloaded }));
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	play.before_module_swap();
+	BOOST_TEST(play.suspended());
+	BOOST_TEST(!play_set());
+	BOOST_TEST((play.state() == edt::play_state::playing)); // nothing announced while suspended
+	play.after_module_swap(core::reload_report{ core::reload_status::lost, "the module is gone" });
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::stopped, edt::play_reason::stopped_for_reload }));
+	BOOST_TEST(!play.suspended());
+	BOOST_TEST(!play_set());
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(contexts().level_set().active());
+
+	loader.unload("play_game", root);
+}
+
+// The seed, the time scale, the world's time and the blackboard, committed and written in the last frame, come back.
+BOOST_AUTO_TEST_CASE(a_module_reload_keeps_the_seed_time_and_blackboard)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	play.set_seed(42);
+	play.set_time_scale(0.5f);
+	BOOST_REQUIRE(play.start());
+	ecs::blackboard_writer& board = play_set()->channel().external_blackboard();
+	board.set(ecs::bb_key<play_marker>{ "hud.marker" }, play_marker{ 5 });
+	for (int i = 0; i < 3; ++i) contexts().update(std::chrono::duration<float>(0.016f));
+	board.set(ecs::bb_key<play_marker>{ "hud.pending" }, play_marker{ 6 }); // visible from the next frame
+	const double world_time = play_set()->find("w0")->state().ctx().get<scn::world_time>().seconds;
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_TEST(set->seed() == 42u);
+	BOOST_TEST(set->time_scale() == 0.5f);
+	BOOST_TEST(set->find("w0")->state().ctx().get<scn::world_time>().seconds == world_time);
+	const play_marker* committed = set->channel().reader().find(ecs::bb_key<play_marker>{ "hud.marker" });
+	BOOST_REQUIRE(committed != nullptr);
+	BOOST_TEST(committed->value == 5);
+	BOOST_TEST(set->channel().reader().find(ecs::bb_key<play_marker>{ "hud.pending" }) == nullptr);
+	contexts().update(std::chrono::duration<float>(0.016f));
+	const play_marker* pending = set->channel().reader().find(ecs::bb_key<play_marker>{ "hud.pending" });
+	BOOST_REQUIRE(pending != nullptr);
+	BOOST_TEST(pending->value == 6);
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_reload_during_a_step_keeps_the_frames_to_step)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play.step(3));
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+
+	BOOST_REQUIRE(play_set());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::step));
+	BOOST_TEST(play_set()->pending_steps() == 3u);
+	BOOST_TEST((play.state() == edt::play_state::paused));
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+// A restore that fails (here: a set "play" is already there) stops Play and gives the editor back as Stop does.
+BOOST_AUTO_TEST_CASE(a_failed_restore_stops_play)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	play.before_module_swap();
+	BOOST_REQUIRE(play.suspended());
+	contexts().create_set(edt::k_play_set, contexts().game_layer(), scn::set_options{ .hot_reload = false });
+
+	play.after_module_swap(k_reloaded);
+
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::stopped, edt::play_reason::stopped_for_reload }));
+	BOOST_TEST(!play_set());
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(contexts().level_set().active());
+
+	loader.unload("play_game", root);
+}
+
+// Without a snapshot (a caller that takes none, or one Play could not take) the reload stops Play and starts it again.
+BOOST_AUTO_TEST_CASE(without_a_snapshot_a_module_reload_stops_play_and_starts_it_again)
 {
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
@@ -736,7 +976,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)
 	loader.unload("play_game", root);
 }
 
-BOOST_AUTO_TEST_CASE(a_module_reload_while_paused_starts_play_again_paused)
+BOOST_AUTO_TEST_CASE(without_a_snapshot_a_module_reload_while_paused_starts_play_again_paused)
 {
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
@@ -1053,7 +1293,7 @@ BOOST_AUTO_TEST_CASE(app_advance_hold_is_released_whenever_play_stops)
 	BOOST_REQUIRE(commands.invoke("app.advance", json::parse(R"json({"frames":3})json"), agent).ok);
 	play.before_module_swap();
 	BOOST_TEST(!frame_control.holding());
-	play.after_module_swap();
+	play.after_module_swap(k_reloaded);
 	BOOST_TEST(play.active());
 	BOOST_TEST(!frame_control.holding());
 }
@@ -1553,7 +1793,7 @@ BOOST_AUTO_TEST_CASE(a_restart_after_a_module_reload_is_not_the_controllers_paus
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
 	// The reload stops Play and starts it again paused: a Stop all the same.
 	play.before_module_swap();
-	play.after_module_swap();
+	play.after_module_swap(k_reloaded);
 	BOOST_REQUIRE((play.state() == edt::play_state::paused));
 	BOOST_TEST(!modes.holds_pause());
 	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
@@ -1586,7 +1826,7 @@ BOOST_AUTO_TEST_CASE(a_stop_in_game_mode_brings_the_editor_back_but_not_without_
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
 	modes_seen.clear();
 	play.before_module_swap();
-	play.after_module_swap();
+	play.after_module_swap(k_reloaded);
 	BOOST_TEST((modes.mode() == edt::editor_mode::game));
 	BOOST_TEST(modes_seen.empty());
 	BOOST_TEST((play.state() == edt::play_state::playing));
@@ -1611,7 +1851,7 @@ BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warnin
 
 	play.before_module_swap();
 	start_blocked = "a level is loading";
-	play.after_module_swap();
+	play.after_module_swap(k_reloaded);
 	modes.after_module_swap(); // what the swap gate's hook calls next
 	BOOST_TEST(!play.active());
 	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
@@ -1623,7 +1863,7 @@ BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warnin
 	start_blocked.reset();
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
 	play.before_module_swap();
-	play.after_module_swap();
+	play.after_module_swap(k_reloaded);
 	modes.after_module_swap();
 	BOOST_TEST((modes.mode() == edt::editor_mode::game));
 }
