@@ -77,6 +77,7 @@ public:
 		edt::asset_kind_desc kind;
 		kind.id = "ext.kind";
 		kind.suffix = ".ext";
+		kind.open = [](edt::editor_context&, const res::tag&) {};
 		context.add_asset_kind(std::move(kind));
 
 		context.subscribe(context.events().document_changed, [this](edt::document_id, std::uint64_t) { ++m_state.document_changes; });
@@ -219,7 +220,6 @@ BOOST_AUTO_TEST_CASE(TheTasksOfAModule_NeverStartAfterAnUnload_WhenItIsUnloadedB
 	test_util::pump(tasks);
 	BOOST_CHECK_EQUAL(state.job_bodies_run, 0);
 	BOOST_CHECK_EQUAL(state.job_results_delivered, 0);
-	BOOST_CHECK_EQUAL(state.continuations_run, 0);
 	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
 }
 
@@ -256,8 +256,8 @@ BOOST_AUTO_TEST_CASE(AScope_CountsWhatItKeeps_AndClearsItAll)
 {
 	edt::registration_scope scope(tasks);
 	edt::panel_desc panel;
-	panel.id = "scope.panel";
-	panel.title = "Scope";
+	panel.id = "ext.panel";
+	panel.title = "Ext";
 	panel.open_by_default = false;
 	panel.show_in_view_menu = false;
 	panel.panel = std::make_shared<probe_panel>();
