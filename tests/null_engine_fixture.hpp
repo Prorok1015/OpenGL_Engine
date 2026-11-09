@@ -133,7 +133,7 @@ struct null_engine_fixture
 
 	~null_engine_fixture()
 	{
-		scene_types.reset();
+		unregister_scene_types();
 		scn::scene_term(storage);
 		engine::render::render_term(storage);
 		set_render_validate(false);
@@ -142,6 +142,13 @@ struct null_engine_fixture
 		rs.unregistrate_adapter(scn::model_importer_adapter::INFO);
 #endif
 		rs.unregistrate_adapter(core::desc::desc_adapter_t::INFO);
+	}
+
+	// The first step of engine::engine_module::shutdown_services, in the same order. Idempotent.
+	void unregister_scene_types()
+	{
+		scn::stop_scene_loads(storage);
+		scene_types.reset();
 	}
 
 	vl::swapchain* validating_swapchain()
