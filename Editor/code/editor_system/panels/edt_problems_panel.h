@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include <snk/editor/edt_problem_list.h>
 #include <array>
 #include <cstddef>

@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_api.h"
+#include "edt_panel_base.h"
 #include "edt_registration.h"
 #include <cstddef>
 #include <cstdint>
@@ -10,8 +11,6 @@
 
 namespace edt
 {
-	class panel_base;
-
 	// Where a panel is docked the first time the editor opens (and after the layout is reset).
 	// `floating` panels are not docked.
 	enum class dock_slot { floating, left, right, center, bottom_left, bottom_right };

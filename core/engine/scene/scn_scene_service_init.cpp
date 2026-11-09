@@ -3,6 +3,7 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/input/inp_action_state.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_camera_controller_system.h>
@@ -32,6 +33,7 @@ void scn::scene_init(ds::app_data_storage &store) {
       resource, assembler, sfactory,
       store.require_shared<scn::hot_reload_manager>());
   scn::register_engine_components(contexts.catalog());
+  contexts.add_event<inp::action_event>();
   // Engine event types (contexts.add_event<T>(), WORLD_BUS.md) go above this line: a layer takes the base's types
   // as they are when it is created, and add_event refuses once a layer exists.
   // The game worlds always live in a layer, empty until a game module fills it (MODULE_LAYER.md).
@@ -48,6 +50,11 @@ void scn::scene_init(ds::app_data_storage &store) {
 
   auto& render_system = store.require<rnd::render_system>();
   render_system.set_skinning_manager(&store.require<rnd::skinning_manager>());
+}
+
+void scn::stop_scene_loads(ds::app_data_storage &store) {
+  store.require<scn::context_manager>().stop_layer_loads();
+  store.require<res::resource_system>().stop_loading();
 }
 
 void scn::scene_term(ds::app_data_storage &store) {

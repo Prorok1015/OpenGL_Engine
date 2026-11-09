@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_world_context.h>
+#include <snk/input/inp_action_state.h>
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <snk/ecs/ecs_entity_changer.hpp>
 #include <snk/ecs/ecs_component.h>
@@ -46,6 +47,8 @@ void scn::world_context::begin_frame(std::chrono::duration<float> dt)
 void scn::world_context::write_fixed_time()
 {
 	m_state.ctx().insert_or_assign(scn::fixed_time{ m_stepper.step() });
+	// The one place every fixed step starts, also before the first system of the phase: no step can miss its edges.
+	if (auto* actions = m_state.ctx().find<inp::fixed_action_state>()) actions->begin_step();
 }
 
 void scn::world_context::reset_time()

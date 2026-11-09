@@ -1,10 +1,9 @@
 #pragma once
-#include "edt_api.h"
 #include <snk/application/app_module_interface.h>
 
 namespace editor
 {
-	class SNK_EDITOR_API editor_module : public app::modules::module_interface
+	class editor_module : public app::modules::module_interface
 	{
 	public:
 		virtual void register_services(ds::app_data_storage& data) override;

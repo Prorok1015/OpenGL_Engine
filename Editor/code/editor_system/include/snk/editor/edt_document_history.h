@@ -78,6 +78,11 @@ namespace edt
 		static constexpr std::size_t k_default_limit = 100;
 
 		explicit document_history(std::size_t limit = k_default_limit) : m_limit(limit == 0 ? 1 : limit) {}
+		// Spelled out: a dllexport class gets its copy members generated, and the records hold move-only edits.
+		document_history(const document_history&) = delete;
+		document_history& operator=(const document_history&) = delete;
+		document_history(document_history&&) = default;
+		document_history& operator=(document_history&&) = default;
 
 		// Older records go first when there are more. At least 1.
 		void set_limit(std::size_t limit);

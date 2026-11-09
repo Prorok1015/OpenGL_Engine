@@ -335,14 +335,14 @@ BOOST_AUTO_TEST_CASE(EditorLevelDesc_IsLaidOutAsTheDesignTable)
 	inp::register_ecs_input_system(prod, std::make_shared<inp::ecs_input_manager>());
 
 	const std::vector<std::string> editor_level = {
-		"inp::update_input_state", "scn::animation_controller_update", "scn::animation_system_node",
+		"inp::update_input_state", "inp::update_actions", "scn::animation_controller_update", "scn::animation_system_node",
 		"scn::depth_system", "scn::transform_system", "scn::animation_system_matrix",
 		"scn::update_camera_matrix_system" };
 
 	auto check = [&](const std::vector<std::string>& list) {
 		auto plan = ecs::build_system_plan(prod.registry(), list, { .validate_access = false });
 		BOOST_TEST(plan.diagnostics.empty());
-		BOOST_TEST(plan.names_in(ecs::phase::input) == (names{ "inp::update_input_state" }), boost::test_tools::per_element());
+		BOOST_TEST(plan.names_in(ecs::phase::input) == (names{ "inp::update_input_state", "inp::update_actions" }), boost::test_tools::per_element());
 		BOOST_TEST(plan.names_in(ecs::phase::update) == (names{ "scn::animation_controller_update", "scn::animation_system_node" }), boost::test_tools::per_element());
 		BOOST_TEST(plan.names_in(ecs::phase::transform) == (names{ "scn::depth_system", "scn::transform_system" }), boost::test_tools::per_element());
 		BOOST_TEST(plan.names_in(ecs::phase::late_update) == (names{ "scn::animation_system_matrix" }), boost::test_tools::per_element());

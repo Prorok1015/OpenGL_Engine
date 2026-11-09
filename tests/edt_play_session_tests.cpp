@@ -21,6 +21,7 @@
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
+#include "edt_document_cast.h"
 #include <snk/application/app_frame_commands.h>
 #include <snk/application/app_frame_control.h>
 #include <snk/application/app_module_source.h>
@@ -233,7 +234,7 @@ struct play_fixture : test_util::module_env
 	edt::editor_services services;
 	edt::scene_document state;
 	edt::editor_events events;
-	edt::document_manager documents{ state, services, events };
+	edt::document_manager documents{ state, edt::prefab_preview(services), events };
 	edt::selection_service selection{ events };
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };
@@ -1401,7 +1402,7 @@ struct engine_play_fixture : test_util::null_engine_fixture
 	edt::editor_services services;
 	edt::scene_document state;
 	edt::editor_events events;
-	edt::document_manager documents{ state, services, events };
+	edt::document_manager documents{ state, edt::prefab_preview(services), events };
 	edt::selection_service selection{ events };
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };

@@ -9,6 +9,7 @@
             "name" : "3d_scene",
             "systems" : [
                 "inp::update_input_state",
+                "inp::update_actions",
                 "scn::animation_controller_update",
                 "scn::animation_system_node",
                 "scn::depth_system",

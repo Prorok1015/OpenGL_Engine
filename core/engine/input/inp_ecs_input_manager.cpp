@@ -1,4 +1,5 @@
 #include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_action_state.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <snk/input/inp_events.hpp>
 #include <snk/ecs/ecs_system.h>
@@ -7,6 +8,8 @@ void inp::register_ecs_input_system(ecs::system_factory& factory, std::shared_pt
 {
 	factory.register_system<&ecs_input_manager::update_input_state_system>("inp::update_input_state",
 		{ .phase = ecs::phase::input, .run_in_edit = true }, std::move(manager));
+	factory.register_system<&inp::update_actions_system>("inp::update_actions",
+		{ .phase = ecs::phase::input, .after = { "inp::update_input_state" } });
 }
 
 void inp::ecs_input_manager::on_focus_lost(wnd::handle)

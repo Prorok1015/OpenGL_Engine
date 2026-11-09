@@ -38,6 +38,7 @@ namespace inp
 		inp::input_state m_raw;
 	};
 
-	// Registers "inp::update_input_state" (phase `input`) for the given manager instance.
+	// Registers "inp::update_input_state" (phase `input`) for the given manager instance, and "inp::update_actions"
+	// (inp_action_state.h) after it.
 	SNK_API void register_ecs_input_system(ecs::system_factory& factory, std::shared_ptr<ecs_input_manager> manager);
 }

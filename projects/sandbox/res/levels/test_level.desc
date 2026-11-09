@@ -10,6 +10,7 @@
             "name" : "3d_scene",
             "systems" : [
                 "inp::update_input_state",
+                "inp::update_actions",
                 "scn::update_camera_matrix_system",
                 "scn::depth_system",
                 "scn::transform_system"

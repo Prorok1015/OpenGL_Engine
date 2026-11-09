@@ -21,15 +21,15 @@ namespace cmd { class command_registry; }
 
 namespace edt
 {
-	class scene_document;
-
 	// Facade over the engine services and the editor's own services. Created by editor_system::init and
 	// registered in ds::app_data_storage (data.require<edt::editor_context>()). Engine services are
 	// references and are not owned; `commands` is the process-wide command registry that actions() adds the
 	// editor's part to (and that the engine registered log.read into). The job.*, dialog.* and problems.list
-	// commands are registered here and live as long as the context. A job that failed (threw) is logged and shown as an error
+	// commands are registered here and live as long as the context; adopt() lets the editor hand it more
+	// registrations (the commands that read the scene) to live and die with it. A job that failed (threw) is logged and shown as an error
 	// message dialog; the destructor waits for the running jobs, so build the context after what they use. The scene document belongs to the editor (its controllers are built
-	// on it before the context exists); the context's document_manager refers to it and owns the prefab preview.
+	// on it before the context exists); the context's document_manager refers to it and owns the preview, which
+	// `make_preview` builds.
 	// The engine services the editor works through (context manager, assembler, system factory) are the editor's
 	// editor_services, which the context refers to: they live as long as the editor, so the context must not be used
 	// after the editor_system is gone. Game data (descs, levels, prefabs) goes through services() at the moment of use,
@@ -39,7 +39,7 @@ namespace edt
 	public:
 		editor_context(res::resource_system& resources, rnd::render_system& render,
 			gui::gui_system& gui, editor_services& services, ds::task_system& tasks, cmd::command_registry& commands,
-			scene_document& scene);
+			document& scene, preview_factory make_preview);
 		~editor_context();
 		editor_context(const editor_context&) = delete;
 		editor_context& operator=(const editor_context&) = delete;
@@ -63,6 +63,9 @@ namespace edt
 		action_registry& actions() { return m_actions; }
 		inspector_registry& inspectors() { return m_inspectors; }
 		asset_kind_registry& asset_kinds() { return m_asset_kinds; }
+
+		// The registrations die with the context, before the services their commands call.
+		void adopt(std::vector<registration> added);
 
 	private:
 		res::resource_system& m_resources;

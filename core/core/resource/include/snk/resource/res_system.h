@@ -82,6 +82,11 @@ namespace res
 		// Cancels the load tasks that have not started and waits for the running ones: main thread only. A layer then
 		// reports the resources it loaded that are still referenced (their code may belong to a module being unloaded).
 		~resource_system();
+		// What the destructor does to the loads, without destroying: the queued load tasks are cancelled, the running
+		// ones waited for, the parked steps failed ("Load cancelled"), and every later load is cancelled too. Main
+		// thread, idempotent. Shutdown calls it before the types the loads deserialize into are unregistered (#653).
+		// File changes are still delivered to the watchers; whatever they request is cancelled.
+		void stop_loading();
 		resource_system(const resource_system&) = delete;
 		resource_system& operator= (const resource_system&) = delete;
 		resource_system(resource_system&&) = delete;

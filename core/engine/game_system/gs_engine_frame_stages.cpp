@@ -1,6 +1,7 @@
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/window/wnd_window_system.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/game/gs_input_actions.h>
 #include <snk/game/gs_input_routing.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
@@ -18,7 +19,13 @@ void gs::register_scene_frame_stages(app::frame_stage_registry& registry)
 		// Bindings come from the panels of the previous ui stage; they are rebuilt every frame.
 		if (c.storage.has_value<inp::input_router>()) {
 			auto& router = c.storage.require<inp::input_router>();
-			gs::route_input(router, contexts);
+			std::shared_ptr<const inp::action_map> actions;
+			if (c.storage.has_value<gs::input_actions>()) {
+				auto& project_actions = c.storage.require<gs::input_actions>();
+				project_actions.update(c.storage);
+				actions = project_actions.map();
+			}
+			gs::route_input(router, contexts, actions);
 			router.clear_bindings();
 		}
 		contexts.update(c.dt);

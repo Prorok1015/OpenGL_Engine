@@ -7,7 +7,7 @@
 #include "edt_editor_layer.h"
 #include "edt_editor_mode.h"
 #include "edt_input_binding.h"
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <functional>
