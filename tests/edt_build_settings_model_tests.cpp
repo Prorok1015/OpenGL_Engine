@@ -174,9 +174,9 @@ BOOST_AUTO_TEST_CASE(SnkShipping_IsNoUserDefine_AndAUserPresetThatSetsIt_IsNotBu
 	BOOST_TEST(model.set_define_everywhere("SNK_SHIPPING", "OFF").has_value());
 	BOOST_TEST(model.pending_user_edits().empty());
 
-	dir.write("code/CMakeUserPresets.json", R"({ "version": 3,
+	dir.write("code/CMakeUserPresets.json", R"json({ "version": 3,
 		"configurePresets": [ { "name": "user-release", "inherits": "release", "cacheVariables": { "SNK_SHIPPING": "ON" } } ],
-		"buildPresets": [ { "name": "user-release", "configurePreset": "user-release" } ] })");
+		"buildPresets": [ { "name": "user-release", "configurePreset": "user-release" } ] })json");
 	load();
 	BOOST_TEST(model.preset_for("release") == "release");
 	BOOST_TEST(edt::preset_for_configuration(root() / "code", "release") == "release");
@@ -185,7 +185,7 @@ BOOST_AUTO_TEST_CASE(SnkShipping_IsNoUserDefine_AndAUserPresetThatSetsIt_IsNotBu
 
 BOOST_AUTO_TEST_CASE(IsShippingPreset_FollowsCMakeTruth_ThroughInheritance)
 {
-	const prj::main_presets_result parsed = prj::parse_cmake_presets(R"({ "version": 3, "configurePresets": [
+	const prj::main_presets_result parsed = prj::parse_cmake_presets(R"json({ "version": 3, "configurePresets": [
 		{ "name": "ship_base", "hidden": true, "cacheVariables": { "SNK_SHIPPING": "ON" } },
 		{ "name": "inherited", "inherits": "ship_base" },
 		{ "name": "lower", "cacheVariables": { "SNK_SHIPPING": "yes" } },
@@ -196,7 +196,7 @@ BOOST_AUTO_TEST_CASE(IsShippingPreset_FollowsCMakeTruth_ThroughInheritance)
 		{ "name": "typed_off", "cacheVariables": { "SNK_SHIPPING": { "type": "BOOL", "value": false } } },
 		{ "name": "unset", "inherits": "ship_base", "cacheVariables": { "SNK_SHIPPING": null } },
 		{ "name": "none" }
-	] })");
+	] })json");
 	BOOST_REQUIRE_MESSAGE(parsed.presets, parsed.error);
 	const auto shipping = [&](std::string_view name) {
 		const prj::configure_preset* preset = parsed.presets->find_configure(name);
