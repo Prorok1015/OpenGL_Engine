@@ -439,7 +439,7 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject
 	BOOST_TEST(scratch.front().filename().string().starts_with(own_prefix));
 	BOOST_TEST(fs::is_directory(scratch.front()));
 #ifndef _WIN32
-	BOOST_TEST((fs::status(scratch.front()).permissions() & fs::perms::all) == fs::perms::owner_all);
+	BOOST_TEST(((fs::status(scratch.front()).permissions() & fs::perms::all) == fs::perms::owner_all));
 #endif
 	BOOST_TEST(sys.mount_roots(res::tag::cache).empty());
 
@@ -521,7 +521,7 @@ BOOST_AUTO_TEST_CASE(MakeScratchDir_MakesANewPrivateFolderEachTime)
 	BOOST_TEST(first.path != second.path);
 	BOOST_TEST(fs::is_directory(first.path));
 #ifndef _WIN32
-	BOOST_TEST((fs::status(first.path).permissions() & fs::perms::all) == fs::perms::owner_all);
+	BOOST_TEST(((fs::status(first.path).permissions() & fs::perms::all) == fs::perms::owner_all));
 #endif
 	std::error_code ec;
 	fs::remove_all(first.path, ec);
