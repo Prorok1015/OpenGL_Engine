@@ -4,6 +4,7 @@
 
 namespace edt {
 
+// Exported for editor_system and the tests only (this header is not installed): not part of the editor API.
 class SNK_EDITOR_API file_dialog {
 public:
     enum class SELECT_MODE {

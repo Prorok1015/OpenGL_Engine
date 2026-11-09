@@ -155,6 +155,17 @@ set_target_properties(snk::engine PROPERTIES
     unparsed = re.sub(r'set_target_properties\(snk::engine_api PROPERTIES\n.*?\n\)\n', '', good, flags=re.S)
     assert unparsed != good
     assert any('does not link $<COMPILE_ONLY:snk::core_api>' in e for e in check_targets(unparsed, {'thirdparty_boost_json'}))
+    # The editor API library (#587) must not make a consumer link an archive either.
+    editor_static = good + '''
+add_library(snk::editor_api SHARED IMPORTED)
+
+set_target_properties(snk::editor_api PROPERTIES
+  INTERFACE_LINK_LIBRARIES "snk::thirdparty_boost_json"
+)
+'''
+    assert check_targets(editor_static.replace('snk::thirdparty_boost_json"\n)\n', 'snk::thirdparty_glm"\n)\n'), {'thirdparty_boost_json'}) == []
+    assert any('links the archive snk::thirdparty_boost_json (via snk::editor_api)' in e
+               for e in check_targets(editor_static, {'thirdparty_boost_json'}))
     core_plain = good.replace('\\$<COMPILE_ONLY:snk::ecs>', 'snk::ecs')
     assert any('snk::core_api links snk::ecs' in e for e in check_targets(core_plain, {'thirdparty_boost_json'}))
     config = '''set_target_properties(snk::thirdparty_boost_json PROPERTIES

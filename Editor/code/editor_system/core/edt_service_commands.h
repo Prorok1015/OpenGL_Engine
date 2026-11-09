@@ -10,6 +10,8 @@
 
 namespace edt
 {
+	// Exported for editor_system and the white-box tests only: this header is not installed, so it is not API.
+	//
 	// Commands over the editor's services, for scripts and agents. Each returns the registrations it made (keep them
 	// as long as the commands should exist); a refused one is left out.
 	//

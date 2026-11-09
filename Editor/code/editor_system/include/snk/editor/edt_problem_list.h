@@ -16,7 +16,7 @@ namespace edt
 	enum class problem_severity { error, warning, note };
 
 	SNK_EDITOR_API const char* problem_severity_name(problem_severity severity);
-	std::optional<problem_severity> problem_severity_from(std::string_view name);
+	SNK_EDITOR_API std::optional<problem_severity> problem_severity_from(std::string_view name);
 
 	// One diagnostic: a compiler, linker or CMake message (build_output_parser), later also a desc error (#24).
 	struct problem

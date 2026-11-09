@@ -74,8 +74,8 @@ if(SNK_WITH_ASSIMP AND SNK_ENGINE_SHARED AND MSVC)
 endif()
 # snk::mcp_server: the agent server of the editor (edt_agent_server, edt_mcp_bridge_host). Nothing under core/ links it.
 # Like snk_engine, the library carries its dependencies privately: whoever includes snk/editor links snk::engine and
-# snk::engine_api itself (the editor, unit_tests, a module of the SDK). A public link to engine_api would make the
-# SDK export of this real target require engine_api, which the shared set exports as a facade.
+# snk::engine_api itself (the editor, unit_tests, a module of the SDK; tests/package_consumer does). A public link to
+# engine_api would make the SDK export of this real target require engine_api, which the shared set exports as a facade.
 target_link_libraries(snk_editor_api PRIVATE snk::engine PRIVATE snk::engine_api)
 if(SNK_ENGINE_SHARED AND MSVC)
 	# As editor_system: snk_engine.dll exports only SNK_API, Boost.JSON is linked in as its own static copy.
