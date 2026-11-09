@@ -46,6 +46,10 @@ function(snk_check_mcp_isolation)
 	# 1. Roots: the SDK closure, the shipping host `game` (#591) and its library `game_host` (#592), and every target
 	# created under core/ (third-party trees inside it are skipped).
 	set(_roots snk::engine snk::engine_api)
+	# The editor API library (#587) is exported to game_editor modules: it must not reach the server either.
+	if(TARGET snk::editor_api)
+		list(APPEND _roots snk::editor_api)
+	endif()
 	foreach(_host IN ITEMS game game_host)
 		if(TARGET ${_host})
 			list(APPEND _roots ${_host})

@@ -211,6 +211,8 @@ add_test(NAME unit_tests COMMAND unit_tests)
 if(SNK_ENGINE_SHARED)
     # A game module loaded from disk by unit_tests (tests/module_dll).
     add_subdirectory(tests/module_dll)
+    # A module that registers into the editor through snk_editor_api (#587).
+    add_subdirectory(tests/editor_api_dll)
 else()
     # A game module compiled into a static host (snk_add_game_host, #592), run headless by CI.
     add_subdirectory(tests/static_game)

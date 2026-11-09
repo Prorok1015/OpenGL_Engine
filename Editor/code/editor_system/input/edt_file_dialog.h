@@ -1,9 +1,10 @@
 #pragma once
+#include <snk/editor/edt_api.h>
 #include <snk/common/common.h>
 
 namespace edt {
 
-class file_dialog {
+class SNK_EDITOR_API file_dialog {
 public:
     enum class SELECT_MODE {
         FILES_ONLY,      // Files only

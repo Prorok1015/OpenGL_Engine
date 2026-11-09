@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 TARGETS_FILE = Path('lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake')
-ENTRY_POINTS = ('snk::engine', 'snk::engine_api')
+ENTRY_POINTS = ('snk::engine', 'snk::engine_api', 'snk::editor_api')
 USAGE_ONLY = ('snk::engine_api', 'snk::core_api')
 ARCHIVE_SUFFIXES = ('.lib', '.a')
 
@@ -94,7 +94,7 @@ def check_archives(lib_dir, files, allowed):
     errors = []
     if not lib_dir.is_dir():
         return errors
-    owners = {'snk::engine'} | {f'snk::{name}' for name in allowed}
+    owners = {'snk::engine', 'snk::editor_api'} | {f'snk::{name}' for name in allowed}
     for path in sorted(lib_dir.iterdir()):
         if path.is_file() and path.suffix in ARCHIVE_SUFFIXES and files.get(path.name) not in owners:
             errors.append(f'{path} is installed by the shared set ({files.get(path.name, "no target")})')
@@ -168,6 +168,13 @@ set_target_properties(snk::engine PROPERTIES
     files = imported_files([config])
     assert files['libboost_json-vc145-mt-x64-1_84.lib'] == 'snk::thirdparty_boost_json'
     assert files['snk_engine.lib'] == 'snk::engine'
+    # The editor API library (#587) is a shared library of the set: its import library is no stray archive.
+    with_editor = config + '''set_target_properties(snk::editor_api PROPERTIES
+  IMPORTED_IMPLIB_RELEASE "${_IMPORT_PREFIX}/lib/snk/snk_editor_api.lib"
+  IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/bin/snk_editor_api.dll"
+  )
+'''
+    assert imported_files([with_editor])['snk_editor_api.lib'] == 'snk::editor_api'
     print('check_sdk_shared_set: self-test passed')
 
 
