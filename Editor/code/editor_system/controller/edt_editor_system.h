@@ -62,6 +62,7 @@ namespace edt {
 	class blackboard_panel;
 	class build_settings_panel;
 	class git_panel;
+	class world_systems_panel;
 	class asset_browser_panel;
 	class prefab_editor_panel;
 	class prefab_document;
@@ -198,6 +199,7 @@ namespace edt {
 		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
 		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
 		std::shared_ptr<git_panel>             m_git_panel;
+		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
 		// Git Account (#458 PR-4): the person sets the forge tokens here; floating, closed by default.
 		std::shared_ptr<forge_account_panel>   m_forge_account_panel;
 		// Owner of the Git Account jobs (token save/remove/probe): not under SNK_HAS_ASSIMP like the import's, so it is here.
