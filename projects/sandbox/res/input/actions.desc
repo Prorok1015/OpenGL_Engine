@@ -1,6 +1,7 @@
 {
     "__type" : "input_actions_desc",
     "__version" : 1,
+    "__guid" : "ee74bfcd-a922-4a8d-9016-367e24a3d46f",
     "actions" : [
         { "name" : "MoveLeft", "bindings" : [ { "key" : "A" }, { "key" : "LEFT" } ] },
         { "name" : "MoveRight", "bindings" : [ { "key" : "D" }, { "key" : "RIGHT" } ] },
