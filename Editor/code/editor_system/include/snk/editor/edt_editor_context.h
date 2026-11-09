@@ -47,6 +47,7 @@ namespace edt
 		res::resource_system& resources() const { return m_resources; }
 		rnd::render_system& render() const { return m_render; }
 		gui::gui_system& gui() const { return m_gui; }
+		ds::task_system& tasks() const { return m_tasks; }
 		editor_services& services() const { return m_services; }
 
 		document_manager& documents() { return m_documents; }
@@ -71,6 +72,7 @@ namespace edt
 		res::resource_system& m_resources;
 		rnd::render_system& m_render;
 		gui::gui_system& m_gui;
+		ds::task_system& m_tasks;
 		editor_services& m_services;
 		editor_events m_events;
 		document_manager m_documents;

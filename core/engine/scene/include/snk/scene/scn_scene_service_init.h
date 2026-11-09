@@ -5,5 +5,7 @@
 namespace scn
 {
 	SNK_API void scene_init(ds::app_data_storage& store);
+	// The scene layers' and the root's resource loads stop (shutdown, before the scene types are unregistered: #653).
+	SNK_API void stop_scene_loads(ds::app_data_storage& store);
 	SNK_API void scene_term(ds::app_data_storage& store);
 }

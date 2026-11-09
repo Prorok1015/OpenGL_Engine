@@ -18,8 +18,8 @@ add_library(snk::editor_api ALIAS snk_editor_api)
 file(GLOB_RECURSE SE_EDT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 set(SE_EDT_API_SOURCES
 	core/edt_action_registry.cpp core/edt_asset_kind_registry.cpp core/edt_dialog_service.cpp core/edt_document_history.cpp
-	core/edt_document_manager.cpp core/edt_editor_context.cpp core/edt_editor_services.cpp core/edt_inspector_registry.cpp
-	core/edt_job_service.cpp core/edt_panel_registry.cpp core/edt_problem_list.cpp core/edt_selection_service.cpp
+	core/edt_document_manager.cpp core/edt_editor_context.cpp core/edt_editor_extension.cpp core/edt_editor_services.cpp core/edt_inspector_registry.cpp
+	core/edt_job_service.cpp core/edt_panel_registry.cpp core/edt_problem_list.cpp core/edt_registration_scope.cpp core/edt_selection_service.cpp
 	core/edt_service_commands.cpp input/edt_file_dialog.cpp panels/edt_panel_base.cpp)
 list(TRANSFORM SE_EDT_API_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 list(REMOVE_ITEM SE_EDT_SOURCES ${SE_EDT_API_SOURCES})

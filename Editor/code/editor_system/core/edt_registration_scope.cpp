@@ -1,0 +1,44 @@
+#include <snk/editor/edt_registration_scope.h>
+#include <snk/common/engine_assert.h>
+#include <utility>
+
+edt::registration_scope::registration_scope(ds::task_system& tasks)
+	: m_tasks_system(tasks)
+{
+}
+
+edt::registration_scope::~registration_scope()
+{
+	clear();
+}
+
+void edt::registration_scope::keep(registration handle)
+{
+	m_registrations.push_back(std::move(handle));
+}
+
+void edt::registration_scope::keep(connection handle)
+{
+	m_connections.push_back(std::move(handle));
+}
+
+void edt::registration_scope::stop_tasks()
+{
+	ASSERT_MSG(ds::detail::running_callbacks(m_tasks) == 0,
+		"registration_scope: unloaded from inside one of the module's own callbacks");
+	m_tasks.refuse_new_tasks();
+	m_tasks.cancel_tasks();
+	m_tasks_system.wait_idle(m_tasks);
+	ds::detail::run_pending_main(m_tasks);
+}
+
+void edt::registration_scope::clear()
+{
+	stop_tasks();
+	while (!m_connections.empty()) {
+		m_connections.pop_back();
+	}
+	while (!m_registrations.empty()) {
+		m_registrations.pop_back();
+	}
+}

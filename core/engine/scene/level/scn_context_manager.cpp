@@ -56,6 +56,14 @@ scn::context_manager::~context_manager()
 	m_sets.clear();
 }
 
+void scn::context_manager::stop_layer_loads()
+{
+	for (const auto& layer : m_layers) {
+		layer->stop_tasks();
+		layer->resources().stop_loading();
+	}
+}
+
 std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_view name, scn::scene_layer* layer,
 																 scn::set_options options)
 {
