@@ -745,7 +745,7 @@ struct editor_module_fixture : test_util::module_env {
 		project.data.name = "Game";
 		project.data.modules = { manifest_module("test_editor", prj::module_kind::editor) };
 		root.construct<prj::project_context>(std::move(project));
-		hooks.before_swap = [this] { g_editor_events.push_back("before"); };
+		hooks.before_swap = [] { g_editor_events.push_back("before"); };
 		hooks.after_swap = [](const core::reload_report& report) { g_editor_events.push_back(std::string{ "after:" } + std::string{ core::to_string(report.status) }); };
 		loader.load(compiled(reload_v1_entry()), root);
 	}
