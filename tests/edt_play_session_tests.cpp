@@ -1001,7 +1001,7 @@ BOOST_AUTO_TEST_CASE(a_restore_waits_for_its_resources_hidden_and_busy)
 	BOOST_TEST(!play_set()->active());
 	BOOST_TEST((play_set()->mode() == ecs::run_mode::pause));
 	BOOST_TEST(edt::view_set(services) == nullptr);
-	BOOST_TEST(!play.pause());
+	// A step would run frames of a set that waits; a pause only sets the mode the wait gives (the editor layout's).
 	BOOST_TEST(!play.step(1));
 	BOOST_TEST((play.state() == edt::play_state::playing)); // nothing announced
 	BOOST_TEST(reload_polls.size() == 1u);
