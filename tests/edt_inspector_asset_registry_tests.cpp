@@ -2,6 +2,7 @@
 #include <snk/command/cmd_registry.h>
 #include "null_engine_fixture.hpp"
 #include "edt_builtin_asset_kinds.h"
+#include "edt_document_cast.h"
 #include "edt_inspector_panel.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_panel_base.h>
@@ -81,7 +82,7 @@ struct context_fixture : test_util::null_engine_fixture
 			.base_assembler = &storage.require<scn::ecs_assembler>(), .base_sfactory = &storage.require<ecs::system_factory>() }
 		, context(std::make_unique<edt::editor_context>(
 			storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
-			gui, services, tasks, commands, scene))
+			gui, services, tasks, commands, scene, edt::prefab_preview(services)))
 	{
 	}
 

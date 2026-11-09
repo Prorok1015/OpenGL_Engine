@@ -328,7 +328,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state, prefab_preview(m_services));
 	m_context->adopt(register_state_commands(m_context->actions().commands(), state_command_sources{
 		m_context->documents(), m_context->selection(), m_services, m_context->asset_kinds(),
-		[this] { return m_res.get_resource_layers(); } }));
+		[&res = m_res] { return res.get_resource_layers(); } }));
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
 	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs(), m_res);
