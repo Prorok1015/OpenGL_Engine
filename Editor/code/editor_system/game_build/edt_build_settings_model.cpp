@@ -8,6 +8,9 @@
 #include <cctype>
 #include <charconv>
 #include <format>
+#include <map>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -71,18 +74,33 @@ namespace {
 	})";
 }
 
+namespace {
+	constexpr std::string_view k_shipping_define = "SNK_SHIPPING";
+
+	// CMake's if() truth of a cache value.
+	bool cmake_true(std::string value)
+	{
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+		if (value == "ON" || value == "TRUE" || value == "YES" || value == "Y") return true;
+		// Any other non-zero number is true as well.
+		long long number = 0;
+		const char* const end = value.data() + value.size();
+		const auto [ptr, ec] = std::from_chars(value.data(), end, number);
+		return ec == std::errc{} && ptr == end && number != 0;
+	}
+
+	// A user preset can turn a debuggame/release build into the shipping executable, which the editor cannot load.
+	bool user_defines_shipping(const std::map<std::string, std::string>& defines)
+	{
+		const auto it = defines.find(std::string(k_shipping_define));
+		return it != defines.end() && cmake_true(it->second);
+	}
+}
+
 bool edt::is_shipping_preset(const prj::configure_preset& preset)
 {
-	const auto it = preset.cache_variables.find("SNK_SHIPPING");
-	if (it == preset.cache_variables.end()) return false;
-	std::string value = it->second;
-	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-	if (value == "ON" || value == "TRUE" || value == "YES" || value == "Y") return true;
-	// CMake's if(): any other non-zero number is true as well.
-	long long number = 0;
-	const char* const end = value.data() + value.size();
-	const auto [ptr, ec] = std::from_chars(value.data(), end, number);
-	return ec == std::errc{} && ptr == end && number != 0;
+	const auto it = preset.cache_variables.find(std::string(k_shipping_define));
+	return it != preset.cache_variables.end() && cmake_true(it->second);
 }
 
 std::string edt::preset_for_configuration(const fs::path& code_dir, std::string_view configuration)
@@ -93,7 +111,13 @@ std::string edt::preset_for_configuration(const fs::path& code_dir, std::string_
 			read.error, configuration, prj::user_preset_name(configuration));
 		return std::string(configuration);
 	}
-	return prj::has_user_preset(read.doc, configuration) ? prj::user_preset_name(configuration) : std::string(configuration);
+	if (!prj::has_user_preset(read.doc, configuration)) return std::string(configuration);
+	if (user_defines_shipping(prj::user_defines(read.doc, configuration))) {
+		egLOG_WARN("editor/build", "{} sets {}: the team preset '{}' is built instead (a shipping build is not a module)",
+			prj::user_preset_name(configuration), k_shipping_define, configuration);
+		return std::string(configuration);
+	}
+	return prj::user_preset_name(configuration);
 }
 
 fs::path edt::build_settings_model::user_presets_file() const
@@ -179,6 +203,10 @@ void edt::build_settings_model::load(const fs::path& root)
 		entry.generator = preset.generator;
 		entry.team_defines = preset.cache_variables;
 		if (!m_user_broken) entry.user_defines = prj::user_defines(m_user_doc, preset.name);
+		if (user_defines_shipping(entry.user_defines)) {
+			m_load_errors.push_back(std::format("CMakeUserPresets.json: {} sets {}; the editor builds '{}' instead",
+				prj::user_preset_name(preset.name), k_shipping_define, preset.name));
+		}
 		m_loaded_configurations.push_back(std::move(entry));
 	}
 	revert();
@@ -198,8 +226,9 @@ std::string edt::build_settings_model::selected_configuration() const
 
 std::string edt::build_settings_model::preset_for(std::string_view configuration) const
 {
-	return !m_user_broken && prj::has_user_preset(m_user_doc, configuration) ? prj::user_preset_name(configuration)
-		: std::string(configuration);
+	if (m_user_broken || !prj::has_user_preset(m_user_doc, configuration)) return std::string(configuration);
+	if (user_defines_shipping(prj::user_defines(m_user_doc, configuration))) return std::string(configuration);
+	return prj::user_preset_name(configuration);
 }
 
 std::optional<int> edt::build_settings_model::preset_jobs() const
@@ -247,6 +276,9 @@ std::optional<std::string> edt::build_settings_model::set_define(std::string_vie
 	const auto it = std::find_if(m_configurations.begin(), m_configurations.end(),
 		[configuration](const build_settings_configuration& entry) { return entry.name == configuration; });
 	if (it == m_configurations.end()) return std::format("CMakePresets.json has no configure preset '{}'", configuration);
+	if (name == k_shipping_define) {
+		return std::format("{} is set only by the shipping preset: the editor builds the game module", k_shipping_define);
+	}
 	if (auto problem = prj::check_user_define(*m_main, configuration, name, value, presets_version())) return problem;
 	m_define_edits.push_back(prj::set_define{ std::string(configuration), std::string(name), std::string(value) });
 	it->user_defines[std::string(name)] = std::string(value);

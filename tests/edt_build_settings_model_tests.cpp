@@ -166,6 +166,23 @@ BOOST_AUTO_TEST_CASE(Load_TheShippingPresetIsNotListed)
 	BOOST_TEST(model.pending_user_edits().size() == 2u);
 }
 
+BOOST_AUTO_TEST_CASE(SnkShipping_IsNoUserDefine_AndAUserPresetThatSetsIt_IsNotBuilt)
+{
+	load();
+	BOOST_REQUIRE_MESSAGE(model.available(), model.unavailable_reason());
+	BOOST_TEST(model.set_define("release", "SNK_SHIPPING", "ON").has_value());
+	BOOST_TEST(model.set_define_everywhere("SNK_SHIPPING", "OFF").has_value());
+	BOOST_TEST(model.pending_user_edits().empty());
+
+	dir.write("code/CMakeUserPresets.json", R"({ "version": 3,
+		"configurePresets": [ { "name": "user-release", "inherits": "release", "cacheVariables": { "SNK_SHIPPING": "ON" } } ],
+		"buildPresets": [ { "name": "user-release", "configurePreset": "user-release" } ] })");
+	load();
+	BOOST_TEST(model.preset_for("release") == "release");
+	BOOST_TEST(edt::preset_for_configuration(root() / "code", "release") == "release");
+	BOOST_TEST(std::ranges::any_of(model.load_errors(), [](const std::string& e) { return e.find("SNK_SHIPPING") != std::string::npos; }));
+}
+
 BOOST_AUTO_TEST_CASE(IsShippingPreset_FollowsCMakeTruth_ThroughInheritance)
 {
 	const prj::main_presets_result parsed = prj::parse_cmake_presets(R"({ "version": 3, "configurePresets": [
