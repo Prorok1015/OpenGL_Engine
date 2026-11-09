@@ -663,6 +663,12 @@ edt::model_file_scan edt::model_importer::scan_files(const import_source& source
 					scan.error = reference.error;
 					return scan;
 				}
+				checkpoint(ctx);
+				if (stop_progress_handler::past_deadline(source.deadline)) {
+					scan.error = "the model took too long to read";
+					return scan;
+				}
+				access.hash_listed(reference);
 			}
 		}
 	}
@@ -698,11 +704,24 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 			return im;
 		}
 
-		auto file_size = static_cast<std::streamsize>(in.tellg());
+		const auto file_size = static_cast<std::uintmax_t>(in.tellg());
+		if (file_size > k_max_person_source_bytes) {
+			im.error = std::format("The model file is too big: {} bytes, the limit is {}", file_size, k_max_person_source_bytes);
+			egLOG_ERROR("edt/import", "{}", im.error);
+			return im;
+		}
 		in.seekg(0);
 		file_data.resize(static_cast<size_t>(file_size));
-		in.read(reinterpret_cast<char*>(file_data.data()), file_size);
-		in.close();
+		constexpr std::size_t chunk = 8ull * 1024ull * 1024ull;
+		for (std::size_t done = 0; done < file_data.size(); done += chunk) {
+			checkpoint(ctx);
+			const std::size_t part = (std::min)(chunk, file_data.size() - done);
+			if (!in.read(reinterpret_cast<char*>(file_data.data() + done), static_cast<std::streamsize>(part))) {
+				im.error = std::format("Failed to read file: {}", abs_path.string());
+				egLOG_ERROR("edt/import", "{}", im.error);
+				return im;
+			}
+		}
 	}
 	checkpoint(ctx);
 

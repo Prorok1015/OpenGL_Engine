@@ -21,6 +21,9 @@ namespace edt {
 		std::filesystem::path             source_path;  // original file on disk
 	};
 
+	// The largest model file an import a person starts reads into memory (an agent's import has its own, smaller limit).
+	inline constexpr std::uintmax_t k_max_person_source_bytes = 256ull * 1024ull * 1024ull;
+
 	// What an import reads. `preloaded`: the bytes of the model file, already read. `allowed`: set for an agent's
 	// import, the files the model may read besides it (what a person was shown).
 	struct import_source {

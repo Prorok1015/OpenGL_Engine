@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_file_identity.h"
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -15,6 +16,10 @@ namespace edt {
 		std::filesystem::path path;	// canonical
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
+		file_id id{};
+		// Set by the scan from the bytes it read; the import that follows must read the same bytes.
+		content_digest digest{};
+		bool hashed = false;
 	};
 
 	struct model_file_limits
@@ -39,6 +44,7 @@ namespace edt {
 		std::filesystem::path path;
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
+		file_id id{};
 		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
 		bool found() const { return !path.empty() && error.empty(); }
@@ -48,7 +54,7 @@ namespace edt {
 	// below it that are not hidden; images (checked by their first bytes) for textures, a .bin beside a .gltf and a .mtl
 	// beside an .obj; a bounded number of files and bytes. Without `allowed` it only collects what the model refers to
 	// (the scan the person is shown); with `allowed` it refuses everything the person was not shown, or whose size or
-	// modification time changed. `read` checks again what it read.
+	// modification time changed. `read` checks again what it read, down to its bytes.
 	class model_file_access
 	{
 	public:
@@ -58,6 +64,8 @@ namespace edt {
 		resolved_reference resolve(std::string_view reference, model_file_kind kind);
 		// The bytes of a resolved file; throws std::runtime_error when the import would read more than it was allowed.
 		std::optional<std::vector<std::byte>> read(const resolved_reference& file);
+		// The scan: reads a listed file and records the SHA-256 of its bytes (once per file) that the import must match.
+		void hash_listed(const resolved_reference& file);
 		// The name below the model folder of a resolved file: one name for every spelling of the same path.
 		std::string relative_name(const resolved_reference& file) const;
 
