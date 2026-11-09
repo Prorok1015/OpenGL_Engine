@@ -407,6 +407,7 @@ std::chrono::steady_clock::time_point edt::play_session::now() const
 std::size_t edt::play_session::reloading_resources() const
 {
 	if (!m_waiting) return 0;
+	if (m_options.pending_resources) return m_options.pending_resources();
 	const auto contexts = m_services.ctx_manager.lock();
 	scn::scene_layer* layer = contexts ? contexts->game_layer() : nullptr;
 	return layer ? layer->resources().pending_loads() : 0;

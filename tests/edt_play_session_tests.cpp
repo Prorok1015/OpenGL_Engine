@@ -283,7 +283,9 @@ struct play_fixture : test_util::module_env
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router,
 		.start_blocker = [this] { return start_blocked; }, .forget_runtime_entities = [this] { ++forgotten; },
 		.each_frame = [this](const std::string& id, std::function<bool()> poll) { reload_polls.emplace_back(id, std::move(poll)); },
-		.now = [this] { return clock; } } };
+		.now = [this] { return clock; }, .pending_resources = [this] { return pending_resources; } } };
+	// What a restore waits for (the game layer's loads in flight in the editor): the tests decide when it is there.
+	std::size_t pending_resources = 0;
 	int forgotten = 0;
 	// What editor_layer::register_implicit holds for Play (the resource wait after a restore), and the wait's clock.
 	std::vector<std::pair<std::string, std::function<bool()>>> reload_polls;
@@ -302,20 +304,19 @@ struct play_fixture : test_util::module_env
 	// The loads finish and the next UI frame sees it.
 	void settle()
 	{
+		pending_resources = 0;
 		pump();
 		run_reload_polls();
 	}
 
-	// A swap whose restore waits: the layer has a load in flight when the set comes back.
-	res::res_handle<res::text_resource> restore_waiting(const char* file)
+	// A swap whose restore waits: a load is in flight when the set comes back.
+	void restore_waiting()
 	{
 		BOOST_REQUIRE(play.capture_for_reload().empty());
 		play.before_module_swap();
-		auto handle = contexts().game_layer()->resources().require<res::text_resource>(put(file, "slow"));
-		BOOST_REQUIRE(contexts().game_layer()->resources().pending_loads() > 0);
+		pending_resources = 1;
 		play.after_module_swap(k_reloaded);
 		BOOST_REQUIRE(play.reloading());
-		return handle;
 	}
 	std::vector<state_change> seen;
 	edt::connection seen_connection = events.play_state_changed.subscribe([this](edt::play_state s, edt::play_reason r) {
@@ -993,7 +994,7 @@ BOOST_AUTO_TEST_CASE(a_restore_waits_for_its_resources_hidden_and_busy)
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(play.start());
-	const auto pending = restore_waiting("slow.txt");
+	restore_waiting();
 
 	BOOST_TEST(play.reloading_resources() > 0u);
 	BOOST_REQUIRE(play_set());
@@ -1022,7 +1023,7 @@ BOOST_AUTO_TEST_CASE(a_stop_during_the_resource_wait_ends_it)
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(play.start());
-	const auto pending = restore_waiting("slow.txt");
+	restore_waiting();
 
 	play.stop();
 	BOOST_TEST(!play.reloading());
@@ -1040,7 +1041,7 @@ BOOST_AUTO_TEST_CASE(a_resource_wait_past_its_limit_runs_on)
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(play.start());
-	const auto pending = restore_waiting("slow.txt");
+	restore_waiting();
 
 	run_reload_polls();
 	BOOST_TEST(play.reloading());
@@ -1063,8 +1064,8 @@ BOOST_AUTO_TEST_CASE(a_second_reload_during_the_wait_keeps_the_mode_to_restore)
 	BOOST_REQUIRE(play.start());
 	contexts().update(std::chrono::duration<float>(0.016f));
 	const std::uint64_t frames = play.frames_run();
-	const auto first = restore_waiting("slow.txt");
-	const auto second = restore_waiting("slower.txt");
+	restore_waiting();
+	restore_waiting();
 
 	BOOST_TEST(reload_polls.size() == 2u); // the first wait's poll ends at its next frame
 	settle();
@@ -1253,7 +1254,7 @@ BOOST_AUTO_TEST_CASE(play_commands_answer_busy_while_a_module_reload_waits)
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(play.start());
-	const auto pending = restore_waiting("slow.txt");
+	restore_waiting();
 
 	for (const char* id : { "play.pause", "play.step", "play.start" }) {
 		BOOST_TEST(actions.invoke(id, json::object{}).code == "busy", id);
@@ -1944,7 +1945,7 @@ BOOST_AUTO_TEST_CASE(a_switch_to_the_editor_during_a_resource_wait_pauses_play_o
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
 	BOOST_REQUIRE((play.state() == edt::play_state::playing));
-	const auto pending = restore_waiting("slow.txt");
+	restore_waiting();
 
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
 	BOOST_TEST(modes.holds_pause());

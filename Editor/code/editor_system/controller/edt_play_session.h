@@ -52,6 +52,8 @@ namespace edt
 		std::function<void(const std::string& id, std::function<bool()> poll)> each_frame{};
 		// The clock of that wait; null: std::chrono::steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now{};
+		// What the restored set waits for; null: the loads in flight of the game layer (resource_system::pending_loads).
+		std::function<std::size_t()> pending_resources{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
