@@ -391,6 +391,10 @@ public:
 		return slot ? slot->subscribe(std::move(fn)) : connection{};
 	}
 
+	// True when T is an event type of this world (bound now, or bound by this call from the registry of the last bind).
+	template <class T>
+	bool knows() { return find_or_bind<T>() != nullptr; }
+
 	// Fills every window (types in registration order), then calls the subscribers type by type: those subscribed
 	// when the delivery began. Does nothing in discard mode.
 	void deliver();

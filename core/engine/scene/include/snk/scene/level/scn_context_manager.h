@@ -173,6 +173,24 @@ namespace scn
 
 		// True inside update().
 		bool updating() const { return m_updating; }
+		// True while the manager or any of its sets updates (a system or a bus subscriber is on the stack).
+		bool any_updating() const
+		{
+			if (m_updating) return true;
+			for (const auto& s : m_sets) {
+				if (s->updating()) return true;
+			}
+			return false;
+		}
+
+		// A subscription of the engine or the editor to the worlds of the base's sets (a module subscribes through
+		// gs::module_context, which covers its layer's sets). The connection removes it; T must be an engine event type.
+		template <typename T>
+		[[nodiscard]] ecs::connection subscribe(scn::event_filter filter, std::function<void(ecs::bus_context&, const ecs::envelope<T>&)> fn)
+		{
+			ASSERT_MSG(m_event_types->contains<T>(), "context_manager::subscribe: {} is not an engine event type", entt::type_name<T>::value());
+			return m_subscriptions.subscribe<T>(std::move(filter), std::move(fn));
+		}
 
 		// Writer for values from outside the phases; visible after the next exchange of the set.
 		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
@@ -209,5 +227,8 @@ namespace scn
 		std::function<void()> m_on_reload;
 		res::tag m_pending_level_reload;
 		std::function<void(game_layer_change)> m_on_game_layer_change;
+		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.0). The base's sets
+		// point at it: the destructor clears them before any member goes.
+		scn::event_subscriptions m_subscriptions;
 	};
 }

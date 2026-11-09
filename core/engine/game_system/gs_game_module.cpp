@@ -69,6 +69,11 @@ namespace {
 				return "called from inside one of the module's callbacks; unload from a main-queue item of the engine "
 					"(task_system::post_main) instead";
 			}
+			// A system or a bus subscriber (WORLD_BUS 3.4) of the module would be on the stack.
+			if (m_contexts.any_updating()) {
+				return "called during the scene's update (a system or a bus subscriber); unload from a main-queue item of "
+					"the engine (task_system::post_main) instead";
+			}
 			return {};
 		}
 

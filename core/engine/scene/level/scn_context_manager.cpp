@@ -65,6 +65,7 @@ std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_vie
 	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types), options,
 												  std::move(event_types));
 	set->set_layer(layer);
+	set->set_subscriptions(layer ? &layer->subscriptions() : &m_subscriptions);
 	return set;
 }
 
@@ -96,6 +97,8 @@ scn::scene_layer& scn::context_manager::create_layer(ds::task_system* tasks)
 
 void scn::context_manager::destroy_layer(scn::scene_layer& layer)
 {
+	// A system or a bus subscriber of the layer would be on the stack while its worlds and code go.
+	ASSERT_MSG(!any_updating(), "destroy_layer during an update");
 	// The layer's tasks may still touch its worlds.
 	layer.stop_tasks();
 	if (m_game_layer == &layer) {

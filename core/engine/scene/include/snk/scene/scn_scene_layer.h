@@ -9,6 +9,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_event_subscriptions.h>
 #include <snk/common/snk_api.h>
 #include <entt/meta/context.hpp>
 #include <memory>
@@ -62,6 +63,9 @@ namespace scn
 		// (`events().add<my_event>()`).
 		ecs::bus_registry& events() { return *m_events; }
 		const std::shared_ptr<ecs::bus_registry>& event_types() const { return m_events; }
+		// Bus subscriptions heard in the worlds of the layer's sets (a module subscribes through
+		// gs::module_context::subscribe, which keeps them here until the layer goes).
+		event_subscriptions& subscriptions() { return m_subscriptions; }
 
 		// Owner of the module's tasks: run them with task_system::run(lane, desc, layer.tasks(), fn).
 		const ds::lifetime& tasks() const { return m_tasks; }
@@ -97,5 +101,6 @@ namespace scn
 		ds::task_system* m_task_system = nullptr;
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
 		std::shared_ptr<ecs::bus_registry> m_events;
+		event_subscriptions m_subscriptions;
 	};
 }

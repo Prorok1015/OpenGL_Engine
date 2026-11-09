@@ -83,6 +83,19 @@ namespace gs
 		// in the engine's queues after the module is gone (#406). A result goes back through what `fn` captures.
 		ds::task_handle<void> run(ds::lane lane, ds::task_desc desc, std::function<void(ds::task_context&)> fn);
 
+		// A bus subscription (WORLD_BUS.md 3.4) heard in the worlds of the layer's sets that `filter` matches (level, Play,
+		// previews; {set, world} names one world, since the Play twin repeats the level's names). Called per event of T
+		// on the main thread during the world's delivery; what it emits goes to the next delivery, what it changes
+		// through bus_context::changer()/spawner() lands right after the delivery. The layer keeps it: it survives a
+		// data reload (desc, level) and goes with the layer (unload, code reload). The returned connection may be
+		// disconnected earlier. T must be an event type of the layer (the engine's or layer.events()).
+		template <class T>
+		ecs::connection& subscribe(scn::event_filter filter, std::function<void(ecs::bus_context&, const ecs::envelope<T>&)> fn)
+		{
+			ASSERT_MSG(m_layer.events().contains<T>(), "module_context::subscribe: {} is not an event type of the layer", entt::type_name<T>::value());
+			return m_layer.keep(m_layer.subscriptions().subscribe<T>(std::move(filter), std::move(fn)));
+		}
+
 	private:
 		scn::scene_layer& m_layer;
 		cmd::command_registry* m_commands = nullptr;
