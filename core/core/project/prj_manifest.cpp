@@ -242,7 +242,7 @@ namespace
 	prj::manifest parse_object(const json::object& root, std::vector<std::string>& warnings)
 	{
 		warn_unknown_fields(root,
-			{ "format_version", "name", "engine_version", "start_scene", "content_roots", "modules", "platforms" },
+			{ "format_version", "name", "engine_version", "start_scene", "input_actions", "content_roots", "modules", "platforms" },
 			"$", warnings);
 
 		const auto required = [&root](std::string_view key) -> const json::value& {
@@ -280,6 +280,14 @@ namespace
 				fail("$.start_scene", "expected a res:// tag inside the project");
 			}
 			result.start_scene = std::string{ text };
+		}
+
+		if (const auto* input_actions = root.if_contains("input_actions")) {
+			const std::string_view text = require_string(*input_actions, "$.input_actions");
+			if (!is_res_tag(text)) {
+				fail("$.input_actions", "expected a res:// tag inside the project");
+			}
+			result.input_actions = std::string{ text };
 		}
 
 		if (const auto* roots = root.if_contains("content_roots")) {

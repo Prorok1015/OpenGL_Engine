@@ -391,6 +391,14 @@ namespace {
 		return std::find(std::begin(mounted), std::end(mounted), protocol) != std::end(mounted);
 	}
 
+	// The custom fields that hold names, not tags (#604: action names and key names). Only the strict tag rule is off for
+	// them; the walk over every string still refuses one that names another protocol. A list, not a flag of the schema:
+	// desc::field_schema is built by module code too, and a new member there would change the module API's layout.
+	bool holds_plain_text(std::string_view type, std::string_view field_key)
+	{
+		return type == "input_actions_desc" && (field_key == "actions" || field_key == "/actions");
+	}
+
 	// A tag a file refers to: literally "res://" and then a path inside the project. Nothing else is rewritten or guessed.
 	std::string strict_tag_problem(std::string_view text)
 	{
@@ -508,7 +516,7 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 							const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
 								|| field.kind == desc::field_kind::custom
 								|| (field.kind == desc::field_kind::array && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
-							if (!tag_field) continue;
+							if (!tag_field || (field.kind == desc::field_kind::custom && holds_plain_text(type, field.key))) continue;
 							const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
 							const json::value* held = patch.if_contains(key);
 							if (!held) continue;

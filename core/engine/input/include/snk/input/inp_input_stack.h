@@ -110,6 +110,12 @@ namespace inp
 
 	// The printable keys of INPUT_STACK.md §4.4; Escape, Enter, Tab, F-keys and modifiers are not.
 	SNK_API bool is_text_key(KEYBOARD_BUTTONS key);
-	// "W", "K_0", "ESCAPE": the names of KEYBOARD_BUTTONS.
+	// "W", "K_0", "ESCAPE": the names of KEYBOARD_BUTTONS (physical positions on a US layout, INPUT_STACK.md).
 	SNK_API std::optional<KEYBOARD_BUTTONS> key_from_name(std::string_view name);
+	// The name key_from_name reads; empty for COUNT.
+	SNK_API std::string_view key_code_name(KEYBOARD_BUTTONS key);
+	// "LEFT", "RIGHT", "MIDDLE", "BTN_4".."BTN_8": one name per button, the aliases BTN_1..BTN_3 and LAST have none.
+	SNK_API std::optional<MOUSE_BUTTONS> mouse_button_from_name(std::string_view name);
+	// Empty for LAST and COUNT.
+	SNK_API std::string_view mouse_button_name(MOUSE_BUTTONS button);
 }

@@ -21,6 +21,9 @@ namespace
 	};
 	static_assert(std::size(k_key_names) == inp::key_count, "a key was added to KEYBOARD_BUTTONS: name it here");
 
+	constexpr std::string_view k_mouse_names[] = { "LEFT", "RIGHT", "MIDDLE", "BTN_4", "BTN_5", "BTN_6", "BTN_7", "BTN_8" };
+	static_assert(std::size(k_mouse_names) == static_cast<std::size_t>(inp::MOUSE_BUTTONS::LAST), "a button was added to MOUSE_BUTTONS: name it here");
+
 	bool region_holds(const inp::stack_layer_desc& layer, glm::vec2 pos)
 	{
 		return std::ranges::any_of(layer.regions, [pos](const glm::ivec4& r) {
@@ -196,4 +199,23 @@ std::optional<inp::KEYBOARD_BUTTONS> inp::key_from_name(std::string_view name)
 	const auto it = std::ranges::find(k_key_names, name);
 	if (it == std::end(k_key_names)) return std::nullopt;
 	return static_cast<KEYBOARD_BUTTONS>(std::distance(std::begin(k_key_names), it));
+}
+
+std::string_view inp::key_code_name(KEYBOARD_BUTTONS key)
+{
+	const auto index = static_cast<std::size_t>(key);
+	return index < std::size(k_key_names) ? k_key_names[index] : std::string_view{};
+}
+
+std::optional<inp::MOUSE_BUTTONS> inp::mouse_button_from_name(std::string_view name)
+{
+	const auto it = std::ranges::find(k_mouse_names, name);
+	if (it == std::end(k_mouse_names)) return std::nullopt;
+	return static_cast<MOUSE_BUTTONS>(std::distance(std::begin(k_mouse_names), it));
+}
+
+std::string_view inp::mouse_button_name(MOUSE_BUTTONS button)
+{
+	const auto index = static_cast<std::size_t>(button);
+	return index < std::size(k_mouse_names) ? k_mouse_names[index] : std::string_view{};
 }

@@ -428,6 +428,35 @@ BOOST_AUTO_TEST_CASE(ManyProblems_AreCappedWithoutLettingTheFilePass)
 	BOOST_TEST(!fs::exists(res_root / "levels" / "many.desc"));
 }
 
+BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolIsStillRefused)
+{
+	const std::string actions = R"({"__type":"input_actions_desc","actions":[
+		{"name":"MoveLeft","bindings":[{"key":"A"},{"key":"LEFT"}]},
+		{"name":"Fire","bindings":[{"mouse":"LEFT"}]}]})";
+	std::size_t errors = 0;
+	for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(actions), "res://input/actions.desc")) {
+		if (item.severity == res::diagnostic_severity::error) ++errors;
+	}
+	BOOST_TEST(errors == 0u);
+
+	for (const std::string_view bad : { "user/x", "user://x", "edt://settings/a", "https://example.com/a" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			const json::value with_bad = json::parse(std::string(R"({"__type":"input_actions_desc","actions":[{"name":")") + std::string(bad)
+				+ R"(","bindings":[{"key":"A"}]}]})");
+			bool refused = false;
+			for (const res::diagnostic& item : edt::validate_desc_tree(*descs, with_bad, "res://input/actions.desc")) {
+				if (item.severity == res::diagnostic_severity::error) refused = true;
+			}
+			BOOST_TEST(refused);
+		}
+	}
+
+	fs::create_directories(res_root / "input");
+	const auto created = call("desc.create", json::object{ { "path", "input/actions.desc" }, { "desc", json::parse(actions) } });
+	BOOST_TEST_MESSAGE(created.error);
+	BOOST_TEST(created.ok);
+}
+
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)
 {
 	const fs::path outside = dir.path() / "outside";

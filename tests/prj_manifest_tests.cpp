@@ -203,6 +203,24 @@ BOOST_AUTO_TEST_CASE(Parse_StartSceneMustBeAResTagInsideTheProject)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(Parse_InputActionsIsAnOptionalResTagInsideTheProject)
+{
+	const auto none = prj::parse_manifest(minimal_with("start_scene", R"("res://levels/a.desc")"));
+	BOOST_REQUIRE(none.data.has_value());
+	BOOST_TEST(none.data->input_actions.empty());
+
+	const auto ok = prj::parse_manifest(minimal_with("input_actions", R"("res://input/actions.desc")"));
+	BOOST_REQUIRE(ok.data.has_value());
+	BOOST_TEST(ok.data->input_actions == "res://input/actions.desc");
+	BOOST_TEST(ok.warnings.empty());
+
+	for (const std::string_view tag : { R"(1)", R"("input/actions.desc")", R"("memory://a.desc")", R"("res://")",
+			R"("res://../a.desc")", R"("res:///abs.desc")", R"("res://input\\a.desc")", R"("res://con.desc")" }) {
+		BOOST_TEST_INFO("input_actions: " << tag);
+		check_error(prj::parse_manifest(minimal_with("input_actions", tag)), "$.input_actions");
+	}
+}
+
 BOOST_AUTO_TEST_CASE(Parse_ControlCharactersAreRejectedInEveryStringField)
 {
 	for (const std::string_view bad : { R"("a\u0000b")", R"("a\nb")", R"("a\u007fb")" }) {

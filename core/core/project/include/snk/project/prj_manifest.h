@@ -37,6 +37,9 @@ namespace prj
 		std::vector<std::filesystem::path> content_roots;
 		std::vector<module_ref> modules;
 		std::vector<std::string> platforms;
+		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.1).
+		// A res:// tag of the game actions (input_actions_desc, WORLD_BUS.md 4.1), or empty: the project has none.
+		std::string input_actions;
 	};
 
 	struct manifest_error

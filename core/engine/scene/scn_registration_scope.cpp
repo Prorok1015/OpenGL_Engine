@@ -11,6 +11,7 @@
 #include <snk/scene/scn_bone_desc.h>
 #include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/scn_directional_light_desc.h>
+#include <snk/scene/scn_input_actions_desc.h>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_object_desc.h>
@@ -114,6 +115,7 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	scope.desc<animated_node_desc>(animated_node_desc::__type);
 	scope.desc<animation_clip_desc>(animation_clip_desc::__type);
 	scope.desc<animation_collection_desc>(animation_collection_desc::__type);
+	scope.desc<input_actions_desc>(input_actions_desc::__type);
 
 	// v2: children are an array of nodes with __id and name (the world is a prefab, so it shares the step).
 	scope.migration("prefab_desc", 1, migrate_prefab_v1);
