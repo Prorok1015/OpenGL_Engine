@@ -6,10 +6,13 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_editor_extension.h>
 #include <snk/editor/editor_module.h>
 #include <edt_decode_runner.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -94,8 +97,17 @@ int main(int argc, char* argv[])
 		// After the host's own modules: initialize_all_services must not see the loader grow.
 		core::project_modules_options project_modules;
 		project_modules.with_editor_modules = true;
+		project_modules.check_editor_module = [](const app::modules::module_entry& entry) {
+			return edt::check_editor_api_version(entry.editor_api_version);
+		};
+		project_modules.editor_unload_refusal = [&app_storage]() -> std::string {
+			return app_storage.has_value<edt::editor_context>() ? app_storage.require<edt::editor_context>().module_unload_refusal() : std::string{};
+		};
 		// In the storage, so the editor can reload a module from a new build (#435).
-		app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules)).load_all();
+		auto& project_host = app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules));
+		project_host.load_all();
+		// After `game`: a game_editor registers into the editor on top of it (#588).
+		project_host.load_editor_modules();
 		// The run folders of model decoders whose editor crashed (#647).
 		try {
 			edt::decode_runner::remove_stale_folders();

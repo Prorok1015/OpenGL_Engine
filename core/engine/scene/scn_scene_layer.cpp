@@ -26,6 +26,7 @@ scn::scene_layer::~scene_layer()
 {
 	// The module's catalog entries hold functions and schema deleters of its binary: they go first.
 	m_catalog.clear();
+	m_blackboard_types.clear();
 	stop_tasks();
 	while (!m_kept.empty()) {
 		m_kept.pop_back();

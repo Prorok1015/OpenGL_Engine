@@ -22,7 +22,10 @@
 // inp::action_event; the bus and every existing type keep their layout, so a module built for 3.0 or 3.1 still loads.
 // 3.3 (#604): inp::fixed_action_state, a new ctx type; nothing else changes layout. action_state::update and
 // inp::update_actions_system changed signature: they are the engine's, a module reads the ctx types and never calls them.
-#define SNK_MODULE_API_VERSION 0x0003'0003u // major << 16 | minor
+// 3.4 (#600): gs::module_context::observe (component observers the hot reload in Play mutes). The mute depth is appended
+// to the private, heap-held state of scn::event_subscriptions, so no layout a module reads changes; a module that uses
+// observe needs an engine of 3.4 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0004u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)
@@ -141,6 +144,9 @@ namespace app::modules {
 		const struct snk_module_build_info* (*build_info)() = nullptr;
 		module_interface* (*create)() = nullptr;
 		void (*destroy)(module_interface*) = nullptr;
+		// Only an editor module (kind "editor", #588) has it: snk_editor_api_version, the editor API it was built against.
+		// The host that loads editor modules checks it before the module is created; a runtime module has none.
+		std::uint32_t (*editor_api_version)() = nullptr;
 	};
 
 	// Empty string when the module can be loaded by this host, otherwise the reason it cannot.
@@ -187,7 +193,7 @@ namespace app::modules {
 // The module_entry of the four functions SNK_DECLARE_MODULE_PREFIXED(prefix, ...) defines.
 #define SNK_MODULE_ENTRY(prefix) \
 	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
-		&prefix##destroy_module }
+		&prefix##destroy_module, nullptr }
 
 // The game module compiled into a static host (snk_add_game_host, #592): the host gets its entry from here, not from a
 // library it opens. Defined by SNK_DECLARE_MODULE when the module is built with SNK_GAME_MODULE_STATIC.

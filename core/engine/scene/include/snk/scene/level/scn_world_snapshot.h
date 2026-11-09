@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/desc/desc_schema_ops.h>
+#include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <entt/entity/registry.hpp>
 #include <cstddef>
@@ -8,8 +9,11 @@
 #include <string>
 #include <vector>
 
+namespace ecs { class blackboard_data; }
+
 namespace scn
 {
+	class blackboard_catalog;
 	class component_catalog;
 	struct component_entry;
 	class world_context;
@@ -69,5 +73,15 @@ namespace scn
 	// come back loading: waiting for them is the caller's (HOT_RELOAD_PLAY.md section 6, step 6). False, with the
 	// world left partly built, when the snapshot is not one.
 	SNK_API bool restore_world(world_context& world, const json::object& snapshot, const component_catalog& catalog,
+		const desc::read_context& context, snapshot_report& report);
+
+	// The committed blackboard of a set as [{key, type, value}], each value through the schema `types` has for it. A
+	// value of a type without one is left out and counted in report.unsaved under entt's type name (HOT_RELOAD_PLAY.md
+	// 4.4: lost, with a warning from the owner).
+	SNK_API json::array capture_blackboard(const ecs::blackboard_data& board, const blackboard_catalog& types, snapshot_report& report);
+
+	// Puts capture_blackboard's values back as committed. A type `types` no longer knows goes to report.unknown and is
+	// skipped; a value that does not fit its field to report.partial (the field keeps its default).
+	SNK_API void restore_blackboard(ecs::blackboard_data& board, const json::array& values, const blackboard_catalog& types,
 		const desc::read_context& context, snapshot_report& report);
 }

@@ -25,6 +25,26 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 
 edt::editor_context::~editor_context() = default;
 
+void edt::editor_context::track_module_scope(const registration_scope& scope)
+{
+	m_module_scopes.push_back(&scope);
+}
+
+void edt::editor_context::untrack_module_scope(const registration_scope& scope)
+{
+	std::erase(m_module_scopes, &scope);
+}
+
+std::string edt::editor_context::module_unload_refusal() const
+{
+	for (const registration_scope* scope : m_module_scopes) {
+		if (scope->running_callbacks() > 0) {
+			return "called from inside one of a game_editor module's task continuations; unload from a main-queue item of the engine (task_system::post_main) instead";
+		}
+	}
+	return {};
+}
+
 void edt::editor_context::adopt(std::vector<registration> added)
 {
 	for (auto& r : added) m_service_commands.push_back(std::move(r));

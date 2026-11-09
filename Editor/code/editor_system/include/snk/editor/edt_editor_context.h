@@ -10,7 +10,9 @@
 #include "edt_job_service.h"
 #include "edt_panel_registry.h"
 #include "edt_problem_list.h"
+#include "edt_registration_scope.h"
 #include "edt_selection_service.h"
+#include <string>
 #include <vector>
 
 namespace res { class resource_system; }
@@ -68,6 +70,15 @@ namespace edt
 		// The registrations die with the context, before the services their commands call.
 		void adopt(std::vector<registration> added);
 
+		// The scopes of the game_editor modules that are loaded (editor_extension keeps its own here): the host asks before
+		// it unloads one.
+		void track_module_scope(const registration_scope& scope);
+		void untrack_module_scope(const registration_scope& scope);
+		// Empty when the modules can be unloaded now; otherwise why not: one of their task continuations is running. Only
+		// those are counted: a reload started from a module's panel draw, action or inspector callback is not seen (the
+		// registries do not count their callbacks), so such code must not ask for a reload.
+		std::string module_unload_refusal() const;
+
 	private:
 		res::resource_system& m_resources;
 		rnd::render_system& m_render;
@@ -86,6 +97,7 @@ namespace edt
 		asset_kind_registry m_asset_kinds;
 		// After the services they call and the registry they live in: destroyed first.
 		std::vector<registration> m_service_commands;
+		std::vector<const registration_scope*> m_module_scopes;
 		// Shows a failed job to the person; uses m_jobs and m_dialogs, so it goes first.
 		connection m_job_failures;
 	};

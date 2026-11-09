@@ -6,6 +6,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/scene/level/scn_world_snapshot.h>
+#include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
@@ -14,6 +15,7 @@
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_skybox_desc.h>
 #include <snk/scene/scn_transform_system.h>
+#include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <memory>
 #include <snk/ecs/ecs_random.hpp>
@@ -319,6 +321,52 @@ BOOST_AUTO_TEST_CASE(WhatCannotBeSavedOrPlacedIsReported)
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, catalog, read_context(), restored)); // the engine's only
 	BOOST_TEST(restored.unknown.at("test.bullet") == 1u);
+}
+
+// #600 (HOT_RELOAD_PLAY.md 4.4): a blackboard value comes back when its type is registered with a schema; any other is
+// reported as lost. Registering is optional and engine types are not affected.
+BOOST_AUTO_TEST_CASE(BlackboardValuesWithASchemaComeBack_OthersAreReported)
+{
+	scn::blackboard_catalog types;
+	BOOST_REQUIRE(types.add<score>("test.score", schema_of<score>("test.score")));
+	BOOST_TEST(!types.add<scratch>("test.scratch", nullptr)); // only with a schema
+	ecs::blackboard_data board;
+	board.write("hud.score", entt::type_hash<score>::value(), entt::type_name<score>::value(), std::make_shared<const score>(score{ 17 }), 0);
+	board.write("hud.scratch", entt::type_hash<scratch>::value(), entt::type_name<scratch>::value(), std::make_shared<const scratch>(scratch{ 3 }), 0);
+	board.commit();
+
+	scn::snapshot_report captured;
+	const json::array saved = scn::capture_blackboard(board, types, captured);
+	BOOST_REQUIRE(saved.size() == 1u);
+	BOOST_TEST(captured.unsaved.at(std::string{ entt::type_name<scratch>::value() }) == 1u);
+
+	ecs::blackboard_data restored_board;
+	scn::snapshot_report restored;
+	scn::restore_blackboard(restored_board, saved, types, read_context(), restored);
+	const ecs::blackboard_reader reader{ &restored_board };
+	const score* value = reader.find(ecs::bb_key<score>{ "hud.score" });
+	BOOST_REQUIRE(value != nullptr);
+	BOOST_TEST(value->points == 17);
+	BOOST_TEST(restored_board.committed().size() == 1u);
+	BOOST_TEST(restored.unknown.empty());
+	BOOST_TEST(restored.partial.empty());
+
+	const scn::blackboard_catalog none;
+	ecs::blackboard_data forgotten;
+	scn::snapshot_report unknown;
+	scn::restore_blackboard(forgotten, saved, none, read_context(), unknown);
+	BOOST_TEST(unknown.unknown.at("test.score") == 1u);
+	BOOST_TEST(forgotten.committed().empty());
+
+	json::array changed = saved;
+	changed.at(0).as_object().at("value").as_object()["points"] = "many";
+	ecs::blackboard_data defaulted;
+	scn::snapshot_report partial;
+	scn::restore_blackboard(defaulted, changed, types, read_context(), partial);
+	BOOST_TEST(partial.partial.at("test.score") == 1u);
+	const score* kept_default = ecs::blackboard_reader{ &defaulted }.find(ecs::bb_key<score>{ "hud.score" });
+	BOOST_REQUIRE(kept_default != nullptr);
+	BOOST_TEST(kept_default->points == 0);
 }
 
 BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)

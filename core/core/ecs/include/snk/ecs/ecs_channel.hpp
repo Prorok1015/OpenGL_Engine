@@ -73,6 +73,8 @@ public:
 
 	// Pending values replace the committed ones; the pending map is emptied.
 	void commit();
+	// Puts a committed value back as it was (a restore of the set, HOT_RELOAD_PLAY.md 6), written by no context.
+	void restore(std::string_view name, entt::id_type type, std::string_view type_name, std::shared_ptr<const void> value);
 	void clear();
 
 	const map_type& committed() const { return m_committed; }

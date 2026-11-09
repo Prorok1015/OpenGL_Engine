@@ -207,6 +207,13 @@ namespace app::modules {
 			return std::nullopt;
 		}
 
+		// Why the module's layer would refuse unload(name) now (one of its callbacks is on the stack); empty when it would
+		// not, and for a module that is not loaded or has no layer. Lets a host check before it touches anything.
+		std::string layer_unload_refusal(std::string_view name) const {
+			const auto it = std::ranges::find_if(m_entries, [&](const entry& e) { return e.module->name() == name; });
+			return it != m_entries.end() && it->layer ? it->layer->unload_refusal() : std::string{};
+		}
+
 		void register_all_services(ds::app_data_storage& data) {
 			ensure_sorted();
 			for (auto& e : m_entries) {
