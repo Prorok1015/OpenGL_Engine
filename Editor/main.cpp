@@ -97,7 +97,11 @@ int main(int argc, char* argv[])
 		// In the storage, so the editor can reload a module from a new build (#435).
 		app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules)).load_all();
 		// The run folders of model decoders whose editor crashed (#647).
-		edt::decode_runner::remove_stale_folders();
+		try {
+			edt::decode_runner::remove_stale_folders();
+		} catch (const std::exception& e) {
+			egLOG_WARN("app", "cleanup of the folders of ended model decoders failed: {}", e.what());
+		}
 
 		app::application editor;
 		result = editor.run(app_storage);

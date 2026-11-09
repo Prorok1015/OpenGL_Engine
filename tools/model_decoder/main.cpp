@@ -30,6 +30,7 @@
 #include <fstream>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -68,22 +69,36 @@ constexpr bool k_address_space_limit_works = true;
 // First thing main does, before anything of the request is read: whatever the model makes the parser do, the process
 // leaves no core dump (it would hold the model's bytes, outside the run folder), no crash dialog and does not outlive its
 // parent. POSIX also takes away privilege gain.
-void harden_process()
+void harden_process(long expected_parent)
 {
 #if defined(__linux__)
-	const pid_t parent = getppid();
 	prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 	prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 	const rlimit no_core{ 0, 0 };
 	setrlimit(RLIMIT_CORE, &no_core);
 	prctl(PR_SET_PDEATHSIG, SIGKILL);
-	// The parent may have died between our start and the prctl: the signal only comes for a death after it.
-	if (getppid() != parent) {
+	// The signal only comes for a death after the prctl: a parent that died before it is seen here, against the pid the
+	// parent passed (without one, against nothing: getppid() of an orphan is 1 or a subreaper, not a pid to trust).
+	if (expected_parent > 0 && getppid() != static_cast<pid_t>(expected_parent)) {
 		std::_Exit(1);
 	}
 #elif defined(_WIN32)
+	(void)expected_parent;
 	SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+#else
+	(void)expected_parent;
 #endif
+}
+
+// --parent-pid <n>, read before anything else (the full parse comes after the hardening).
+long parent_pid_argument(int argc, char** argv)
+{
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (std::string_view(argv[i]) == "--parent-pid") {
+			return std::strtol(argv[i + 1], nullptr, 10);
+		}
+	}
+	return 0;
 }
 
 // The sanitizers reserve terabytes of address space for their shadow memory, so RLIMIT_AS cannot be used under them.
@@ -142,6 +157,8 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.request = fs::absolute(args[++i]);
 		} else if (arg == "--out" && has_value) {
 			parsed.out = fs::absolute(args[++i]);
+		} else if (arg == "--parent-pid" && has_value) {
+			++i;
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 		} else if (arg == "--self-test-sleep" && has_value) {
 			parsed.self_test_sleep_ms = std::strtoull(args[++i].string().c_str(), nullptr, 10);
@@ -183,7 +200,7 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 
 int main(int argc, char** argv)
 {
-	harden_process();
+	harden_process(parent_pid_argument(argc, argv));
 	const auto args = parse_arguments(command_line(argc, argv));
 	if (!args) {
 		egLOG_ERROR("model_decoder", "usage: snk_model_decoder --request <bundle> --out <bundle>");

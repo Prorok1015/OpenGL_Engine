@@ -131,7 +131,11 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 		return result;
 	};
 
+	// A regular file, not a link or a FIFO: the file may have been made by the process that is being distrusted.
 	std::error_code ec;
+	if (std::filesystem::symlink_status(file, ec).type() != std::filesystem::file_type::regular || ec) {
+		return refuse("the bundle is not a regular file");
+	}
 	const std::uint64_t size = std::filesystem::file_size(file, ec);
 	if (ec) return refuse("the bundle file cannot be read");
 	std::ifstream in(file, std::ios::binary);

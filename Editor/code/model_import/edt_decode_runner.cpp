@@ -153,7 +153,10 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	options.low_priority = true;
 	options.memory_limit_bytes = m_config.memory_limit_bytes;
 	options.on_stderr_line = [](std::string_view line) { egLOG_WARN("edt/decoder", "{}", printable(line)); };
-	std::vector<std::string> arguments{ "--request", utf8_text(request_file), "--out", utf8_text(out_file) };
+	// The child compares its parent with this at start: an editor that died before the child looked is not mistaken for
+	// a live parent (getppid() would then be 1 or a subreaper).
+	std::vector<std::string> arguments{ "--request", utf8_text(request_file), "--out", utf8_text(out_file),
+		"--parent-pid", std::to_string(platform::current_process_id()) };
 	arguments.insert(arguments.end(), m_config.extra_arguments.begin(), m_config.extra_arguments.end());
 	const platform::process_result result = platform::run_process(m_config.decoder, arguments,
 		options, [](std::string_view line) { egLOG_INFO("edt/decoder", "{}", printable(line)); }, child_stop.get_token());
