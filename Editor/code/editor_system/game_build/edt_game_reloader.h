@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,8 +39,13 @@ namespace edt
 		// swapped under it.
 		std::function<void(const std::string& id, std::function<void()> fn)> next_frame;
 		// Runs `poll` on every UI frame under `id` while it returns true (editor_layer::register_implicit, which ignores
-		// a taken id). Null: a reload during a live build is refused instead of queued.
+		// a taken id). Null: a reload during a live build or while `defer` names a reason is refused instead of queued.
 		std::function<void(const std::string& id, std::function<bool()> poll)> each_frame;
+		// Why a reload must wait now (a level or an asset is loading, #600); empty: it may run. Null: never waits.
+		std::function<std::string()> defer;
+		// Runs right before the swap, after every check (HOT_RELOAD_PLAY.md 3.1): Play takes its snapshot here.
+		// Returns why Play is restarted instead of kept; empty: kept, or not running. Null: nothing runs.
+		std::function<std::string(const std::string& module)> before_reload;
 	};
 
 	// Reloads the game module from its new build (#435): Build > Reload Game Module (action build.reload_game_module)
@@ -51,6 +57,9 @@ namespace edt
 		static constexpr const char* k_action_id = "build.reload_game_module";
 		// next_frame / each_frame id of a reload waiting for a frame: + the module name.
 		static constexpr std::string_view k_reload_frame_id = "edt/reload_game_module/";
+		// each_frame id of the one reload of a module waiting for a build or `defer` (+ the module name): not the one
+		// above, which may be running the frame that queues it, and register_implicit ignores a taken id.
+		static constexpr std::string_view k_wait_frame_id = "edt/reload_game_module/waiting/";
 
 		game_reloader(dialog_service& dialogs, action_registry& actions, game_reloader_options options);
 
@@ -60,16 +69,34 @@ namespace edt
 		core::reload_report reload(const std::string& module);
 		// reload without the message for a build not taken: the caller reports it (live mode, #445).
 		core::reload_report reload_quiet(const std::string& module);
+		// Both of the above refuse while `defer` names a reason. These wait instead: now, or on the first frame without
+		// a reason (each_frame), and hand the report to `done`. Without each_frame: now. Requests for a module that
+		// already waits join that wait: one swap, every `done` gets its report, and the messages are shown when any
+		// request was not quiet. A reloader destroyed while a reload waits never calls its `done`.
+		void reload_when_ready(const std::string& module);
+		void reload_quiet_when_ready(const std::string& module, std::function<void(const core::reload_report&)> done);
+		// Why a reload must wait now; empty: it may run.
+		[[nodiscard]] std::string defer_reason() const;
 
 	private:
 		std::optional<std::string> pick(const std::string& module) const;
 		// `who` gets the module the report is about: the picked one, else `module`.
 		core::reload_report attempt(const std::string& module, std::string& who);
 		core::reload_report tell(const std::string& module, core::reload_report report);
-		// The action during a live build: stops it and queues the reload until no build runs. {status: queued} or the
-		// refusal.
-		action_result reload_after_background(const std::string& module);
+		// The action during a live build or while `defer` names a reason: stops the live build and queues the reload
+		// until nothing holds it. {status: queued} or the refusal.
+		action_result queue_action_reload(const std::string& module);
+		// Joins or starts the wait of `module` (k_wait_frame_id): polls until neither a build nor `defer` holds it.
+		void wait_then_reload(const std::string& module, bool quiet, std::function<void(const core::reload_report&)> done);
+
+		struct waiting_reload
+		{
+			bool tell = false;
+			std::vector<std::function<void(const core::reload_report&)>> done{};
+		};
 		bool any_build_running() const;
+		// A reload of the module the action would pick already waits.
+		bool waits(const std::string& module) const;
 
 		dialog_service& m_dialogs;
 		game_reloader_options m_options;
@@ -77,6 +104,7 @@ namespace edt
 		connection m_built;
 		// What a frame scheduled by a build checks: the reloader may be gone by then.
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
+		std::map<std::string, waiting_reload> m_waiting;
 		mutable std::chrono::steady_clock::time_point m_build_checked{};
 		mutable bool m_build_found = false;
 	};

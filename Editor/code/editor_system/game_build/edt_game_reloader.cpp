@@ -44,8 +44,8 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 		if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
 		std::string module;
 		if (const json::value* chosen = request.args.as_object().if_contains("module")) module = std::string(chosen->as_string());
-		if (m_options.background_building && m_options.background_building() && m_options.each_frame) {
-			return reload_after_background(module);
+		if (m_options.each_frame && ((m_options.background_building && m_options.background_building()) || !defer_reason().empty() || waits(module))) {
+			return queue_action_reload(module);
 		}
 		const core::reload_report report = reload(module);
 		return action_result::success(json::object{ { "status", core::to_string(report.status) }, { "message", report.message } });
@@ -69,7 +69,7 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 			// One per module: two modules built at once are both reloaded.
 			m_options.next_frame(std::string(k_reload_frame_id) + built.module, [this, alive = std::weak_ptr<int>(m_alive), module = built.module] {
 				if (!alive.expired()) {
-					reload(module);
+					reload_when_ready(module);
 				}
 			});
 		});
@@ -115,24 +115,80 @@ core::reload_report edt::game_reloader::reload(const std::string& module)
 	return tell(who, std::move(report));
 }
 
-edt::action_result edt::game_reloader::reload_after_background(const std::string& module)
+edt::action_result edt::game_reloader::queue_action_reload(const std::string& module)
 {
 	const std::optional<std::string> name = pick(module);
 	if (!name) {
 		const core::reload_report report = tell(module, { core::reload_status::refused, "it has not been built" });
 		return action_result::success(json::object{ { "status", core::to_string(report.status) }, { "message", report.message } });
 	}
-	if (m_options.stop_background) m_options.stop_background();
-	// A second click while it waits finds the id taken: one reload, not two.
-	m_options.each_frame(std::string(k_reload_frame_id) + *name, [this, alive = std::weak_ptr<int>(m_alive), who = *name] {
+	// A second click while it waits joins the wait: one reload, not two.
+	const std::string reason = defer_reason();
+	if (m_options.background_building && m_options.background_building()) {
+		if (m_options.stop_background) m_options.stop_background();
+		wait_then_reload(*name, false, {});
+		std::string message = "the live build is stopped; the module is reloaded once it has ended";
+		if (!reason.empty()) message += std::format(" and once the reload may run (it waits: {})", reason);
+		return action_result::success(json::object{ { "status", "queued" }, { "message", message } });
+	}
+	wait_then_reload(*name, false, {});
+	const std::string message = reason.empty() ? std::string{ "the reload joins the one already queued" } : std::format("the reload waits: {}", reason);
+	return action_result::success(json::object{ { "status", "queued" }, { "message", message } });
+}
+
+void edt::game_reloader::reload_when_ready(const std::string& module)
+{
+	if (!m_options.each_frame || (defer_reason().empty() && !m_waiting.contains(module))) {
+		reload(module);
+		return;
+	}
+	wait_then_reload(module, false, {});
+}
+
+void edt::game_reloader::reload_quiet_when_ready(const std::string& module, std::function<void(const core::reload_report&)> done)
+{
+	if (!m_options.each_frame || (defer_reason().empty() && !m_waiting.contains(module))) {
+		const core::reload_report report = reload_quiet(module);
+		if (done) done(report);
+		return;
+	}
+	wait_then_reload(module, true, std::move(done));
+}
+
+void edt::game_reloader::wait_then_reload(const std::string& module, bool quiet, std::function<void(const core::reload_report&)> done)
+{
+	const auto [entry, first] = m_waiting.try_emplace(module);
+	entry->second.tell = entry->second.tell || !quiet;
+	if (done) entry->second.done.push_back(std::move(done));
+	if (!first) return;
+	m_options.each_frame(std::string(k_wait_frame_id) + module, [this, alive = std::weak_ptr<int>(m_alive), module, logged = std::string{}]() mutable {
 		if (alive.expired()) return false;
-		// The stopped job ends at a later pump; its compiler or linker may write the file until then.
+		// A stopped job ends at a later pump; its compiler or linker may write the file until then.
 		if (any_build_running()) return true;
-		reload(who);
+		if (const std::string reason = defer_reason(); !reason.empty()) {
+			if (reason != logged) {
+				egLOG_INFO("editor", "The reload of the game module '{}' waits: {}", module, reason);
+				logged = reason;
+			}
+			return true;
+		}
+		auto waited = m_waiting.extract(module);
+		if (waited.empty()) return false;
+		const core::reload_report report = waited.mapped().tell ? reload(module) : reload_quiet(module);
+		for (const auto& notify : waited.mapped().done) notify(report);
 		return false;
 	});
-	return action_result::success(json::object{ { "status", "queued" },
-		{ "message", "the live build is stopped; the module is reloaded once it has ended" } });
+}
+
+bool edt::game_reloader::waits(const std::string& module) const
+{
+	const std::optional<std::string> name = pick(module);
+	return name && m_waiting.contains(*name);
+}
+
+std::string edt::game_reloader::defer_reason() const
+{
+	return m_options.defer ? m_options.defer() : std::string{};
 }
 
 bool edt::game_reloader::any_build_running() const
@@ -158,11 +214,19 @@ core::reload_report edt::game_reloader::attempt(const std::string& module, std::
 			return { core::reload_status::refused, "the live build is being stopped; reload again in a moment" };
 		}
 	}
+	if (const std::string reason = defer_reason(); !reason.empty()) {
+		return { core::reload_status::refused, std::format("it must wait: {}", reason) };
+	}
 	const std::optional<std::string> name = pick(module);
 	if (!name) {
 		return { core::reload_status::refused, "it has not been built" };
 	}
 	who = *name;
+	if (m_options.before_reload) {
+		if (const std::string restart = m_options.before_reload(*name); !restart.empty()) {
+			egLOG_WARN("editor", "The Play state is not kept across the reload of '{}': {}. Play restarts.", *name, restart);
+		}
+	}
 	return m_options.reload(*name);
 }
 

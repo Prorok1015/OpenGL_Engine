@@ -133,6 +133,8 @@ jobs:
       # #591: the shipping host on the static engine runs the project's start level (sandbox: levels/editor_level.desc)
       # with no display. game/exit_after_level_loaded ends the run with 0 once "level loaded" is logged;
       # app/exit_after_frames is only the cap. The host switches off file watching and hot reload itself.
+      # #593: it mounts the project read-only, so it runs from a write-protected copy that must not change at all;
+      # user:// goes to resource/user_path, memory:// to a temp folder of the run that is gone afterwards.
       - name: Game host headless run
         if: matrix.preset == 'ci-linux-clang-debug'
         timeout-minutes: 5
@@ -140,13 +142,35 @@ jobs:
         run: |
           mkdir -p game_out
           log=game_out/game.log
+          project="$RUNNER_TEMP/read_only_sandbox"
+          user_dir="$RUNNER_TEMP/game_user"
+          tmp_root="${TMPDIR:-/tmp}"
+          tree_hash() {
+            (cd "$1" && { find . -printf '%y %m %p %s %T@\n' | LC_ALL=C sort; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum; }) | sha256sum
+          }
+          rm -rf "$project" "$user_dir"
+          cp -a projects/sandbox "$project"
+          # Under root chmod protects nothing; the hash (permission bits included) still catches any write.
+          chmod -R a-w "$project"
+          trap 'chmod -R u+w "$project"' EXIT
+          before=$(tree_hash "$project")
+          scratch_before=$(find "$tmp_root" -maxdepth 1 -name 'snk-*' | wc -l)
           rc=0
           env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 build/ci-linux-clang-debug/apps/game/game \
-            --config apps/game/config/game.cfg --headless --project projects/sandbox \
+            --config apps/game/config/game.cfg --headless --project "$project" \
             --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
+              resource/user_path "$user_dir" \
             >game_out/stdout.txt 2>"$log" || rc=$?
           tail -20 "$log"
           if [ "$rc" -ne 0 ]; then echo "::error::expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
+          if [ "$(tree_hash "$project")" != "$before" ]; then
+            echo "::error::the game host changed its project folder"; find "$project" -newer "$log" | head -20; exit 1
+          fi
+          grep -q "mounted read-only; user:// in $user_dir" "$log"
+          test -d "$user_dir"
+          if [ "$(find "$tmp_root" -maxdepth 1 -name 'snk-*' | wc -l)" -ne "$scratch_before" ]; then
+            echo "::error::the run left its memory:// folder behind"; find "$tmp_root" -maxdepth 1 -name 'snk-*'; exit 1
+          fi
           if ! grep -q "level loaded: .*editor_level.desc" "$log"; then
             echo "::error::the start level did not load (exit_after_frames cap reached?)"; exit 1
           fi

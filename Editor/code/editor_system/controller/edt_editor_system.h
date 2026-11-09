@@ -244,6 +244,8 @@ namespace edt {
 		res::tag m_pending_desc_tag;
 		std::string m_pending_desc_key;
 		bool poll_pending_desc();
+		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
+		std::optional<std::string> load_in_progress() const;
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
