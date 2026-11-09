@@ -9,10 +9,12 @@
 #include <snk/common/logger/engine_log.h>
 #include <cstddef>
 #include <string>
+#include <utility>
 
 namespace {
-	// How many frames a loaded level may wait for the loads it started before it is reported loaded anyway (#656).
-	CFG_VAR_DEF_INT(cfg_scene_level_settle_frames, "scene/level_settle_frames", 600);
+	// How long a loaded level may wait for the loads it started before it is reported loaded anyway (#656). In time, not
+	// frames: a headless run without a frame limit polls hundreds of times a second.
+	CFG_VAR_DEF_FLOAT(cfg_scene_level_settle_seconds, "scene/level_settle_seconds", 10.0f);
 }
 
 std::string scn::start_level_name(const ds::app_data_storage& data, std::string_view override_level)
@@ -62,10 +64,11 @@ void scn::report_level_failed(const res::tag& level, const res::res_handle<scn::
 }
 
 scn::start_level_loader::start_level_loader(context_manager& contexts, res::resource_system& base_resources,
-	ds::task_system& tasks)
+	ds::task_system& tasks, clock_fn now)
 	: m_contexts(contexts)
 	, m_base_resources(base_resources)
 	, m_tasks(tasks)
+	, m_now(now ? std::move(now) : clock_fn{ [] { return std::chrono::steady_clock::now(); } })
 {
 }
 
@@ -84,7 +87,6 @@ void scn::start_level_loader::begin(const res::tag& level)
 	auto& resources = m_contexts.game_layer() ? m_contexts.game_layer()->resources() : m_base_resources;
 	m_level = level;
 	m_handle = resources.require<scn::level_desc>(level);
-	m_settle_polls = 0;
 	m_state = state::loading;
 }
 
@@ -96,6 +98,7 @@ scn::start_level_loader::state scn::start_level_loader::poll()
 			m_state = state::failed;
 		} else if (m_handle.is_ready()) {
 			if (m_contexts.load_level(m_level)) {
+				m_settling_since = m_now();
 				m_state = state::settling;
 			} else {
 				report_level_failed(m_level, m_handle);
@@ -108,9 +111,10 @@ scn::start_level_loader::state scn::start_level_loader::poll()
 		if (pending == 0) {
 			report_level_loaded(m_level);
 			m_state = state::loaded;
-		} else if (++m_settle_polls >= *cfg_scene_level_settle_frames) {
-			egLOG_WARN("scene/level", "level '{}' loaded with {} loads still pending after {} frames (scene/level_settle_frames)",
-				m_level.view(), pending, m_settle_polls);
+		} else if (const std::chrono::duration<float> waited = m_now() - m_settling_since;
+				   waited.count() >= *cfg_scene_level_settle_seconds) {
+			egLOG_WARN("scene/level", "level '{}' loaded with {} loads still pending after {:.1f} s (scene/level_settle_seconds)",
+				m_level.view(), pending, waited.count());
 			report_level_loaded(m_level);
 			m_state = state::loaded;
 		}

@@ -8,6 +8,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_start_level.h>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -16,11 +17,16 @@
 #include <utility>
 #include <vector>
 
-// #656: the start level is reported loaded only once the loads it started are done, or after scene/level_settle_frames.
+// #656: the start level is reported loaded only once the loads it started are done, or after scene/level_settle_seconds.
 namespace {
 
 constexpr std::string_view k_level = R"json({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":[]}]})json";
+
+// A mesh node whose material is a desc of its own: building the level asks for it (desc_system::get_field_desc).
+constexpr std::string_view k_level_with_mesh = R"json({"__type":"level_desc","name":"lv","worlds":[
+	{"__type":"world_desc","name":"w0","systems":[],
+	 "children":{"mesh":{"components":{"mesh":{"__type":"mesh_node_desc","material":"gate://m.material.desc"}}}}}]})json";
 
 // Holds every request until release(): a load the level started that is still on its way.
 class gated_resolver : public test_util::ram_resolver
@@ -58,6 +64,7 @@ struct start_level_fixture : test_util::scene_env
 	{
 		gate = &rs->registrate_resolver<gated_resolver>("gate");
 		gate->files[res::tag{ "gate://nested.txt" }] = test_util::to_bytes("nested");
+		gate->files[res::tag{ "gate://m.material.desc" }] = test_util::to_bytes(R"json({"__type":"material_desc"})json");
 		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
 			std::lock_guard lock(log_mutex);
 			log.push_back({ level, std::string{ message } });
@@ -68,7 +75,7 @@ struct start_level_fixture : test_util::scene_env
 	{
 		gate->release();
 		pump();
-		cfg::set_variable("scene/level_settle_frames", "600");
+		cfg::set_variable("scene/level_settle_seconds", "10");
 	}
 
 	std::size_t count(std::string_view text, engine::log_level level)
@@ -79,8 +86,14 @@ struct start_level_fixture : test_util::scene_env
 		}));
 	}
 
+	scn::start_level_loader make_loader()
+	{
+		return scn::start_level_loader{ mgr, *rs, tasks, [this] { return now; } };
+	}
+
 	ecs::system_factory sf;
 	scn::context_manager mgr;
+	std::chrono::steady_clock::time_point now{};
 	gated_resolver* gate = nullptr;
 	std::mutex log_mutex;
 	std::vector<std::pair<engine::log_level, std::string>> log;
@@ -94,7 +107,7 @@ BOOST_FIXTURE_TEST_SUITE(ScnStartLevelTests, start_level_fixture)
 BOOST_AUTO_TEST_CASE(a_level_is_not_loaded_while_a_load_it_started_is_in_flight)
 {
 	const res::tag level = put("lv.desc", k_level);
-	scn::start_level_loader loader{ mgr, *rs, tasks };
+	auto loader = make_loader();
 	loader.begin(level);
 	pump();
 	// What a mesh node of the level asks for while the set is built: held by the gate.
@@ -115,19 +128,40 @@ BOOST_AUTO_TEST_CASE(a_level_is_not_loaded_while_a_load_it_started_is_in_flight)
 	BOOST_TEST(count("level loaded:", engine::log_level::info) == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(a_level_whose_loads_never_end_is_reported_loaded_after_the_settle_frames)
+BOOST_AUTO_TEST_CASE(a_mesh_material_of_the_level_held_back_delays_level_loaded)
 {
-	cfg::set_variable("scene/level_settle_frames", "3");
+	const res::tag level = put("lv.desc", k_level_with_mesh);
+	auto loader = make_loader();
+	loader.begin(level);
+	pump();
+
+	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling));
+	BOOST_TEST(count("level loaded:", engine::log_level::info) == 0u);
+	BOOST_TEST(mgr.level_set().size() == 1u);
+
+	gate->release();
+	pump();
+	BOOST_TEST((loader.poll() == scn::start_level_loader::state::loaded));
+	BOOST_TEST(count("level loaded: " + std::string{ level.view() }, engine::log_level::info) == 1u);
+	BOOST_TEST(count("still pending", engine::log_level::warn) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_level_whose_loads_never_end_is_reported_loaded_after_the_settle_seconds)
+{
+	cfg::set_variable("scene/level_settle_seconds", "2");
 	const res::tag level = put("lv.desc", k_level);
-	scn::start_level_loader loader{ mgr, *rs, tasks };
+	auto loader = make_loader();
 	loader.begin(level);
 	pump();
 	const auto nested = rs->require<res::text_resource>(res::tag{ "gate://nested.txt" });
 
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling));
+	now += std::chrono::seconds{ 1 };
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling));
+	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling)); // polls alone do not end it
+	now += std::chrono::seconds{ 1 };
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::loaded));
-	BOOST_TEST(count("still pending after 3 frames", engine::log_level::warn) == 1u);
+	BOOST_TEST(count("still pending after 2.0 s", engine::log_level::warn) == 1u);
 	BOOST_TEST(count("level loaded:", engine::log_level::info) == 1u);
 	BOOST_TEST(!nested.is_ready());
 }
@@ -135,7 +169,7 @@ BOOST_AUTO_TEST_CASE(a_level_whose_loads_never_end_is_reported_loaded_after_the_
 BOOST_AUTO_TEST_CASE(a_level_with_nothing_left_to_load_is_loaded_on_the_first_poll)
 {
 	const res::tag level = put("lv.desc", k_level);
-	scn::start_level_loader loader{ mgr, *rs, tasks };
+	auto loader = make_loader();
 	loader.begin(level);
 	pump();
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::loaded));
