@@ -66,7 +66,7 @@ public:
 	explicit probe_extension(probe_state& state) : m_state(state) {}
 	probe_extension() : m_state(*g_probe_state) {}
 
-	std::string_view name() const override { return "probe_editor"; }
+	std::string_view name() const override { return "ext_editor"; }
 
 	void register_editor(edt::editor_module_context& context) override
 	{
