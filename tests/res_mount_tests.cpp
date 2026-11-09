@@ -3,6 +3,9 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_resource_service_init.h>
+#include <snk/resource/res_shipping_dirs.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -13,6 +16,7 @@
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <system_error>
 #include <chrono>
@@ -222,6 +226,81 @@ BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_f
 	BOOST_TEST(!sys.store(res::tag{ "user://../../escape.txt" }, to_bytes("x")));
 }
 
+BOOST_FIXTURE_TEST_CASE(ShippingMountTable_ContentAndEngineReadOnly_OnlyUserAndMemoryWritable, layers_fixture)
+{
+	const fs::path shared = dir.path() / "project" / "shared";
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+
+	const auto table = res::resource_system::shipping_mount_table(engine, { project, shared }, user, scratch);
+
+	BOOST_REQUIRE(table.size() == 4u);
+	BOOST_TEST(table[0].protocol == res::tag::default_protocol());
+	BOOST_TEST((table[0].roots == std::vector<fs::path>{ engine, shared, project }));
+	BOOST_TEST((table[0].access == res::mount_access::read_only));
+	BOOST_TEST(!table[0].watch.report_changes);
+	BOOST_TEST(table[1].protocol == res::tag::memory);
+	BOOST_TEST((table[1].roots == std::vector<fs::path>{ scratch }));
+	BOOST_TEST((table[1].access == res::mount_access::read_write));
+	BOOST_TEST(table[2].protocol == res::tag::user);
+	BOOST_TEST((table[2].roots == std::vector<fs::path>{ user }));
+	BOOST_TEST((table[2].access == res::mount_access::read_write));
+	BOOST_TEST(table[3].protocol == res::tag::engine);
+	BOOST_TEST((table[3].access == res::mount_access::read_only));
+	for (const auto& mount : table) {
+		BOOST_TEST(mount.protocol != res::tag::cache);
+		BOOST_TEST(mount.protocol != res::tag::code);
+		BOOST_TEST(!mount.file_operations);
+	}
+	BOOST_TEST(!fs::exists(user));
+	BOOST_TEST(!fs::exists(scratch));
+}
+
+BOOST_FIXTURE_TEST_CASE(ShippingMounts_RefuseWritesToTheProjectAndTheEngine_AcceptUserAndMemory, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+	fs::create_directories(user);
+	fs::create_directories(scratch);
+	res::resource_system sys(tasks, res::resource_system::shipping_mount_table(engine, { project }, user, scratch));
+
+	BOOST_TEST(sys.exists(res::tag{ "res://levels/main.desc" }));
+	BOOST_TEST(sys.exists(res::tag{ "res://shaders/only_engine.frag" }));
+	BOOST_TEST(!sys.store_sync(res::tag{ "res://levels/main.desc" }, to_bytes("x")));
+	BOOST_TEST(!sys.store_sync(res::tag{ "res://levels/new.desc" }, to_bytes("x")));
+	BOOST_TEST(!sys.create_sync(res::tag{ "res://levels/created.desc" }, to_bytes("x")));
+	BOOST_TEST(!sys.store_sync(res::tag{ "engine://shaders/pbr.frag" }, to_bytes("x")));
+	BOOST_TEST(read_file(project / "levels" / "main.desc") == "project-level");
+	BOOST_TEST(!fs::exists(project / "levels" / "new.desc"));
+	BOOST_TEST(!fs::exists(project / "levels" / "created.desc"));
+	BOOST_TEST(read_file(engine / "shaders" / "pbr.frag") == "engine-pbr");
+
+	BOOST_TEST(sys.store_sync(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
+	BOOST_TEST(sys.store_sync(res::tag{ "memory://objects/a.desc" }, to_bytes("scratch")));
+	BOOST_TEST(read_file(user / "saves" / "slot1.json") == "save");
+	BOOST_TEST(read_file(scratch / "objects" / "a.desc") == "scratch");
+	BOOST_TEST(!sys.exists(res::tag{ "res://saves/slot1.json" }));
+}
+
+BOOST_FIXTURE_TEST_CASE(NotMountedProtocol_TheErrorNamesTheMountedOnes, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+	fs::create_directories(user);
+	fs::create_directories(scratch);
+	res::resource_system sys(tasks, res::resource_system::shipping_mount_table(engine, { project }, user, scratch));
+
+	const std::string expected = "'cache://' is not mounted in this run (mounted: engine, memory, res, user)";
+	BOOST_TEST(sys.not_mounted_error("cache") == expected);
+	BOOST_TEST(!sys.exists(res::tag{ "cache://thumbs/a.png" }));
+	const res::file_operation created = sys.create_sync(res::tag{ "cache://thumbs/a.png" }, to_bytes("x"));
+	BOOST_TEST(!created);
+	BOOST_TEST(created.error == expected);
+	BOOST_TEST(sys.remove(res::tag{ "cache://thumbs/a.png" }).error == expected);
+}
+
 BOOST_FIXTURE_TEST_CASE(Store_OverAnEngineOnlyFileIsLogged, layers_fixture)
 {
 	std::mutex m;
@@ -316,6 +395,185 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesASymlinkedCacheWithAProjectError, la
 	BOOST_CHECK_THROW(core::res::resource_init(data), prj::project_error);
 	BOOST_TEST(!data.has_value<res::resource_system>());
 	BOOST_TEST(!fs::exists(outside / "memory"));
+}
+
+namespace {
+// res/read_only_project and resource/user_path for one test, as the game host sets them.
+struct read_only_project_config
+{
+	explicit read_only_project_config(const fs::path& user)
+	{
+		cfg::set_variable("res/read_only_project", "true");
+		cfg::set_variable("resource/user_path", user.string());
+	}
+	~read_only_project_config()
+	{
+		cfg::set_variable("res/read_only_project", "false");
+		cfg::set_variable("resource/user_path", "");
+	}
+	read_only_project_config(const read_only_project_config&) = delete;
+	read_only_project_config& operator=(const read_only_project_config&) = delete;
+};
+}
+
+BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"json({ "format_version": 1, "name": "Read Only", "engine_version": "0.2.0" })json");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	const fs::path user = dir.path() / "player";
+	read_only_project_config config{ user };
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	core::res::resource_init(data);
+
+	const auto& project_ctx = data.require<prj::project_context>();
+	auto& sys = data.require<res::resource_system>();
+	BOOST_TEST(!fs::exists(project_ctx.cache_dir()));
+	BOOST_TEST((sys.mount_roots(res::tag::user) == std::vector<fs::path>{ user }));
+	const auto scratch = sys.mount_roots(res::tag::memory);
+	BOOST_REQUIRE(scratch.size() == 1u);
+	const std::string own_prefix = "snk-Read Only-" + std::to_string(platform::current_process_id()) + "-";
+	BOOST_TEST(scratch.front().filename().string().starts_with(own_prefix));
+	BOOST_TEST(fs::is_directory(scratch.front()));
+#ifndef _WIN32
+	BOOST_TEST(((fs::status(scratch.front()).permissions() & fs::perms::all) == fs::perms::owner_all));
+#endif
+	BOOST_TEST(sys.mount_roots(res::tag::cache).empty());
+
+	BOOST_TEST(sys.exists(res::tag{ "res://levels/main.desc" }));
+	BOOST_TEST(!sys.store_sync(res::tag{ "res://levels/main.desc" }, to_bytes("x")));
+	BOOST_TEST(read_file(project / "levels" / "main.desc") == "project-level");
+	BOOST_TEST(sys.store_sync(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
+	BOOST_TEST(read_file(user / "saves" / "slot1.json") == "save");
+
+	core::res::resource_term(data);
+	BOOST_TEST(!fs::exists(scratch.front()));
+	BOOST_TEST(fs::is_directory(user));
+}
+
+BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndLetters_ReplacesTheRest)
+{
+	BOOST_TEST(core::res::safe_folder_name("My Game_2.0-beta") == "My Game_2.0-beta");
+	BOOST_TEST(core::res::safe_folder_name("a/b\\c:d*e") == "a_b_c_d_e");
+	BOOST_TEST(core::res::safe_folder_name("Game. ") == "Game");
+	BOOST_TEST(core::res::safe_folder_name("") == "game");
+	BOOST_TEST(core::res::safe_folder_name("..") == "game");
+	// Letters outside ASCII stay: two such names are two folders.
+	BOOST_TEST(core::res::safe_folder_name("\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0") == "\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0");
+	BOOST_TEST(core::res::safe_folder_name("\xD0\x98\xD0\xB3\xD1\x80\xD0\xB0") != core::res::safe_folder_name("\xD0\x9C\xD0\xB0\xD0\xBC\xD0\xB0"));
+}
+
+BOOST_AUTO_TEST_CASE(SafeFolderName_InvalidUtf8BecomesUnderscores)
+{
+	BOOST_TEST(core::res::safe_folder_name("Caf\xE9") == "Caf_");          // Latin-1, not UTF-8
+	BOOST_TEST(core::res::safe_folder_name("a\xC0\xAF" "b") == "a__b");     // overlong '/'
+	BOOST_TEST(core::res::safe_folder_name("\xED\xA0\x80x") == "___x");    // a surrogate
+	BOOST_TEST(core::res::safe_folder_name("ab\xD0") == "ab_");             // cut in the middle of a letter
+	BOOST_TEST(core::res::safe_folder_name("\xF4\x90\x80\x80") == "____"); // above U+10FFFF
+	BOOST_TEST(core::res::safe_folder_name("\xF0\x9F\x8E\xAE") == "\xF0\x9F\x8E\xAE"); // a valid 4-byte character
+}
+
+BOOST_AUTO_TEST_CASE(SafeFolderName_ReservedWindowsNamesAreChanged)
+{
+	BOOST_TEST(core::res::safe_folder_name("COM\xC2\xB9") == "COM\xC2\xB9_");
+	BOOST_TEST(core::res::safe_folder_name("lpt\xC2\xB3.txt") == "lpt\xC2\xB3.txt_");
+	BOOST_TEST(core::res::safe_folder_name("CON") == "CON_");
+	BOOST_TEST(core::res::safe_folder_name("nul") == "nul_");
+	BOOST_TEST(core::res::safe_folder_name("Aux.txt") == "Aux.txt_");
+	BOOST_TEST(core::res::safe_folder_name("COM1") == "COM1_");
+	BOOST_TEST(core::res::safe_folder_name("lpt9.save") == "lpt9.save_");
+	BOOST_TEST(core::res::safe_folder_name("COM0") == "COM0");
+	BOOST_TEST(core::res::safe_folder_name("CONSOLE") == "CONSOLE");
+}
+
+BOOST_AUTO_TEST_CASE(SafeFolderName_IsAtMost64Bytes_CutOnACharacter)
+{
+	BOOST_TEST(core::res::safe_folder_name(std::string(100, 'a')) == std::string(64, 'a'));
+	// 63 ASCII bytes, then a two-byte letter that would straddle byte 64: it goes whole.
+	const std::string straddling = std::string(63, 'a') + "\xD0\x98" + "bc";
+	BOOST_TEST(core::res::safe_folder_name(straddling) == std::string(63, 'a'));
+	BOOST_TEST(core::res::safe_folder_name(std::string(63, 'a') + " x") == std::string(63, 'a'));
+}
+
+namespace {
+// A scratch folder of `name` for process `pid`, as make_scratch_dir names it, private to this user.
+fs::path planted_scratch(const std::string& name, std::int64_t pid)
+{
+	std::string error;
+	const fs::path base = core::res::scratch_base_dir(error);
+	BOOST_REQUIRE_MESSAGE(!base.empty(), error);
+	const fs::path folder = base / ("snk-" + name + "-" + std::to_string(pid) + "-0123456789abcdef");
+	fs::create_directories(folder / "objects");
+	fs::permissions(folder, fs::perms::owner_all, fs::perm_options::replace);
+	return folder;
+}
+}
+
+BOOST_AUTO_TEST_CASE(MakeScratchDir_MakesANewPrivateFolderEachTime)
+{
+	const auto first = core::res::make_scratch_dir("res_mount_tests_make");
+	const auto second = core::res::make_scratch_dir("res_mount_tests_make");
+	BOOST_REQUIRE_MESSAGE(!first.path.empty(), first.error);
+	BOOST_REQUIRE_MESSAGE(!second.path.empty(), second.error);
+	BOOST_TEST(first.path != second.path);
+	BOOST_TEST(fs::is_directory(first.path));
+#ifndef _WIN32
+	BOOST_TEST(((fs::status(first.path).permissions() & fs::perms::all) == fs::perms::owner_all));
+#endif
+	std::error_code ec;
+	fs::remove_all(first.path, ec);
+	fs::remove_all(second.path, ec);
+}
+
+BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyThePrivateFoldersOfEndedRuns)
+{
+	const std::string name = "res_mount_tests_stale";
+	// No process has this id on Linux (pid_max <= 4194304) or Windows (ids are multiples of 4).
+	constexpr std::int64_t ended_pid = 2147483647;
+	const fs::path ended = planted_scratch(name, ended_pid);
+	const fs::path own = planted_scratch(name, platform::current_process_id());
+	const fs::path other_game = planted_scratch("res_mount_tests_other", ended_pid);
+	std::string error;
+	const fs::path base = core::res::scratch_base_dir(error);
+	const fs::path not_a_scratch_name = base / ("snk-" + name + "-" + std::to_string(ended_pid));
+	fs::create_directories(not_a_scratch_name);
+#ifndef _WIN32
+	// Readable by others: not one this game made, so it is not walked.
+	const fs::path open_folder = base / ("snk-" + name + "-" + std::to_string(ended_pid) + "-fedcba9876543210");
+	fs::create_directories(open_folder);
+	fs::permissions(open_folder, fs::perms::owner_all | fs::perms::group_read | fs::perms::others_read, fs::perm_options::replace);
+	// A link to a folder of the player: neither it nor what it points at goes.
+	test_util::temp_dir victim{ "res_mount_tests_victim" };
+	victim.write("keep.txt", "player data");
+	const fs::path link = base / ("snk-" + name + "-" + std::to_string(ended_pid) + "-00000000000000aa");
+	std::error_code link_ec;
+	fs::create_directory_symlink(victim.path(), link, link_ec);
+#endif
+
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 1u);
+	BOOST_TEST(!fs::exists(ended));
+	BOOST_TEST(fs::is_directory(own));
+	BOOST_TEST(fs::is_directory(other_game));
+	BOOST_TEST(fs::is_directory(not_a_scratch_name));
+#ifndef _WIN32
+	BOOST_TEST(fs::is_directory(open_folder));
+	if (!link_ec) {
+		BOOST_TEST(fs::is_symlink(link));
+		BOOST_TEST(read_file(victim.path() / "keep.txt") == "player data");
+	}
+#endif
+
+	std::error_code ec;
+	for (const auto& folder : { own, other_game, not_a_scratch_name }) {
+		fs::remove_all(folder, ec);
+	}
+#ifndef _WIN32
+	fs::remove_all(open_folder, ec);
+	fs::remove(link, ec);
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()
