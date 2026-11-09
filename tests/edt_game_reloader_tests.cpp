@@ -225,7 +225,7 @@ BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_queues_the_reload_until_no_b
 	BOOST_TEST(stops == 1);
 	BOOST_TEST(reloaded.empty());
 	BOOST_REQUIRE(polls.size() == 1u);
-	BOOST_TEST(polls[0].first == "edt/reload_game_module/game");
+	BOOST_TEST(polls[0].first == "edt/reload_game_module/waiting/game");
 
 	BOOST_TEST(invoke().ok); // a second click: still one reload waiting
 	BOOST_TEST(polls.size() == 1u);
@@ -233,6 +233,11 @@ BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_queues_the_reload_until_no_b
 	BOOST_TEST(polls[0].second()); // the stopped job has not ended yet: keeps waiting
 	BOOST_TEST(reloaded.empty());
 	background = false;
+	// A click after the job ended but before the wait ran joins it: no swap ahead of the queued one.
+	const auto joined = invoke();
+	BOOST_REQUIRE(joined.ok);
+	BOOST_TEST(joined.value.as_object().at("status").as_string() == "queued");
+	BOOST_TEST(reloaded.empty());
 	BOOST_TEST(!polls[0].second());
 	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
 	BOOST_TEST(messages().empty());
@@ -373,7 +378,7 @@ BOOST_AUTO_TEST_CASE(reload_quiet_when_ready_hands_over_its_report_once_the_relo
 	reloader->reload_quiet_when_ready("game", record);
 	BOOST_TEST(reports.empty());
 	BOOST_REQUIRE(waiting.size() == 1u);
-	BOOST_TEST(waiting[0].first == "edt/reload_game_module/waiting_quiet/game");
+	BOOST_TEST(waiting[0].first == "edt/reload_game_module/waiting/game");
 
 	wait_reason.clear();
 	building = true; // a build that starts meanwhile holds it too
@@ -389,6 +394,48 @@ BOOST_AUTO_TEST_CASE(reload_quiet_when_ready_hands_over_its_report_once_the_relo
 	reloader->reload_quiet_when_ready("game", record); // nothing holds it: now
 	BOOST_TEST(reports.size() == 2u);
 	BOOST_TEST(waiting.empty());
+}
+
+// The person's Reload, live mode's and the one after a build meet in one wait: one swap (in PR 2, one Play snapshot),
+// every caller gets its report.
+BOOST_AUTO_TEST_CASE(requests_for_a_module_that_waits_join_one_wait_and_one_swap)
+{
+	wait_reason = "a level is loading";
+	make_waiting();
+	int live_reports = 0;
+	int late_reports = 0;
+	BOOST_TEST(invoke().ok);
+	reloader->reload_quiet_when_ready("game", [&live_reports](const core::reload_report&) { ++live_reports; });
+	events.game_module_built.emit(built(true));
+	BOOST_REQUIRE(scheduled.size() == 1u);
+	scheduled.front().second();
+	BOOST_REQUIRE(waiting.size() == 1u);
+
+	wait_reason.clear();
+	// Nothing holds it any more, but the wait has not run: a request now joins it instead of swapping first.
+	reloader->reload_quiet_when_ready("game", [&late_reports](const core::reload_report&) { ++late_reports; });
+	BOOST_TEST(reloaded.empty());
+	run_waits();
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+	BOOST_TEST(live_reports == 1);
+	BOOST_TEST(late_reports == 1);
+	BOOST_TEST(waiting.empty());
+}
+
+// A build not taken is shown when one of the joined requests was the person's, and still handed to the quiet one.
+BOOST_AUTO_TEST_CASE(a_joined_wait_shows_the_message_when_any_request_was_not_quiet)
+{
+	wait_reason = "a level is loading";
+	make_waiting();
+	next = { core::reload_status::refused, "the copy does not match" };
+	std::vector<core::reload_status> reports;
+	reloader->reload_quiet_when_ready("game", [&reports](const core::reload_report& report) { reports.push_back(report.status); });
+	BOOST_TEST(invoke().ok);
+	wait_reason.clear();
+	run_waits();
+	BOOST_REQUIRE(reports.size() == 1u);
+	BOOST_TEST((reports[0] == core::reload_status::refused));
+	BOOST_TEST(messages().size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(reload_quiet_is_refused_while_defer_names_a_reason)
