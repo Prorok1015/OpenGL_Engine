@@ -137,7 +137,7 @@ struct actions_fixture : test_util::scene_env
 
 BOOST_FIXTURE_TEST_SUITE(GsInputActionsTests, actions_fixture)
 
-BOOST_AUTO_TEST_CASE(TheBoundWorldIsMarkedAndGetsTheMap_TheOtherNeither)
+BOOST_AUTO_TEST_CASE(OnlyTheBoundWorldIsMarked_TheFirstInTheFileReadsTheActions)
 {
 	auto& a = world("a", 0);
 	auto& b = world("b", 1);
@@ -152,9 +152,18 @@ BOOST_AUTO_TEST_CASE(TheBoundWorldIsMarkedAndGetsTheMap_TheOtherNeither)
 	BOOST_TEST(map_of(a).map == map);
 	BOOST_TEST(!bound_of(b).bound);
 	BOOST_TEST(!map_of(b).map);
+
+	// Bound or not, the reader keeps the map: it has to let its actions go when the binding moves away.
+	router.clear_bindings();
+	router.bind({ "level", "b" }, LEFT_RECT);
+	frame(map);
+	BOOST_TEST(!bound_of(a).bound);
+	BOOST_TEST(map_of(a).map == map);
+	BOOST_TEST(bound_of(b).bound);
+	BOOST_TEST(!map_of(b).map);
 }
 
-BOOST_AUTO_TEST_CASE(TwoBoundWorlds_TheFirstInTheLevelFileGetsTheActions)
+BOOST_AUTO_TEST_CASE(TwoWorldsWithTheSystem_TheFirstInTheLevelFileGetsTheActions)
 {
 	// Created out of file order: the id order of the set must not decide.
 	auto& second = world("second", 1);
@@ -282,6 +291,7 @@ BOOST_AUTO_TEST_CASE(LosingTheBindingInPlay_LetsTheActionGoOnce)
 	unbind();
 	frame(map);
 	frame(map);
+	BOOST_TEST(map_of(a).map == map);
 	BOOST_TEST(count(inp::action_edge::released) == 1u);
 	BOOST_TEST(!held(a, "Jump"));
 
@@ -307,7 +317,7 @@ BOOST_AUTO_TEST_CASE(InEdit_NothingIsCounted)
 	BOOST_TEST(!held(a, "Jump"));
 }
 
-BOOST_AUTO_TEST_CASE(ABoundWorldWithoutTheSystem_HasNoActions)
+BOOST_AUTO_TEST_CASE(ASetWhereNoWorldRunsTheSystem_HasNoActions)
 {
 	auto& a = world("a", 0, { "inp::update_input_state" });
 	const auto map = jump_on_space();
@@ -315,6 +325,7 @@ BOOST_AUTO_TEST_CASE(ABoundWorldWithoutTheSystem_HasNoActions)
 	key(KB::SPACE, KEY_ACTION::DOWN);
 	frame(map);
 	BOOST_TEST(bound_of(a).bound);
+	BOOST_TEST(!map_of(a).map);
 	BOOST_TEST(!held(a, "Jump"));
 	BOOST_TEST(seen.empty());
 }

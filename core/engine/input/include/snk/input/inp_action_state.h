@@ -22,7 +22,7 @@ namespace inp
 	};
 
 	// Written into each world's ctx by gs::route_input: the actions the world reads. Empty for a world that gets none
-	// (only the first bound world of a set does until #624, INPUT_STACK.md M6).
+	// (until #624 only the first world of a set in the level file that runs inp::update_actions, INPUT_STACK.md M6).
 	struct action_map_ref
 	{
 		std::shared_ptr<const action_map> map{};

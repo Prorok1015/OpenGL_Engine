@@ -87,25 +87,30 @@ namespace
 		return warned.insert(std::move(key)).second;
 	}
 
-	// Until the action masks of #624 one world of a set reads the actions: the first bound one in the level file
-	// (INPUT_STACK.md M6). The others, and a bound world that would not run inp::update_actions, are warned about once.
+	// Until the action masks of #624 one world of a set reads the actions: the first one in the level file that runs
+	// inp::update_actions (INPUT_STACK.md M6). It keeps the map while it is not bound, so it can let its held actions go
+	// and a Step without the binding stays frozen. A set whose other worlds run the system too, and a set that gets the
+	// input while none of its worlds runs it, are warned about once.
 	const entry* actions_reader(const std::vector<entry>& entries, std::string_view set, bool have_actions)
 	{
 		const entry* first = nullptr;
+		const entry* fed = nullptr;
 		std::size_t readers = 0;
 		for (const auto& e : entries) {
 			// A prefab preview shows content, it plays no game.
-			if (!e.routed.focused || e.context->kind() == scn::context_kind::preview) continue;
+			if (e.context->kind() == scn::context_kind::preview) continue;
+			if (e.routed.focused && !fed) fed = &e;
+			if (!lists_update_actions(*e.context)) continue;
+			++readers;
 			if (!first || e.context->desc_index() < first->context->desc_index()) first = &e;
-			const bool runs = lists_update_actions(*e.context);
-			readers += runs ? 1 : 0;
-			if (have_actions && !runs && warn_once(std::string{ set } + "/" + std::string{ e.context->get_name() } + "#system")) {
-				egLOG_WARN("input", "world '{}' of '{}' gets the input but does not list {}: game actions do nothing in it",
-					e.context->get_name(), set, k_update_actions);
-			}
 		}
-		if (have_actions && readers > 1 && first && warn_once(std::string{ set } + "#readers")) {
-			egLOG_WARN("input", "set '{}': {} bound worlds run {}; only '{}', the first in the level, gets the actions (until #624)",
+		if (!have_actions) return first;
+		if (!first && fed && warn_once(std::string{ set } + "#system")) {
+			egLOG_WARN("input", "world '{}' of '{}' gets the input, but no world of the set lists {}: game actions do nothing there",
+				fed->context->get_name(), set, k_update_actions);
+		}
+		if (readers > 1 && warn_once(std::string{ set } + "#readers")) {
+			egLOG_WARN("input", "set '{}': {} worlds list {}; only '{}', the first in the level, gets the actions (until #624)",
 				set, readers, k_update_actions, first->context->get_name());
 		}
 		return first;
