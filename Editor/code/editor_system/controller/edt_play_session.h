@@ -8,10 +8,12 @@
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -45,6 +47,11 @@ namespace edt
 		// The raw entity ids the editor holds into Play's worlds (the Game view's pick, the gizmo's ring) go stale when
 		// a module reload rebuilds them: called right after the set "play" is gone. Null: nothing to forget.
 		std::function<void()> forget_runtime_entities{};
+		// Runs `poll` on every UI frame under `id` while it returns true (editor_layer::register_implicit). Null: a
+		// restored set runs at once, without waiting for its resources.
+		std::function<void(const std::string& id, std::function<bool()> poll)> each_frame{};
+		// The clock of that wait; null: std::chrono::steady_clock.
+		std::function<std::chrono::steady_clock::time_point()> now{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
@@ -114,6 +121,13 @@ namespace edt
 		void after_module_swap(const core::reload_report& report);
 		// Between before_module_swap and after_module_swap with a snapshot.
 		bool suspended() const { return m_suspended; }
+		// A module reload is under way: suspended, or the restored set waits (inactive, paused) for the resources its
+		// components refer to (HOT_RELOAD_PLAY.md 6, step 6). Play's commands answer busy, the views show nothing.
+		bool reloading() const { return m_suspended || m_waiting.has_value(); }
+		// What the restored set still waits for; 0 when it does not wait.
+		std::size_t reloading_resources() const;
+		// Longer than that, the set runs on with what has loaded (logged).
+		static constexpr std::chrono::seconds k_resource_wait_limit{ 10 };
 
 	private:
 		void set_state(play_state state, play_reason reason);
@@ -122,6 +136,9 @@ namespace edt
 		void mount_user(const std::vector<std::filesystem::path>& roots, bool fresh);
 		void restore_editor();
 		void suspend_for_swap();
+		void wait_for_resources();
+		void end_wait(bool timed_out);
+		std::chrono::steady_clock::time_point now() const;
 		// False: the set "play" may be left half built (stop() takes it).
 		bool restore_after_swap();
 
@@ -165,6 +182,18 @@ namespace edt
 		};
 		std::optional<reload_snapshot> m_reload;
 		bool m_suspended = false;
+		// How the restored set runs once its resources are there.
+		struct resource_wait
+		{
+			ecs::run_mode mode = ecs::run_mode::play;
+			std::uint64_t frames_run = 0;
+			std::uint32_t pending_steps = 0;
+			std::chrono::steady_clock::time_point since{};
+		};
+		std::optional<resource_wait> m_waiting;
+		// Moves whenever a wait starts or ends, so the poll of an older one stops.
+		std::uint64_t m_wait_generation = 0;
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		// What Stop brings back.
 		struct snapshot
 		{

@@ -76,6 +76,7 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 {
 	const auto session = [play = std::move(deps.play)]() -> play_session* { return play ? play() : nullptr; };
 	const auto unavailable = [] { return cmd::result::failure(cmd::codes::failed, "Play is not available"); };
+	const auto reloading = [] { return cmd::result::failure(cmd::codes::busy, "module reload in progress"); };
 	std::vector<registration> out;
 	out.reserve(6);
 
@@ -83,9 +84,10 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 		"Start Play of the scene as it is edited (saved or not); while paused, resume it. Returns the play status "
 		"(frame: frames the play set simulated since Start, not app.advance's frame)");
 	start.enabled = [session] { return session() != nullptr; };
-	start.invoke = [session, unavailable, editing = deps.person_is_editing](const cmd::call& call) {
+	start.invoke = [session, unavailable, reloading, editing = deps.person_is_editing](const cmd::call& call) {
 		play_session* play = session();
 		if (!play) return unavailable();
+		if (play->reloading()) return reloading();
 		// Resuming touches no document, as play.resume.
 		if (play->state() == play_state::paused) {
 			play->resume(reason_of(call));
@@ -109,7 +111,7 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	start_ui.yields_to_text_input = true;
 	start_ui.enabled = [session, editing = deps.person_is_editing] {
 		const play_session* play = session();
-		return play && (play->state() == play_state::paused
+		return play && !play->reloading() && (play->state() == play_state::paused
 			|| (!play->active() && !play->start_refusal() && !(editing && editing())));
 	};
 	out.push_back(actions.add(std::move(start), std::move(start_ui)));
@@ -119,13 +121,20 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 		const play_session* play = session();
 		return play && play->state() == play_state::playing;
 	};
-	pause.invoke = [session, unavailable](const cmd::call& call) {
+	pause.invoke = [session, unavailable, reloading](const cmd::call& call) {
 		play_session* play = session();
 		if (!play) return unavailable();
+		if (play->reloading()) return reloading();
 		play->pause(reason_of(call));
 		return cmd::result::success(status_of(play));
 	};
-	out.push_back(actions.add(std::move(pause), menu_item("Pause")));
+	action_ui pause_ui = menu_item("Pause");
+	// The command answers busy during a module reload; the menu item is greyed then.
+	pause_ui.enabled = [session] {
+		const play_session* play = session();
+		return play && !play->reloading() && play->state() == play_state::playing;
+	};
+	out.push_back(actions.add(std::move(pause), std::move(pause_ui)));
 
 	cmd::command_desc step = play_command("play.step",
 		"While Play is paused, run n (1..600, default 1) frames of one fixed step each on the next frames, then pause again; "
@@ -139,9 +148,10 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 		const play_session* play = session();
 		return play && play->active();
 	};
-	step.invoke = [session, unavailable](const cmd::call& call) {
+	step.invoke = [session, unavailable, reloading](const cmd::call& call) {
 		play_session* play = session();
 		if (!play) return unavailable();
+		if (play->reloading()) return reloading();
 		if (play->state() == play_state::playing) return cmd::result::failure(cmd::codes::failed, "Play is running: pause first");
 		std::int64_t frames = 1;
 		if (const json::value* n = call.args.as_object().if_contains("n")) {
@@ -157,7 +167,7 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	action_ui step_ui = menu_item("Step");
 	step_ui.enabled = [session] {
 		const play_session* play = session();
-		return play && play->state() == play_state::paused;
+		return play && !play->reloading() && play->state() == play_state::paused;
 	};
 	out.push_back(actions.add(std::move(step), std::move(step_ui)));
 
@@ -182,9 +192,10 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 		const play_session* play = session();
 		return play && play->state() == play_state::paused;
 	};
-	resume.invoke = [session, unavailable](const cmd::call& call) {
+	resume.invoke = [session, unavailable, reloading](const cmd::call& call) {
 		play_session* play = session();
 		if (!play) return unavailable();
+		if (play->reloading()) return reloading();
 		play->resume(reason_of(call));
 		return cmd::result::success(status_of(play));
 	};

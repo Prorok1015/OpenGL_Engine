@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <optional>
+#include <string>
 #include <snk/resource/res_tag.h>
 #include <entt/fwd.hpp>
 #include <snk/editor/edt_panel_base.h>
@@ -21,6 +22,8 @@ namespace edt
 		using registry_visitor = std::function<void(entt::registry&)>;
 
 		void set_registry_getter(std::function<entt::registry*()> getter) { m_get_registry = std::move(getter); }
+		// Shown instead of the picture while not empty ("Reloading... (3 resources)"); its cameras stay switched off.
+		void set_notice(std::function<std::string()> notice) { m_notice = std::move(notice); }
 		// The worlds were rebuilt (play_session_options::forget_runtime_entities).
 		void forget_runtime_entities() { m_selection.forget(); }
 		// Visits every world's registry: the overlay worlds of a set draw into the picked camera's texture, and the
@@ -66,6 +69,8 @@ namespace edt
 		bool draw_picked_camera(entt::registry& reg, glm::vec2 avail);
 
 		std::function<entt::registry*()> m_get_registry;
+		std::function<std::string()> m_notice;
+		std::string m_notice_text;
 		std::function<void(const registry_visitor&)> m_for_each_registry;
 		game_view::selection m_selection;
 		inp::input_router* m_router = nullptr;

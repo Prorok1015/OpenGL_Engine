@@ -145,6 +145,9 @@ void edt::play_session::stop(play_reason reason)
 	m_camera_world.clear();
 	m_reload.reset();
 	m_suspended = false;
+	// The poll of a wait stops at its next frame; it never reaches the set that is gone.
+	m_waiting.reset();
+	++m_wait_generation;
 	if (m_options.input) m_options.input->forget_set(k_play_set);
 	m_document.set_edits_locked(false);
 	mount_user(m_options.editor_profile, false);
@@ -157,7 +160,7 @@ void edt::play_session::stop(play_reason reason)
 bool edt::play_session::pause(play_reason reason)
 {
 	const auto contexts = m_services.ctx_manager.lock();
-	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
+	scn::context_set* play = contexts && active() && !reloading() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play || (m_state == play_state::paused && play->pending_steps() == 0)) return false;
 	play->set_mode(ecs::run_mode::pause);
 	set_state(play_state::paused, reason);
@@ -167,7 +170,7 @@ bool edt::play_session::pause(play_reason reason)
 bool edt::play_session::resume(play_reason reason)
 {
 	const auto contexts = m_services.ctx_manager.lock();
-	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
+	scn::context_set* play = contexts && active() && !reloading() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play || m_state == play_state::playing) return false;
 	play->set_mode(ecs::run_mode::play);
 	set_state(play_state::playing, reason);
@@ -177,7 +180,7 @@ bool edt::play_session::resume(play_reason reason)
 bool edt::play_session::step(std::uint32_t frames, play_reason reason)
 {
 	const auto contexts = m_services.ctx_manager.lock();
-	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
+	scn::context_set* play = contexts && active() && !reloading() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play) return false;
 	play->step(std::max<std::uint32_t>(frames, 1u));
 	set_state(play_state::paused, reason);
@@ -293,9 +296,10 @@ std::string edt::play_session::capture_for_reload()
 		egLOG_WARN("play", "the module reload drops {} blackboard value(s) of {}: the type has no schema", count, type);
 	}
 	merge_into(snapshot.report, board_report);
-	snapshot.mode = play->mode();
-	snapshot.frames_run = play->frames_run();
-	snapshot.pending_steps = play->pending_steps();
+	// During a wait the set is held in Pause: what it will run in is the wait's.
+	snapshot.mode = m_waiting ? m_waiting->mode : play->mode();
+	snapshot.frames_run = m_waiting ? m_waiting->frames_run : play->frames_run();
+	snapshot.pending_steps = m_waiting ? m_waiting->pending_steps : play->pending_steps();
 	m_reload = std::move(snapshot);
 	return {};
 }
@@ -310,6 +314,8 @@ void edt::play_session::suspend_for_swap()
 		contexts->destroy_set(k_play_set);
 	}
 	m_camera_world.clear();
+	m_waiting.reset();
+	++m_wait_generation;
 	// The copies hold descs of the module's types: they go before its binary does.
 	m_worlds_copy.clear();
 	if (m_options.input) m_options.input->forget_set(k_play_set);
@@ -362,12 +368,10 @@ bool edt::play_session::restore_after_swap()
 			board.write(key, entry.type, entry.type_name, entry.value, ecs::blackboard_data::external_writer);
 		}
 	}
-	if (saved.mode == ecs::run_mode::step && saved.pending_steps > 0) {
-		play.step(saved.pending_steps);
-	} else {
-		play.set_mode(saved.mode == ecs::run_mode::play ? ecs::run_mode::play : ecs::run_mode::pause);
-	}
-	play.restore_run_state(saved.frames_run, saved.pending_steps);
+	// Neither run nor shown until what the restored components refer to has loaded (HOT_RELOAD_PLAY.md 6, step 6).
+	play.restore_run_state(saved.frames_run, 0);
+	play.set_active(false);
+	m_waiting = resource_wait{ saved.mode, saved.frames_run, saved.pending_steps, now() };
 
 	// The level was built again in the new layer: hidden, as Start left it.
 	scn::context_set& level = contexts->level_set();
@@ -378,6 +382,59 @@ bool edt::play_session::restore_after_swap()
 	egLOG_INFO("play", "Play kept its world across the module reload: {} world(s), {} entities, {} bus event(s) and the mail "
 		"in flight dropped (count unknown, #668)", saved.worlds.size(), report.entities, saved.bus_events);
 	return true;
+}
+
+std::chrono::steady_clock::time_point edt::play_session::now() const
+{
+	return m_options.now ? m_options.now() : std::chrono::steady_clock::now();
+}
+
+std::size_t edt::play_session::reloading_resources() const
+{
+	if (!m_waiting) return 0;
+	const auto contexts = m_services.ctx_manager.lock();
+	scn::scene_layer* layer = contexts ? contexts->game_layer() : nullptr;
+	return layer ? layer->resources().pending_loads() : 0;
+}
+
+void edt::play_session::wait_for_resources()
+{
+	if (!m_waiting) return;
+	if (!m_options.each_frame || reloading_resources() == 0) {
+		end_wait(false);
+		return;
+	}
+	const std::uint64_t generation = ++m_wait_generation;
+	// One id per wait: register_implicit ignores a taken id, and the poll of an older wait may still be listed.
+	m_options.each_frame(std::format("edt/play_reload_resources/{}", generation),
+		[this, alive = std::weak_ptr<int>(m_alive), generation] {
+			if (alive.expired() || generation != m_wait_generation || !m_waiting) return false;
+			const bool timed_out = now() - m_waiting->since >= k_resource_wait_limit;
+			if (!timed_out && reloading_resources() > 0) return true;
+			end_wait(timed_out);
+			return false;
+		});
+}
+
+void edt::play_session::end_wait(bool timed_out)
+{
+	if (!m_waiting) return;
+	if (timed_out) {
+		egLOG_WARN("play", "Play runs on after the module reload with {} resource(s) still loading ({} s)",
+			reloading_resources(), k_resource_wait_limit.count());
+	}
+	const resource_wait wait = *std::exchange(m_waiting, std::nullopt);
+	++m_wait_generation;
+	const auto contexts = m_services.ctx_manager.lock();
+	scn::context_set* play = contexts ? contexts->find_set(k_play_set) : nullptr;
+	if (!play) return;
+	play->set_active(true);
+	if (wait.mode == ecs::run_mode::step && wait.pending_steps > 0) {
+		play->step(wait.pending_steps);
+	} else {
+		play->set_mode(wait.mode == ecs::run_mode::play ? ecs::run_mode::play : ecs::run_mode::pause);
+	}
+	play->restore_run_state(wait.frames_run, wait.pending_steps);
 }
 
 void edt::play_session::before_module_swap()
@@ -400,6 +457,8 @@ void edt::play_session::after_module_swap(const core::reload_report& report)
 			egLOG_WARN("play", "Play stopped: its world was not brought back after the module reload ({})",
 				built ? std::string{ "the restore failed" } : report.message);
 			stop(play_reason::stopped_for_reload);
+		} else {
+			wait_for_resources();
 		}
 		m_reload.reset();
 		return;

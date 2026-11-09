@@ -9,7 +9,8 @@ scn::context_set* edt::view_set(const editor_services& services)
 {
 	const auto contexts = services.ctx_manager.lock();
 	if (!contexts) return nullptr;
-	if (scn::context_set* play = contexts->find_set(k_play_set)) return play;
+	// An inactive "play" is a restore waiting for its resources (play_session::reloading): nothing to show yet.
+	if (scn::context_set* play = contexts->find_set(k_play_set)) return play->active() ? play : nullptr;
 	return &contexts->level_set();
 }
 

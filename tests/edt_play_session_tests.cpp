@@ -281,8 +281,42 @@ struct play_fixture : test_util::module_env
 	// What editor_system's start_blocker says (a level or an asset loading); nullopt: nothing blocks.
 	std::optional<std::string> start_blocked;
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router,
-		.start_blocker = [this] { return start_blocked; }, .forget_runtime_entities = [this] { ++forgotten; } } };
+		.start_blocker = [this] { return start_blocked; }, .forget_runtime_entities = [this] { ++forgotten; },
+		.each_frame = [this](const std::string& id, std::function<bool()> poll) { reload_polls.emplace_back(id, std::move(poll)); },
+		.now = [this] { return clock; } } };
 	int forgotten = 0;
+	// What editor_layer::register_implicit holds for Play (the resource wait after a restore), and the wait's clock.
+	std::vector<std::pair<std::string, std::function<bool()>>> reload_polls;
+	std::chrono::steady_clock::time_point clock{};
+
+	// One UI frame of those polls: one that returns false is done.
+	void run_reload_polls()
+	{
+		auto polls = std::move(reload_polls);
+		reload_polls.clear();
+		for (auto& [id, poll] : polls) {
+			if (poll()) reload_polls.emplace_back(id, std::move(poll));
+		}
+	}
+
+	// The loads finish and the next UI frame sees it.
+	void settle()
+	{
+		pump();
+		run_reload_polls();
+	}
+
+	// A swap whose restore waits: the layer has a load in flight when the set comes back.
+	res::res_handle<res::text_resource> restore_waiting(const char* file)
+	{
+		BOOST_REQUIRE(play.capture_for_reload().empty());
+		play.before_module_swap();
+		auto handle = contexts().game_layer()->resources().require<res::text_resource>(put(file, "slow"));
+		BOOST_REQUIRE(contexts().game_layer()->resources().pending_loads() > 0);
+		play.after_module_swap(k_reloaded);
+		BOOST_REQUIRE(play.reloading());
+		return handle;
+	}
 	std::vector<state_change> seen;
 	edt::connection seen_connection = events.play_state_changed.subscribe([this](edt::play_state s, edt::play_reason r) {
 		seen.emplace_back(s, r);
@@ -763,6 +797,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_play_keeps_its_world)
 	BOOST_REQUIRE_MESSAGE(restart.empty(), restart);
 	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 	play.end_reload();
+	settle();
 
 	BOOST_TEST((report.status == core::reload_status::reloaded));
 	BOOST_TEST((seen == std::vector<state_change>{ { edt::play_state::playing, edt::play_reason::user } }));
@@ -806,6 +841,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_while_paused_keeps_play_paused)
 	BOOST_REQUIRE(play.capture_for_reload().empty());
 	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 	play.end_reload();
+	settle();
 
 	BOOST_TEST((report.status == core::reload_status::reloaded));
 	BOOST_TEST((play.state() == edt::play_state::paused));
@@ -831,6 +867,7 @@ BOOST_AUTO_TEST_CASE(a_world_holding_an_unsaveable_type_restarts_play_and_names_
 	BOOST_TEST(restart.find("unsaved_thing") != std::string::npos);
 	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 	play.end_reload();
+	settle();
 
 	BOOST_TEST((seen == std::vector<state_change>{
 		{ edt::play_state::playing, edt::play_reason::user },
@@ -849,6 +886,7 @@ BOOST_AUTO_TEST_CASE(a_snapshot_is_dropped_unused_and_a_lost_module_stops_play)
 	BOOST_REQUIRE(play.start());
 	BOOST_REQUIRE(play.capture_for_reload().empty());
 	play.end_reload();
+	settle();
 	play.before_module_swap();
 	BOOST_TEST(!play.suspended());
 	play.after_module_swap(k_reloaded);
@@ -886,6 +924,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_keeps_the_seed_time_and_blackboard)
 	BOOST_REQUIRE(play.capture_for_reload().empty());
 	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 	play.end_reload();
+	settle();
 
 	scn::context_set* set = play_set();
 	BOOST_REQUIRE(set);
@@ -915,6 +954,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_a_step_keeps_the_frames_to_step)
 	BOOST_REQUIRE(play.capture_for_reload().empty());
 	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 	play.end_reload();
+	settle();
 
 	BOOST_REQUIRE(play_set());
 	BOOST_TEST((play_set()->mode() == ecs::run_mode::step));
@@ -943,6 +983,97 @@ BOOST_AUTO_TEST_CASE(a_failed_restore_stops_play)
 	BOOST_TEST(!state.edits_locked());
 	BOOST_TEST(contexts().level_set().active());
 
+	loader.unload("play_game", root);
+}
+
+// #600 PR 3a (HOT_RELOAD_PLAY.md 6, step 6): the restored set is neither run nor shown, and Play's commands wait, until
+// what its components refer to has loaded.
+BOOST_AUTO_TEST_CASE(a_restore_waits_for_its_resources_hidden_and_busy)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	const auto pending = restore_waiting("slow.txt");
+
+	BOOST_TEST(play.reloading_resources() > 0u);
+	BOOST_REQUIRE(play_set());
+	BOOST_TEST(!play_set()->active());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::pause));
+	BOOST_TEST(edt::view_set(services) == nullptr);
+	BOOST_TEST(!play.pause());
+	BOOST_TEST(!play.step(1));
+	BOOST_TEST((play.state() == edt::play_state::playing)); // nothing announced
+	BOOST_TEST(reload_polls.size() == 1u);
+
+	settle();
+	BOOST_TEST(!play.reloading());
+	BOOST_TEST(reload_polls.empty());
+	BOOST_TEST(play_set()->active());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::play));
+	BOOST_TEST(edt::view_set(services) == play_set());
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+// A Stop during the wait ends it: the poll stops at its next frame and never reaches the set that is gone.
+BOOST_AUTO_TEST_CASE(a_stop_during_the_resource_wait_ends_it)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	const auto pending = restore_waiting("slow.txt");
+
+	play.stop();
+	BOOST_TEST(!play.reloading());
+	BOOST_TEST(!play_set());
+	run_reload_polls();
+	BOOST_TEST(reload_polls.empty());
+	BOOST_TEST(!play_set());
+
+	loader.unload("play_game", root);
+}
+
+// Past the limit (on the session's clock, not on frames) the set runs on with what has loaded.
+BOOST_AUTO_TEST_CASE(a_resource_wait_past_its_limit_runs_on)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	const auto pending = restore_waiting("slow.txt");
+
+	run_reload_polls();
+	BOOST_TEST(play.reloading());
+	clock += edt::play_session::k_resource_wait_limit + std::chrono::seconds(1);
+	run_reload_polls();
+	BOOST_TEST(!play.reloading());
+	BOOST_TEST(play_set()->active());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::play));
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+// A second reload during the wait (the editor's defer holds it; a caller without one) keeps the mode the first one
+// restored, not the Pause the wait holds the set in.
+BOOST_AUTO_TEST_CASE(a_second_reload_during_the_wait_keeps_the_mode_to_restore)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	contexts().update(std::chrono::duration<float>(0.016f));
+	const std::uint64_t frames = play.frames_run();
+	const auto first = restore_waiting("slow.txt");
+	const auto second = restore_waiting("slower.txt");
+
+	BOOST_TEST(reload_polls.size() == 2u); // the first wait's poll ends at its next frame
+	settle();
+	BOOST_TEST(!play.reloading());
+	BOOST_TEST(reload_polls.empty());
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::play));
+	BOOST_TEST(play.frames_run() == frames);
+
+	play.stop();
 	loader.unload("play_game", root);
 }
 
@@ -1116,6 +1247,25 @@ struct play_commands_fixture : play_fixture
 }
 
 BOOST_FIXTURE_TEST_SUITE(edt_play_commands_tests, play_commands_fixture)
+
+BOOST_AUTO_TEST_CASE(play_commands_answer_busy_while_a_module_reload_waits)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	const auto pending = restore_waiting("slow.txt");
+
+	for (const char* id : { "play.pause", "play.step", "play.start" }) {
+		BOOST_TEST(actions.invoke(id, json::object{}).code == "busy", id);
+	}
+	BOOST_TEST(!actions.items("Play").at(1).enabled); // Play, Pause, Step, Stop
+	BOOST_TEST(actions.items("Play").at(3).enabled); // Stop stays
+	settle();
+	BOOST_TEST(actions.invoke("play.pause", json::object{}).ok);
+
+	play.stop();
+	loader.unload("play_game", root);
+}
 
 BOOST_AUTO_TEST_CASE(an_agent_starts_pauses_steps_and_stops_play_over_mcp)
 {

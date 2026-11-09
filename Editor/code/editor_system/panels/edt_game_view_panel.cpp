@@ -38,6 +38,11 @@ namespace edt
 
 	entt::registry* game_view_panel::pick_registry(const char*& why)
 	{
+		if (m_notice && !(m_notice_text = m_notice()).empty()) {
+			apply_viewports_to_all({}, {});
+			why = m_notice_text.c_str();
+			return nullptr;
+		}
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		if (!reg) {
 			apply_viewports_to_all({}, {});
