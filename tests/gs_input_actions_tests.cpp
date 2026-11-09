@@ -9,6 +9,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world_context.h>
+#include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -40,6 +41,25 @@ struct seen_event
 	inp::action_edge edge = inp::action_edge::pressed;
 };
 
+// What the fixed steps of a world saw of Jump.
+struct fixed_probe
+{
+	int steps = 0;
+	int pressed = 0;
+	int released = 0;
+	int first_pressed_step = -1;
+};
+
+void fixed_probe_system(const inp::fixed_action_state& actions, fixed_probe& out)
+{
+	if (actions.pressed(inp::action_id{ 0 })) {
+		if (out.first_pressed_step < 0) out.first_pressed_step = out.steps;
+		++out.pressed;
+	}
+	out.released += actions.released(inp::action_id{ 0 }) ? 1 : 0;
+	++out.steps;
+}
+
 std::shared_ptr<const inp::action_map> jump_on_space()
 {
 	auto map = std::make_shared<inp::action_map>();
@@ -56,6 +76,7 @@ struct actions_fixture : test_util::scene_env
 		, mgr(*rs, *assembler, sf, hot)
 	{
 		inp::register_ecs_input_system(sf, source);
+		sf.register_system<&fixed_probe_system>("test::fixed_probe", { .phase = ecs::phase::fixed_update });
 		mgr.add_event<inp::action_event>();
 		router.set_default_target(inp::input_target{ .set = "level" });
 		subscription = mgr.subscribe<inp::action_event>({}, [this](ecs::bus_context& ctx, const ecs::envelope<inp::action_event>& e) {
@@ -85,11 +106,20 @@ struct actions_fixture : test_util::scene_env
 		source->on_handle_event(nullptr, e);
 	}
 
-	void frame(const std::shared_ptr<const inp::action_map>& map)
+	void frame(const std::shared_ptr<const inp::action_map>& map, float dt = 0.016f)
 	{
 		gs::route_input(router, mgr, map);
-		mgr.update(std::chrono::duration<float>(0.016f));
+		mgr.update(std::chrono::duration<float>(dt));
 	}
+
+	// A world whose fixed step is 10 ms, with the probe in fixed_update.
+	scn::world_context& fixed_world()
+	{
+		auto& w = world("a", 0, { "inp::update_input_state", "inp::update_actions", "test::fixed_probe" });
+		w.set_stepper(ecs::fixed_stepper(0.01));
+		return w;
+	}
+	static const fixed_probe& probe_of(scn::world_context& w) { return w.state().ctx().get<fixed_probe>(); }
 
 	void unbind() { router.set_default_target(inp::input_target{ .set = "nowhere" }); }
 	void bind() { router.set_default_target(inp::input_target{ .set = "level" }); }
@@ -386,6 +416,44 @@ BOOST_AUTO_TEST_CASE(NoTag_NoMap)
 	BOOST_REQUIRE(actions.map());
 	actions.update(std::string_view{});
 	BOOST_TEST(!actions.map());
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_AFrameWithoutAStepThenOneWithTwo_ShowsThePressInTheFirstStepOnly)
+{
+	auto& w = fixed_world();
+	const auto map = jump_on_space();
+	frame(map, 0.025f); // two steps, 5 ms left over
+	const int before = probe_of(w).steps;
+
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map, 0.004f); // 9 ms: no fixed step
+	BOOST_TEST(probe_of(w).steps == before);
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u); // the bus has it this frame
+
+	frame(map, 0.016f); // 25 ms: two steps
+	BOOST_TEST(probe_of(w).steps == before + 2);
+	BOOST_TEST(probe_of(w).pressed == 1);
+	BOOST_TEST(probe_of(w).first_pressed_step == before);
+}
+
+BOOST_AUTO_TEST_CASE(Fixed_APressDuringPause_IsSeenByTheStepOfAStep)
+{
+	auto& w = fixed_world();
+	const auto map = jump_on_space();
+	frame(map, 0.02f);
+
+	mode(ecs::run_mode::pause);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(probe_of(w).pressed == 0);
+
+	mgr.get_set("level").step(1);
+	frame(map);
+	BOOST_TEST(probe_of(w).pressed == 1);
+	key(KB::SPACE, KEY_ACTION::UP);
+	mgr.get_set("level").step(1);
+	frame(map);
+	BOOST_TEST(probe_of(w).released == 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

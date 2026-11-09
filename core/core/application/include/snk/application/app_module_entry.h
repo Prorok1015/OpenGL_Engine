@@ -20,7 +20,9 @@
 // 3.1 (#603): gs::module_context::subscribe; a module that uses it needs an engine of 3.1 or newer.
 // 3.2 (#604): game actions. New ctx types inp::action_state, inp::action_map_ref, inp::input_bound and the engine event
 // inp::action_event; the bus and every existing type keep their layout, so a module built for 3.0 or 3.1 still loads.
-#define SNK_MODULE_API_VERSION 0x0003'0002u // major << 16 | minor
+// 3.3 (#604): inp::fixed_action_state, a new ctx type; nothing else changes layout. action_state::update and
+// inp::update_actions_system changed signature: they are the engine's, a module reads the ctx types and never calls them.
+#define SNK_MODULE_API_VERSION 0x0003'0003u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)
