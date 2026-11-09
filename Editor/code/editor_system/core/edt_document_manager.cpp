@@ -1,13 +1,11 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
-#include "edt_prefab_document.h"
-#include "edt_scene_document.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
-edt::document_manager::document_manager(scene_document& scene, editor_services& services, editor_events& events)
+edt::document_manager::document_manager(document& scene, preview_factory make_preview, editor_events& events)
 	: m_scene(&scene)
-	, m_services(services)
+	, m_make_preview(std::move(make_preview))
 	, m_events(events)
 {
 	m_scene->assign_id(m_next_id++);
@@ -17,13 +15,13 @@ edt::document_manager::document_manager(scene_document& scene, editor_services& 
 
 edt::document_manager::~document_manager() = default;
 
-edt::scene_document& edt::document_manager::scene()
+edt::document& edt::document_manager::scene()
 {
 	ASSERT_MSG(m_scene, "the scene document is gone: document_manager::shutdown was called");
 	return *m_scene;
 }
 
-const edt::scene_document& edt::document_manager::scene() const
+const edt::document& edt::document_manager::scene() const
 {
 	ASSERT_MSG(m_scene, "the scene document is gone: document_manager::shutdown was called");
 	return *m_scene;
@@ -57,16 +55,17 @@ void edt::document_manager::set_active(document_id id)
 	m_events.document_activated.emit(id);
 }
 
-edt::prefab_document& edt::document_manager::open_prefab(const res::tag& prefab_tag)
+edt::previewable_document& edt::document_manager::open_preview(const res::tag& source)
 {
 	if (!m_preview) {
-		m_preview = std::make_unique<prefab_document>(m_services);
+		m_preview = m_make_preview();
+		ASSERT_MSG(m_preview, "the preview factory of the document_manager made no document");
 	}
 	if (m_preview->is_open()) {
 		close(m_preview->id());
 	}
 
-	m_preview->open(prefab_tag);
+	m_preview->open(source);
 	if (m_preview->is_open()) {
 		m_preview->assign_id(m_next_id++);
 		m_events.document_opened.emit(m_preview->id());
@@ -75,7 +74,7 @@ edt::prefab_document& edt::document_manager::open_prefab(const res::tag& prefab_
 	return *m_preview;
 }
 
-edt::prefab_document* edt::document_manager::preview()
+edt::previewable_document* edt::document_manager::preview()
 {
 	return m_preview && m_preview->is_open() ? m_preview.get() : nullptr;
 }

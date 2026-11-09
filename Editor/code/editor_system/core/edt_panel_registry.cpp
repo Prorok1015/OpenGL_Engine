@@ -1,5 +1,5 @@
 #include <snk/editor/edt_panel_registry.h>
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <utility>

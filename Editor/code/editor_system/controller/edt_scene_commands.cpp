@@ -2,6 +2,7 @@
 #include "edt_override_edit.h"
 #include "edt_scene_document.h"
 #include "edt_scene_ref.h"
+#include "edt_document_cast.h"
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
@@ -228,7 +229,7 @@ namespace {
 		cmd::result run(const cmd::call& call, std::string_view label, const edit_fn& apply, bool keeps_selection = false)
 		{
 			const json::object& args = call.args.as_object();
-			edt::scene_document& scene = sources.documents.scene();
+			edt::scene_document& scene = edt::scene_of(sources.documents);
 			if (const json::value* document = args.if_contains("document")) {
 				const auto id = cmd::json_schema::integer_of(*document);
 				if (!id || static_cast<std::uint64_t>(*id) != scene.id()) {
@@ -651,7 +652,7 @@ namespace {
 	cmd::result world_systems_list(context& ctx, const cmd::call& call)
 	{
 		const json::object& args = call.args.as_object();
-		edt::scene_document& scene = ctx.sources.documents.scene();
+		edt::scene_document& scene = edt::scene_of(ctx.sources.documents);
 		cmd::result error;
 		scn::world_desc* world = world_of(scene, args, error);
 		if (!world) return error;

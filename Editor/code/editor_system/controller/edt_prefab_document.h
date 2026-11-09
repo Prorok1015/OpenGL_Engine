@@ -16,15 +16,15 @@ namespace edt
 	struct prefab_camera_tag {};
 
 	// A prefab opened for preview: read-only, and the owner of the set "preview:<tag>" while it is open.
-	class prefab_document final : public document
+	class prefab_document final : public previewable_document
 	{
 	public:
 		explicit prefab_document(editor_services& services);
 
-		void open(const res::tag& prefab_tag);
-		void close();
+		void open(const res::tag& prefab_tag) override;
+		void close() override;
 
-		bool is_open() const { return m_open; }
+		bool is_open() const override { return m_open; }
 		bool is_dirty() const override { return m_dirty; }
 		std::string_view kind() const override { return "prefab"; }
 		const std::string& title() const override { return m_prefab_name; }

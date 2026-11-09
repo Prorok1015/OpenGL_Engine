@@ -4,6 +4,7 @@
 #include "edt_override_edit.h"
 #include "edt_scene_commands.h"
 #include "edt_scene_document.h"
+#include "edt_document_cast.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/editor/edt_document_manager.h>
@@ -116,7 +117,7 @@ struct commands_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events };
+	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
 	edt::selection_service selection{ events };
 	cmd::command_registry commands;
 	bool gesture = false;

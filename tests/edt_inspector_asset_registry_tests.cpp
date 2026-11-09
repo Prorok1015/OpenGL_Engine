@@ -4,7 +4,7 @@
 #include "edt_builtin_asset_kinds.h"
 #include "edt_inspector_panel.h"
 #include "edt_scene_document.h"
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/editor/edt_action_registry.h>

@@ -67,6 +67,8 @@
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
+#include "edt_document_cast.h"
+#include "edt_state_commands.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_loop_service_interface.h>
 #include <snk/command/cmd_registry.h>
@@ -323,7 +325,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_services.base_assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(m_res, m_rnd, m_gui, m_services,
-		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
+		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state, prefab_preview(m_services));
+	m_context->adopt(register_state_commands(m_context->actions().commands(), state_command_sources{
+		m_context->documents(), m_context->selection(), m_services, m_context->asset_kinds(),
+		[this] { return m_res.get_resource_layers(); } }));
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
 	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs(), m_res);
@@ -849,7 +854,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		quit.discard_changes = [this] {
 			m_state.mark_clean();
 			auto& documents = m_context->documents();
-			if (prefab_document* preview = documents.preview(); preview != nullptr && preview->is_dirty()) {
+			if (prefab_document* preview = prefab_of(documents); preview != nullptr && preview->is_dirty()) {
 				documents.close(preview->id());
 			}
 		};
@@ -1658,7 +1663,7 @@ bool edt::editor_system::poll_pending_desc()
 
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
-	prefab_document& prefab = m_context->documents().open_prefab(tag);
+	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
 	if (prefab.is_open()) {
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
@@ -1675,7 +1680,7 @@ bool edt::editor_system::person_is_editing() const
 void edt::editor_system::close_prefab_editor()
 {
 	auto& documents = m_context->documents();
-	if (prefab_document* prefab = documents.preview()) {
+	if (prefab_document* prefab = prefab_of(documents)) {
 		documents.close(prefab->id());
 	}
 	m_prefab_panel->set_context(nullptr);

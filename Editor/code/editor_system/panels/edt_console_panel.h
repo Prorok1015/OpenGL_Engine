@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include <string>
 #include <vector>
 #include <mutex>

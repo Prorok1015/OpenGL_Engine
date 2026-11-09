@@ -10,6 +10,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include "edt_state_commands.h"
+#include "edt_document_cast.h"
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <cmath>
@@ -175,7 +176,7 @@ struct state_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events };
+	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
 	edt::selection_service selection{ events };
 	edt::asset_kind_registry kinds;
 	edt::registration kind_registration;

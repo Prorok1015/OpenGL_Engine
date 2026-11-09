@@ -15,6 +15,7 @@
 #include "edt_override_edit.h"
 #include "edt_scene_document.h"
 #include "edt_scene_ref.h"
+#include "edt_document_cast.h"
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -307,7 +308,7 @@ namespace {
 
 	const edt::scene_document* scene_for(edt::document_manager& documents, const json::object& args, cmd::result& error)
 	{
-		const edt::scene_document& scene = documents.scene();
+		const edt::scene_document& scene = edt::scene_of(documents);
 		const json::value* requested = args.if_contains("document");
 		if (!requested) return &scene;
 		const auto id = cmd::json_schema::integer_of(*requested);
@@ -470,7 +471,7 @@ namespace {
 	cmd::result node_get(const edt::state_command_sources& sources, const cmd::call& request)
 	{
 		const json::object& args = request.args.as_object();
-		const edt::scene_document& scene = sources.documents.scene();
+		const edt::scene_document& scene = edt::scene_of(sources.documents);
 		located at;
 		cmd::result error;
 		if (!locate(scene, args.at("ref"), at, error)) return error;
@@ -876,7 +877,7 @@ namespace {
 				located at;
 				cmd::result ignored;
 				json::value ref = ref_json(selection.world, selection.path);
-				if (locate(sources.documents.scene(), ref, at, ignored) && at.target.empty()) {
+				if (locate(edt::scene_of(sources.documents), ref, at, ignored) && at.target.empty()) {
 					item["name"] = safe_string(at.owner->name);
 				}
 			}

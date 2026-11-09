@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include "edt_agent_policy_model.h"
 #include "edt_agent_server.h"
 #include <chrono>

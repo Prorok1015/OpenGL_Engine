@@ -3,7 +3,7 @@
 #include <optional>
 #include <snk/resource/res_tag.h>
 #include <entt/fwd.hpp>
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
 #include "edt_game_view_logic.h"
 #include "edt_input_binding.h"
 

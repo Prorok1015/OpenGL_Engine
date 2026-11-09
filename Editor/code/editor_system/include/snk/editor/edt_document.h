@@ -23,6 +23,7 @@ namespace edt
 	};
 
 	class document_manager;
+	class editor_events;
 
 	// The edit undo (redo) would apply: its label as recorded, and who made it.
 	struct history_entry
@@ -63,8 +64,21 @@ namespace edt
 
 		// Called once by the document_manager that takes the document over; nothing else assigns ids.
 		void assign_id(document_id id) { m_id = id; }
+		// Where the document announces that it changed; set by the document_manager (null: nowhere). A document that
+		// announces nothing ignores it.
+		virtual void bind_events(editor_events*) {}
 
 	private:
 		document_id m_id = 0;
+	};
+
+	// A document the document_manager opens and closes again without destroying it: the preview of a prefab. It is
+	// not open until open() succeeded; a source that cannot be loaded leaves it closed.
+	class SNK_EDITOR_API previewable_document : public document
+	{
+	public:
+		virtual void open(const res::tag& source) = 0;
+		virtual void close() = 0;
+		virtual bool is_open() const = 0;
 	};
 }
