@@ -33,12 +33,13 @@ namespace prj
 		engine_version engine;
 		// A res:// tag, or empty when the manifest names no start scene.
 		std::string start_scene;
-		// A res:// tag of the game actions (input_actions_desc, WORLD_BUS.md 4.1), or empty: the project has none.
-		std::string input_actions;
 		// Relative to the project root, highest priority first; the first one receives writes.
 		std::vector<std::filesystem::path> content_roots;
 		std::vector<module_ref> modules;
 		std::vector<std::string> platforms;
+		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.1).
+		// A res:// tag of the game actions (input_actions_desc, WORLD_BUS.md 4.1), or empty: the project has none.
+		std::string input_actions;
 	};
 
 	struct manifest_error

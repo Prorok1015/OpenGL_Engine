@@ -11,17 +11,37 @@ namespace
 		return value && value->is_string() ? std::string{ value->as_string() } : std::string{};
 	}
 
-	// A field present but not a string is kept as a value no name matches, so build_action_map reports it.
-	std::string checked_field(const json::object& object, std::string_view key)
+	std::vector<scn::input_action_entry> parse_entries(const json::array& items)
 	{
-		const auto* value = object.if_contains(key);
-		if (!value) return {};
-		return value->is_string() ? std::string{ value->as_string() } : std::string{ "<not a string>" };
+		std::vector<scn::input_action_entry> parsed;
+		parsed.reserve(items.size());
+		for (const auto& item : items) {
+			scn::input_action_entry action;
+			if (const auto* object = item.if_object()) {
+				action.name = string_field(*object, "name");
+				if (const auto* bindings = object->if_contains("bindings"); bindings && bindings->is_array()) {
+					for (const auto& b : bindings->as_array()) {
+						scn::input_binding_entry binding;
+						if (const auto* bo = b.if_object()) {
+							binding.key = string_field(*bo, "key");
+							binding.mouse = string_field(*bo, "mouse");
+							binding.key_not_text = bo->contains("key") && !bo->at("key").is_string();
+							binding.mouse_not_text = bo->contains("mouse") && !bo->at("mouse").is_string();
+						}
+						action.bindings.push_back(std::move(binding));
+					}
+				}
+			}
+			parsed.push_back(std::move(action));
+		}
+		return parsed;
 	}
 }
 
 json::value desc::json_codec<scn::input_action_list>::to_json(const scn::input_action_list& actions)
 {
+	if (actions.source.is_array() && parse_entries(actions.source.as_array()) == actions.entries) return actions.source;
+	if (!actions.source.is_null() && !actions.source.is_array() && actions.entries.empty()) return actions.source;
 	json::array out;
 	out.reserve(actions.entries.size());
 	for (const auto& action : actions.entries) {
@@ -45,28 +65,11 @@ bool desc::json_codec<scn::input_action_list>::from_json(scn::input_action_list&
 	if (!in.is_array()) {
 		egLOG_WARN("input", "input_actions_desc: /actions: expected an array, the file has no actions");
 		actions.entries.clear();
+		actions.source = in;
 		return true;
 	}
-	std::vector<scn::input_action_entry> parsed;
-	parsed.reserve(in.as_array().size());
-	for (const auto& item : in.as_array()) {
-		scn::input_action_entry action;
-		if (const auto* object = item.if_object()) {
-			action.name = string_field(*object, "name");
-			if (const auto* bindings = object->if_contains("bindings"); bindings && bindings->is_array()) {
-				for (const auto& b : bindings->as_array()) {
-					scn::input_binding_entry binding;
-					if (const auto* bo = b.if_object()) {
-						binding.key = checked_field(*bo, "key");
-						binding.mouse = checked_field(*bo, "mouse");
-					}
-					action.bindings.push_back(std::move(binding));
-				}
-			}
-		}
-		parsed.push_back(std::move(action));
-	}
-	actions.entries = std::move(parsed);
+	actions.entries = parse_entries(in.as_array());
+	actions.source = in;
 	return true;
 }
 
@@ -83,6 +86,10 @@ inp::action_map scn::build_action_map(const input_actions_desc& desc, std::strin
 		std::vector<inp::action_binding> bindings;
 		for (size_t j = 0; j < entry.bindings.size(); ++j) {
 			const auto& b = entry.bindings[j];
+			if (b.key_not_text || b.mouse_not_text) {
+				egLOG_WARN("input", "{}: /actions/{}/bindings/{}/{}: not a string, skipped", file, i, j, b.key_not_text ? "key" : "mouse");
+				continue;
+			}
 			if (b.key.empty() == b.mouse.empty()) {
 				egLOG_WARN("input", "{}: /actions/{}/bindings/{}: a binding names exactly one of \"key\" and \"mouse\", skipped", file, i, j);
 				continue;

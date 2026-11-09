@@ -32,7 +32,8 @@ namespace inp
 		// Ids follow the order of add(). False, and nothing added, for an empty name or one already there.
 		bool add(std::string name, std::vector<action_binding> bindings);
 
-		// Look an action up once and keep its id. An unknown name gives invalid_action and a warning, once per name.
+		// Look an action up once (at init, on the main thread: the warned names are kept without a lock) and keep its
+		// id. An unknown name gives invalid_action and a warning, once per name.
 		action_id id(std::string_view name) const;
 		// Null for invalid_action or an id out of range.
 		const action* find(action_id id) const;

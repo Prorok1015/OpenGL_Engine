@@ -20,6 +20,9 @@ namespace scn
 	{
 		std::string key;
 		std::string mouse;
+		// The field is there but is not a string: build_action_map reports it.
+		bool key_not_text = false;
+		bool mouse_not_text = false;
 		bool operator==(const input_binding_entry&) const = default;
 	};
 
@@ -34,7 +37,10 @@ namespace scn
 	struct input_action_list
 	{
 		std::vector<input_action_entry> entries;
-		bool operator==(const input_action_list&) const = default;
+		// As the file had it: written back unchanged while `entries` still read the same, so saving a file with
+		// mistakes in it keeps them for the person to fix instead of dropping them.
+		json::value source;
+		bool operator==(const input_action_list& other) const { return entries == other.entries; }
 	};
 
 	class input_actions_desc;

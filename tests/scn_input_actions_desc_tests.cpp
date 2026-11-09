@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(ProblemsAreWarnedWithTheirPathAndSkipped)
 	BOOST_TEST(warned("/actions/0/bindings/2/mouse: unknown mouse button 'BTN_1'"));
 	BOOST_TEST(warned("/actions/0/bindings/3: a binding names exactly one"));
 	BOOST_TEST(warned("/actions/0/bindings/4: a binding names exactly one"));
-	BOOST_TEST(warned("/actions/0/bindings/5/key: unknown key"));
+	BOOST_TEST(warned("/actions/0/bindings/5/key: not a string"));
 	BOOST_TEST(warned("/actions/1: an action without a name"));
 	BOOST_TEST(warned("/actions/2: an action without a name"));
 	BOOST_TEST(warned("/actions/3/name: action 'Jump' is already declared"));
@@ -91,6 +91,30 @@ BOOST_AUTO_TEST_CASE(ProblemsAreWarnedWithTheirPathAndSkipped)
 	BOOST_TEST(map.actions()[0].name == "Jump");
 	BOOST_TEST(map.actions()[0].bindings.size() == 1u); // only SPACE
 	BOOST_TEST(map.actions()[1].name == "Ok");
+}
+
+BOOST_AUTO_TEST_CASE(AFileWithMistakesIsSavedAsItWasUntilItIsEdited)
+{
+	constexpr const char* broken = R"({ "actions": [
+		{ "name": "Jump", "bindings": [ { "key": 5 }, { "key": "SPACEBAR", "extra": true }, 7 ] },
+		"not an object", { "bindings": null } ] })";
+	auto desc = read(broken);
+	boost::json::object saved;
+	desc.serialize(saved);
+	BOOST_TEST((saved.at("actions") == boost::json::parse(broken).as_object().at("actions")));
+	BOOST_TEST(boost::json::serialize(saved).find("not a string") == std::string::npos);
+
+	auto not_an_array = read(R"({ "actions": 5 })");
+	boost::json::object kept;
+	not_an_array.serialize(kept);
+	BOOST_TEST((kept.at("actions") == boost::json::value(5)));
+
+	// An edit writes what the desc now holds.
+	desc.actions.entries.resize(1);
+	desc.actions.entries[0].bindings = { scn::input_binding_entry{ .key = "SPACE" } };
+	boost::json::object edited;
+	desc.serialize(edited);
+	BOOST_TEST((edited.at("actions") == boost::json::parse(R"([{"name":"Jump","bindings":[{"key":"SPACE"}]}])")));
 }
 
 BOOST_AUTO_TEST_CASE(ActionsThatAreNotAnArrayAreWarnedAboutAndEmpty)
