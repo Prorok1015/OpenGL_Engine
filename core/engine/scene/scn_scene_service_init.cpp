@@ -52,6 +52,11 @@ void scn::scene_init(ds::app_data_storage &store) {
   render_system.set_skinning_manager(&store.require<rnd::skinning_manager>());
 }
 
+void scn::stop_scene_loads(ds::app_data_storage &store) {
+  store.require<scn::context_manager>().stop_layer_loads();
+  store.require<res::resource_system>().stop_loading();
+}
+
 void scn::scene_term(ds::app_data_storage &store) {
 	store.destruct<rnd::frame_assembler>();
   store.destruct<scn::hot_reload_manager>();

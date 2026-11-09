@@ -273,6 +273,40 @@ BOOST_AUTO_TEST_CASE(destroying_the_layer_cancels_its_pending_loads)
 	BOOST_TEST(pending.has_error());
 }
 
+// #653: what the destructor does to the loads, with the layer still there.
+BOOST_AUTO_TEST_CASE(stop_loading_cancels_the_pending_loads_and_every_later_one)
+{
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto pending = layer->require<res::text_resource>(put("a.txt", "hello")); // not pumped: still queued
+	BOOST_TEST(!pending.is_ready());
+
+	layer->stop_loading();
+	pump();
+	BOOST_TEST(pending.has_error());
+	BOOST_TEST(pending.error_text() == "Load cancelled");
+
+	const auto later = layer->require<res::text_resource>(put("b.txt", "later"));
+	pump();
+	BOOST_TEST(later.has_error());
+	BOOST_TEST(later.error_text() == "Load cancelled");
+
+	layer->stop_loading();
+	layer.reset();
+	pump();
+}
+
+BOOST_AUTO_TEST_CASE(stop_loading_of_the_root_leaves_its_finished_resources)
+{
+	const auto tag = put("a.txt", "hello");
+	const auto loaded = load<res::text_resource>(*rs, tag);
+	BOOST_REQUIRE(loaded.is_ready());
+
+	layer.reset();
+	rs->stop_loading();
+	BOOST_TEST(loaded.is_ready());
+	BOOST_TEST(loaded.get()->str() == "hello");
+}
+
 // The base's empty game layer has no limit: its writes go to the root's resolvers.
 BOOST_AUTO_TEST_CASE(a_layer_without_a_write_limit_stores_and_erases_in_the_root)
 {

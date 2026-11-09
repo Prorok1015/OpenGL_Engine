@@ -147,6 +147,7 @@ struct null_engine_fixture
 	// The first step of engine::engine_module::shutdown_services, in the same order. Idempotent.
 	void unregister_scene_types()
 	{
+		scn::stop_scene_loads(storage);
 		scene_types.reset();
 	}
 
