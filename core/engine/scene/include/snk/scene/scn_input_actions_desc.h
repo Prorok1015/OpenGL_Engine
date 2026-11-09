@@ -18,8 +18,8 @@ namespace scn
 {
 	struct input_binding_entry
 	{
-		std::string key;
-		std::string mouse;
+		std::string key{};
+		std::string mouse{};
 		// The field is there but is not a string: build_action_map reports it.
 		bool key_not_text = false;
 		bool mouse_not_text = false;
@@ -28,15 +28,15 @@ namespace scn
 
 	struct input_action_entry
 	{
-		std::string name;
-		std::vector<input_binding_entry> bindings;
+		std::string name{};
+		std::vector<input_binding_entry> bindings{};
 		bool operator==(const input_action_entry&) const = default;
 	};
 
 	// Not a std::vector: the field is read and written only by its codec, never as a schema array.
 	struct input_action_list
 	{
-		std::vector<input_action_entry> entries;
+		std::vector<input_action_entry> entries{};
 		// As the file had it: written back unchanged while `entries` still read the same, so saving a file with
 		// mistakes in it keeps them for the person to fix instead of dropping them.
 		json::value source;
