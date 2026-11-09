@@ -23,6 +23,10 @@ namespace edt
 	// warning and gives `configuration` (the team preset still builds).
 	std::string preset_for_configuration(const std::filesystem::path& code_dir, std::string_view configuration);
 
+	// Its effective SNK_SHIPPING is true for CMake (the template's `shipping`, #592): a game executable with the static
+	// engine, which the editor neither lists nor builds, since it cannot load it.
+	bool is_shipping_preset(const prj::configure_preset& preset);
+
 	// One configure preset of CMakePresets.json as the Build Settings window shows it.
 	struct build_settings_configuration
 	{

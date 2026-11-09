@@ -9,7 +9,9 @@
 # 2. The layout: the editor, snk_engine.dll and the Debug snk_engined.dll, PDBs, the MSVC runtime, the SDK.
 # 3. editor.exe and snk_engine.dll need no DLL outside the package but Windows' own (check_windows_deps.sh).
 # 4. tests/package_consumer builds and runs against snk::engine and snk::engine_static, Debug and Release.
-# 5. The project template's game module builds against the package (Release, and DebugGame on the Release engine).
+# 5. The project template's game module builds against the package (Release, and DebugGame on the Release engine), and
+#    its shipping executable (preset `shipping`, #592): game.exe with the static engine, built only (tests/static_game
+#    runs a host), needing no snk_engine.dll nor any other DLL but Windows' own and the MSVC runtime.
 # 6. editor.exe runs from the unpacked folder: --headless (a null window and the null renderer, no GL context, #452)
 #    opens projects/sandbox, loads a level and exits with 0. That proves the DLLs resolve and the config, the engine
 #    resources (res_core/) and the project are found; it does not draw anything (hosted runners have no GPU).
@@ -67,7 +69,8 @@ for f in bin/editor.exe bin/editor.pdb bin/snk_engine.dll bin/snk_engine.pdb bin
 	lib/cmake/snake_sdk/snake_sdkConfig.cmake lib/cmake/snake_sdk/snake_sdk_sharedTargets.cmake \
 	lib/cmake/snake_sdk/snake_sdk_staticTargets.cmake lib/cmake/snake_sdk/snake_sdk_sharedTargets-release.cmake \
 	lib/cmake/snake_sdk/snake_sdk_sharedTargets-debug.cmake lib/cmake/snake_sdk/snake_sdk_staticTargets-release.cmake \
-	lib/cmake/snake_sdk/snake_sdk_staticTargets-debug.cmake config/editor.cfg data/templates res_core \
+	lib/cmake/snake_sdk/snake_sdk_staticTargets-debug.cmake lib/cmake/snake_sdk/SnkGameHost.cmake \
+	include/snk/game_host/game_host.h config/editor.cfg data/templates res_core \
 	projects/sandbox/project.snkproj README.txt include/snk; do
 	if [[ ! -e "${root}/${f}" ]]; then echo "::error::the package has no ${f}"; status=1; fi
 done
@@ -113,6 +116,12 @@ if [[ -n "$(find "${proj}/build/bin" -maxdepth 1 -iname 'gamed.*' -print -quit)"
 fi
 # DebugGame (built last) names its PDB without a path (/PDBALTPATH, #435).
 if grep -aqi 'bin[\/]game\.pdb' "${proj}/build/bin/game.dll"; then echo "::error::game.dll names its PDB by path"; exit 1; fi
+echo "---- the template's shipping executable"
+(cd "${proj}/code" && cmake --preset shipping && cmake --build --preset shipping)
+ls -l "${proj}/build/shipping"
+test -f "${proj}/build/shipping/game.exe"
+# No snk_engine.dll lies next to it: an import of the shared engine fails here like any other non-Windows DLL.
+bash tools/ci/check_windows_deps.sh --runtime-elsewhere "${proj}/build/shipping" game.exe
 
 # ---- 6. editor.exe from the unpacked folder ----
 log="${work}/editor_headless"

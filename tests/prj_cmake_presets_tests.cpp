@@ -40,11 +40,19 @@ namespace {
             "displayName": "Release",
             "inherits": "base",
             "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        },
+        {
+            "name": "shipping",
+            "displayName": "Shipping",
+            "description": "A game executable with the module and the static engine compiled in (not built by the editor)",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SNK_SHIPPING": "ON" }
         }
     ],
     "buildPresets": [
         { "name": "debuggame", "configurePreset": "debuggame" },
-        { "name": "release", "configurePreset": "release", "jobs": 4 }
+        { "name": "release", "configurePreset": "release", "jobs": 4 },
+        { "name": "shipping", "configurePreset": "shipping" }
     ]
 }
 )";
@@ -133,7 +141,7 @@ BOOST_AUTO_TEST_CASE(MainView_ResolvesInheritance)
 {
 	const auto main = parse_main(k_main);
 	BOOST_TEST(main.version == 3);
-	BOOST_REQUIRE(main.configure.size() == 3u);
+	BOOST_REQUIRE(main.configure.size() == 4u);
 	BOOST_TEST(main.configure[0].hidden);
 
 	const auto* debuggame = main.find_configure("debuggame");
@@ -147,10 +155,17 @@ BOOST_AUTO_TEST_CASE(MainView_ResolvesInheritance)
 	BOOST_TEST(debuggame->cache_variables.at("CMAKE_BUILD_TYPE") == "DebugGame");
 	BOOST_TEST(debuggame->cache_variables.at("CMAKE_EXPORT_COMPILE_COMMANDS") == "ON");
 
-	BOOST_REQUIRE(main.build.size() == 2u);
+	const auto* shipping = main.find_configure("shipping");
+	BOOST_REQUIRE(shipping);
+	BOOST_TEST(shipping->cache_variables.size() == 3u);
+	BOOST_TEST(shipping->cache_variables.at("SNK_SHIPPING") == "ON");
+	BOOST_TEST(shipping->cache_variables.at("CMAKE_EXPORT_COMPILE_COMMANDS") == "ON");
+
+	BOOST_REQUIRE(main.build.size() == 3u);
 	BOOST_TEST(main.build[0].configure_preset == "debuggame");
 	BOOST_TEST(!main.build[0].jobs.has_value());
 	BOOST_TEST((main.build[1].jobs == 4));
+	BOOST_TEST(main.build[2].configure_preset == "shipping");
 }
 
 BOOST_AUTO_TEST_CASE(MainView_InheritsArray_FirstParentWins_NullUnsets_ObjectFormIsItsValue)

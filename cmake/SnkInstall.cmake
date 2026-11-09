@@ -14,12 +14,13 @@
 #   lib/libsnk_engine.so                a shared build
 #   bin/snk_engine.dll, lib/snk/snk_engine.lib   a shared build on Windows
 #   lib/cmake/snake_sdk/                snake_sdkConfig.cmake, ...ConfigVersion.cmake,
-#                                       snake_sdk_{shared,static}Targets[-<config>].cmake
+#                                       snake_sdk_{shared,static}Targets[-<config>].cmake,
+#                                       SnkGameHost.cmake (a static build: snk_add_game_host, #592)
 #
 # One prefix holds both engines, installed from two builds of the same sources (#223): a shared build
 # exports snk::engine (the editor and game modules link it with snk::engine_api; every other target of the set is an
 # INTERFACE facade with the usage requirements only, see _snk_sdk_make_facade), a static build
-# exports snk::engine_static (Shipping, #23). The two builds compile the same component sources
+# exports snk::engine_static and snk::game_host (Shipping, #23, #592). The two builds compile the same component sources
 # differently (SNK_API dllexport vs nothing), so each has its own export set, file names and target
 # names (snk::static_<name>): installing one never overwrites the other. Debug libraries carry a "d"
 # (CMAKE_DEBUG_POSTFIX), so a Debug and a Release install share the prefix too. Third-party libraries
@@ -130,7 +131,7 @@ function(_snk_sdk_include_dest out abs)
 		string(FIND "${abs}/" "${CMAKE_SOURCE_DIR}/" _pos)
 		if(_pos EQUAL 0)
 			file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${abs}")
-			if(_rel MATCHES "^core/.*/include$")
+			if(_rel MATCHES "^(core/.*|apps/game/host)/include$")
 				# snk_component_headers(): include/snk/<name>/... lands at
 				# <prefix>/include/snk/<name>/..., whichever component it comes from.
 				set(_dest include)
@@ -376,6 +377,10 @@ function(snk_install_sdk)
 
 	# 1. Everything the public targets need at build/link time, transitively.
 	set(_todo snk::engine snk::engine_api)
+	# The shipping host library (#592) exists in the static build only.
+	if(NOT SNK_ENGINE_SHARED AND TARGET snk::game_host)
+		list(APPEND _todo snk::game_host)
+	endif()
 	set(_closure "")
 	set(_imported "")
 	while(_todo)
@@ -428,6 +433,10 @@ function(snk_install_sdk)
 		if(NOT SNK_ENGINE_SHARED)
 			if(_t STREQUAL "engine")
 				set_property(TARGET ${_t} PROPERTY EXPORT_NAME engine_static)
+			elseif(_t STREQUAL "game_host")
+				# Only in the static set, so no static_ prefix: snk_add_game_host links snk::game_host in-tree and
+				# from the SDK alike.
+				set_property(TARGET ${_t} PROPERTY EXPORT_NAME game_host)
 			else()
 				get_target_property(_name ${_t} EXPORT_NAME)
 				if(NOT _name)
@@ -515,6 +524,11 @@ function(snk_install_sdk)
 		"${CMAKE_BINARY_DIR}/snake_sdkConfigVersion.cmake"
 		DESTINATION ${SNK_SDK_CMAKE_DIR}
 		COMPONENT snake_sdk)
+	# snk_add_game_host() for a consumer of snk::game_host; the config includes it when the static set is there. The
+	# static build alone installs it, so the shared install into the same prefix writes nothing twice.
+	if(NOT SNK_ENGINE_SHARED AND TARGET game_host)
+		install(FILES "${CMAKE_SOURCE_DIR}/cmake/SnkGameHost.cmake" DESTINATION ${SNK_SDK_CMAKE_DIR} COMPONENT snake_sdk)
+	endif()
 
 	# The same package for this build tree, in <build>/snake_sdk (#434): an editor run from the build tree builds a
 	# project's game module against it without `cmake --install`. Paths point into the build and source trees.
@@ -528,6 +542,9 @@ function(snk_install_sdk)
 		INSTALL_DESTINATION "${_tree_dir}"
 		INSTALL_PREFIX "${CMAKE_BINARY_DIR}")
 	configure_file("${CMAKE_BINARY_DIR}/snake_sdkConfigVersion.cmake" "${_tree_dir}/snake_sdkConfigVersion.cmake" COPYONLY)
+	if(NOT SNK_ENGINE_SHARED AND TARGET game_host)
+		configure_file("${CMAKE_SOURCE_DIR}/cmake/SnkGameHost.cmake" "${_tree_dir}/SnkGameHost.cmake" COPYONLY)
+	endif()
 
 	# Builds exactly what `cmake --install` copies (INTERFACE libraries have nothing to build).
 	set(_buildable "")

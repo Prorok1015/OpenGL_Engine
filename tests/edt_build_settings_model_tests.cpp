@@ -42,11 +42,18 @@ constexpr std::string_view k_main = R"({
             "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
         },
         { "name": "debuggame", "displayName": "DebugGame", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "DebugGame" } },
-        { "name": "release", "displayName": "Release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } }
+        { "name": "release", "displayName": "Release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+        {
+            "name": "shipping",
+            "displayName": "Shipping",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SNK_SHIPPING": "ON" }
+        }
     ],
     "buildPresets": [
         { "name": "debuggame", "configurePreset": "debuggame" },
-        { "name": "release", "configurePreset": "release" }
+        { "name": "release", "configurePreset": "release" },
+        { "name": "shipping", "configurePreset": "shipping" }
     ]
 }
 )";
@@ -146,6 +153,47 @@ BOOST_AUTO_TEST_CASE(Load_TeamDefinesAreReadOnly_UserDefinesAndJobsFromTheUserPr
 	BOOST_TEST(!model.dirty());
 	BOOST_TEST(model.pending_files().empty());
 	BOOST_TEST(model.changed_on_disk().empty());
+}
+
+// #592: the static game executable cannot be loaded by the editor, so its preset is neither listed nor edited.
+BOOST_AUTO_TEST_CASE(Load_TheShippingPresetIsNotListed)
+{
+	load();
+	BOOST_REQUIRE_MESSAGE(model.available(), model.unavailable_reason());
+	BOOST_TEST(model.find("shipping") == nullptr);
+	BOOST_TEST(model.set_define("shipping", "A", "1").has_value());
+	BOOST_TEST(!model.set_define_everywhere("SNK_X", "ON").has_value());
+	BOOST_TEST(model.pending_user_edits().size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(IsShippingPreset_FollowsCMakeTruth_ThroughInheritance)
+{
+	const prj::main_presets_result parsed = prj::parse_cmake_presets(R"({ "version": 3, "configurePresets": [
+		{ "name": "ship_base", "hidden": true, "cacheVariables": { "SNK_SHIPPING": "ON" } },
+		{ "name": "inherited", "inherits": "ship_base" },
+		{ "name": "lower", "cacheVariables": { "SNK_SHIPPING": "yes" } },
+		{ "name": "number", "cacheVariables": { "SNK_SHIPPING": "2" } },
+		{ "name": "typed", "cacheVariables": { "SNK_SHIPPING": { "type": "BOOL", "value": true } } },
+		{ "name": "off", "cacheVariables": { "SNK_SHIPPING": "OFF" } },
+		{ "name": "zero", "cacheVariables": { "SNK_SHIPPING": "0" } },
+		{ "name": "typed_off", "cacheVariables": { "SNK_SHIPPING": { "type": "BOOL", "value": false } } },
+		{ "name": "unset", "inherits": "ship_base", "cacheVariables": { "SNK_SHIPPING": null } },
+		{ "name": "none" }
+	] })");
+	BOOST_REQUIRE_MESSAGE(parsed.presets, parsed.error);
+	const auto shipping = [&](std::string_view name) {
+		const prj::configure_preset* preset = parsed.presets->find_configure(name);
+		BOOST_REQUIRE(preset != nullptr);
+		return edt::is_shipping_preset(*preset);
+	};
+	for (const std::string_view name : { "inherited", "lower", "number", "typed" }) {
+		BOOST_TEST_INFO("preset: " << name);
+		BOOST_TEST(shipping(name));
+	}
+	for (const std::string_view name : { "off", "zero", "typed_off", "unset", "none" }) {
+		BOOST_TEST_INFO("preset: " << name);
+		BOOST_TEST(!shipping(name));
+	}
 }
 
 BOOST_AUTO_TEST_CASE(Load_WithoutAProjectOrPresets_IsUnavailable)

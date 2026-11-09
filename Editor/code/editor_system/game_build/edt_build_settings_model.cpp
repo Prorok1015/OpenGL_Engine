@@ -5,6 +5,8 @@
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <format>
 #include <system_error>
 #include <utility>
@@ -67,6 +69,20 @@ namespace {
 		"required": ["configuration", "jobs_mode", "jobs", "reload_after_build", "log_verbosity", "live", "configurations", "errors"],
 		"additionalProperties": false
 	})";
+}
+
+bool edt::is_shipping_preset(const prj::configure_preset& preset)
+{
+	const auto it = preset.cache_variables.find("SNK_SHIPPING");
+	if (it == preset.cache_variables.end()) return false;
+	std::string value = it->second;
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+	if (value == "ON" || value == "TRUE" || value == "YES" || value == "Y") return true;
+	// CMake's if(): any other non-zero number is true as well.
+	long long number = 0;
+	const char* const end = value.data() + value.size();
+	const auto [ptr, ec] = std::from_chars(value.data(), end, number);
+	return ec == std::errc{} && ptr == end && number != 0;
 }
 
 std::string edt::preset_for_configuration(const fs::path& code_dir, std::string_view configuration)
@@ -156,7 +172,7 @@ void edt::build_settings_model::load(const fs::path& root)
 	}
 
 	for (const prj::configure_preset& preset : m_main->configure) {
-		if (preset.hidden) continue;
+		if (preset.hidden || is_shipping_preset(preset)) continue;
 		build_settings_configuration entry;
 		entry.name = preset.name;
 		entry.display_name = preset.display_name.empty() ? preset.name : preset.display_name;

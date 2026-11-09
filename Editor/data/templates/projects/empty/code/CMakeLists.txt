@@ -3,11 +3,16 @@
 #   cmake --preset debuggame && cmake --build --preset debuggame
 # with SNAKE_SDK_DIR (or snake_sdk_DIR) set to the folder holding snake_sdkConfig.cmake: <editor>/lib/cmake/snake_sdk
 # in an installed editor, <build>/snake_sdk in an engine build tree.
+#
+# Shipping (SNK_SHIPPING, preset `shipping`): the same code compiled into a game executable with the static engine,
+# ../build/shipping/<name>(.exe), instead of a module:
+#   cmake --preset shipping && cmake --build --preset shipping
 cmake_minimum_required(VERSION 3.24)
 project(game LANGUAGES C CXX)
 
 # The module's name in ../project.snkproj: the editor loads ../build/bin/<name>.dll (lib<name>.so).
 set(SNK_GAME_MODULE game)
+option(SNK_SHIPPING "Build a game executable with the module and the static engine compiled in" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +37,19 @@ if(NOT snake_sdk_DIR AND DEFINED ENV{SNAKE_SDK_DIR})
 	set(snake_sdk_DIR "$ENV{SNAKE_SDK_DIR}" CACHE PATH "Folder holding snake_sdkConfig.cmake")
 endif()
 find_package(snake_sdk 0.2 CONFIG REQUIRED)
+
+if(SNK_SHIPPING)
+	if(NOT snake_sdk_HAS_STATIC)
+		message(FATAL_ERROR "The SDK in ${snake_sdk_DIR} has no static engine (snake_sdk_staticTargets.cmake): "
+			"a shipping build compiles the engine into the game executable.")
+	endif()
+	# The module compiled with SNK_GAME_MODULE_STATIC: an OBJECT library, so its SNK_DECLARE_MODULE is not dropped.
+	add_library(game_objects OBJECT src/game_module.cpp)
+	snk_add_game_host(game MODULE game_objects NAME ${SNK_GAME_MODULE})
+	set_target_properties(game PROPERTIES OUTPUT_NAME "${SNK_GAME_MODULE}")
+	return()
+endif()
+
 if(NOT snake_sdk_ENGINE_SHARED)
 	message(FATAL_ERROR "The SDK in ${snake_sdk_DIR} has a static engine: a game module needs the shared engine "
 		"(SNK_ENGINE_SHARED), or it would carry its own copy of it.")

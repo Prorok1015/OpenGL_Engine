@@ -28,6 +28,10 @@ endif()
 if(snake_sdk_HAS_STATIC)
 	# One target for a static consumer: the engine archive and the headers of the layer contract.
 	set_property(TARGET snk::engine_static APPEND PROPERTY INTERFACE_LINK_LIBRARIES snk::static_engine_api)
+	# Shipping (#592): snk_add_game_host(<exe> MODULE <OBJECT lib> NAME <module>) links snk::game_host, the static host.
+	if(TARGET snk::game_host)
+		include("${CMAKE_CURRENT_LIST_DIR}/SnkGameHost.cmake")
+	endif()
 endif()
 
 # The engine is installed as Release and, from the separate debug package, Debug. A configuration of
