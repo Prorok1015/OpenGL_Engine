@@ -1307,7 +1307,7 @@ BOOST_AUTO_TEST_CASE(a_cursor_is_good_for_one_query_of_one_play_session_and_cont
 	for (const json::value& item : page.structured.as_object().at("items").as_array()) seen.push_back(item.as_object().at("entity").to_number<std::uint64_t>());
 	for (const json::value& item : next.structured.as_object().at("items").as_array()) seen.push_back(item.as_object().at("entity").to_number<std::uint64_t>());
 	BOOST_TEST(seen.size() == 5u); // six made, one of them (made[3]) destroyed before it was reached; made[0] was already listed
-	BOOST_TEST(std::ranges::adjacent_find(seen) == seen.end());
+	BOOST_TEST((std::ranges::adjacent_find(seen) == seen.end()));
 
 	const mcp::call_result other_filter = call_tool("runtime_query", R"json({"filter":{"name_glob":"other"},"cursor":")json" + cursor + "\"}");
 	BOOST_TEST(other_filter.is_error);
