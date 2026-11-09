@@ -318,8 +318,12 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 #ifdef _WIN32
 	// A shared temp folder (C:\Windows\Temp for a service) holds other users' folders: only one of this user's profile
 	// is cleaned.
-	const fs::path profile_data = environment_path("LOCALAPPDATA");
-	if (profile_data.empty() || !fs_paths::is_inside(profile_data, base)) {
+	// Canonical: %TEMP% often names the profile by its 8.3 short name (C:\Users\RUNNER~1\...), %LOCALAPPDATA% by the long one.
+	std::error_code profile_ec;
+	std::error_code base_ec;
+	const fs::path profile_data = fs::canonical(environment_path("LOCALAPPDATA"), profile_ec);
+	const fs::path canonical_base = fs::canonical(base, base_ec);
+	if (profile_ec || base_ec || !fs_paths::is_inside(profile_data, canonical_base)) {
 		egLOG_DEBUG("resource", "no cleanup of ended runs: '{}' is not in this user's profile", fs_paths::utf8_of(base));
 		return 0;
 	}
