@@ -5,7 +5,8 @@
 #include <functional>
 
 scn::scene_layer::scene_layer(res::resource_system& base_resources, ecs_assembler& base_assembler, ecs::system_factory& base_systems,
-	const ecs::channel_registry& base_channels, const component_catalog& base_catalog, ds::task_system* tasks)
+	const ecs::channel_registry& base_channels, const ecs::bus_registry& base_events, const component_catalog& base_catalog,
+	ds::task_system* tasks)
 	: m_resources(std::make_unique<res::resource_system>(base_resources))
 	, m_descs(*m_resources, &base_assembler.get_desc_system())
 	, m_assembler(m_descs, *m_resources, &base_assembler)
@@ -17,6 +18,7 @@ scn::scene_layer::scene_layer(res::resource_system& base_resources, ecs_assemble
 	m_resources->registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, std::ref(*m_resources), std::ref(m_descs));
 	m_hot_reload = std::make_shared<hot_reload_manager>(m_assembler, *m_resources);
 	m_channels = std::make_shared<ecs::channel_registry>(&base_channels);
+	m_events = std::make_shared<ecs::bus_registry>(&base_events);
 	m_task_system = tasks;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/desc/desc_system.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_component_registry.hpp>
@@ -19,7 +20,7 @@ namespace scn
 	class hot_reload_manager;
 
 	// The services of a layer over the base (MODULE_LAYER.md): a resource layer with a desc adapter on the layer's
-	// desc system, desc system, assembler, system factory and channel types over the base ones, component names, a
+	// desc system, desc system, assembler, system factory, channel and event types over the base ones, component names, a
 	// meta context and the hot reload of the layer's worlds. What a game module registers goes here; the worlds of the
 	// layer are the sets the context_manager created for it. Main thread, between frames; the base services outlive it.
 	//
@@ -31,7 +32,8 @@ namespace scn
 	public:
 		// `tasks`: the task system the layer's tasks run on; null when nothing is bound to tasks().
 		scene_layer(res::resource_system& base_resources, ecs_assembler& base_assembler, ecs::system_factory& base_systems,
-			const ecs::channel_registry& base_channels, const component_catalog& base_catalog, ds::task_system* tasks);
+			const ecs::channel_registry& base_channels, const ecs::bus_registry& base_events, const component_catalog& base_catalog,
+			ds::task_system* tasks);
 		// Stops the layer's tasks, drops what it keeps, then stops the layer's loads before the desc system their
 		// adapters use goes away.
 		~scene_layer();
@@ -56,6 +58,10 @@ namespace scn
 		// The message types of the layer's sets: the base's, then the module's (`channels().add<my_message>()`).
 		ecs::channel_registry& channels() { return *m_channels; }
 		const std::shared_ptr<ecs::channel_registry>& channel_types() const { return m_channels; }
+		// The event types of the worlds of the layer's sets (WORLD_BUS.md 3): the base's, then the module's
+		// (`events().add<my_event>()`).
+		ecs::bus_registry& events() { return *m_events; }
+		const std::shared_ptr<ecs::bus_registry>& event_types() const { return m_events; }
 
 		// Owner of the module's tasks: run them with task_system::run(lane, desc, layer.tasks(), fn).
 		const ds::lifetime& tasks() const { return m_tasks; }
@@ -90,5 +96,6 @@ namespace scn
 		std::vector<std::shared_ptr<void>> m_kept;
 		ds::task_system* m_task_system = nullptr;
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
+		std::shared_ptr<ecs::bus_registry> m_events;
 	};
 }

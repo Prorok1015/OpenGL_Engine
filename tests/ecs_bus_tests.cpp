@@ -535,6 +535,24 @@ BOOST_AUTO_TEST_CASE(binding_to_a_registry_of_other_types_is_refused)
 	BOOST_TEST(logs.count("the registry now has 0") == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(posting_or_subscribing_binds_a_type_registered_after_the_bind)
+{
+	ecs::bus_registry types;
+	types.add<coin>();
+	entt::registry reg;
+	auto& bus = reg.ctx().emplace<ecs::world_bus>();
+	BOOST_TEST(bus.bind(types, reg, "World0"));
+
+	types.add<hit>();
+	int hits = 0;
+	auto sub = bus.subscribe<hit>([&](const ecs::envelope<hit>&) { ++hits; });
+	BOOST_TEST(sub.connected());
+	BOOST_TEST(bus.bound_types() == 2u);
+	bus.post(hit{ 1 });
+	bus.deliver();
+	BOOST_TEST(hits == 1);
+}
+
 BOOST_AUTO_TEST_CASE(two_runs_deliver_the_same_sequence)
 {
 	auto run = [] {
