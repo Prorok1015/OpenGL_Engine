@@ -21,10 +21,18 @@
             "displayName": "Release",
             "inherits": "base",
             "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        },
+        {
+            "name": "shipping",
+            "displayName": "Shipping",
+            "description": "A game executable with the module and the static engine compiled in (not built by the editor)",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SNK_SHIPPING": "ON" }
         }
     ],
     "buildPresets": [
         { "name": "debuggame", "configurePreset": "debuggame" },
-        { "name": "release", "configurePreset": "release" }
+        { "name": "release", "configurePreset": "release" },
+        { "name": "shipping", "configurePreset": "shipping" }
     ]
 }

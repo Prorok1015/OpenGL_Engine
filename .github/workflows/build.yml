@@ -1000,6 +1000,26 @@ jobs:
             "build/consumer-${engine}/package_consumer"
           done
 
+      # The project template's shipping executable (#592): the module compiled into snk::game_host with the static
+      # engine of the prefix. Built only; tests/static_game is the run test.
+      - name: Build the project template's shipping executable against the prefix
+        run: |
+          proj="${RUNNER_TEMP}/template_shipping"
+          rm -rf "$proj"
+          cp -r Editor/data/templates/projects/empty "$proj"
+          export SNAKE_SDK_DIR="${SDK_PREFIX}/lib/cmake/snake_sdk"
+          (cd "$proj/code" && cmake --preset shipping && cmake --build --preset shipping)
+          ls -l "$proj/build/shipping"
+          exe="$proj/build/shipping/game"
+          test -x "$exe"
+          # No pipe into grep -q: under pipefail an early exit of the reader fails the writer, and the check would pass.
+          needed="$(readelf -d "$exe" | grep NEEDED)"
+          echo "$needed"
+          if [[ "$needed" == *snk_engine* ]]; then
+            echo "::error::the shipping executable needs the shared engine"
+            exit 1
+          fi
+
   # The Windows release package (#223): Release and Debug legs build the static and the shared engine and pack the two
   # archives, a check job unpacks them like a user (the consumer against both engines, the template's game module,
   # dumpbin, editor.exe --headless from the unpacked folder). release.yml runs the same workflow. FULL tier.

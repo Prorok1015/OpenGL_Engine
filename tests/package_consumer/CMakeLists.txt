@@ -38,6 +38,10 @@ target_link_libraries(package_consumer PRIVATE ${_engine})
 # jobs turn it on. Add a component to SNK_CONSUMER_HEADER_COMPONENTS when it gains public headers.
 option(SNK_CONSUMER_HEADER_CHECK "Compile one TU per installed public header of the migrated components" OFF)
 set(SNK_CONSUMER_HEADER_COMPONENTS application core_input window driver ecs desc resource common config input image game gui render scene core engine)
+if(snake_sdk_HAS_STATIC)
+	# The shipping host library (snk::game_host, #592) is installed with the static engine only.
+	list(APPEND SNK_CONSUMER_HEADER_COMPONENTS game_host)
+endif()
 if(SNK_CONSUMER_HEADER_CHECK)
 	get_filename_component(_sdk_prefix "${snake_sdk_DIR}/../../.." ABSOLUTE)
 	if(NOT IS_DIRECTORY "${_sdk_prefix}/include/snk")

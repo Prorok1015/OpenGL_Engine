@@ -3,4 +3,5 @@
 add_library(game_host STATIC game_host.cpp game_host_module.cpp game_host_module.h include/snk/game_host/game_host.h)
 add_library(snk::game_host ALIAS game_host)
 snk_component_headers(game_host)
-target_link_libraries(game_host PUBLIC snk::engine PUBLIC snk::engine_api PRIVATE snk::sanitizers)
+# Installed with the static SDK as snk::game_host: the sanitizer flags stay build-tree only, as for the components.
+target_link_libraries(game_host PUBLIC snk::engine PUBLIC snk::engine_api PRIVATE $<BUILD_LOCAL_INTERFACE:snk::sanitizers>)
