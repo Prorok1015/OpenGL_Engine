@@ -284,7 +284,7 @@ core::project_module_host::project_module_host(app::modules::module_loader& load
 
 std::optional<std::filesystem::path> core::project_module_host::build_output(const std::string& name) const
 {
-	if (!m_data.has_value<prj::project_context>()) {
+	if (m_options.compiled_only || !m_data.has_value<prj::project_context>()) {
 		return std::nullopt;
 	}
 	return find_library(m_data.require<prj::project_context>(), name);
@@ -368,7 +368,14 @@ core::project_modules_report core::project_module_host::load_all()
 
 	std::vector<std::string> known;
 	for (const auto& ref : project.data.modules) {
-		if (ref.kind == prj::module_kind::runtime && (m_options.compiled_in.contains(ref.name) || find_library(project, ref.name))) {
+		if (ref.kind != prj::module_kind::runtime) {
+			continue;
+		}
+		if (m_options.compiled_in.contains(ref.name)) {
+			known.push_back(ref.name);
+		} else if (m_options.compiled_only) {
+			egLOG_WARN("project", "module '{}' is not loaded: the static host loads only compiled-in modules", ref.name);
+		} else if (find_library(project, ref.name)) {
 			known.push_back(ref.name);
 		}
 	}
@@ -395,7 +402,7 @@ core::project_modules_report core::project_module_host::load_all()
 			std::unique_ptr<app::modules::module_source> source;
 			if (const auto it = m_options.compiled_in.find(ref.name); it != m_options.compiled_in.end()) {
 				source = std::make_unique<app::modules::static_module_source>(ref.name, it->second);
-			} else if (const auto found = find_library(project, ref.name)) {
+			} else if (const auto found = build_output(ref.name)) {
 				if (std::string why = copy_library(project, *found, copy); !why.empty()) {
 					return why;
 				}
@@ -438,6 +445,9 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	}
 	if (m_options.compiled_in.contains(name)) {
 		return refused("it is compiled into the host");
+	}
+	if (m_options.compiled_only) {
+		return refused("the static host loads only compiled-in modules");
 	}
 	const auto& project = m_data.require<prj::project_context>();
 	const auto found = find_library(project, name);

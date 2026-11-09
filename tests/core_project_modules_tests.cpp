@@ -378,6 +378,38 @@ BOOST_AUTO_TEST_CASE(a_compiled_in_module_is_current_and_a_refused_library_is_no
 	BOOST_TEST(!host.is_current("no_such_module"));
 }
 
+BOOST_AUTO_TEST_CASE(a_static_host_never_opens_the_build_output)
+{
+	open({ manifest_module("test_game"), manifest_module("extra_game", prj::module_kind::runtime, true) });
+	put_broken_library("test_game");
+	put_broken_library("extra_game");
+	core::project_modules_options options;
+	options.compiled_only = true;
+	core::project_module_host host(loader, data, options);
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.loaded.empty());
+	BOOST_TEST(report.refused.empty());
+	BOOST_TEST(report.missing_required == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(report.missing_optional == std::vector<std::string>{ "extra_game" });
+	BOOST_TEST(!fs::exists(root / ".cache" / "modules"));
+	BOOST_TEST(!host.build_output("test_game").has_value());
+	BOOST_TEST((host.reload("test_game").status == core::reload_status::refused));
+}
+
+BOOST_AUTO_TEST_CASE(a_static_host_still_loads_its_compiled_in_modules)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	auto options = compiled_in(probe_entry());
+	options.compiled_only = true;
+	const auto report = load(options);
+
+	BOOST_TEST(report.loaded == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(report.refused.empty());
+	BOOST_TEST(data.has_value<probe_service>());
+}
+
 BOOST_AUTO_TEST_CASE(a_library_that_cannot_be_opened_is_refused_and_its_copy_removed)
 {
 	open({ manifest_module("test_game") });

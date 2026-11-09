@@ -71,6 +71,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/level/scn_start_level.h>
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_project.h>
 #include <snk/platform/plt_process.h>
@@ -721,10 +722,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		});
 	}
 
-	std::string startup_level = cfg_startup_level;
-	if (startup_level.empty() && data.has_value<prj::project_context>()) {
-		startup_level = data.require<prj::project_context>().data.start_scene;
-	}
+	std::string startup_level = scn::start_level_name(data, *cfg_startup_level);
 	const std::optional<editor_mode> start_mode = editor_mode_of(*cfg_start_mode);
 	if (!start_mode) {
 		egLOG_WARN("editor", "editor/start_mode '{}' is neither 'editor' nor 'game': the editor starts in editor mode", *cfg_start_mode);
@@ -745,7 +743,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	}
 	if (!project_held && !startup_level.empty()) {
 		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
-		const res::tag level = startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level);
+		const res::tag level = scn::start_level_tag(startup_level);
 		// #518: a neutral loading screen until the load ends; every end of it (loaded, failed, Esc in its modal) passes
 		// through the poll below to finish_startup.
 		if (start_in_game && m_modes) m_modes->begin_startup(std::string(level.view()));
@@ -1530,7 +1528,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 		return false;
 	}
 	if (m_loading_level_handle.has_error()) {
-		egLOG_ERROR("Editor/Load", "Failed to load level '{}'", m_loading_level_tag.view());
+		scn::report_level_failed(m_loading_level_tag, m_loading_level_handle);
 		if (loaded_out) *loaded_out = false;
 		abandon_level_load();
 		return false;
@@ -1584,7 +1582,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 		abandon_level_load();
 	}
 	if (loaded) {
-		egLOG_INFO("Editor/LoadLevel", "level loaded: {}", m_state.level_tag.view());
+		scn::report_level_loaded(m_state.level_tag);
 		refresh_world_problems();
 		if (m_stop_after_level_loaded) {
 			egLOG_INFO("app", "exit after the level loaded (editor/exit_after_level_loaded)");

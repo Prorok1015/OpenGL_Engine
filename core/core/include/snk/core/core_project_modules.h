@@ -26,6 +26,9 @@ namespace core
 		std::map<std::string, app::modules::module_entry> compiled_in;
 		// Whether the manifest's editor modules count. None is loaded yet (Extension API, #22): they are only reported.
 		bool with_editor_modules = false;
+		// A static host (the shipping `game`, #591): only `compiled_in` modules run, nothing is opened from the
+		// project's build output, and reload() from it is refused.
+		bool compiled_only = false;
 	};
 
 	struct project_modules_report

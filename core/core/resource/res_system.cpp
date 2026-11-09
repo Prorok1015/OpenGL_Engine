@@ -20,6 +20,8 @@
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 // Optional lower layer (engine base resources). Empty = single-root setup.
 CFG_VAR_DEF_PATH(cfg_res_base_path, "resource/base_path", "");
+// Off in a shipped game (#591): nothing on disk is expected to change while it runs.
+CFG_VAR_DEF_BOOL(cfg_res_watch_files, "res/watch_files", true);
 
 void core::res::detail::then_on_main(const std::shared_ptr<res_resource_block>& block, ds::task_system& tasks,
                                      std::shared_ptr<ds::detail::held_slot> slot) {
@@ -227,11 +229,13 @@ void res::resource_system::register_mount(const mount &mounted) {
   egLOG("resource/system", "Mount {}:// ({}): {}", mounted.protocol,
         mounted.access == mount_access::read_only ? "read-only" : "read-write",
         mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
+  const bool watch_files = watches_files();
+  const watch_options watch = watch_files ? mounted.watch : watch_options{};
   auto &resolver = registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access,
-                                                      mounted.writable, mounted.watch, mounted.file_operations);
+                                                      mounted.writable, watch, mounted.file_operations, watch_files);
   resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
-  if (mounted.watch.report_changes) {
+  if (watch.report_changes) {
     resolver.set_changes_callback([this, protocol = std::string{mounted.protocol}](std::vector<res::file_change> batch) {
       m_tasks.post_main([this, protocol, batch = std::move(batch), alive = m_lifetime.token()]() {
         if (alive.expired()) {
@@ -1252,6 +1256,10 @@ void add_engine_mount(res::mount_table &table, const std::filesystem::path &engi
 
 std::filesystem::path res::resource_system::configured_engine_base() {
   return cfg_res_base_path->empty() ? std::filesystem::path{} : std::filesystem::path{cfg_res_base_path->string()};
+}
+
+bool res::resource_system::watches_files() {
+  return *cfg_res_watch_files;
 }
 
 res::mount_table res::resource_system::config_mount_table() {

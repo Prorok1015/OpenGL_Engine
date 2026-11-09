@@ -108,6 +108,8 @@ namespace res
 			const std::filesystem::path& user_dir, const std::filesystem::path& code_dir = {});
 		// resource/base_path as configured, empty when not set; not checked.
 		static std::filesystem::path configured_engine_base();
+		// res/watch_files: whether the mounts watch their files for changes (hot reload, the asset browser).
+		static bool watches_files();
 
 		bool exists(const tag& tag) const {
 			const auto& resolvers = root().m_resolvers;
