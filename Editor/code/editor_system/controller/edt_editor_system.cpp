@@ -502,6 +502,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.new_level = [this] {
 		if (m_play && m_play->active()) m_play->stop();
+		cancel_level_settle();
 		m_level_ctrl.new_level();
 	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
