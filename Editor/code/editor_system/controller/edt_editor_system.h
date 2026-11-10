@@ -104,6 +104,9 @@ namespace edt {
 		void tick_live_mode();
 		// Once a frame: a loaded level waits for the loads it started before "level loaded" and the exit (#669).
 		void tick_level_settle();
+		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file
+		// opened when an asset kind opens it; nothing for a node that is gone or a level that is not open (#596).
+		void go_to_problem(const std::string& source, const problem& item);
 		// The repository watcher's frame (#485): the `editor_vcs` frame stage. Re-arms it when a probe changed the
 		// service's cached state (never probes itself) and raises editor_events::repository_changed.
 		void tick_repository_watcher();
@@ -326,6 +329,7 @@ namespace edt {
 		std::vector<connection> m_session_connections;
 		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
 		void refresh_world_problems();
+		void go_to(const desc_target& target);
 		world_problem_publisher m_world_problems;
 		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab" (the open preview).
 		desc_problem_publisher m_desc_problems;
