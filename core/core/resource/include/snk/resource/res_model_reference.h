@@ -12,7 +12,8 @@ namespace res
 	// The tag a file a model refers to names (a texture, a .bin, a .mtl; #631). Model files write these relative to the
 	// model ("textures/a.png"), so a reference without a protocol is read in the model's folder and protocol; one with a
 	// protocol must name the model's own. "." and ".." are folded; a reference that climbs above the protocol's root, is
-	// absolute ("/x", "c:/x") or holds a control character names nothing, and nothing is read for it.
+	// absolute ("/x", "c:/x"), holds a control character, or keeps a ':' in any segment once folded (a drive "../c:/x", a
+	// Windows stream "a.png:s") names nothing, and nothing is read for it.
 	inline std::optional<tag> model_reference_tag(const tag& model, const std::string_view reference)
 	{
 		if (model.protocol().empty() || reference.empty() || has_control_chars(reference)) {
@@ -46,6 +47,8 @@ namespace res
 					return std::nullopt;
 				}
 				segments.pop_back();
+			} else if (segment.find(':') != std::string_view::npos) {
+				return std::nullopt;
 			} else if (!segment.empty() && segment != ".") {
 				segments.push_back(segment);
 			}

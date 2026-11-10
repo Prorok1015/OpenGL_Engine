@@ -191,12 +191,15 @@ BOOST_AUTO_TEST_CASE(ModelReference_IsReadInTheModelsFolderAndProtocol) {
 		}
 	}
 	for (const std::string_view reference : { "../../../a.png", "memory://../x.png", "memory://models/../../x", "res://a.png",
-		"user://a.png", "/abs.png", "C:/a.png", "c:\\a.png", "a:b://c", "", "a\x01.png" }) {
+		"user://a.png", "/abs.png", "C:/a.png", "c:\\a.png", "a:b://c", "", "a\x01.png", "\\\\server\\share\\a.png",
+		"MEMORY://models/a.png", "..\\..\\..\\x", "../c:/x", "a.png:stream", "dir:x/a.png", "memory://models/c:/x" }) {
 		BOOST_TEST_CONTEXT(reference) {
 			BOOST_TEST(!res::model_reference_tag(model, reference).has_value());
 		}
 	}
 	BOOST_TEST(!res::model_reference_tag(res::tag{ "models/m.obj" }, "a.png").has_value());
+	BOOST_TEST(!res::model_reference_tag(res::tag{ "res://m/x.obj" }, "res://C:/x").has_value());
+	BOOST_TEST(!res::model_reference_tag(res::tag{ "res://m/x.obj" }, "RES://m/a.png").has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

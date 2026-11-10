@@ -40,7 +40,7 @@ std::vector<std::byte> to_bytes(std::string_view s)
 	return out;
 }
 
-std::string load(const res::vfs_resolver& r, const char* tag)
+std::string load(const res::vfs_resolver& r, std::string_view tag)
 {
 	auto block = r.resolve(res::tag{ tag });
 	block->wait();
@@ -330,6 +330,11 @@ BOOST_FIXTURE_TEST_CASE(ATagWithoutAProtocol_ReachesNoMount_AndTheErrorSaysToWri
 
 	res::vfs_resolver layered("res", { engine, project });
 	BOOST_TEST(load(layered, "res:///etc/passwd").rfind("ERR:", 0) == 0u);
+	BOOST_TEST(load(layered, "res://shaders\\..\\..\\..\\engine\\shaders\\pbr.frag").rfind("ERR:", 0) == 0u);
+	BOOST_TEST(load(layered, "res://a\\..\\..\\x").rfind("ERR:", 0) == 0u);
+	using namespace std::string_view_literals;
+	BOOST_TEST(load(layered, "res://shaders/pbr.frag\0.txt"sv).rfind("ERR:", 0) == 0u);
+	BOOST_TEST(!sys.exists(res::tag{ "res://levels/main.desc\0x"sv }));
 }
 
 BOOST_FIXTURE_TEST_CASE(Store_OverAnEngineOnlyFileIsLogged, layers_fixture)

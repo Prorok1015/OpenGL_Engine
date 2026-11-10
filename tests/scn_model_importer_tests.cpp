@@ -60,6 +60,29 @@ f 4/1 5/2 6/3
 // from x=0 at t=0 to x=10 at t=2.
 constexpr const char* GLTF_TRIANGLE = R"GLTF({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"Parent","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"children":[1,2]},{"name":"Child","mesh":0,"translation":[0,5,0]},{"name":"Tilted","rotation":[0.23911761839433449,0.3696438106143861,-0.09904576054128762,0.8923991008325228]}],"meshes":[{"name":"TriMesh","primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],"materials":[{"name":"Red","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}],"animations":[{"name":"Move","samplers":[{"input":4,"output":5,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}],"buffers":[{"byteLength":136,"uri":"data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAABAAIAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAIEEAAAAAAAAAAA=="}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6},{"buffer":0,"byteOffset":104,"byteLength":8},{"buffer":0,"byteOffset":112,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2]},{"bufferView":5,"componentType":5126,"count":2,"type":"VEC3"}]})GLTF";
 
+// The buffer GLTF_TRIANGLE embeds, as the bytes of a .bin file next to the model.
+constexpr unsigned char GLTF_TRIANGLE_BIN[] = {
+	0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x41,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// GLTF_TRIANGLE with its buffer read from `uri` instead of embedded.
+std::string gltf_with_buffer_uri(std::string_view uri)
+{
+	std::string text = GLTF_TRIANGLE;
+	const std::size_t begin = text.find("data:application/octet-stream;base64,");
+	const std::size_t end = text.find('"', begin);
+	text.replace(begin, end - begin, uri);
+	return text;
+}
+
 // The child of a node (or of the file root) with the given name; children are an array of named nodes.
 const json::value& child_named(const json::value& node, std::string_view name)
 {
@@ -307,10 +330,25 @@ BOOST_AUTO_TEST_CASE(Obj_ATextureWrittenRelativeToTheModel_IsReadInTheModelsFold
 	}
 }
 
+// #631: a .bin the model names is opened through the importer's IO system, in the model's folder and never above the root.
+BOOST_AUTO_TEST_CASE(Gltf_ABufferNextToTheModel_IsRead_OneAboveTheRootIsNot)
+{
+	const std::string bin(reinterpret_cast<const char*>(GLTF_TRIANGLE_BIN), sizeof(GLTF_TRIANGLE_BIN));
+	rs->store(res::tag{ "memory://models/g0/data/tri.bin" }, test_util::to_bytes(bin));
+	const auto beside = import("g0/tri.gltf", gltf_with_buffer_uri("data/tri.bin").c_str());
+	BOOST_REQUIRE(beside);
+	BOOST_TEST(has_child(serialized(*beside), "Child"));
+
+	rs->store(res::tag{ "memory://tri.bin" }, test_util::to_bytes(bin));
+	BOOST_TEST(!import("g1/tri.gltf", gltf_with_buffer_uri("../../../tri.bin").c_str()));
+	BOOST_TEST(!import("g2/tri.gltf", gltf_with_buffer_uri("../c:/tri.bin").c_str()));
+}
+
 BOOST_AUTO_TEST_CASE(Obj_ATextureAboveTheProtocolsRootOrAbsolute_IsNotLoaded)
 {
 	int index = 0;
-	for (const char* reference : { "../../../a.png", "../../../../etc/passwd.png", "/etc/a.png", "C:/a.png", "C:\\a.png" }) {
+	for (const char* reference : { "../../../a.png", "../../../../etc/passwd.png", "/etc/a.png", "C:/a.png", "C:\\a.png",
+		"../c:/a.png", "a.png:stream", "\\\\server\\share\\a.png", "..\\..\\..\\a.png" }) {
 		BOOST_TEST_CONTEXT(reference) {
 			BOOST_TEST(!imported_diffuse_data(std::format("r{}", index++), reference).has_value());
 		}
