@@ -5,6 +5,7 @@
 #include "edt_camera_redirect.h"
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_node_index.h>
 
 namespace edt::game_view
 {
@@ -21,9 +22,11 @@ namespace edt::game_view
 		for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
 			if (!is_game_camera(cam)) continue;
 			const auto* name = reg.try_get<scn::name_component>(ent);
+			const auto* node = reg.try_get<scn::node_id_component>(ent);
 			out.push_back({ ent, name && !name->name.empty()
 				? name->name
-				: std::format("Camera {}", static_cast<std::uint32_t>(entt::to_entity(ent))) });
+				: std::format("Camera {}", static_cast<std::uint32_t>(entt::to_entity(ent))),
+				node ? node->path : std::vector<std::uint64_t>{} });
 		}
 		// Views walk the storage back to front; keep the picker (and the default pick) in creation order.
 		std::ranges::sort(out, {}, [](const camera_entry& e) { return entt::to_entity(e.entity); });
@@ -37,10 +40,25 @@ namespace edt::game_view
 			m_selected = entt::null;
 		}
 		m_cameras = std::move(cameras);
+		if (!m_forgotten_path.empty() && m_registry) {
+			const auto same_node = std::ranges::find(m_cameras, m_forgotten_path, &camera_entry::path);
+			if (same_node != m_cameras.end()) m_selected = same_node->entity;
+			m_forgotten_path.clear();
+		}
 		const auto it = std::ranges::find(m_cameras, m_selected, &camera_entry::entity);
 		if (it == m_cameras.end()) {
 			m_selected = m_cameras.empty() ? entt::null : m_cameras.front().entity;
 		}
+	}
+
+	void selection::forget()
+	{
+		const auto it = std::ranges::find(m_cameras, m_selected, &camera_entry::entity);
+		// A forget before the first refresh of the rebuilt registry keeps the path the first one saved.
+		if (it != m_cameras.end()) m_forgotten_path = it->path;
+		m_registry = nullptr;
+		m_cameras.clear();
+		m_selected = entt::null;
 	}
 
 	void selection::select(int index)

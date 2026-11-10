@@ -503,7 +503,10 @@ void edt::file_menu::register_actions()
 
 	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
 		.disabled_tooltip = IMPORT_UNAVAILABLE,
-		.disabled_reason = [] { return std::string(IMPORT_UNAVAILABLE); },
+		.disabled_reason = [this] {
+			const std::string why = m_hooks.agent_import != nullptr ? m_hooks.agent_import->unavailable_reason() : std::string{};
+			return why.empty() ? std::string(IMPORT_UNAVAILABLE) : why;
+		},
 		.execute_call = [this, import_request_of](const cmd::call& request) {
 			const json::object& args = request.args.as_object();
 			const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name") && !args.contains("folder");

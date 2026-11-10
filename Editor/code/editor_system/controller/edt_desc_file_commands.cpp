@@ -1,6 +1,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_code_commands.h"
 #include "edt_file_menu.h"
+#include "edt_tag_text.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -376,20 +377,9 @@ namespace {
 		return key == "__type" || key == "__version" || key == "__guid" || key == "__id" || key == "__parent";
 	}
 
-	// res::tag takes the text up to the first ':' or '/' as the protocol, so "user/x.png" and "user:/x.png" are
-	// user://x.png: the protocol is read the way the tag reads it, not by looking for "://".
-	std::string_view leading_protocol(const std::string& text)
-	{
-		const std::size_t end = text.find_first_of(":/\\");
-		return end == std::string::npos ? std::string_view{} : std::string_view(text).substr(0, end);
-	}
-
-	// A place a tag can name that is not the project's res/: every protocol the editor mounts.
-	bool is_other_protocol(std::string_view protocol)
-	{
-		constexpr std::string_view mounted[] = { "memory", "engine", "cache", "code", "user", "edt" };
-		return std::find(std::begin(mounted), std::end(mounted), protocol) != std::end(mounted);
-	}
+	// The protocol is read the way res::tag reads it, not by looking for "://" (edt_tag_text.h, shared with the decoder's checks).
+	std::string_view leading_protocol(const std::string& text) { return edt::tag_leading_protocol(text); }
+	bool is_other_protocol(std::string_view protocol) { return edt::is_other_tag_protocol(protocol); }
 
 	// The custom fields that hold names, not tags (#604: action names and key names). Only the strict tag rule is off for
 	// them; the walk over every string still refuses one that names another protocol. A list, not a flag of the schema:
@@ -409,11 +399,7 @@ namespace {
 	// Empty when `text` as a plain string value cannot reach another protocol: it names none, or it is a good res:// tag.
 	std::string loose_tag_problem(std::string_view text)
 	{
-		const std::string normalized = [&] {
-			std::string copy(text);
-			std::replace(copy.begin(), copy.end(), '\\', '/');
-			return copy;
-		}();
+		const std::string normalized = edt::tag_text_normalized(text);
 		const std::string_view protocol = leading_protocol(normalized);
 		if (protocol.empty()) return {};
 		if (protocol == "res") return strict_tag_problem(normalized);

@@ -206,6 +206,9 @@ namespace {
 			result.all_tags = imported.all_tags;
 			result.source_path = in.plan.source;
 			remap = in.exporter->build_remap(result, in.plan.name, in.plan.folder);
+			if (const std::string why = edt::asset_exporter::remap_problem(remap, in.plan.name, in.plan.folder); !why.empty()) {
+				throw std::runtime_error("the import cannot be exported: " + why);
+			}
 			for (const auto& entry : remap) {
 				const std::string relative(entry.second.relative());
 				switch (state_in_layers(in.layers, relative)) {
@@ -298,6 +301,14 @@ std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::s
 	return plan;
 }
 
+std::string edt::agent_model_import::unavailable_reason() const
+{
+	if (!m_options.import || !m_options.scan) {
+		return "model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF)";
+	}
+	return m_options.unavailable_reason ? m_options.unavailable_reason() : std::string{};
+}
+
 edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_request& request) const
 {
 	agent_import_plan plan;
@@ -306,8 +317,8 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 		plan.error = std::move(why);
 		return plan;
 	};
-	if (!available()) {
-		return refuse(cmd::codes::disabled, "model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF)");
+	if (const std::string why = unavailable_reason(); !why.empty()) {
+		return refuse(cmd::codes::disabled, why);
 	}
 	if (request.path.empty()) return refuse(cmd::codes::invalid_args, "the source path is empty");
 
@@ -344,6 +355,14 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	const std::string wanted_name = request.name.empty() ? to_utf8(resolved.stem()) : request.name;
 	const agent_level_path name = check_agent_name(wanted_name);
 	if (!name.ok()) return refuse(cmd::codes::invalid_args, "the asset name: " + name.error + (request.name.empty() ? " (give a name)" : ""));
+	// A name that is the extension of a model format would let the exporter's naming build a model file out of a resource.
+	{
+		std::string folded = name.path;
+		std::transform(folded.begin(), folded.end(), folded.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		for (const std::string_view extension : k_model_extensions) {
+			if (folded == extension.substr(1)) return refuse(cmd::codes::invalid_args, "the asset name cannot be the extension of a model format ('" + name.path + "'): give another name");
+		}
+	}
 	plan.name = name.path;
 	const agent_level_path folder = check_agent_folder(request.folder.empty() ? "assets/" + plan.name : request.folder);
 	if (!folder.ok()) return refuse(cmd::codes::invalid_args, "the folder: " + folder.error);

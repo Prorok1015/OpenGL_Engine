@@ -34,6 +34,7 @@ namespace scn  { class ecs_assembler; class level_desc; }
 namespace ecs  { class system_factory; }
 namespace platform { class secret_store; }
 namespace inp  { class input_router; }
+namespace cmd  { class command_registry; }
 
 namespace edt {
 	class agent_server;
@@ -51,6 +52,7 @@ namespace edt {
 	class editor_context;
 	class editor_layer;
 	class model_importer;
+	class process_decoder;
 	class asset_exporter;
 	class agent_model_import;
 	class asset_export_dialog;
@@ -139,6 +141,8 @@ namespace edt {
 		// Import/export
 #if SNK_HAS_ASSIMP
 		std::unique_ptr<edt::model_importer> m_model_importer;
+		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
+		std::unique_ptr<edt::process_decoder> m_process_decoder;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
@@ -297,6 +301,8 @@ namespace edt {
 		// The policy and the confirmations behind the MCP server (editor/agent_server, editor/mcp_stdio, off by default);
 		// null when both are off.
 		std::unique_ptr<agent_access> m_agent_access;
+		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
+		cmd::command_registry* m_agent_argument_checks = nullptr;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		std::filesystem::path m_agent_server_settings_file;

@@ -1,5 +1,7 @@
 #include "edt_asset_exporter.h"
+#include "edt_process_decoder.h"
 #include <boost/json.hpp>
+#include <format>
 
 namespace json = boost::json;
 
@@ -24,15 +26,16 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 		if (!model_name.empty() && rel.starts_with(prefix))
 			rel = rel.substr(prefix.size());
 
-		// Replace model name with asset name in the filename
+		// Replace the model name with the asset name where the importer put it: at the start of the file name, followed by a dot
+		// (<model>.prefab.desc, <model>.geom.desc). Never inside a folder name or after the first dot: the name is the agent's
+		// to choose, and a replacement in "x.raw" or "x.tga" could turn a texture into a file with a model's extension.
 		auto replace_stem = [&](std::string& path, const std::string& old_name, const std::string& new_name) {
 			if (old_name.empty())
-				return; // "" matches at every position, so the loop below would never end
-			size_t pos = 0;
-			while ((pos = path.find(old_name, pos)) != std::string::npos) {
-				path.replace(pos, old_name.size(), new_name);
-				pos += new_name.size();
-			}
+				return;
+			const size_t slash = path.rfind('/');
+			const size_t file_start = slash == std::string::npos ? 0 : slash + 1;
+			if (path.compare(file_start, old_name.size() + 1, old_name + ".") == 0)
+				path.replace(file_start, old_name.size(), new_name);
 		};
 
 		if (asset_name != model_name)
@@ -44,6 +47,28 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 	}
 
 	return remap;
+}
+
+std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder)
+{
+	const std::string folder_prefix = std::string(target_folder) + "/";
+	for (const auto& [from, to] : remap) {
+		const std::string_view final_path = to.relative();
+		if (!final_path.starts_with(folder_prefix)) {
+			return std::format("'{}' would be written outside the folder of the import", to.view());
+		}
+		const std::string_view relative = final_path.substr(folder_prefix.size());
+		// What lands in the project is what an import makes, under the names the importer would give it, and the remap changed
+		// no extension: the adapter reads a file by its extension.
+		if (!is_import_resource_name(relative, asset_name)) {
+			return std::format("'{}' is not a name an import gives a resource", to.view());
+		}
+		const std::string_view before = from.relative();
+		if (file_extension_lowercase(before) != file_extension_lowercase(final_path)) {
+			return std::format("the export would change the extension of '{}'", from.view());
+		}
+	}
+	return {};
 }
 
 void edt::asset_exporter::remap_json_strings(

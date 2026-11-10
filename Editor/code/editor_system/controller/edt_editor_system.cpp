@@ -25,6 +25,7 @@
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
+#include "edt_process_decoder.h"
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
@@ -59,6 +60,7 @@
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
+#include "edt_agent_model_guard.h"
 #include "edt_agent_server.h"
 #include "edt_agent_server_settings.h"
 #include "edt_agent_policy_model.h"
@@ -82,6 +84,7 @@
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_problem_list.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -171,12 +174,16 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
 	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
 	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
+	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
+	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
 	// Minutes without a request after which an agent's MCP session is closed (its "allow until the end of the session" with it); 0: never.
 	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
+	// The memory the decoder process may use for an agent's model (#647), in MiB; 0: 2048. Kept between 256 and 8192.
+	CFG_VAR_DEF_INT(cfg_import_decoder_memory_mb, "import/decoder_memory_mb", 0);
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run
@@ -266,6 +273,7 @@ edt::editor_system::~editor_system()
 	m_agent_server.reset();
 	m_session_connections.clear();
 	m_agent_access.reset();
+	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
 	// The layer may outlive this system: no game layout drawn through it any more.
 	if (editor_layer) {
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
@@ -336,12 +344,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	{
 		edt::agent_import_options import_options;
 #if SNK_HAS_ASSIMP
-		import_options.import = [importer = m_model_importer.get()](const edt::import_source& source, ds::task_context* task) {
-			return importer->import_background(source, task);
+		// An agent's model is parsed in a process of its own, with a memory limit and killed at its deadline (#647). There is
+		// no fallback to parsing it here: without the decoder the command says so.
+		{
+			std::string memory_warning;
+			edt::decode_runner_config decoder_config;
+			decoder_config.memory_limit_bytes = edt::decoder_memory_limit(static_cast<std::int64_t>(*cfg_import_decoder_memory_mb), memory_warning);
+			if (!memory_warning.empty()) egLOG_WARN("Editor/Import", "{}", memory_warning);
+			m_process_decoder = std::make_unique<edt::process_decoder>(m_res, std::move(decoder_config));
+		}
+		import_options.import = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
+			return decoder->import(source, task);
 		};
-		import_options.scan = [](const edt::import_source& source, ds::task_context* task) {
-			return edt::model_importer::scan_files(source, task);
+		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
+			return decoder->scan(source, task);
 		};
+		import_options.unavailable_reason = [decoder = m_process_decoder.get()] { return decoder->unavailable_reason(); };
 #endif
 		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
 		import_options.resources_path = [this] { return m_res.get_resources_path(); };
@@ -815,6 +833,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const auto user_roots = m_res.mount_roots("edt");
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
+		commands.set_agent_argument_check(make_agent_model_check(m_res));
+		m_agent_argument_checks = &commands;
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
 			approved_snapshot_for(user_dir / "settings", options.project_dir));
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
@@ -1038,6 +1058,20 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		options.play_profile = data.require<prj::project_context>().play_profile_dir();
 		options.editor_profile = user_roots;
 	}
+	if (data.has_value<prj::project_context>()) options.project_root = data.require<prj::project_context>().root;
+	options.report_full_snapshot = cfg_hot_reload_dump_snapshot;
+	// The problems list, not a dialog: live mode reloads on every build, and a dialog each time would be in the way.
+	options.notify = [this](const std::string& message) {
+		if (message.empty()) {
+			m_context->problems().clear("hot_reload");
+			return;
+		}
+		problem item;
+		item.severity = problem_severity::warning;
+		item.message = message;
+		item.notes = { "details: .cache/hot_reload/last_play_snapshot.json" };
+		m_context->problems().set("hot_reload", { std::move(item) });
+	};
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };

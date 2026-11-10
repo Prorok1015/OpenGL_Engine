@@ -119,6 +119,10 @@ namespace {
 	{
 		target found;
 		found.play = deps.play ? deps.play() : nullptr;
+		if (found.play && found.play->reloading()) {
+			error = failure(cmd::codes::busy, "a module reload is rebuilding Play's world; call again once it runs");
+			return std::nullopt;
+		}
 		found.set = deps.play_set ? deps.play_set() : nullptr;
 		if (!found.play || !found.set || found.play->state() == edt::play_state::stopped) {
 			error = failure(cmd::codes::not_found, "Play is not running (these commands show the live state of Play; scene.query / node.get show the document)");
@@ -152,6 +156,7 @@ namespace {
 		out["note"] = "the live state of Play, not the document";
 		out["play_state"] = json::string(edt::play_state_name(at.play->state()));
 		out["frame"] = static_cast<std::int64_t>(at.play->frames_run());
+		out["reload"] = static_cast<std::int64_t>(at.play->reload_number());
 		out["world"] = safe_string(at.world->get_name());
 		if (const auto* time = at.world->state().ctx().find<scn::world_time>()) out["world_time"] = time->seconds;
 	}
@@ -225,11 +230,13 @@ namespace {
 		return true;
 	}
 
-	// What a cursor is tied to: the Start and the frame it was made in, the query it continues (world and filter) and the
-	// entity it continues after. A position would skip or repeat entities when one is made or destroyed in between.
+	// What a cursor is tied to: the Start, the module reload and the frame it was made in (a reload rebuilds the entities
+	// and keeps the frame count), the query it continues (world and filter) and the entity it continues after. A position
+	// would skip or repeat entities when one is made or destroyed in between.
 	struct cursor
 	{
 		std::uint64_t run = 0;
+		std::uint64_t reload = 0;
 		std::uint64_t frame = 0;
 		std::uint64_t query = 0;
 		std::uint32_t after = 0;
@@ -237,7 +244,7 @@ namespace {
 
 	std::string format_cursor(const cursor& at)
 	{
-		return std::format("{}.{}.{:x}.{}", at.run, at.frame, at.query, at.after);
+		return std::format("{}.{}.{}.{:x}.{}", at.run, at.reload, at.frame, at.query, at.after);
 	}
 
 	std::optional<cursor> parse_cursor(std::string_view text)
@@ -253,7 +260,7 @@ namespace {
 			rest = dot == std::string_view::npos ? std::string_view{} : rest.substr(dot + 1);
 			return dot != std::string_view::npos || rest.empty();
 		};
-		if (!take(out.run, 10) || !take(out.frame, 10) || !take(out.query, 16) || rest.empty() || !take(out.after, 10) || !rest.empty()) {
+		if (!take(out.run, 10) || !take(out.reload, 10) || !take(out.frame, 10) || !take(out.query, 16) || rest.empty() || !take(out.after, 10) || !rest.empty()) {
 			return std::nullopt;
 		}
 		return out;
@@ -274,7 +281,7 @@ namespace {
 	cmd::result stale_cursor(std::uint64_t frame)
 	{
 		cmd::result error = failure(cmd::codes::stale,
-			std::format("the cursor is from another frame or another Play session (now frame {}); pause the game (play.pause) or start the query again", frame));
+			std::format("the cursor is from another frame, another module reload or another Play session (now frame {}); pause the game (play.pause) or start the query again", frame));
 		error.value = json::object{ { "frame", static_cast<std::int64_t>(frame) } };
 		return error;
 	}
@@ -289,6 +296,7 @@ namespace {
 		const scn::entity_writer writer(*at->catalog);
 		const std::uint64_t frame = at->play->frames_run();
 		const std::uint64_t run = at->play->run_number();
+		const std::uint64_t reload = at->play->reload_number();
 
 		name_filter names{ std::string{} };
 		std::vector<const scn::component_entry*> required;
@@ -325,7 +333,7 @@ namespace {
 		if (const json::value* given = args.if_contains("cursor")) {
 			const auto parsed = parse_cursor(std::string_view(given->as_string()));
 			if (!parsed) return failure(cmd::codes::invalid_args, "not a cursor of runtime.query");
-			if (parsed->run != run || parsed->frame != frame) return stale_cursor(frame);
+			if (parsed->run != run || parsed->reload != reload || parsed->frame != frame) return stale_cursor(frame);
 			if (parsed->query != query_hash) return failure(cmd::codes::invalid_args, "the cursor belongs to another query (another world or filter)");
 			after = parsed->after;
 		}
@@ -369,7 +377,7 @@ namespace {
 		write_header(out, *at);
 		out["items"] = std::move(items);
 		if (!subtree_complete) out["subtree_truncated"] = true;
-		if (more) out["next_cursor"] = format_cursor({ run, frame, query_hash, last });
+		if (more) out["next_cursor"] = format_cursor({ run, reload, frame, query_hash, last });
 		return cmd::result::success(std::move(out));
 	}
 
@@ -447,8 +455,10 @@ namespace {
 		if (added.active()) out.push_back(std::move(added));
 	}
 
-	constexpr std::string_view k_header_properties = R"("source":{"type":"string","enum":["play"]},"note":{"type":"string"},
-		"play_state":{"type":"string","enum":["playing","paused"]},"frame":{"type":"integer"},"world":{"type":"string"},"world_time":{"type":"number"})";
+	constexpr std::string_view k_header_properties = R"json("source":{"type":"string","enum":["play"]},"note":{"type":"string"},
+		"play_state":{"type":"string","enum":["playing","paused"]},"frame":{"type":"integer"},
+		"reload":{"type":"integer","description":"module reloads that rebuilt this Play's world; entity ids read before one name other entities"},
+		"world":{"type":"string"},"world_time":{"type":"number"})json";
 
 	constexpr std::string_view k_summary = R"({"type":"object","properties":{"entity":{"type":"integer"},"name":{"type":"string"},
 		"components":{"type":"array","items":{"type":"string"}},"has_children":{"type":"boolean"}},"required":["entity","name","components","has_children"]})";
@@ -463,14 +473,14 @@ std::vector<edt::registration> edt::register_runtime_commands(cmd::command_regis
 	query.id = "runtime.query";
 	query.summary = "Page through the live entities of a world of the running game (Play): entity id, name, component names. Filter by name, component or subtree; follow next_cursor (pause the game first for a consistent walk). Read-only; this is the state of Play, not the document";
 	query.category = cmd::agent_category::read;
-	query.args_schema = parse_schema(std::format(R"({{"type":"object","properties":{{
+	query.args_schema = parse_schema(std::format(R"json({{"type":"object","properties":{{
 		"world":{{"type":"string","description":"world name; default the first world of Play"}},
 		"filter":{{"type":"object","properties":{{
 			"name_glob":{{"type":"string","description":"* and ? wildcards, case-insensitive; without them a substring"}},
 			"has_component":{{"type":"array","items":{{"type":"string"}},"description":"catalog names that must all be present"}},
 			"under":{{"type":"integer","minimum":0,"description":"an entity id: only it and what lies under it"}}}},"additionalProperties":false}},
 		"page_size":{{"type":"integer","minimum":1,"maximum":{},"description":"entities per page, at most {}, default {}"}},
-		"cursor":{{"type":"string","description":"next_cursor of the previous page of the same query; stale once a frame has passed or the game was restarted"}}}},"additionalProperties":false}})",
+		"cursor":{{"type":"string","description":"next_cursor of the previous page of the same query; stale once a frame has passed, a module reload rebuilt the world or the game was restarted"}}}},"additionalProperties":false}})json",
 		state_query_max_page_size, state_query_max_page_size, state_query_default_page_size));
 	query.result_schema = parse_schema(std::format(R"({{"type":"object","properties":{{{},
 		"items":{{"type":"array","items":{}}},"next_cursor":{{"type":"string"}},"subtree_truncated":{{"type":"boolean","description":"filter.under reached the limit of entities it walks"}}}},"required":["source","frame","items"]}})", k_header_properties, k_summary));
@@ -479,7 +489,7 @@ std::vector<edt::registration> edt::register_runtime_commands(cmd::command_regis
 
 	cmd::command_desc get;
 	get.id = "runtime.get";
-	get.summary = "One live entity of the running game (Play) by its whole entity id: name, parent, children, components as desc JSON. Components without a schema are only named (unsaved); what does not fit 256 KiB is named in truncated. Read-only; the state of Play, not the document";
+	get.summary = "One live entity of the running game (Play) by its whole entity id: name, parent, children, components as desc JSON. Components without a schema are only named (unsaved); what does not fit 256 KiB is named in truncated. Read-only; the state of Play, not the document. An entity id read before a module reload (see 'reload' in the answers) may name another entity now";
 	get.category = cmd::agent_category::read;
 	get.args_schema = parse_schema(R"({"type":"object","properties":{
 		"entity":{"type":"integer","minimum":0,"description":"the entity id from runtime.query, with its version"},

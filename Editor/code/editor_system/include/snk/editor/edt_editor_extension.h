@@ -18,7 +18,7 @@
 // snk_editor_api_version (SNK_DECLARE_EDITOR_MODULE) and checked by the host before it creates the module: the major
 // must match, the module's minor must not exceed the host's. Raise the major for a change that breaks a module's
 // build or binary, the minor for an addition.
-// 1.1: asset_kind_desc::make_preview (the preview document of an asset kind).
+// 1.1: editor_module_context::add_asset_preview (the preview document of an asset suffix, asset_preview_desc).
 #define SNK_EDITOR_API_VERSION 0x0001'0001u
 
 namespace edt

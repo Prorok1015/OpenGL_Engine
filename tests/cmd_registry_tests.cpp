@@ -385,4 +385,34 @@ BOOST_AUTO_TEST_CASE(Headless_OtherCommandsRun_AndWithADisplayNothingChanges)
 	BOOST_TEST(runs == 2);
 }
 
+// #681: the agent argument check runs for agents only, after the gate and before the schema, and without a gate too.
+BOOST_AUTO_TEST_CASE(AgentArgumentCheck_RefusesOnlyAgents_BeforeTheSchema_WithOrWithoutAGate)
+{
+	cmd::command_registry commands;
+	int runs = 0;
+	auto reg = commands.add(echo_command(runs));
+	int checked = 0;
+	commands.set_agent_argument_check([&checked](const cmd::command_desc& command, const cmd::call& request) -> std::optional<cmd::result> {
+		++checked;
+		BOOST_TEST(command.id == "test.echo");
+		if (request.args.as_object().contains("nope")) return cmd::result::failure(cmd::codes::denied, "refused by the check");
+		return std::nullopt;
+	});
+
+	const cmd::result refused = commands.invoke("test.echo", json_of(R"({"nope":1})"), cmd::origin::agent("s1"));
+	BOOST_TEST(refused.code == cmd::codes::denied); // not invalid_args: the check comes before the schema
+	BOOST_TEST(refused.error == "refused by the check");
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::agent("s1")).ok);
+	BOOST_TEST(checked == 2);
+
+	for (const cmd::origin& from : { cmd::origin::ui(), cmd::origin::test(), cmd::origin::game() }) {
+		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})"), from).code == cmd::codes::invalid_args);
+	}
+	BOOST_TEST(checked == 2);
+
+	commands.set_agent_argument_check(nullptr);
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})"), cmd::origin::agent("s1")).code == cmd::codes::invalid_args);
+	BOOST_TEST(runs == 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
