@@ -19,7 +19,9 @@
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -64,6 +66,26 @@ constexpr bool k_fails = true;
 #else
 constexpr bool k_fails = false;
 #endif
+#if defined(TEST_DLL_BAD_RESTORE)
+constexpr bool k_keeper_traps = true;
+#else
+constexpr bool k_keeper_traps = false;
+#endif
+
+struct dll_keeper : ecs::system_interface
+{
+	dll_keeper()
+	{
+		if constexpr (k_keeper_traps) {
+			std::error_code ec;
+			if (std::filesystem::exists(dll_game::keeper_trap_file, ec)) {
+				throw std::runtime_error("the keeper of this build cannot start");
+			}
+		}
+	}
+	void run(entt::view<entt::get_t<dll_game::dll_component>> view) { frames += static_cast<int>(view.size()); }
+	int frames = 0;
+};
 
 void dll_move(entt::view<entt::get_t<dll_game::dll_component>> view)
 {
@@ -118,6 +140,7 @@ private:
 		});
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
 		layer.systems().register_system<&dll_animate>(std::string{ dll_game::animate_system_name });
+		layer.systems().register_system<&dll_keeper::run, dll_keeper>(std::string{ dll_game::keeper_system_name }, {});
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
 		// Its functions and schema live in this library: the layer drops them before the library goes.
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },

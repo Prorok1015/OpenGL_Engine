@@ -303,6 +303,26 @@ BOOST_AUTO_TEST_CASE(reload_quiet_returns_a_build_not_taken_without_a_message)
 	BOOST_TEST(messages().empty());
 }
 
+// #601: only a reload the person asked for may load a build the host took back; live mode's (quiet) never does.
+BOOST_AUTO_TEST_CASE(only_the_persons_reload_goes_through_reload_by_person)
+{
+	std::vector<std::string> by_person;
+	edt::game_reloader_options with_person = options();
+	with_person.reload_by_person = [&](const std::string& module) {
+		by_person.push_back(module);
+		return next;
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(with_person));
+
+	BOOST_TEST(invoke().ok);
+	BOOST_TEST(by_person == std::vector<std::string>{ "game" });
+	BOOST_TEST(reloaded.empty());
+
+	reloader->reload_quiet("game");
+	BOOST_TEST(by_person.size() == 1u);
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+}
+
 BOOST_AUTO_TEST_CASE(reload_quiet_is_refused_while_a_build_runs)
 {
 	make();

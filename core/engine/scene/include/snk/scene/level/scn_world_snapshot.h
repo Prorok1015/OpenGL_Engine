@@ -28,6 +28,8 @@ namespace scn
 		std::map<std::string, std::size_t> unknown;
 		// Restored, but a value did not fit its field (a field changed its type): that field kept its default.
 		std::map<std::string, std::size_t> partial;
+		// Restored, but the snapshot holds a field the schema no longer has (removed or renamed): its value is dropped.
+		std::map<std::string, std::size_t> removed_fields;
 		std::size_t entities = 0;
 	};
 

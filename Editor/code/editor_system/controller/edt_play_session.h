@@ -64,6 +64,10 @@ namespace edt
 		// After every module reload that met Play: what Play lost, or why it restarted or stopped; empty when it kept all
 		// of it. Null: the log only.
 		std::function<void(const std::string& message)> notify{};
+		// Play could not be restored in a build that loaded: asks for that build to be taken back (core::project_module_host
+		// ::revert, never from inside the swap), whose swap brings Play back in the previous build; end_revert after the
+		// call. Gets the module of that reload. Null: Play stops instead (HOT_RELOAD_PLAY.md 3.5).
+		std::function<void(const std::string& module)> revert_module{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
@@ -138,6 +142,18 @@ namespace edt
 		// stops (stopped_for_reload) and starts again (module_reloaded), paused if it was.
 		void before_module_swap();
 		void after_module_swap(const core::reload_report& report);
+		// The revert revert_module asked for returned: one that never swapped (refused before its hooks) leaves Play
+		// suspended, so it stops.
+		void end_revert(const core::reload_report& report);
+		// The revert revert_module asked for, on its frame: `revert` takes the build back (project_module_host::revert),
+		// then end_revert. A Stop since the request cancels it instead: `forget` drops what could be taken back, the new
+		// build stays loaded and Problems says so.
+		void run_revert(const std::function<core::reload_report()>& revert, const std::function<void()>& forget);
+		// The restore failed in the new build and its revert is asked for, not yet done: the build that loaded is taken
+		// back. Stop drops the request.
+		bool reverting() const { return m_reverting; }
+		// Why the restore failed in the last reload; empty when it did not.
+		const std::string& restore_failure() const { return m_restore_failure; }
 		// Between before_module_swap and after_module_swap with a snapshot.
 		bool suspended() const { return m_suspended; }
 		// A module reload is under way: suspended, or the restored set waits (inactive, paused) for the resources its
@@ -159,9 +175,12 @@ namespace edt
 		void wait_for_resources();
 		void end_wait(bool timed_out);
 		std::chrono::steady_clock::time_point now() const;
-		// False: the set "play" may be left half built (stop() takes it). `restored` gets what the restore dropped.
-		bool restore_after_swap(scn::snapshot_report& restored);
-		// `play`: kept, stopped or restarted.
+		// False (with why): the set "play" may be left half built (stop() takes it). `restored` gets what the restore
+		// dropped. May throw from the new module's code.
+		bool restore_after_swap(scn::snapshot_report& restored, std::string& failure);
+		// The half-built set goes; the session stays suspended with its snapshot, for the restore in the previous build.
+		void await_revert(const std::string& module, std::string failure);
+		// `play`: kept, reverted (kept in the previous build), stopped or restarted.
 		void report_reload(const core::reload_report& outcome, const scn::snapshot_report& restored, std::string_view play);
 
 		scene_document& m_document;
@@ -202,10 +221,19 @@ namespace edt
 			std::uint32_t pending_steps = 0;
 			scn::snapshot_report report{};
 			std::size_t bus_events = 0;
+			// Systems of the module's layer that keep state in their fields: it starts over.
+			std::vector<std::string> systems_restarted;
 		};
 		std::optional<reload_snapshot> m_reload;
 		// Why the last capture_for_reload kept nothing: Play restarts instead.
 		std::string m_capture_refusal;
+		// "<world>: <system>" the last restore left out: the new build has no such system.
+		std::vector<std::string> m_dropped_systems;
+		// The restore in the new build failed and its revert was asked for (once per reload): why it failed.
+		bool m_reverting = false;
+		std::string m_restore_failure;
+		// Why that revert did not bring the previous build back.
+		std::string m_revert_failure;
 		// When the reload began (capture_for_reload), for the report's duration.
 		std::optional<std::chrono::steady_clock::time_point> m_reload_started;
 		bool m_suspended = false;

@@ -877,24 +877,49 @@ namespace desc
 		deserialize(binding, obj, in, read_context{});
 	}
 
-	void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx)
+	std::vector<std::string> known_keys(const schema_binding& binding)
 	{
-		const auto& fields = binding.schema->fields;
 		std::vector<std::string> known;
-		known.reserve(fields.size());
+		known.reserve(binding.schema->fields.size());
 		std::vector<std::string> tokens;
 		const auto remember = [&](const std::string& pointer) {
 			if (json_pointer_tokens(pointer, tokens) && !tokens.empty()) {
 				known.push_back(tokens.front());
 			}
 		};
-
-		for (std::size_t i = 0; i < fields.size(); ++i) {
-			const field_schema& field = fields[i];
+		for (const field_schema& field : binding.schema->fields) {
 			remember(field.key);
-			const json::value* value = pointer_get_in_object(in, field.key);
 			for (const auto& alias : field.read_aliases) {
 				remember(alias);
+			}
+		}
+		return known;
+	}
+
+	std::vector<std::string> unknown_keys(std::span<const std::string> known, const json::object& in)
+	{
+		std::vector<std::string> unknown;
+		for (const auto& member : in) {
+			const std::string_view key{ member.key() };
+			if (!key.starts_with("__") && std::ranges::find(known, key) == known.end()) {
+				unknown.emplace_back(key);
+			}
+		}
+		return unknown;
+	}
+
+	std::vector<std::string> unknown_keys(const schema_binding& binding, const json::object& in)
+	{
+		return unknown_keys(known_keys(binding), in);
+	}
+
+	void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx)
+	{
+		const auto& fields = binding.schema->fields;
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			const field_schema& field = fields[i];
+			const json::value* value = pointer_get_in_object(in, field.key);
+			for (const auto& alias : field.read_aliases) {
 				if (!value) {
 					value = pointer_get_in_object(in, alias);
 				}
@@ -910,11 +935,7 @@ namespace desc
 			}
 		}
 
-		for (const auto& member : in) {
-			const std::string_view key{ member.key() };
-			if (key.starts_with("__") || std::ranges::find(known, key) != known.end()) {
-				continue;
-			}
+		for (const std::string& key : unknown_keys(binding, in)) {
 			egLOG_DEBUG(log_category, "'{}': ignoring unknown key '{}'", binding.schema->name, key);
 		}
 	}
