@@ -40,6 +40,17 @@ std::vector<std::byte> text_bytes(std::string_view text)
 
 std::vector<std::byte> png_bytes() { return { std::byte{ 0x89 }, std::byte{ 0x50 }, std::byte{ 0x4E }, std::byte{ 0x47 }, std::byte{ 0x0D }, std::byte{ 0x0A }, std::byte{ 0x1A }, std::byte{ 0x0A }, std::byte{ 0 } }; }
 
+// A string as JSON text between quotes: a backslash doubled.
+std::string edt_json_escaped(std::string_view text)
+{
+	std::string out;
+	for (const char c : text) {
+		if (c == '\\') out += "\\\\";
+		else out.push_back(c);
+	}
+	return out;
+}
+
 edt::bundle_blob blob_of(const res::tag& tag, std::vector<std::byte> bytes) { return { std::string(tag.view()), std::move(bytes) }; }
 
 // The answer a decoder gives for m.obj: a prefab, a geometry, a material and a texture with its desc.
@@ -224,6 +235,34 @@ BOOST_AUTO_TEST_CASE(TwoTagsThatDifferOnlyByCase_AreOneFileOnWindows_AndRefusedA
 	const std::vector<res::tag> tags = { k_prefab, k_geom, first, second };
 	const std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")), blob_of(first, png_bytes()), blob_of(second, png_bytes()) };
 	BOOST_CHECK(!edt::accept_import_answer(answer_with(blobs, tags, tags), request, problem).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ADescStringWithBackslashes_IsReadAsATagTheWayTheResourceSystemReadsIt)
+{
+	const auto request = request_in();
+	std::string problem;
+	// res::tag turns a backslash into a slash first: "res\\x\\y.fbx" is res://x/y.fbx, "edt\\x" is edt://x.
+	for (const char* reference : { "res\\\\robot\\\\robot.fbx", "res\\robot\\robot.fbx", "edt\\settings\\agent_policy.json", "user\\x.desc", "cache\\x", "code\\x.cpp", "engine\\x" }) {
+		auto bundle = import_answer();
+		bundle.blobs[4].bytes = text_bytes(std::string(R"json({"__type":"texture_2d_desc","__parent":"res://base_texture.desc","data":")json") + edt_json_escaped(reference) + "\"}");
+		BOOST_CHECK_MESSAGE(!edt::accept_import_answer(bundle, request, problem).has_value(), reference);
+	}
+	// A Windows path in a name is not a tag: the first segment is no protocol.
+	auto plain = import_answer();
+	plain.blobs[4].bytes = text_bytes(std::string(R"json({"__type":"texture_2d_desc","__parent":"res://base_texture.desc","data":"memory://m/textures/t.png","name":"textures\\a.png"})json"));
+	BOOST_CHECK_MESSAGE(edt::accept_import_answer(plain, request, problem).has_value(), problem);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceNameThatCannotBeAFileOnWindows_IsRefused)
+{
+	const auto request = request_in();
+	std::string problem;
+	for (const char* name : { "memory://m/textures/con.png", "memory://m/textures/NUL.png", "memory://m/textures/com1.png", "memory://m/textures/a.png.",
+		"memory://m/textures/a .png.txm.desc ", "memory://m/textures/a?.png", "memory://m/textures/a<b.png" }) {
+		const std::vector<res::tag> tags = { k_prefab, k_geom, res::tag(name) };
+		const std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")), { name, png_bytes() } };
+		BOOST_CHECK_MESSAGE(!edt::accept_import_answer(answer_with(blobs, tags, tags), request, problem).has_value(), name);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ADescWithAKeyThatReadsAsATag_IsRefused)

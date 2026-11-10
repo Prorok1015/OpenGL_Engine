@@ -201,13 +201,39 @@ const std::unordered_set<std::string_view> k_res_references = {
 const std::unordered_set<std::string_view> k_parent_references = { "res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc" };
 const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__guid", "__id", "__parent" };
 
+// res::tag turns every backslash into a slash before it reads the protocol (up to the first ':' or '/'), so "res\\x\\y.fbx" is
+// the tag res://x/y.fbx: the text is read the same way here.
 bool reads_as_tag(std::string_view text)
 {
-	if (text.find("://") != std::string_view::npos) return true;
-	const std::size_t end = text.find_first_of(":/");
-	if (end == std::string_view::npos) return false;
-	const std::string protocol = lower(std::string(text.substr(0, end)));
+	std::string normal(text);
+	std::replace(normal.begin(), normal.end(), '\\', '/');
+	if (normal.find("://") != std::string::npos) return true;
+	const std::size_t end = normal.find_first_of(":/");
+	if (end == std::string::npos) return false;
+	const std::string protocol = lower(normal.substr(0, end));
 	return protocol == "res" || protocol == "memory" || protocol == "engine" || protocol == "cache" || protocol == "code" || protocol == "user" || protocol == "edt";
+}
+
+// A name that is one file on Windows or cannot be made there (a trailing dot or space, a device name, the characters
+// Windows refuses), so two resources of an import cannot collide there and none is a device.
+bool windows_segment_problem(std::string_view segment)
+{
+	if (segment.empty() || segment.back() == '.' || segment.back() == ' ') return true;
+	if (segment.find_first_of("<>\"|?*") != std::string_view::npos) return true;
+	const std::string stem = lower(std::string(segment.substr(0, segment.find('.'))));
+	if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul") return true;
+	return stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem[3] >= '1' && stem[3] <= '9';
+}
+
+bool windows_path_problem(std::string_view path)
+{
+	while (!path.empty()) {
+		const std::size_t slash = path.find('/');
+		if (windows_segment_problem(path.substr(0, slash))) return true;
+		if (slash == std::string_view::npos) break;
+		path.remove_prefix(slash + 1);
+	}
+	return false;
 }
 
 std::string json_problem(const boost::json::value& value, const std::unordered_set<std::string>& bundle_tags, std::size_t depth = 0)
@@ -313,7 +339,7 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 	// The folder of the import is the stem of the model, as the importer makes it; it is the editor's, not the child's.
 	const std::string stem = request.source_path.stem().string();
 	const std::string prefix = "memory://" + stem + "/";
-	if (stem.empty() || !is_bundle_tag(prefix + "x", bundle_limits{}.max_tag_bytes)) {
+	if (stem.empty() || windows_segment_problem(stem) || !is_bundle_tag(prefix + "x", bundle_limits{}.max_tag_bytes)) {
 		problem = "the name of the model cannot be the folder of an import";
 		return std::nullopt;
 	}
@@ -360,6 +386,10 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 			return std::nullopt;
 		}
 		const std::string_view relative = std::string_view(blob.tag).substr(prefix.size());
+		if (windows_path_problem(relative)) {
+			problem = "the import made a resource with a name that cannot be a file on every system: '" + cleaned(relative) + "'";
+			return std::nullopt;
+		}
 		const std::optional<blob_kind> what = classify(relative, stem);
 		if (!what) {
 			problem = "the import made a resource of a kind it never makes: '" + cleaned(relative) + "'";
