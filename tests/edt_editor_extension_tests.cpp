@@ -55,10 +55,62 @@ struct probe_state
 	bool saw_refusal_inside_a_callback = false;
 	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then.
 	int callbacks_after_shutdown = 0;
+	// The preview the module's asset kind makes (#589): when it is destroyed, and what the editor looked like then.
+	int previews_made = 0;
+	int previews_destroyed = 0;
+	bool preview_destroyed_after_shutdown = false;
+	bool kind_still_registered_when_preview_destroyed = false;
+	int preview_continuations = 0;
+	int preview_continuations_after_destroy = 0;
 };
 
 probe_state* g_probe_state = nullptr;
 edt::editor_context* g_probe_editor = nullptr;
+
+class probe_preview final : public edt::previewable_document
+{
+public:
+	probe_preview(probe_state& state, ds::task_system& tasks, const ds::lifetime& lifetime)
+		: m_state(state), m_tasks(tasks), m_lifetime(lifetime)
+	{
+		++m_state.previews_made;
+	}
+
+	~probe_preview() override
+	{
+		++m_state.previews_destroyed;
+		m_state.preview_destroyed_after_shutdown = m_state.shut_down;
+		m_state.kind_still_registered_when_preview_destroyed = g_probe_editor && g_probe_editor->asset_kinds().find("ext.kind") != nullptr;
+	}
+
+	std::string_view kind() const override { return "ext.preview"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return false; }
+	std::uint64_t generation() const override { return 0; }
+
+	void open(const res::tag& source) override
+	{
+		m_source = source;
+		m_open = true;
+		probe_state& state = m_state;
+		m_tasks.run(ds::lane::compute, ds::task_desc{ "preview task" }, m_lifetime, [](ds::task_context&) {})
+			.then_main(m_lifetime, [&state](ds::task_result<void>&) {
+				if (state.previews_destroyed > 0) ++state.preview_continuations_after_destroy;
+				else ++state.preview_continuations;
+			});
+	}
+	void close() override { m_open = false; }
+	bool is_open() const override { return m_open; }
+
+private:
+	probe_state& m_state;
+	ds::task_system& m_tasks;
+	const ds::lifetime& m_lifetime;
+	std::string m_title = "probe preview";
+	res::tag m_source;
+	bool m_open = false;
+};
 
 class probe_extension final : public edt::editor_extension
 {
@@ -92,6 +144,9 @@ public:
 		kind.id = "ext.kind";
 		kind.suffix = ".ext";
 		kind.open = [](edt::editor_context&, const res::tag&) {};
+		kind.make_preview = [&state = m_state, &tasks = context.task_system(), &lifetime = context.tasks()](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> {
+			return std::make_unique<probe_preview>(state, tasks, lifetime);
+		};
 		context.add_asset_kind(std::move(kind));
 
 		edt::problem item;
@@ -167,7 +222,7 @@ struct extension_fixture : test_util::null_engine_fixture
 			.base_assembler = &storage.require<scn::ecs_assembler>(), .base_sfactory = &storage.require<ecs::system_factory>() }
 		, context(std::make_unique<edt::editor_context>(
 			storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
-			gui, services, tasks, commands, scene, edt::prefab_preview(services)))
+			gui, services, tasks, commands, scene))
 	{
 		host_data.attach(std::shared_ptr<edt::editor_context>(context.get(), [](edt::editor_context*) {}));
 		g_probe_state = &state;
@@ -316,6 +371,29 @@ BOOST_AUTO_TEST_CASE(AResultQueuedBeforeTheUnload_IsNotDeliveredToTheModuleAfter
 	BOOST_CHECK_EQUAL(state.shutdowns, 1);
 }
 
+BOOST_AUTO_TEST_CASE(APreviewOfAModule_IsDestroyedAtUnload_AfterItsTasksStoppedAndBeforeItsKindIsGone_AndNothingArrivesAfterwards)
+{
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		edt::previewable_document* preview = context->documents().open_preview(res::tag::make("things/a.ext"));
+		BOOST_REQUIRE(preview != nullptr);
+		BOOST_REQUIRE(preview->is_open());
+		BOOST_REQUIRE_EQUAL(state.previews_made, 1);
+		// The preview's task ran on the pool; its continuation waits in the main queue when the module goes.
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.preview_continuations, 0);
+		module.shutdown_services(host_data);
+	}
+	BOOST_CHECK_EQUAL(state.previews_destroyed, 1);
+	BOOST_CHECK_MESSAGE(state.preview_destroyed_after_shutdown, "the preview went before the module's tasks were stopped");
+	BOOST_CHECK_MESSAGE(state.kind_still_registered_when_preview_destroyed, "the preview went after its asset kind was gone");
+	BOOST_CHECK(context->documents().preview() == nullptr);
+
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.preview_continuations_after_destroy, 0);
+}
+
 BOOST_AUTO_TEST_CASE(ASubscriptionOfAModule_IsGoneAfterUnload_SoTheEventNoLongerReachesIt)
 {
 	{
@@ -354,6 +432,10 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItC
 	static std::uint32_t reported = 0;
 	reported = host;
 	BOOST_CHECK(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty());
+
+	// 1.1 added asset_kind_desc::make_preview (#589): a module built against 1.0 does not use it and is served as before.
+	reported = 0x0001'0000u;
+	BOOST_CHECK_MESSAGE(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty(), "a module built against editor api 1.0 is refused");
 
 	reported = host + (1u << 16);
 	const std::string newer_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });

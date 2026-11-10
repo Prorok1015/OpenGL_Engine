@@ -14,7 +14,7 @@ namespace edt
 		std::function<void(const res::tag&)> add_desc_to_scene;
 	};
 
-	// "prefab" (.prefab.desc: double-click opens the prefab editor) and "desc" (any asset dropped onto the
+	// "prefab" (.prefab.desc: double-click opens the prefab editor; its preview is the prefab_document) and "desc" (any asset dropped onto the
 	// viewport is added to the scene). The kinds stay registered while the returned handles live.
 	[[nodiscard]] std::vector<registration> register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks);
 }

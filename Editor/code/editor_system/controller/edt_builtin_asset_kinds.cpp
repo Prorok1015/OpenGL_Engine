@@ -1,4 +1,6 @@
 #include "edt_builtin_asset_kinds.h"
+#include "edt_prefab_document.h"
+#include <memory>
 #include <utility>
 
 std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks)
@@ -10,6 +12,7 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 		.suffix = ".prefab.desc",
 		.icon = "[D]",
 		.open = [open = hooks.open_prefab](editor_context&, const res::tag& tag) { open(tag); },
+		.make_preview = [](editor_services& services) -> std::unique_ptr<previewable_document> { return std::make_unique<prefab_document>(services); },
 	}));
 	// Empty suffix: every dropped asset is added through its desc, as before the registry existed.
 	out.push_back(registry.add({

@@ -173,7 +173,7 @@ auto result = inspectors.invoke(type_name, comp_node);
 
 **Adding a new component renderer**: implement lambda in `edt_component_renderers/`, register it in `edt_component_renderers.cpp::register_desc_component_renderers()`. A second renderer for the same type is refused with an error.
 
-`editor_context::asset_kinds()` (`asset_kind_registry`) maps a res-relative path suffix to `{open, drop_into_scene, icon}`; the longest matching suffix that has the wanted action wins. Built-in kinds (`prefab` = `.prefab.desc` opens the prefab editor, `desc` = any asset dropped onto the viewport is added to the scene) are in `controller/edt_builtin_asset_kinds.cpp`.
+`editor_context::asset_kinds()` (`asset_kind_registry`) maps a res-relative path suffix to `{open, drop_into_scene, make_preview, icon}`; the longest matching suffix that has the wanted action wins (a kind with only `make_preview` is allowed). `make_preview` (editor API 1.1, #589) makes the `previewable_document` a source of that kind is previewed in: `document_manager::open_preview(tag)` takes it from the longest matching kind (null when none), keeps one document per kind, and when the kind is removed (a `game_editor` unloads) closes and destroys it before the kind goes (after the module's tasks are stopped); one with unsaved changes (`is_dirty`) is closed with a warning in the log and in the problems (source `preview`), never silently. `document_manager::set_preview_kinds` binds it to a registry (`editor_context` does). Built-in kinds (`prefab` = `.prefab.desc` opens the prefab editor and makes the `prefab_document`, `desc` = any asset dropped onto the viewport is added to the scene) are in `controller/edt_builtin_asset_kinds.cpp`.
 
 ## Desc ↔ ECS Edit Loop
 
