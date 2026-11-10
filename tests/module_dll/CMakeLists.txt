@@ -4,6 +4,8 @@
 #
 # The other builds of the same module are what a reload swaps in (#435): v2 moves by 2, failing fails to register,
 # bad_api reports the next major API version, bad_restore has a system that cannot start while a test sets a trap (#601).
+# The trap of bad_restore: an absolute path both the library and the test name, whatever the working directory.
+set(_keeper_trap "${CMAKE_CURRENT_BINARY_DIR}/test_game_dll_keeper.trap")
 foreach(_variant IN ITEMS "" v2 failing bad_api bad_restore)
 	set(_target test_game_dll)
 	if(_variant)
@@ -14,6 +16,7 @@ foreach(_variant IN ITEMS "" v2 failing bad_api bad_restore)
 		string(TOUPPER "${_variant}" _define)
 		target_compile_definitions(${_target} PRIVATE TEST_DLL_${_define})
 	endif()
+	target_compile_definitions(${_target} PRIVATE "SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\"")
 	target_link_libraries(${_target} PRIVATE snk::engine snk::engine_api snk::sanitizers)
 	if(MSVC)
 		# snk_engine.dll exports only SNK_API: Boost.JSON (desc serialize/deserialize) needs its own static
@@ -27,5 +30,5 @@ endforeach()
 set(_dll_tests "${CMAKE_CURRENT_SOURCE_DIR}/app_module_dll_tests.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/edt_play_reload_dll_tests.cpp")
 target_sources(unit_tests PRIVATE ${_dll_tests})
 set_source_files_properties(${_dll_tests} TARGET_DIRECTORY unit_tests
-	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_GAME_DLL_PATH=\"$<TARGET_FILE:test_game_dll>\";SNK_TEST_GAME_DLL_V2_PATH=\"$<TARGET_FILE:test_game_dll_v2>\";SNK_TEST_GAME_DLL_FAILING_PATH=\"$<TARGET_FILE:test_game_dll_failing>\";SNK_TEST_GAME_DLL_BAD_API_PATH=\"$<TARGET_FILE:test_game_dll_bad_api>\";SNK_TEST_GAME_DLL_BAD_RESTORE_PATH=\"$<TARGET_FILE:test_game_dll_bad_restore>\"" SKIP_PRECOMPILE_HEADERS ON)
+	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_GAME_DLL_PATH=\"$<TARGET_FILE:test_game_dll>\";SNK_TEST_GAME_DLL_V2_PATH=\"$<TARGET_FILE:test_game_dll_v2>\";SNK_TEST_GAME_DLL_FAILING_PATH=\"$<TARGET_FILE:test_game_dll_failing>\";SNK_TEST_GAME_DLL_BAD_API_PATH=\"$<TARGET_FILE:test_game_dll_bad_api>\";SNK_TEST_GAME_DLL_BAD_RESTORE_PATH=\"$<TARGET_FILE:test_game_dll_bad_restore>\";SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\"" SKIP_PRECOMPILE_HEADERS ON)
 target_link_libraries(unit_tests PRIVATE ${CMAKE_DL_LIBS})

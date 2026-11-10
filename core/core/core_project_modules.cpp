@@ -642,6 +642,7 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		hooks.before_swap();
 	}
 	const auto finish = [&](reload_report report) {
+		report.module = name;
 		// Only a new build in place can be taken back, once.
 		if (report.status != reload_status::reloaded) {
 			m_revert.erase(name);

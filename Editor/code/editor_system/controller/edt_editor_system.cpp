@@ -657,12 +657,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<core::project_module_host>().build_output(module);
 	};
 	const auto reload_module = [this, &data](const std::string& module, bool retry_taken_back) {
-		m_last_reloaded_module = module;
 		core::reload_report report = data.has_value<core::project_module_host>()
 			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks(), retry_taken_back)
 			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
 		// A snapshot before_reload took and no swap used goes, whatever the outcome.
 		if (m_play) m_play->end_reload();
+		// The build loaded but could not restore Play: it is taken back next frame, so it is not reported as running.
+		if (report.status == core::reload_status::reloaded && m_play && m_play->reverting()) {
+			report.status = core::reload_status::rolled_back;
+			report.message = std::format("it could not restore Play ({}); the previous build is loaded again", m_play->restore_failure());
+		}
 		return report;
 	};
 	reload_options.reload = [reload_module](const std::string& module) { return reload_module(module, false); };
@@ -1066,12 +1070,17 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	options.report_full_snapshot = cfg_hot_reload_dump_snapshot;
 	// The problems list, not a dialog: live mode reloads on every build, and a dialog each time would be in the way.
 	// Never from inside the swap: the host refuses a revert while a reload runs, so it waits for the next UI frame.
-	options.revert_module = [this, &data] {
-		editor_layer->register_implicit("edt/revert_game_module", [this, &data] {
+	options.revert_module = [this, &data](const std::string& module) {
+		editor_layer->register_implicit("edt/revert_game_module", [this, &data, module] {
+			// Play was stopped meanwhile: the build that loaded stays.
+			if (!m_play || !m_play->reverting()) {
+				egLOG_INFO("hot_reload", "the revert of '{}' is dropped: Play no longer waits for it", module);
+				return false;
+			}
 			core::reload_report report = data.has_value<core::project_module_host>()
-				? data.require<core::project_module_host>().revert(m_last_reloaded_module, m_swap_gate.hooks())
+				? data.require<core::project_module_host>().revert(module, m_swap_gate.hooks())
 				: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
-			if (m_play) m_play->end_revert(report);
+			m_play->end_revert(report);
 			return false;
 		});
 	};

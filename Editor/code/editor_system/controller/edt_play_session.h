@@ -66,8 +66,8 @@ namespace edt
 		std::function<void(const std::string& message)> notify{};
 		// Play could not be restored in a build that loaded: asks for that build to be taken back (core::project_module_host
 		// ::revert, never from inside the swap), whose swap brings Play back in the previous build; end_revert after the
-		// call. Null: Play stops instead (HOT_RELOAD_PLAY.md 3.5).
-		std::function<void()> revert_module{};
+		// call. Gets the module of that reload. Null: Play stops instead (HOT_RELOAD_PLAY.md 3.5).
+		std::function<void(const std::string& module)> revert_module{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
@@ -145,6 +145,11 @@ namespace edt
 		// The revert revert_module asked for returned: one that never swapped (refused before its hooks) leaves Play
 		// suspended, so it stops.
 		void end_revert(const core::reload_report& report);
+		// The restore failed in the new build and its revert is asked for, not yet done: the build that loaded is taken
+		// back. Stop drops the request.
+		bool reverting() const { return m_reverting; }
+		// Why the restore failed in the last reload; empty when it did not.
+		const std::string& restore_failure() const { return m_restore_failure; }
 		// Between before_module_swap and after_module_swap with a snapshot.
 		bool suspended() const { return m_suspended; }
 		// A module reload is under way: suspended, or the restored set waits (inactive, paused) for the resources its
@@ -170,7 +175,7 @@ namespace edt
 		// dropped. May throw from the new module's code.
 		bool restore_after_swap(scn::snapshot_report& restored, std::string& failure);
 		// The half-built set goes; the session stays suspended with its snapshot, for the restore in the previous build.
-		void await_revert(std::string failure);
+		void await_revert(const std::string& module, std::string failure);
 		// `play`: kept, reverted (kept in the previous build), stopped or restarted.
 		void report_reload(const core::reload_report& outcome, const scn::snapshot_report& restored, std::string_view play);
 
@@ -223,6 +228,8 @@ namespace edt
 		// The restore in the new build failed and its revert was asked for (once per reload): why it failed.
 		bool m_reverting = false;
 		std::string m_restore_failure;
+		// Why that revert did not bring the previous build back.
+		std::string m_revert_failure;
 		// When the reload began (capture_for_reload), for the report's duration.
 		std::optional<std::chrono::steady_clock::time_point> m_reload_started;
 		bool m_suspended = false;

@@ -146,7 +146,7 @@ struct dll_play_fixture : test_util::module_env
 		.each_frame = [this](const std::string&, std::function<bool()> poll) { reload_polls.push_back(std::move(poll)); },
 		.project_root = project.game, .report_full_snapshot = true,
 		.notify = [this](const std::string& message) { notices.push_back(message); },
-		.revert_module = [this] { ++revert_requests; } } };
+		.revert_module = [this](const std::string&) { ++revert_requests; } } };
 	edt::module_swap_gate gate{ [this](bool before) {
 		if (before) level_ctrl.detach_from_game_layer();
 		else level_ctrl.attach_to_game_layer();

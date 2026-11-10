@@ -99,6 +99,8 @@ namespace {
 int g_markers_seen = 0;
 // Set around Play's restore only (not the level's rebuild): Build 2's keeper cannot be made then (#601).
 bool g_keeper_trap = false;
+// The trap throws something that is not a std::exception.
+bool g_keeper_trap_unknown = false;
 
 // A system of the module that keeps state in its fields; Build 2's one throws while the trap is set.
 template<int Build>
@@ -106,7 +108,10 @@ struct play_keeper : ecs::system_interface
 {
 	play_keeper()
 	{
-		if (Build == 2 && g_keeper_trap) throw std::runtime_error("the keeper of build 2 cannot start");
+		if (Build == 2 && g_keeper_trap) {
+			if (g_keeper_trap_unknown) throw 42;
+			throw std::runtime_error("the keeper of build 2 cannot start");
+		}
 	}
 	void run(entt::view<entt::get_t<play_marker>> markers) { frames += static_cast<int>(markers.size()); }
 	int frames = 0;
@@ -1174,7 +1179,10 @@ struct reverting_session
 		, play(fixture.state, fixture.services, fixture.world_ctrl, fixture.selection, fixture.events, edt::play_session_options{
 			.project_root = fixture.report_root.path(),
 			.notify = [this](const std::string& message) { told.push_back(message); },
-			.revert_module = [this] { ++revert_requests; } })
+			.revert_module = [this](const std::string& module) {
+				++revert_requests;
+				reverted_module = module;
+			} })
 	{
 		f.gate.set_play_hooks([this] { play.before_module_swap(); }, [this](const core::reload_report& report) {
 			g_keeper_trap = true;
@@ -1186,6 +1194,7 @@ struct reverting_session
 	~reverting_session()
 	{
 		g_keeper_trap = false;
+		g_keeper_trap_unknown = false;
 		play.stop();
 		f.gate.set_play_hooks([&fixture = f] { fixture.play.before_module_swap(); },
 			[&fixture = f](const core::reload_report& report) { fixture.play.after_module_swap(report); });
@@ -1194,6 +1203,7 @@ struct reverting_session
 	play_fixture& f;
 	std::vector<std::string> told;
 	int revert_requests = 0;
+	std::string reverted_module;
 	edt::play_session play;
 };
 
@@ -1216,6 +1226,8 @@ BOOST_AUTO_TEST_CASE(a_build_play_cannot_be_restored_in_is_taken_back_and_play_g
 		session.play.end_reload();
 
 		BOOST_TEST(session.revert_requests == 1);
+		BOOST_TEST(session.reverted_module == "play_game");
+		BOOST_TEST(session.play.reverting());
 		BOOST_TEST(session.play.reloading());
 		BOOST_TEST(!play_set());
 		BOOST_TEST((session.play.state() == edt::play_state::playing)); // nothing announced while the revert is due
@@ -1238,6 +1250,94 @@ BOOST_AUTO_TEST_CASE(a_build_play_cannot_be_restored_in_is_taken_back_and_play_g
 		const json::object report = read_report();
 		BOOST_TEST(report.at("play").as_string() == "reverted");
 		BOOST_TEST(report.at("restore_failed_because").as_string().find("cannot start") != std::string::npos);
+
+		// The next reload that keeps all of Play clears the line in Problems.
+		session.play.stop();
+		open_level(MODULE_LEVEL);
+		BOOST_REQUIRE(session.play.start());
+		BOOST_REQUIRE(session.play.capture_for_reload().empty());
+		BOOST_REQUIRE((host.reload("play_game", build_of(v1_entry()), [] { return build_of(v1_entry()); }, gate.hooks()).status
+			== core::reload_status::reloaded));
+		session.play.end_reload();
+		settle();
+		BOOST_TEST(session.revert_requests == 1);
+		BOOST_REQUIRE(!session.told.empty());
+		BOOST_TEST(session.told.back().empty());
+		BOOST_TEST(read_report().at("play").as_string() == "kept");
+	}
+	loader.unload("play_game", root);
+}
+
+// A restore that throws something other than a std::exception is a failed restore too.
+BOOST_AUTO_TEST_CASE(a_restore_that_throws_an_unknown_type_is_taken_back_too)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(SYSTEMS_LEVEL);
+	{
+		reverting_session session(*this);
+		g_keeper_trap_unknown = true;
+		BOOST_REQUIRE(session.play.start());
+		BOOST_REQUIRE(session.play.capture_for_reload().empty());
+		host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+		session.play.end_reload();
+
+		BOOST_TEST(session.revert_requests == 1);
+		BOOST_TEST(session.play.restore_failure() == "an exception of an unknown type");
+		session.play.end_revert(host.revert("play_game", gate.hooks()));
+		BOOST_TEST((session.play.state() == edt::play_state::playing));
+		BOOST_TEST(read_report().at("restore_failed_because").as_string() == "an exception of an unknown type");
+	}
+	loader.unload("play_game", root);
+}
+
+// A Stop while the revert is due drops it: the revert that comes after it neither stops anything nor writes a report.
+BOOST_AUTO_TEST_CASE(a_stop_while_the_revert_is_due_drops_it)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(SYSTEMS_LEVEL);
+	{
+		reverting_session session(*this);
+		BOOST_REQUIRE(session.play.start());
+		BOOST_REQUIRE(session.play.capture_for_reload().empty());
+		host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+		session.play.end_reload();
+		BOOST_REQUIRE(session.play.reverting());
+
+		session.play.stop();
+		BOOST_TEST(!session.play.reverting());
+		BOOST_TEST(!session.play.reloading());
+		const std::size_t told = session.told.size();
+		session.play.end_revert(host.revert("play_game", gate.hooks()));
+
+		BOOST_TEST((session.play.state() == edt::play_state::stopped));
+		BOOST_TEST(session.told.size() == told);
+		BOOST_TEST(!std::filesystem::exists(report_root.path() / ".cache" / "hot_reload" / "last_play_snapshot.json"));
+	}
+	loader.unload("play_game", root);
+}
+
+// Stop and Start before the revert ran: the new session is not taken over by the revert's answer.
+BOOST_AUTO_TEST_CASE(a_play_started_again_before_the_revert_is_not_stopped_by_it)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(SYSTEMS_LEVEL);
+	{
+		reverting_session session(*this);
+		BOOST_REQUIRE(session.play.start());
+		BOOST_REQUIRE(session.play.capture_for_reload().empty());
+		host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+		session.play.end_reload();
+		BOOST_REQUIRE(session.play.reverting());
+
+		session.play.stop();
+		BOOST_REQUIRE(session.play.start());
+		BOOST_TEST(!session.play.reverting());
+		const std::size_t told = session.told.size();
+		session.play.end_revert(core::reload_report{ core::reload_status::refused, "no reload of it to take back" });
+
+		BOOST_TEST((session.play.state() == edt::play_state::playing));
+		BOOST_TEST(play_set());
+		BOOST_TEST(session.told.size() == told);
 	}
 	loader.unload("play_game", root);
 }
@@ -1263,7 +1363,9 @@ BOOST_AUTO_TEST_CASE(a_revert_that_cannot_bring_play_back_stops_it_and_is_asked_
 		BOOST_TEST(!play_set());
 		BOOST_REQUIRE(!session.told.empty());
 		BOOST_TEST(session.told.back().find("Play stopped") != std::string::npos);
+		BOOST_TEST(session.told.back().find("no reload of it to take back") != std::string::npos);
 		BOOST_TEST(read_report().at("play").as_string() == "stopped");
+		BOOST_TEST(read_report().at("revert_failed_because").as_string() == "no reload of it to take back");
 
 		// The running build is 2 now: its restore fails, a revert is asked for, and its restore fails again.
 		BOOST_REQUIRE(session.play.start());

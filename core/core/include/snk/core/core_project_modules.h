@@ -77,6 +77,8 @@ namespace core
 		reload_status status = reload_status::refused;
 		// Empty when reloaded; otherwise why, for the user.
 		std::string message;
+		// The module the swap was for; empty when nothing was swapped.
+		std::string module{};
 	};
 
 	struct reload_hooks

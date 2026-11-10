@@ -270,6 +270,8 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 		}
 	}
 
+	// The keys each type reads, once per type rather than once per entity.
+	std::unordered_map<const component_entry*, std::vector<std::string>> known_by_type;
 	for (std::size_t i = 0; i < entities.size(); ++i) {
 		const json::value* components_value = entities[i].as_object().if_contains("components");
 		if (!components_value || !components_value->is_object()) {
@@ -288,7 +290,9 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 			}
 			if (const auto* value = components.if_contains(entry.name); value && value->is_object()) {
 				const json::object& saved = value->as_object();
-				const std::vector<std::string> removed = desc::unknown_keys(*entry.schema, saved);
+				auto known = known_by_type.find(&entry);
+				if (known == known_by_type.end()) known = known_by_type.emplace(&entry, desc::known_keys(*entry.schema)).first;
+				const std::vector<std::string> removed = desc::unknown_keys(known->second, saved);
 				// A field the schema dropped is reported as removed, not as a field that no longer fits.
 				json::object kept;
 				if (!removed.empty()) {

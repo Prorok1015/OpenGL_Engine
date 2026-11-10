@@ -150,6 +150,10 @@ void edt::play_session::stop(play_reason reason)
 	m_camera_world.clear();
 	m_reload.reset();
 	m_suspended = false;
+	// A revert asked for and not yet run is dropped: the build that loaded stays, nothing comes back to this session.
+	m_reverting = false;
+	m_restore_failure.clear();
+	m_revert_failure.clear();
 	// The poll of a wait stops at its next frame; it never reaches the set that is gone.
 	m_waiting.reset();
 	++m_wait_generation;
@@ -278,6 +282,7 @@ std::string edt::play_session::capture_for_reload()
 	m_capture_refusal.clear();
 	m_dropped_systems.clear();
 	m_restore_failure.clear();
+	m_revert_failure.clear();
 	m_reverting = false;
 	m_reload_started = now();
 	const auto contexts = m_services.ctx_manager.lock();
@@ -303,13 +308,18 @@ std::string edt::play_session::capture_for_reload()
 		saved_world saved;
 		saved.name = std::string{ world.get_name() };
 		saved.systems = world.systems().value_or(std::vector<std::string>{});
+		// A system with an instance keeps state in its fields; system_entry stays as old modules built it (ABI).
 		const ecs::system_registry& systems = layer->systems().registry();
-		for (const std::string& name : saved.systems) {
-			const ecs::system_entry* entry = systems.find(name);
-			const bool engines = systems.parent() && systems.parent()->find(name);
-			if (entry && entry->stateful && !engines && std::ranges::find(snapshot.systems_restarted, name) == snapshot.systems_restarted.end()) {
-				egLOG_WARN("hot_reload", "the system '{}' keeps state in its fields: it starts again after the module reload", name);
-				snapshot.systems_restarted.push_back(name);
+		if (const ecs::system_plan* plan = world.plan()) {
+			for (const ecs::phase_plan& phase : plan->phases) {
+				for (const ecs::system_node& node : phase.nodes) {
+					const bool engines = systems.parent() && systems.parent()->find(node.name);
+					if (node.instance.owner && !engines
+						&& std::ranges::find(snapshot.systems_restarted, node.name) == snapshot.systems_restarted.end()) {
+						egLOG_WARN("hot_reload", "the system '{}' keeps state in its fields: it starts again after the module reload", node.name);
+						snapshot.systems_restarted.push_back(node.name);
+					}
+				}
 			}
 		}
 		saved.input_layer = world.input_layer();
@@ -528,10 +538,11 @@ void edt::play_session::after_module_swap(const core::reload_report& report)
 		}
 		// Once per reload, only for a new build that loaded: its revert brings the previous build back, and Play in it.
 		if (!kept && !second_pass && report.status == core::reload_status::reloaded && m_options.revert_module) {
-			await_revert(std::move(failure));
+			await_revert(report.module, std::move(failure));
 			return;
 		}
 		if (!failure.empty() && m_restore_failure.empty()) m_restore_failure = failure;
+		if (second_pass && !built) m_revert_failure = report.message;
 		report_reload(report, restored, kept ? (second_pass ? "reverted" : "kept") : "stopped");
 		if (!kept) {
 			egLOG_WARN("hot_reload", "Play stopped: its world was not brought back after the module reload ({})",
@@ -557,7 +568,7 @@ void edt::play_session::after_module_swap(const core::reload_report& report)
 	m_capture_refusal.clear();
 }
 
-void edt::play_session::await_revert(std::string failure)
+void edt::play_session::await_revert(const std::string& module, std::string failure)
 {
 	if (const auto contexts = m_services.ctx_manager.lock(); contexts && contexts->find_set(k_play_set)) {
 		contexts->destroy_set(k_play_set);
@@ -572,14 +583,16 @@ void edt::play_session::await_revert(std::string failure)
 	m_reverting = true;
 	m_suspended = true;
 	egLOG_WARN("hot_reload", "the new build could not restore Play ({}): the previous build is loaded again", m_restore_failure);
-	m_options.revert_module();
+	m_options.revert_module(module);
 }
 
 void edt::play_session::end_revert(const core::reload_report& report)
 {
-	if (!std::exchange(m_reverting, false)) return;
+	// Stop dropped the revert (m_reverting), or a swap of the revert already brought Play back (not suspended).
+	if (!std::exchange(m_reverting, false) || !m_suspended) return;
 	// The revert never swapped: no after_module_swap comes, nothing runs Play.
 	m_suspended = false;
+	m_revert_failure = report.message;
 	egLOG_WARN("hot_reload", "Play stopped: the previous build was not loaded again ({})", report.message);
 	report_reload(report, {}, "stopped");
 	stop(play_reason::stopped_for_reload);
@@ -645,9 +658,11 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 		if (play == "kept" && !lost_something) {
 			m_options.notify({});
 		} else if (play == "stopped") {
-			m_options.notify(m_restore_failure.empty()
+			std::string message = m_restore_failure.empty()
 				? std::string{ "Play stopped: its state was not brought back after the game module was reloaded." }
-				: std::format("Play stopped: its state was not brought back after the game module was reloaded ({}).", m_restore_failure));
+				: std::format("Play stopped: its state was not brought back after the game module was reloaded ({}).", m_restore_failure);
+			if (!m_revert_failure.empty()) message += std::format(" The previous build was not loaded again: {}.", m_revert_failure);
+			m_options.notify(message);
 		} else if (play == "reverted") {
 			m_options.notify(std::format("The new build of the game module could not restore Play ({}): the previous build runs "
 				"again and Play goes on. Build the module again to retry.", m_restore_failure));
@@ -678,6 +693,7 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 	out["play"] = play;
 	if (!m_capture_refusal.empty()) out["not_kept_because"] = m_capture_refusal;
 	if (!m_restore_failure.empty()) out["restore_failed_because"] = m_restore_failure;
+	if (!m_revert_failure.empty()) out["revert_failed_because"] = m_revert_failure;
 	out["entities"] = dropped.entities;
 	out["dropped_no_schema"] = counts_json(dropped.unsaved);
 	out["dropped_unknown_type"] = counts_json(dropped.unknown);

@@ -227,8 +227,6 @@ namespace edt {
 		void follow_game_layer_change(bool before);
 		// Changes of the game layer reach follow_game_layer_change through it; a reload of the game module holds them (#435).
 		module_swap_gate m_swap_gate{ [this](bool before) { follow_game_layer_change(before); } };
-		// The module the last reload swapped: what Play's revert takes back (#601).
-		std::string m_last_reloaded_module;
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;

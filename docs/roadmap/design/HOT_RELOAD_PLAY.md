@@ -131,6 +131,8 @@
    - явная перезагрузка человеком (`retry_taken_back`).
 
    Если старая сборка при откате не загрузилась (`lost`), `current` очищается и `is_current()` ложно, так что та же сборка снова грузится (#601).
+
+   Имя модуля для отката приходит в `reload_report::module` той замены, которая не смогла восстановить Play. Пока откат ждёт следующего кадра (`play_session::reverting()`), reload сообщает о новой сборке как о `rolled_back` («не смогла восстановить Play, загружается предыдущая»), а не как о `reloaded`. Поэтому live mode не записывает её как загруженную. Stop в это время отменяет откат: новая сборка остаётся, ответ отката сессию не трогает, в том числе сессию, запущенную заново до отката. Если откат не удался (отказ или `lost`), причина попадает в Problems и в отчёт (`revert_failed_because`).
 3. Гейт проходит `detach`/`attach` уровня второй раз, как при любой замене.
 4. `before_swap` второго прохода **не снимает новый снимок**: набора `"play"` нет, а `play_session` уже в `suspended`. Используется прежний снимок.
 5. `after_swap` второго прохода → `restore(snapshot)` в слое старого модуля.
@@ -272,7 +274,7 @@ Restore сверяет снимок с реестрами нового слоя:
 
 Пропажа типа, системы или поля — ожидаемая правка кода, а не ошибка (вопрос 4).
 
-Как это видно (#601): всё перечисленное идёт в лог с категорией `hot_reload`, в отчёт `last_play_snapshot.json` (`dropped_unknown_type`, `dropped_systems`, `field_removed`, `field_kept_default`) и одной строкой в Problems (`hot_reload`). Удалённое поле находит `desc::unknown_keys`: `restore_world` считает такие компоненты в `snapshot_report::removed_fields`. Stateful-системы модульного слоя (`ecs::system_entry::stateful`) из списков миров тоже попадают в отчёт (`systems_restarted`) и в Problems: их поля начинаются заново (§8). Системы движка не упоминаются.
+Как это видно (#601): всё перечисленное идёт в лог с категорией `hot_reload`, в отчёт `last_play_snapshot.json` (`dropped_unknown_type`, `dropped_systems`, `field_removed`, `field_kept_default`) и одной строкой в Problems (`hot_reload`). Удалённое поле находит `desc::unknown_keys`: `restore_world` считает такие компоненты в `snapshot_report::removed_fields`. Системы-объекты модульного слоя из плана мира (`system_node::instance.owner` не пуст; раскладка `ecs::system_entry` не меняется, так что модуль на старых заголовках тоже подходит) тоже попадают в отчёт (`systems_restarted`) и в Problems: их поля начинаются заново (§8). Системы движка не упоминаются.
 
 ## 8. Время, Pause, Step, детерминизм
 
