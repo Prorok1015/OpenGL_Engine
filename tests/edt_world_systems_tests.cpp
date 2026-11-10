@@ -16,6 +16,7 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <boost/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -293,12 +294,20 @@ BOOST_AUTO_TEST_CASE(AnUnknownSystem_IsAProblemOfTheLevel_NotASilentSkip)
 	publisher.refresh(problems, scene, &level);
 	BOOST_TEST(problems.size() == 1u);
 	BOOST_TEST(announced == 1);
+	// Problems' "Go to" (#596): every row knows its world, whatever its kind.
+	const std::optional<std::string> world = publisher.world_of(found[0]);
+	BOOST_REQUIRE(world.has_value());
+	BOOST_TEST(*world == "w0");
+	edt::problem other = found[0];
+	other.message += " (another)";
+	BOOST_TEST(!publisher.world_of(other).has_value());
 
 	// Removing the name from the list clears the problem once the plan is rebuilt from the desc.
 	BOOST_REQUIRE(call("world.systems.remove", R"({"system":"gone::system"})").ok);
 	level.add_systems(level.get("w0"), scene.world_descs[0].get_systems(), sfactory);
 	publisher.refresh(problems, scene, &level);
 	BOOST_TEST(problems.size() == 0u);
+	BOOST_TEST(!publisher.world_of(found[0]).has_value());
 	publisher.refresh(problems, scene, nullptr);
 	BOOST_TEST(problems.size() == 0u);
 }

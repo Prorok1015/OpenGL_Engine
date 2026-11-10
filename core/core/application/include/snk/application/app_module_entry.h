@@ -2,6 +2,7 @@
 #include <snk/application/app_module_interface.h>
 #include <entt/config/config.h>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <string>
 #include <version>
@@ -32,11 +33,21 @@
 // been built against it, so the minor stays 3.5.
 // inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
-// 3.6 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
+// 3.6 (#614): the optional export snk_module_layout_key, the key of the layouts of the engine types whose size is compiled
+// into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
+// own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
+// Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
+// 3.7 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
 // methods; module_context is made by the engine and gains two members at its end), the ctx type inp::input_stack_control
 // (a system's list of stack commands, methods exported), inp::stack_command and inp::stack_layer_desc::owner already there.
-// A module built for 3.5 never calls them and still loads; one that uses them needs an engine of 3.6 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
+// A module built for 3.6 or older never calls them and still loads; one that uses them needs an engine of 3.7 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0007u // major << 16 | minor
+
+// The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
+// without that header a module reports 0, which the host does not check.
+#ifndef SNK_DETAIL_MODULE_LAYOUT_KEY
+#define SNK_DETAIL_MODULE_LAYOUT_KEY 0u
+#endif
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)
@@ -158,6 +169,8 @@ namespace app::modules {
 		// Only an editor module (kind "editor", #588) has it: snk_editor_api_version, the editor API it was built against.
 		// The host that loads editor modules checks it before the module is created; a runtime module has none.
 		std::uint32_t (*editor_api_version)() = nullptr;
+		// snk_module_layout_key (3.6, #614); null for a module built for 3.5 or older.
+		std::uint64_t (*layout_key)() = nullptr;
 	};
 
 	// Empty string when the module can be loaded by this host, otherwise the reason it cannot.
@@ -199,12 +212,27 @@ namespace app::modules {
 		return {};
 	}
 
+	// Empty when the module was built against the engine types' layouts the host has (`host_key`,
+	// gs::engine_module_layout_key), or cannot tell (no snk_module_layout_key, key 0, `host_key` 0); otherwise why not.
+	inline std::string check_module_layout(const module_entry& entry, std::uint64_t host_key)
+	{
+		if (!entry.layout_key || host_key == 0) {
+			return {};
+		}
+		const std::uint64_t key = entry.layout_key();
+		if (key == 0 || key == host_key) {
+			return {};
+		}
+		return std::format("it was built against an engine whose types have another layout (module key {:016x}, engine "
+			"key {:016x}): rebuild the project (Build > Build Game)", key, host_key);
+	}
+
 }
 
-// The module_entry of the four functions SNK_DECLARE_MODULE_PREFIXED(prefix, ...) defines.
+// The module_entry of the functions SNK_DECLARE_MODULE_PREFIXED(prefix, ...) defines.
 #define SNK_MODULE_ENTRY(prefix) \
 	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
-		&prefix##destroy_module, nullptr }
+		&prefix##destroy_module, nullptr, &prefix##module_layout_key }
 
 // The game module compiled into a static host (snk_add_game_host, #592): the host gets its entry from here, not from a
 // library it opens. Defined by SNK_DECLARE_MODULE when the module is built with SNK_GAME_MODULE_STATIC.
@@ -230,6 +258,10 @@ app::modules::module_entry snk_static_module_entry();
 	attr void prefix##destroy_module(::app::modules::module_interface* module) \
 	{ \
 		delete module; \
+	} \
+	attr std::uint64_t prefix##module_layout_key() \
+	{ \
+		return SNK_DETAIL_MODULE_LAYOUT_KEY; \
 	} \
 	}
 

@@ -5,9 +5,11 @@
 #include "edt_agent_policy.h"
 #include "edt_agent_server.h"
 #include "edt_data_protocol.h"
+#include "edt_document_cast.h"
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
 #include "edt_mcp_bridge_host.h"
+#include "edt_scene_document.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_frame_commands.h>
 #include <snk/application/app_frame_control.h>
@@ -19,6 +21,7 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_problem_list.h>
+#include <snk/editor/edt_selection_service.h>
 #include <snk/gui/gui_null_backend.h>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/gui/gui_system.h>
@@ -31,6 +34,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -913,6 +917,14 @@ constexpr std::string_view k_level_with_unknown = R"json({"__type":"level_desc",
 constexpr std::string_view k_clean_level = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
 	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"odd"}]}]})json";
+constexpr std::string_view k_level_with_unknown_system = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]},
+	{"__type":"world_desc","__version":4,"name":"w1","systems":["no_such_system"],"children":[]}]})json";
+constexpr std::string_view k_level_with_world_file = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+	"res://worlds/desc_problems_world.desc"]})json";
+constexpr std::string_view k_world_file_with_unknown = R"json({"__type":"world_desc","__version":4,"name":"wf","systems":[],"children":[
+	{"__id":"00000000000000f1","name":"plain"},
+	{"__id":"00000000000000f2","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
 constexpr std::string_view k_prefab_with_unknown = R"json({"__type":"prefab_desc","__version":4,"children":[
 	{"__id":"00000000000000e1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
 constexpr std::string_view k_clean_prefab = R"json({"__type":"prefab_desc","__version":4,"children":[
@@ -1023,6 +1035,116 @@ BOOST_FIXTURE_TEST_CASE(AHotReloadOfTheWorkingCopy_IsReportedAsTheLevelsFile, de
 		contexts.update(std::chrono::duration<float>(0.001f));
 	}
 	BOOST_TEST(desc_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(GoingToARow_SelectsItsNode, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown);
+	const auto rows = desc_rows();
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	auto& selection = editor().context()->selection();
+	selection.clear();
+
+	editor().go_to_problem("desc", *unknown);
+	BOOST_TEST(selection.current().world == "w0");
+	BOOST_TEST(selection.current().path == (std::vector<std::uint64_t>{ 0xd1 }), boost::test_tools::per_element());
+}
+
+BOOST_FIXTURE_TEST_CASE(GoingToARowWhoseNodeIsGone_DoesNothing, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown);
+	const auto rows = desc_rows();
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	const edt::problem row = *unknown;
+	const boost::json::object ref{ { "context", "w0" }, { "path", boost::json::array{ "00000000000000d1" } } };
+	const auto deleted = invoke_as_agent("scene.node.delete", boost::json::object{ { "ref", ref } });
+	BOOST_REQUIRE_MESSAGE(deleted.ok, deleted.error);
+	auto& selection = editor().context()->selection();
+	selection.clear();
+	int selections = 0;
+	const auto counted = editor().context()->events().selection_changed.subscribe([&selections](const edt::selection&) { ++selections; });
+
+	editor().go_to_problem("desc", row);
+	BOOST_TEST(selections == 0);
+	BOOST_TEST(selection.current().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(GoingToARowOfAWorldFile_SelectsItsNodeInThatWorld, desc_problems_fixture)
+{
+	store(res::tag::make("worlds/desc_problems_world.desc"), k_world_file_with_unknown);
+	open_level(k_level_with_world_file);
+	const auto rows = desc_rows();
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	BOOST_TEST(unknown->file == "worlds/desc_problems_world.desc");
+	auto& selection = editor().context()->selection();
+	selection.clear();
+
+	editor().go_to_problem("desc", *unknown);
+	BOOST_TEST(selection.current().world == "wf");
+	BOOST_TEST(selection.current().path == (std::vector<std::uint64_t>{ 0xf2 }), boost::test_tools::per_element());
+}
+
+BOOST_FIXTURE_TEST_CASE(ARowOfALevelThatIsNoLongerOpen_LoadsAndSelectsNothing, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown);
+	const auto rows = desc_rows();
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	const edt::problem row = *unknown;
+
+	const res::tag other = res::tag::make("levels/desc_problems_other.desc");
+	store(other, k_clean_level);
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", std::string(other.relative()) } }).ok);
+	pump_level_load();
+	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), std::string(other.relative()));
+	auto& selection = editor().context()->selection();
+	selection.clear();
+
+	editor().go_to_problem("desc", row);
+	BOOST_TEST(!editor().level_load_in_progress());
+	BOOST_TEST(std::string(editor().current_level_tag().relative()) == std::string(other.relative()));
+	BOOST_TEST(selection.current().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(DuringPlay_GoingToARowSelectsNothing, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown);
+	const auto rows = desc_rows();
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	const edt::problem row = *unknown;
+	const auto started = invoke_as_agent("play.start", boost::json::object{});
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	auto& selection = editor().context()->selection();
+	selection.clear();
+	int selections = 0;
+	const auto counted = editor().context()->events().selection_changed.subscribe([&selections](const edt::selection&) { ++selections; });
+
+	editor().go_to_problem("desc", row);
+	BOOST_TEST(selections == 0);
+	BOOST_TEST(selection.current().empty());
+	BOOST_REQUIRE(invoke_as_agent("play.stop", boost::json::object{}).ok);
+}
+
+BOOST_FIXTURE_TEST_CASE(GoingToAWorldRow_MakesItsWorldActive, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown_system);
+	const auto& scene = edt::scene_of(editor().context()->documents());
+	BOOST_REQUIRE(scene.active_world_name() && *scene.active_world_name() == "w0");
+	std::vector<edt::problem> world_rows;
+	for (const auto& entry : editor().context()->problems().list()) {
+		if (entry.source == "world") world_rows.push_back(entry.item);
+	}
+	BOOST_REQUIRE_EQUAL(world_rows.size(), 1u);
+	BOOST_REQUIRE(!world_rows[0].notes.empty());
+	BOOST_TEST(world_rows[0].notes[0].starts_with("/worlds/1/systems/"));
+
+	editor().go_to_problem("world", world_rows[0]);
+	BOOST_REQUIRE(scene.active_world_name());
+	BOOST_TEST(*scene.active_world_name() == "w1");
 }
 
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)

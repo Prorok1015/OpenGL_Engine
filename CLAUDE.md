@@ -50,6 +50,11 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - **Exception:** `BeginPopup*`/`BeginMenu`/`BeginTable`/etc. → call `End*` only if `Begin*` returned true
 - **Ref:** `Editor/code/editor_system/panels/edt_panel_base.cpp`
 
+### Module ABI: layout of listed engine types = major bump
+- **What:** changing the size or alignment of a type in `gs::module_layout_key()` (`snk/game/gs_module_layout.h`) is a major bump of `SNK_MODULE_API_VERSION`; add a type there when module code constructs, copies or allocates it (an engine template instantiated in the module). Engine-created types a module only reads (`scene_layer`, `world_context`, `module_context`...) stay out: append fields at their end (minor), never reorder or remove (major). The key does not catch a reorder of fields of one size or a vtable change (`bus_slot`, `bus_type`, `module_interface`): those are a major bump by hand
+- **Why:** a `game.dll` allocates those types itself; the host refuses a module with another layout key (#614), but modules older than 3.6 carry no key
+- **Ref:** `docs/roadmap/design/MODULE_LAYER.md` (Ключ раскладки модуля), comment above `SNK_MODULE_API_VERSION`
+
 ### Never bypass resource cache
 - **Use:** get `res::resource_system&` by injection (constructor parameter / `app_data_storage` in composition code), then `.require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
 - **No global accessor:** `res::get_system()` (and `rnd::`/`gui::get_system()`) no longer exist — never reintroduce a global/singleton; inject `res::resource_system&`

@@ -68,7 +68,7 @@ int snk::game_host::run(int argc, char* argv[], std::map<std::string, app::modul
 		// After the host's own modules: initialize_all_services must not see the loader grow. The game modules are
 		// compiled in (#592); nothing is opened from the project's build output.
 		core::project_modules_options project_modules{ .compiled_in = std::move(compiled_in), .with_editor_modules = false,
-			.check_editor_module = {}, .editor_unload_refusal = {}, .compiled_only = true };
+			.check_editor_module = {}, .editor_unload_refusal = {}, .compiled_only = true, .layout_key = 0 };
 		auto& modules = app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules));
 		const core::project_modules_report report = modules.load_all();
 

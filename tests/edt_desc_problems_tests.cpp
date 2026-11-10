@@ -4,7 +4,9 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 // #596: the source "desc" holds the diagnostics of the descs the editor loaded, one set per scope.
@@ -23,6 +25,15 @@ std::vector<edt::problem> desc_problems(const edt::problem_list& problems)
 	for (const auto& entry : problems.list()) {
 		if (entry.source == edt::desc_problem_publisher::source) out.push_back(entry.item);
 	}
+	return out;
+}
+
+edt::desc_target in_world(std::string world, std::vector<std::uint64_t> path = {})
+{
+	edt::desc_target out;
+	out.level = "res://levels/l.desc";
+	out.world = std::move(world);
+	out.path = std::move(path);
 	return out;
 }
 
@@ -109,6 +120,69 @@ BOOST_AUTO_TEST_CASE(AReportOfTheSameRows_SetsNothing_AndADropReplacesTheLastDro
 	const auto rows = desc_problems(problems);
 	BOOST_REQUIRE(rows.size() == 1u);
 	BOOST_TEST(rows[0].message == "second");
+}
+
+BOOST_AUTO_TEST_CASE(ARow_LeadsWhereItsLocatorSaidWhenItWasReported)
+{
+	const res::tag copy{ "memory://editor/loading/1/l.desc" };
+	const res::tag file{ "res://levels/l.desc" };
+	std::vector<std::string> asked;
+	publisher.report(problems, "level", { warning_at(copy.string(), "/worlds/0/children/1/components/x", "odd") }, copy, file,
+		[&asked](const res::diagnostic& item) {
+			asked.push_back(item.resource);
+			return in_world("main", { 0xa2 });
+		});
+	BOOST_TEST(asked == std::vector<std::string>{ copy.string() }, boost::test_tools::per_element()); // as the load named it
+	const auto rows = desc_problems(problems);
+	BOOST_REQUIRE_EQUAL(rows.size(), 1u);
+	const auto target = publisher.target_of(rows[0]);
+	BOOST_REQUIRE(target.has_value());
+	BOOST_TEST(target->world == "main");
+	BOOST_TEST(target->path == (std::vector<std::uint64_t>{ 0xa2 }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(WithoutALocator_ARowLeadsToItsFile_TheWorkingCopyAsTheLevel)
+{
+	const res::tag copy{ "memory://editor/loading/1/l.desc" };
+	const res::tag file{ "res://levels/l.desc" };
+	publisher.report(problems, "level", { warning_at(copy.string(), "/worlds/0", "odd") }, copy, file);
+	publisher.report(problems, "drop", { warning_at("res://prefabs/p.prefab.desc", "/children/0", "odd") });
+	const auto rows = desc_problems(problems);
+	BOOST_REQUIRE_EQUAL(rows.size(), 2u);
+	for (const auto& row : rows) {
+		const auto target = publisher.target_of(row);
+		BOOST_REQUIRE(target.has_value());
+		BOOST_TEST(target->world.empty());
+		BOOST_TEST((target->resource == file.string() || target->resource == "res://prefabs/p.prefab.desc"));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ARowsTarget_GoesWithItsScope)
+{
+	publisher.report(problems, "level", { warning_at("res://levels/l.desc", "/worlds/0", "odd") }, {}, {},
+		[](const res::diagnostic&) { return in_world("main"); });
+	publisher.report(problems, "drop", { warning_at("res://prefabs/p.prefab.desc", "/children/0", "odd") });
+	const auto rows = desc_problems(problems);
+	BOOST_REQUIRE_EQUAL(rows.size(), 2u);
+	const auto level_row = rows[0].file == "levels/l.desc" ? rows[0] : rows[1];
+	BOOST_REQUIRE(publisher.target_of(level_row).has_value());
+
+	publisher.clear(problems, "level");
+	BOOST_TEST(!publisher.target_of(level_row).has_value());
+	BOOST_TEST(desc_problems(problems).size() == 1u);
+
+	publisher.report(problems, "level", {}, {}, {});
+	BOOST_TEST(!publisher.target_of(level_row).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheTruncatedRow_LeadsNowhere)
+{
+	res::diagnostic more = warning_at("", "", "3 more diagnostics");
+	more.kind = std::string{ res::diagnostic_kind::truncated };
+	publisher.report(problems, "drop", { more });
+	const auto rows = desc_problems(problems);
+	BOOST_REQUIRE_EQUAL(rows.size(), 1u);
+	BOOST_TEST(!publisher.target_of(rows[0]).has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

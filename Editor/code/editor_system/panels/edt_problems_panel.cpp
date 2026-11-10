@@ -1,6 +1,7 @@
 #include "edt_problems_panel.h"
 #include <imgui.h>
 #include <format>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -123,6 +124,7 @@ void edt::problems_panel::refresh()
 			added.tooltip += '\n';
 			added.tooltip += note;
 		}
+		added.source = std::move(entry.source);
 		added.item = std::move(entry.item);
 		++m_counts[index_of(added.item.severity)];
 		m_rows.push_back(std::move(added));
@@ -158,6 +160,7 @@ void edt::problems_panel::on_render()
 
 	constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable
 		| ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+	std::optional<std::size_t> activated;
 	if (ImGui::BeginTable("##problems_rows", 3, flags)) {
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, 70.f);
@@ -177,13 +180,19 @@ void edt::problems_panel::on_render()
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
 				ImGui::PushStyleColor(ImGuiCol_Text, color_of(severity));
-				ImGui::Selectable(problem_severity_name(severity), false, ImGuiSelectableFlags_SpanAllColumns);
+				ImGui::Selectable(problem_severity_name(severity), false,
+					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
 				ImGui::PopStyleColor();
+				bool activate = m_on_activate && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+				activate = activate || (m_on_activate && ImGui::IsItemFocused()
+					&& (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)));
 				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.tooltip.c_str());
 				if (ImGui::BeginPopupContextItem("##problem_menu")) {
+					if (m_on_activate && ImGui::MenuItem("Go to")) activate = true;
 					if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(problem_copy_text(entry.item).c_str());
 					ImGui::EndPopup();
 				}
+				if (activate) activated = index;
 
 				ImGui::TableSetColumnIndex(1);
 				ImGui::TextUnformatted(entry.location.c_str());
@@ -203,5 +212,10 @@ void edt::problems_panel::on_render()
 			}
 		}
 		ImGui::EndTable();
+	}
+	if (activated) {
+		// A copy: going to a row may change the problems the rows were built from.
+		const row chosen = m_rows[*activated];
+		m_on_activate(chosen.source, chosen.item);
 	}
 }
