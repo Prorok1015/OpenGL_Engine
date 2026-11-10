@@ -283,14 +283,16 @@ void scn::context_manager::reload_level(const res::tag& changed_tag)
 		return;
 	}
 	auto level_res = resources_of(get_set(level_set_name)).require_sync<scn::level_desc>(changed_tag);
-	if (m_on_reload_result) m_on_reload_result(changed_tag, level_res);
 	if (!level_res.is_ready()) {
+		if (m_on_reload_result) m_on_reload_result(changed_tag, level_res);
 		egLOG("Level Manager", "Failed to reload level '{0}'", changed_tag.view());
 		return;
 	}
 	auto& set = get_set(level_set_name);
 	std::vector<std::string> new_names;
 	const bool names_ok = collect_world_names(*level_res, new_names);
+	// Only now: the worlds are separate loads, and their diagnostics reach the level's handle once they settled.
+	if (m_on_reload_result) m_on_reload_result(changed_tag, level_res);
 	if (!names_ok) {
 		// load_from_desc dereferences every world handle, so a broken world file must not reach it
 		egLOG_WARN("Level Manager", "level reload '{}': world desc failed to load, keeping the current level", changed_tag.view());
