@@ -159,15 +159,15 @@ BOOST_AUTO_TEST_CASE(ATagFieldWithoutAProtocol_IsAWarningAtTheField_AndTheTextIs
 	BOOST_TEST(it->reason == "'shaders/a.frag' has no protocol: write res://shaders/a.frag");
 }
 
-BOOST_AUTO_TEST_CASE(ADescFieldWithoutAProtocol_IsALoadErrorAtTheField)
+// Reported like any reference that does not load (#595): a load error of the referenced tag, here with the fix.
+BOOST_AUTO_TEST_CASE(ADescFieldWithoutAProtocol_IsALoadErrorOfThatTag_WithTheFix)
 {
 	put("sky.desc", R"json({"__type":"skybox_desc","material":"materials/a.mat.desc"})json");
 	const auto items = diagnostics_of("sky.desc");
-	const auto it = std::ranges::find_if(items, [](const res::diagnostic& d) { return d.json_path == "/material"; });
-	BOOST_REQUIRE_MESSAGE(it != items.end(), "no diagnostic at /material");
-	BOOST_TEST((it->severity == res::diagnostic_severity::error));
-	BOOST_TEST(it->resource == where("sky.desc"));
-	BOOST_TEST(it->reason.find("'materials/a.mat.desc' has no protocol: write res://materials/a.mat.desc") != std::string::npos);
+	const res::diagnostic* failed = find(items, res::diagnostic_kind::load, "materials/a.mat.desc");
+	BOOST_REQUIRE_MESSAGE(failed, "no load error of materials/a.mat.desc");
+	BOOST_TEST((failed->severity == res::diagnostic_severity::error));
+	BOOST_TEST(failed->reason == "'materials/a.mat.desc' has no protocol: write res://materials/a.mat.desc");
 }
 
 BOOST_AUTO_TEST_CASE(AnUnknownPrefabComponentIsAWarningAtItsPath)
