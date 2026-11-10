@@ -286,7 +286,8 @@ jobs:
           done
           ls -l "$proj/build/bin"
           test -f "$proj/build/bin/libgame.so"
-          if ls "$proj/build/bin" | grep -q "gamed\."; then echo "::error::the module has a debug postfix"; exit 1; fi
+          test -f "$proj/build/bin/libgame_editor.so"
+          if ls "$proj/build/bin" | grep -qE "game(_editor)?d\."; then echo "::error::a module has a debug postfix"; exit 1; fi
 
       # The shared editor opens the project and loads the module from build/bin (#428). The template's
       # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag.
@@ -296,6 +297,7 @@ jobs:
             -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch
           grep -E "module 'game' (loaded|refused)" headless_out/template/editor.log || true
           grep -q "module 'game' loaded" headless_out/template/editor.log
+          grep -q "editor module 'game_editor' loaded" headless_out/template/editor.log
 
       - name: Upload the template run log
         if: failure()
