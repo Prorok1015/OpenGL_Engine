@@ -27,6 +27,8 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/scene/level/scn_level_desc.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -1004,12 +1006,31 @@ BOOST_FIXTURE_TEST_CASE(AHotReloadOfTheWorkingCopy_IsReportedAsTheLevelsFile, de
 	BOOST_REQUIRE(desc_rows().empty());
 
 	// The editor's level set is built from its working copy; a change of it reloads the level.
+	std::mutex log_mutex;
+	std::vector<std::string> reload_log;
+	auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level, std::string_view message) {
+		if (category != "Level Manager" && category != "scene" && message.find("reload") == std::string_view::npos) return;
+		std::lock_guard lock(log_mutex);
+		reload_log.emplace_back(std::string(category) + ": " + std::string(message));
+	});
+	auto& contexts = storage.require<scn::context_manager>();
+	auto& resources = storage.require<res::resource_system>();
 	const res::tag copy = editor().current_editor_tag();
+	BOOST_TEST_REQUIRE(contexts.level_set().active());
 	store(copy, k_level_with_unknown);
-	storage.require<res::resource_system>().signal_changed(copy);
+	BOOST_TEST_REQUIRE(resources.exists(copy));
+	resources.signal_changed(copy);
 	for (int i = 0; i < 20 && desc_rows().empty(); ++i) {
 		test_util::pump(tasks);
-		storage.require<scn::context_manager>().update(std::chrono::duration<float>(0.001f));
+		contexts.update(std::chrono::duration<float>(0.001f));
+	}
+	{
+		// What a fresh load of the copy reports now, to tell a reload that never ran from one that read the old text.
+		res::diagnostics_collector fresh;
+		resources.require_sync<scn::level_desc>(copy).collect_into(fresh);
+		BOOST_TEST_MESSAGE("diagnostics of the copy now: " << fresh.items().size());
+		std::lock_guard lock(log_mutex);
+		for (const auto& line : reload_log) BOOST_TEST_MESSAGE(line);
 	}
 	BOOST_TEST(has_unknown_component_of("levels/desc_problems.desc"));
 
