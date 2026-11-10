@@ -46,17 +46,20 @@ namespace
 					"children":[{"__id":"00000000000000ab","name":"Child","components":{"object":{"__type":"object_desc"}}}]}
 			]})json";
 
-	// Desc types with a spawner that make no component of their own when spawned alone, and why.
+	// Desc types with a spawner that make no component of their own when spawned alone, and why. Those that are still
+	// spawned as a node's component are checked like the others, only not required to make one: if they start to, what
+	// they make must be in the catalog.
 	struct not_spawned
 	{
 		std::string_view type;
 		std::string_view why;
+		bool spawned = true;
 	};
 	constexpr not_spawned k_not_spawned[] = {
-		{ "prefab_desc", "structural: the prefab itself, whose nodes are the other descs" },
-		{ "world_desc", "structural: a world is a prefab, spawned like prefab_desc" },
-		{ "skin_weights_desc", "creates no component: it registers the weights in rnd::skinning_manager" },
-		{ "stat_desc", "test-only desc of test_scene_env" },
+		{ "prefab_desc", "structural: the prefab itself, whose nodes are the other descs", false },
+		{ "world_desc", "structural: a world is a prefab, spawned like prefab_desc", false },
+		{ "skin_weights_desc", "creates no component: it registers the weights in rnd::skinning_manager", true },
+		{ "stat_desc", "test-only desc of test_scene_env", true },
 	};
 
 	// The desc k_every_desc gives `type` in the components of one of its nodes (with the fields it needs), else none.
@@ -166,7 +169,9 @@ BOOST_AUTO_TEST_CASE(EverySpawnerAloneMakesOnlyCatalogComponents)
 	const boost::json::array nodes = boost::json::parse(k_every_desc).as_object().at("children").as_array();
 	std::size_t checked = 0;
 	for (const std::string& type : assembler->spawner_types()) {
-		if (std::ranges::any_of(k_not_spawned, [&](const not_spawned& entry) { return entry.type == type; })) continue;
+		const auto* excuse = std::find_if(std::begin(k_not_spawned), std::end(k_not_spawned),
+			[&](const not_spawned& entry) { return entry.type == type; });
+		if (excuse != std::end(k_not_spawned) && !excuse->spawned) continue;
 		++checked;
 		std::optional<boost::json::object> desc = find_component_desc(nodes, type);
 		if (!desc) desc = boost::json::object{ { "__type", type } };
@@ -174,8 +179,8 @@ BOOST_AUTO_TEST_CASE(EverySpawnerAloneMakesOnlyCatalogComponents)
 		spawn_one(reg, desc, type);
 		const bool made = std::ranges::any_of(non_empty_storages(reg),
 			[&](entt::id_type id) { return std::ranges::find(node_storages, id) == node_storages.end(); });
-		BOOST_CHECK_MESSAGE(made, "desc type '" << type << "' spawned alone made no component: give it the fields it needs in "
-			"k_every_desc, or list it in k_not_spawned with the reason");
+		BOOST_CHECK_MESSAGE(made || excuse != std::end(k_not_spawned), "desc type '" << type << "' spawned alone made no "
+			"component: give it the fields it needs in k_every_desc, or list it in k_not_spawned with the reason");
 		for (const auto& missing : scn::unregistered_storages(reg, catalog)) {
 			BOOST_ERROR("desc type '" << type << "' makes '" << missing.type << "', which is not in the engine's component catalog: "
 				"register it in scn::register_engine_components");
