@@ -385,12 +385,12 @@ namespace res
 			return require_resource_internal<RESOURCE, false>(tag, resolve_alias(tag));
 		}
 
-		// A handle of `tag` that has failed with `reason` and loaded nothing: what a reference refused before any load gets
-		// (#697), so its holder sees it as a resource that did not load. Not cached: a later require of the tag is not
-		// affected.
+		// A failed handle that loaded nothing: what a reference refused before any load gets (#697), so its holder sees a
+		// resource that did not load. Its tag is empty, so nothing that takes the tag from the handle (a component, a
+		// later require) can load the refused one; `tag` and `reason` stay in the block's error and diagnostics. Not cached.
 		template<class RESOURCE>
 		res_handle<RESOURCE> refused(const res::tag& tag, std::string reason) {
-			return res_handle<RESOURCE>(refused_block(tag, std::move(reason)), tag, &m_tasks);
+			return res_handle<RESOURCE>(refused_block(tag, std::move(reason)), res::tag{}, &m_tasks);
 		}
 
 		// Blocks until the resource is ready or failed. Main thread only: a pool worker that waits stalls the pool

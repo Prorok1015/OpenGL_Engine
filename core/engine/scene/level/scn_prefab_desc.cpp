@@ -732,7 +732,7 @@ void scn::reconcile(
 
 		// Records edit the merged data, so the parent is folded in here and the component spawns from the result.
 		std::shared_ptr<desc::desc_base> parent;
-		if (cnode.parent_desc.is_valid()) {
+		if (cnode.parent_desc.is_valid() && !cnode.parent_desc.has_error() && cnode.parent_desc.get_tag().is_valid()) {
 			parent = assembler.get_resource_system().require_sync<desc::desc_base>(cnode.parent_desc.get_tag()).get_sync();
 		}
 		std::string type = cnode.type_name;

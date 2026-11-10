@@ -3,6 +3,7 @@
 #include <snk/resource/res_diagnostics.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_skybox_desc.h>
@@ -94,7 +95,7 @@ BOOST_AUTO_TEST_CASE(ReferenceProblem_AllowsResEngineMemoryAndTheOwnersProtocolO
 			const res::tag tag{ std::format("{}://a.png", protocol) };
 			const std::string why = res::reference_problem(tag);
 			BOOST_TEST(why.find(std::format("not '{}://'", protocol)) != std::string::npos);
-			BOOST_TEST(res::reference_problem(tag, protocol).empty());
+			BOOST_TEST(res::reference_problem(tag, protocol).empty() == (protocol != "cache"));
 			BOOST_TEST(!res::reference_problem(tag, "res").empty());
 		}
 	}
@@ -207,6 +208,59 @@ BOOST_AUTO_TEST_CASE(AnOverrideReadByTheAssembler_LoadsNothing)
 		}
 	}
 	BOOST_TEST(reads() == 0u);
+}
+
+// The refused handle gives its holders no tag to load later: a mesh spawns without a geometry component.
+BOOST_AUTO_TEST_CASE(APrefabWithARefusedGeometry_SpawnsNoGeometryComponent)
+{
+	for (const std::string_view protocol : k_closed) {
+		BOOST_TEST_CONTEXT(protocol) {
+			const res::tag tag = put(std::format("mesh_{}.prefab.desc", protocol), std::format(
+				R"json({{"__type":"prefab_desc","__version":3,"children":[{{"__id":"00000000000000a1","name":"n",
+				"components":{{"mesh":{{"__type":"mesh_node_desc","geometry":"{}://w.desc","vx_end":3}}}}}}]}})json", protocol));
+			const auto prefab = require_loaded<scn::prefab_desc>(tag);
+			BOOST_REQUIRE(prefab.is_ready());
+			entt::registry reg;
+			scn::assemble_prefab(*assembler, reg, reg.create(), *prefab.get(), "p", res::tag{});
+			pump();
+			BOOST_TEST(reg.view<scn::mesh_component>().size() == 1u);
+			BOOST_TEST(reg.view<scn::geometry_component>().empty());
+		}
+	}
+	BOOST_TEST(reads() == 0u);
+}
+
+// A component with edits is composed from its parent desc, which is loaded again by tag: a refused one is not.
+BOOST_AUTO_TEST_CASE(AnEditedComponentWithARefusedParent_LoadsNothing)
+{
+	for (const std::string_view protocol : k_closed) {
+		BOOST_TEST_CONTEXT(protocol) {
+			put(std::format("base_{}.prefab.desc", protocol), std::format(
+				R"json({{"__type":"prefab_desc","__version":3,"children":[{{"__id":"00000000000000a1","name":"n",
+				"components":{{"mesh":"{}://m.desc"}}}}]}})json", protocol));
+			const res::tag level = put(std::format("level_{}.prefab.desc", protocol), std::format(
+				R"json({{"__type":"prefab_desc","__version":3,"children":[{{"__id":"00000000000000c1","name":"inst",
+				"components":{{"base":"memory://t/base_{}.prefab.desc"}},
+				"overrides":[{{"target":["00000000000000a1"],"component":"mesh","path":"/a","value":1}}]}}]}})json", protocol));
+			const auto prefab = require_loaded<scn::prefab_desc>(level);
+			BOOST_REQUIRE(prefab.is_ready());
+			entt::registry reg;
+			scn::assemble_prefab(*assembler, reg, reg.create(), *prefab.get(), "level", res::tag{});
+			pump();
+		}
+	}
+	BOOST_TEST(reads() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ACacheDesc_MayNotReferToCache_ItAliasesUser)
+{
+	BOOST_TEST(!res::reference_problem(res::tag{ "cache://user_profile/x.desc" }, "cache").empty());
+	auto& cache = *mounts.at("cache");
+	cache.store(res::tag{ "cache://child.desc" }, test_util::to_bytes(R"json({"__type":"material_desc","__parent":"cache://base.desc"})json"));
+	const auto before = reads();
+	const auto handle = require_loaded<desc::desc_base>(res::tag{ "cache://child.desc" });
+	BOOST_TEST(handle.has_error());
+	BOOST_TEST(reads() == before + 1u); // the child itself, never its parent
 }
 
 BOOST_AUTO_TEST_CASE(ADescOfAProtocol_MayReferToItsOwnProtocol)
