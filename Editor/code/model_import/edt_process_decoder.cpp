@@ -1,4 +1,5 @@
 #include "edt_process_decoder.h"
+#include "edt_tag_text.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_process.h>
 #include <boost/json/parse_options.hpp>
@@ -201,17 +202,14 @@ const std::unordered_set<std::string_view> k_res_references = {
 const std::unordered_set<std::string_view> k_parent_references = { "res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc" };
 const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__guid", "__id", "__parent" };
 
-// res::tag turns every backslash into a slash before it reads the protocol (up to the first ':' or '/'), so "res\\x\\y.fbx" is
-// the tag res://x/y.fbx: the text is read the same way here.
+// Read as res::tag reads it (edt_tag_text.h, the same functions the desc files an agent writes are checked with): "res\\x\\y.fbx"
+// is the tag res://x/y.fbx. Stricter than the desc-file check in one way: a protocol in other letter case counts too.
 bool reads_as_tag(std::string_view text)
 {
-	std::string normal(text);
-	std::replace(normal.begin(), normal.end(), '\\', '/');
+	const std::string normal = edt::tag_text_normalized(text);
 	if (normal.find("://") != std::string::npos) return true;
-	const std::size_t end = normal.find_first_of(":/");
-	if (end == std::string::npos) return false;
-	const std::string protocol = lower(normal.substr(0, end));
-	return protocol == "res" || protocol == "memory" || protocol == "engine" || protocol == "cache" || protocol == "code" || protocol == "user" || protocol == "edt";
+	const std::string protocol = lower(std::string(edt::tag_leading_protocol(normal)));
+	return protocol == "res" || edt::is_other_tag_protocol(protocol);
 }
 
 // A name that is one file on Windows or cannot be made there (a trailing dot or space, a device name, the characters
