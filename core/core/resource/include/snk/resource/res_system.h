@@ -385,6 +385,14 @@ namespace res
 			return require_resource_internal<RESOURCE, false>(tag, resolve_alias(tag));
 		}
 
+		// A handle of `tag` that has failed with `reason` and loaded nothing: what a reference refused before any load gets
+		// (#697), so its holder sees it as a resource that did not load. Not cached: a later require of the tag is not
+		// affected.
+		template<class RESOURCE>
+		res_handle<RESOURCE> refused(const res::tag& tag, std::string reason) {
+			return res_handle<RESOURCE>(refused_block(tag, std::move(reason)), tag, &m_tasks);
+		}
+
 		// Blocks until the resource is ready or failed. Main thread only: a pool worker that waits stalls the pool
 		// (asserts on one, except under policy::manual, where the tests pump the lanes themselves). The adapter of a
 		// resource that needs others declares them instead (adapter_interface::collect_dependencies).
@@ -635,6 +643,8 @@ namespace res
 		// the block whoever asks: a game module's request for a base resource must not leave a block made by the
 		// module's code in the base's cache (#416).
 		std::shared_ptr<resource_handle> require_block(const res::tag& tag, std::span<const ds::type_id> chain, bool sync);
+		// The block of refused(): made here, not in the binary that asks (#416).
+		std::shared_ptr<resource_handle> refused_block(const res::tag& tag, std::string reason);
 
 		// The most specific adapter for the type levels `chain` in this system and its parents: each type level (T, then
 		// its base_type ...) is looked up in this system first and then in the parents, so a parent's adapter for the

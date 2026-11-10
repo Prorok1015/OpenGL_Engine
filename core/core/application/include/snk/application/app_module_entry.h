@@ -39,7 +39,9 @@
 // own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
 // Still 3.6 (#631): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
-#define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
+// 3.7 (#697): desc_system::get_field_desc, inline in module code, refuses a reference to user://, cache://, code://, edt:// through
+// the new export resource_system::refused_block; a module built for 3.7 needs an engine of 3.7. No layout changes.
+#define SNK_MODULE_API_VERSION 0x0003'0007u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

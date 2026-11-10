@@ -243,7 +243,13 @@ namespace desc
 		auto get_field_desc(const desc::desc_base& owner, const json::value& data, std::string_view json_path = {}) const
 		{
 			if (data.is_string()) {
-				auto handle = m_res_system.require<T>(json::value_to<res::tag>(data));
+				const res::tag reference = json::value_to<res::tag>(data);
+				// The owner's protocol is unknown for the assembler's untagged copy: the stricter rule applies (#697).
+				if (std::string why = res::reference_problem(reference, owner.get_tag().protocol()); !why.empty()) {
+					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
+					return m_res_system.refused<T>(reference, std::move(why));
+				}
+				auto handle = m_res_system.require<T>(reference);
 				res::note_field_load(handle.get_control_block(), json_path, false, &core::res::holds<T>, core::res::handle_type_name<T>());
 				return handle;
 			}
