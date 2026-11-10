@@ -11,6 +11,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/res_tag.h>
 #include <snk/scene/scn_animation.h>
+#include <snk/scene/level/scn_prefab_spawn.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_model.h>
@@ -18,7 +19,9 @@
 
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <stdexcept>
 #include <system_error>
@@ -105,6 +108,24 @@ void dll_animate(entt::registry& reg, entt::view<entt::get_t<scn::animation_cont
 	}
 }
 
+// One call to spawn a segment, one to remove one: no hand-made entities, no cleanup of the systems' queues.
+struct dll_snake : ecs::system_interface
+{
+	void run(entt::registry& reg)
+	{
+		const glm::mat4 at = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(spawned++), 0.0f, 0.0f));
+		const entt::entity head = scn::spawn_prefab(reg, res::tag{ std::string{ dll_game::segment_tag } }, at);
+		if (head == entt::null) return;
+		segments.push_back(head);
+		if (segments.size() > dll_game::snake_length) {
+			scn::despawn(reg, segments.front());
+			segments.pop_front();
+		}
+	}
+	std::deque<entt::entity> segments;
+	int spawned = 0;
+};
+
 class test_game_dll_module final : public gs::game_module
 {
 public:
@@ -141,6 +162,7 @@ private:
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
 		layer.systems().register_system<&dll_animate>(std::string{ dll_game::animate_system_name });
 		layer.systems().register_system<&dll_keeper::run, dll_keeper>(std::string{ dll_game::keeper_system_name }, {});
+		layer.systems().register_system<&dll_snake::run, dll_snake>(std::string{ dll_game::snake_system_name }, {});
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
 		// Its functions and schema live in this library: the layer drops them before the library goes.
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },

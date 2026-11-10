@@ -2,6 +2,7 @@
 #include <snk/desc/desc_describe.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_prefab_spawn.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_anchor_desc.h>
 #include <snk/scene/scn_animated_node_desc.h>
@@ -137,7 +138,13 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 		assemble_prefab(running, reg, e, prefab, name, prefab.get_tag());
 	};
 	scope.structural_spawner("prefab_desc", prefab_spawn);
-	scope.structural_spawner(world_desc::__type, prefab_spawn);
+	// Every world built from its desc (a level load, a reload, Play's start, a module swap) names the assembler that
+	// built it for spawn_prefab: after a module reload the new layer's, never the unloaded one's (#551).
+	scope.structural_spawner(world_desc::__type, [prefab_spawn](const ecs_assembler& running, entt::registry& reg, entt::entity e,
+		const desc::desc_base& base, const std::string_view name) {
+		prefab_spawn(running, reg, e, base, name);
+		reg.ctx().insert_or_assign(prefab_spawning{ .assembler = &running, .world_root = e, .waited_for = {} });
+	});
 
 	simple_spawner<scene_anchor_desc>(scope, "anchor_desc", assemble_scene_anchor);
 	simple_spawner<camera_desc>(scope, camera_desc::__type, assemble_camera);

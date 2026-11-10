@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_prefab_desc.h>
+#include "scn_hierarchy_destroy.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_desc.h>
@@ -614,19 +615,6 @@ namespace {
 		}
 	}
 
-	// A parent may still list a child that game code destroyed with a bare reg.destroy (#543).
-	void destroy_entity_hierarchy(entt::registry& reg, entt::entity entity)
-	{
-		if (!reg.valid(entity)) return;
-		if (auto* children_comp = reg.try_get<scn::children_component>(entity)) {
-			auto children = children_comp->children;
-			for (auto child : children) {
-				destroy_entity_hierarchy(reg, child);
-			}
-		}
-		reg.destroy(entity);
-	}
-
 	// Live children of a node, claimed by node id (their node_id_component) or, for nodes that carry no id, by name.
 	class live_children {
 	public:
@@ -775,7 +763,7 @@ void scn::reconcile(
 		auto& children_vec = children_comp->children;
 		for (auto it = children_vec.begin(); it != children_vec.end(); ) {
 			if (!kept.contains(*it)) {
-				destroy_entity_hierarchy(reg, *it);
+				scn::detail::destroy_hierarchy(reg, *it);
 				it = children_vec.erase(it);
 			} else {
 				++it;

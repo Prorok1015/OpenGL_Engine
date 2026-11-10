@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <string_view>
 
 // What the host test knows of the game module in test_game_dll (a shared library loaded from disk).
@@ -27,5 +28,11 @@ namespace dll_game {
 	// (never stored, fails) through res_handle::then (#416): blocks of the BASE's cache, requested from the library.
 	inline constexpr std::string_view base_tag = "memory://t/dll_base.txt";
 	inline constexpr std::string_view base_missing_tag = "memory://t/dll_base_missing.txt";
+	// The demo's snake on the public API (#551): every frame a segment (the prefab segment_tag, stored by the host) is
+	// spawned at the head with scn::spawn_prefab, and once there are snake_length the oldest goes with scn::despawn.
+	inline constexpr std::string_view snake_system_name = "dll::snake";
+	inline constexpr std::string_view segment_tag = "memory://t/dll_segment.prefab.desc";
+	inline constexpr std::string_view segment_name = "dll_segment";
+	inline constexpr std::size_t snake_length = 3;
 
 }
