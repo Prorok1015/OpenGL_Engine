@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace
@@ -53,7 +54,7 @@ namespace
 	private:
 		// The manager gives the id to this proxy (assign_id is not virtual); the document announces its changes with it.
 		template<class F>
-		decltype(auto) run(F&& body) const
+		auto run(F&& body) const -> std::invoke_result_t<F&&>
 		{
 			const edt::callback_gate::guard running(m_gate);
 			if (m_inner->id() != id()) m_inner->assign_id(id());
