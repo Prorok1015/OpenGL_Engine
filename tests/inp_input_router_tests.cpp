@@ -1005,7 +1005,9 @@ BOOST_AUTO_TEST_CASE(UpdateStage_RoutesBeforeTheContextsRunAndRebuildsTheBinding
 
 BOOST_AUTO_TEST_CASE(StackCommands_WaitForTheSetAndComeOutOnceInOrder)
 {
-	router.queue_command("level", { .kind = inp::stack_command_kind::push, .world = "a", .layer = { .name = "menu" } });
+	inp::stack_layer_desc menu;
+	menu.name = "menu";
+	router.queue_command("level", { .kind = inp::stack_command_kind::push, .world = "a", .layer = menu });
 	router.queue_command("level", { .kind = inp::stack_command_kind::remove, .world = "a", .name = "menu" });
 	router.queue_command("other", { .kind = inp::stack_command_kind::set_world_active, .world = "b", .active = false });
 
