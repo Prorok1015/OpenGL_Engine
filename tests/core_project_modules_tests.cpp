@@ -747,6 +747,18 @@ BOOST_AUTO_TEST_CASE(without_a_reload_or_after_a_rollback_there_is_nothing_to_re
 	BOOST_TEST((host.revert("reload_game", hooks).status == core::reload_status::refused));
 	BOOST_TEST(calls.empty());
 	BOOST_TEST(registered("build1_desc"));
+
+	// A point an earlier reload left goes with a later one that swapped and rolled back: no empty or stale point remains.
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status
+		== core::reload_status::reloaded));
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_v2_entry()), hooks).status
+		== core::reload_status::rolled_back));
+	calls.clear();
+	const auto stale = host.revert("reload_game", hooks);
+	BOOST_TEST((stale.status == core::reload_status::refused));
+	BOOST_TEST(stale.message.find("no reload of it to take back") != std::string::npos);
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(registered("build2_desc"));
 }
 
 BOOST_AUTO_TEST_CASE(a_revert_after_the_module_was_unloaded_is_refused)
