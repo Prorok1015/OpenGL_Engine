@@ -13,6 +13,7 @@
 #include <snk/application/app_frame_control.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/gui/gui_null_backend.h>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/gui/gui_system.h>
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -725,6 +727,76 @@ BOOST_FIXTURE_TEST_CASE(AnAgentOpeningAFileThatIsNoLevel_LeavesTheDocumentOnItsO
 	BOOST_CHECK_MESSAGE(saved.ok, saved.error);
 	BOOST_CHECK(bytes_of_resource(resources, "base_material.desc") == material_before);
 	BOOST_CHECK_EQUAL(std::string(editor().current_level_tag().relative()), "levels/smoke_level.desc");
+}
+
+// #681: a model is parsed only through file.import_model. An agent naming a model file in the arguments of any other
+// command is refused, and the editor makes no attempt to load it (with assimp the model adapter would parse it in-process).
+namespace {
+
+constexpr const char* k_agent_model = "res://models/agent_named.glb";
+
+struct model_load_log
+{
+	model_load_log()
+		: sink(engine::add_log_sink([this](std::string_view category, engine::log_level, std::string_view message) {
+			if (!category.starts_with("res") || message.find("agent_named.glb") == std::string_view::npos) return;
+			std::lock_guard lock(mutex);
+			lines.emplace_back(message);
+		}))
+	{
+	}
+
+	std::size_t count()
+	{
+		std::lock_guard lock(mutex);
+		return lines.size();
+	}
+
+	std::mutex mutex;
+	std::vector<std::string> lines;
+	engine::log_sink_handle sink;
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNothingLoadsIt, agent_editor_fixture)
+{
+	const auto pump_frames = [this] {
+		for (int i = 0; i < 50; ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+	};
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	pump_frames();
+	BOOST_REQUIRE(!editor().level_load_in_progress());
+	person_allows(true);
+	const std::string garbage = "not a model";
+	std::vector<std::byte> bytes(garbage.size());
+	std::ranges::transform(garbage, bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+	BOOST_REQUIRE(storage.require<res::resource_system>().store_sync(res::tag{ k_agent_model }, bytes));
+	model_load_log log;
+
+	const cmd::result created = invoke_as_agent("scene.node.create", boost::json::parse(R"json({
+		"parent": { "context": "3d_scene", "path": [] }, "name": "sky",
+		"components": { "sky": { "type": "skybox_desc", "fields": { "material": "res://models/agent_named.glb" } } } })json"));
+	BOOST_TEST(!created.ok);
+	BOOST_TEST(created.code == cmd::codes::denied);
+	pump_frames();
+	BOOST_TEST(log.count() == 0u);
+
+	const cmd::result written = invoke_as_agent("desc.create", boost::json::parse(R"json({
+		"path": "levels/agent_level.desc",
+		"desc": { "__type": "level_desc", "name": "agent_level", "worlds": [
+			{ "__type": "world_desc", "name": "w0", "systems": [],
+			  "children": [ { "name": "m", "components": { "m": "res://models/agent_named.glb" } } ] } ] } })json"));
+	BOOST_TEST(!written.ok);
+	BOOST_TEST(written.code == cmd::codes::denied);
+	if (written.ok) {
+		static_cast<void>(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/agent_level.desc" } }));
+		pump_frames();
+	}
+	BOOST_TEST(log.count() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
