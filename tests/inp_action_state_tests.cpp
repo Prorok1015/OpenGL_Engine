@@ -48,6 +48,13 @@ struct actions_fixture
 
 	bool edge_free(inp::action_id id) const { return !state.pressed(id) && !state.released(id); }
 
+	// The key reaches a layer that declares the action; `armed`: the memory of fronts of that layer lets it give a press.
+	void reach_key(inp::action_id id, KB key, bool armed)
+	{
+		reach.reach[id].keys.set(static_cast<std::size_t>(key));
+		reach.reach[id].armed_keys.set(static_cast<std::size_t>(key), armed);
+	}
+
 	// What reached the layers that declare the actions (#624); not given, the state alone decides.
 	bool use_reach = false;
 	inp::action_input reach{};
@@ -351,20 +358,21 @@ BOOST_AUTO_TEST_CASE(WithReach_AnActionIsDownOnlyThroughABindingThatReachedALaye
 	frame();
 	BOOST_TEST(!state.held(JUMP));
 
-	// The key reaches a layer while it is still held: it was taken when it went down, so no press.
-	reach.reach[JUMP].keys.set(static_cast<std::size_t>(KB::SPACE));
+	// The key reaches a layer while it is still held and is not armed there (it was taken when it went down): no press.
+	reach_key(JUMP, KB::SPACE, false);
 	frame();
 	BOOST_TEST(edge_free(JUMP));
 	BOOST_TEST(!state.held(JUMP));
 
 	set(KB::SPACE, false);
 	frame();
+	reach_key(JUMP, KB::SPACE, true);
 	set(KB::SPACE, true);
 	frame();
 	BOOST_TEST(state.pressed(JUMP));
 
 	// A layer above takes the key: the action is let go, once.
-	reach.reach[JUMP].keys.reset();
+	reach.reach[JUMP] = inp::action_reach{};
 	frame();
 	BOOST_TEST(state.released(JUMP));
 	frame();
@@ -375,8 +383,8 @@ BOOST_AUTO_TEST_CASE(WithReach_TheOtherBindingKeepsAHalfTakenActionHeld)
 {
 	use_reach = true;
 	reach.reach.assign(2, inp::action_reach{});
-	// Fire is the left button or F: F reached, the button did not.
-	reach.reach[FIRE].keys.set(static_cast<std::size_t>(KB::F));
+	// Fire is the left button or F: F reached and is armed, the button did not reach.
+	reach_key(FIRE, KB::F, true);
 	frame();
 
 	set(KB::F, true);
@@ -396,27 +404,48 @@ BOOST_AUTO_TEST_CASE(WithReach_TheOtherBindingKeepsAHalfTakenActionHeld)
 	BOOST_TEST(!state.held(FIRE));
 }
 
+BOOST_AUTO_TEST_CASE(WithReach_OneBindingHeldAndTakenForGood_DoesNotStopThePressOfTheOther)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	// Fire: the button reached and armed, F is held and taken the whole time (not reached, not armed).
+	reach.reach[FIRE].buttons = true;
+	reach.reach[FIRE].armed_buttons.set(static_cast<std::size_t>(MB::LEFT));
+	frame();
+	set(KB::F, true);
+	frame();
+	frame();
+	BOOST_TEST(edge_free(FIRE));
+
+	set(MB::LEFT, true);
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
+	set(MB::LEFT, false);
+	frame();
+	BOOST_TEST(state.released(FIRE));
+}
+
 BOOST_AUTO_TEST_CASE(WithReach_AKeyHeldWhileTheActionDidNotReach_IsNoPressWhenItReachesAgain)
 {
 	use_reach = true;
 	reach.reach.assign(2, inp::action_reach{});
-	const auto space = static_cast<std::size_t>(KB::SPACE);
-	reach.reach[JUMP].keys.set(space);
+	reach_key(JUMP, KB::SPACE, true);
 	frame();
 
 	// A modal layer takes the key before it is pressed and gives it back while it is still held.
-	reach.reach[JUMP].keys.reset();
+	reach.reach[JUMP] = inp::action_reach{};
 	frame();
 	set(KB::SPACE, true);
 	frame();
-	reach.reach[JUMP].keys.set(space);
+	reach_key(JUMP, KB::SPACE, false);
 	frame();
 	BOOST_TEST(edge_free(JUMP));
 	BOOST_TEST(!state.held(JUMP));
 
-	// Let go, then pressed again: a press.
+	// Let go (the memory arms it again), then pressed again: a press.
 	set(KB::SPACE, false);
 	frame();
+	reach_key(JUMP, KB::SPACE, true);
 	set(KB::SPACE, true);
 	frame();
 	BOOST_TEST(state.pressed(JUMP));
@@ -430,8 +459,9 @@ BOOST_AUTO_TEST_CASE(WithReach_TheCursorOverAnotherWorldWithoutAButton_DoesNotDi
 	// The cursor is over the HUD of another world: Fire does not reach, no button is down.
 	frame();
 	frame();
-	// The cursor leaves and the click lands in the same frame.
+	// The cursor leaves and the click lands in the same frame (the button was up, so it is armed).
 	reach.reach[FIRE].buttons = true;
+	reach.reach[FIRE].armed_buttons.set(static_cast<std::size_t>(MB::LEFT));
 	set(MB::LEFT, true);
 	frame();
 	BOOST_TEST(state.pressed(FIRE));
@@ -443,10 +473,34 @@ BOOST_AUTO_TEST_CASE(WithReach_AKeyPressedInTheFrameTheModalLayerCloses_IsAPress
 	reach.reach.assign(2, inp::action_reach{});
 	frame();
 	frame();
-	reach.reach[JUMP].keys.set(static_cast<std::size_t>(KB::SPACE));
+	reach_key(JUMP, KB::SPACE, true);
 	set(KB::SPACE, true);
 	frame();
 	BOOST_TEST(state.pressed(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(WithReach_ABindingDownWhenTheMapComesIn_GivesNoPress_ButAnotherBindingDoes)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	reach_key(FIRE, KB::F, true);
+	reach.reach[FIRE].buttons = true;
+	reach.reach[FIRE].armed_buttons.set(static_cast<std::size_t>(MB::LEFT));
+	frame();
+	set(KB::F, true);
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
+
+	// A new map while F is held: F gives no press until it is let go (the memory of fronts says it is armed, the new
+	// state does not trust that), the left button is another binding and does.
+	ref.map = make_map();
+	frame();
+	frame();
+	BOOST_TEST(!state.held(FIRE));
+	BOOST_TEST(edge_free(FIRE));
+	set(MB::LEFT, true);
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
 }
 
 BOOST_AUTO_TEST_CASE(WithReach_AnActionOutsideTheVectorIsNeverDown)

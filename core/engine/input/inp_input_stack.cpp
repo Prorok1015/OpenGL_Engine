@@ -62,6 +62,7 @@ namespace
 	{
 		inp::action_id id = inp::invalid_action;
 		std::bitset<inp::key_count> keys;
+		std::bitset<inp::mouse_count> buttons;
 		bool mouse = false;
 	};
 
@@ -75,8 +76,9 @@ namespace
 			for (const inp::action_binding& binding : action.bindings) {
 				if (const auto* key = std::get_if<KEYBOARD_BUTTONS>(&binding)) {
 					declared.keys.set(static_cast<std::size_t>(*key));
-				} else {
+				} else if (const auto* button = std::get_if<inp::MOUSE_BUTTONS>(&binding)) {
 					declared.mouse = true;
+					if (static_cast<std::size_t>(*button) < inp::mouse_count) declared.buttons.set(static_cast<std::size_t>(*button));
 				}
 			}
 			out.push_back(declared);
@@ -98,6 +100,7 @@ void inp::input_stack::put(std::string_view world, std::uint32_t desc_index, sta
 {
 	for (stack_entry& entry : m_entries) {
 		if (entry.world == world && entry.layer.name == layer.name) {
+			if (entry.desc_index != desc_index) forget_memory(world, layer.name);
 			entry.desc_index = desc_index;
 			entry.layer = std::move(layer);
 			return;
@@ -109,11 +112,46 @@ void inp::input_stack::put(std::string_view world, std::uint32_t desc_index, sta
 void inp::input_stack::retain_worlds(const std::vector<std::string>& worlds)
 {
 	std::erase_if(m_entries, [&worlds](const stack_entry& entry) { return !is_fed(worlds, entry.world); });
+	std::erase_if(m_memory, [&worlds](const auto& item) { return !is_fed(worlds, item.first.first); });
 }
 
 void inp::input_stack::remove_world(std::string_view world)
 {
 	std::erase_if(m_entries, [world](const stack_entry& entry) { return entry.world == world; });
+	std::erase_if(m_memory, [world](const auto& item) { return item.first.first == world; });
+}
+
+bool inp::input_stack::remove(std::string_view world, std::string_view name)
+{
+	const auto it = std::ranges::find_if(m_entries, [&](const stack_entry& entry) { return entry.world == world && entry.layer.name == name; });
+	if (it == m_entries.end()) return false;
+	m_entries.erase(it);
+	forget_memory(world, name);
+	return true;
+}
+
+void inp::input_stack::remove_owner(layer_owner owner)
+{
+	for (const stack_entry& entry : m_entries) {
+		if (entry.layer.owner == owner) forget_memory(entry.world, entry.layer.name);
+	}
+	std::erase_if(m_entries, [owner](const stack_entry& entry) { return entry.layer.owner == owner; });
+}
+
+inp::layer_memory& inp::input_stack::memory(std::string_view world, std::string_view layer)
+{
+	return m_memory[{ std::string{ world }, std::string{ layer } }];
+}
+
+const inp::layer_memory* inp::input_stack::find_memory(std::string_view world, std::string_view layer) const
+{
+	const auto it = m_memory.find({ std::string{ world }, std::string{ layer } });
+	return it == m_memory.end() ? nullptr : &it->second;
+}
+
+void inp::input_stack::forget_memory(std::string_view world, std::string_view layer)
+{
+	m_memory.erase({ std::string{ world }, std::string{ layer } });
 }
 
 const inp::stack_layer_desc* inp::input_stack::find(std::string_view world, std::string_view name) const
@@ -162,6 +200,11 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 	if (actions) {
 		for (auto& [name, world] : out.worlds) world.actions.assign(actions->size(), action_reach{});
 	}
+	out.layers.resize(layers.size());
+	for (std::size_t i = 0; i < layers.size(); ++i) {
+		out.layers[i].world = layers[i]->world;
+		out.layers[i].layer = layers[i]->layer.name;
+	}
 
 	for (std::size_t k = 0; k < key_count; ++k) {
 		const auto key = static_cast<KEYBOARD_BUTTONS>(k);
@@ -169,6 +212,7 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 			const stack_entry* entry = layers[i];
 			world_input& world = out.worlds[entry->world];
 			world.keys[k] = true;
+			out.layers[i].keys.set(k);
 			bool takes_action = false;
 			for (const declared_action& action : declared[i]) {
 				if (!action.keys.test(k)) continue;
@@ -258,6 +302,7 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 	}
 
 	for (std::size_t i = 0; i < layers.size(); ++i) {
+		out.layers[i].buttons = layer_buttons[i];
 		if (!layer_buttons[i]) continue;
 		world_input& world = out.worlds[layers[i]->world];
 		for (const declared_action& action : declared[i]) {
@@ -269,6 +314,45 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 		world.mouse_focus = world.buttons || (world.motion && !engaged);
 	}
 	return out;
+}
+
+void inp::arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions)
+{
+	std::bitset<key_count> held;
+	for (std::size_t k = 0; k < key_count && k < physical.keyboard.size(); ++k) held[k] = physical.keyboard[k];
+	std::bitset<mouse_count> held_buttons;
+	for (std::size_t b = 0; b < mouse_count && b < physical.mouse.size(); ++b) held_buttons[b] = physical.mouse[b];
+
+	for (const stack_entry* entry : stack.ordered()) {
+		layer_memory& memory = stack.memory(entry->world, entry->layer.name);
+		if (!memory.initialized) {
+			memory.initialized = true;
+			memory.armed_keys = ~held;
+			memory.armed_buttons = ~held_buttons;
+		}
+
+		std::bitset<key_count> reached_keys;
+		bool reached_buttons = false;
+		const auto reach = std::ranges::find_if(resolved.layers, [entry](const layer_reach& item) {
+			return item.world == entry->world && item.layer == entry->layer.name;
+		});
+		if (reach != resolved.layers.end()) {
+			reached_keys = reach->keys;
+			reached_buttons = reach->buttons;
+			if (world_input* world = resolved.find(entry->world)) {
+				for (const declared_action& action : declared_by(entry->layer, actions)) {
+					if (action.id >= world->actions.size()) continue;
+					action_reach& armed = world->actions[action.id];
+					armed.armed_keys |= action.keys & reached_keys & memory.armed_keys;
+					if (reached_buttons) armed.armed_buttons |= action.buttons & memory.armed_buttons;
+				}
+			}
+		}
+
+		const std::bitset<mouse_count> reached_mask = reached_buttons ? ~std::bitset<mouse_count>() : std::bitset<mouse_count>();
+		memory.armed_keys = ~held | (held & reached_keys & memory.armed_keys);
+		memory.armed_buttons = ~held_buttons | (held_buttons & reached_mask & memory.armed_buttons);
+	}
 }
 
 bool inp::is_text_key(KEYBOARD_BUTTONS key)

@@ -1,5 +1,6 @@
 #include <snk/input/inp_action_state.h>
 #include <snk/common/logger/engine_log.h>
+#include <cstdint>
 #include <type_traits>
 #include <variant>
 
@@ -36,24 +37,41 @@ namespace
 		}, binding);
 	}
 
-	// A binding counts when it is down and reached a layer of the world that declares the action.
-	bool reached_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	bool binding_armed(const inp::action_binding& binding, const inp::action_reach& reach)
 	{
-		for (const auto& binding : action.bindings) {
-			if (binding_reached(binding, reach) && binding_down(binding, state)) return true;
-		}
-		return false;
+		return std::visit([&reach](auto button) {
+			const auto index = static_cast<std::size_t>(button);
+			if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+				return reach.armed_keys.test(index);
+			} else {
+				return index < inp::mouse_count && reach.armed_buttons.test(index);
+			}
+		}, binding);
 	}
 
-	// A binding is held but a layer took it: the action must not be armed by that key's release being seen late, so it
-	// stays disarmed until the held binding is let go (INPUT_STACK.md 5). Not reaching is no reason by itself: the cursor
-	// over another world's HUD makes the mouse binding not reach with no button down.
-	bool held_but_not_reached(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	struct binding_view
 	{
-		for (const auto& binding : action.bindings) {
-			if (binding_down(binding, state) && !binding_reached(binding, reach)) return true;
+		// Some binding is down and reached a layer of the world that declares the action.
+		bool down = false;
+		// ...and is armed there (the memory of fronts) and was not down when the map came in.
+		bool may_press = false;
+		// The bindings (by index) that are down, reached or not.
+		std::uint64_t down_bits = 0;
+	};
+
+	binding_view evaluate(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach, std::uint64_t suppressed)
+	{
+		binding_view view;
+		for (std::size_t i = 0; i < action.bindings.size(); ++i) {
+			const auto& binding = action.bindings[i];
+			if (!binding_down(binding, state)) continue;
+			if (i < 64) view.down_bits |= std::uint64_t{ 1 } << i;
+			if (!binding_reached(binding, reach)) continue;
+			view.down = true;
+			const bool fresh_binding = i >= 64 || (suppressed & (std::uint64_t{ 1 } << i)) == 0;
+			if (fresh_binding && binding_armed(binding, reach)) view.may_press = true;
 		}
-		return false;
+		return view;
 	}
 }
 
@@ -128,38 +146,42 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		s.released = false;
 		if (!bound.bound && bound.frozen) continue;
 
+		const bool with_reach = reached && !reached->reach.empty();
 		bool down = false;
-		// A binding held while a layer took it keeps the action disarmed: when the layer lets go with the key still held
-		// (a modal layer closed), the press waits for a release and a new press.
-		bool taken_while_held = false;
+		bool may_press = true;
+		std::uint64_t down_bits = 0;
 		if (bound.bound) {
-			if (reached && !reached->reach.empty()) {
+			if (with_reach) {
 				const action_reach none{};
 				const action_reach& reach = id < reached->reach.size() ? reached->reach[id] : none;
-				down = reached_down(list[id], state, reach);
-				taken_while_held = held_but_not_reached(list[id], state, reach);
+				const binding_view view = evaluate(list[id], state, reach, s.suppressed);
+				down = view.down;
+				may_press = view.may_press;
+				down_bits = view.down_bits;
 			} else {
 				down = action_down(list[id], state);
 			}
 		}
 		if (fresh) {
-			s.armed = bound.bound && !taken_while_held && !down;
+			s.suppressed = down_bits;
+			s.armed = bound.bound && !down;
 			continue;
 		}
 		if (s.held && !down) {
 			s.held = false;
 			s.released = true;
 			emit(id, action_edge::released);
-		} else if (!s.held && down && s.armed) {
+		} else if (!s.held && down && may_press && (with_reach || s.armed)) {
 			s.held = true;
 			s.pressed = true;
 			emit(id, action_edge::pressed);
 		}
-		if (!bound.bound || taken_while_held) {
+		if (!bound.bound) {
 			s.armed = false;
 		} else if (!down) {
 			s.armed = true;
 		}
+		s.suppressed &= down_bits;
 		if (fixed) fixed->set_held(id, s.held);
 	}
 }

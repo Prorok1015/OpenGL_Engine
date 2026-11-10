@@ -687,14 +687,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (!data.has_value<core::project_module_host>()) return std::nullopt;
 		return data.require<core::project_module_host>().build_output(module);
 	};
-	reload_options.reload = [this, &data](const std::string& module) {
+	const auto reload_module = [this, &data](const std::string& module, bool retry_taken_back) {
 		core::reload_report report = data.has_value<core::project_module_host>()
-			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks())
+			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks(), retry_taken_back)
 			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
 		// A snapshot before_reload took and no swap used goes, whatever the outcome.
 		if (m_play) m_play->end_reload();
+		// The build loaded but could not restore Play: it is taken back next frame, so it is not reported as running.
+		if (report.status == core::reload_status::reloaded && m_play && m_play->reverting()) {
+			report.status = core::reload_status::rolled_back;
+			report.message = std::format("it could not restore Play ({}); it is being taken back, the previous build loads again",
+				m_play->restore_failure());
+		}
 		return report;
 	};
+	reload_options.reload = [reload_module](const std::string& module) { return reload_module(module, false); };
+	// Only a person loads a build the host took back again (#601): live mode would loop.
+	reload_options.reload_by_person = [reload_module](const std::string& module) { return reload_module(module, true); };
 	// Play keeps its world across the swap (#600): the snapshot is taken after every check, right before it.
 	reload_options.before_reload = [this](const std::string&) { return m_play ? m_play->capture_for_reload() : std::string{}; };
 	reload_options.building = [this] { return m_game_builder && m_game_builder->is_manual_build_running(); };
@@ -1092,6 +1101,22 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	if (data.has_value<prj::project_context>()) options.project_root = data.require<prj::project_context>().root;
 	options.report_full_snapshot = cfg_hot_reload_dump_snapshot;
 	// The problems list, not a dialog: live mode reloads on every build, and a dialog each time would be in the way.
+	// Never from inside the swap: the host refuses a revert while a reload runs, so it waits for the next UI frame.
+	options.revert_module = [this, &data](const std::string& module) {
+		editor_layer->register_implicit("edt/revert_game_module", [this, &data, module] {
+			if (!m_play) return false;
+			core::project_module_host* host = data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
+			m_play->run_revert(
+				[&] {
+					return host ? host->revert(module, m_swap_gate.hooks())
+						: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
+				},
+				[&] {
+					if (host) host->forget_revert(module);
+				});
+			return false;
+		});
+	};
 	options.notify = [this](const std::string& message) {
 		if (message.empty()) {
 			m_context->problems().clear("hot_reload");

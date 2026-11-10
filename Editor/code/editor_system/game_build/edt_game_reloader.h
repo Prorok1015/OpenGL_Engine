@@ -26,6 +26,9 @@ namespace edt
 		std::function<std::optional<std::filesystem::path>(const std::string& module)> build_output;
 		// Swaps the running module for its new build (core::project_module_host::reload with the editor's hooks).
 		std::function<core::reload_report(const std::string& module)> reload;
+		// The same for a reload the person asked for (the action, the reload after their build): it may load a build the
+		// host took back (#601), live mode's never. Null: `reload`.
+		std::function<core::reload_report(const std::string& module)> reload_by_person;
 		// The person's build is running (greys the action out, refuses a reload); null: never.
 		std::function<bool()> building;
 		// A background (live) build is running; null: never. It does not grey the action out: the action stops it
@@ -81,7 +84,7 @@ namespace edt
 	private:
 		std::optional<std::string> pick(const std::string& module) const;
 		// `who` gets the module the report is about: the picked one, else `module`.
-		core::reload_report attempt(const std::string& module, std::string& who);
+		core::reload_report attempt(const std::string& module, std::string& who, bool by_person);
 		core::reload_report tell(const std::string& module, core::reload_report report);
 		// The action during a live build or while `defer` names a reason: stops the live build and queues the reload
 		// until nothing holds it. {status: queued} or the refusal.

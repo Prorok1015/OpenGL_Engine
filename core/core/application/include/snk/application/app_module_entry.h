@@ -27,6 +27,9 @@
 // observe needs an engine of 3.4 or newer.
 // 3.5 (#624): inp::action_input, a new ctx type (what of an action reached the layers of a world that declare it).
 // inp::stack_layer_desc gains `all_actions` at its end (the layer declares every action); nothing that exists moves.
+// inp::action_input is read by the engine's inp::update_actions alone (no module, template or test DLL reads it); its
+// element action_reach grew (armed_keys, armed_buttons: the memory of fronts, #624 PR b) before any module could have
+// been built against it, so the minor stays 3.5.
 // inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
 #define SNK_MODULE_API_VERSION 0x0003'0005u // major << 16 | minor
