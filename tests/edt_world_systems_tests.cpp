@@ -1,3 +1,4 @@
+#include "edt_prefab_preview_kinds.hpp"
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "edt_scene_commands.h"
@@ -75,7 +76,8 @@ struct systems_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
+	edt::document_manager documents{ scene, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
 	edt::selection_service selection{ events };
 	cmd::command_registry commands;
 	int pushes = 0;

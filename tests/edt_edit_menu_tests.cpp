@@ -1,3 +1,4 @@
+#include "edt_prefab_preview_kinds.hpp"
 #include <boost/test/unit_test.hpp>
 #include "edt_agent_policy.h"
 #include "edt_edit_menu.h"
@@ -54,7 +55,8 @@ struct edit_menu_fixture
 	edt::scene_document scene;
 	edt::editor_services services;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
+	edt::document_manager documents{ scene, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
 	edt::action_registry actions;
 	edt::dialog_service dialogs;
 	bool gesture = false;

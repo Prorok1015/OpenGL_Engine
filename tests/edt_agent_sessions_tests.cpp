@@ -1,3 +1,4 @@
+#include "edt_prefab_preview_kinds.hpp"
 #include <boost/test/unit_test.hpp>
 #include "edt_agent_sessions.h"
 #include "edt_scene_commands.h"
@@ -77,7 +78,8 @@ struct sessions_fixture
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
+	edt::document_manager documents{ scene, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
 	edt::selection_service selection{ events };
 	cmd::command_registry commands;
 	edt::agent_sessions sessions{ documents };

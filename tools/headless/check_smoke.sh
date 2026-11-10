@@ -10,7 +10,7 @@
 #               the script (::error:: line); the diff image is saved as <screenshot>.diff.png. SNK_SMOKE_FUZZ (per-pixel colour tolerance, default 4%) and SNK_SMOKE_MAX_DIFF_PCT
 #               (share of differing pixels that is flagged, default 2) tune the comparison.
 #
-# Fails when the log has error/assert/exception lines, or when the crop has less texture than bare sky/water,
+# Fails when the log has error/assert/exception lines or resources that outlived their layer (#657), or when the crop has less texture than bare sky/water,
 # i.e. the model (the robot on smoke_level) was not drawn. Needs ImageMagick (convert).
 set -euo pipefail
 
@@ -25,6 +25,11 @@ fail=0
 if bad=$(grep -inE '\[(error|critical)\]|assert|exception' "$log"); then
 	echo "FAIL: suspicious log lines in $log:" >&2
 	echo "$bad" | head -20 >&2
+	fail=1
+fi
+if leaked=$(grep -F "are still referenced:" "$log"); then
+	echo "::error::resources outlived their layer at shutdown (#657) in $log:"
+	echo "$leaked" | head -5
 	fail=1
 fi
 

@@ -137,4 +137,5 @@ if ! grep -q "level loaded: .*smoke_level.desc" "${log}.stderr"; then
 	echo "::error::the packaged editor did not load the startup level"; exit 1
 fi
 if grep -E '\[(error|critical)\]' "${log}.stderr"; then echo "::error::errors in the packaged editor's log"; exit 1; fi
+if grep -F "are still referenced:" "${log}.stderr"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
 echo "the package is complete"

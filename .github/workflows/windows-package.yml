@@ -100,6 +100,7 @@ jobs:
           if grep -q "watching files under" "$log"; then echo "::error::a file watcher started"; exit 1; fi
           if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
+          if grep -F "are still referenced:" "$log"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
           trap - EXIT
 
       # The host imports no snk_engine.dll (it is the static engine) and no DLL beyond Windows: an editor or git library
@@ -130,6 +131,7 @@ jobs:
           if ! grep -q "level loaded: .*main.desc" "$log"; then echo "::error::the start level did not load"; exit 1; fi
           if ! grep -q "static game system ran" "$log"; then echo "::error::the module's system did not run"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the static game host log"; exit 1; fi
+          if grep -F "are still referenced:" "$log"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
           trap - EXIT
 
       # The unit tests on the shared Release engine (what the removed "Windows MSVC Shared Release" job ran).
