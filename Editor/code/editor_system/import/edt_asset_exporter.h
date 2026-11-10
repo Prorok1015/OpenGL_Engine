@@ -48,14 +48,14 @@ namespace edt {
 			bool wait_for_writes = false,
 			const std::function<void(int, int)>& on_file = {}) const;
 
-	private:
-		res::resource_system& m_res;
-
-		// Remap all string values in a JSON tree that match memory:// tags
 		// Empty when everything the remap would write is something an import of `asset_name` makes, below `target_folder`, with the
 		// extension it had (an agent's import: nothing it chose may turn a resource into a model file). Else why not.
 		static std::string remap_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder);
 
+	private:
+		res::resource_system& m_res;
+
+		// Remap all string values in a JSON tree that match memory:// tags
 		static void remap_json_strings(
 			boost::json::value& val,
 			const std::unordered_map<res::tag, res::tag>& remap);
