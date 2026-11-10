@@ -12,7 +12,10 @@ project(game LANGUAGES C CXX)
 
 # The module's name in ../project.snkproj: the editor loads ../build/bin/<name>.dll (lib<name>.so).
 set(SNK_GAME_MODULE game)
+# The editor module's name in ../project.snkproj: ../build/bin/<name>.dll (lib<name>.so).
+set(SNK_GAME_EDITOR_MODULE game_editor)
 option(SNK_SHIPPING "Build a game executable with the module and the static engine compiled in" OFF)
+option(SNK_GAME_EDITOR "Also build the editor module (game_editor), which registers a panel and an inspector renderer into the editor" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,26 +58,46 @@ if(NOT snake_sdk_ENGINE_SHARED)
 		"(SNK_ENGINE_SHARED), or it would carry its own copy of it.")
 endif()
 
+# Always ../build/bin/<name>, whoever builds it and in any configuration: no "d" postfix (an engine build tree may set
+# CMAKE_DEBUG_POSTFIX) and no per-configuration subfolder ($<1:...> keeps multi-config generators from adding one).
+# The editor loads a copy of the module from .cache/modules/<pid>-<n>/ with what lies next to it (#435).
+function(snk_module_output target name)
+	set(_bin "${CMAKE_CURRENT_SOURCE_DIR}/../build/bin")
+	set_target_properties(${target} PROPERTIES
+		OUTPUT_NAME "${name}"
+		DEBUG_POSTFIX ""
+		RUNTIME_OUTPUT_DIRECTORY "$<1:${_bin}>"
+		LIBRARY_OUTPUT_DIRECTORY "$<1:${_bin}>"
+		PDB_OUTPUT_DIRECTORY "$<1:${_bin}>")
+	if(MSVC)
+		# The module names its PDB by file name only, not by its path in build/bin: the debugger takes the one next to the
+		# copy, and the PDB in build/bin stays free for the next build.
+		target_link_options(${target} PRIVATE "$<$<CONFIG:DebugGame>:/PDBALTPATH:%_PDB%>")
+	else()
+		# Libraries next to the module are found next to its copy.
+		set_target_properties(${target} PROPERTIES BUILD_RPATH "$ORIGIN")
+	endif()
+endfunction()
+
 add_library(game SHARED src/game_module.cpp)
 target_link_libraries(game PRIVATE snk::engine snk::engine_api)
 target_compile_definitions(game PRIVATE "SNK_GAME_MODULE_NAME=\"${SNK_GAME_MODULE}\"")
+snk_module_output(game "${SNK_GAME_MODULE}")
 
-# Always ../build/bin/<name>, whoever builds it and in any configuration: no "d" postfix (an engine build tree may set
-# CMAKE_DEBUG_POSTFIX) and no per-configuration subfolder ($<1:...> keeps multi-config generators from adding one).
-set(_game_bin "${CMAKE_CURRENT_SOURCE_DIR}/../build/bin")
-set_target_properties(game PROPERTIES
-	OUTPUT_NAME "${SNK_GAME_MODULE}"
-	DEBUG_POSTFIX ""
-	RUNTIME_OUTPUT_DIRECTORY "$<1:${_game_bin}>"
-	LIBRARY_OUTPUT_DIRECTORY "$<1:${_game_bin}>"
-	PDB_OUTPUT_DIRECTORY "$<1:${_game_bin}>")
-
-# The editor loads a copy of the module from .cache/modules/<pid>-<n>/ with what lies next to it (#435).
-if(MSVC)
-	# The module names its PDB by file name only, not by its path in build/bin: the debugger takes the one next to the
-	# copy, and the PDB in build/bin stays free for the next build.
-	target_link_options(game PRIVATE "$<$<CONFIG:DebugGame>:/PDBALTPATH:%_PDB%>")
-else()
-	# Libraries next to the module are found next to its copy.
-	set_target_properties(game PROPERTIES BUILD_RPATH "$ORIGIN")
+# The module of the editor (kind "editor" in ../project.snkproj, optional): a panel and an inspector renderer. It needs
+# the editor API library of the shared SDK. Not part of a shipping build (that returned above).
+if(SNK_GAME_EDITOR)
+	if(TARGET snk::editor_api)
+		add_library(game_editor SHARED src/game_editor.cpp)
+		target_link_libraries(game_editor PRIVATE snk::engine snk::engine_api snk::editor_api)
+		# snk_engine.dll exports only SNK_API, so the module's desc code (boost::json) needs its own copy of Boost.JSON, which the
+		# SDK carries for MSVC only.
+		if(MSVC AND TARGET snk::thirdparty_boost_json)
+			target_link_libraries(game_editor PRIVATE snk::thirdparty_boost_json)
+		endif()
+		target_compile_definitions(game_editor PRIVATE "SNK_GAME_EDITOR_MODULE_NAME=\"${SNK_GAME_EDITOR_MODULE}\"")
+		snk_module_output(game_editor "${SNK_GAME_EDITOR_MODULE}")
+	else()
+		message(WARNING "The SDK in ${snake_sdk_DIR} has no editor API library (snk::editor_api): game_editor is not built.")
+	endif()
 endif()
