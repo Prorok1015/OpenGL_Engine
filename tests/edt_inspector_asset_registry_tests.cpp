@@ -82,7 +82,7 @@ struct context_fixture : test_util::null_engine_fixture
 			.base_assembler = &storage.require<scn::ecs_assembler>(), .base_sfactory = &storage.require<ecs::system_factory>() }
 		, context(std::make_unique<edt::editor_context>(
 			storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
-			gui, services, tasks, commands, scene, edt::prefab_preview(services)))
+			gui, services, tasks, commands, scene))
 	{
 	}
 

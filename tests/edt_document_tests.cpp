@@ -1,3 +1,4 @@
+#include "edt_prefab_preview_kinds.hpp"
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/editor/edt_action_registry.h>
@@ -85,7 +86,8 @@ struct document_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, edt::prefab_preview(services), events };
+	edt::document_manager documents{ scene, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
 	std::vector<edt::connection> connections;
 	std::vector<std::string> log;
 	std::vector<std::pair<edt::document_id, std::uint64_t>> changed;
@@ -429,6 +431,38 @@ BOOST_AUTO_TEST_CASE(EditorServices_LevelSetIsTheContextManagersAndNullOnceItIsG
 
 	services.ctx_manager.reset();
 	BOOST_TEST(services.level_set() == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_ChoosesTheBuiltInPreview_EvenWhenAModulePreviewHasALongerSuffix)
+{
+	struct other_document final : edt::previewable_document
+	{
+		std::string_view kind() const override { return "other"; }
+		const std::string& title() const override { return m_title; }
+		const res::tag& source() const override { return m_source; }
+		bool is_dirty() const override { return false; }
+		std::uint64_t generation() const override { return 0; }
+		void open(const res::tag& source) override { m_source = source; m_open = true; }
+		void close() override { m_open = false; }
+		bool is_open() const override { return m_open; }
+
+		std::string m_title = "other";
+		res::tag m_source;
+		bool m_open = false;
+	};
+	edt::asset_preview_desc longer;
+	longer.id = "module.preview";
+	longer.suffix = ".ui.prefab.desc";
+	longer.make_preview = [](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> { return std::make_unique<other_document>(); };
+	auto registered = prefab_kinds.kinds.add_preview(std::move(longer));
+	BOOST_REQUIRE(registered.active());
+
+	const res::tag ui_prefab = res::tag::make("prefabs/a.ui.prefab.desc");
+	BOOST_REQUIRE(documents.open_preview(ui_prefab) != nullptr);
+	BOOST_CHECK_EQUAL(documents.preview()->kind(), "other");
+
+	// The prefab editor asks for the prefab document by its id: a document of another type is never cast to it.
+	BOOST_CHECK_NO_THROW(edt::open_prefab(documents, ui_prefab));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
