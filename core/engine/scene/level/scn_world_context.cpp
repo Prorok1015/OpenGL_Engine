@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_world_context.h>
+#include "scn_prefab_spawning.h"
 #include <snk/input/inp_action_state.h>
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <snk/ecs/ecs_entity_changer.hpp>
@@ -113,6 +114,8 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 	if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
 		changer->apply(state);
 	}
+	// After the changer: its batches may still name an entity of a tree removed here.
+	scn::detail::flush_despawns(state);
 
 	if (auto* sandbox = state.ctx().find<ecs::entity_spawner>()) {
 		entt::continuous_loader loader{ state };

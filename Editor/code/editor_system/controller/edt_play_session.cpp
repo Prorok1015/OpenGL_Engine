@@ -17,6 +17,7 @@
 #include <snk/resource/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/level/scn_prefab_spawn.h>
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
@@ -429,6 +430,10 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 			if (!restored) {
 				failure = std::format("the world '{}' could not be restored", world_saved.name);
 				return false;
+			}
+			// Not built from its desc: spawn_prefab gets the new layer's assembler here (#551).
+			if (!scn::bind_prefab_spawning(world.state(), layer->assembler())) {
+				egLOG_WARN("hot_reload", "the world '{}' has no root after the restore: spawn_prefab is off in it", world_saved.name);
 			}
 		}
 		ecs::blackboard_data& board = play.channel().restorable_blackboard();
