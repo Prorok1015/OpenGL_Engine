@@ -8,6 +8,8 @@
 // The engine's runtime components in the base catalog (HOT_RELOAD_PLAY.md section 4.3). Each schema is described next
 // to its registration, from outside the component: no member, base or virtual function is added to it. The render and
 // the animation components are in scn_engine_components_render.cpp and scn_engine_components_animation.cpp.
+// A component the engine creates on a world and does not register here fails CI (#620): the catalog test for the desc
+// spawners, tools/ci/check_engine_components.py for the sources.
 
 namespace scn
 {

@@ -7,11 +7,13 @@
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/level/scn_screen_anchor.h>
+#include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <type_traits>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,20 +21,16 @@
 
 // Every runtime component the engine creates is in the base catalog with a schema, or marked derived / editor-only
 // (#599, HOT_RELOAD_PLAY.md section 4.3). A world is spawned through the production spawners with a node per scene desc
-// listed below (a hand-written list: a new desc type must be added to it), and every non-empty storage must be known:
-// a component one of these spawners adds without registering it makes the walk report it, which fails the test.
+// (k_every_desc), and every non-empty storage must be known: a component one of these spawners adds without registering
+// it makes the walk report it, which fails the test. EverySpawnerAloneMakesOnlyCatalogComponents covers every desc type
+// with a spawner, not only those of the prefab (#620): each is spawned alone and must make a component, all of them in
+// the catalog. Components made outside the spawners are checked in the sources by tools/ci/check_engine_components.py.
 
 namespace
 {
-	struct catalog_fixture : test_util::scene_env
-	{
-		catalog_fixture() { scn::register_engine_components(catalog); }
-
-		// A prefab with one node per scene desc listed here; a skinning node with bones adds the skeleton and the bone
-		// matrices to the root.
-		entt::entity spawn_every_desc(entt::registry& reg)
-		{
-			const auto tag = put("all.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	// A prefab with one node per scene desc; a skinning node with bones adds the skeleton and the bone matrices to the
+	// root.
+	constexpr const char* k_every_desc = R"json({"__type":"prefab_desc","__version":4,"children":[
 				{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 				{"__id":"00000000000000a2","name":"Sun","components":{"light":{"__type":"directional_light_desc"}}},
 				{"__id":"00000000000000a3","name":"Marker","components":{"marker":{"__type":"screen_anchor_desc"}}},
@@ -46,7 +44,70 @@ namespace
 				{"__id":"00000000000000a9","name":"Animated","components":{"node":{"__type":"animated_node_desc"}}},
 				{"__id":"00000000000000aa","name":"Anchor","components":{"anchor":{"__type":"anchor_desc"}},
 					"children":[{"__id":"00000000000000ab","name":"Child","components":{"object":{"__type":"object_desc"}}}]}
-			]})");
+			]})json";
+
+	// Desc types with a spawner that make no component of their own when spawned alone, and why. Those that are still
+	// spawned as a node's component are checked like the others, only not required to make one: if they start to, what
+	// they make must be in the catalog.
+	struct not_spawned
+	{
+		std::string_view type;
+		std::string_view why;
+		bool spawned = true;
+	};
+	constexpr not_spawned k_not_spawned[] = {
+		{ "prefab_desc", "structural: the prefab itself, whose nodes are the other descs", false },
+		{ "world_desc", "structural: a world is a prefab, spawned like prefab_desc", false },
+		{ "skin_weights_desc", "creates no component: it registers the weights in rnd::skinning_manager", true },
+	};
+
+	// The desc k_every_desc gives `type` in the components of one of its nodes (with the fields it needs), else none.
+	std::optional<boost::json::object> find_component_desc(const boost::json::array& nodes, std::string_view type)
+	{
+		for (const boost::json::value& node : nodes) {
+			const auto& object = node.as_object();
+			if (const auto* components = object.if_contains("components")) {
+				for (const auto& component : components->as_object()) {
+					const auto& desc = component.value().as_object();
+					if (desc.at("__type").as_string() == type) return desc;
+				}
+			}
+			if (const auto* children = object.if_contains("children")) {
+				if (auto found = find_component_desc(children->as_array(), type)) return found;
+			}
+		}
+		return std::nullopt;
+	}
+
+	std::vector<entt::id_type> non_empty_storages(const entt::registry& reg)
+	{
+		std::vector<entt::id_type> ids;
+		for (const auto [id, storage] : reg.storage()) {
+			if (!storage.empty()) ids.push_back(id);
+		}
+		return ids;
+	}
+
+	struct catalog_fixture : test_util::scene_env
+	{
+		// The engine's desc types only: the test-only stat_desc of scene_env is no engine spawner.
+		catalog_fixture() : test_util::scene_env(test_util::test_descs::without) { scn::register_engine_components(catalog); }
+
+		// A prefab of one node holding `desc` (none: a bare node).
+		void spawn_one(entt::registry& reg, const std::optional<boost::json::object>& desc, std::string_view name)
+		{
+			boost::json::object components;
+			if (desc) components["c"] = *desc;
+			const boost::json::object prefab{ { "__type", "prefab_desc" }, { "__version", 4 },
+				{ "children", boost::json::array{ boost::json::object{ { "__id", "00000000000000c1" }, { "name", "Node" },
+					{ "components", std::move(components) } } } } };
+			const auto tag = put(std::format("one_{}.prefab.desc", name), boost::json::serialize(prefab));
+			scn::assemble_prefab(*assembler, reg, reg.create(), *load<scn::prefab_desc>(tag), "one", tag);
+		}
+
+		entt::entity spawn_every_desc(entt::registry& reg)
+		{
+			const auto tag = put("all.prefab.desc", k_every_desc);
 			const entt::entity root = reg.create();
 			scn::assemble_prefab(*assembler, reg, root, *load<scn::prefab_desc>(tag), "all", tag);
 			return root;
@@ -93,6 +154,43 @@ BOOST_AUTO_TEST_CASE(EveryComponentOfASpawnedWorldIsInTheCatalog)
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::object_component>::value()));
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::sky_component>::value()));
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::bone_component>::value()));
+}
+
+// Every desc type with a spawner, a new one included, is spawned alone in a world of its own (with the fields k_every_desc
+// gives it, else empty): it must make a component a bare node does not have, and all it makes must be in the catalog.
+BOOST_AUTO_TEST_CASE(EverySpawnerAloneMakesOnlyCatalogComponents)
+{
+	entt::registry bare;
+	spawn_one(bare, std::nullopt, "bare");
+	std::vector<entt::id_type> node_storages = non_empty_storages(bare);
+	// The assembler keeps one per spawned component: it says nothing of the type.
+	node_storages.push_back(entt::type_hash<scn::component_tracker>::value());
+
+	const boost::json::array nodes = boost::json::parse(k_every_desc).as_object().at("children").as_array();
+	std::size_t checked = 0;
+	for (const std::string& type : assembler->spawner_types()) {
+		const auto* excuse = std::find_if(std::begin(k_not_spawned), std::end(k_not_spawned),
+			[&](const not_spawned& entry) { return entry.type == type; });
+		if (excuse != std::end(k_not_spawned) && !excuse->spawned) continue;
+		++checked;
+		std::optional<boost::json::object> desc = find_component_desc(nodes, type);
+		if (!desc) desc = boost::json::object{ { "__type", type } };
+		entt::registry reg;
+		spawn_one(reg, desc, type);
+		const bool made = std::ranges::any_of(non_empty_storages(reg),
+			[&](entt::id_type id) { return std::ranges::find(node_storages, id) == node_storages.end(); });
+		BOOST_CHECK_MESSAGE(made || excuse != std::end(k_not_spawned), "desc type '" << type << "' spawned alone made no "
+			"component: give it the fields it needs in k_every_desc, or list it in k_not_spawned with the reason");
+		for (const auto& missing : scn::unregistered_storages(reg, catalog)) {
+			BOOST_ERROR("desc type '" << type << "' makes '" << missing.type << "', which is not in the engine's component catalog: "
+				"register it in scn::register_engine_components");
+		}
+	}
+	BOOST_TEST(checked > 0u);
+	// An excuse for a type that has no spawner any more is stale.
+	for (const not_spawned& entry : k_not_spawned) {
+		BOOST_CHECK_MESSAGE(assembler->has_spawner(entry.type), "k_not_spawned names '" << entry.type << "', which has no spawner: remove it");
+	}
 }
 
 BOOST_AUTO_TEST_CASE(EveryEngineEntryHasASchemaOrIsMarked)
