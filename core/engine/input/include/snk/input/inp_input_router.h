@@ -94,6 +94,9 @@ namespace inp
 		// A change of the stack of a set from outside the worlds (gs::module_context::input_stack, the editor). It waits for the
 		// next gs::route_input, which applies it after the commands of the systems (INPUT_STACK.md 3.3); while the set is in
 		// Pause it keeps waiting. Main thread only.
+		// A set keeps at most `command_limit` commands: a Pause must not collect what code asks for every frame to apply it all when
+		// the set runs again. Past it the new commands are dropped (warned about once per session of the set).
+		static constexpr std::size_t command_limit = 256;
 		void queue_command(std::string_view set, stack_command command);
 		// The commands queued for the set, in call order; the queue is emptied.
 		std::vector<stack_command> take_commands(std::string_view set);

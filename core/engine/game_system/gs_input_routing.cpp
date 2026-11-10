@@ -291,10 +291,6 @@ namespace
 		const entry* reader = actions_reader(entries, set_name, live_actions != nullptr);
 
 		inp::input_stack& stack = router.stack(set.name());
-		// A Pause keeps the commands waiting: the layers stay as they are until it goes (INPUT_STACK.md 3.4).
-		if (set.mode() != ecs::run_mode::pause) {
-			apply_stack_commands(router, entries, set_name, stack);
-		}
 		std::vector<std::string> present;
 		std::vector<std::string> fed;
 		for (const auto& e : entries) {
@@ -305,6 +301,11 @@ namespace
 			if (e.routed.focused) fed.push_back(name);
 		}
 		stack.retain_worlds(present);
+		// After the base layers are put: a world made again this frame has its flag of "off" reset by `put`, and a command must
+		// not be lost to that. A Pause keeps the commands waiting: the layers stay as they are until it goes (INPUT_STACK.md 3.4).
+		if (set.mode() != ecs::run_mode::pause) {
+			apply_stack_commands(router, entries, set_name, stack);
+		}
 
 		inp::input_router::mouse_hold hold = router.hold(set_name);
 		if (!fed.empty() && button_down && !hold.active) {

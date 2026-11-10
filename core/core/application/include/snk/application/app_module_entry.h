@@ -42,6 +42,8 @@
 // methods; module_context is made by the engine and gains two members at its end), the ctx type inp::input_stack_control
 // (a system's list of stack commands, methods exported), inp::stack_command and inp::stack_layer_desc::owner already there.
 // A module built for 3.6 or older never calls them and still loads; one that uses them needs an engine of 3.7 or newer.
+// gs::input_stack_handle, inp::stack_layer_desc and inp::input_stack_control are in the layout key (#614: the module holds,
+// builds and allocates them), so the key changes; a module without the key export (3.6 and older) is checked by version only.
 #define SNK_MODULE_API_VERSION 0x0003'0007u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

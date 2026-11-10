@@ -53,6 +53,12 @@ void inp::input_router::queue_command(std::string_view set, stack_command comman
 {
 	const auto it = m_commands.find(set);
 	auto& queue = it != m_commands.end() ? it->second : m_commands.emplace(std::string{ set }, std::vector<stack_command>{}).first->second;
+	if (queue.size() >= command_limit) {
+		if (warn_once(set, "#command-full")) {
+			egLOG_WARN("input", "set '{}': {} input stack commands are waiting and the set does not take them (Pause); the new ones are dropped", set, command_limit);
+		}
+		return;
+	}
 	queue.push_back(std::move(command));
 }
 

@@ -139,6 +139,9 @@ namespace inp
 		// The memory of fronts of a layer (arm_actions writes it); dropped with the layer, its world or the set, and when the
 		// world's desc_index changes (put: the world was made again).
 		const layer_memory* find_memory(std::string_view world, std::string_view layer) const;
+		// True the first time `key` is asked for in this stack: a refused command is said once per session of the set (the stack
+		// goes with the set), not every frame it is asked again.
+		bool warn_once(std::string key);
 		std::size_t memory_count() const { return m_memory.size(); }
 
 		// Top first: by `order` (higher first), then by the world's desc_index, then the later added layer first.
@@ -154,6 +157,7 @@ namespace inp
 		std::uint64_t m_added = 0;
 		std::map<std::pair<std::string, std::string>, layer_memory> m_memory;
 		std::set<std::string, std::less<>> m_off_worlds;
+		std::set<std::string> m_warned;
 	};
 
 	struct world_ref

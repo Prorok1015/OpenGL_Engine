@@ -1,6 +1,7 @@
 #include <snk/input/inp_input_stack.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <format>
 #include <bitset>
 #include <iterator>
 #include <variant>
@@ -141,6 +142,11 @@ void inp::input_stack::set_world_active(std::string_view world, bool active)
 bool inp::input_stack::world_active(std::string_view world) const
 {
 	return !m_off_worlds.contains(world);
+}
+
+bool inp::input_stack::warn_once(std::string key)
+{
+	return m_warned.insert(std::move(key)).second;
 }
 
 inp::stack_layer_desc* inp::input_stack::find(std::string_view world, std::string_view name)
@@ -459,11 +465,13 @@ namespace
 {
 	constexpr std::string_view k_command_names[] = { "push", "replace", "remove", "set_active", "set_order", "set_world_active" };
 
-	void refuse(const inp::stack_command& command, std::string_view why)
+	void refuse(inp::input_stack& stack, const inp::stack_command& command, std::string_view why)
 	{
 		const std::string& layer = command.kind == inp::stack_command_kind::push || command.kind == inp::stack_command_kind::replace
 			? command.layer.name : command.name;
-		egLOG_ERROR("input", "input stack: {} '{}' in world '{}' refused: {}", k_command_names[static_cast<std::size_t>(command.kind)], layer, command.world, why);
+		const std::string_view kind = k_command_names[static_cast<std::size_t>(command.kind)];
+		if (!stack.warn_once(std::format("{}|{}|{}|{}", kind, command.world, layer, why))) return;
+		egLOG_WARN("input", "input stack: {} '{}' in world '{}' refused: {}", kind, layer, command.world, why);
 	}
 }
 
@@ -473,7 +481,7 @@ std::size_t inp::apply_commands(input_stack& stack, const std::vector<stack_comm
 	for (const stack_command& command : commands) {
 		const auto world = std::ranges::find(worlds, command.world, &world_ref::name);
 		if (world == worlds.end()) {
-			refuse(command, "no such world in the set");
+			refuse(stack, command, "no such world in the set");
 			continue;
 		}
 		if (command.kind == stack_command_kind::set_world_active) {
@@ -485,16 +493,16 @@ std::size_t inp::apply_commands(input_stack& stack, const std::vector<stack_comm
 		const bool puts = command.kind == stack_command_kind::push || command.kind == stack_command_kind::replace;
 		const std::string& name = puts ? command.layer.name : command.name;
 		if (name.empty()) {
-			refuse(command, "the layer has no name");
+			refuse(stack, command, "the layer has no name");
 			continue;
 		}
 		stack_layer_desc* existing = stack.find(command.world, name);
 		if (existing && existing->owner != command.source) {
-			refuse(command, "the layer belongs to another owner");
+			refuse(stack, command, "the layer belongs to another owner");
 			continue;
 		}
 		if (!existing && command.kind != stack_command_kind::push) {
-			refuse(command, "no such layer");
+			refuse(stack, command, "no such layer");
 			continue;
 		}
 

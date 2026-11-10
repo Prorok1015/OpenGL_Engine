@@ -1125,4 +1125,17 @@ BOOST_AUTO_TEST_CASE(Inject_GoesWithTheSet)
 	BOOST_TEST(router.take_injected("level").empty());
 }
 
+BOOST_AUTO_TEST_CASE(StackCommands_AQueueThatIsNotTakenStopsAtTheLimit_ForEachSet)
+{
+	for (std::size_t i = 0; i < inp::input_router::command_limit + 50; ++i) {
+		router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = i % 2 == 0 });
+	}
+	router.queue_command("other", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	BOOST_TEST(router.take_commands("level").size() == inp::input_router::command_limit);
+	BOOST_TEST(router.take_commands("other").size() == 1u);
+
+	router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	BOOST_TEST(router.take_commands("level").size() == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -800,4 +800,12 @@ BOOST_AUTO_TEST_CASE(Commands_TheControlOfASystemKeepsTheCallsInOrderAndHandsThe
 	BOOST_TEST(routes.take().empty());
 }
 
+BOOST_AUTO_TEST_CASE(Commands_ARefusalIsSaidOncePerReasonAndLayer)
+{
+	inp::input_stack stack;
+	BOOST_TEST(stack.warn_once("remove|game|panel|the layer belongs to another owner"));
+	BOOST_TEST(!stack.warn_once("remove|game|panel|the layer belongs to another owner"));
+	BOOST_TEST(stack.warn_once("remove|game|other|the layer belongs to another owner"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

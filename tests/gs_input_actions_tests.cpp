@@ -1090,4 +1090,42 @@ BOOST_AUTO_TEST_CASE(StackCommands_ForASetThatIsNotThere_AreDroppedAndNotGivenTo
 	BOOST_TEST(router.stack("later").world_active("a"));
 }
 
+BOOST_AUTO_TEST_CASE(StackCommands_AWorldMadeAgainInTheFrame_KeepsTheSwitchAskedForThatFrame)
+{
+	world("game", 0);
+	world("minimap", 1, { "inp::update_input_state" });
+	const auto map = jump_on_space();
+	frame(map);
+	BOOST_TEST(world_on("minimap"));
+
+	mgr.destroy_context("level", "minimap");
+	world("minimap", 5, { "inp::update_input_state" });
+	gs::input_stack_handle(&router, "level").set_world_active("minimap", false);
+	frame(map);
+	BOOST_TEST(!world_on("minimap"));
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_ALongPauseKeepsAtMostTheLimit_AndAppliesThemWhenItGoes)
+{
+	world("game", 0);
+	const auto map = jump_on_space();
+	frame(map);
+	const std::size_t before = router.stack("level").size();
+
+	mode(ecs::run_mode::pause);
+	gs::input_stack_handle handle(&router, "level");
+	for (std::size_t i = 0; i < inp::input_router::command_limit + 40; ++i) {
+		inp::stack_layer_desc layer;
+		layer.name = "l" + std::to_string(i);
+		handle.push("game", layer);
+	}
+	frame(map);
+	frame(map);
+	BOOST_TEST(router.stack("level").size() == before);
+
+	mode(ecs::run_mode::play);
+	frame(map);
+	BOOST_TEST(router.stack("level").size() == before + inp::input_router::command_limit);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
