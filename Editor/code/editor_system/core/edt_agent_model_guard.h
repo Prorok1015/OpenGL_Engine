@@ -16,7 +16,8 @@ namespace edt
 	// loaded later). Models the project's own files refer to are the project's: they load as for a person.
 
 	// The extension the resolver would pick an adapter by, compared without case: `\` as `/`, trailing spaces and dots
-	// dropped (a Windows file name ignores them), then what follows the last '.' of the last segment. Empty: none.
+	// dropped (a Windows file name ignores them), then what follows the last '.' of the last segment, or the whole
+	// segment when it has no '.' (as res::tag::extension()). Empty: none.
 	std::string model_check_extension(std::string_view text);
 
 	struct named_model

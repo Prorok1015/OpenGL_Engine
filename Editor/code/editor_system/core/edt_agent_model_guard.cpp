@@ -54,9 +54,9 @@ std::string edt::model_check_extension(std::string_view text)
 	while (!text.empty() && (text.back() == ' ' || text.back() == '.')) text.remove_suffix(1);
 	const std::size_t segment = text.find_last_of("/\\");
 	const std::string_view name = segment == std::string_view::npos ? text : text.substr(segment + 1);
+	// As res::tag::extension(): a name without a dot is its own extension (res://models/glb is served by the "glb" adapter).
 	const std::size_t dot = name.find_last_of('.');
-	if (dot == std::string_view::npos) return {};
-	std::string ext(name.substr(dot + 1));
+	std::string ext(dot == std::string_view::npos ? name : name.substr(dot + 1));
 	std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 	return ext;
 }

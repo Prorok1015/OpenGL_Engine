@@ -731,6 +731,7 @@ BOOST_FIXTURE_TEST_CASE(AnAgentOpeningAFileThatIsNoLevel_LeavesTheDocumentOnItsO
 
 // #681: a model is parsed only through file.import_model. An agent naming a model file in the arguments of any other
 // command is refused, and the editor makes no attempt to load it (with assimp the model adapter would parse it in-process).
+// Without assimp nothing serves a model, so nothing is refused either: the run only shows that nothing parsed it.
 namespace {
 
 constexpr const char* k_agent_model = "res://models/agent_named.glb";
@@ -742,6 +743,7 @@ struct model_load_log
 			if (!category.starts_with("res") || message.find("agent_named.glb") == std::string_view::npos) return;
 			std::lock_guard lock(mutex);
 			lines.emplace_back(message);
+			if (message.find("Failed to deserialize") != std::string_view::npos) ++parsed;
 		}))
 	{
 	}
@@ -752,8 +754,16 @@ struct model_load_log
 		return lines.size();
 	}
 
+	// What reached an adapter: a load that found none ("No adapter found") is not counted.
+	std::size_t parsed_count()
+	{
+		std::lock_guard lock(mutex);
+		return parsed;
+	}
+
 	std::mutex mutex;
 	std::vector<std::string> lines;
+	std::size_t parsed = 0;
 	engine::log_sink_handle sink;
 };
 
@@ -780,23 +790,35 @@ BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNo
 	const cmd::result created = invoke_as_agent("scene.node.create", boost::json::parse(R"json({
 		"parent": { "context": "3d_scene", "path": [] }, "name": "sky",
 		"components": { "sky": { "type": "skybox_desc", "fields": { "material": "res://models/agent_named.glb" } } } })json"));
+#if SNK_HAS_ASSIMP
 	BOOST_TEST(!created.ok);
 	BOOST_TEST(created.code == cmd::codes::denied);
+#endif
 	pump_frames();
+#if SNK_HAS_ASSIMP
 	BOOST_TEST(log.count() == 0u);
+#else
+	BOOST_TEST(log.parsed_count() == 0u);
+#endif
 
 	const cmd::result written = invoke_as_agent("desc.create", boost::json::parse(R"json({
 		"path": "levels/agent_level.desc",
 		"desc": { "__type": "level_desc", "name": "agent_level", "worlds": [
 			{ "__type": "world_desc", "name": "w0", "systems": [],
 			  "children": [ { "name": "m", "components": { "m": "res://models/agent_named.glb" } } ] } ] } })json"));
+#if SNK_HAS_ASSIMP
 	BOOST_TEST(!written.ok);
 	BOOST_TEST(written.code == cmd::codes::denied);
+#endif
 	if (written.ok) {
 		static_cast<void>(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/agent_level.desc" } }));
 		pump_frames();
 	}
+#if SNK_HAS_ASSIMP
 	BOOST_TEST(log.count() == 0u);
+#else
+	BOOST_TEST(log.parsed_count() == 0u);
+#endif
 
 	// A person's call is not checked: the person decides what the editor parses.
 	cmd::call by_person;

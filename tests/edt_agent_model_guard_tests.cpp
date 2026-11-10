@@ -53,14 +53,16 @@ BOOST_AUTO_TEST_CASE(TheExtension_IsTakenAsTheResolverWould_WithoutCaseAndTraili
 	BOOST_TEST(edt::model_check_extension("models\\robot.obj") == "obj");
 	BOOST_TEST(edt::model_check_extension("x.glb") == "glb");
 	BOOST_TEST(edt::model_check_extension("res://models/x.glb.desc") == "desc");
-	BOOST_TEST(edt::model_check_extension("res://models.glb/x") == "");
-	BOOST_TEST(edt::model_check_extension("res://models/glb") == "");
+	// A name without a dot is its own extension, as res::tag reads it: "res://models/glb" goes to the "glb" adapter.
+	BOOST_TEST(edt::model_check_extension("res://models.glb/x") == "x");
+	BOOST_TEST(edt::model_check_extension("res://models/glb") == "glb");
+	BOOST_TEST(edt::model_check_extension("res://models/GLB ") == "glb");
 	BOOST_TEST(edt::model_check_extension("") == "");
 	// res::tag turns every `\` into `/` before it reads the protocol: `res\models\x.glb` is res://models/x.glb (#680 review).
 	BOOST_TEST(edt::model_check_extension("res\\models\\x.glb") == "glb");
 	BOOST_TEST(edt::model_check_extension("res:\\models\\x.fbx") == "fbx");
 	BOOST_TEST(edt::model_check_extension("res\\models\\x.glb\\") == "");
-	for (const char* text : { "res\\models\\x.glb", "res:\\m\\x.fbx", "res://m/x.gltf", "m\\x.obj", "res\\a.glb\\b.desc", "x.glb" }) {
+	for (const char* text : { "res\\models\\x.glb", "res:\\m\\x.fbx", "res://m/x.gltf", "m\\x.obj", "res\\a.glb\\b.desc", "x.glb", "res://models/glb", "glb", "res://models.glb/x" }) {
 		BOOST_TEST_CONTEXT(text) {
 			BOOST_TEST(edt::model_check_extension(text) == std::string(res::tag{ text }.extension()));
 		}
@@ -78,6 +80,7 @@ BOOST_AUTO_TEST_CASE(AModelIsFoundAtAnyDepth_WithItsPointer_ButNotInKeysOrOtherF
 	BOOST_TEST(found->extension == "glb");
 
 	BOOST_TEST(!edt::find_named_model(boost::json::parse(R"json({"x.glb":"res://levels/a.desc","n":"robot"})json"), k_models));
+	BOOST_TEST(edt::find_named_model(boost::json::parse(R"json({"m":"res://models/glb"})json"), k_models).has_value());
 	BOOST_TEST(!edt::find_named_model(boost::json::parse(R"json({"m":"res://m/x.glb"})json"), {}));
 }
 
