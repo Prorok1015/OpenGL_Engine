@@ -269,6 +269,28 @@ BOOST_AUTO_TEST_CASE(DespawnOfATreeSpawnedInTheSameFrame_RemovesItWhole)
 	step();
 }
 
+BOOST_AUTO_TEST_CASE(AHotReloadOfTheSpawnedPrefab_KeepsWhereTheGameMovedItsRoot)
+{
+	const entt::entity root = scn::spawn_prefab(*reg, segment, placed_at({ 1.0f, 0.0f, 0.0f }));
+	BOOST_REQUIRE(root != entt::null);
+	reg->get<scn::local_transform>(root).local = placed_at({ 3.0f, 0.0f, 0.0f }).to_matrix();
+
+	put("segment.prefab.desc", R"({"__type":"prefab_desc","__version":4,"transform":{"position":[0,0,9]},"children":[
+		{"__id":"00000000000000a1","name":"head","transform":{"position":[0,2,0]},
+		 "children":[{"__id":"00000000000000a2","name":"tail"}]}]})");
+	rs->signal_changed(segment);
+	pump();
+	scn::trigger_hot_reload(*assembler, *reg, require_loaded<desc::desc_base>(segment));
+
+	BOOST_REQUIRE(reg->valid(root));
+	BOOST_TEST((position_of(root) == glm::vec3(3.0f, 0.0f, 0.0f)));
+	const entt::entity head = at({ own_id(root), 0xa1 });
+	BOOST_REQUIRE(head != entt::null);
+	BOOST_TEST((position_of(head) == glm::vec3(0.0f, 2.0f, 0.0f)));
+	step();
+	BOOST_TEST((glm::vec3(reg->get<scn::world_transform>(head).world[3]) == glm::vec3(3.0f, 2.0f, 0.0f)));
+}
+
 BOOST_AUTO_TEST_CASE(SpawnUnderAParentQueuedForDespawn_GoesWithIt)
 {
 	const entt::entity first = scn::spawn_prefab(*reg, segment);

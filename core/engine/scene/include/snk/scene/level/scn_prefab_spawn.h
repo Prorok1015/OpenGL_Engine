@@ -21,7 +21,8 @@ namespace scn
 	// local transform; none keeps the prefab root's own. A tag not loaded yet is loaded now, which stalls the frame: load
 	// it ahead and pass the handle. entt::null, with a line in the log, when the world was not built from a desc, the
 	// parent is gone or the prefab does not load.
-	// A hot reload of the prefab the parent belongs to keeps the spawned tree. Entity handles do not survive a rebuild
+	// A hot reload of the prefab the parent belongs to keeps the spawned tree; one of its own prefab keeps the root's
+	// current transform (where the game moved it) and rebuilds the rest. Entity handles do not survive a rebuild
 	// of the world (reload_context, Play's restore); outside Play the spawned entities go with such a rebuild.
 	SNK_API entt::entity spawn_prefab(entt::registry& world, const res::tag& prefab,
 		std::optional<eng::transform3d> local = std::nullopt, entt::entity parent = entt::null);

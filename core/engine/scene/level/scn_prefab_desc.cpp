@@ -702,7 +702,9 @@ void scn::reconcile(
 			// A transform the node spells out places the instance; otherwise the prefab root's does, with the
 			// target-[] transform records applied. Taken before the prefab_instance below replaces `node`.
 			const glm::mat4 placement = (node.has_transform ? node : expanded).get_local_transform();
-			if (!node.has_transform || !reg.all_of<scn::local_transform>(live)) {
+			// Where game code moved a spawned tree is the game's state: a reload of its prefab keeps it (#551).
+			const bool kept_by_game = mode == reconcile_mode::reload && reg.all_of<scn::spawned_root_component, scn::local_transform>(live);
+			if (!kept_by_game && (!node.has_transform || !reg.all_of<scn::local_transform>(live))) {
 				reg.emplace_or_replace<scn::local_transform>(live, placement);
 			}
 			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, node });
