@@ -109,17 +109,21 @@ namespace core
 		// (entry, name) before anything is unloaded; then before_swap, the running module goes, the new one is loaded,
 		// and if it fails the previous copy is loaded again; then after_swap. Libraries next to the module are copied but
 		// not reloaded: the system keeps the one already loaded under that name (logged). Never throws for a module.
-		reload_report reload(const std::string& name, const reload_hooks& hooks = {});
+		// A build revert() took back is refused until the build output changes, unless `retry_taken_back` (a person asked
+		// for this reload; live mode never does).
+		reload_report reload(const std::string& name, const reload_hooks& hooks = {}, bool retry_taken_back = false);
 		// Same with `next` instead of the build output (compiled-in modules, tests); `previous` gives the source of the
 		// running module again for a rollback (empty: no rollback).
 		reload_report reload(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 			std::function<std::unique_ptr<app::modules::module_source>()> previous, const reload_hooks& hooks = {});
 		// Takes back the last reload() of `name` that put a new build in place: the build that ran before it is loaded
 		// again through the same swap (hooks, editor modules), as when Play could not be restored in the new build
-		// (HOT_RELOAD_PLAY.md 3.5). Once per reload; afterwards reload() refuses the build taken back until the build
-		// output changes, so live mode does not load it again. The copy of the previous build stays if it fails to load
-		// (lost). Refused without calling the hooks: a reload runs, nothing to take back (no reload since the module was
-		// loaded, the last one was not `reloaded`, or it was taken back already), or the module is not loaded.
+		// (HOT_RELOAD_PLAY.md 3.5). Afterwards reload() refuses the build taken back until the build output changes, so
+		// live mode does not load it again. If the previous build fails to load (lost), its copy stays and no module runs.
+		// What can be taken back is set by a reload that ends `reloaded` over a running module and dropped by one that
+		// swapped and ended otherwise, by revert() itself and by load_all(); a refusal before the swap keeps it (the
+		// running module did not change). Refused without calling the hooks: a reload runs, an editor module, nothing
+		// to take back, or the module is not loaded. A compiled-in module can be taken back too.
 		reload_report revert(const std::string& name, const reload_hooks& hooks = {});
 
 		// The library reload() would copy, if the project's build output has one.

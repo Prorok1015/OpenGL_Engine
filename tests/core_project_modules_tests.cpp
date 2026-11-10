@@ -936,6 +936,18 @@ BOOST_AUTO_TEST_CASE(a_reload_asked_for_from_inside_a_game_callback_is_refused_b
 	BOOST_TEST(editor_runs());
 }
 
+BOOST_AUTO_TEST_CASE(an_editor_module_is_not_taken_back_on_its_own)
+{
+	host.load_editor_modules();
+	g_editor_events.clear();
+	const auto report = host.revert("test_editor", hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("editor module") != std::string::npos);
+	BOOST_TEST(g_editor_events.empty());
+	BOOST_TEST(editor_runs());
+}
+
 BOOST_AUTO_TEST_CASE(an_editor_module_is_not_reloaded_on_its_own)
 {
 	host.load_editor_modules();

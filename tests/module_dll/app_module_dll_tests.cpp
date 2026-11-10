@@ -424,6 +424,40 @@ BOOST_AUTO_TEST_CASE(a_revert_runs_the_previous_copy_again_and_the_build_taken_b
 	const auto rebuilt = host.reload(std::string{ dll_game::module_name });
 	BOOST_CHECK_MESSAGE(rebuilt.status == core::reload_status::reloaded, rebuilt.message);
 	BOOST_TEST(moved_value(*this) == 4);
+
+	// A person asks for the build taken back again (Build > Reload Game Module): it is loaded.
+	BOOST_REQUIRE((host.revert(std::string{ dll_game::module_name }).status == core::reload_status::reloaded));
+	BOOST_TEST((host.reload(std::string{ dll_game::module_name }).status == core::reload_status::refused));
+	const auto retried = host.reload(std::string{ dll_game::module_name }, {}, true);
+	BOOST_CHECK_MESSAGE(retried.status == core::reload_status::reloaded, retried.message);
+	BOOST_TEST(moved_value(*this) == 4);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// A previous copy that no longer loads leaves no module: no copy counts as current, so the same build loads again.
+BOOST_AUTO_TEST_CASE(a_revert_whose_previous_copy_fails_leaves_no_current_copy)
+{
+	dll_project project("dll_revert_lost", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, core::project_modules_options{});
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	project.rebuild(g_v2_path);
+	BOOST_REQUIRE((host.reload(std::string{ dll_game::module_name }).status == core::reload_status::reloaded));
+	BOOST_REQUIRE(host.is_current(std::string{ dll_game::module_name }));
+	// The previous copy is not mapped any more: it becomes a build that passes the check and fails to register.
+	std::filesystem::copy_file(g_failing_path, project.copy(0), std::filesystem::copy_options::overwrite_existing);
+
+	const auto report = host.revert(std::string{ dll_game::module_name });
+
+	BOOST_CHECK_MESSAGE(report.status == core::reload_status::lost, report.message);
+	BOOST_TEST((loader.state(dll_game::module_name) != app::modules::module_state::initialized));
+	BOOST_TEST(!host.is_current(std::string{ dll_game::module_name }));
+	BOOST_TEST(std::filesystem::exists(project.copy(0))); // kept for a look
+	const auto again = host.reload(std::string{ dll_game::module_name });
+	BOOST_CHECK_MESSAGE(again.status == core::reload_status::reloaded, again.message);
+	BOOST_TEST(host.is_current(std::string{ dll_game::module_name }));
+	BOOST_TEST(moved_value(*this) == 4);
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();
 }

@@ -407,8 +407,9 @@ void core::project_module_host::remove_unused_copies() const
 core::project_modules_report core::project_module_host::load_all()
 {
 	project_modules_report report;
-	// What a reload before this load left to take back names builds of modules loaded anew now.
+	// What a reload before this load left to take back or refused names builds of modules loaded anew now.
 	m_revert.clear();
+	m_rejected.clear();
 	if (!m_data.has_value<prj::project_context>()) {
 		return report;
 	}
@@ -466,7 +467,7 @@ core::project_modules_report core::project_module_host::load_all()
 	return report;
 }
 
-core::reload_report core::project_module_host::reload(const std::string& name, const reload_hooks& hooks)
+core::reload_report core::project_module_host::reload(const std::string& name, const reload_hooks& hooks, bool retry_taken_back)
 {
 	const auto refused = [&](std::string why) {
 		egLOG_ERROR("project", "module '{}' not reloaded: {}", name, why);
@@ -494,14 +495,26 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 		return refused(std::format("there is no build of it in '{}'", utf8(build_output_dir(project))));
 	}
 	if (const auto rejected = m_rejected.find(name); rejected != m_rejected.end()) {
-		std::error_code stat_ec;
-		const bool same_file = fs::equivalent(*found, rejected->second.source, stat_ec) && !stat_ec;
-		const std::uintmax_t size = same_file ? fs::file_size(*found, stat_ec) : 0;
-		const fs::file_time_type time = same_file && !stat_ec ? fs::last_write_time(*found, stat_ec) : fs::file_time_type{};
-		if (same_file && !stat_ec && size == rejected->second.size && time == rejected->second.time) {
-			return refused("this build was taken back after it was loaded (the editor could not go on with it); build the module again");
+		if (retry_taken_back || m_loader.state(name) != app::modules::module_state::initialized) {
+			// A person asks for it again, or nothing runs that it could be taken back to.
+			m_rejected.erase(rejected);
+		} else {
+			std::error_code equal_ec;
+			std::error_code size_ec;
+			std::error_code time_ec;
+			const bool same_file = fs::equivalent(*found, rejected->second.source, equal_ec);
+			const std::uintmax_t size = fs::file_size(*found, size_ec);
+			const fs::file_time_type time = fs::last_write_time(*found, time_ec);
+			if (equal_ec || size_ec || time_ec) {
+				// Kept: a file locked while it is written could otherwise pass as a new build once.
+				return refused(std::format("'{}' cannot be compared with the build taken back: {}", utf8(*found),
+					(equal_ec ? equal_ec : size_ec ? size_ec : time_ec).message()));
+			}
+			if (same_file && size == rejected->second.size && time == rejected->second.time) {
+				return refused("this build was taken back after it was loaded (the editor could not go on with it); build the module again");
+			}
+			m_rejected.erase(rejected);
 		}
-		m_rejected.erase(rejected);
 	}
 	remove_unused_copies();
 	module_copy copy;
@@ -549,6 +562,9 @@ core::reload_report core::project_module_host::revert(const std::string& name, c
 	if (m_reloading) {
 		return refused("a reload is already running");
 	}
+	if (is_editor_module(name)) {
+		return refused("it is an editor module: it reloads with the game module, not on its own");
+	}
 	const auto it = m_revert.find(name);
 	if (it == m_revert.end()) {
 		return refused("no reload of it to take back");
@@ -571,6 +587,9 @@ core::reload_report core::project_module_host::revert(const std::string& name, c
 	const reload_report report = swap(name, std::move(source), nullptr, hooks, point.previous, true);
 	if (report.status == reload_status::reloaded && point.reverted) {
 		m_rejected[name] = rejected_build{ point.reverted->source, point.reverted->source_size, point.reverted->source_time };
+		if (point.previous) {
+			warn_about_siblings(name, point.previous->siblings, point.reverted->siblings);
+		}
 	}
 	return report;
 }
@@ -658,16 +677,20 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		}
 	}
 
+	// Made before the load: nothing that can throw is left between a module that loaded and finish (after_swap).
+	auto& copies = m_copies[name];
+	const bool can_revert = previous && was_loaded;
+	revert_point next_revert = can_revert ? revert_point{ previous, copies.current, copy } : revert_point{};
+	revert_point* revert_slot = can_revert ? &m_revert[name] : nullptr;
+
 	problem = guarded([&] { m_loader.load(std::move(*prepared), m_data); return std::string{}; });
 	prepared.reset();
 	if (problem.empty()) {
-		auto& copies = m_copies[name];
-		std::optional<loaded_copy> running = copies.current;
 		if (copy) {
 			copies.previous = std::exchange(copies.current, *copy);
 		}
-		if (previous && was_loaded) {
-			m_revert[name] = revert_point{ previous, std::move(running), copy };
+		if (revert_slot) {
+			*revert_slot = std::move(next_revert);
 		} else {
 			m_revert.erase(name);
 		}
@@ -680,6 +703,12 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		return finish({ reload_status::refused, std::format("the new build failed: {}", problem) });
 	}
 	if (!previous) {
+		// No module runs: the copy that was current is unloaded and must not count as the build in use (is_current).
+		// A copy revert() kept stays as the previous one.
+		if (keep_copy && copy) {
+			copies.previous = *copy;
+		}
+		copies.current.reset();
 		return finish({ reload_status::lost, std::format("the new build failed: {}", problem) });
 	}
 	const std::string rollback = guarded([&] { return load_module(m_loader, m_data, previous(), name); });
