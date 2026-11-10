@@ -30,7 +30,8 @@
 // inp::stack_layer_desc gains `all_actions` at its end (the layer declares every action); nothing that exists moves.
 // inp::action_input is read by the engine's inp::update_actions alone (no module, template or test DLL reads it); its
 // element action_reach grew (armed_keys, armed_buttons: the memory of fronts, #624 PR b) before any module could have
-// been built against it, so the minor stays 3.5.
+// been built against it, so the minor stays 3.5. inp::action_injection (#624 PR c, the edges of inp::input_router::inject)
+// is a ctx type of the same kind: gs::route_input writes it, inp::update_actions reads it, no module does.
 // inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
 // 3.6 (#614): the optional export snk_module_layout_key, the key of the layouts of the engine types whose size is compiled

@@ -1,5 +1,7 @@
 #include <snk/input/inp_input_router.h>
+#include <algorithm>
 #include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <string_view>
 #include <vector>
 
@@ -39,6 +41,12 @@ void inp::input_router::forget_set(std::string_view set)
 	if (const auto it = m_commands.find(set); it != m_commands.end()) {
 		m_commands.erase(it);
 	}
+	if (const auto it = m_injected.find(set); it != m_injected.end()) {
+		m_injected.erase(it);
+	}
+	if (const auto it = m_warned.find(set); it != m_warned.end()) {
+		m_warned.erase(it);
+	}
 }
 
 void inp::input_router::queue_command(std::string_view set, stack_command command)
@@ -54,6 +62,52 @@ std::vector<inp::stack_command> inp::input_router::take_commands(std::string_vie
 	if (it == m_commands.end()) return {};
 	std::vector<stack_command> taken = std::move(it->second);
 	m_commands.erase(it);
+	return taken;
+}
+
+std::vector<inp::input_router::dropped_injection> inp::input_router::drop_commands_except(const std::vector<std::string>& sets)
+{
+	std::vector<dropped_injection> dropped;
+	for (auto it = m_commands.begin(); it != m_commands.end();) {
+		if (std::ranges::find(sets, it->first) != sets.end()) {
+			++it;
+			continue;
+		}
+		dropped.push_back({ it->first, it->second.size() });
+		it = m_commands.erase(it);
+	}
+	return dropped;
+}
+
+void inp::input_router::forget_commands(std::string_view set)
+{
+	if (const auto it = m_commands.find(set); it != m_commands.end()) {
+		m_commands.erase(it);
+	}
+}
+
+void inp::input_router::inject(const input_target& target, std::string action, action_edge edge)
+{
+	if (target.context.empty()) {
+		egLOG_WARN("input", "inject '{}' into set '{}' names no world, dropped", action, target.set);
+		return;
+	}
+	auto& queue = m_injected[target.set];
+	if (queue.size() >= injection_limit) {
+		if (warn_once(target.set, "#inject-full")) {
+			egLOG_WARN("input", "set '{}': {} injected edges are waiting and the set does not take them (Pause, a frozen Step); the new ones are dropped", target.set, injection_limit);
+		}
+		return;
+	}
+	queue.push_back(queued_injection{ target.context, std::move(action), edge });
+}
+
+std::vector<inp::input_router::queued_injection> inp::input_router::take_injected(std::string_view set)
+{
+	const auto it = m_injected.find(set);
+	if (it == m_injected.end()) return {};
+	std::vector<queued_injection> taken = std::move(it->second);
+	m_injected.erase(it);
 	return taken;
 }
 
@@ -101,4 +155,32 @@ inp::routed_input inp::input_router::route(std::string_view set, std::string_vie
 		}
 	}
 	return out;
+}
+
+std::vector<inp::input_router::dropped_injection> inp::input_router::drop_injected_except(const std::vector<std::string>& sets)
+{
+	std::vector<dropped_injection> dropped;
+	for (auto it = m_injected.begin(); it != m_injected.end();) {
+		if (std::ranges::find(sets, it->first) != sets.end()) {
+			++it;
+			continue;
+		}
+		dropped.push_back({ it->first, it->second.size() });
+		it = m_injected.erase(it);
+	}
+	return dropped;
+}
+
+void inp::input_router::forget_injected(std::string_view set)
+{
+	if (const auto it = m_injected.find(set); it != m_injected.end()) {
+		m_injected.erase(it);
+	}
+}
+
+bool inp::input_router::warn_once(std::string_view set, std::string key)
+{
+	const auto it = m_warned.find(set);
+	auto& keys = it != m_warned.end() ? it->second : m_warned.emplace(std::string{ set }, std::set<std::string>{}).first->second;
+	return keys.insert(std::move(key)).second;
 }
