@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_model.h>
 #include <cstddef>
 #include <string>
@@ -58,6 +59,17 @@ BOOST_AUTO_TEST_CASE(ACubemapWithARefusedFace_LoadsAndReadsNothing)
 	const auto faces = load_desc("faces.desc", R"json({"__type":"texture_cubemap_desc","data":{"right":"user://b.png",
 		"left":"memory://t/l.png"}})json");
 	BOOST_TEST(faces.is_ready());
+	BOOST_TEST(user.resolves == 0u);
+}
+
+// The texture manager loads the tag a material hands it: one it may not refer to stays an empty slot.
+BOOST_AUTO_TEST_CASE(TheTextureManager_RefusesAUserTag_TheSlotStaysEmpty)
+{
+	rnd::texture_manager textures(nullptr, storage.require<desc::desc_system>(), storage.require<res::resource_system>());
+	const rnd::texture_id id = textures.require(res::tag{ "user://b.png" });
+	test_util::pump(tasks);
+	BOOST_TEST((textures.require(res::tag{ "user://b.png" }) == id));
+	BOOST_TEST(!textures.is_ready(id));
 	BOOST_TEST(user.resolves == 0u);
 }
 

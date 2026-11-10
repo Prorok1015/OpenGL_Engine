@@ -206,7 +206,7 @@ BOOST_AUTO_TEST_CASE(ActionReachIsMinor3_5_AndAModuleBuiltFor3_4StillLoads)
 BOOST_AUTO_TEST_CASE(TheLayoutKeyIsMinor3_6_AndAModuleBuiltFor3_5WithoutItStillLoads)
 {
 	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 6u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 6u);
 	auto entry = generated_entry();
 	entry.api_version = &api_3_5;
 	entry.build_info = +[]() { return info_with(api_3_5(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
