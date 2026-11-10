@@ -84,6 +84,11 @@ namespace scn
 		// `kind::level` survive the reload.
 		void set_on_reload(std::function<void()> cb) { m_on_reload = std::move(cb); }
 
+		// Called for every hot reload that read the level file, also one that failed, with the handle it read (its
+		// diagnostics: the editor's Problems, #596). Unset by default: a host without it reloads as before.
+		using reload_result_callback = std::function<void(const res::tag& level, const res::res_handle<scn::level_desc>& handle)>;
+		void set_on_reload_result(reload_result_callback cb) { m_on_reload_result = std::move(cb); }
+
 		// Returns the existing set when the name is taken (logged; its options are kept, a mismatch is an error too).
 		// `layer` null: the base services.
 		scn::context_set& create_set(std::string_view name, scn::scene_layer* layer = nullptr, scn::set_options options = {});
@@ -230,8 +235,9 @@ namespace scn
 		std::function<void()> m_on_reload;
 		res::tag m_pending_level_reload;
 		std::function<void(game_layer_change)> m_on_game_layer_change;
-		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.0). The base's sets
-		// point at it: the destructor clears them before any member goes.
+		// Kept before every later member, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION
+		// 3.0): new members go only after it. The base's sets point at it: the destructor clears them before any member goes.
 		scn::event_subscriptions m_subscriptions;
+		reload_result_callback m_on_reload_result;
 	};
 }
