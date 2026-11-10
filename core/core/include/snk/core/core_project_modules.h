@@ -36,6 +36,9 @@ namespace core
 		// A static host (the shipping `game`, #591): only `compiled_in` modules run, nothing is opened from the
 		// project's build output, and reload() from it is refused.
 		bool compiled_only = false;
+		// The engine's layout key (gs::engine_module_layout_key, #614): a module whose snk_module_layout_key differs is
+		// refused before it is created, and a reload to it before the running module goes. 0: not checked.
+		std::uint64_t layout_key = 0;
 	};
 
 	struct project_modules_report

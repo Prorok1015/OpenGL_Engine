@@ -197,6 +197,12 @@ private:
 
 }
 
+#if defined(TEST_DLL_BAD_LAYOUT)
+// Built as if against an engine whose types have other layouts (#614).
+#undef SNK_DETAIL_MODULE_LAYOUT_KEY
+#define SNK_DETAIL_MODULE_LAYOUT_KEY (::gs::module_layout_key() ^ 1u)
+#endif
+
 #if defined(TEST_DLL_BAD_API)
 extern "C" {
 SNK_MODULE_EXPORT std::uint32_t snk_module_api_version() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
@@ -211,6 +217,8 @@ SNK_MODULE_EXPORT const struct snk_module_build_info* snk_module_build_info()
 }
 SNK_MODULE_EXPORT ::app::modules::module_interface* snk_create_module() { return new test_game_dll_module(); }
 SNK_MODULE_EXPORT void snk_destroy_module(::app::modules::module_interface* module) { delete module; }
+// Another layout too: the host reports the api, which says what to change, not the layout (#614).
+SNK_MODULE_EXPORT std::uint64_t snk_module_layout_key() { return ::gs::module_layout_key() ^ 1u; }
 }
 #else
 SNK_DECLARE_MODULE(test_game_dll_module)

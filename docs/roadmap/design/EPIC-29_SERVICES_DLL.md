@@ -62,7 +62,7 @@ extern "C" SNK_MODULE_EXPORT app::modules::module_interface* snk_create_module()
 extern "C" SNK_MODULE_EXPORT void snk_destroy_module(app::modules::module_interface*);
 #define SNK_DECLARE_MODULE(Type) /* все четыре функции */
 ```
-- ABI: C-имена, за ними C++-тип и тот же тулчейн/CRT; несовпадение major или `build_info` — отказ. Уничтожает тот бинарник, что создал.
+- ABI: C-имена, за ними C++-тип и тот же тулчейн/CRT; несовпадение major или `build_info` — отказ. Уничтожает тот бинарник, что создал. С 3.6 (#614) — ещё необязательная `snk_module_layout_key`: модуль с ключом раскладки, отличным от ключа движка, отказывается (`MODULE_LAYER.md`, «Ключ раскладки модуля»).
 - Сейчас: `module_entry` из указателей на функции, тесты load/unload в unit_tests. dlopen/LoadLibrary и тестовая .so — EPIC-52 (#21). Hot reload вне объёма (ADR-01).
 
 ## 7. Коммиты (каждый сохраняет поведение, CI зелёный)

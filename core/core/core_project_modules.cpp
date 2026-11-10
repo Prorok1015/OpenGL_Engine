@@ -248,12 +248,29 @@ namespace {
 		check_fn m_check;
 	};
 
+	// The source checked against the engine's layout key once it is open, before its module is created (#614).
+	std::unique_ptr<app::modules::module_source> with_layout_check(std::unique_ptr<app::modules::module_source> source,
+		std::uint64_t layout_key)
+	{
+		if (layout_key == 0) {
+			return source;
+		}
+		return std::make_unique<checked_module_source>(std::move(source), [layout_key](const app::modules::module_entry& entry) {
+			// The version, the compiler and the flags first: prepare reports their own message (debug/release, another
+			// major), which says what to change; a layout message would only say "rebuild".
+			if (!app::modules::check_module_entry(entry).empty()) {
+				return std::string{};
+			}
+			return app::modules::check_module_layout(entry, layout_key);
+		});
+	}
+
 	// Empty string once the module is loaded. The module is checked against the manifest's name before it gets a
 	// layer; when refused it is gone by the time this returns.
 	std::string load_module(app::modules::module_loader& loader, ds::app_data_storage& data,
-		std::unique_ptr<app::modules::module_source> source, const std::string& name)
+		std::unique_ptr<app::modules::module_source> source, const std::string& name, std::uint64_t layout_key)
 	{
-		auto prepared = app::modules::module_loader::prepare(std::move(source));
+		auto prepared = app::modules::module_loader::prepare(with_layout_check(std::move(source), layout_key));
 		if (prepared.name() != name) {
 			return std::format("{} is the module '{}'", prepared.describe(), prepared.name());
 		}
@@ -447,7 +464,7 @@ core::project_modules_report core::project_module_host::load_all()
 			} else {
 				return "its library is no longer in the build output";
 			}
-			return load_module(m_loader, m_data, std::move(source), ref.name);
+			return load_module(m_loader, m_data, std::move(source), ref.name, m_options.layout_key);
 		});
 		if (problem.empty()) {
 			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
@@ -613,7 +630,7 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	// Checked next to the running module: nothing of the running one is touched until the new one passed.
 	std::optional<app::modules::module_loader::prepared_module> prepared;
 	std::string problem = guarded([&]() -> std::string {
-		prepared.emplace(app::modules::module_loader::prepare(std::move(next)));
+		prepared.emplace(app::modules::module_loader::prepare(with_layout_check(std::move(next), m_options.layout_key)));
 		if (prepared->name() != name) {
 			std::string why = std::format("{} is the module '{}'", prepared->describe(), prepared->name());
 			prepared.reset();
@@ -717,7 +734,7 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		copies.current.reset();
 		return finish({ reload_status::lost, std::format("the new build failed: {}", problem) });
 	}
-	const std::string rollback = guarded([&] { return load_module(m_loader, m_data, previous(), name); });
+	const std::string rollback = guarded([&] { return load_module(m_loader, m_data, previous(), name, m_options.layout_key); });
 	if (rollback.empty()) {
 		return finish({ reload_status::rolled_back, std::format("the new build failed, the previous one runs again: {}", problem) });
 	}
@@ -774,7 +791,7 @@ core::project_modules_report core::project_module_host::load_editor_modules()
 				return {};
 			}
 			source = std::make_unique<checked_module_source>(std::move(source), m_options.check_editor_module);
-			return load_module(m_loader, m_data, std::move(source), ref.name);
+			return load_module(m_loader, m_data, std::move(source), ref.name, m_options.layout_key);
 		});
 		if (problem.empty() && m_loader.state(ref.name) == app::modules::module_state::initialized) {
 			egLOG_INFO("project", "editor module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
