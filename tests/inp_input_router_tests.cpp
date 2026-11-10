@@ -1167,7 +1167,7 @@ BOOST_AUTO_TEST_CASE(Liveness_EndsWithTheRouter)
 {
 	std::weak_ptr<inp::input_router*> token;
 	{
-		inp::input_router other;
+		inp::input_router other{ source };
 		token = other.liveness();
 		BOOST_TEST(!token.expired());
 	}

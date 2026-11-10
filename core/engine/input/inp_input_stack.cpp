@@ -157,6 +157,13 @@ inp::stack_snapshot inp::input_stack::snapshot() const
 inp::stack_restore_report inp::input_stack::restore(const stack_snapshot& saved, const std::vector<world_ref>& worlds)
 {
 	stack_restore_report report;
+	for (const world_ref& world : worlds) {
+		if (find(world.name, base_layer_name)) continue;
+		stack_layer_desc placeholder;
+		placeholder.name = base_layer_name;
+		placeholder.active = false;
+		put(world.name, world.desc_index, std::move(placeholder));
+	}
 	for (const stack_snapshot::layer& item : saved.layers) {
 		const auto world = std::ranges::find(worlds, item.world, &world_ref::name);
 		if (world == worlds.end()) {
@@ -167,7 +174,11 @@ inp::stack_restore_report inp::input_stack::restore(const stack_snapshot& saved,
 		++report.restored;
 	}
 	for (const std::string& name : saved.off_worlds) {
-		if (std::ranges::find(worlds, name, &world_ref::name) != worlds.end()) set_world_active(name, false);
+		if (std::ranges::find(worlds, name, &world_ref::name) != worlds.end()) {
+			set_world_active(name, false);
+		} else {
+			++report.off_worlds_skipped;
+		}
 	}
 	return report;
 }

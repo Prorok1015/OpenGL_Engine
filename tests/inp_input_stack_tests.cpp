@@ -840,7 +840,7 @@ BOOST_AUTO_TEST_CASE(Restore_PutsTheLayersBackWithTheNewDescIndex_AndTwiceMakesN
 	const auto second = fresh.restore(saved, worlds);
 	BOOST_TEST(first.restored == 1u);
 	BOOST_TEST(second.restored == 1u);
-	BOOST_TEST(fresh.size() == 1u);
+	BOOST_TEST(fresh.size() == 3u); // the layer and a placeholder of the base layer of each of the two worlds
 	BOOST_TEST(fresh.find("game", "menu") != nullptr);
 	BOOST_TEST(!fresh.world_active("hud"));
 }
@@ -858,6 +858,42 @@ BOOST_AUTO_TEST_CASE(Restore_LeavesOutTheLayersOfAWorldThatIsGone_AndCountsThem)
 	BOOST_TEST(report.restored == 1u);
 	BOOST_TEST(report.skipped == 1u);
 	BOOST_TEST(fresh.find("gone", "menu") == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(Restore_KeepsTheRestoredLayerAboveTheBaseLayerThatTheNextFramePuts)
+{
+	inp::input_stack old_run;
+	old_run.put("game", 0, layer("world", 0));
+	inp::stack_layer_desc menu = layer("menu", 0);
+	menu.owner = inp::layer_owner::module;
+	old_run.put("game", 0, menu);
+
+	inp::input_stack fresh;
+	fresh.restore(old_run.snapshot(), { { "game", 0 } });
+	fresh.put("game", 0, layer("world", 0));
+	BOOST_TEST((names_of(fresh) == std::vector<std::string>{ "game/menu", "game/world" }));
+}
+
+BOOST_AUTO_TEST_CASE(Restore_AFreshPushOfTheNewBuildWinsOverTheRestoredLayer)
+{
+	inp::input_stack old_run;
+	inp::stack_layer_desc menu = layer("menu", 2);
+	menu.owner = inp::layer_owner::module;
+	old_run.put("game", 0, menu);
+
+	inp::input_stack fresh;
+	fresh.restore(old_run.snapshot(), { { "game", 0 } });
+	BOOST_TEST(inp::apply_commands(fresh, { push_by(inp::layer_owner::module, "game", layer("menu", 9)) }, { { "game", 0 } }) == 1u);
+	BOOST_REQUIRE(fresh.find("game", "menu") != nullptr);
+	BOOST_TEST(fresh.find("game", "menu")->order == 9);
+}
+
+BOOST_AUTO_TEST_CASE(Restore_CountsTheOffWorldsThatAreGone)
+{
+	inp::input_stack old_run;
+	old_run.set_world_active("hud", false);
+	inp::input_stack fresh;
+	BOOST_TEST(fresh.restore(old_run.snapshot(), { { "game", 0 } }).off_worlds_skipped == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(Restore_GivesAHeldKeyNoPress_TheLayerStartsWithPreviousEqualCurrent)

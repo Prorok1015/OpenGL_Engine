@@ -129,11 +129,16 @@ namespace inp
 		std::vector<std::string> off_worlds;
 	};
 
+	// The layer every world has from the engine (gs::route_input puts it each frame).
+	inline constexpr const char* base_layer_name = "world";
+
 	struct stack_restore_report
 	{
 		std::size_t restored = 0;
 		// Layers of a world that is not in the new run: left out, not an error.
 		std::size_t skipped = 0;
+		// Worlds that were off and are not in the new run.
+		std::size_t off_worlds_skipped = 0;
 	};
 
 	class SNK_API input_stack;
@@ -171,7 +176,8 @@ namespace inp
 		bool warn_once(std::string key);
 		// What a hot reload keeps of the stack, and putting it back into the stack of the new run: a layer of a world that is in
 		// `worlds` is put with that world's desc_index (the same name replaces, so doing it twice makes no second layer); the
-		// worlds that were off are switched off again.
+		// worlds that were off are switched off again. A placeholder of the base layer goes in first for every world, so the
+		// restored layers keep their rank above it when the real base layer replaces it (it keeps the place of adding).
 		stack_snapshot snapshot() const;
 		stack_restore_report restore(const stack_snapshot& saved, const std::vector<world_ref>& worlds);
 		std::size_t memory_count() const { return m_memory.size(); }

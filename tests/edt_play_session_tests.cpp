@@ -1044,6 +1044,10 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_a_step_keeps_the_frames_to_step)
 // #625 (b): the layers the module put on the input stack of "play" and the worlds it switched off survive a reload, once each.
 BOOST_AUTO_TEST_CASE(a_module_reload_keeps_the_input_layers_of_play_without_duplicates)
 {
+	const auto menu_layers_of_play = [this] {
+		const auto layers = router.stack("play").ordered();
+		return std::ranges::count_if(layers, [](const inp::stack_entry* entry) { return entry->layer.name == "menu"; });
+	};
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(play.start());
@@ -1060,7 +1064,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_keeps_the_input_layers_of_play_without_dupl
 		settle();
 
 		BOOST_REQUIRE(play_set());
-		BOOST_TEST(router.stack("play").size() == 1u);
+		BOOST_TEST(menu_layers_of_play() == 1);
 		BOOST_TEST(router.stack("play").find("w0", "menu") != nullptr);
 		BOOST_TEST(!router.stack("play").world_active("w0"));
 	}

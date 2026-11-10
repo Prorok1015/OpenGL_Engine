@@ -350,11 +350,7 @@ std::string edt::play_session::capture_for_reload()
 	snapshot.mode = m_waiting ? m_waiting->mode : play->mode();
 	snapshot.frames_run = m_waiting ? m_waiting->frames_run : play->frames_run();
 	snapshot.pending_steps = m_waiting ? m_waiting->pending_steps : play->pending_steps();
-	if (m_options.input) {
-		snapshot.input_stack = m_options.input->stack(k_play_set).snapshot();
-		snapshot.injected_dropped = m_options.input->take_injected(k_play_set).size();
-		snapshot.stack_commands_dropped = m_options.input->take_commands(k_play_set).size();
-	}
+	if (m_options.input) snapshot.input_stack = m_options.input->stack(k_play_set).snapshot();
 	m_reload = std::move(snapshot);
 	return {};
 }
@@ -373,7 +369,14 @@ void edt::play_session::suspend_for_swap()
 	++m_wait_generation;
 	// The copies hold descs of the module's types: they go before its binary does.
 	m_worlds_copy.clear();
-	if (m_options.input) m_options.input->forget_set(k_play_set);
+	if (m_options.input) {
+		// Only a swap that happens loses them: a reload the host refuses leaves the queues of the running Play alone.
+		if (m_reload) {
+			m_reload->injected_dropped = m_options.input->take_injected(k_play_set).size();
+			m_reload->stack_commands_dropped = m_options.input->take_commands(k_play_set).size();
+		}
+		m_options.input->forget_set(k_play_set);
+	}
 	if (m_options.forget_runtime_entities) m_options.forget_runtime_entities();
 	m_suspended = true;
 }
@@ -448,8 +451,9 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 		std::vector<inp::world_ref> worlds;
 		play.for_each([&](scn::world_context& world) { worlds.push_back({ std::string{ world.get_name() }, world.desc_index() }); });
 		saved.input_stack_restored = m_options.input->stack(k_play_set).restore(saved.input_stack, worlds);
-		if (saved.input_stack_restored.skipped > 0) {
-			egLOG_WARN("hot_reload", "{} input layer(s) belong to a world the new run does not have: left out", saved.input_stack_restored.skipped);
+		if (saved.input_stack_restored.skipped > 0 || saved.input_stack_restored.off_worlds_skipped > 0) {
+			egLOG_WARN("hot_reload", "{} input layer(s) and {} switched-off world(s) belong to a world the new run does not have: left out",
+				saved.input_stack_restored.skipped, saved.input_stack_restored.off_worlds_skipped);
 		}
 	}
 	// Neither run nor shown until what the restored components refer to has loaded (HOT_RELOAD_PLAY.md 6, step 6).
@@ -737,6 +741,7 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 		out["mail_dropped"] = "unknown (#668)";
 		out["input_layers_restored"] = m_reload->input_stack_restored.restored;
 		out["input_layers_skipped"] = m_reload->input_stack_restored.skipped;
+		out["input_off_worlds_skipped"] = m_reload->input_stack_restored.off_worlds_skipped;
 		out["input_injected_dropped"] = m_reload->injected_dropped;
 		out["input_commands_dropped"] = m_reload->stack_commands_dropped;
 		boost::json::array worlds;
