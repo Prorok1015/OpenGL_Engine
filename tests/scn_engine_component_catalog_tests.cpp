@@ -13,6 +13,7 @@
 #include <type_traits>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,9 +22,9 @@
 // Every runtime component the engine creates is in the base catalog with a schema, or marked derived / editor-only
 // (#599, HOT_RELOAD_PLAY.md section 4.3). A world is spawned through the production spawners with a node per scene desc
 // (k_every_desc), and every non-empty storage must be known: a component one of these spawners adds without registering
-// it makes the walk report it, which fails the test. EverySpawnableDescIsInThePrefab keeps that prefab complete: a desc
-// type with a spawner that is neither in it nor in k_not_spawned fails (#620). Components made outside the spawners are
-// checked in the sources by tools/ci/check_engine_components.py.
+// it makes the walk report it, which fails the test. EverySpawnerAloneMakesOnlyCatalogComponents covers every desc type
+// with a spawner, not only those of the prefab (#620): each is spawned alone and must make a component, all of them in
+// the catalog. Components made outside the spawners are checked in the sources by tools/ci/check_engine_components.py.
 
 namespace
 {
@@ -45,7 +46,7 @@ namespace
 					"children":[{"__id":"00000000000000ab","name":"Child","components":{"object":{"__type":"object_desc"}}}]}
 			]})json";
 
-	// Desc types with a spawner that k_every_desc does not spawn, and why. Anything else with a spawner must be in it.
+	// Desc types with a spawner that make no component of their own when spawned alone, and why.
 	struct not_spawned
 	{
 		std::string_view type;
@@ -58,20 +59,48 @@ namespace
 		{ "stat_desc", "test-only desc of test_scene_env" },
 	};
 
-	// The __type of every object in `value`, at any depth.
-	void collect_types(const boost::json::value& value, std::vector<std::string>& out)
+	// The desc k_every_desc gives `type` in the components of one of its nodes (with the fields it needs), else none.
+	std::optional<boost::json::object> find_component_desc(const boost::json::array& nodes, std::string_view type)
 	{
-		if (const auto* object = value.if_object()) {
-			if (const auto* type = object->if_contains("__type"); type && type->is_string()) out.emplace_back(type->as_string());
-			for (const auto& member : *object) collect_types(member.value(), out);
-		} else if (const auto* array = value.if_array()) {
-			for (const auto& item : *array) collect_types(item, out);
+		for (const boost::json::value& node : nodes) {
+			const auto& object = node.as_object();
+			if (const auto* components = object.if_contains("components")) {
+				for (const auto& component : components->as_object()) {
+					const auto& desc = component.value().as_object();
+					if (desc.at("__type").as_string() == type) return desc;
+				}
+			}
+			if (const auto* children = object.if_contains("children")) {
+				if (auto found = find_component_desc(children->as_array(), type)) return found;
+			}
 		}
+		return std::nullopt;
+	}
+
+	std::vector<entt::id_type> non_empty_storages(const entt::registry& reg)
+	{
+		std::vector<entt::id_type> ids;
+		for (const auto [id, storage] : reg.storage()) {
+			if (!storage.empty()) ids.push_back(id);
+		}
+		return ids;
 	}
 
 	struct catalog_fixture : test_util::scene_env
 	{
 		catalog_fixture() { scn::register_engine_components(catalog); }
+
+		// A prefab of one node holding `desc` (none: a bare node).
+		void spawn_one(entt::registry& reg, const std::optional<boost::json::object>& desc, std::string_view name)
+		{
+			boost::json::object components;
+			if (desc) components["c"] = *desc;
+			const boost::json::object prefab{ { "__type", "prefab_desc" }, { "__version", 4 },
+				{ "children", boost::json::array{ boost::json::object{ { "__id", "00000000000000c1" }, { "name", "Node" },
+					{ "components", std::move(components) } } } } };
+			const auto tag = put(std::format("one_{}.prefab.desc", name), boost::json::serialize(prefab));
+			scn::assemble_prefab(*assembler, reg, reg.create(), *load<scn::prefab_desc>(tag), "one", tag);
+		}
 
 		entt::entity spawn_every_desc(entt::registry& reg)
 		{
@@ -124,21 +153,35 @@ BOOST_AUTO_TEST_CASE(EveryComponentOfASpawnedWorldIsInTheCatalog)
 	BOOST_TEST(has_storage(reg, entt::type_hash<scn::bone_component>::value()));
 }
 
-// A new desc type with a spawner is checked by EveryComponentOfASpawnedWorldIsInTheCatalog only once it is in the
-// prefab: until then this fails, naming it.
-BOOST_AUTO_TEST_CASE(EverySpawnableDescIsInThePrefab)
+// Every desc type with a spawner, a new one included, is spawned alone in a world of its own (with the fields k_every_desc
+// gives it, else empty): it must make a component a bare node does not have, and all it makes must be in the catalog.
+BOOST_AUTO_TEST_CASE(EverySpawnerAloneMakesOnlyCatalogComponents)
 {
-	std::vector<std::string> spawned;
-	collect_types(boost::json::parse(k_every_desc), spawned);
+	entt::registry bare;
+	spawn_one(bare, std::nullopt, "bare");
+	std::vector<entt::id_type> node_storages = non_empty_storages(bare);
+	// The assembler keeps one per spawned component: it says nothing of the type.
+	node_storages.push_back(entt::type_hash<scn::component_tracker>::value());
+
+	const boost::json::array nodes = boost::json::parse(k_every_desc).as_object().at("children").as_array();
 	std::size_t checked = 0;
 	for (const std::string& type : assembler->spawner_types()) {
+		if (std::ranges::any_of(k_not_spawned, [&](const not_spawned& entry) { return entry.type == type; })) continue;
 		++checked;
-		const bool in_prefab = std::ranges::find(spawned, type) != spawned.end();
-		const bool excused = std::ranges::any_of(k_not_spawned, [&](const not_spawned& entry) { return entry.type == type; });
-		BOOST_CHECK_MESSAGE(in_prefab || excused, "desc type '" << type << "' has a spawner but is not in k_every_desc: add a node "
-			"with it there (its components are then checked), or to k_not_spawned with the reason");
+		std::optional<boost::json::object> desc = find_component_desc(nodes, type);
+		if (!desc) desc = boost::json::object{ { "__type", type } };
+		entt::registry reg;
+		spawn_one(reg, desc, type);
+		const bool made = std::ranges::any_of(non_empty_storages(reg),
+			[&](entt::id_type id) { return std::ranges::find(node_storages, id) == node_storages.end(); });
+		BOOST_CHECK_MESSAGE(made, "desc type '" << type << "' spawned alone made no component: give it the fields it needs in "
+			"k_every_desc, or list it in k_not_spawned with the reason");
+		for (const auto& missing : scn::unregistered_storages(reg, catalog)) {
+			BOOST_ERROR("desc type '" << type << "' makes '" << missing.type << "', which is not in the engine's component catalog: "
+				"register it in scn::register_engine_components");
+		}
 	}
-	BOOST_TEST(checked > std::size(k_not_spawned));
+	BOOST_TEST(checked > 0u);
 	// An excuse for a type that has no spawner any more is stale.
 	for (const not_spawned& entry : k_not_spawned) {
 		BOOST_CHECK_MESSAGE(assembler->has_spawner(entry.type), "k_not_spawned names '" << entry.type << "', which has no spawner: remove it");

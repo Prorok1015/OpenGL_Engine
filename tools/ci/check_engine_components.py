@@ -10,17 +10,27 @@ the desc spawners make; this checks the sources for the rest (systems, the snaps
 
 Every emplace<X>, emplace_or_replace<X> and get_or_emplace<X> on a registry in the engine's sources (calls through
 ctx() are context values, not components) must name a type registered with add_engine_component / add_engine_derived
-(any file of the engine) or one of ALLOWED below, with its reason. The match is by the last identifier of the type
-(scn::local_transform and local_transform are one), so a type alias or a type reached through a generic template is not
-seen: the catalog test and the runtime refusal cover those.
+(any file of the engine) or be allowed in that file by ALLOWED below, with its reason. The match is by the last
+identifier of the type (scn::local_transform and local_transform are one).
+
+The check reads one line at a time, so it does not see:
+  - a call whose template argument is on the next line (`reg.emplace<` then the type);
+  - other ways to make a component: insert<X>, storage<X>().emplace, patch;
+  - a type alias, or a type reached through a generic template of another name;
+  - ctx() on the line before the call or kept in a variable (`auto& ctx = reg.ctx(); ctx.emplace<X>()` is reported as a
+    component: allow it with the reason);
+  - calls inside /* */ comments (// comments are skipped).
+The catalog test (tests/scn_engine_component_catalog_tests.cpp) and the hot reload's refusal of a world holding an
+unknown storage (scn::unregistered_storages) cover what this misses.
 """
 import re
 import sys
 from pathlib import Path
 
-# Types created on a world that are not catalog entries, and why. A stale entry (the type is no longer created) fails.
+# (file name, type) created on a world that is not a catalog entry, and why. A stale entry (nothing of that name is
+# created in that file any more) fails.
 ALLOWED = {
-    'T': 'scn_component_catalog.h: component_entry::read, the generic reader of every registered type',
+    ('scn_component_catalog.h', 'T'): 'component_entry::read, the generic reader of every registered type',
 }
 
 SUFFIXES = ('.cpp', '.h', '.hpp')
@@ -58,16 +68,17 @@ def problems(files, allowed=ALLOWED):
     seen = set()
     for path, number, type_name in created:
         name = last_name(type_name)
-        seen.add(name)
-        if name in registered or name in allowed:
+        key = (Path(path).name, name)
+        seen.add(key)
+        if name in registered or key in allowed:
             continue
         errors.append(f"{path}:{number}: '{type_name}' is created on a world but is not in the engine component catalog: "
                       f"register it in scn::register_engine_components (add_engine_component, or add_engine_derived when "
                       f"it is recomputed and not saved), or add it to ALLOWED in tools/ci/check_engine_components.py "
                       f"with the reason")
-    for name in sorted(set(allowed) - seen):
-        errors.append(f"tools/ci/check_engine_components.py: ALLOWED names '{name}', which no engine source creates "
-                      f"any more: remove it")
+    for file_name, name in sorted(set(allowed) - seen):
+        errors.append(f"tools/ci/check_engine_components.py: ALLOWED names '{name}' in {file_name}, which no longer "
+                      f"creates it: remove it")
     return errors
 
 
@@ -77,27 +88,38 @@ def read_tree(root):
             yield str(path), path.read_text(encoding='utf-8', errors='replace')
 
 
+def expect(condition, what):
+    # Not assert: python -O would skip every check.
+    if not condition:
+        raise SystemExit(f'check_engine_components: self-test failed: {what}')
+
+
 def self_test():
     registry = ('reg.cpp', 'add_engine_component<local_transform>(catalog, "scn.local_transform");\n'
                            'add_engine_derived<scn::world_transform>(catalog, "scn.world_transform");\n')
-    good = ('a.cpp', 'reg.emplace<scn::local_transform>(e);\n'
-                     'reg.emplace_or_replace<world_transform>(e, m);\n'
-                     'registry->template get_or_emplace<scn::local_transform>(e);\n'
-                     'reg.ctx().emplace<scn::node_index>();\n'
-                     'reg.ctx().template emplace<ecs::world_bus>();\n'
-                     '// reg.emplace<commented_out>(e);\n'
-                     'reg.emplace_or_replace<T>(e, std::move(value));\n')
-    assert problems([registry, good]) == [], problems([registry, good])
+    good = ('dir/scn_component_catalog.h', 'reg.emplace<scn::local_transform>(e);\n'
+                                           'reg.emplace_or_replace<world_transform>(e, m);\n'
+                                           'registry->template get_or_emplace<scn::local_transform>(e);\n'
+                                           'reg.ctx().emplace<scn::node_index>();\n'
+                                           'reg.ctx().template emplace<ecs::world_bus>();\n'
+                                           '// reg.emplace<commented_out>(e);\n'
+                                           'reg.emplace_or_replace<T>(e, std::move(value));\n')
+    errors = problems([registry, good])
+    expect(errors == [], f'a clean tree reports {errors}')
 
     bad = ('b.cpp', 'void f() {\n    reg.emplace_or_replace<scn::mouse_state>(e);\n}\n')
     errors = problems([registry, good, bad])
-    assert len(errors) == 1 and errors[0].startswith("b.cpp:2: 'scn::mouse_state'"), errors
+    expect(len(errors) == 1 and errors[0].startswith("b.cpp:2: 'scn::mouse_state'"), f'an unregistered type gives {errors}')
 
-    stale = problems([registry, good], allowed={'T': 'generic', 'gone': 'no longer created'})
-    assert len(stale) == 1 and "'gone'" in stale[0], stale
+    elsewhere = ('other.cpp', 'reg.emplace<T>(e);\n')
+    errors = problems([registry, good, elsewhere])
+    expect(len(errors) == 1 and errors[0].startswith("other.cpp:1: 'T'"), f'T outside its allowed file gives {errors}')
+
+    stale = problems([registry, good], allowed={('scn_component_catalog.h', 'T'): 'generic', ('x.cpp', 'gone'): 'old'})
+    expect(len(stale) == 1 and "'gone' in x.cpp" in stale[0], f'a stale allowance gives {stale}')
 
     _, created = scan([('c.cpp', 'reg.emplace<a>(e); reg.emplace<b::c>(e);\n')])
-    assert [entry[2] for entry in created] == ['a', 'b::c'], created
+    expect([entry[2] for entry in created] == ['a', 'b::c'], f'two calls on a line give {created}')
     print('check_engine_components: self-test passed')
 
 
@@ -106,6 +128,10 @@ def main(argv):
         self_test()
         return 0
     root = argv[1] if len(argv) > 1 else 'core/engine'
+    if not Path(root).is_dir():
+        print(f'check_engine_components: {root} is not a directory (run from the repository root or pass the engine '
+              f'source root)')
+        return 2
     errors = problems(list(read_tree(root)))
     for error in errors:
         print(error)

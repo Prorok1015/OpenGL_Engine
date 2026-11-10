@@ -197,8 +197,8 @@ reg.add_ctx<game_score>("game.score", schema);                   // ресурс
 | Только редактор | `editor_camera_tag`, `prefab_camera_tag` | нет; камера внедряется заново |
 
 **Полнота каталога (#620).** Новый компонент движка регистрируется в каталоге: `add_engine_component`, или `add_engine_derived`, если он пересчитывается. Иначе CI падает в двух местах:
-- `tests/scn_engine_component_catalog_tests.cpp` спавнит по узлу каждого desc-типа со спавнером. Тип, которого нет в префабе теста и нет в списке `k_not_spawned` с причиной, валит тест.
-- `tools/ci/check_engine_components.py` (fast-уровень CI, шаг Coverage) находит в исходниках `core/engine` любой `emplace` / `emplace_or_replace` / `get_or_emplace` компонента на реестре. Тип должен быть в каталоге или в `ALLOWED` скрипта с причиной.
+- `tests/scn_engine_component_catalog_tests.cpp` спавнит каждый desc-тип со спавнером (`ecs_assembler::spawner_types`) отдельно в свой мир. Поля берутся из префаба теста, если тип там есть; иначе desc пустой. Тип должен создать хотя бы один компонент сверх голого узла, и все созданные компоненты должны быть в каталоге. Исключения — список `k_not_spawned` с причиной.
+- `tools/ci/check_engine_components.py` (fast-уровень CI, шаг Coverage) находит в исходниках `core/engine` любой `emplace` / `emplace_or_replace` / `get_or_emplace` компонента на реестре. Тип должен быть в каталоге или разрешён для этого файла в `ALLOWED` скрипта с причиной. Чего скрипт не видит, перечислено в его шапке.
 
 Псевдоним типа или компонент, созданный обобщённым шаблоном, текстовая проверка не видит. Такой компонент ловит отказ снимка по `unregistered_storages`.
 
