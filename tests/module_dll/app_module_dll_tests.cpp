@@ -391,6 +391,43 @@ BOOST_AUTO_TEST_CASE(a_project_module_reloads_from_a_new_build_and_keeps_the_pre
 	root.destruct<prj::project_context>();
 }
 
+// #601 (HOT_RELOAD_PLAY.md 3.5): the previous copy runs again, the build taken back is not loaded again until a new one.
+BOOST_AUTO_TEST_CASE(a_revert_runs_the_previous_copy_again_and_the_build_taken_back_waits_for_a_new_build)
+{
+	namespace fs = std::filesystem;
+	dll_project project("dll_revert", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, core::project_modules_options{});
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	project.rebuild(g_v2_path);
+	const auto reloaded = host.reload(std::string{ dll_game::module_name });
+	BOOST_REQUIRE_MESSAGE(reloaded.status == core::reload_status::reloaded, reloaded.message);
+	BOOST_REQUIRE(moved_value(*this) == 4);
+
+	const auto report = host.revert(std::string{ dll_game::module_name });
+
+	BOOST_CHECK_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	BOOST_TEST(resident(project.copy(0)));
+	BOOST_TEST(!resident(project.copy(1)));
+	BOOST_TEST(fs::is_directory(project.copy_folder(1))); // the build taken back is the previous copy now
+	BOOST_TEST(moved_value(*this) == 3);
+
+	// Live mode reloads after every build: the same output is refused, so no reload/revert loop starts.
+	const auto same = host.reload(std::string{ dll_game::module_name });
+	BOOST_TEST((same.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(same.message.find("taken back") != std::string::npos, same.message);
+	BOOST_TEST(moved_value(*this) == 3);
+
+	project.rebuild(g_v2_path);
+	// A copy keeps the source's time on Windows: the new build must not look like the one taken back.
+	fs::last_write_time(project.built, fs::last_write_time(project.built) + std::chrono::hours(1));
+	const auto rebuilt = host.reload(std::string{ dll_game::module_name });
+	BOOST_CHECK_MESSAGE(rebuilt.status == core::reload_status::reloaded, rebuilt.message);
+	BOOST_TEST(moved_value(*this) == 4);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
 BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_module_stays)
 {
 	dll_project project("dll_reload_bad_api", root);

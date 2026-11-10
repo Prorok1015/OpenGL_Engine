@@ -714,6 +714,86 @@ BOOST_AUTO_TEST_CASE(without_a_build_in_the_project_nothing_is_reloaded)
 	BOOST_TEST(registered("build1_desc"));
 }
 
+// #601 (HOT_RELOAD_PLAY.md 3.5): the build that ran before the last reload comes back, through the same swap, once.
+BOOST_AUTO_TEST_CASE(a_revert_brings_the_previous_build_back_once)
+{
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status
+		== core::reload_status::reloaded));
+	calls.clear();
+
+	const auto report = host.revert("reload_game", hooks);
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST(registered("build1_desc"));
+	BOOST_TEST(!registered("build2_desc"));
+	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:reloaded" }), boost::test_tools::per_element());
+
+	calls.clear();
+	const auto again = host.revert("reload_game", hooks);
+	BOOST_TEST((again.status == core::reload_status::refused));
+	BOOST_TEST(again.message.find("no reload") != std::string::npos);
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(registered("build1_desc"));
+}
+
+BOOST_AUTO_TEST_CASE(without_a_reload_or_after_a_rollback_there_is_nothing_to_revert)
+{
+	BOOST_TEST((host.revert("reload_game", hooks).status == core::reload_status::refused));
+	BOOST_TEST(calls.empty());
+
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_v1_entry()), hooks).status
+		== core::reload_status::rolled_back));
+	calls.clear();
+	BOOST_TEST((host.revert("reload_game", hooks).status == core::reload_status::refused));
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(registered("build1_desc"));
+}
+
+BOOST_AUTO_TEST_CASE(a_revert_after_the_module_was_unloaded_is_refused)
+{
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status
+		== core::reload_status::reloaded));
+	loader.unload("reload_game", root);
+	calls.clear();
+
+	const auto report = host.revert("reload_game", hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("not loaded") != std::string::npos);
+	BOOST_TEST(calls.empty());
+	BOOST_TEST((loader.state("reload_game") != app::modules::module_state::initialized));
+}
+
+BOOST_AUTO_TEST_CASE(a_revert_asked_for_from_inside_a_reload_is_refused)
+{
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status
+		== core::reload_status::reloaded));
+	std::optional<core::reload_report> nested;
+	hooks.before_swap = [&] { nested = host.revert("reload_game"); };
+
+	const auto report = host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_REQUIRE(nested.has_value());
+	BOOST_TEST((nested->status == core::reload_status::refused));
+	BOOST_TEST(nested->message.find("already running") != std::string::npos);
+}
+
+// A previous build that fails to load again is not followed by another try: no module runs.
+BOOST_AUTO_TEST_CASE(a_revert_whose_previous_build_fails_leaves_no_module)
+{
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_failing_entry()), hooks).status
+		== core::reload_status::reloaded));
+	calls.clear();
+
+	const auto report = host.revert("reload_game", hooks);
+
+	BOOST_TEST((report.status == core::reload_status::lost));
+	BOOST_TEST((loader.state("reload_game") == app::modules::module_state::unloaded));
+	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:lost" }), boost::test_tools::per_element());
+	BOOST_TEST((host.revert("reload_game", hooks).status == core::reload_status::refused));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // Editor modules (#588): loaded after the game modules by load_editor_modules, unloaded before a game reload swaps and

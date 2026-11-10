@@ -407,6 +407,8 @@ void core::project_module_host::remove_unused_copies() const
 core::project_modules_report core::project_module_host::load_all()
 {
 	project_modules_report report;
+	// What a reload before this load left to take back names builds of modules loaded anew now.
+	m_revert.clear();
 	if (!m_data.has_value<prj::project_context>()) {
 		return report;
 	}
@@ -491,6 +493,16 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	if (!found) {
 		return refused(std::format("there is no build of it in '{}'", utf8(build_output_dir(project))));
 	}
+	if (const auto rejected = m_rejected.find(name); rejected != m_rejected.end()) {
+		std::error_code stat_ec;
+		const bool same_file = fs::equivalent(*found, rejected->second.source, stat_ec) && !stat_ec;
+		const std::uintmax_t size = same_file ? fs::file_size(*found, stat_ec) : 0;
+		const fs::file_time_type time = same_file && !stat_ec ? fs::last_write_time(*found, stat_ec) : fs::file_time_type{};
+		if (same_file && !stat_ec && size == rejected->second.size && time == rejected->second.time) {
+			return refused("this build was taken back after it was loaded (the editor could not go on with it); build the module again");
+		}
+		m_rejected.erase(rejected);
+	}
 	remove_unused_copies();
 	module_copy copy;
 	if (std::string why = guarded([&] { return copy_library(project, *found, copy); }); !why.empty()) {
@@ -528,13 +540,48 @@ core::reload_report core::project_module_host::reload(const std::string& name, s
 	return swap(name, std::move(next), previous, hooks, std::nullopt);
 }
 
+core::reload_report core::project_module_host::revert(const std::string& name, const reload_hooks& hooks)
+{
+	const auto refused = [&](std::string why) {
+		egLOG_ERROR("project", "module '{}' not taken back: {}", name, why);
+		return reload_report{ reload_status::refused, std::move(why) };
+	};
+	if (m_reloading) {
+		return refused("a reload is already running");
+	}
+	const auto it = m_revert.find(name);
+	if (it == m_revert.end()) {
+		return refused("no reload of it to take back");
+	}
+	revert_point point = std::move(it->second);
+	m_revert.erase(it);
+	if (m_loader.state(name) != app::modules::module_state::initialized) {
+		return refused("it is not loaded");
+	}
+	std::error_code ec;
+	if (point.previous && !fs::is_regular_file(point.previous->library, ec)) {
+		return refused(std::format("the copy of the previous build is gone: '{}'", utf8(point.previous->library)));
+	}
+	const reloading_scope scope{ m_reloading };
+	std::unique_ptr<app::modules::module_source> source;
+	if (std::string why = guarded([&] { source = point.source(); return std::string{}; }); !why.empty()) {
+		return refused(std::move(why));
+	}
+	// No rollback: a previous build that fails now leaves no module running, and its copy stays for a look.
+	const reload_report report = swap(name, std::move(source), nullptr, hooks, point.previous, true);
+	if (report.status == reload_status::reloaded && point.reverted) {
+		m_rejected[name] = rejected_build{ point.reverted->source, point.reverted->source_size, point.reverted->source_time };
+	}
+	return report;
+}
+
 core::reload_report core::project_module_host::swap(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 	const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
-	const std::optional<loaded_copy>& copy)
+	const std::optional<loaded_copy>& copy, bool keep_copy)
 {
 	std::error_code ec;
 	const auto drop_copy = [&] {
-		if (copy) {
+		if (copy && !keep_copy) {
 			fs::remove_all(copy->folder, ec);
 		}
 	};
@@ -576,6 +623,10 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		hooks.before_swap();
 	}
 	const auto finish = [&](reload_report report) {
+		// Only a new build in place can be taken back, once.
+		if (report.status != reload_status::reloaded) {
+			m_revert.erase(name);
+		}
 		if (report.status == reload_status::reloaded) {
 			egLOG_INFO("project", "module '{}' reloaded{}", name, copy ? " from " + utf8(copy->library) : std::string{});
 		} else {
@@ -611,8 +662,14 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	prepared.reset();
 	if (problem.empty()) {
 		auto& copies = m_copies[name];
+		std::optional<loaded_copy> running = copies.current;
 		if (copy) {
 			copies.previous = std::exchange(copies.current, *copy);
+		}
+		if (previous && was_loaded) {
+			m_revert[name] = revert_point{ previous, std::move(running), copy };
+		} else {
+			m_revert.erase(name);
 		}
 		return finish({ reload_status::reloaded, {} });
 	}

@@ -114,6 +114,13 @@ namespace core
 		// running module again for a rollback (empty: no rollback).
 		reload_report reload(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 			std::function<std::unique_ptr<app::modules::module_source>()> previous, const reload_hooks& hooks = {});
+		// Takes back the last reload() of `name` that put a new build in place: the build that ran before it is loaded
+		// again through the same swap (hooks, editor modules), as when Play could not be restored in the new build
+		// (HOT_RELOAD_PLAY.md 3.5). Once per reload; afterwards reload() refuses the build taken back until the build
+		// output changes, so live mode does not load it again. The copy of the previous build stays if it fails to load
+		// (lost). Refused without calling the hooks: a reload runs, nothing to take back (no reload since the module was
+		// loaded, the last one was not `reloaded`, or it was taken back already), or the module is not loaded.
+		reload_report revert(const std::string& name, const reload_hooks& hooks = {});
 
 		// The library reload() would copy, if the project's build output has one.
 		std::optional<std::filesystem::path> build_output(const std::string& name) const;
@@ -152,15 +159,33 @@ namespace core
 			std::optional<loaded_copy> previous;
 		};
 
+		// What revert() loads again, and the build it takes back.
+		struct revert_point
+		{
+			std::function<std::unique_ptr<app::modules::module_source>()> source;
+			std::optional<loaded_copy> previous;
+			std::optional<loaded_copy> reverted;
+		};
+		// A build revert() took back, by the build output file it was copied from.
+		struct rejected_build
+		{
+			std::filesystem::path source;
+			std::uintmax_t size = 0;
+			std::filesystem::file_time_type time{};
+		};
+
+		// `keep_copy`: a failed load leaves the folder of `copy` (a previous build revert() loads again).
 		reload_report swap(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 			const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
-			const std::optional<loaded_copy>& copy);
+			const std::optional<loaded_copy>& copy, bool keep_copy = false);
 		void remove_unused_copies() const;
 
 		app::modules::module_loader& m_loader;
 		ds::app_data_storage& m_data;
 		project_modules_options m_options;
 		std::map<std::string, module_copies> m_copies;
+		std::map<std::string, revert_point> m_revert;
+		std::map<std::string, rejected_build> m_rejected;
 		// Editor modules in the order they were loaded.
 		std::vector<std::string> m_editor_loaded;
 		// A reload runs: one asked for from inside it (a hook, the module's own code) is refused.
