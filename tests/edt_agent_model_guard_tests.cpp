@@ -67,8 +67,9 @@ BOOST_AUTO_TEST_CASE(TheExtension_IsTakenAsTheResolverWould_WithoutCaseAndTraili
 			BOOST_TEST(edt::model_check_extension(text) == std::string(res::tag{ text }.extension()));
 		}
 	}
-	// The resolver decodes no percent escapes: "%2Eglb" is a name without that extension, as for the resolver.
-	BOOST_TEST(edt::model_check_extension("res://models/x%2Eglb") == "");
+	// The resolver decodes no percent escapes: "x%2Eglb" has no dot, so it is its own extension and names no model.
+	BOOST_TEST(edt::model_check_extension("res://models/x%2Eglb") == "x%2eglb");
+	BOOST_TEST(!edt::find_named_model(boost::json::parse(R"json({"m":"res://models/x%2Eglb"})json"), k_models));
 }
 
 BOOST_AUTO_TEST_CASE(AModelIsFoundAtAnyDepth_WithItsPointer_ButNotInKeysOrOtherFiles)
