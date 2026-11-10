@@ -20,7 +20,7 @@ public:
 SNK_DECLARE_EDITOR_MODULE(my_editor_module)
 ```
 
-`SNK_DECLARE_EDITOR_MODULE` экспортирует функции модуля и `snk_editor_api_version`. Редактор сравнивает её с `SNK_EDITOR_API_VERSION` до создания модуля: major должен совпасть, minor модуля — не быть больше minor редактора. Версия сейчас 1.1 (1.1 добавила превью ассетов). CMake: `snk::engine snk::engine_api snk::editor_api` из SDK; библиотека `snk::editor_api` есть только при общем движке.
+`SNK_DECLARE_EDITOR_MODULE` экспортирует функции модуля и `snk_editor_api_version`. Редактор сравнивает её с `SNK_EDITOR_API_VERSION` до создания модуля: major должен совпасть, minor модуля — не быть больше minor редактора. Версия сейчас 1.2 (1.1 добавила превью ассетов; 1.2 — счётчик исполняемых колбэков модуля: панели, действия, инспекторы, asset kinds и обработчики событий, зарегистрированные через `editor_module_context`, считаются, пока работают, и `module_unload_refusal` отказывает выгрузке из них). CMake: `snk::engine snk::engine_api snk::editor_api` из SDK; библиотека `snk::editor_api` есть только при общем движке.
 
 ## Реестры
 

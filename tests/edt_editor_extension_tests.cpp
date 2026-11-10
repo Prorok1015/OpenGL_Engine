@@ -526,4 +526,148 @@ BOOST_AUTO_TEST_CASE(AShutdownEditorThatThrows_StillClearsTheScopeAndLeavesNothi
 	BOOST_CHECK_EQUAL(state.shutdowns, 1);
 }
 
+namespace {
+
+class gated_panel final : public edt::panel_base
+{
+public:
+	gated_panel(edt::editor_context& editor, std::string& seen) : panel_base("ext.gated", "Gated"), m_editor(editor), m_seen(seen) {}
+
+protected:
+	void on_render() override {}
+	void on_hidden() override { m_seen = m_editor.module_unload_refusal(); }
+
+private:
+	edt::editor_context& m_editor;
+	std::string& m_seen;
+};
+
+}
+
+// #663: what the module registered through editor_module_context counts while it runs, so a reload asked from inside it is
+// refused (the unload would destroy the code that runs it), and the count is back to zero afterwards.
+struct callback_scope_fixture
+{
+	explicit callback_scope_fixture(extension_fixture& host)
+		: editor(*host.context), scope(host.tasks), module_context(editor, scope)
+	{
+		editor.track_module_scope(scope);
+	}
+
+	~callback_scope_fixture()
+	{
+		scope.clear();
+		editor.untrack_module_scope(scope);
+	}
+
+	edt::editor_context& editor;
+	edt::registration_scope scope;
+	edt::editor_module_context module_context;
+};
+
+BOOST_AUTO_TEST_CASE(APanelOfAModule_CountsWhileItIsDrawn)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	edt::panel_desc panel;
+	panel.id = "ext.gated";
+	panel.title = "Gated";
+	panel.open_by_default = false;
+	panel.panel = std::make_shared<gated_panel>(*context, seen);
+	module.module_context.add_panel(std::move(panel));
+
+	context->panels().render_all();
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnEventHandlerOfAModule_CountsWhileItRuns)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	module.module_context.subscribe(context->events().document_changed, [&](edt::document_id, std::uint64_t) {
+		seen = context->module_unload_refusal();
+	});
+
+	context->events().document_changed.emit(edt::document_id{}, 1);
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnActionOfAModule_CountsWhileItRuns)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	edt::action_desc action;
+	action.id = "ext.gated_action";
+	action.expose_as_tool = false;
+	action.execute = [&](const boost::json::value&) {
+		seen = context->module_unload_refusal();
+		return edt::action_result::success();
+	};
+	module.module_context.add_action(std::move(action));
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.gated_action", boost::json::object{});
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnInspectorRendererOfAModule_CountsWhileItRuns)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	module.module_context.add_inspector("ext_gated_type", [&](scn::prefab_desc::prefab_comp_node&) {
+		seen = context->module_unload_refusal();
+		return false;
+	});
+
+	scn::prefab_desc::prefab_comp_node node;
+	[[maybe_unused]] const auto drawn = context->inspectors().invoke("ext_gated_type", node);
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnAssetKindOfAModule_CountsWhileItOpens)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	edt::asset_kind_desc kind;
+	kind.id = "ext_gated_kind";
+	kind.suffix = ".ext_gated";
+	kind.open = [&](edt::editor_context&, const res::tag&) { seen = context->module_unload_refusal(); };
+	module.module_context.add_asset_kind(std::move(kind));
+
+	const edt::asset_kind_desc* registered = context->asset_kinds().kind_for_open("a.ext_gated");
+	BOOST_REQUIRE(registered != nullptr);
+	registered->open(*context, res::tag{ "res://a.ext_gated" });
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACallbackThatThrows_ReleasesTheCountAndALaterUnloadIsNotRefused)
+{
+	callback_scope_fixture module(*this);
+	module.module_context.add_inspector("ext_throwing_type", [](scn::prefab_desc::prefab_comp_node&) -> bool {
+		throw std::runtime_error("callback failed");
+	});
+
+	scn::prefab_desc::prefab_comp_node node;
+	BOOST_CHECK_THROW(static_cast<void>(context->inspectors().invoke("ext_throwing_type", node)), std::runtime_error);
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACallbackOfTheEditor_IsNotCounted)
+{
+	callback_scope_fixture module(*this);
+	std::string seen = "unset";
+	auto own = context->inspectors().add("editor_own_type", [&](scn::prefab_desc::prefab_comp_node&) {
+		seen = context->module_unload_refusal();
+		return false;
+	});
+
+	scn::prefab_desc::prefab_comp_node node;
+	[[maybe_unused]] const auto drawn = context->inspectors().invoke("editor_own_type", node);
+	BOOST_CHECK(seen.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

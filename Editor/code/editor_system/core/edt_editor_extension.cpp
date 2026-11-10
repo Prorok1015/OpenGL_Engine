@@ -1,6 +1,34 @@
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/common/engine_assert.h>
+#include <functional>
 #include <string>
+#include <utility>
+
+namespace
+{
+	// The module's callback, counted while it runs: editor_context::module_unload_refusal refuses an unload meanwhile.
+	template<class R, class... Args>
+	std::function<R(Args...)> counted(edt::callback_gate& gate, std::function<R(Args...)> fn)
+	{
+		if (!fn) return fn;
+		return [&gate, fn = std::move(fn)](Args... args) -> R {
+			const edt::callback_gate::guard running(gate);
+			return fn(std::forward<Args>(args)...);
+		};
+	}
+
+	void count_action_callbacks(edt::callback_gate& gate, edt::action_desc& desc)
+	{
+		desc.disabled_reason = counted(gate, std::move(desc.disabled_reason));
+		desc.checked = counted(gate, std::move(desc.checked));
+		desc.dynamic_label = counted(gate, std::move(desc.dynamic_label));
+		desc.execute = counted(gate, std::move(desc.execute));
+		desc.execute_call = counted(gate, std::move(desc.execute_call));
+		desc.activate = counted(gate, std::move(desc.activate));
+		desc.enabled = counted(gate, std::move(desc.enabled));
+		desc.describe = counted(gate, std::move(desc.describe));
+	}
+}
 
 edt::editor_module_context::editor_module_context(editor_context& editor, registration_scope& scope)
 	: m_editor(editor)
@@ -17,7 +45,7 @@ void edt::editor_module_context::set_problems(std::string source, std::vector<pr
 
 void edt::editor_module_context::add_panel(panel_desc desc)
 {
-	m_scope.keep(m_editor.panels().add(std::move(desc)));
+	m_scope.keep(m_editor.panels().add(std::move(desc), m_scope.callbacks()));
 }
 
 void edt::editor_module_context::add_menu(std::string name)
@@ -27,26 +55,43 @@ void edt::editor_module_context::add_menu(std::string name)
 
 void edt::editor_module_context::add_action(action_desc desc)
 {
+	count_action_callbacks(m_scope.callbacks(), desc);
 	m_scope.keep(m_editor.actions().add(std::move(desc)));
 }
 
 void edt::editor_module_context::add_action(cmd::command_desc command, std::optional<action_ui> ui)
 {
+	callback_gate& gate = m_scope.callbacks();
+	command.category_of = counted(gate, std::move(command.category_of));
+	command.describe = counted(gate, std::move(command.describe));
+	command.invoke = counted(gate, std::move(command.invoke));
+	command.enabled = counted(gate, std::move(command.enabled));
+	command.disabled_reason = counted(gate, std::move(command.disabled_reason));
+	if (ui) {
+		ui->disabled_reason = counted(gate, std::move(ui->disabled_reason));
+		ui->checked = counted(gate, std::move(ui->checked));
+		ui->dynamic_label = counted(gate, std::move(ui->dynamic_label));
+		ui->enabled = counted(gate, std::move(ui->enabled));
+		ui->activate = counted(gate, std::move(ui->activate));
+	}
 	m_scope.keep(m_editor.actions().add(std::move(command), std::move(ui)));
 }
 
 void edt::editor_module_context::add_inspector(std::string type, inspector_renderer renderer)
 {
-	m_scope.keep(m_editor.inspectors().add(std::move(type), std::move(renderer)));
+	m_scope.keep(m_editor.inspectors().add(std::move(type), counted(m_scope.callbacks(), std::move(renderer))));
 }
 
 void edt::editor_module_context::add_asset_kind(asset_kind_desc desc)
 {
+	desc.open = counted(m_scope.callbacks(), std::move(desc.open));
+	desc.drop_into_scene = counted(m_scope.callbacks(), std::move(desc.drop_into_scene));
 	m_scope.keep(m_editor.asset_kinds().add(std::move(desc)));
 }
 
 void edt::editor_module_context::add_asset_preview(asset_preview_desc desc)
 {
+	desc.make_preview = counted(m_scope.callbacks(), std::move(desc.make_preview));
 	m_scope.keep(m_editor.asset_kinds().add_preview(std::move(desc)));
 }
 

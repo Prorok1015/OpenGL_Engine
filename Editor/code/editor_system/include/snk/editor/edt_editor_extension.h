@@ -20,7 +20,9 @@
 // must match, the module's minor must not exceed the host's. Raise the major for a change that breaks a module's
 // build or binary, the minor for an addition.
 // 1.1: editor_module_context::add_asset_preview (the preview document of an asset suffix, asset_preview_desc).
-#define SNK_EDITOR_API_VERSION 0x0001'0001u
+// 1.2: the module's callbacks are counted while they run (registration_scope::callbacks, #663): a reload asked from inside
+// one is refused. The inline editor_module_context::subscribe reads the new member of the scope, so a 1.2 module needs a 1.2 host.
+#define SNK_EDITOR_API_VERSION 0x0001'0002u
 
 namespace edt
 {
@@ -42,6 +44,8 @@ namespace edt
 		void add_action(cmd::command_desc command, std::optional<action_ui> ui);
 		void add_inspector(std::string type, inspector_renderer renderer);
 		void add_asset_kind(asset_kind_desc desc);
+		// The module's callbacks (panels, actions, inspector renderers, asset kinds, event handlers) are counted while they run:
+		// editor_context::module_unload_refusal refuses an unload meanwhile, so a callback cannot reload its own module.
 		// The document that previews the assets of a suffix (editor API 1.1, #589). Its make_preview runs on the editor's main
 		// thread when the preview opens; the document it makes must run its tasks on tasks() (not on jobs(), which the module
 		// does not own), and its close() and destructor run at unload after shutdown_editor(): they must not rely on
@@ -51,7 +55,12 @@ namespace edt
 		template<class... Args, class F>
 		void subscribe(signal<Args...>& event, F&& handler)
 		{
-			m_scope.keep(event.subscribe(std::function<void(Args...)>(std::forward<F>(handler))));
+			callback_gate& gate = m_scope.callbacks();
+			m_scope.keep(event.subscribe(std::function<void(Args...)>(
+				[&gate, fn = std::forward<F>(handler)](Args... args) mutable {
+					const callback_gate::guard running(gate);
+					fn(args...);
+				})));
 		}
 
 		// The owner of the jobs and task continuations the module starts: they are stopped when it unloads, and none
@@ -98,7 +107,8 @@ namespace edt
 	// callbacks over members that are already gone. The module's DLL must not touch edt:: from a static initializer.
 	// Still not tracked by the context: services() (the engine's own registries, which a module reaches through its
 	// game layer anyway) and the raw signals of events() (use editor_module_context::subscribe: a connection made
-	// by hand must be dropped in shutdown_editor).
+	// by hand must be dropped in shutdown_editor). The callbacks registered through the context are counted while they
+	// run (editor_context::module_unload_refusal); those made by hand are not.
 	class SNK_EDITOR_API editor_extension : public app::modules::module_interface
 	{
 	public:
