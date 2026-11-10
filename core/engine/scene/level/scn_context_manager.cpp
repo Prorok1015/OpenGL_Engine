@@ -366,7 +366,12 @@ void scn::context_manager::switch_level(scn::context_set& set, const res::tag& l
 		m_pending_level_reload = res::tag{};
 	}
 	// The old level's tasks may hold its registries: they stop before the worlds go, as when a set is destroyed.
+	const auto waited_from = std::chrono::steady_clock::now();
 	set.stop_tasks();
+	if (const auto waited = std::chrono::steady_clock::now() - waited_from; waited > std::chrono::milliseconds(100)) {
+		egLOG_WARN("scene", "set '{}': the tasks of the level left took {} ms to stop; a task that waits for the main thread "
+			"would hang the switch", set.name(), std::chrono::duration_cast<std::chrono::milliseconds>(waited).count());
+	}
 	set.clear();
 	set.load_from_desc(desc, systems_of(set), assembler_of(set), kind);
 	if (&set == m_level_set) watch_level(level_tag);

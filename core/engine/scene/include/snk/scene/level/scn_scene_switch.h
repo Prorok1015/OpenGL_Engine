@@ -28,6 +28,9 @@ namespace scn
 	// subscriber or observer, and from the main thread outside the frame. In the editor's Play only the worlds of Play
 	// are replaced, never the edited level. False, with a line in the log, when `world` belongs to no set.
 	// Data that must outlive the switch belongs in the module layer's storage: the worlds and the set's blackboard go.
+	// Before the worlds go the set's tasks are stopped and waited for (as by a set's destruction): a task of the level
+	// must not wait for the main thread (its own then_main, post_main, a resource the main thread finishes), or the
+	// switch hangs the frame. A request still loading when the game module is swapped is dropped with the set.
 	SNK_API bool request_level(const entt::registry& world, const res::tag& level);
 
 	// Where the last request of the set `world` belongs to stands.
