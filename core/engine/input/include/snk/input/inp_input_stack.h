@@ -81,7 +81,7 @@ namespace inp
 		bool captured = false;
 		std::string world;
 		// The layer that took the press; empty: any layer of `world` (what the mouse bindings of actions reach).
-		std::string layer;
+		std::string layer{};
 	};
 
 	// What of one action reaches the layers of a world that declare it (INPUT_STACK.md 3.2): the keyboard keys that no layer
