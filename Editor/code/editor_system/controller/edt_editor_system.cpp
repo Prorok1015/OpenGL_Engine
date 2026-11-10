@@ -60,6 +60,7 @@
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
+#include "edt_agent_model_guard.h"
 #include "edt_agent_server.h"
 #include "edt_agent_server_settings.h"
 #include "edt_agent_policy_model.h"
@@ -269,6 +270,7 @@ edt::editor_system::~editor_system()
 	m_agent_server.reset();
 	m_session_connections.clear();
 	m_agent_access.reset();
+	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
 	// The layer may outlive this system: no game layout drawn through it any more.
 	if (editor_layer) {
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
@@ -828,6 +830,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const auto user_roots = m_res.mount_roots("edt");
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
+		commands.set_agent_argument_check(make_agent_model_check(m_res));
+		m_agent_argument_checks = &commands;
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
 			approved_snapshot_for(user_dir / "settings", options.project_dir));
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.

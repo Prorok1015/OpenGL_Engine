@@ -323,6 +323,23 @@ namespace res
 			return *adapter_new;
 		}
 
+		// The extensions of `extension` that its adapter serves now, here or in a parent: empty when it is not registered
+		// (a build without the importer).
+		std::vector<std::string> registered_extensions(const extension& extension) const {
+			std::vector<std::string> out;
+			for (const auto& ext : extension.extensions) {
+				for (const resource_system* system = this; system; system = system->m_parent) {
+					const auto it = system->m_adapters.find(std::pair{ extension.resource_type, ext });
+					const auto info = it == system->m_adapters.end() ? system->m_adapter_infos.end() : system->m_adapter_infos.find(it->second);
+					if (info != system->m_adapter_infos.end() && info->second == extension) {
+						out.push_back(ext);
+						break;
+					}
+				}
+			}
+			return out;
+		}
+
 		void unregistrate_adapter(extension extension) {
 			for(auto& ext : extension.extensions) {
 				auto it = m_adapters.find(std::pair{ extension.resource_type, ext });

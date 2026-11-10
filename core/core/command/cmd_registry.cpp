@@ -141,6 +141,9 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 	if (m_gate && request.from.kind == origin_kind::agent) {
 		if (std::optional<result> refused = apply_policy(command->desc, request)) return std::move(*refused);
 	}
+	if (m_agent_argument_check && request.from.kind == origin_kind::agent) {
+		if (std::optional<result> refused = m_agent_argument_check(command->desc, request)) return std::move(*refused);
+	}
 	if (auto problem = json_schema::validate(command->desc.args_schema, request.args))
 		return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': {}", id, *problem));
 
@@ -159,6 +162,12 @@ void cmd::command_registry::set_policy_gate(std::shared_ptr<policy_gate> gate)
 	ASSERT_MSG(on_main_thread(), "command_registry::set_policy_gate: main thread only");
 	m_gate = std::move(gate);
 	if (!m_gate) m_tickets.clear();
+}
+
+void cmd::command_registry::set_agent_argument_check(agent_argument_check check)
+{
+	ASSERT_MSG(on_main_thread(), "command_registry::set_agent_argument_check: main thread only");
+	m_agent_argument_check = std::move(check);
 }
 
 void cmd::command_registry::set_clock(std::function<std::chrono::steady_clock::time_point()> now)
