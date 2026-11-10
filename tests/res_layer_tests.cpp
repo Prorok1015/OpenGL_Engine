@@ -377,7 +377,6 @@ BOOST_AUTO_TEST_CASE(a_wait_asked_for_after_stop_loading_is_refused_and_leaves_t
 	BOOST_REQUIRE(layer->wait_graph_nodes() == 0u);
 	{
 		const auto joined = res::when_all(*layer, in_flight);
-		pump();
 		BOOST_TEST(joined.has_error());
 		BOOST_TEST(joined.error_text().find("Load cancelled") != std::string::npos);
 		BOOST_TEST(layer->wait_graph_nodes() == 0u);
@@ -386,6 +385,27 @@ BOOST_AUTO_TEST_CASE(a_wait_asked_for_after_stop_loading_is_refused_and_leaves_t
 	gate.release();
 	pump();
 	BOOST_TEST(in_flight.is_ready());
+	BOOST_TEST(layer->wait_graph_nodes() == 0u);
+}
+
+// #675: blocks that have all finished settle a wait at once, so a stopped layer still joins them.
+BOOST_AUTO_TEST_CASE(a_wait_on_finished_blocks_after_stop_loading_is_ready)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag first{ "gate://first.txt" };
+	const res::tag second{ "gate://second.txt" };
+	gate.files[first] = test_util::to_bytes("first");
+	gate.files[second] = test_util::to_bytes("second");
+	const auto a = rs->require<res::text_resource>(first);
+	const auto b = rs->require<res::text_resource>(second);
+	pump();
+	BOOST_REQUIRE(a.is_ready());
+	BOOST_REQUIRE(b.is_ready());
+
+	layer->stop_loading();
+	const auto joined = res::when_all(*layer, a, b);
+	BOOST_TEST(joined.is_ready());
+	BOOST_TEST(!joined.has_error());
 	BOOST_TEST(layer->wait_graph_nodes() == 0u);
 }
 
