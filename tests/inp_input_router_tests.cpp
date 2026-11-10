@@ -1001,4 +1001,86 @@ BOOST_AUTO_TEST_CASE(UpdateStage_RoutesBeforeTheContextsRunAndRebuildsTheBinding
 	BOOST_TEST(stage_router.binding_count() == 0u); // consumed: the panels bind again next frame
 }
 
+// ---------------------------------------------------------------- inject (#624)
+
+BOOST_AUTO_TEST_CASE(Inject_WaitsForTheSetAndComesOutOnceInOrder)
+{
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "level", "b" }, "Fire", inp::action_edge::pressed);
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::released);
+	router.inject({ "other", "a" }, "Jump", inp::action_edge::pressed);
+
+	const auto taken = router.take_injected("level");
+	BOOST_REQUIRE_EQUAL(taken.size(), 3u);
+	BOOST_TEST(taken[0].world == "a");
+	BOOST_TEST(taken[0].action == "Jump");
+	BOOST_TEST((taken[0].edge == inp::action_edge::pressed));
+	BOOST_TEST(taken[1].world == "b");
+	BOOST_TEST((taken[2].edge == inp::action_edge::released));
+	BOOST_TEST(router.take_injected("level").empty());
+	BOOST_TEST(router.take_injected("other").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_WithoutAWorld_IsDropped)
+{
+	router.inject({ "level", "" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(router.take_injected("level").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Inject_TheQueuesOfSetsThatAreNotThereAreDropped_AndTheOthersStay)
+{
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "play", "a" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "play", "b" }, "Jump", inp::action_edge::released);
+	router.inject({ "typo", "a" }, "Jump", inp::action_edge::pressed);
+
+	const auto dropped = router.drop_injected_except({ "level" });
+	BOOST_REQUIRE_EQUAL(dropped.size(), 2u);
+	std::size_t edges = 0;
+	for (const auto& item : dropped) edges += item.edges;
+	BOOST_TEST(edges == 3u);
+	BOOST_TEST(router.take_injected("level").size() == 1u);
+	BOOST_TEST(router.take_injected("play").empty());
+	BOOST_TEST(router.drop_injected_except({ "level" }).empty());
+}
+
+BOOST_AUTO_TEST_CASE(Inject_AQueueThatIsNotTakenStopsAtTheLimit_ForEachSet)
+{
+	for (std::size_t i = 0; i < inp::input_router::injection_limit + 50; ++i) {
+		router.inject({ "level", "a" }, "Jump", i % 2 == 0 ? inp::action_edge::pressed : inp::action_edge::released);
+	}
+	router.inject({ "other", "a" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(router.take_injected("level").size() == inp::input_router::injection_limit);
+	BOOST_TEST(router.take_injected("other").size() == 1u);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(router.take_injected("level").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_ASetThatStartsAfreshDoesNotGetWhatWasQueuedBefore)
+{
+	router.inject({ "play", "a" }, "Jump", inp::action_edge::pressed);
+	router.forget_injected("play");
+	BOOST_TEST(router.take_injected("play").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Warnings_AreSaidOncePerSession_AndAgainAfterTheSetIsForgotten)
+{
+	BOOST_TEST(router.warn_once("play", "#key"));
+	BOOST_TEST(!router.warn_once("play", "#key"));
+	BOOST_TEST(router.warn_once("play", "#other"));
+	BOOST_TEST(router.warn_once("level", "#key"));
+
+	router.forget_set("play");
+	BOOST_TEST(router.warn_once("play", "#key"));
+	BOOST_TEST(!router.warn_once("level", "#key"));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_GoesWithTheSet)
+{
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	router.forget_set("level");
+	BOOST_TEST(router.take_injected("level").empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
