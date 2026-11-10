@@ -74,12 +74,17 @@ void edt::desc_problem_publisher::clear(problem_list& problems, std::string_view
 
 std::optional<edt::desc_target> edt::desc_problem_publisher::target_of(const problem& row) const
 {
+	// The same row can be in two scopes (a world file dropped and loaded with the level): the one that names a world
+	// leads further than the file.
+	std::optional<desc_target> found;
 	for (const auto& [scope, set] : m_scopes) {
 		for (std::size_t i = 0; i < set.items.size(); ++i) {
-			if (same(set.items[i], row)) return set.targets[i];
+			if (!same(set.items[i], row)) continue;
+			if (!set.targets[i].world.empty()) return set.targets[i];
+			if (!found) found = set.targets[i];
 		}
 	}
-	return std::nullopt;
+	return found;
 }
 
 void edt::desc_problem_publisher::publish(problem_list& problems)

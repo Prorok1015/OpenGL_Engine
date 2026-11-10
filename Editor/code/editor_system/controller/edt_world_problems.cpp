@@ -39,6 +39,14 @@ namespace {
 std::vector<edt::problem> edt::world_problem_publisher::collect(const scene_document& scene, const scn::context_set* level)
 {
 	std::vector<problem> out;
+	for (auto& entry : collect_by_world(scene, level)) out.push_back(std::move(entry.item));
+	return out;
+}
+
+std::vector<edt::world_problem_publisher::world_problem> edt::world_problem_publisher::collect_by_world(const scene_document& scene,
+	const scn::context_set* level)
+{
+	std::vector<world_problem> out;
 	if (!level) return out;
 	const std::string file(scene.level_tag.relative());
 	const std::size_t count = std::min(scene.world_names.size(), scene.world_descs.size());
@@ -68,7 +76,7 @@ std::vector<edt::problem> edt::world_problem_publisher::collect(const scene_docu
 					break;
 				}
 			}
-			out.push_back(std::move(item));
+			out.push_back({ std::move(item), scene.world_names[world] });
 		}
 	}
 	return out;
@@ -76,7 +84,13 @@ std::vector<edt::problem> edt::world_problem_publisher::collect(const scene_docu
 
 void edt::world_problem_publisher::refresh(problem_list& problems, const scene_document& scene, const scn::context_set* level)
 {
-	std::vector<problem> now = collect(scene, level);
+	std::vector<problem> now;
+	std::vector<std::string> worlds;
+	for (auto& entry : collect_by_world(scene, level)) {
+		now.push_back(std::move(entry.item));
+		worlds.push_back(std::move(entry.world));
+	}
+	m_worlds = std::move(worlds);
 	if (m_published && now.size() == m_last.size() && std::equal(now.begin(), now.end(), m_last.begin(), same)) return;
 	if (now.empty()) {
 		if (m_published) problems.clear(source);
@@ -86,4 +100,13 @@ void edt::world_problem_publisher::refresh(problem_list& problems, const scene_d
 		m_published = true;
 	}
 	m_last = std::move(now);
+}
+
+std::optional<std::string> edt::world_problem_publisher::world_of(const problem& row) const
+{
+	if (!m_published) return std::nullopt;
+	for (std::size_t i = 0; i < m_last.size() && i < m_worlds.size(); ++i) {
+		if (same(m_last[i], row)) return m_worlds[i];
+	}
+	return std::nullopt;
 }

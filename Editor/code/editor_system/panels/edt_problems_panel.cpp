@@ -184,7 +184,8 @@ void edt::problems_panel::on_render()
 					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
 				ImGui::PopStyleColor();
 				bool activate = m_on_activate && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-				activate = activate || (m_on_activate && ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false));
+				activate = activate || (m_on_activate && ImGui::IsItemFocused()
+					&& (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)));
 				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.tooltip.c_str());
 				if (ImGui::BeginPopupContextItem("##problem_menu")) {
 					if (m_on_activate && ImGui::MenuItem("Go to")) activate = true;

@@ -1746,15 +1746,13 @@ void edt::editor_system::go_to_problem(const std::string& source, const problem&
 		if (const auto target = m_desc_problems.target_of(item)) go_to(*target);
 		return;
 	}
-	if (source == world_problem_publisher::source && !item.notes.empty()) {
-		// The source "world" is refreshed on every change of the document, so its pointers are read against it now.
-		level_worlds worlds;
-		worlds.level = m_state.level_tag.string();
-		worlds.names = { item.file };
-		for (std::size_t i = 0; i < m_state.world_descs.size() && i < m_state.world_names.size(); ++i) {
-			worlds.worlds.push_back({ m_state.world_names[i], &m_state.world_descs[i].get_root(), {} });
-		}
-		go_to(locate_desc(worlds, item.file, item.notes.front()));
+	if (source == world_problem_publisher::source) {
+		const auto world = m_world_problems.world_of(item);
+		if (!world) return;
+		desc_target target;
+		target.level = m_state.level_tag.string();
+		target.world = *world;
+		go_to(target);
 	}
 }
 
@@ -1782,7 +1780,14 @@ void edt::editor_system::go_to(const desc_target& target)
 				return;
 			}
 		}
-		if (m_state.active_world_idx != static_cast<int>(index)) m_world_ctrl.select_world(static_cast<int>(index));
+		if (m_state.active_world_idx != static_cast<int>(index)) {
+			m_world_ctrl.select_world(static_cast<int>(index));
+			// A world the level set does not build is refused: the selection must not point into an inactive world.
+			if (m_state.active_world_idx != static_cast<int>(index)) {
+				egLOG_INFO("editor", "the world '{}' could not be made active", target.world);
+				return;
+			}
+		}
 		if (target.path.empty()) return;
 		selection value;
 		value.document = m_state.id();
@@ -1791,7 +1796,10 @@ void edt::editor_system::go_to(const desc_target& target)
 		m_context->selection().select(std::move(value));
 		return;
 	}
-	if (!target.resource.empty()) static_cast<void>(m_context->asset_kinds().open(*m_context, res::tag{ target.resource }));
+	if (target.resource.empty()) return;
+	if (!m_context->asset_kinds().open(*m_context, res::tag{ target.resource })) {
+		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
+	}
 }
 
 std::optional<std::string> edt::editor_system::load_in_progress() const
