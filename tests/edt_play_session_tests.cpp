@@ -573,6 +573,8 @@ BOOST_AUTO_TEST_CASE(a_level_switch_in_play_replaces_only_plays_worlds_and_the_g
 			{"__id":"00000000000000b1","name":"FarCam","components":{"camera":{"__type":"camera_desc","__version":2}}}]}]})");
 	const std::string before = level_json();
 	const bool dirty = state.is_dirty();
+	const std::uint64_t generation = state.generation();
+	const bool could_undo = state.next_undo_entry().has_value();
 	const auto cameras_of = [](entt::registry& reg) {
 		std::vector<edt::game_view::camera_entry> out;
 		// The game's cameras: the editor camera Play injects is not one.
@@ -619,10 +621,13 @@ BOOST_AUTO_TEST_CASE(a_level_switch_in_play_replaces_only_plays_worlds_and_the_g
 	BOOST_TEST((level.tag() == state.level_tag));
 	BOOST_TEST(level_json() == before);
 	BOOST_TEST(state.is_dirty() == dirty);
+	BOOST_TEST(state.generation() == generation);
+	BOOST_TEST(state.next_undo_entry().has_value() == could_undo);
 
 	play.stop();
 	BOOST_TEST(play_set() == nullptr);
 	BOOST_TEST(level.active());
+	BOOST_TEST(state.generation() == generation);
 	BOOST_TEST(level.has("w0"));
 	BOOST_TEST(level_json() == before);
 	contexts().set_on_level_switched(nullptr);

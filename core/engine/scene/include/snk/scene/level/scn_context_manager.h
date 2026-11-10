@@ -83,9 +83,9 @@ namespace scn
 		// update(), before any set runs; the kind of its worlds stays (Play's worlds stay kind::play). True while a
 		// request of any set still loads (a module reload waits for it, HOT_RELOAD_PLAY.md 5).
 		bool level_switch_pending() const;
-		// False: a request on the set "level" fails (the editor: that set is the edited level). Kept across
+		// False: request_level refuses the set "level" at once (the editor: that set is the edited level). Kept across
 		// set_game_layer.
-		void set_level_set_switchable(bool switchable) { m_level_set_switchable = switchable; }
+		void set_level_set_switchable(bool switchable);
 		// After a set was rebuilt by a request (the editor rebinds Play's camera and input to the new worlds).
 		void set_on_level_switched(std::function<void(scn::context_set&)> cb) { m_on_level_switched = std::move(cb); }
 

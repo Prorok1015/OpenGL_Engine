@@ -5,6 +5,8 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_scene_switch.h>
+#include <snk/scene/scn_event_subscriptions.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
 #include <chrono>
 #include <optional>
@@ -29,12 +31,23 @@ struct orders
 {
 	std::optional<res::tag> from_system;
 	int counted = 0;
+	// A task the system starts on its set, and whether its body ran.
+	ds::task_system* tasks = nullptr;
+	bool start_task = false;
+	bool task_ran = false;
+	ds::task_handle<void> task;
 };
 orders* g_orders = nullptr;
 
 void sys_request(entt::registry& reg)
 {
-	if (g_orders && g_orders->from_system) scn::request_level(reg, *std::exchange(g_orders->from_system, std::nullopt));
+	if (!g_orders) return;
+	if (std::exchange(g_orders->start_task, false)) {
+		// A task of game code that would read the world when it runs.
+		g_orders->task = g_orders->tasks->run(ds::lane::compute, ds::task_desc{ .name = "level_a.task" }, scn::context_set::current()->tasks(),
+			[](ds::task_context&) { g_orders->task_ran = true; });
+	}
+	if (g_orders->from_system) scn::request_level(reg, *std::exchange(g_orders->from_system, std::nullopt));
 }
 
 void sys_count(entt::registry&)
@@ -45,10 +58,11 @@ void sys_count(entt::registry&)
 void sys_ping(ecs::event_writer<ping>& out) { out.emit({ 1 }); }
 
 constexpr const char* LEVEL_A = R"({"__type":"level_desc","name":"a","worlds":[
-	{"__type":"world_desc","name":"a0","systems":["request","ping"],"children":{"n":{"components":{"stat":{"__type":"stat_desc","hp":1}}}}},
+	{"__type":"world_desc","name":"a0","systems":["request","ping"],"children":{"n":{"components":{"stat":{"__type":"stat_desc","hp":1}}},
+		"m":{"components":{"mesh":{"__type":"mesh_node_desc","material":"memory://t/lv_a_mat.desc"}}}}},
 	{"__type":"world_desc","name":"a1","systems":[]}]})";
 constexpr const char* LEVEL_B = R"({"__type":"level_desc","name":"b","worlds":[
-	{"__type":"world_desc","name":"b0","systems":["count","request"]}]})";
+	{"__type":"world_desc","name":"b0","systems":["count","request"],"children":{"s":{"components":{"stat":{"__type":"stat_desc","hp":2}}}}}]})";
 constexpr const char* LEVEL_C = R"({"__type":"level_desc","name":"c","worlds":[
 	{"__type":"world_desc","name":"c0","systems":[]}]})";
 
@@ -59,10 +73,12 @@ struct switch_fixture : test_util::scene_env
 		, mgr(*rs, *assembler, sf, hot)
 	{
 		g_orders = &order;
+		order.tasks = &tasks;
 		sf.register_system<&sys_request>("request", { .phase = ecs::phase::update });
 		sf.register_system<&sys_count>("count", { .phase = ecs::phase::update });
 		sf.register_system<&sys_ping>("ping", { .phase = ecs::phase::update });
 		mgr.add_event<ping>();
+		put("lv_a_mat.desc", R"({"__type":"material_desc","queue":"opaque"})");
 		level_a = put("lv_a.desc", LEVEL_A);
 		level_b = put("lv_b.desc", LEVEL_B);
 		level_c = put("lv_c.desc", LEVEL_C);
@@ -178,12 +194,56 @@ BOOST_AUTO_TEST_CASE(ALevelThatDoesNotLoad_KeepsTheCurrentOne_AndSaysItFailed)
 
 BOOST_AUTO_TEST_CASE(TheResourcesOfTheLevelLeft_AreReleased)
 {
+	pump();
 	BOOST_REQUIRE(live("lv_a.desc"));
+	BOOST_REQUIRE(live("lv_a_mat.desc")); // held by the mesh's material component in the world
 	BOOST_REQUIRE(scn::request_level(first_world(), level_b));
-	for (int i = 0; i < 3; ++i) frame();
+	// Past the grace frames of the render's material instance cache (8), which a headless test does not have.
+	for (int i = 0; i < 12; ++i) frame();
 	BOOST_REQUIRE((worlds() == names{ "b0" }));
 	BOOST_TEST(!live("lv_a.desc"));
+	BOOST_TEST(!live("lv_a_mat.desc"));
 	BOOST_TEST(live("lv_b.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(ATaskTheOldLevelStarted_IsStoppedBeforeItsWorldsGo)
+{
+	const auto held_b = require_loaded<scn::level_desc>(level_b); // ready at once: the switch comes before any pump
+	order.start_task = true;
+	order.from_system = level_b;
+	mgr.update(one_frame); // the task is queued, B is ready
+	BOOST_REQUIRE(order.task.valid());
+	mgr.update(one_frame); // the switch
+	BOOST_REQUIRE((worlds() == names{ "b0" }));
+	pump();
+	BOOST_TEST(!order.task_ran);
+}
+
+BOOST_AUTO_TEST_CASE(ARequestMadeWhileTheNewWorldsAreBuilt_IsKeptForTheNextFrame)
+{
+	scn::event_subscriptions observers;
+	mgr.level_set().set_subscriptions(&observers);
+	std::optional<res::tag> next = level_c;
+	auto observer = observers.observe<test_util::stat_component>({}, scn::observed::construct, [&](ecs::bus_context& ctx, entt::entity) {
+		if (next && ctx.world() == "b0") scn::request_level(ctx.registry(), *std::exchange(next, std::nullopt));
+	});
+	std::vector<std::string> switched;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view message) {
+		if (message.find("switched to the level") != std::string_view::npos) switched.emplace_back(message);
+	});
+	BOOST_REQUIRE(scn::request_level(first_world(), level_b));
+	frame();
+	frame();
+	BOOST_REQUIRE((worlds() == names{ "b0" }));
+	BOOST_TEST((mgr.level_set().tag() == level_b));
+	BOOST_REQUIRE(switched.size() == 1u);
+	BOOST_TEST(switched.front().find("lv_b.desc") != std::string::npos); // the level built, not the one asked for during it
+	BOOST_TEST((scn::level_switch(mgr.level_set().get("b0").state()).level == level_c));
+	frame();
+	frame();
+	BOOST_TEST((worlds() == names{ "c0" }));
+	mgr.level_set().clear();
+	mgr.level_set().set_subscriptions(nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(ASetOfPlayWorlds_KeepsTheirKind_AndTheLevelIsNotTouched)
@@ -199,14 +259,28 @@ BOOST_AUTO_TEST_CASE(ASetOfPlayWorlds_KeepsTheirKind_AndTheLevelIsNotTouched)
 	BOOST_TEST((mgr.level_set().tag() == level_a));
 }
 
-BOOST_AUTO_TEST_CASE(TheLevelSetCanBeClosedToRequests_AsInTheEditor)
+BOOST_AUTO_TEST_CASE(TheLevelSetCanBeClosedToRequests_AsInTheEditor_ARequestIsRefusedAtOnce)
 {
 	mgr.set_level_set_switchable(false);
-	BOOST_REQUIRE(scn::request_level(first_world(), level_b));
-	frame();
-	frame();
+	std::size_t warnings = 0;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && message.find("takes no level switch") != std::string_view::npos) ++warnings;
+	});
+	// A system asking every frame: refused each time, said once, nothing ever waits for it.
+	for (int i = 0; i < 3; ++i) {
+		BOOST_TEST(!scn::request_level(first_world(), level_b));
+		frame();
+		BOOST_TEST(!mgr.level_switch_pending());
+	}
+	BOOST_TEST(warnings == 1u);
 	BOOST_TEST((worlds() == names{ "a0", "a1" }));
-	BOOST_TEST((scn::level_switch(first_world()).status == scn::level_switch_status::failed));
+	BOOST_TEST((scn::level_switch(first_world()).status == scn::level_switch_status::idle));
+
+	mgr.set_level_set_switchable(true);
+	BOOST_REQUIRE(scn::request_level(first_world(), level_c));
+	frame();
+	frame();
+	BOOST_TEST((worlds() == names{ "c0" }));
 }
 
 BOOST_AUTO_TEST_CASE(ALoadOfTheLevel_DropsARequestOfTheLevelBefore)

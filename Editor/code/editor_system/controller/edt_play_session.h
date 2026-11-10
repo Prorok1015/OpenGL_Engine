@@ -130,7 +130,7 @@ namespace edt
 		std::string capture_for_reload();
 		// The game replaced the worlds of "play" with another level (scn::request_level, #564): the editor camera goes
 		// into the new world that has the active world's name, the Game view and the viewport drop their picks
-		// (forget_runtime_entities). The document is not touched.
+		// (forget_runtime_entities), the set's injected input and stack commands go. The document is not touched.
 		void on_level_switched();
 		// The reload call returned: a snapshot no swap used (the build was refused before the swap) is dropped.
 		void end_reload()

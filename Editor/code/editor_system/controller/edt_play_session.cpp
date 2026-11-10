@@ -765,6 +765,11 @@ void edt::play_session::on_level_switched()
 	m_camera_world.clear();
 	// New registries may reuse the old ones' addresses and entity ids: the Game view's and the viewport's picks go.
 	if (m_options.forget_runtime_entities) m_options.forget_runtime_entities();
+	// What was injected into the old worlds or asked of their stack is not for the new ones.
+	if (m_options.input) {
+		m_options.input->forget_injected(k_play_set);
+		m_options.input->forget_commands(k_play_set);
+	}
 	follow_active_world();
 	egLOG_INFO("play", "Play switched to another level; the edited level is unchanged");
 }

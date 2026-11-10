@@ -148,6 +148,7 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	replacement->set_time_scale(m_level_set->time_scale());
 	replacement->set_seed(m_level_set->seed());
 	replacement->set_active(m_level_set->active());
+	replacement->level_switch().closed = !m_level_set_switchable;
 	*it = std::move(replacement);
 	m_level_set = it->get();
 	m_game_layer = layer;
@@ -254,7 +255,10 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 	set.clear();
 	m_pending_level_reload = res::tag{};
 	// A request of the level loaded before is not for this one.
-	set.level_switch() = {};
+	auto& slot = set.level_switch();
+	slot.status = level_switch_status::idle;
+	slot.level = {};
+	slot.loading = {};
 	set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
 	watch_level(level_tag);
 	return true;
@@ -275,6 +279,18 @@ void scn::context_manager::watch_level(const res::tag& level_tag)
 		}
 		reload_level(changed_tag);
 	});
+}
+
+void scn::context_manager::set_level_set_switchable(bool switchable)
+{
+	m_level_set_switchable = switchable;
+	auto& slot = m_level_set->level_switch();
+	slot.closed = !switchable;
+	slot.closed_said = false;
+	if (!switchable && slot.status == level_switch_status::loading) {
+		slot.status = level_switch_status::idle;
+		slot.loading = {};
+	}
 }
 
 bool scn::context_manager::level_switch_pending() const
@@ -307,10 +323,6 @@ void scn::context_manager::apply_level_switches()
 		if (std::ranges::none_of(m_sets, [set](const auto& owned) { return owned.get() == set; })) continue;
 		auto& slot = set->level_switch();
 		if (slot.status != level_switch_status::loading) continue;
-		if (set == m_level_set && !m_level_set_switchable) {
-			fail(*set, slot, "the set \"level\" is the edited level here");
-			continue;
-		}
 		if (!slot.loading.is_valid()) slot.loading = resources_of(*set).require<scn::level_desc>(slot.level);
 		if (slot.loading.has_error()) {
 			fail(*set, slot, "the level desc did not load");
@@ -330,7 +342,9 @@ void scn::context_manager::apply_level_switches()
 		if (!worlds_ready) continue;
 		const res::res_handle<scn::level_desc> desc = std::exchange(slot.loading, res::res_handle<scn::level_desc>{});
 		slot.status = level_switch_status::idle;
-		switch_level(*set, slot.level, *desc);
+		// A copy: a spawner or observer of the new worlds may ask for yet another level, which rewrites the slot.
+		const res::tag level = slot.level;
+		switch_level(*set, level, *desc);
 		if (m_on_level_switched) m_on_level_switched(*set);
 	}
 }
@@ -351,6 +365,8 @@ void scn::context_manager::switch_level(scn::context_set& set, const res::tag& l
 		}
 		m_pending_level_reload = res::tag{};
 	}
+	// The old level's tasks may hold its registries: they stop before the worlds go, as when a set is destroyed.
+	set.stop_tasks();
 	set.clear();
 	set.load_from_desc(desc, systems_of(set), assembler_of(set), kind);
 	if (&set == m_level_set) watch_level(level_tag);

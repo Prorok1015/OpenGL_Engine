@@ -17,6 +17,10 @@ namespace scn
 			level_switch_status status = level_switch_status::idle;
 			res::tag level;
 			res::res_handle<level_desc> loading;
+			// The set takes no requests (the editor's set "level", the edited document): request_level refuses at
+			// once, saying so the first time.
+			bool closed = false;
+			bool closed_said = false;
 		};
 
 		// In the ctx of every world of a set, refreshed before each frame of the set: request_level from outside a set's
