@@ -26,9 +26,11 @@ void rnd::texture_cubemap_desc::deserialize(desc::desc_system& system, const boo
 				cube_faces.back = system.get_field_desc<res::picture_resource>(*this, *f);
 		}
 	}
-	// Refresh inherited handles too: the parent desc can remain cached across a picture reload.
+	// Refresh inherited handles too: the parent desc can remain cached across a picture reload. A failed or refused one
+	// (#697: no tag) is left as it is.
 	auto refresh = [&](res::res_handle<res::picture_resource>& image) {
-		if (image.is_valid()) image = system.get_field_desc<res::picture_resource>(*this, json::value_from(image.get_tag()));
+		if (image.is_valid() && !image.has_error() && image.get_tag().is_valid())
+			image = system.get_field_desc<res::picture_resource>(*this, json::value_from(image.get_tag()));
 	};
 	if (mode == SOURCE_TYPE::SINGLE_FILE) {
 		refresh(single_image);
@@ -45,15 +47,15 @@ void rnd::texture_cubemap_desc::serialize(json::object& resource) const
 	if (mode == SOURCE_TYPE::SINGLE_FILE) {
 		single_image.wait();
 		if (single_image.is_ready())
-			resource["data"] = json::value_from(single_image->get_tag());
+			resource["data"] = json::value_from(single_image.get_tag());
 	} else {
 		json::object data_obj;
-		data_obj["right"] = json::value_from(cube_faces.right->get_tag());
-		data_obj["left"] = json::value_from(cube_faces.left->get_tag());
-		data_obj["top"] = json::value_from(cube_faces.top->get_tag());
-		data_obj["bottom"] = json::value_from(cube_faces.bottom->get_tag());
-		data_obj["front"] = json::value_from(cube_faces.front->get_tag());
-		data_obj["back"] = json::value_from(cube_faces.back->get_tag());
+		data_obj["right"] = json::value_from(cube_faces.right.get_tag());
+		data_obj["left"] = json::value_from(cube_faces.left.get_tag());
+		data_obj["top"] = json::value_from(cube_faces.top.get_tag());
+		data_obj["bottom"] = json::value_from(cube_faces.bottom.get_tag());
+		data_obj["front"] = json::value_from(cube_faces.front.get_tag());
+		data_obj["back"] = json::value_from(cube_faces.back.get_tag());
 		resource["data"] = std::move(data_obj);
 	}
 }
