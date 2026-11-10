@@ -4,6 +4,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/res_system.h>
+#include <snk/resource/res_tag.h>
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <boost/json/parse.hpp>
 #include <cstddef>
@@ -55,6 +56,15 @@ BOOST_AUTO_TEST_CASE(TheExtension_IsTakenAsTheResolverWould_WithoutCaseAndTraili
 	BOOST_TEST(edt::model_check_extension("res://models.glb/x") == "");
 	BOOST_TEST(edt::model_check_extension("res://models/glb") == "");
 	BOOST_TEST(edt::model_check_extension("") == "");
+	// res::tag turns every `\` into `/` before it reads the protocol: `res\models\x.glb` is res://models/x.glb (#680 review).
+	BOOST_TEST(edt::model_check_extension("res\\models\\x.glb") == "glb");
+	BOOST_TEST(edt::model_check_extension("res:\\models\\x.fbx") == "fbx");
+	BOOST_TEST(edt::model_check_extension("res\\models\\x.glb\\") == "");
+	for (const char* text : { "res\\models\\x.glb", "res:\\m\\x.fbx", "res://m/x.gltf", "m\\x.obj", "res\\a.glb\\b.desc", "x.glb" }) {
+		BOOST_TEST_CONTEXT(text) {
+			BOOST_TEST(edt::model_check_extension(text) == std::string(res::tag{ text }.extension()));
+		}
+	}
 	// The resolver decodes no percent escapes: "%2Eglb" is a name without that extension, as for the resolver.
 	BOOST_TEST(edt::model_check_extension("res://models/x%2Eglb") == "");
 }
@@ -88,6 +98,7 @@ BOOST_AUTO_TEST_CASE(TheCheck_FollowsTheRegisteredModelAdapter_AndLetsImportMode
 	BOOST_TEST(refused->code == cmd::codes::denied);
 	BOOST_TEST(refused->error.find("/fields/material") != std::string::npos);
 	BOOST_TEST(refused->error.find("file.import_model") != std::string::npos);
+	BOOST_TEST(check(command_named("component.add"), agent_call(R"json({"fields":{"material":"res\\models\\agent_named.glb"}})json")).has_value());
 	BOOST_TEST(!check(command_named("file.import_model"), agent_call(R"json({"path":"/home/me/robot.glb"})json")));
 	BOOST_TEST(!check(command_named("component.add"), agent_call(R"json({"fields":{"material":"res://materials/a.desc"}})json")));
 
