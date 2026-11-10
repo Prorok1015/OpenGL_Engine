@@ -118,6 +118,16 @@ CFG_VAR_EXT_PATH(cfg_edt_data_path);
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
 
 namespace {
+	template<class T>
+	std::vector<res::diagnostic> diagnostics_of(const res::res_handle<T>& handle)
+	{
+		res::diagnostics_collector collector;
+		handle.collect_into(collector);
+		return collector.items();
+	}
+}
+
+namespace {
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
 	{
@@ -303,6 +313,7 @@ edt::editor_system::~editor_system()
 	}
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
+		ctx_mgr->set_on_reload_result(nullptr);
 	}
 }
 
@@ -521,6 +532,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.new_level = [this] {
 		if (m_play && m_play->active()) m_play->stop();
 		cancel_level_settle();
+		m_desc_problems.clear(m_context->problems(), "level");
 		m_level_ctrl.new_level();
 	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
@@ -1177,6 +1189,12 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
+	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
+	m_world_problem_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
+		if (id == document_id{} || id != m_desc_prefab_document) return;
+		m_desc_prefab_document = document_id{};
+		m_desc_problems.clear(m_context->problems(), "prefab");
+	}));
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_game_view_panel->set_input_blocked([this] {
 		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
@@ -1345,6 +1363,10 @@ void edt::editor_system::wire_controller_callbacks()
 	};
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
+		// Also a reload that failed: its errors stay in Problems until a clean one replaces them.
+		ctx_mgr->set_on_reload_result([this](const res::tag&, const res::res_handle<scn::level_desc>& handle) {
+			m_desc_problems.report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag);
+		});
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
 			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
@@ -1629,6 +1651,8 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	}
 	if (m_loading_level_handle.has_error()) {
 		scn::report_level_failed(m_loading_level_tag, m_loading_level_handle);
+		m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
+			m_loading_level_tag);
 		if (loaded_out) *loaded_out = false;
 		abandon_level_load();
 		return false;
@@ -1670,6 +1694,9 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	m_state.editor_tag = m_loading_editor_tag;
 	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
 	if (loaded_out) *loaded_out = loaded;
+	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
+	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
+		m_loading_level_tag);
 	if (!loaded) {
 		m_state.level_tag = level_tag_before;
 		m_state.editor_tag = editor_tag_before;
@@ -1731,6 +1758,7 @@ bool edt::editor_system::poll_pending_desc()
 	if (!m_pending_desc_handle.is_valid()) return false;
 	if (m_pending_desc_handle.has_error()) {
 		egLOG_ERROR("Editor/Drop", "Failed to load desc '{}'", m_pending_desc_tag.view());
+		m_desc_problems.report(m_context->problems(), "drop", diagnostics_of(m_pending_desc_handle));
 		m_pending_desc_handle = {};
 		return false;
 	}
@@ -1761,6 +1789,7 @@ bool edt::editor_system::poll_pending_desc()
 		ImGui::EndPopup();
 	}
 
+	m_desc_problems.report(m_context->problems(), "drop", diagnostics_of(m_pending_desc_handle));
 	m_level_ctrl.add_desc_to_scene(m_pending_desc_handle, m_pending_desc_key);
 	m_pending_desc_handle = {};
 	return false;
@@ -1771,6 +1800,10 @@ bool edt::editor_system::poll_pending_desc()
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
+	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
+	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
+	m_desc_problems.report(m_context->problems(), "prefab", diagnostics_of(loaded));
+	m_desc_prefab_document = prefab.is_open() ? prefab.id() : document_id{};
 	if (prefab.is_open()) {
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);

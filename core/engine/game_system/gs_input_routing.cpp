@@ -51,8 +51,9 @@ namespace
 		return keys;
 	}
 
-	// The layer every world has: what its UI laid out last frame plus the level's defaults.
-	inp::stack_layer_desc base_layer(const entry& e)
+	// The layer every world has: what its UI laid out last frame plus the level's defaults. `declare_all`: it declares every
+	// action of the map when the level lists none (the default reader, INPUT_STACK.md 6).
+	inp::stack_layer_desc base_layer(const entry& e, bool declare_all)
 	{
 		inp::stack_layer_desc layer;
 		layer.name = "world";
@@ -70,6 +71,7 @@ namespace
 			layer.actions = defaults->actions;
 			layer.listen = defaults->listen;
 		}
+		layer.all_actions = declare_all && layer.actions.empty();
 		return layer;
 	}
 
@@ -87,38 +89,94 @@ namespace
 		return warned.insert(std::move(key)).second;
 	}
 
-	// Until the action masks of #624 one world of a set reads the actions: the first one in the level file that runs
-	// inp::update_actions (INPUT_STACK.md M6). It keeps the map while it is not bound, so it can let its held actions go
-	// and a Step without the binding stays frozen. A set whose other worlds run the system too, and a set that gets the
-	// input while none of its worlds runs it, are warned about once.
+	// A world declares its actions itself when its level lists them (`input_stack.actions`); the others get the default.
+	bool declares_actions(const scn::world_context& context)
+	{
+		const auto& defaults = context.input_stack();
+		return defaults && !defaults->actions.empty();
+	}
+
+	int base_order(const scn::world_context& context)
+	{
+		const auto& defaults = context.input_stack();
+		return defaults && defaults->order ? *defaults->order : context.input_layer();
+	}
+
+	bool above(const scn::world_context& a, const scn::world_context& b)
+	{
+		if (base_order(a) != base_order(b)) return base_order(a) > base_order(b);
+		return a.desc_index() < b.desc_index();
+	}
+
+	// INPUT_STACK.md 6: what the actions do to the worlds is said once per set, so a level that loses keys is not silent.
+	void warn_about_declarations(const std::vector<entry>& entries, std::string_view set, const entry* reader)
+	{
+		const entry* lost = nullptr;
+		for (const auto& e : entries) {
+			if (e.context->kind() == scn::context_kind::preview) continue;
+			const bool lists = lists_update_actions(*e.context);
+			if (declares_actions(*e.context) && !lists && warn_once(std::string{ set } + "#declared:" + std::string{ e.context->get_name() })) {
+				egLOG_WARN("input", "world '{}' of '{}' declares actions in its input_stack but does not list {}: its layer takes their keys and nobody reads them",
+					e.context->get_name(), set, k_update_actions);
+			}
+			if (reader && &e != reader && above(*reader->context, *e.context)) lost = &e;
+			if (!reader && lists && !declares_actions(*e.context) && warn_once(std::string{ set } + "#default-lost:" + std::string{ e.context->get_name() })) {
+				egLOG_WARN("input", "world '{}' of '{}' lists {} but gets no actions: another world declares its own, which replaces the default",
+					e.context->get_name(), set, k_update_actions);
+			}
+		}
+		if (lost && warn_once(std::string{ set } + "#below")) {
+			egLOG_WARN("input", "set '{}': world '{}' reads every action by default and takes their keys; the worlds below it, '{}' among them, no longer get those raw keys "
+				"(declare the actions in a world's input_stack to say who reads which)", set, reader->context->get_name(), lost->context->get_name());
+		}
+	}
+
+	// A world reads the actions its layers declare (INPUT_STACK.md 3.2). While no world of the set lists any of its own the
+	// default serves (M6): the first world in the level file that runs inp::update_actions declares all of them. It keeps the
+	// map while it is not bound, so it can let its held actions go and a Step without the binding stays frozen. A set
+	// whose other such worlds run the system too, and a set that gets the input while none of its worlds runs it, are
+	// warned about once.
 	const entry* actions_reader(const std::vector<entry>& entries, std::string_view set, bool have_actions)
 	{
 		const entry* first = nullptr;
 		const entry* fed = nullptr;
 		std::size_t readers = 0;
+		std::size_t declarers = 0;
 		for (const auto& e : entries) {
 			// A prefab preview shows content, it plays no game.
 			if (e.context->kind() == scn::context_kind::preview) continue;
 			if (e.routed.focused && !fed) fed = &e;
 			if (!lists_update_actions(*e.context)) continue;
+			if (declares_actions(*e.context)) {
+				++declarers;
+				continue;
+			}
 			++readers;
 			if (!first || e.context->desc_index() < first->context->desc_index()) first = &e;
 		}
+		// The default is for levels that declare nothing; once a world declares its actions it replaces the default.
+		if (declarers) first = nullptr;
 		if (!have_actions) return first;
-		if (!first && fed && warn_once(std::string{ set } + "#system")) {
+		warn_about_declarations(entries, set, first);
+		if (!first && !declarers && fed && warn_once(std::string{ set } + "#system")) {
 			egLOG_WARN("input", "world '{}' of '{}' gets the input, but no world of the set lists {}: game actions do nothing there",
 				fed->context->get_name(), set, k_update_actions);
 		}
 		if (readers > 1 && warn_once(std::string{ set } + "#readers")) {
-			egLOG_WARN("input", "set '{}': {} worlds list {}; only '{}', the first in the level, gets the actions (until #624)",
-				set, readers, k_update_actions, first->context->get_name());
+			egLOG_WARN("input", "set '{}': {} worlds list {} and declare no actions; only '{}', the first in the level, gets them "
+				"(declare actions in a world's input_stack to give them to another)", set, readers, k_update_actions, first->context->get_name());
 		}
 		return first;
 	}
 
+	bool reads_actions(const entry& e, const entry* reader)
+	{
+		return &e == reader || (declares_actions(*e.context) && lists_update_actions(*e.context));
+	}
+
 	// Mouse and keyboard parts of the full state are given out separately: a context may take the
 	// keyboard of a focused text field while the mouse belongs to someone else. The cursor position goes to everyone.
-	void write(const entry& e, const inp::world_input* in, const inp::input_bound& bound, std::shared_ptr<const inp::action_map> actions)
+	void write(const entry& e, inp::world_input* in, const inp::input_bound& bound, std::shared_ptr<const inp::action_map> actions)
 	{
 		inp::input_state state = e.routed.state;
 		const inp::input_state neutral = inp::input_router::neutral(state);
@@ -140,6 +198,7 @@ namespace
 		ctx.insert_or_assign(inp::input_focus{ in && (in->mouse_focus || in->keyboard_focus) });
 		ctx.insert_or_assign(bound);
 		ctx.insert_or_assign(inp::action_map_ref{ std::move(actions) });
+		ctx.insert_or_assign(inp::action_input{ in ? std::move(in->actions) : std::vector<inp::action_reach>{} });
 	}
 
 	void route_set(inp::input_router& router, scn::context_set& set, const std::shared_ptr<const inp::action_map>& actions)
@@ -156,37 +215,41 @@ namespace
 			entries.push_back(std::move(e));
 		});
 
+		const std::string_view set_name = set.name();
+		// Actions exist in Play and Step (INPUT_STACK.md 3.4): an Edit set keeps every raw key.
+		static const std::shared_ptr<const inp::action_map> no_actions;
+		const std::shared_ptr<const inp::action_map>& live_actions = set.mode() == ecs::run_mode::edit ? no_actions : actions;
+		const entry* reader = actions_reader(entries, set_name, live_actions != nullptr);
+
 		inp::input_stack& stack = router.stack(set.name());
 		std::vector<std::string> present;
 		std::vector<std::string> fed;
 		for (const auto& e : entries) {
 			const std::string name{ e.context->get_name() };
-			stack.put(name, e.context->desc_index(), base_layer(e));
+			stack.put(name, e.context->desc_index(), base_layer(e, &e == reader));
 			present.push_back(name);
 			// Contexts the router handed the full state to; the rest stay neutral as before.
 			if (e.routed.focused) fed.push_back(name);
 		}
 		stack.retain_worlds(present);
 
-		const std::string_view set_name = set.name();
 		inp::input_router::mouse_hold hold = router.hold(set_name);
 		if (!fed.empty() && button_down && !hold.active) {
 			// The press (or the first sight of an already pressed button) decides who owns the drag.
-			const std::optional<std::string> taker = inp::mouse_taker(stack, fed, cursor);
-			hold = { true, taker.has_value(), taker ? target_of(set_name, *taker) : inp::input_target{} };
+			const inp::stack_entry* taker = inp::mouse_taker_entry(stack, fed, cursor);
+			hold = { true, taker != nullptr, taker ? target_of(set_name, taker->world) : inp::input_target{}, taker ? taker->layer.name : std::string{} };
 			router.set_hold(set_name, hold);
 		}
 
 		// An owner that is gone (destroyed, or no longer fed by the target) leaves the held
 		// button with nobody until it is released: it must not fall through to the others.
-		const inp::drag_hold drag{ hold.active, hold.captured, hold.owner.set == set_name ? hold.owner.context : std::string{} };
-		const inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, drag);
+		const inp::drag_hold drag{ hold.active, hold.captured, hold.owner.set == set_name ? hold.owner.context : std::string{}, hold.layer };
+		inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, drag, live_actions.get());
 
-		const entry* reader = actions_reader(entries, set_name, actions != nullptr);
 		const bool stepping = set.mode() == ecs::run_mode::step;
 		for (const auto& e : entries) {
 			const inp::input_bound bound{ e.routed.focused, stepping && !e.routed.focused };
-			write(e, resolved.find(e.context->get_name()), bound, &e == reader ? actions : std::shared_ptr<const inp::action_map>{});
+			write(e, resolved.find(e.context->get_name()), bound, reads_actions(e, reader) ? live_actions : no_actions);
 		}
 	}
 }

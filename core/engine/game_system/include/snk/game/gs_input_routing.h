@@ -21,10 +21,13 @@ namespace gs
 	// Nothing taken: every world of the target gets the full state.
 	SNK_API void route_input(inp::input_router& router, scn::context_manager& contexts);
 
-	// The same, and the game actions (WORLD_BUS.md 4.2): every world gets `inp::input_bound` (fed this frame; frozen when
-	// not fed while its set steps) and `inp::action_map_ref`, which holds `actions` only for the first world of its set by
-	// `desc_index` that lists inp::update_actions, bound or not (INPUT_STACK.md M6, until #624). Null `actions`: no world
-	// reads actions.
+	// The same, and the game actions (WORLD_BUS.md 4.2, INPUT_STACK.md 3.2): every world gets `inp::input_bound` (fed this
+	// frame; frozen when not fed while its set steps), `inp::action_map_ref` and `inp::action_input`. A layer declares
+	// the actions it names (`input_stack.actions` of the level) and takes their keyboard keys; the world gets an action when
+	// a binding of it reached a layer that declares it (OR over the bindings). `inp::action_map_ref` holds `actions` for the
+	// worlds that list inp::update_actions and declare actions, and for the default reader (M6): the first world of its set
+	// by `desc_index` that lists the system and declares none, whose base layer then declares them all. Null `actions`: no
+	// world reads actions.
 	SNK_API void route_input(inp::input_router& router, scn::context_manager& contexts,
 		const std::shared_ptr<const inp::action_map>& actions);
 }

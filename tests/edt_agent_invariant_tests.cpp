@@ -15,6 +15,10 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/editor/edt_asset_kind_registry.h>
+#include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_problem_list.h>
 #include <snk/gui/gui_null_backend.h>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/gui/gui_system.h>
@@ -22,8 +26,10 @@
 #include <snk/input/inp_input_router.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -896,6 +902,154 @@ BOOST_FIXTURE_TEST_CASE(ALoadedLevel_IsReportedOnceItsLoadsSettled_AndNotAfterAN
 	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
 	tick_settle(log, "levels/test_level.desc");
 	BOOST_CHECK_EQUAL(log.count("levels/test_level.desc"), 0u);
+}
+
+// #596: what the editor's desc loads report goes to Problems as the source "desc".
+namespace {
+
+constexpr std::string_view k_level_with_unknown = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__id":"00000000000000d1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]}]})json";
+constexpr std::string_view k_clean_level = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__id":"00000000000000d1","name":"odd"}]}]})json";
+constexpr std::string_view k_prefab_with_unknown = R"json({"__type":"prefab_desc","__version":4,"children":[
+	{"__id":"00000000000000e1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
+constexpr std::string_view k_clean_prefab = R"json({"__type":"prefab_desc","__version":4,"children":[
+	{"__id":"00000000000000e1","name":"plain"}]})json";
+
+struct desc_problems_fixture : agent_editor_fixture
+{
+	void pump_level_load()
+	{
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	}
+
+	std::vector<edt::problem> desc_rows()
+	{
+		std::vector<edt::problem> rows;
+		for (const auto& entry : editor().context()->problems().list()) {
+			if (entry.source == "desc") rows.push_back(entry.item);
+		}
+		return rows;
+	}
+
+	void store(const res::tag& tag, std::string_view text)
+	{
+		std::vector<std::byte> bytes(text.size());
+		std::ranges::transform(text, bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+		BOOST_REQUIRE(storage.require<res::resource_system>().store_sync(tag, bytes));
+	}
+
+	void open_level(std::string_view text)
+	{
+		store(level_tag, text);
+		BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", std::string(level_tag.relative()) } }).ok);
+		pump_level_load();
+		BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), std::string(level_tag.relative()));
+	}
+
+	bool has_unknown_component_of(std::string_view file)
+	{
+		const auto rows = desc_rows();
+		return std::ranges::any_of(rows, [file](const edt::problem& row) { return row.code == "unknown_component" && row.file == file; });
+	}
+
+	void open_prefab(const res::tag& tag)
+	{
+		gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag)); });
+		test_util::pump(tasks);
+	}
+
+	const res::tag level_tag = res::tag::make("levels/desc_problems.desc");
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(ALevelsDescWarnings_AreProblemsOfTheSourceDesc_UntilItLoadsClean, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown);
+	const auto rows = desc_rows();
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	BOOST_TEST(unknown->file == "levels/desc_problems.desc"); // the level's file, not the editor's working copy
+	BOOST_REQUIRE(!unknown->notes.empty());
+	BOOST_TEST(unknown->notes[0].starts_with("/worlds/0"));
+
+	open_level(k_clean_level);
+	BOOST_TEST(desc_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(FileNew_DropsTheRowsOfTheLevelItCloses, desc_problems_fixture)
+{
+	open_level(k_level_with_unknown);
+	BOOST_REQUIRE(has_unknown_component_of("levels/desc_problems.desc"));
+
+	cmd::call make_new;
+	make_new.args = boost::json::object{ { "discard_unsaved", true } };
+	make_new.from = cmd::origin::ui();
+	cmd::result made;
+	gui().run_without_drawing([&] { made = registry().invoke("file.new", make_new); });
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	BOOST_TEST(desc_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(AHotReloadOfTheWorkingCopy_IsReportedAsTheLevelsFile, desc_problems_fixture)
+{
+	open_level(k_clean_level);
+	BOOST_REQUIRE(desc_rows().empty());
+
+	// The editor's level set is built from its working copy; a change of it reloads the level.
+	auto& contexts = storage.require<scn::context_manager>();
+	auto& resources = storage.require<res::resource_system>();
+	const res::tag copy = editor().current_editor_tag();
+	BOOST_TEST_REQUIRE(contexts.level_set().active());
+	store(copy, k_level_with_unknown);
+	resources.signal_changed(copy);
+	for (int i = 0; i < 20 && desc_rows().empty(); ++i) {
+		test_util::pump(tasks);
+		contexts.update(std::chrono::duration<float>(0.001f));
+	}
+	BOOST_TEST(has_unknown_component_of("levels/desc_problems.desc"));
+
+	store(copy, k_clean_level);
+	resources.signal_changed(copy);
+	for (int i = 0; i < 20 && !desc_rows().empty(); ++i) {
+		test_util::pump(tasks);
+		contexts.update(std::chrono::duration<float>(0.001f));
+	}
+	BOOST_TEST(desc_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
+{
+	const res::tag odd = res::tag::make("prefabs/desc_problems_odd.prefab.desc");
+	const res::tag plain = res::tag::make("prefabs/desc_problems_plain.prefab.desc");
+	store(odd, k_prefab_with_unknown);
+	store(plain, k_clean_prefab);
+
+	open_prefab(odd);
+	BOOST_TEST(has_unknown_component_of("prefabs/desc_problems_odd.prefab.desc"));
+
+	open_prefab(plain); // the preview of the first closes: its rows go
+	BOOST_TEST(desc_rows().empty());
+
+	open_prefab(odd);
+	BOOST_REQUIRE(has_unknown_component_of("prefabs/desc_problems_odd.prefab.desc"));
+	auto& documents = editor().context()->documents();
+	BOOST_REQUIRE(documents.preview());
+	documents.close(documents.preview()->id());
+	BOOST_TEST(desc_rows().empty());
+
+	// A prefab that does not load: its error stays until the next prefab is opened.
+	open_prefab(res::tag::make("prefabs/no_such_prefab.prefab.desc"));
+	BOOST_TEST(!desc_rows().empty());
+	open_prefab(plain);
+	BOOST_TEST(desc_rows().empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

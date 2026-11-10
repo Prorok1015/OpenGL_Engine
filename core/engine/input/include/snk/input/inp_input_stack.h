@@ -1,8 +1,10 @@
 #pragma once
+#include <snk/input/inp_actions.h>
 #include <snk/input/inp_events.hpp>
 #include <snk/common/snk_api.h>
 #include <glm/glm.hpp>
 #include <array>
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -27,7 +29,9 @@ namespace inp
 		int order = 0;
 		// An inactive layer receives nothing and takes nothing.
 		bool active = true;
-		// Taken by the layer: the keys of these actions (#624), these keys, the printable keys.
+		// Taken by the layer: the keyboard keys of these actions (#624; the mouse buttons of an action follow the layer's
+		// click rules), these keys, the printable keys. The layer also declares the actions: the world gets one when a
+		// binding of it reached this layer (stack_resolution, world_input::actions).
 		std::vector<std::string> actions;
 		std::vector<KEYBOARD_BUTTONS> keys;
 		bool text_keys = false;
@@ -36,9 +40,11 @@ namespace inp
 		// Clicks and wheel inside these rects {x0, y0, x1, y1}, bounds included, are the layer's.
 		std::vector<glm::ivec4> regions;
 		bool block_below = false;
-		// Seen by the layer but passed on (#624).
+		// Seen by the layer but passed on (not used yet).
 		std::vector<std::string> listen;
 		layer_owner owner = layer_owner::engine;
+		// Declares every action of the map given to resolve, besides `actions` (the default reader of a set, INPUT_STACK.md 6).
+		bool all_actions = false;
 	};
 
 	struct stack_entry
@@ -74,6 +80,16 @@ namespace inp
 		bool active = false;
 		bool captured = false;
 		std::string world;
+		// The layer that took the press; empty: any layer of `world` (what the mouse bindings of actions reach).
+		std::string layer{};
+	};
+
+	// What of one action reaches the layers of a world that declare it (INPUT_STACK.md 3.2): the keyboard keys that no layer
+	// above took, and whether the world got the mouse buttons. The action is down when a binding is down and reached.
+	struct action_reach
+	{
+		std::bitset<key_count> keys;
+		bool buttons = false;
 	};
 
 	// What reaches a world after the stack has been walked.
@@ -88,6 +104,8 @@ namespace inp
 		bool mouse_focus = false;
 		// A layer that takes the keyboard got keys.
 		bool keyboard_focus = false;
+		// By action id of the map given to resolve; empty without one. An action no layer of the world declares has no keys.
+		std::vector<action_reach> actions;
 	};
 
 	struct stack_resolution
@@ -99,14 +117,26 @@ namespace inp
 			const auto it = worlds.find(world);
 			return it == worlds.end() ? nullptr : &it->second;
 		}
+		world_input* find(std::string_view world)
+		{
+			const auto it = worlds.find(world);
+			return it == worlds.end() ? nullptr : &it->second;
+		}
 	};
 
 	// The world of the top layer that takes a click at `cursor`: a layer with `block_below` or one whose regions hold it.
 	// Only layers of the `fed` worlds count.
 	SNK_API std::optional<std::string> mouse_taker(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor);
+	// The same layer as an entry (its world and name); null when none takes it.
+	SNK_API const stack_entry* mouse_taker_entry(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor);
 
-	// `engaged`: a button is down or the wheel moved this frame.
-	SNK_API stack_resolution resolve(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged, const drag_hold& hold);
+	// `engaged`: a button is down or the wheel moved this frame. `actions`: the map that gives the names a layer declares their
+	// bindings (#624); a layer takes the keyboard keys of its actions like its `keys`, and the world gets an action when
+	// a binding of it reaches a layer that declares it: A taken above and the arrow key not, the action is still there (OR).
+	// A mouse binding reaches the layers that get the click or the drag: the layer it lands on and the ones above it (the
+	// ones of the same world, or all above when it blocks); a modal layer of a world hides the mouse actions of the layers below it.
+	SNK_API stack_resolution resolve(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged, const drag_hold& hold,
+		const action_map* actions = nullptr);
 
 	// The printable keys of INPUT_STACK.md §4.4; Escape, Enter, Tab, F-keys and modifiers are not.
 	SNK_API bool is_text_key(KEYBOARD_BUTTONS key);
