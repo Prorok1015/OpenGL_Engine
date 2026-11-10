@@ -4,21 +4,18 @@
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resolvers/res_control_block.hpp>
-#include <snk/scene/level/scn_context_manager.h>
-#include <snk/scene/level/scn_context_set.h>
-#include <snk/scene/level/scn_world_context.h>
-#include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_component_catalog.h>
-#include <snk/scene/scn_scene_layer.h>
 #include <cstddef>
 #include <cstdint>
 
 // The layout key of a module binary (#614): a module built against headers in which one of these types has another
-// size or alignment is refused by the host before it is created ("rebuild the project"), since the module allocates
-// them or runs their inline code (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION). Only sizes and alignments:
-// offsetof is not portable on non-standard-layout types, so a reorder of fields of one size is not caught.
-// Add a type here when a module creates it or runs its inline code; a new type, a comment or a rebuilt engine leave
-// the key as it is, so a module built for an older minor still loads.
+// size or alignment is refused by the host before it is created ("rebuild the project"). The list holds the types
+// whose size is compiled into module code: a module constructs, copies or allocates them through engine templates
+// (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION). A type the engine creates and a module only reads through
+// inline accessors (scene_layer, world_context, context_set, module_context...) stays out: a field appended at its end
+// moves nothing a module reads and is a minor change, while a reorder or removal there is a major bump by hand.
+// Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of fields of one size
+// is not caught. A new type, a comment or a rebuilt engine leave the key as it is.
 namespace gs
 {
 	namespace detail
@@ -45,11 +42,14 @@ namespace gs
 	constexpr std::uint64_t module_layout_key() noexcept
 	{
 		return detail::layout_of<
+			// register_system builds the entry and the registry's map node in module code.
 			ecs::system_desc, ecs::system_instance, ecs::system_entry,
-			ecs::detail::bus_state, ecs::detail::bus_slot_impl<int>, ecs::event_writer<int>, ecs::event_reader<int>,
+			// bus_type_impl<T> makes the slot of an event type of the module; writers and readers are its system arguments.
+			ecs::detail::bus_slot_impl<int>, ecs::event_writer<int>, ecs::event_reader<int>,
+			// require<T> and make_dep<T> allocate the control block and the dependency in module code.
 			core::res::res_control_block_base, res::res_dep,
-			scn::component_entry, scn::scene_layer, scn::world_desc, scn::world_context, scn::context_set,
-			scn::context_manager>();
+			// component_catalog::add<T> builds the entry in module code.
+			scn::component_entry>();
 	}
 
 	// module_layout_key() as the engine was built: what the host compares a module's key with.

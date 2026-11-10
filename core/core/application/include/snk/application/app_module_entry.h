@@ -33,8 +33,8 @@
 // been built against it, so the minor stays 3.5.
 // inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
-// 3.6 (#614): the optional export snk_module_layout_key, the key of the layouts of the engine types a module allocates or
-// runs inline code of (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
+// 3.6 (#614): the optional export snk_module_layout_key, the key of the layouts of the engine types whose size is compiled
+// into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
 // own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
 #define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
