@@ -248,6 +248,10 @@ namespace desc
 						return false;
 					}
 					value = in.as_string().empty() ? res::tag{} : res::tag{ std::string_view{ in.as_string() } };
+					if (value.is_valid() && value.protocol().empty()) {
+						// Kept as written, so a save does not change the file; nothing can load it (#631).
+						::res::report_load_warning(::res::diagnostic_kind::schema, ctx.field_pointer, ::res::no_protocol_reason(value));
+					}
 					return true;
 				} else if constexpr (natural == field_kind::entity) {
 					if (in.is_null()) {

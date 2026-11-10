@@ -38,6 +38,7 @@
 // into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
 // own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
+// #631 (no bump, from 3.6 on): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
 // 3.7 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
 // methods; module_context is made by the engine and gains two members at its end), the ctx type inp::input_stack_control
 // (a system's list of stack commands, methods exported), inp::stack_command and inp::stack_layer_desc::owner already there.

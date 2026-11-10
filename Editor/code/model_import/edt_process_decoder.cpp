@@ -202,14 +202,15 @@ const std::unordered_set<std::string_view> k_res_references = {
 const std::unordered_set<std::string_view> k_parent_references = { "res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc" };
 const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__guid", "__id", "__parent" };
 
-// Read as res::tag reads it (edt_tag_text.h, the same functions the desc files an agent writes are checked with): "res\\x\\y.fbx"
-// is the tag res://x/y.fbx. Stricter than the desc-file check in one way: a protocol in other letter case counts too.
+// Read as res::tag reads it (edt_tag_text.h, the same functions the desc files an agent writes are checked with): "res:\\x\\y.fbx"
+// is the tag res://x/y.fbx. Stricter than res::tag: any "://", and a text that only begins like a protocol ("user/x"), in
+// any letter case, count too.
 bool reads_as_tag(std::string_view text)
 {
 	const std::string normal = edt::tag_text_normalized(text);
 	if (normal.find("://") != std::string::npos) return true;
-	const std::string protocol = lower(std::string(edt::tag_leading_protocol(normal)));
-	return protocol == "res" || edt::is_other_tag_protocol(protocol);
+	const std::string prefix = lower(std::string(edt::protocol_like_prefix(normal)));
+	return prefix == "res" || edt::is_other_tag_protocol(prefix);
 }
 
 // A name that is one file on Windows or cannot be made there (a trailing dot or space, a device name, the characters

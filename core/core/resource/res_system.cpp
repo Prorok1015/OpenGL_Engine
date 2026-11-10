@@ -499,7 +499,7 @@ void res::resource_system::start_loading(const res::tag &tag,
     const auto &resolvers = root().m_resolvers;
     auto resolver_it = resolvers.find(tag.protocol());
     if (resolver_it == resolvers.end()) {
-      std::string error = not_mounted_error(tag.protocol());
+      std::string error = not_mounted_error(tag);
       egLOG_ERROR("res/resolver", "cannot load {}: {}", tag.view(), error);
       block->set_error(std::move(error));
       return;
@@ -1115,7 +1115,7 @@ bool res::resource_system::erase(const res::tag &tag) {
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(tag.protocol());
   if (found == resolvers.end()) {
-    egLOG_WARN("resource/erase", "{}", not_mounted_error(tag.protocol()));
+    egLOG_WARN("resource/erase", "{}", not_mounted_error(tag));
     return false;
   }
   if (!found->second->erase(tag)) {
@@ -1132,7 +1132,7 @@ res::file_operation res::resource_system::remove(const res::tag &tag) {
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(tag.protocol());
   if (found == resolvers.end()) {
-    std::string error = not_mounted_error(tag.protocol());
+    std::string error = not_mounted_error(tag);
     egLOG_WARN("resource/remove", "{}", error);
     return file_operation::failure(std::move(error));
   }
@@ -1154,7 +1154,7 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(from.protocol());
   if (found == resolvers.end()) {
-    std::string error = not_mounted_error(from.protocol());
+    std::string error = not_mounted_error(from);
     egLOG_WARN("resource/rename", "{}", error);
     return file_operation::failure(std::move(error));
   }
@@ -1364,6 +1364,13 @@ std::string res::resource_system::not_mounted_error(std::string_view protocol) c
     list += list.empty() ? std::string{name} : std::format(", {}", name);
   }
   return std::format("'{}://' is not mounted in this run (mounted: {})", protocol, list.empty() ? "none" : list);
+}
+
+std::string res::resource_system::not_mounted_error(const tag &tag) const {
+  if (tag.protocol().empty()) {
+    return no_protocol_reason(tag);
+  }
+  return not_mounted_error(tag.protocol());
 }
 
 res::mount_table res::resource_system::config_mount_table() {
