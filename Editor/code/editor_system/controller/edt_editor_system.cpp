@@ -82,6 +82,7 @@
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_problem_list.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -171,6 +172,8 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
 	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
 	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
+	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
+	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
@@ -1037,7 +1040,19 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		options.editor_profile = user_roots;
 	}
 	if (data.has_value<prj::project_context>()) options.project_root = data.require<prj::project_context>().root;
-	options.notify = [this](const std::string& message) { m_context->dialogs().message(message_level::warning, message); };
+	options.report_full_snapshot = cfg_hot_reload_dump_snapshot;
+	// The problems list, not a dialog: live mode reloads on every build, and a dialog each time would be in the way.
+	options.notify = [this](const std::string& message) {
+		if (message.empty()) {
+			m_context->problems().clear("hot_reload");
+			return;
+		}
+		problem item;
+		item.severity = problem_severity::warning;
+		item.message = message;
+		item.notes = { "details: .cache/hot_reload/last_play_snapshot.json" };
+		m_context->problems().set("hot_reload", { std::move(item) });
+	};
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };

@@ -273,6 +273,7 @@ std::string edt::play_session::capture_for_reload()
 {
 	m_reload.reset();
 	m_capture_refusal.clear();
+	m_reload_started = now();
 	const auto contexts = m_services.ctx_manager.lock();
 	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play) return {};
@@ -508,6 +509,21 @@ namespace {
 		return out;
 	}
 
+	// The entities of a capture_world snapshot and the components they hold.
+	std::pair<std::size_t, std::size_t> count_entities(const boost::json::object& state)
+	{
+		std::size_t entities = 0;
+		std::size_t components = 0;
+		const auto* list = state.if_contains("entities");
+		if (!list || !list->is_array()) return { 0, 0 };
+		for (const boost::json::value& entity : list->as_array()) {
+			++entities;
+			const auto* parts = entity.is_object() ? entity.as_object().if_contains("components") : nullptr;
+			if (parts && parts->is_object()) components += parts->as_object().size();
+		}
+		return { entities, components };
+	}
+
 	std::string counts_text(const std::map<std::string, std::size_t>& counts)
 	{
 		std::string out;
@@ -525,7 +541,9 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 	const bool lost_something = !dropped.unsaved.empty() || !dropped.unknown.empty() || !dropped.partial.empty();
 
 	if (m_options.notify) {
-		if (play == "stopped") {
+		if (play == "kept" && !lost_something) {
+			m_options.notify({});
+		} else if (play == "stopped") {
 			m_options.notify("Play stopped: its state was not brought back after the game module was reloaded.");
 		} else if (play == "restarted") {
 			m_options.notify(m_capture_refusal.empty()
@@ -539,9 +557,14 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 			m_options.notify(std::format("Play kept its world across the module reload, not all of it.{}", what));
 		}
 	}
+	const auto started = std::exchange(m_reload_started, {});
 	if (m_options.project_root.empty()) return;
 
 	boost::json::object out;
+	out["written_at"] = std::format("{:%FT%TZ}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+	if (started != std::chrono::steady_clock::time_point{}) {
+		out["duration_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(now() - started).count();
+	}
 	out["module_reload"] = boost::json::object{ { "status", to_string(outcome.status) }, { "message", outcome.message } };
 	out["play"] = play;
 	if (!m_capture_refusal.empty()) out["not_kept_because"] = m_capture_refusal;
@@ -556,12 +579,18 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 		for (const saved_world& world : m_reload->worlds) {
 			boost::json::array systems;
 			for (const std::string& system : world.systems) systems.emplace_back(system);
-			worlds.emplace_back(boost::json::object{ { "name", world.name }, { "systems", std::move(systems) },
-				{ "input_layer", world.input_layer }, { "state", world.state } });
+			const auto [entities, components] = count_entities(world.state);
+			boost::json::object entry{ { "name", world.name }, { "systems", std::move(systems) }, { "input_layer", world.input_layer },
+				{ "entities", entities }, { "components", components } };
+			if (m_options.report_full_snapshot) entry["state"] = world.state;
+			worlds.emplace_back(std::move(entry));
 		}
 		out["worlds"] = std::move(worlds);
-		out["blackboard"] = m_reload->blackboard;
-		out["blackboard_pending"] = m_reload->blackboard_pending;
+		out["blackboard_values"] = m_reload->blackboard.size() + m_reload->blackboard_pending.size();
+		if (m_options.report_full_snapshot) {
+			out["blackboard"] = m_reload->blackboard;
+			out["blackboard_pending"] = m_reload->blackboard_pending;
+		}
 	}
 	if (const auto error = prj::write_project_file(m_options.project_root, std::filesystem::path{ ".cache" } / "hot_reload" / "last_play_snapshot.json",
 			prj::to_indented_json(out))) {

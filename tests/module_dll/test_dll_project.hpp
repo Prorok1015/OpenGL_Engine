@@ -10,8 +10,38 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <system_error>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 namespace test_util {
+
+	// Whether the image is still mapped (a leftover reference, or GNU_UNIQUE symbols pinning it on Linux).
+	// The loader opens the canonical path; GetModuleHandleW matches it only with backslashes.
+	inline bool resident(const std::filesystem::path& file)
+	{
+		std::error_code ec;
+		const std::filesystem::path path = std::filesystem::canonical(file, ec);
+#if defined(_WIN32)
+		return ::GetModuleHandleW(path.c_str()) != nullptr;
+#else
+		void* again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+		if (again) {
+			::dlclose(again);
+		}
+		return again != nullptr;
+#endif
+	}
 
 	// The file name core::load_project_modules looks for in <root>/build/bin; the built test library may carry a debug
 	// postfix.

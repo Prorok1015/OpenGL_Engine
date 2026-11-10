@@ -58,7 +58,11 @@ namespace edt
 		// Every module reload that met a running Play writes what it kept and dropped to
 		// <project_root>/.cache/hot_reload/last_play_snapshot.json (HOT_RELOAD_PLAY.md 3.1). Empty: no report.
 		std::filesystem::path project_root{};
-		// Tells the person when a module reload dropped part of Play's state or restarted or stopped Play. Null: the log only.
+		// The report also holds every world's whole state and the blackboard, not only their counts: costly in a big
+		// world, it is written on the main thread.
+		bool report_full_snapshot = false;
+		// After every module reload that met Play: what Play lost, or why it restarted or stopped; empty when it kept all
+		// of it. Null: the log only.
 		std::function<void(const std::string& message)> notify{};
 	};
 
@@ -202,6 +206,8 @@ namespace edt
 		std::optional<reload_snapshot> m_reload;
 		// Why the last capture_for_reload kept nothing: Play restarts instead.
 		std::string m_capture_refusal;
+		// When the reload began (capture_for_reload), for the report's duration; default: not known.
+		std::chrono::steady_clock::time_point m_reload_started{};
 		bool m_suspended = false;
 		// How the restored set runs once its resources are there.
 		struct resource_wait

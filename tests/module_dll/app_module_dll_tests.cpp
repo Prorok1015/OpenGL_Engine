@@ -24,18 +24,6 @@
 #include <system_error>
 #include <vector>
 
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
-
 // The game module of test_game_dll.cpp, loaded from disk with native_library_source (#220 PR-7): it fills its
 // layer, its worlds run, and unloading releases the library image. Shared configurations only: the module links
 // snk_engine as a game.dll does.
@@ -52,23 +40,7 @@ std::unique_ptr<app::modules::native_library_source> game_library()
 	return std::make_unique<app::modules::native_library_source>(g_module_path, g_module_path.parent_path());
 }
 
-// Whether the image is still mapped (a leftover reference, or GNU_UNIQUE symbols pinning it on Linux).
-// The loader opens the canonical path; GetModuleHandleW matches it only with backslashes.
-bool resident(const std::filesystem::path& file)
-{
-	std::error_code ec;
-	const std::filesystem::path path = std::filesystem::canonical(file, ec);
-#if defined(_WIN32)
-	return ::GetModuleHandleW(path.c_str()) != nullptr;
-#else
-	void* again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
-	if (again) {
-		::dlclose(again);
-	}
-	return again != nullptr;
-#endif
-}
-
+using test_util::resident;
 using test_util::project_library_name;
 
 constexpr const char* DLL_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[

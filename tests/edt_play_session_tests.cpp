@@ -1054,9 +1054,14 @@ BOOST_AUTO_TEST_CASE(a_module_reload_writes_its_report_and_tells_what_play_lost)
 	BOOST_TEST(report.at("module_reload").at("status").as_string() == "reloaded");
 	BOOST_TEST(report.at("dropped_no_schema").at("test.schemaless").to_number<int>() == 1);
 	BOOST_TEST(report.at("mail_dropped").is_string());
+	BOOST_TEST(report.at("written_at").is_string());
+	BOOST_TEST(report.at("duration_ms").is_int64());
 	BOOST_REQUIRE(report.at("worlds").as_array().size() == 1u);
-	BOOST_TEST(report.at("worlds").as_array()[0].at("name").as_string() == "w0");
-	BOOST_TEST(report.at("worlds").as_array()[0].at("state").is_object());
+	const json::object& w0 = report.at("worlds").as_array()[0].as_object();
+	BOOST_TEST(w0.at("name").as_string() == "w0");
+	BOOST_TEST(w0.at("entities").to_number<int>() >= 2); // the world's root and the schemaless entity
+	BOOST_TEST(!w0.contains("state")); // counts only, unless report_full_snapshot
+	BOOST_TEST(!report.contains("blackboard"));
 
 	// A new Start counts its reloads from zero.
 	play.stop();

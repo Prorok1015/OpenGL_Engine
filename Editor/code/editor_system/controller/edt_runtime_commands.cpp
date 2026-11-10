@@ -455,10 +455,10 @@ namespace {
 		if (added.active()) out.push_back(std::move(added));
 	}
 
-	constexpr std::string_view k_header_properties = R"("source":{"type":"string","enum":["play"]},"note":{"type":"string"},
+	constexpr std::string_view k_header_properties = R"json("source":{"type":"string","enum":["play"]},"note":{"type":"string"},
 		"play_state":{"type":"string","enum":["playing","paused"]},"frame":{"type":"integer"},
 		"reload":{"type":"integer","description":"module reloads that rebuilt this Play's world; entity ids read before one name other entities"},
-		"world":{"type":"string"},"world_time":{"type":"number"})";
+		"world":{"type":"string"},"world_time":{"type":"number"})json";
 
 	constexpr std::string_view k_summary = R"({"type":"object","properties":{"entity":{"type":"integer"},"name":{"type":"string"},
 		"components":{"type":"array","items":{"type":"string"}},"has_children":{"type":"boolean"}},"required":["entity","name","components","has_children"]})";
@@ -473,14 +473,14 @@ std::vector<edt::registration> edt::register_runtime_commands(cmd::command_regis
 	query.id = "runtime.query";
 	query.summary = "Page through the live entities of a world of the running game (Play): entity id, name, component names. Filter by name, component or subtree; follow next_cursor (pause the game first for a consistent walk). Read-only; this is the state of Play, not the document";
 	query.category = cmd::agent_category::read;
-	query.args_schema = parse_schema(std::format(R"({{"type":"object","properties":{{
+	query.args_schema = parse_schema(std::format(R"json({{"type":"object","properties":{{
 		"world":{{"type":"string","description":"world name; default the first world of Play"}},
 		"filter":{{"type":"object","properties":{{
 			"name_glob":{{"type":"string","description":"* and ? wildcards, case-insensitive; without them a substring"}},
 			"has_component":{{"type":"array","items":{{"type":"string"}},"description":"catalog names that must all be present"}},
 			"under":{{"type":"integer","minimum":0,"description":"an entity id: only it and what lies under it"}}}},"additionalProperties":false}},
 		"page_size":{{"type":"integer","minimum":1,"maximum":{},"description":"entities per page, at most {}, default {}"}},
-		"cursor":{{"type":"string","description":"next_cursor of the previous page of the same query; stale once a frame has passed, a module reload rebuilt the world or the game was restarted"}}}},"additionalProperties":false}})",
+		"cursor":{{"type":"string","description":"next_cursor of the previous page of the same query; stale once a frame has passed, a module reload rebuilt the world or the game was restarted"}}}},"additionalProperties":false}})json",
 		state_query_max_page_size, state_query_max_page_size, state_query_default_page_size));
 	query.result_schema = parse_schema(std::format(R"({{"type":"object","properties":{{{},
 		"items":{{"type":"array","items":{}}},"next_cursor":{{"type":"string"}},"subtree_truncated":{{"type":"boolean","description":"filter.under reached the limit of entities it walks"}}}},"required":["source","frame","items"]}})", k_header_properties, k_summary));
@@ -489,7 +489,7 @@ std::vector<edt::registration> edt::register_runtime_commands(cmd::command_regis
 
 	cmd::command_desc get;
 	get.id = "runtime.get";
-	get.summary = "One live entity of the running game (Play) by its whole entity id: name, parent, children, components as desc JSON. Components without a schema are only named (unsaved); what does not fit 256 KiB is named in truncated. Read-only; the state of Play, not the document";
+	get.summary = "One live entity of the running game (Play) by its whole entity id: name, parent, children, components as desc JSON. Components without a schema are only named (unsaved); what does not fit 256 KiB is named in truncated. Read-only; the state of Play, not the document. An entity id read before a module reload (see "reload" in the answers) may name another entity now";
 	get.category = cmd::agent_category::read;
 	get.args_schema = parse_schema(R"({"type":"object","properties":{
 		"entity":{"type":"integer","minimum":0,"description":"the entity id from runtime.query, with its version"},

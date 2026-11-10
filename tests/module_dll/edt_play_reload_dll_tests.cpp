@@ -128,7 +128,7 @@ struct dll_play_fixture : test_util::module_env
 	std::vector<std::string> notices;
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{
 		.each_frame = [this](const std::string&, std::function<bool()> poll) { reload_polls.push_back(std::move(poll)); },
-		.project_root = project.game,
+		.project_root = project.game, .report_full_snapshot = true,
 		.notify = [this](const std::string& message) { notices.push_back(message); } } };
 	edt::module_swap_gate gate{ [this](bool before) {
 		if (before) level_ctrl.detach_from_game_layer();
@@ -154,6 +154,9 @@ BOOST_AUTO_TEST_CASE(play_keeps_its_world_across_a_reload_of_the_library_and_run
 	const core::reload_report report = reload_play();
 
 	BOOST_CHECK_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	// Nothing keeps the first build: Play's set, the snapshot and the level hold no reference into it.
+	BOOST_TEST(test_util::resident(project.copy(1)));
+	BOOST_TEST(!test_util::resident(project.copy(0)));
 	BOOST_TEST(!play.reloading());
 	BOOST_TEST((play.state() == edt::play_state::playing));
 	BOOST_TEST(play.reload_number() == 1u);
@@ -163,7 +166,8 @@ BOOST_AUTO_TEST_CASE(play_keeps_its_world_across_a_reload_of_the_library_and_run
 	const boost::json::object written = read_report();
 	BOOST_REQUIRE(written.contains("play"));
 	BOOST_TEST(written.at("play").as_string() == "kept");
-	BOOST_TEST(written.at("worlds").as_array().size() == 1u);
+	BOOST_REQUIRE(written.at("worlds").as_array().size() == 1u);
+	BOOST_TEST(written.at("worlds").as_array()[0].at("state").is_object()); // report_full_snapshot
 }
 
 // The new build fails to register: the previous copy is loaded again and Play goes on in it.
@@ -181,6 +185,9 @@ BOOST_AUTO_TEST_CASE(play_keeps_its_world_when_the_reload_rolls_back_to_the_prev
 	const core::reload_report report = reload_play();
 
 	BOOST_CHECK_MESSAGE(report.status == core::reload_status::rolled_back, report.message);
+	// The previous copy is loaded again; the failing build's copy is gone with its folder.
+	BOOST_TEST(test_util::resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
 	BOOST_TEST(play.active());
 	BOOST_TEST(value_in_play() == 4);
 	run_frame();
