@@ -67,6 +67,9 @@ namespace edt {
 		std::function<import_intermediate(const import_source&, ds::task_context*)> import;
 		// Lists the files besides the model it would read, or why an agent may not import it.
 		std::function<model_file_scan(const import_source&, ds::task_context*)> scan;
+		// Empty or null: the import can run. Else why it cannot now (the decoder process is not there): the command is
+		// refused as disabled with this text.
+		std::function<std::string()> unavailable_reason;
 		// The folders res:// is read from, the top one last: a target that exists in any of them is not overwritten.
 		std::function<std::vector<std::filesystem::path>()> resource_layers;
 		// The folder an import writes into (the top layer of the project that is open now).
@@ -96,8 +99,10 @@ namespace edt {
 		agent_model_import(const agent_model_import&) = delete;
 		agent_model_import& operator=(const agent_model_import&) = delete;
 
-		// The import is built in (the editor has assimp).
-		bool available() const { return static_cast<bool>(m_options.import) && static_cast<bool>(m_options.scan); }
+		// The import is built in (the editor has assimp) and can run (its decoder is there).
+		bool available() const { return unavailable_reason().empty(); }
+		// Empty when an agent's import can run; else why not (no assimp, or the decoder process is missing).
+		std::string unavailable_reason() const;
 		// An import job of this service is running.
 		bool running() const;
 
