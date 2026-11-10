@@ -38,6 +38,7 @@
 // into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
 // own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
+// Still 3.6 (#631): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
 #define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
