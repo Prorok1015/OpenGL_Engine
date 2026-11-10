@@ -6,9 +6,11 @@
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
+#include <algorithm>
 #include <string>
 #include <functional>
 #include <unordered_map>
+#include <vector>
 #include <snk/common/snk_api.h>
 
 namespace res {
@@ -123,6 +125,16 @@ namespace scn {
 				return &it->second;
 			}
 			return m_parent ? m_parent->find_spawner(desc_type) : nullptr;
+		}
+
+		// Every desc type with a spawner here or in the parent, in name order (what a spawn can make, #620).
+		std::vector<std::string> spawner_types() const {
+			std::vector<std::string> types = m_parent ? m_parent->spawner_types() : std::vector<std::string>{};
+			for (const auto& [type, spawner] : m_spawners) {
+				types.push_back(type);
+			}
+			std::sort(types.begin(), types.end());
+			return types;
 		}
 
 		desc::desc_system& get_desc_system() const { return m_desc_sys; }
