@@ -9,6 +9,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/editor/editor_module.h>
+#include <snk/game/gs_module_layout.h>
 #include <edt_decode_runner.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
@@ -97,6 +98,8 @@ int main(int argc, char* argv[])
 		// After the host's own modules: initialize_all_services must not see the loader grow.
 		core::project_modules_options project_modules;
 		project_modules.with_editor_modules = true;
+		// A game.dll built against other layouts of the engine's types is refused, not loaded (#614).
+		project_modules.layout_key = gs::engine_module_layout_key();
 		project_modules.check_editor_module = [](const app::modules::module_entry& entry) {
 			return edt::check_editor_api_version(entry.editor_api_version);
 		};

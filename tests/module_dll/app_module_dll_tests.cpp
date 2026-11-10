@@ -8,6 +8,7 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/platform/plt_process.h>
 #include <snk/desc/desc_base.hpp>
+#include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/scn_animation_collection_desc.h>
@@ -46,6 +47,15 @@ const std::filesystem::path g_module_path{ SNK_TEST_GAME_DLL_PATH };
 const std::filesystem::path g_v2_path{ SNK_TEST_GAME_DLL_V2_PATH };
 const std::filesystem::path g_failing_path{ SNK_TEST_GAME_DLL_FAILING_PATH };
 const std::filesystem::path g_bad_api_path{ SNK_TEST_GAME_DLL_BAD_API_PATH };
+const std::filesystem::path g_bad_layout_path{ SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH };
+
+// The editor's options (#614): the engine's layout key is checked.
+core::project_modules_options checked_layouts()
+{
+	core::project_modules_options options;
+	options.layout_key = gs::engine_module_layout_key();
+	return options;
+}
 
 std::unique_ptr<app::modules::native_library_source> game_library()
 {
@@ -474,6 +484,59 @@ BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_module_st
 
 	BOOST_TEST((report.status == core::reload_status::refused));
 	BOOST_CHECK_MESSAGE(report.message.find("api") != std::string::npos, report.message);
+	BOOST_TEST(resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
+	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// #614: a library built with the engine's headers reports the engine's layout key, and the host lets it in.
+BOOST_AUTO_TEST_CASE(a_library_built_with_the_engine_headers_reports_its_layout_key_and_loads)
+{
+	auto source = game_library();
+	BOOST_REQUIRE(source->open().empty());
+	BOOST_REQUIRE(source->entry().layout_key != nullptr);
+	BOOST_TEST(source->entry().layout_key() == gs::engine_module_layout_key());
+	source->close();
+
+	dll_project project("dll_layout_same", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, checked_layouts());
+	BOOST_TEST(host.load_all().loaded.size() == 1u);
+	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// A library built against other layouts of the engine's types is not created: refused at load, its copy removed.
+BOOST_AUTO_TEST_CASE(a_library_built_against_other_layouts_is_not_loaded)
+{
+	dll_project project("dll_layout_load", root);
+	project.build(g_bad_layout_path);
+	core::project_module_host host(loader, root, checked_layouts());
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.loaded.empty());
+	BOOST_TEST(report.refused == std::vector<std::string>{ std::string{ dll_game::module_name } });
+	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(0)));
+	root.destruct<prj::project_context>();
+}
+
+// A reload to such a build is refused before the running module goes: it stays and keeps running.
+BOOST_AUTO_TEST_CASE(a_reload_to_a_build_against_other_layouts_is_refused_and_the_running_module_stays)
+{
+	dll_project project("dll_layout_reload", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, checked_layouts());
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	project.rebuild(g_bad_layout_path);
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("rebuild the project") != std::string::npos, report.message);
 	BOOST_TEST(resident(project.copy(0)));
 	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
 	BOOST_TEST(moved_value(*this) == 3);
