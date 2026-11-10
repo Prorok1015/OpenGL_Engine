@@ -150,6 +150,11 @@ struct res::resource_system::wait_graph {
     return m_nodes.empty();
   }
 
+  std::size_t size() {
+    std::lock_guard lock(m_mutex);
+    return m_nodes.size();
+  }
+
 private:
   struct node {
     std::shared_ptr<block> self;
@@ -772,6 +777,10 @@ void res::resource_system::await_blocks(
       });
     });
   }
+}
+
+std::size_t res::resource_system::wait_graph_nodes() const {
+  return m_graph->size();
 }
 
 res::res_handle<res::when_all_result> res::resource_system::when_all_blocks(
