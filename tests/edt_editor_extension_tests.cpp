@@ -789,7 +789,6 @@ BOOST_AUTO_TEST_CASE(AReloadAskedFromAModuleAction_IsRefusedAndTheEditorModulesS
 	auto host = make_host();
 	host->load_all();
 	host->load_editor_modules();
-	const counts loaded = snapshot();
 	const auto reload = [&] {
 		return host->reload("ext_game",
 			std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)),
@@ -806,15 +805,18 @@ BOOST_AUTO_TEST_CASE(AReloadAskedFromAModuleAction_IsRefusedAndTheEditorModulesS
 		return edt::action_result::success();
 	};
 	module.module_context.add_action(std::move(action));
+	const counts loaded = snapshot();
 
 	[[maybe_unused]] const auto result = context->actions().invoke("ext.reload_myself", boost::json::object{});
 	BOOST_CHECK_EQUAL(core::to_string(from_inside.status), "refused");
 	BOOST_CHECK_MESSAGE(from_inside.message.find("callback") != std::string::npos, from_inside.message);
 	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK(snapshot() == loaded);
 
 	const auto later = reload();
 	BOOST_CHECK_EQUAL(core::to_string(later.status), "reloaded");
 	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK(snapshot() == loaded);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
