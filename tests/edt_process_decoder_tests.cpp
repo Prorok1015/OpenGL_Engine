@@ -27,23 +27,54 @@ edt::decode_request request_in(const fs::path& model = k_models / "m.obj")
 
 const res::tag k_prefab("memory://m/m.prefab.desc");
 const res::tag k_geom("memory://m/m.geom.desc");
-const res::tag k_material("memory://m/m.material.desc");
+const res::tag k_material("memory://m/materials/x.mat.desc");
+const res::tag k_texture("memory://m/textures/t.png");
+const res::tag k_texture_desc("memory://m/textures/t.png.txm.desc");
 
-edt::decode_bundle import_answer(const edt::decode_request& request)
+std::vector<std::byte> text_bytes(std::string_view text)
+{
+	std::vector<std::byte> bytes(text.size());
+	for (std::size_t i = 0; i < text.size(); ++i) bytes[i] = static_cast<std::byte>(text[i]);
+	return bytes;
+}
+
+std::vector<std::byte> png_bytes() { return { std::byte{ 0x89 }, std::byte{ 0x50 }, std::byte{ 0x4E }, std::byte{ 0x47 }, std::byte{ 0x0D }, std::byte{ 0x0A }, std::byte{ 0x1A }, std::byte{ 0x0A }, std::byte{ 0 } }; }
+
+edt::bundle_blob blob_of(const res::tag& tag, std::vector<std::byte> bytes) { return { std::string(tag.view()), std::move(bytes) }; }
+
+// The answer a decoder gives for m.obj: a prefab, a geometry, a material and a texture with its desc.
+edt::decode_bundle import_answer(boost::json::object prefab_json = {})
 {
 	edt::import_intermediate imported;
 	imported.prefab_tag = k_prefab;
 	imported.geom_tag = k_geom;
-	imported.all_tags = { k_prefab, k_geom, k_material };
-	imported.created_tags = { k_prefab, k_geom, k_material };
+	imported.created_tags = { k_prefab, k_geom, k_material, k_texture, k_texture_desc };
+	imported.all_tags = imported.created_tags;
 	imported.source_path = "somewhere/else.obj";
+	imported.prefab_json = std::move(prefab_json);
 	edt::decode_bundle bundle;
 	bundle.manifest["kind"] = "import";
 	bundle.manifest["import"] = edt::to_json(imported);
-	for (const res::tag& tag : imported.created_tags) {
-		bundle.blobs.push_back({ std::string(tag.view()), { std::byte{ 1 }, std::byte{ 2 } } });
-	}
-	(void)request;
+	bundle.blobs.push_back(blob_of(k_prefab, text_bytes(R"json({"__type":"prefab_desc","geometry":"memory://m/m.geom.desc"})json")));
+	bundle.blobs.push_back(blob_of(k_geom, text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})json")));
+	bundle.blobs.push_back(blob_of(k_material, text_bytes(R"json({"__type":"material_desc","__parent":"res://base_material.desc","name":"x","shader_fragment":"res://shaders/mix_opaque_trans_scene.frag"})json")));
+	bundle.blobs.push_back(blob_of(k_texture, png_bytes()));
+	bundle.blobs.push_back(blob_of(k_texture_desc, text_bytes(R"json({"__type":"texture_2d_desc","__parent":"res://base_texture.desc","data":"memory://m/textures/t.png"})json")));
+	return bundle;
+}
+
+// The answer rebuilt with other tags, resources and fields, for the hostile cases.
+edt::decode_bundle answer_with(const std::vector<edt::bundle_blob>& blobs, const std::vector<res::tag>& listed, const std::vector<res::tag>& created)
+{
+	edt::import_intermediate imported;
+	imported.prefab_tag = k_prefab;
+	imported.geom_tag = k_geom;
+	imported.created_tags = created;
+	imported.all_tags = listed;
+	edt::decode_bundle bundle;
+	bundle.manifest["kind"] = "import";
+	bundle.manifest["import"] = edt::to_json(imported);
+	bundle.blobs = blobs;
 	return bundle;
 }
 
@@ -73,10 +104,10 @@ BOOST_AUTO_TEST_CASE(AnImportAnswer_ThatMatchesWhatWasAsked_IsAccepted_AndTakesT
 {
 	const auto request = request_in();
 	std::string problem;
-	const auto imported = edt::accept_import_answer(import_answer(request), request, problem);
+	const auto imported = edt::accept_import_answer(import_answer(), request, problem);
 	BOOST_REQUIRE_MESSAGE(imported.has_value(), problem);
 	BOOST_CHECK(imported->error.empty());
-	BOOST_CHECK_EQUAL(imported->created_tags.size(), 3u);
+	BOOST_CHECK_EQUAL(imported->created_tags.size(), 5u);
 	BOOST_CHECK(imported->source_path == request.source_path);
 }
 
@@ -84,11 +115,11 @@ BOOST_AUTO_TEST_CASE(AnImportAnswer_OfAnotherKind_OrWithoutAnImport_IsRefused)
 {
 	const auto request = request_in();
 	std::string problem;
-	auto bundle = import_answer(request);
+	auto bundle = import_answer();
 	bundle.manifest["kind"] = "scan";
 	BOOST_CHECK(!edt::accept_import_answer(bundle, request, problem).has_value());
 
-	bundle = import_answer(request);
+	bundle = import_answer();
 	bundle.manifest.erase("import");
 	BOOST_CHECK(!edt::accept_import_answer(bundle, request, problem).has_value());
 }
@@ -98,49 +129,123 @@ BOOST_AUTO_TEST_CASE(AnImportAnswer_WithAResourceItDidNotCreate_OrWithoutOneItDi
 	const auto request = request_in();
 	std::string problem;
 
-	auto extra = import_answer(request);
-	extra.blobs.push_back({ "memory://m/stray.txt", { std::byte{ 3 } } });
+	auto extra = import_answer();
+	extra.blobs.push_back({ "memory://m/textures/stray.png", png_bytes() });
 	BOOST_CHECK(!edt::accept_import_answer(extra, request, problem).has_value());
 
-	auto missing = import_answer(request);
+	auto missing = import_answer();
 	missing.blobs.pop_back();
 	BOOST_CHECK(!edt::accept_import_answer(missing, request, problem).has_value());
 
-	auto renamed = import_answer(request);
-	renamed.blobs.back().tag = "memory://m/other.desc";
+	auto renamed = import_answer();
+	renamed.blobs.back().tag = "memory://m/textures/other.png.txm.desc";
 	BOOST_CHECK(!edt::accept_import_answer(renamed, request, problem).has_value());
 }
 
-BOOST_AUTO_TEST_CASE(AnImportAnswer_WithATagOutsideTheFolderOfItsPrefab_OrNotListed_IsRefused)
+BOOST_AUTO_TEST_CASE(AnImportAnswer_WithAModelFileAsAResource_IsRefused_WhateverItsFolder)
+{
+	const auto request = request_in();
+	std::string problem;
+	// The exporter would copy it into the project, and loading what refers to it would parse it inside the editor.
+	for (const char* name : { "memory://m/evil.fbx", "memory://m/textures/evil.glb", "memory://m/textures/evil.gltf", "memory://m/textures/evil.obj",
+		"memory://m/__embedded_txm/evil.fbx", "memory://m/materials/evil.fbx" }) {
+		const std::vector<res::tag> tags = { k_prefab, k_geom, res::tag(name) };
+		const std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")), { name, text_bytes("raw model bytes") } };
+		BOOST_CHECK_MESSAGE(!edt::accept_import_answer(answer_with(blobs, tags, tags), request, problem).has_value(), name);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AnImageThatIsNotAnImage_IsRefused_AndOneUnderADoubleExtensionIsStillAnImage)
+{
+	const auto request = request_in();
+	std::string problem;
+	auto not_an_image = import_answer();
+	not_an_image.blobs[3].bytes = text_bytes("this is no png");
+	BOOST_CHECK(!edt::accept_import_answer(not_an_image, request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("not what its name says") != std::string::npos, problem);
+
+	// A real PNG under "evil.fbx.png" stays an image: the adapter takes the last extension.
+	const res::tag double_name("memory://m/textures/evil.fbx.png");
+	const std::vector<res::tag> tags = { k_prefab, k_geom, double_name };
+	const std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")), blob_of(double_name, png_bytes()) };
+	const auto accepted = edt::accept_import_answer(answer_with(blobs, tags, tags), request, problem);
+	BOOST_CHECK_MESSAGE(accepted.has_value(), problem);
+}
+
+BOOST_AUTO_TEST_CASE(ADescThatPointsOutsideTheImport_IsRefused)
+{
+	const auto request = request_in();
+	std::string problem;
+	for (const char* reference : { "edt://settings/agent_policy.json", "user://x.desc", "cache://x", "engine://x", "code://x.cpp",
+		"res://some/file.desc", "memory://modules/other.desc", "memory://m/not_in_the_bundle.desc", "user/x.desc" }) {
+		auto bundle = import_answer();
+		bundle.blobs[4].bytes = text_bytes(std::string(R"json({"__type":"texture_2d_desc","__parent":"res://base_texture.desc","data":")json") + reference + "\"}");
+		BOOST_CHECK_MESSAGE(!edt::accept_import_answer(bundle, request, problem).has_value(), reference);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ADescWithAParentThatIsNotABaseResource_OrAForbiddenKey_OrBadJson_IsRefused)
+{
+	const auto request = request_in();
+	std::string problem;
+	const auto refused = [&](const char* text) {
+		auto bundle = import_answer();
+		bundle.blobs[2].bytes = text_bytes(text);
+		return !edt::accept_import_answer(bundle, request, problem).has_value();
+	};
+	BOOST_CHECK(refused(R"json({"__type":"material_desc","__parent":"memory://m/m.geom.desc"})json"));
+	BOOST_CHECK(refused(R"json({"__type":"material_desc","__parent":"edt://settings/x"})json"));
+	BOOST_CHECK(refused(R"json({"__type":"material_desc","__parent":["res://base_material.desc"]})json"));
+	BOOST_CHECK(refused(R"json({"__type":"material_desc","__secret":1})json"));
+	BOOST_CHECK(refused("not json"));
+	BOOST_CHECK(refused("[1,2]"));
+}
+
+BOOST_AUTO_TEST_CASE(ThePrefabJsonOfAnImport_IsHeldToTheSameRules)
+{
+	const auto request = request_in();
+	std::string problem;
+	boost::json::object bad;
+	bad["geometry"] = "user://x.geom.desc";
+	BOOST_CHECK(!edt::accept_import_answer(import_answer(bad), request, problem).has_value());
+
+	boost::json::object good;
+	good["geometry"] = "memory://m/m.geom.desc";
+	good["name"] = "a plain name";
+	BOOST_CHECK(edt::accept_import_answer(import_answer(good), request, problem).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AnImportAnswer_ThatListsATagItDidNotCreate_OrPutsTheFolderElsewhere_IsRefused)
 {
 	const auto request = request_in();
 	std::string problem;
 
-	edt::import_intermediate imported;
-	imported.prefab_tag = k_prefab;
-	imported.geom_tag = k_geom;
-	imported.all_tags = { k_prefab, k_geom, res::tag("memory://elsewhere/x.desc") };
-	imported.created_tags = { k_prefab, k_geom, res::tag("memory://elsewhere/x.desc") };
-	edt::decode_bundle outside;
-	outside.manifest["kind"] = "import";
-	outside.manifest["import"] = edt::to_json(imported);
-	for (const res::tag& tag : imported.created_tags) outside.blobs.push_back({ std::string(tag.view()), { std::byte{ 1 } } });
-	BOOST_CHECK(!edt::accept_import_answer(outside, request, problem).has_value());
+	// Listed but not created: the exporter walks the listed tags, so someone else's memory:// would be copied.
+	const std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")) };
+	auto listed_only = answer_with(blobs, { k_prefab, k_geom, k_material }, { k_prefab, k_geom });
+	BOOST_CHECK(!edt::accept_import_answer(listed_only, request, problem).has_value());
 
-	imported.all_tags = { k_prefab, k_geom };
-	imported.created_tags = { k_prefab, k_geom, k_material };
-	edt::decode_bundle unlisted;
-	unlisted.manifest["kind"] = "import";
-	unlisted.manifest["import"] = edt::to_json(imported);
-	for (const res::tag& tag : imported.created_tags) unlisted.blobs.push_back({ std::string(tag.view()), { std::byte{ 1 } } });
-	BOOST_CHECK(!edt::accept_import_answer(unlisted, request, problem).has_value());
-
-	imported.created_tags = { k_prefab, k_geom, k_geom };
-	edt::decode_bundle twice;
-	twice.manifest["kind"] = "import";
-	twice.manifest["import"] = edt::to_json(imported);
-	for (const res::tag& tag : imported.created_tags) twice.blobs.push_back({ std::string(tag.view()), { std::byte{ 1 } } });
+	auto twice = answer_with(blobs, { k_prefab, k_geom }, { k_prefab, k_geom, k_geom });
 	BOOST_CHECK(!edt::accept_import_answer(twice, request, problem).has_value());
+
+	// The folder is the stem of the model the editor asked about, not what the child says.
+	const auto other = request_in(k_models / "other.obj");
+	BOOST_CHECK(!edt::accept_import_answer(import_answer(), other, problem).has_value());
+	BOOST_CHECK(edt::accept_import_answer(answer_with(blobs, { k_prefab, k_geom }, { k_prefab, k_geom }), request, problem).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AnImportAnswer_BiggerThanTheRequestAllows_IsRefused)
+{
+	auto request = request_in();
+	request.limits.max_file_bytes = 4;
+	request.limits.max_total_bytes = 1000;
+	std::string problem;
+	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("bigger than the request") != std::string::npos, problem);
+
+	request = request_in();
+	request.limits.max_total_bytes = 10;
+	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AFailedImport_IsHandedBackAsItsError_ButNeverWithResources)

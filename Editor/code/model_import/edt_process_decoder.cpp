@@ -1,12 +1,16 @@
 #include "edt_process_decoder.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_process.h>
+#include <boost/json/parse_options.hpp>
+#include <boost/json/stream_parser.hpp>
 #include <algorithm>
+#include <cctype>
 #include <format>
 #include <iterator>
 #include <stdexcept>
 #include <stop_token>
 #include <unordered_set>
+#include <initializer_list>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -19,14 +23,16 @@ constexpr std::uint64_t k_min_memory_mb = 256;
 constexpr std::uint64_t k_max_memory_mb = 8192;
 constexpr std::size_t k_max_error_bytes = 300;
 
-// What the child says about itself goes to an agent and into a log: cut, and without anything a terminal acts on.
+// What the child says about itself goes to an agent and into a log: cut on a code point boundary, and escaped like the
+// rest of what it prints (control characters, bidi marks, separators).
 std::string cleaned(std::string_view text)
 {
-	std::string out;
-	for (const char c : text.substr(0, k_max_error_bytes)) {
-		const auto byte = static_cast<unsigned char>(c);
-		out.push_back((byte < 0x20 || byte == 0x7f) ? ' ' : c);
+	std::string_view cut = text.substr(0, k_max_error_bytes);
+	if (cut.size() < text.size()) {
+		while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.remove_suffix(1);
+		if (!cut.empty() && static_cast<unsigned char>(cut.back()) >= 0xC0) cut.remove_suffix(1);
 	}
+	const std::string out = edt::decode_log_text(cut);
 	if (out == "std::bad_alloc") return "the decoder ran out of memory";
 	return out;
 }
@@ -49,15 +55,6 @@ bool lies_in(const fs::path& path, const fs::path& folder)
 	const auto mismatch = std::mismatch(root.begin(), root.end(), normal.begin(), normal.end());
 	// `root` may end with an empty element ("dir/"): the rest of it is then the empty tail.
 	return mismatch.first == root.end() || (std::next(mismatch.first) == root.end() && mismatch.first->empty());
-}
-
-// "memory://<name>/..." -> "memory://<name>/", empty when the tag has no folder.
-std::string folder_prefix_of(const std::string& tag)
-{
-	const std::string_view scheme = "memory://";
-	if (!tag.starts_with(scheme)) return {};
-	const std::size_t slash = tag.find('/', scheme.size());
-	return slash == std::string::npos ? std::string{} : tag.substr(0, slash + 1);
 }
 
 } // namespace
@@ -118,6 +115,147 @@ std::optional<edt::model_file_scan> edt::accept_scan_answer(const decode_bundle&
 	return scan;
 }
 
+namespace {
+
+// The tags a model import makes below its folder, by what they hold; anything else is refused. In particular no model
+// file (.fbx, .glb, .gltf, .obj and the rest the importer's adapter reads) can come back as a resource: the exporter copies
+// every resource into the project, and a model there is parsed inside the editor when something refers to it.
+enum class blob_kind { desc, image, embedded_raw, embedded_image };
+
+std::string lower(std::string text)
+{
+	std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return text;
+}
+
+bool ends_with_text(std::string_view text, std::string_view suffix)
+{
+	return text.size() > suffix.size() && lower(std::string(text.substr(text.size() - suffix.size()))) == suffix;
+}
+
+std::string_view extension_of(std::string_view name)
+{
+	const std::size_t dot = name.rfind('.');
+	return dot == std::string_view::npos ? std::string_view{} : name.substr(dot + 1);
+}
+
+std::optional<blob_kind> classify(std::string_view relative, std::string_view stem)
+{
+	if (relative == std::string(stem) + ".prefab.desc" || relative == std::string(stem) + ".geom.desc") return blob_kind::desc;
+	const auto in_folder = [&relative](std::string_view folder) { return relative.starts_with(folder) && relative.size() > folder.size(); };
+	if (in_folder("materials/")) {
+		return ends_with_text(relative, ".mat.desc") ? std::optional(blob_kind::desc) : std::nullopt;
+	}
+	if (in_folder("textures/")) {
+		if (ends_with_text(relative, ".txm.desc")) return blob_kind::desc;
+		const std::string extension = lower(std::string(extension_of(relative)));
+		if (extension == "png" || extension == "jpg" || extension == "jpeg" || extension == "tga" || extension == "bmp") return blob_kind::image;
+		return std::nullopt;
+	}
+	if (in_folder("__embedded_txm/")) {
+		if (ends_with_text(relative, ".txm.desc")) return blob_kind::desc;
+		const std::string extension = lower(std::string(extension_of(relative)));
+		if (extension == "raw") return blob_kind::embedded_raw;
+		if (extension == "pct" || extension == "png" || extension == "jpg" || extension == "jpeg") return blob_kind::embedded_image;
+	}
+	return std::nullopt;
+}
+
+bool starts_with_bytes(const std::vector<std::byte>& bytes, std::initializer_list<unsigned> head)
+{
+	if (bytes.size() < head.size()) return false;
+	std::size_t i = 0;
+	for (const unsigned expected : head) {
+		if (std::to_integer<unsigned>(bytes[i++]) != expected) return false;
+	}
+	return true;
+}
+
+bool is_png(const std::vector<std::byte>& bytes) { return starts_with_bytes(bytes, { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }); }
+bool is_jpeg(const std::vector<std::byte>& bytes) { return starts_with_bytes(bytes, { 0xFF, 0xD8, 0xFF }); }
+bool is_bmp(const std::vector<std::byte>& bytes) { return starts_with_bytes(bytes, { 'B', 'M' }); }
+
+// What the exporter will copy under this name must be what the name says.
+bool content_matches(blob_kind kind, std::string_view relative, const std::vector<std::byte>& bytes)
+{
+	switch (kind) {
+	case blob_kind::desc: return true;	// checked as JSON by the caller
+	case blob_kind::image: {
+		const std::string extension = lower(std::string(extension_of(relative)));
+		if (extension == "png") return is_png(bytes);
+		if (extension == "jpg" || extension == "jpeg") return is_jpeg(bytes);
+		if (extension == "bmp") return is_bmp(bytes);
+		return bytes.size() >= 18;	// .tga has no magic: its header is 18 bytes
+	}
+	case blob_kind::embedded_raw: return bytes.size() >= 8;
+	case blob_kind::embedded_image: return is_png(bytes) || is_jpeg(bytes) || is_bmp(bytes);
+	}
+	return false;
+}
+
+// What a desc of an import may point at: the base descs and the shader the importer names, and the resources of this very
+// bundle. Every other string that reads as a tag (a protocol, or a "://" in it) is refused, so a desc cannot send hot
+// reload, the exporter or an agent's node.get to edt://, user://, cache://, engine://, code:// or a file of the project.
+const std::unordered_set<std::string_view> k_res_references = {
+	"res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc", "res://shaders/mix_opaque_trans_scene.frag" };
+const std::unordered_set<std::string_view> k_parent_references = { "res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc" };
+const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__guid", "__id", "__parent" };
+
+bool reads_as_tag(std::string_view text)
+{
+	if (text.find("://") != std::string_view::npos) return true;
+	const std::size_t end = text.find_first_of(":/");
+	if (end == std::string_view::npos) return false;
+	const std::string protocol = lower(std::string(text.substr(0, end)));
+	return protocol == "res" || protocol == "memory" || protocol == "engine" || protocol == "cache" || protocol == "code" || protocol == "user" || protocol == "edt";
+}
+
+std::string json_problem(const boost::json::value& value, const std::unordered_set<std::string>& bundle_tags, std::size_t depth = 0)
+{
+	if (depth > 64) return "a desc of the import is nested too deep";
+	if (value.is_string()) {
+		const std::string_view text(value.as_string().data(), value.as_string().size());
+		if (reads_as_tag(text) && !bundle_tags.contains(std::string(text)) && !k_res_references.contains(text)) {
+			return "a desc of the import refers to '" + cleaned(text) + "', which is neither a resource of the import nor a base resource";
+		}
+		return {};
+	}
+	if (value.is_array()) {
+		for (const boost::json::value& element : value.as_array()) {
+			if (std::string why = json_problem(element, bundle_tags, depth + 1); !why.empty()) return why;
+		}
+		return {};
+	}
+	if (!value.is_object()) return {};
+	for (const auto& member : value.as_object()) {
+		const std::string_view key(member.key().data(), member.key().size());
+		if (key.starts_with("__") && !k_header_keys.contains(key)) return "a desc of the import has the key '" + cleaned(key) + "'";
+		if (key == "__parent") {
+			const boost::json::value& parent = member.value();
+			const std::string_view text = parent.is_string() ? std::string_view(parent.as_string().data(), parent.as_string().size()) : std::string_view{};
+			if (!k_parent_references.contains(text)) return "a desc of the import has a __parent that is not a base resource";
+		}
+		if (std::string why = json_problem(member.value(), bundle_tags, depth + 1); !why.empty()) return why;
+	}
+	return {};
+}
+
+std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered_set<std::string>& bundle_tags)
+{
+	boost::json::parse_options options;
+	options.max_depth = 64;
+	boost::json::stream_parser parser(boost::json::storage_ptr{}, options);
+	boost::system::error_code error;
+	parser.write(reinterpret_cast<const char*>(blob.bytes.data()), blob.bytes.size(), error);
+	if (!error) parser.finish(error);
+	if (error) return "a desc of the import is not valid JSON within the limits";
+	const boost::json::value value = parser.release();
+	if (!value.is_object()) return "a desc of the import is not a JSON object";
+	return json_problem(value, bundle_tags);
+}
+
+}
+
 std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem)
 {
 	const boost::json::object& manifest = bundle.manifest;
@@ -157,44 +295,78 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		return imported;
 	}
 
-	const std::string prefix = folder_prefix_of(std::string(imported->prefab_tag.view()));
-	if (prefix.empty()) {
-		problem = "the prefab of the import is not below a memory:// folder";
+	// The folder of the import is the stem of the model, as the importer makes it; it is the editor's, not the child's.
+	const std::string stem = request.source_path.stem().string();
+	const std::string prefix = "memory://" + stem + "/";
+	if (stem.empty() || !is_bundle_tag(prefix + "x", bundle_limits{}.max_tag_bytes)) {
+		problem = "the name of the model cannot be the folder of an import";
 		return std::nullopt;
 	}
-	const auto below_prefix = [&prefix](const res::tag& tag) {
-		return is_bundle_tag(std::string(tag.view()), bundle_limits{}.max_tag_bytes) && std::string(tag.view()).starts_with(prefix);
-	};
-	std::unordered_set<std::string> all;
-	for (const res::tag& tag : imported->all_tags) {
-		if (!below_prefix(tag)) {
-			problem = "the import lists a resource outside the folder of its prefab";
-			return std::nullopt;
-		}
-		all.insert(std::string(tag.view()));
-	}
-	if (!all.contains(std::string(imported->prefab_tag.view())) || !below_prefix(imported->geom_tag) || !all.contains(std::string(imported->geom_tag.view()))) {
-		problem = "the prefab or the geometry of the import is not among its resources";
+	if (std::string(imported->prefab_tag.view()) != prefix + stem + ".prefab.desc" || std::string(imported->geom_tag.view()) != prefix + stem + ".geom.desc") {
+		problem = "the prefab or the geometry of the import is not where the model's import puts it";
 		return std::nullopt;
 	}
+
+	// An import made in an empty memory:// lists exactly what it created: a tag it only lists would be copied into the
+	// project by the exporter although this import never made it.
 	std::unordered_set<std::string> created;
 	for (const res::tag& tag : imported->created_tags) {
-		const std::string text(tag.view());
-		if (!all.contains(text) || !created.insert(text).second) {
-			problem = "the import created a resource it does not list, or one twice";
+		if (!created.insert(std::string(tag.view())).second) {
+			problem = "the import created a resource twice";
 			return std::nullopt;
 		}
+	}
+	std::unordered_set<std::string> listed;
+	for (const res::tag& tag : imported->all_tags) listed.insert(std::string(tag.view()));
+	if (listed != created) {
+		problem = "the import lists resources it did not create";
+		return std::nullopt;
+	}
+	if (!created.contains(std::string(imported->prefab_tag.view())) || !created.contains(std::string(imported->geom_tag.view()))) {
+		problem = "the prefab or the geometry of the import is not among its resources";
+		return std::nullopt;
 	}
 	// Exactly the created resources came with the answer, each once (the bundle reader refuses a tag twice).
 	if (bundle.blobs.size() != created.size()) {
 		problem = "the resources of the answer are not the ones the import created";
 		return std::nullopt;
 	}
+
+	// What the request allows, not only what a bundle can hold: a blob is at most twice the biggest file of a model and the
+	// resources together twice what a model may read; one blob cannot take the editor's memory before the exporter copies it.
+	const std::uint64_t blob_limit = static_cast<std::uint64_t>(request.limits.max_file_bytes) * 2;
+	const std::uint64_t total_limit = static_cast<std::uint64_t>(request.limits.max_total_bytes) * 2;
+	std::uint64_t total = 0;
 	for (const bundle_blob& blob : bundle.blobs) {
-		if (!created.contains(blob.tag)) {
+		if (!created.contains(blob.tag) || !blob.tag.starts_with(prefix)) {
 			problem = "the answer carries a resource the import did not create";
 			return std::nullopt;
 		}
+		const std::string_view relative = std::string_view(blob.tag).substr(prefix.size());
+		const std::optional<blob_kind> what = classify(relative, stem);
+		if (!what) {
+			problem = "the import made a resource of a kind it never makes: '" + cleaned(relative) + "'";
+			return std::nullopt;
+		}
+		if (blob.bytes.size() > blob_limit || (total += blob.bytes.size()) > total_limit) {
+			problem = "the resources of the import are bigger than the request allows";
+			return std::nullopt;
+		}
+		if (!content_matches(*what, relative, blob.bytes)) {
+			problem = "the resource '" + cleaned(relative) + "' is not what its name says";
+			return std::nullopt;
+		}
+		if (*what == blob_kind::desc) {
+			if (std::string why = desc_blob_problem(blob, created); !why.empty()) {
+				problem = std::move(why);
+				return std::nullopt;
+			}
+		}
+	}
+	// The prefab the editor builds from this JSON is checked like the descs of the bundle.
+	if (std::string why = json_problem(imported->prefab_json, created); !why.empty()) {
+		problem = std::move(why);
+		return std::nullopt;
 	}
 	return imported;
 }
@@ -243,7 +415,7 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 	decode_runner_config config = m_config;
 	if (source.deadline != std::chrono::steady_clock::time_point{}) {
 		const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
-		config.timeout = std::clamp(left, std::chrono::milliseconds(1000), m_config.timeout);
+		config.timeout = std::min(std::max(left, std::chrono::milliseconds(1000)), m_config.timeout);
 	}
 	const decode_runner runner(std::move(config));
 	decode_outcome outcome = runner.run(request, *source.preloaded, task != nullptr ? task->stop : std::stop_token{});
@@ -292,7 +464,9 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	}
 	if (!imported->error.empty()) return std::move(*imported);
 
-	// An agent's import never reuses or overwrites a resource it did not store itself.
+	// An agent's import never reuses or overwrites a resource it did not store itself. The check and the store are two calls:
+	// the resolver of memory:// has no create-only store, and another writer of this folder (a person's import of a model with
+	// the same name) would have to land between them; the importer in the process has the same window.
 	for (const res::tag& tag : imported->created_tags) {
 		if (m_resources.exists(tag)) {
 			throw std::runtime_error(std::format("'{}' is already in memory: another import of a model with this name has not finished", tag.view()));
