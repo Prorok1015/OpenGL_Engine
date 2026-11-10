@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace edt {
 
@@ -27,6 +28,14 @@ namespace edt {
 	// taken from the child (the request's is). An import the child reported as failed comes back with `error` set and no
 	// resources.
 	std::optional<import_intermediate> accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem);
+
+	// Whether `relative` (below the folder of an import named `stem`) is a name an import gives a resource: <stem>.prefab.desc,
+	// <stem>.geom.desc, materials/*.mat.desc, textures/*.txm.desc and images, __embedded_txm/* descs and images. Never a model
+	// file. The exporter checks the names it is about to write with it.
+	bool is_import_resource_name(std::string_view relative, std::string_view stem);
+
+	// The text after the last dot of the last segment, in lower case; empty when there is none.
+	std::string file_extension_lowercase(std::string_view path);
 
 	// The memory the decoder may use, from cfg `import/decoder_memory_mb`: 2 GiB when unset (0 or less), never unlimited, kept
 	// between 256 MiB and 8 GiB; `warning` says so when the value was changed.

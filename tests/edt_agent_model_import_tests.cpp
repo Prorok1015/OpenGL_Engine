@@ -224,6 +224,17 @@ BOOST_AUTO_TEST_CASE(Resolve_RefusesALinkToAModel)
 	BOOST_CHECK(plan.error.find("link") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(Resolve_RefusesAnAssetNameThatIsTheExtensionOfAModelFormat)
+{
+	for (const char* name : { "obj", "fbx", "glb", "gltf", "OBJ", "Fbx" }) {
+		const edt::agent_import_plan plan = service->resolve(request(name));
+		BOOST_CHECK_MESSAGE(!plan.ok(), name);
+		BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+		BOOST_CHECK_MESSAGE(plan.error.find("extension of a model format") != std::string::npos, plan.error);
+	}
+	BOOST_CHECK(service->resolve(request("objects")).ok());
+}
+
 BOOST_AUTO_TEST_CASE(Resolve_RefusesBadNamesAndFolders)
 {
 	for (const char* name : { "..", "a/b", "CON", "x.", "a:b", "a|b" }) {

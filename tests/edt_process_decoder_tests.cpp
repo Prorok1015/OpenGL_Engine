@@ -215,6 +215,26 @@ BOOST_AUTO_TEST_CASE(ThePrefabJsonOfAnImport_IsHeldToTheSameRules)
 	BOOST_CHECK(edt::accept_import_answer(import_answer(good), request, problem).has_value());
 }
 
+BOOST_AUTO_TEST_CASE(TwoTagsThatDifferOnlyByCase_AreOneFileOnWindows_AndRefusedAsARepeat)
+{
+	const auto request = request_in();
+	std::string problem;
+	const res::tag first("memory://m/textures/T.png");
+	const res::tag second("memory://m/textures/t.PNG");
+	const std::vector<res::tag> tags = { k_prefab, k_geom, first, second };
+	const std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")), blob_of(first, png_bytes()), blob_of(second, png_bytes()) };
+	BOOST_CHECK(!edt::accept_import_answer(answer_with(blobs, tags, tags), request, problem).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ADescWithAKeyThatReadsAsATag_IsRefused)
+{
+	const auto request = request_in();
+	std::string problem;
+	auto bundle = import_answer();
+	bundle.blobs[2].bytes = text_bytes(R"json({"__type":"material_desc","__parent":"res://base_material.desc","user://x":1})json");
+	BOOST_CHECK(!edt::accept_import_answer(bundle, request, problem).has_value());
+}
+
 BOOST_AUTO_TEST_CASE(AnImportAnswer_ThatListsATagItDidNotCreate_OrPutsTheFolderElsewhere_IsRefused)
 {
 	const auto request = request_in();

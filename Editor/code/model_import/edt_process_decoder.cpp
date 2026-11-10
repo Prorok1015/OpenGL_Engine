@@ -230,6 +230,9 @@ std::string json_problem(const boost::json::value& value, const std::unordered_s
 	for (const auto& member : value.as_object()) {
 		const std::string_view key(member.key().data(), member.key().size());
 		if (key.starts_with("__") && !k_header_keys.contains(key)) return "a desc of the import has the key '" + cleaned(key) + "'";
+		if (reads_as_tag(key) && !bundle_tags.contains(std::string(key)) && !k_res_references.contains(key)) {
+			return "a desc of the import has the key '" + cleaned(key) + "', which reads as a tag";
+		}
 		if (key == "__parent") {
 			const boost::json::value& parent = member.value();
 			const std::string_view text = parent.is_string() ? std::string_view(parent.as_string().data(), parent.as_string().size()) : std::string_view{};
@@ -254,6 +257,18 @@ std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered
 	return json_problem(value, bundle_tags);
 }
 
+}
+
+bool edt::is_import_resource_name(std::string_view relative, std::string_view stem)
+{
+	return classify(relative, stem).has_value();
+}
+
+std::string edt::file_extension_lowercase(std::string_view path)
+{
+	const std::size_t slash = path.rfind('/');
+	const std::string_view name = slash == std::string_view::npos ? path : path.substr(slash + 1);
+	return lower(std::string(extension_of(name)));
 }
 
 std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem)
@@ -310,8 +325,10 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 	// An import made in an empty memory:// lists exactly what it created: a tag it only lists would be copied into the
 	// project by the exporter although this import never made it.
 	std::unordered_set<std::string> created;
+	std::unordered_set<std::string> created_folded;
 	for (const res::tag& tag : imported->created_tags) {
-		if (!created.insert(std::string(tag.view())).second) {
+		// Two tags that differ only by case are one file on Windows (and on a case-insensitive disk): refused as a repeat.
+		if (!created.insert(std::string(tag.view())).second || !created_folded.insert(lower(std::string(tag.view()))).second) {
 			problem = "the import created a resource twice";
 			return std::nullopt;
 		}
