@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,6 +50,47 @@ namespace inp
 		bool all_actions = false;
 	};
 
+	// What game code asks of the stack (INPUT_STACK.md 3.3). Plain data: it waits for the next gs::route_input, which applies it
+	// with apply_commands. `source` is who asks: it owns the layers a push makes, and only its own layers can be changed.
+	enum class stack_command_kind : std::uint8_t { push, replace, remove, set_active, set_order, set_world_active };
+
+	struct stack_command
+	{
+		stack_command_kind kind = stack_command_kind::push;
+		// The world of the layer; for set_world_active, the world to switch. Empty from a system: its own world.
+		std::string world{};
+		// The layer for remove, set_active and set_order; push and replace name theirs in `layer.name`.
+		std::string name{};
+		stack_layer_desc layer{};
+		int order = 0;
+		bool active = true;
+		layer_owner source = layer_owner::module;
+	};
+
+	// The ctx resource a system of a world uses to ask for changes of the stack of its set: it fills a list that gs::route_input
+	// takes at the start of the next frame (worlds in the order of their desc_index, calls in order). The commands are about
+	// the layers of the world of the system; set_world_active names any world of the set.
+	class SNK_API input_stack_control
+	{
+	public:
+		// A layer of the system's world; one with the same name is replaced (a repeated setup makes no second layer).
+		void push(stack_layer_desc layer);
+		// Like push, but the layer must exist already.
+		void replace(stack_layer_desc layer);
+		void remove(std::string name);
+		void set_active(std::string name, bool active);
+		void set_order(std::string name, int order);
+		// Every layer of the world, of any owner, switched on or off (the base layer too).
+		void set_world_active(std::string world, bool active);
+
+		bool empty() const { return m_commands.empty(); }
+		// What gs::route_input takes: the commands in call order; the list is emptied.
+		std::vector<stack_command> take();
+
+	private:
+		std::vector<stack_command> m_commands;
+	};
+
 	struct stack_entry
 	{
 		std::string world;
@@ -87,10 +129,19 @@ namespace inp
 		bool remove(std::string_view world, std::string_view name);
 		// Every layer of the owner (a module's layers go when it unloads or reloads), memories included.
 		void remove_owner(layer_owner owner);
+		// A world that is off has all its layers inactive, whatever their own flag says (set_world_active); it is on by default
+		// and a world that is made again is on. Dropped with the world.
+		void set_world_active(std::string_view world, bool active);
+		bool world_active(std::string_view world) const;
+		// To change a layer in place (apply_commands); null when there is none.
+		stack_layer_desc* find(std::string_view world, std::string_view name);
 
 		// The memory of fronts of a layer (arm_actions writes it); dropped with the layer, its world or the set, and when the
 		// world's desc_index changes (put: the world was made again).
 		const layer_memory* find_memory(std::string_view world, std::string_view layer) const;
+		// True the first time `key` is asked for in this stack: a refused command is said once per session of the set (the stack
+		// goes with the set), not every frame it is asked again.
+		bool warn_once(std::string key);
 		std::size_t memory_count() const { return m_memory.size(); }
 
 		// Top first: by `order` (higher first), then by the world's desc_index, then the later added layer first.
@@ -105,7 +156,21 @@ namespace inp
 		std::vector<stack_entry> m_entries;
 		std::uint64_t m_added = 0;
 		std::map<std::pair<std::string, std::string>, layer_memory> m_memory;
+		std::set<std::string, std::less<>> m_off_worlds;
+		std::set<std::string> m_warned;
 	};
+
+	struct world_ref
+	{
+		std::string name;
+		std::uint32_t desc_index = 0;
+	};
+
+	// Applies the commands in order to the stack of a set whose worlds are `worlds` (what gs::route_input knows of them); the
+	// last command on a layer wins. A command that names a world that is not there, a layer that does not exist, or a layer of
+	// another owner is logged and skipped: push, replace, remove, set_active and set_order touch only the layers of their own
+	// `source`; set_world_active switches the whole world. Returns how many commands were applied.
+	SNK_API std::size_t apply_commands(input_stack& stack, const std::vector<stack_command>& commands, const std::vector<world_ref>& worlds);
 
 	// A mouse button held since a press: `captured` when a layer took the press, then `world` is its world.
 	struct drag_hold

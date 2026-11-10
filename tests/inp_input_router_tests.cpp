@@ -1001,6 +1001,52 @@ BOOST_AUTO_TEST_CASE(UpdateStage_RoutesBeforeTheContextsRunAndRebuildsTheBinding
 	BOOST_TEST(stage_router.binding_count() == 0u); // consumed: the panels bind again next frame
 }
 
+// ---------------------------------------------------------------- stack commands (#625)
+
+BOOST_AUTO_TEST_CASE(StackCommands_WaitForTheSetAndComeOutOnceInOrder)
+{
+	inp::stack_layer_desc menu;
+	menu.name = "menu";
+	router.queue_command("level", { .kind = inp::stack_command_kind::push, .world = "a", .layer = menu });
+	router.queue_command("level", { .kind = inp::stack_command_kind::remove, .world = "a", .name = "menu" });
+	router.queue_command("other", { .kind = inp::stack_command_kind::set_world_active, .world = "b", .active = false });
+
+	const auto taken = router.take_commands("level");
+	BOOST_REQUIRE_EQUAL(taken.size(), 2u);
+	BOOST_TEST((taken[0].kind == inp::stack_command_kind::push));
+	BOOST_TEST((taken[1].kind == inp::stack_command_kind::remove));
+	BOOST_TEST(router.take_commands("level").empty());
+	BOOST_TEST(router.take_commands("other").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_TheQueuesOfSetsThatAreNotThereAreDropped_AndAFreshSetGetsNoOldOnes)
+{
+	router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	router.queue_command("play", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	router.queue_command("play", { .kind = inp::stack_command_kind::remove, .world = "a", .name = "menu" });
+	router.queue_command("typo", { .kind = inp::stack_command_kind::remove, .world = "a", .name = "menu" });
+
+	const auto dropped = router.drop_commands_except({ "level" });
+	BOOST_REQUIRE_EQUAL(dropped.size(), 2u);
+	std::size_t count = 0;
+	for (const auto& item : dropped) count += item.edges;
+	BOOST_TEST(count == 3u);
+	BOOST_TEST(router.take_commands("level").size() == 1u);
+	BOOST_TEST(router.take_commands("play").empty());
+	BOOST_TEST(router.drop_commands_except({ "level" }).empty());
+
+	router.queue_command("play", { .kind = inp::stack_command_kind::remove, .world = "a", .name = "menu" });
+	router.forget_commands("play");
+	BOOST_TEST(router.take_commands("play").empty());
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_GoWithTheSet)
+{
+	router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	router.forget_set("level");
+	BOOST_TEST(router.take_commands("level").empty());
+}
+
 // ---------------------------------------------------------------- inject (#624)
 
 BOOST_AUTO_TEST_CASE(Inject_WaitsForTheSetAndComesOutOnceInOrder)
@@ -1081,6 +1127,19 @@ BOOST_AUTO_TEST_CASE(Inject_GoesWithTheSet)
 	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
 	router.forget_set("level");
 	BOOST_TEST(router.take_injected("level").empty());
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_AQueueThatIsNotTakenStopsAtTheLimit_ForEachSet)
+{
+	for (std::size_t i = 0; i < inp::input_router::command_limit + 50; ++i) {
+		router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = i % 2 == 0 });
+	}
+	router.queue_command("other", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	BOOST_TEST(router.take_commands("level").size() == inp::input_router::command_limit);
+	BOOST_TEST(router.take_commands("other").size() == 1u);
+
+	router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	BOOST_TEST(router.take_commands("level").size() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

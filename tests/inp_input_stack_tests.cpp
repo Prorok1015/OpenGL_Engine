@@ -627,4 +627,185 @@ BOOST_AUTO_TEST_CASE(Fronts_AWorldThatDiesWhileItTakesAHeldKey_LeavesTheOnesBelo
 	BOOST_TEST(armed(frame_of(stack, { "game" }, outside, false, physical, map), "game", JUMP, KEYBOARD_BUTTONS::SPACE));
 }
 
+// ---------------------------------------------------------------- commands (#625)
+
+namespace {
+
+const std::vector<inp::world_ref> TWO_WORLDS{ { "game", 0 }, { "minimap", 1 } };
+
+inp::stack_command push_by(inp::layer_owner source, std::string world, inp::stack_layer_desc desc)
+{
+	return { .kind = inp::stack_command_kind::push, .world = std::move(world), .layer = std::move(desc), .source = source };
+}
+
+inp::stack_command command_by(inp::layer_owner source, inp::stack_command_kind kind, std::string world, std::string name)
+{
+	return { .kind = kind, .world = std::move(world), .name = std::move(name), .source = source };
+}
+
+inp::input_stack stack_with_base_layers()
+{
+	inp::input_stack stack;
+	stack.put("game", 0, layer("world"));
+	stack.put("minimap", 1, layer("world"));
+	return stack;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(Commands_APushIsOwnedByItsSource_AndAPushOfTheSameNameReplacesIt)
+{
+	auto stack = stack_with_base_layers();
+	auto first = layer("menu", 5);
+	first.block_below = true;
+	BOOST_TEST(inp::apply_commands(stack, { push_by(inp::layer_owner::module, "game", first) }, TWO_WORLDS) == 1u);
+	const auto* menu = stack.find("game", "menu");
+	BOOST_REQUIRE(menu != nullptr);
+	BOOST_TEST((menu->owner == inp::layer_owner::module));
+	BOOST_TEST(menu->block_below);
+
+	BOOST_TEST(inp::apply_commands(stack, { push_by(inp::layer_owner::module, "game", layer("menu", 7)) }, TWO_WORLDS) == 1u);
+	BOOST_TEST(stack.size() == 3u);
+	BOOST_TEST(stack.find("game", "menu")->order == 7);
+	BOOST_TEST(!stack.find("game", "menu")->block_below);
+}
+
+BOOST_AUTO_TEST_CASE(Commands_ALayerOfAnotherOwnerCannotBeChanged)
+{
+	auto stack = stack_with_base_layers();
+	stack.put("game", 0, [] { auto l = layer("panel", 3); l.owner = inp::layer_owner::editor; return l; }());
+	const std::vector<inp::stack_command> commands{
+		command_by(inp::layer_owner::module, inp::stack_command_kind::remove, "game", "panel"),
+		command_by(inp::layer_owner::module, inp::stack_command_kind::set_active, "game", "panel"),
+		command_by(inp::layer_owner::module, inp::stack_command_kind::set_order, "game", "panel"),
+		command_by(inp::layer_owner::module, inp::stack_command_kind::remove, "game", "world"),
+		push_by(inp::layer_owner::module, "game", layer("panel", 9)),
+		{ .kind = inp::stack_command_kind::replace, .world = "game", .layer = layer("world", 9), .source = inp::layer_owner::module },
+	};
+	BOOST_TEST(inp::apply_commands(stack, commands, TWO_WORLDS) == 0u);
+	BOOST_REQUIRE(stack.find("game", "panel") != nullptr);
+	BOOST_TEST(stack.find("game", "panel")->order == 3);
+	BOOST_TEST(stack.find("game", "panel")->active);
+	BOOST_TEST(stack.find("game", "world") != nullptr);
+	BOOST_TEST(stack.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(Commands_TheOwnerChangesItsLayer_AndTheLastCommandWins)
+{
+	auto stack = stack_with_base_layers();
+	const std::vector<inp::stack_command> commands{
+		push_by(inp::layer_owner::module, "game", layer("menu", 5)),
+		command_by(inp::layer_owner::module, inp::stack_command_kind::set_active, "game", "menu"),
+		{ .kind = inp::stack_command_kind::set_order, .world = "game", .name = "menu", .order = 8, .source = inp::layer_owner::module },
+	};
+	BOOST_TEST(inp::apply_commands(stack, commands, TWO_WORLDS) == 3u);
+	BOOST_TEST(stack.find("game", "menu")->active);
+	BOOST_TEST(stack.find("game", "menu")->order == 8);
+
+	auto off = command_by(inp::layer_owner::module, inp::stack_command_kind::set_active, "game", "menu");
+	off.active = false;
+	auto on = off;
+	on.active = true;
+	inp::apply_commands(stack, { off, on, off }, TWO_WORLDS);
+	BOOST_TEST(!stack.find("game", "menu")->active);
+
+	inp::apply_commands(stack, { command_by(inp::layer_owner::module, inp::stack_command_kind::remove, "game", "menu"),
+		push_by(inp::layer_owner::module, "game", layer("menu", 1)) }, TWO_WORLDS);
+	BOOST_TEST(stack.find("game", "menu")->order == 1);
+	BOOST_TEST(stack.find("game", "menu")->active);
+}
+
+BOOST_AUTO_TEST_CASE(Commands_AReplaceNeedsTheLayer_AndAWorldThatIsNotThereIsRefused)
+{
+	auto stack = stack_with_base_layers();
+	const std::vector<inp::stack_command> commands{
+		{ .kind = inp::stack_command_kind::replace, .world = "game", .layer = layer("menu"), .source = inp::layer_owner::module },
+		push_by(inp::layer_owner::module, "ghost", layer("menu")),
+		command_by(inp::layer_owner::module, inp::stack_command_kind::remove, "game", "nothing"),
+		push_by(inp::layer_owner::module, "game", layer("")),
+		{ .kind = inp::stack_command_kind::set_world_active, .world = "ghost", .active = false },
+	};
+	BOOST_TEST(inp::apply_commands(stack, commands, TWO_WORLDS) == 0u);
+	BOOST_TEST(stack.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(Commands_AWorldThatIsOffHasNoLiveLayers_WhateverTheirOwnFlag)
+{
+	auto stack = stack_with_base_layers();
+	inp::apply_commands(stack, { push_by(inp::layer_owner::module, "minimap", layer("zoom", 2)) }, TWO_WORLDS);
+	const std::vector<std::string> both{ "game", "minimap" };
+	const glm::vec2 outside{ -10.f, -10.f };
+	BOOST_TEST(inp::resolve(stack, both, outside, false, {}).layers.size() == 3u);
+
+	const inp::stack_command off{ .kind = inp::stack_command_kind::set_world_active, .world = "minimap", .active = false };
+	BOOST_TEST(inp::apply_commands(stack, { off }, TWO_WORLDS) == 1u);
+	BOOST_TEST(!stack.world_active("minimap"));
+	BOOST_TEST(stack.world_active("game"));
+	BOOST_TEST(inp::resolve(stack, both, outside, false, {}).layers.size() == 1u);
+	BOOST_TEST(stack.find("minimap", "zoom")->active);
+
+	// The layers of the world stay, and the base layer put again every frame does not switch it on.
+	stack.put("minimap", 1, layer("world"));
+	BOOST_TEST(inp::resolve(stack, both, outside, false, {}).layers.size() == 1u);
+
+	auto on = off;
+	on.active = true;
+	inp::apply_commands(stack, { on }, TWO_WORLDS);
+	BOOST_TEST(inp::resolve(stack, both, outside, false, {}).layers.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(Commands_AWorldThatIsOffIsOnWhenItIsMadeAgain_OrGone)
+{
+	auto stack = stack_with_base_layers();
+	const inp::stack_command off{ .kind = inp::stack_command_kind::set_world_active, .world = "minimap", .active = false };
+	inp::apply_commands(stack, { off }, TWO_WORLDS);
+
+	stack.put("minimap", 5, layer("world"));
+	BOOST_TEST(stack.world_active("minimap"));
+
+	inp::apply_commands(stack, { off }, TWO_WORLDS);
+	stack.retain_worlds({ "game" });
+	BOOST_TEST(stack.world_active("minimap"));
+
+	inp::apply_commands(stack, { off }, { { "game", 0 }, { "minimap", 1 } });
+	stack.remove_world("minimap");
+	BOOST_TEST(stack.world_active("minimap"));
+}
+
+BOOST_AUTO_TEST_CASE(Commands_TheControlOfASystemKeepsTheCallsInOrderAndHandsThemOverOnce)
+{
+	inp::input_stack_control routes;
+	BOOST_TEST(routes.empty());
+	routes.push(layer("menu", 5));
+	routes.set_active("menu", false);
+	routes.set_order("menu", 3);
+	routes.replace(layer("menu", 4));
+	routes.remove("menu");
+	routes.set_world_active("minimap", false);
+	BOOST_TEST(!routes.empty());
+
+	const auto taken = routes.take();
+	BOOST_REQUIRE_EQUAL(taken.size(), 6u);
+	BOOST_TEST((taken[0].kind == inp::stack_command_kind::push));
+	BOOST_TEST(taken[0].layer.name == "menu");
+	BOOST_TEST((taken[1].kind == inp::stack_command_kind::set_active));
+	BOOST_TEST(!taken[1].active);
+	BOOST_TEST(taken[2].order == 3);
+	BOOST_TEST((taken[3].kind == inp::stack_command_kind::replace));
+	BOOST_TEST((taken[4].kind == inp::stack_command_kind::remove));
+	BOOST_TEST(taken[5].world == "minimap");
+	BOOST_TEST((taken[5].source == inp::layer_owner::module));
+	BOOST_TEST(taken[0].world.empty());
+	BOOST_TEST(routes.empty());
+	BOOST_TEST(routes.take().empty());
+}
+
+BOOST_AUTO_TEST_CASE(Commands_ARefusalIsSaidOncePerReasonAndLayer)
+{
+	inp::input_stack stack;
+	BOOST_TEST(stack.warn_once("remove|game|panel|the layer belongs to another owner"));
+	BOOST_TEST(!stack.warn_once("remove|game|panel|the layer belongs to another owner"));
+	BOOST_TEST(stack.warn_once("remove|game|other|the layer belongs to another owner"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
