@@ -333,6 +333,33 @@ BOOST_AUTO_TEST_CASE(stop_loading_of_the_root_leaves_its_finished_resources)
 	BOOST_TEST(loaded.get()->str() == "hello");
 }
 
+// #657: a load that waits for a dependency still in flight when the loads stop (a desc whose __parent was loading at
+// exit) must not be kept alive by the wait: the layer goes with nothing of its own referenced.
+BOOST_AUTO_TEST_CASE(stop_loading_drops_the_waits_of_a_dependency_still_in_flight)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag dependency{ "gate://parent.node" };
+	gate.files[dependency] = test_util::to_bytes("parent");
+	gate.gate = true;
+	layer->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+	const auto child = put("child.lnode", "child\n" + dependency.string());
+
+	{
+		const auto pending = layer->require<layer_node>(child);
+		pump(); // the child is read and waits for its dependency, which the gate holds
+		BOOST_REQUIRE(!pending.is_ready());
+		layer->stop_loading();
+		pump();
+		BOOST_TEST(pending.has_error());
+	}
+	BOOST_TEST(layer->live_resources() == 0u);
+
+	gate.release();
+	pump();
+	BOOST_TEST(layer->live_resources() == 0u);
+}
+
 // #657: the warning of a destroyed layer names what is still held, so the holder can be found.
 BOOST_AUTO_TEST_CASE(a_destroyed_layer_names_the_resources_still_held)
 {

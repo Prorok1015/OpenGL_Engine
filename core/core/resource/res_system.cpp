@@ -135,6 +135,21 @@ struct res::resource_system::wait_graph {
     }
   }
 
+  // Every edge goes, with the blocks the nodes hold (released outside the lock): once the loads stopped no wait
+  // settles any more, and an edge left behind would keep both its blocks alive (#657).
+  void clear() {
+    node_map released;
+    {
+      std::lock_guard lock(m_mutex);
+      released.swap(m_nodes);
+    }
+  }
+
+  bool empty() {
+    std::lock_guard lock(m_mutex);
+    return m_nodes.empty();
+  }
+
 private:
   struct node {
     std::shared_ptr<block> self;
@@ -314,6 +329,7 @@ res::resource_system::~resource_system() {
   // The gate is closed: nothing parked runs any more, and what it holds (adapters, blocks) goes now, not when the root
   // settles what it waited for.
   stop_loading();
+  ASSERT_MSG(m_graph->empty(), "a stopped resource_system still has waits in its graph");
   if (m_parent) {
     std::unique_lock lock(m_cache_mutex);
     for (const auto &[dependent, targets] : m_depends_on) {
@@ -367,6 +383,7 @@ void res::resource_system::stop_loading() {
   m_lifetime.cancel_tasks();
   m_tasks.wait_idle(m_lifetime);
   cancel_parked();
+  m_graph->clear();
 }
 
 void res::resource_system::run_on_compute(std::function<void()> cb,

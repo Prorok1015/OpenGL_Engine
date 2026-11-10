@@ -156,9 +156,11 @@ jobs:
           before=$(tree_hash "$project")
           scratch_before=$(find "$tmp_root" -maxdepth 1 -name 'snk-*' | wc -l)
           rc=0
+          # Not 0: "level loaded" waits for the loads the level started (#656, up to scene/level_settle_seconds = 10 s),
+          # and 20000 uncapped frames end in ~0.5 s on Release. At 1000 fps the cap is >= 20 s.
           env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 build/ci-linux-clang-debug/apps/game/game \
             --config apps/game/config/game.cfg --headless --project "$project" \
-            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
+            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 1000 \
               resource/user_path "$user_dir" \
             >game_out/stdout.txt 2>"$log" || rc=$?
           tail -20 "$log"
