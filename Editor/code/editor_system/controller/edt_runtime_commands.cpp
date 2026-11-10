@@ -489,7 +489,7 @@ std::vector<edt::registration> edt::register_runtime_commands(cmd::command_regis
 
 	cmd::command_desc get;
 	get.id = "runtime.get";
-	get.summary = "One live entity of the running game (Play) by its whole entity id: name, parent, children, components as desc JSON. Components without a schema are only named (unsaved); what does not fit 256 KiB is named in truncated. Read-only; the state of Play, not the document. An entity id read before a module reload (see "reload" in the answers) may name another entity now";
+	get.summary = "One live entity of the running game (Play) by its whole entity id: name, parent, children, components as desc JSON. Components without a schema are only named (unsaved); what does not fit 256 KiB is named in truncated. Read-only; the state of Play, not the document. An entity id read before a module reload (see 'reload' in the answers) may name another entity now";
 	get.category = cmd::agent_category::read;
 	get.args_schema = parse_schema(R"({"type":"object","properties":{
 		"entity":{"type":"integer","minimum":0,"description":"the entity id from runtime.query, with its version"},
