@@ -92,7 +92,7 @@ struct import_fixture : test_util::scene_env
 			return imported;
 		}
 		const std::string stem = model.stem().string();
-		const res::tag texture{ "memory://" + stem + "/tex/albedo.png" };
+		const res::tag texture{ "memory://" + stem + "/textures/albedo.png" };
 		const res::tag geometry{ "memory://" + stem + "/" + stem + ".geom.desc" };
 		const res::tag prefab{ "memory://" + stem + "/" + stem + ".prefab.desc" };
 		rs->store(texture, test_util::to_bytes("png bytes"));
@@ -483,13 +483,13 @@ BOOST_AUTO_TEST_CASE(Start_WithoutAnApproval_LooksAtNoPath)
 
 BOOST_AUTO_TEST_CASE(Job_ErasesOnlyTheMemoryCopiesItCreated)
 {
-	const res::tag foreign{ "memory://robot/tex/foreign.png" };
+	const res::tag foreign{ "memory://robot/textures/foreign.png" };
 	rs->store(foreign, test_util::to_bytes("belongs to somebody else"));
 	foreign_tag = foreign;
 	const auto started = approved_start(request("hero", "models"), agent);
 	BOOST_REQUIRE(started.ok());
 	run_jobs();
-	BOOST_CHECK(in_memory("memory://robot/tex/foreign.png"));
+	BOOST_CHECK(in_memory("memory://robot/textures/foreign.png"));
 	BOOST_CHECK(!in_memory("memory://robot/robot.prefab.desc"));
 }
 
@@ -508,14 +508,14 @@ BOOST_AUTO_TEST_CASE(Start_AfterTheApproval_ImportsExportsAndCleansMemory)
 	BOOST_CHECK_EQUAL(std::string(result.at("prefab").as_string()), "res://models/hero.prefab.desc");
 	std::vector<std::string> assets;
 	for (const json::value& asset : result.at("assets").as_array()) assets.emplace_back(asset.as_string());
-	BOOST_TEST((assets == std::vector<std::string>{ "res://models/hero.geom.desc", "res://models/hero.prefab.desc", "res://models/tex/albedo.png" }));
+	BOOST_TEST((assets == std::vector<std::string>{ "res://models/hero.geom.desc", "res://models/hero.prefab.desc", "res://models/textures/albedo.png" }));
 
 	BOOST_CHECK(fs::exists(res_root / "models" / "hero.prefab.desc"));
 	BOOST_CHECK(fs::exists(res_root / "models" / "hero.geom.desc"));
-	BOOST_CHECK_EQUAL(read_file(res_root / "models" / "tex" / "albedo.png"), "png bytes");
+	BOOST_CHECK_EQUAL(read_file(res_root / "models" / "textures" / "albedo.png"), "png bytes");
 	// The memory:// references of the prefab point at the project files now.
 	BOOST_CHECK(read_file(res_root / "models" / "hero.prefab.desc").find("res://models/hero.geom.desc") != std::string::npos);
-	for (const char* tag : { "memory://robot/tex/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
+	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }
 	}
 	BOOST_CHECK(!service->running());
@@ -623,7 +623,7 @@ BOOST_AUTO_TEST_CASE(Job_RefusesAFileThatChangesWhileItIsImported_AndLeavesNothi
 	BOOST_CHECK(info->status == edt::job_status::failed);
 	BOOST_CHECK(info->error.find("changed") != std::string::npos);
 	BOOST_CHECK(!fs::exists(res_root / "assets"));
-	for (const char* tag : { "memory://robot/tex/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
+	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }
 	}
 }
@@ -656,7 +656,7 @@ BOOST_AUTO_TEST_CASE(Job_ATargetThatAppearedMeanwhile_WritesNothing)
 	BOOST_CHECK(info->error.find("exists") != std::string::npos);
 	BOOST_CHECK_EQUAL(read_file(res_root / "assets" / "robot" / "robot.geom.desc"), "somebody's file");
 	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
-	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "tex"));
+	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "textures"));
 	BOOST_CHECK(!in_memory("memory://robot/robot.prefab.desc"));
 }
 
@@ -671,10 +671,10 @@ BOOST_AUTO_TEST_CASE(Job_AWriteRefusedHalfWay_TakesBackWhatWasWritten)
 	const auto info = jobs.info(started.job);
 	BOOST_REQUIRE(info.has_value());
 	BOOST_CHECK(info->status == edt::job_status::failed);
-	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "tex" / "albedo.png"));
+	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "textures" / "albedo.png"));
 	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.geom.desc"));
 	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
-	for (const char* tag : { "memory://robot/tex/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
+	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }
 	}
 }
@@ -689,7 +689,7 @@ BOOST_AUTO_TEST_CASE(Job_CancelledBeforeTheWriteLeavesNoFileAndNoMemoryCopy)
 	BOOST_CHECK(!jobs.is_running(started.job));
 	BOOST_CHECK_EQUAL(imports, 1);
 	BOOST_CHECK(!fs::exists(res_root / "assets"));
-	for (const char* tag : { "memory://robot/tex/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
+	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }
 	}
 	BOOST_CHECK(!service->running());
