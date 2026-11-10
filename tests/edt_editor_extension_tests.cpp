@@ -707,9 +707,10 @@ private:
 
 BOOST_AUTO_TEST_CASE(APreviewOfAModule_CountsInItsFactoryAndInEveryCallTheEditorMakesIntoItsDocument)
 {
-	callback_scope_fixture module(*this);
+	// Declared before the module: the editor asks the document (is_dirty, close) when the module's preview is removed at unload.
 	std::vector<std::string> seen;
 	std::string made_while;
+	callback_scope_fixture module(*this);
 	edt::asset_preview_desc preview;
 	preview.id = "ext.gated_preview";
 	preview.suffix = ".gprev";
