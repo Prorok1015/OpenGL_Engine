@@ -563,7 +563,7 @@ BOOST_AUTO_TEST_CASE(TheChecksReadTheProtocolAsResTagDoes_AndRefuseEveryTextWith
 		}
 		return errors;
 	};
-	constexpr std::string_view good = "res://materials/ok.mat.desc";
+	constexpr const char* good = "res://materials/ok.mat.desc";
 	for (const std::string_view text : { "a:b://x", "://x", "res://", "res:///abs", "RES://a.png", "\\\\", "c:\\\\path",
 		"user/xsecret.desc", "user:/xa.png", "user\\xa.png", "res://res://a.png", "res://user://a.png", "x-y://a",
 		"materials/a.mat.desc", "res:/a.png", "res/a.png", good }) {
