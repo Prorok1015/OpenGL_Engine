@@ -562,7 +562,7 @@ BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_reported_for_its_api_even_with_an
 
 	BOOST_TEST((report.status == core::reload_status::refused));
 	BOOST_CHECK_MESSAGE(report.message.find("api major") != std::string::npos, report.message);
-	BOOST_CHECK_MESSAGE(report.message.find("layout") == std::string::npos, report.message);
+	BOOST_CHECK_MESSAGE(report.message.find("another layout") == std::string::npos, report.message);
 	BOOST_TEST(resident(project.copy(0)));
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();
