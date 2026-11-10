@@ -186,15 +186,21 @@ inline void register_stat_desc(scn::registration_scope& scope)
 		});
 }
 
+// Whether a scene_env registers the test-only stat_desc next to the engine's types.
+enum class test_descs { with, without };
+
 struct scene_env : ram_res_env
 {
-	scene_env()
+	// test_descs::without: only what register_scene_types registers, for a test that walks every engine spawner.
+	explicit scene_env(test_descs with_test_descs = test_descs::with)
 	{
 		descs = std::make_unique<desc::desc_system>(*rs);
 		rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(*descs));
 		assembler = std::make_unique<scn::ecs_assembler>(*descs, *rs);
 		scope.emplace(scn::register_scene_types(*descs, *assembler, skinning));
-		register_stat_desc(*scope);
+		if (with_test_descs == test_descs::with) {
+			register_stat_desc(*scope);
+		}
 	}
 
 	~scene_env()

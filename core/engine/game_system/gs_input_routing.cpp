@@ -242,6 +242,34 @@ namespace
 		ctx.insert_or_assign(std::move(injection));
 	}
 
+	// The commands of the systems (worlds in the order of their desc_index, each in call order), then those queued from outside.
+	void apply_stack_commands(inp::input_router& router, const std::vector<entry>& entries, std::string_view set, inp::input_stack& stack)
+	{
+		std::vector<const entry*> by_file;
+		by_file.reserve(entries.size());
+		std::vector<inp::world_ref> worlds;
+		worlds.reserve(entries.size());
+		for (const auto& e : entries) {
+			by_file.push_back(&e);
+			worlds.push_back({ std::string{ e.context->get_name() }, e.context->desc_index() });
+		}
+		std::ranges::stable_sort(by_file, [](const entry* a, const entry* b) { return a->context->desc_index() < b->context->desc_index(); });
+
+		std::vector<inp::stack_command> commands;
+		for (const entry* e : by_file) {
+			auto* control = e->context->state().ctx().find<inp::input_stack_control>();
+			if (!control || control->empty()) continue;
+			for (inp::stack_command& command : control->take()) {
+				if (command.world.empty() && command.kind != inp::stack_command_kind::set_world_active) command.world = e->context->get_name();
+				commands.push_back(std::move(command));
+			}
+		}
+		for (inp::stack_command& command : router.take_commands(set)) {
+			commands.push_back(std::move(command));
+		}
+		inp::apply_commands(stack, commands, worlds);
+	}
+
 	void route_set(inp::input_router& router, scn::context_set& set, const std::shared_ptr<const inp::action_map>& actions)
 	{
 		const inp::input_state& raw = router.raw_state();
@@ -273,6 +301,11 @@ namespace
 			if (e.routed.focused) fed.push_back(name);
 		}
 		stack.retain_worlds(present);
+		// After the base layers are put: a world made again this frame has its flag of "off" reset by `put`, and a command must
+		// not be lost to that. A Pause keeps the commands waiting: the layers stay as they are until it goes (INPUT_STACK.md 3.4).
+		if (set.mode() != ecs::run_mode::pause) {
+			apply_stack_commands(router, entries, set_name, stack);
+		}
 
 		inp::input_router::mouse_hold hold = router.hold(set_name);
 		if (!fed.empty() && button_down && !hold.active) {
@@ -319,6 +352,11 @@ void gs::route_input(inp::input_router& router, scn::context_manager& contexts, 
 		sets.emplace_back(set.name());
 		route_set(router, set, actions);
 	});
+	for (const auto& dropped : router.drop_commands_except(sets)) {
+		if (router.warn_once(dropped.set, "#command-set")) {
+			egLOG_WARN("input", "input stack commands for set '{}', which is not there: {} command(s) dropped", dropped.set, dropped.edges);
+		}
+	}
 	for (const auto& dropped : router.drop_injected_except(sets)) {
 		if (router.warn_once(dropped.set, "#inject-set")) {
 			egLOG_WARN("input", "inject into set '{}', which is not there: {} edge(s) dropped", dropped.set, dropped.edges);

@@ -38,8 +38,14 @@
 // into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
 // own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
-// Still 3.6 (#631): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
-#define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
+// #631 (no bump, from 3.6 on): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
+// 3.7 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
+// methods; module_context is made by the engine and gains two members at its end), the ctx type inp::input_stack_control
+// (a system's list of stack commands, methods exported), inp::stack_command and inp::stack_layer_desc::owner already there.
+// A module built for 3.6 or older never calls them and still loads; one that uses them needs an engine of 3.7 or newer.
+// gs::input_stack_handle, inp::stack_layer_desc and inp::input_stack_control are in the layout key (#614: the module holds,
+// builds and allocates them), so the key changes; a module without the key export (3.6 and older) is checked by version only.
+#define SNK_MODULE_API_VERSION 0x0003'0007u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

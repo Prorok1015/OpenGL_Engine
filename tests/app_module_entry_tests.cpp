@@ -58,6 +58,8 @@ std::uint32_t api_3_3() { return 0x0003'0003u; }
 std::uint32_t api_3_4() { return 0x0003'0004u; }
 // A module built before snk_module_layout_key (#614).
 std::uint32_t api_3_5() { return 0x0003'0005u; }
+// A module built before gs::module_context::input_stack (#625).
+std::uint32_t api_3_6() { return 0x0003'0006u; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -206,7 +208,7 @@ BOOST_AUTO_TEST_CASE(ActionReachIsMinor3_5_AndAModuleBuiltFor3_4StillLoads)
 BOOST_AUTO_TEST_CASE(TheLayoutKeyIsMinor3_6_AndAModuleBuiltFor3_5WithoutItStillLoads)
 {
 	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 6u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 6u);
 	auto entry = generated_entry();
 	entry.api_version = &api_3_5;
 	entry.build_info = +[]() { return info_with(api_3_5(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
@@ -224,6 +226,16 @@ BOOST_AUTO_TEST_CASE(AModuleThatDoesNotKnowTheLayoutsReportsZeroAndIsNotChecked)
 	BOOST_REQUIRE(entry.layout_key != nullptr);
 	BOOST_TEST(entry.layout_key() == 0u);
 	BOOST_TEST(app::modules::check_module_layout(entry, 0x1234u).empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheInputStackFromCodeIsMinor3_7_AndAModuleBuiltFor3_6StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 7u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_6;
+	entry.build_info = +[]() { return info_with(api_3_6(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 
 BOOST_AUTO_TEST_CASE(ModuleNeedingNewerMinorIsRefused)
