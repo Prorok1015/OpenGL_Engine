@@ -50,6 +50,7 @@ namespace edt {
 	class editor_context;
 	class editor_layer;
 	class model_importer;
+	class process_decoder;
 	class asset_exporter;
 	class agent_model_import;
 	class asset_export_dialog;
@@ -136,6 +137,8 @@ namespace edt {
 		// Import/export
 #if SNK_HAS_ASSIMP
 		std::unique_ptr<edt::model_importer> m_model_importer;
+		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
+		std::unique_ptr<edt::process_decoder> m_process_decoder;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;

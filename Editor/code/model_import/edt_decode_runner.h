@@ -4,9 +4,11 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace edt {
@@ -33,6 +35,28 @@ namespace edt {
 		bool cancelled = false;
 
 		bool ok() const { return bundle.has_value(); }
+	};
+
+	// What the child printed is the model's doing: a line made safe for the log. Control characters, C1 controls, the
+	// line and paragraph separators and the bidi marks are written as \xNN (each byte of their UTF-8), so a line cannot
+	// forge log lines, move a terminal's cursor or reorder the text a person reads.
+	std::string decode_log_text(std::string_view line);
+
+	// What a run may put in the editor's log: past 200 lines or 64 KiB one line says so and the rest is dropped (Assimp
+	// warns about every odd thing in a model; a hostile one can flood the log for the whole deadline).
+	class decode_log_budget
+	{
+	public:
+		// Counts one line; true while it may be logged.
+		bool take(std::size_t bytes);
+
+	private:
+		static constexpr std::size_t k_max_lines = 200;
+		static constexpr std::size_t k_max_bytes = 64 * 1024;
+		std::mutex m_mutex;
+		std::size_t m_lines = 0;
+		std::size_t m_bytes = 0;
+		bool m_done = false;
 	};
 
 	// Runs the decoder process (#647) for one request. The model's bytes go in the request bundle; the child gets a

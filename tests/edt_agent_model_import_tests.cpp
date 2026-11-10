@@ -282,6 +282,25 @@ BOOST_AUTO_TEST_CASE(WithoutAnImporter_EverythingIsDisabledWithTheReason)
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::disabled);
 }
 
+BOOST_AUTO_TEST_CASE(WithoutTheDecoder_EverythingIsDisabledWithAReasonThatNamesTheFile_AndNothingIsParsedHere)
+{
+	int parsed_here = 0;
+	edt::agent_import_options none = options();
+	none.import = [&parsed_here](const edt::import_source&, ds::task_context*) { ++parsed_here; return edt::import_intermediate{}; };
+	none.scan = [&parsed_here](const edt::import_source&, ds::task_context*) { ++parsed_here; return edt::model_file_scan{}; };
+	none.unavailable_reason = [] { return std::string("the model decoder 'bin/snk_model_decoder' was not found next to the editor"); };
+	edt::agent_model_import bare(exporter, jobs, *rs, std::move(none));
+	BOOST_CHECK(!bare.available());
+	const edt::agent_import_plan plan = bare.resolve(request());
+	BOOST_CHECK_EQUAL(plan.code, cmd::codes::disabled);
+	BOOST_CHECK(plan.error.find("snk_model_decoder") != std::string::npos);
+	const auto started = bare.start(request(), cmd::origin::ui(), true);
+	BOOST_CHECK(!started.ok());
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::disabled);
+	BOOST_CHECK(started.error.find("snk_model_decoder") != std::string::npos);
+	BOOST_CHECK_EQUAL(parsed_here, 0);
+}
+
 BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 {
 	const std::optional<std::string> text = service->describe(request("hero", "models"), agent);

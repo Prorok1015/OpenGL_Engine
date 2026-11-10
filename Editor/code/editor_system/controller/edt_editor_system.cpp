@@ -25,6 +25,7 @@
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
+#include "edt_process_decoder.h"
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
@@ -177,6 +178,8 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
 	// Minutes without a request after which an agent's MCP session is closed (its "allow until the end of the session" with it); 0: never.
 	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
+	// The memory the decoder process may use for an agent's model (#647), in MiB; 0: 2048. Kept between 256 and 8192.
+	CFG_VAR_DEF_INT(cfg_import_decoder_memory_mb, "import/decoder_memory_mb", 0);
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run
@@ -335,12 +338,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	{
 		edt::agent_import_options import_options;
 #if SNK_HAS_ASSIMP
-		import_options.import = [importer = m_model_importer.get()](const edt::import_source& source, ds::task_context* task) {
-			return importer->import_background(source, task);
+		// An agent's model is parsed in a process of its own, with a memory limit and killed at its deadline (#647). There is
+		// no fallback to parsing it here: without the decoder the command says so.
+		{
+			std::string memory_warning;
+			edt::decode_runner_config decoder_config;
+			decoder_config.memory_limit_bytes = edt::decoder_memory_limit(static_cast<std::int64_t>(*cfg_import_decoder_memory_mb), memory_warning);
+			if (!memory_warning.empty()) egLOG_WARN("Editor/Import", "{}", memory_warning);
+			m_process_decoder = std::make_unique<edt::process_decoder>(m_res, std::move(decoder_config));
+		}
+		import_options.import = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
+			return decoder->import(source, task);
 		};
-		import_options.scan = [](const edt::import_source& source, ds::task_context* task) {
-			return edt::model_importer::scan_files(source, task);
+		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
+			return decoder->scan(source, task);
 		};
+		import_options.unavailable_reason = [decoder = m_process_decoder.get()] { return decoder->unavailable_reason(); };
 #endif
 		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
 		import_options.resources_path = [this] { return m_res.get_resources_path(); };

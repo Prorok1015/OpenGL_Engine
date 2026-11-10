@@ -298,6 +298,14 @@ std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::s
 	return plan;
 }
 
+std::string edt::agent_model_import::unavailable_reason() const
+{
+	if (!m_options.import || !m_options.scan) {
+		return "model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF)";
+	}
+	return m_options.unavailable_reason ? m_options.unavailable_reason() : std::string{};
+}
+
 edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_request& request) const
 {
 	agent_import_plan plan;
@@ -306,8 +314,8 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 		plan.error = std::move(why);
 		return plan;
 	};
-	if (!available()) {
-		return refuse(cmd::codes::disabled, "model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF)");
+	if (const std::string why = unavailable_reason(); !why.empty()) {
+		return refuse(cmd::codes::disabled, why);
 	}
 	if (request.path.empty()) return refuse(cmd::codes::invalid_args, "the source path is empty");
 

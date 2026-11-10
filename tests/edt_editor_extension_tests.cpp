@@ -441,7 +441,7 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItC
 	reported = host;
 	BOOST_CHECK(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty());
 
-	// 1.1 added asset_kind_desc::make_preview (#589): a module built against 1.0 does not use it and is served as before.
+	// 1.1 added add_asset_preview (#589): a module built against 1.0 does not call it and is served as before.
 	reported = 0x0001'0000u;
 	BOOST_CHECK_MESSAGE(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty(), "a module built against editor api 1.0 is refused");
 

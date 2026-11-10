@@ -103,16 +103,18 @@ long parent_pid_argument(int argc, char** argv)
 
 // The sanitizers reserve terabytes of address space for their shadow memory, so RLIMIT_AS cannot be used under them.
 // Windows: the editor's Job object limits the memory.
-void limit_address_space(std::uint64_t memory_limit_bytes)
+// False when the limit was asked for and could not be set: the caller ends, a decoder without its limit must not run.
+bool limit_address_space(std::uint64_t memory_limit_bytes)
 {
 #if defined(__linux__)
 	if (memory_limit_bytes != 0 && k_address_space_limit_works) {
 		const rlimit limit{ static_cast<rlim_t>(memory_limit_bytes), static_cast<rlim_t>(memory_limit_bytes) };
-		setrlimit(RLIMIT_AS, &limit);
+		return setrlimit(RLIMIT_AS, &limit) == 0;
 	}
 #else
 	(void)memory_limit_bytes;
 #endif
+	return true;
 }
 
 struct arguments
@@ -233,7 +235,9 @@ int main(int argc, char** argv)
 	if (!request) {
 		return fail("request: not a valid decode request");
 	}
-	limit_address_space(request->memory_limit_bytes);
+	if (!limit_address_space(request->memory_limit_bytes)) {
+		return fail("the memory limit could not be set");
+	}
 
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (args->self_test_alloc_bytes != 0) {
