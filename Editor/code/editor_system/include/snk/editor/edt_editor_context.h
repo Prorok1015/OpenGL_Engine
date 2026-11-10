@@ -76,7 +76,7 @@ namespace edt
 		void untrack_module_scope(const registration_scope& scope);
 		// Empty when the modules can be unloaded now; otherwise why not: one of their callbacks is running (a task
 		// continuation, a panel draw, an action, an inspector renderer, an asset kind or an event handler registered through
-		// editor_module_context). Not seen: the methods of the document an asset preview makes.
+		// editor_module_context, and every call the editor makes into the document an asset preview makes).
 		std::string module_unload_refusal() const;
 
 	private:

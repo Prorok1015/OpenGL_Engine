@@ -1,7 +1,11 @@
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/common/engine_assert.h>
+#include <cstdint>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace
@@ -16,6 +20,49 @@ namespace
 			return fn(std::forward<Args>(args)...);
 		};
 	}
+
+	// The document a module's preview factory made, seen by the editor through this proxy: every call into the module's code
+	// (open, close, save, undo, the reads, the event binding) is counted. Not the destructor: it runs at unload, after the
+	// module's tasks stopped.
+	class counted_preview final : public edt::previewable_document
+	{
+	public:
+		counted_preview(edt::callback_gate& gate, std::unique_ptr<edt::previewable_document> inner)
+			: m_gate(gate), m_inner(std::move(inner)) {}
+
+		std::string_view kind() const override { return run([&] { return m_inner->kind(); }); }
+		const std::string& title() const override { return run([&]() -> const std::string& { return m_inner->title(); }); }
+		const res::tag& source() const override { return run([&]() -> const res::tag& { return m_inner->source(); }); }
+		bool is_dirty() const override { return run([&] { return m_inner->is_dirty(); }); }
+		std::uint64_t generation() const override { return run([&] { return m_inner->generation(); }); }
+		bool can_save() const override { return run([&] { return m_inner->can_save(); }); }
+		edt::save_result save() override { return run([&] { return m_inner->save(); }); }
+		edt::save_result save_as(const res::tag& target) override { return run([&] { return m_inner->save_as(target); }); }
+		bool undo() override { return run([&] { return m_inner->undo(); }); }
+		bool redo() override { return run([&] { return m_inner->redo(); }); }
+		std::optional<edt::history_entry> next_undo_entry() const override { return run([&] { return m_inner->next_undo_entry(); }); }
+		std::optional<edt::history_entry> next_redo_entry() const override { return run([&] { return m_inner->next_redo_entry(); }); }
+		bool has_agent_changes() const override { return run([&] { return m_inner->has_agent_changes(); }); }
+		bool edits_locked() const override { return run([&] { return m_inner->edits_locked(); }); }
+		void accept_agent_changes() override { run([&] { m_inner->accept_agent_changes(); }); }
+		void bind_events(edt::editor_events* events) override { run([&] { m_inner->bind_events(events); }); }
+		void open(const res::tag& source) override { run([&] { m_inner->open(source); }); }
+		void close() override { run([&] { m_inner->close(); }); }
+		bool is_open() const override { return run([&] { return m_inner->is_open(); }); }
+
+	private:
+		// The manager gives the id to this proxy (assign_id is not virtual); the document announces its changes with it.
+		template<class F>
+		decltype(auto) run(F&& body) const
+		{
+			const edt::callback_gate::guard running(m_gate);
+			if (m_inner->id() != id()) m_inner->assign_id(id());
+			return std::forward<F>(body)();
+		}
+
+		edt::callback_gate& m_gate;
+		std::unique_ptr<edt::previewable_document> m_inner;
+	};
 
 	void count_action_callbacks(edt::callback_gate& gate, edt::action_desc& desc)
 	{
@@ -91,7 +138,15 @@ void edt::editor_module_context::add_asset_kind(asset_kind_desc desc)
 
 void edt::editor_module_context::add_asset_preview(asset_preview_desc desc)
 {
-	desc.make_preview = counted(m_scope.callbacks(), std::move(desc.make_preview));
+	if (desc.make_preview) {
+		desc.make_preview = [&gate = m_scope.callbacks(), make = std::move(desc.make_preview)](edt::editor_services& services)
+			-> std::unique_ptr<edt::previewable_document> {
+			const edt::callback_gate::guard running(gate);
+			std::unique_ptr<edt::previewable_document> made = make(services);
+			if (!made) return nullptr;
+			return std::make_unique<counted_preview>(gate, std::move(made));
+		};
+	}
 	m_scope.keep(m_editor.asset_kinds().add_preview(std::move(desc)));
 }
 

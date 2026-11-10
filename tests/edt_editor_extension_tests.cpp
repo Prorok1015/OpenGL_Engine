@@ -670,4 +670,151 @@ BOOST_AUTO_TEST_CASE(ACallbackOfTheEditor_IsNotCounted)
 	BOOST_CHECK(seen.empty());
 }
 
+namespace {
+
+class gated_preview final : public edt::previewable_document
+{
+public:
+	gated_preview(edt::editor_context& editor, std::vector<std::string>& seen) : m_editor(editor), m_seen(seen) {}
+
+	std::string_view kind() const override { return "gated_preview"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return note(); }
+	std::uint64_t generation() const override { return 0; }
+	bool can_save() const override { return true; }
+	edt::save_result save() override { note(); return edt::save_result::ok(); }
+	bool undo() override { return note(); }
+	void open(const res::tag& source) override { note(); m_source = source; m_open = true; }
+	void close() override { m_open = false; }
+	bool is_open() const override { return m_open; }
+
+private:
+	bool note() const
+	{
+		m_seen.push_back(m_editor.module_unload_refusal());
+		return false;
+	}
+
+	edt::editor_context& m_editor;
+	std::vector<std::string>& m_seen;
+	std::string m_title = "gated";
+	res::tag m_source{};
+	bool m_open = false;
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(APreviewOfAModule_CountsInItsFactoryAndInEveryCallTheEditorMakesIntoItsDocument)
+{
+	callback_scope_fixture module(*this);
+	std::vector<std::string> seen;
+	std::string made_while;
+	edt::asset_preview_desc preview;
+	preview.id = "ext.gated_preview";
+	preview.suffix = ".gprev";
+	preview.make_preview = [&](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> {
+		made_while = context->module_unload_refusal();
+		return std::make_unique<gated_preview>(*context, seen);
+	};
+	module.module_context.add_asset_preview(std::move(preview));
+
+	edt::previewable_document* document = context->documents().open_preview(res::tag{ "res://a.gprev" });
+	BOOST_REQUIRE(document != nullptr);
+	BOOST_CHECK(!made_while.empty());
+	BOOST_CHECK(document->save().saved);
+	BOOST_CHECK(!document->undo());
+	BOOST_CHECK(!document->is_dirty());
+	BOOST_REQUIRE_GE(seen.size(), 4u); // open, save, undo, is_dirty
+	for (const std::string& refusal : seen) BOOST_CHECK(!refusal.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACommandOfAModule_CountsInItsInvokeAndItsMenuActivation)
+{
+	callback_scope_fixture module(*this);
+	std::string invoked_while;
+	std::string activated_while;
+	cmd::command_desc command;
+	command.id = "ext.gated_command";
+	command.args_schema = cmd::no_args_schema();
+	command.result_schema = cmd::no_args_schema();
+	command.expose_as_tool = false;
+	command.invoke = [&](const cmd::call&) {
+		invoked_while = context->module_unload_refusal();
+		return cmd::result::success();
+	};
+	edt::action_ui ui;
+	ui.label = "Gated";
+	ui.activate = [&] { activated_while = context->module_unload_refusal(); };
+	module.module_context.add_action(std::move(command), std::move(ui));
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.gated_command", boost::json::object{});
+	BOOST_CHECK(!invoked_while.empty());
+	context->actions().activate("ext.gated_command");
+	BOOST_CHECK(!activated_while.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACallbackOfAModuleThatCallsAnother_KeepsTheCountUntilTheOuterOneEnds)
+{
+	callback_scope_fixture module(*this);
+	std::string inner_while;
+	std::string outer_after_inner;
+	const auto add = [&](const char* id, edt::action_fn body) {
+		edt::action_desc action;
+		action.id = id;
+		action.expose_as_tool = false;
+		action.execute = std::move(body);
+		module.module_context.add_action(std::move(action));
+	};
+	add("ext.inner", [&](const boost::json::value&) {
+		inner_while = context->module_unload_refusal();
+		return edt::action_result::success();
+	});
+	add("ext.outer", [&](const boost::json::value&) {
+		[[maybe_unused]] const auto result = context->actions().invoke("ext.inner", boost::json::object{});
+		outer_after_inner = context->module_unload_refusal();
+		return edt::action_result::success();
+	});
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.outer", boost::json::object{});
+	BOOST_CHECK(!inner_while.empty());
+	BOOST_CHECK(!outer_after_inner.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AReloadAskedFromAModuleAction_IsRefusedAndTheEditorModulesStay_ALaterOneRuns)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	const counts loaded = snapshot();
+	const auto reload = [&] {
+		return host->reload("ext_game",
+			std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)),
+			[] { return std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)); });
+	};
+
+	callback_scope_fixture module(*this);
+	core::reload_report from_inside;
+	edt::action_desc action;
+	action.id = "ext.reload_myself";
+	action.expose_as_tool = false;
+	action.execute = [&](const boost::json::value&) {
+		from_inside = reload();
+		return edt::action_result::success();
+	};
+	module.module_context.add_action(std::move(action));
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.reload_myself", boost::json::object{});
+	BOOST_CHECK_EQUAL(core::to_string(from_inside.status), "refused");
+	BOOST_CHECK_MESSAGE(from_inside.message.find("callback") != std::string::npos, from_inside.message);
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+
+	const auto later = reload();
+	BOOST_CHECK_EQUAL(core::to_string(later.status), "reloaded");
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
