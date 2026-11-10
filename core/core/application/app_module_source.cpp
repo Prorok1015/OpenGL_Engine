@@ -117,6 +117,7 @@ std::string app::modules::native_library_source::open()
 	m_entry.create = find_symbol<decltype(m_entry.create)>(m_handle, "snk_create_module");
 	m_entry.destroy = find_symbol<decltype(m_entry.destroy)>(m_handle, "snk_destroy_module");
 	m_entry.editor_api_version = find_symbol<decltype(m_entry.editor_api_version)>(m_handle, "snk_editor_api_version");
+	m_entry.layout_key = find_symbol<decltype(m_entry.layout_key)>(m_handle, "snk_module_layout_key");
 	return {};
 }
 

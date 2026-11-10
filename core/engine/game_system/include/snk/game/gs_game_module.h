@@ -7,6 +7,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/config/cfg_api.h>
+#include <snk/game/gs_module_layout.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/common/snk_api.h>
 #include <functional>

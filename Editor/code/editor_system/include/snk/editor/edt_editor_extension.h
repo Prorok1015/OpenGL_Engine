@@ -4,6 +4,7 @@
 #include "edt_registration_scope.h"
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
+#include <snk/game/gs_module_layout.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -144,4 +145,4 @@ namespace edt
 // The module_entry of an editor module declared with SNK_DECLARE_EDITOR_MODULE_PREFIXED(prefix, ...): the five functions.
 #define SNK_EDITOR_MODULE_ENTRY(prefix) \
 	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
-		&prefix##destroy_module, &prefix##editor_api_version }
+		&prefix##destroy_module, &prefix##editor_api_version, &prefix##module_layout_key }
