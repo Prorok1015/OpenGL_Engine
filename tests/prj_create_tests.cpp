@@ -77,7 +77,7 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 	const auto created = prj::create_project(k_empty_template, dir.path() / "game", "Game");
 	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
 
-	for (const char* file : { "code/CMakeLists.txt", "code/CMakePresets.json", "code/src/game_module.cpp" }) {
+	for (const char* file : { "code/CMakeLists.txt", "code/CMakePresets.json", "code/src/game_module.cpp", "code/src/game_editor.cpp" }) {
 		BOOST_TEST_INFO("file: " << file);
 		BOOST_TEST(fs::is_regular_file(dir.path() / "game" / file));
 	}
@@ -97,12 +97,18 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 	const auto opened = prj::open_project(created.manifest_file);
 	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
 	const auto& modules = opened.context->data.modules;
-	BOOST_REQUIRE(modules.size() == 1u);
+	BOOST_REQUIRE(modules.size() == 2u);
 	BOOST_TEST(modules[0].name == "game");
 	BOOST_TEST((modules[0].kind == prj::module_kind::runtime));
 	BOOST_TEST(modules[0].optional);
+	BOOST_TEST(modules[1].name == "game_editor");
+	BOOST_TEST((modules[1].kind == prj::module_kind::editor));
+	BOOST_TEST(modules[1].optional);
 	// The name the CMake project builds the module under is the manifest's.
-	BOOST_TEST(read_text(dir.path() / "game" / "code" / "CMakeLists.txt").find("set(SNK_GAME_MODULE game)") != std::string::npos);
+	const std::string cmake = read_text(dir.path() / "game" / "code" / "CMakeLists.txt");
+	BOOST_TEST(cmake.find("set(SNK_GAME_MODULE game)") != std::string::npos);
+	BOOST_TEST(cmake.find("set(SNK_GAME_EDITOR_MODULE game_editor)") != std::string::npos);
+	BOOST_TEST(fs::is_regular_file(dir.path() / "game" / "code" / "src" / "game_editor.cpp"));
 }
 
 BOOST_AUTO_TEST_CASE(Create_IntoAnEmptyFolder_FillsIt)
