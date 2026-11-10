@@ -665,7 +665,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// The build loaded but could not restore Play: it is taken back next frame, so it is not reported as running.
 		if (report.status == core::reload_status::reloaded && m_play && m_play->reverting()) {
 			report.status = core::reload_status::rolled_back;
-			report.message = std::format("it could not restore Play ({}); the previous build is loaded again", m_play->restore_failure());
+			report.message = std::format("it could not restore Play ({}); it is being taken back, the previous build loads again",
+				m_play->restore_failure());
 		}
 		return report;
 	};
@@ -1072,15 +1073,16 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// Never from inside the swap: the host refuses a revert while a reload runs, so it waits for the next UI frame.
 	options.revert_module = [this, &data](const std::string& module) {
 		editor_layer->register_implicit("edt/revert_game_module", [this, &data, module] {
-			// Play was stopped meanwhile: the build that loaded stays.
-			if (!m_play || !m_play->reverting()) {
-				egLOG_INFO("hot_reload", "the revert of '{}' is dropped: Play no longer waits for it", module);
-				return false;
-			}
-			core::reload_report report = data.has_value<core::project_module_host>()
-				? data.require<core::project_module_host>().revert(module, m_swap_gate.hooks())
-				: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
-			m_play->end_revert(report);
+			if (!m_play) return false;
+			core::project_module_host* host = data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
+			m_play->run_revert(
+				[&] {
+					return host ? host->revert(module, m_swap_gate.hooks())
+						: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
+				},
+				[&] {
+					if (host) host->forget_revert(module);
+				});
 			return false;
 		});
 	};

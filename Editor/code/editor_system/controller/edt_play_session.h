@@ -145,6 +145,10 @@ namespace edt
 		// The revert revert_module asked for returned: one that never swapped (refused before its hooks) leaves Play
 		// suspended, so it stops.
 		void end_revert(const core::reload_report& report);
+		// The revert revert_module asked for, on its frame: `revert` takes the build back (project_module_host::revert),
+		// then end_revert. A Stop since the request cancels it instead: `forget` drops what could be taken back, the new
+		// build stays loaded and Problems says so.
+		void run_revert(const std::function<core::reload_report()>& revert, const std::function<void()>& forget);
 		// The restore failed in the new build and its revert is asked for, not yet done: the build that loaded is taken
 		// back. Stop drops the request.
 		bool reverting() const { return m_reverting; }

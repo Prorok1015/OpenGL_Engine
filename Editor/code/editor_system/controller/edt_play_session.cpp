@@ -586,6 +586,19 @@ void edt::play_session::await_revert(const std::string& module, std::string fail
 	m_options.revert_module(module);
 }
 
+void edt::play_session::run_revert(const std::function<core::reload_report()>& revert, const std::function<void()>& forget)
+{
+	if (!m_reverting) {
+		if (forget) forget();
+		egLOG_WARN("hot_reload", "the revert of the game module is cancelled: Play was stopped, the new build stays loaded");
+		if (m_options.notify) {
+			m_options.notify("The revert of the game module was cancelled by Stop: the new build stays loaded.");
+		}
+		return;
+	}
+	end_revert(revert ? revert() : core::reload_report{ core::reload_status::refused, "nothing can take the build back" });
+}
+
 void edt::play_session::end_revert(const core::reload_report& report)
 {
 	// Stop dropped the revert (m_reverting), or a swap of the revert already brought Play back (not suspended).

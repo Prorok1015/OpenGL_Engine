@@ -1232,8 +1232,9 @@ BOOST_AUTO_TEST_CASE(a_build_play_cannot_be_restored_in_is_taken_back_and_play_g
 		BOOST_TEST(!play_set());
 		BOOST_TEST((session.play.state() == edt::play_state::playing)); // nothing announced while the revert is due
 
-		const core::reload_report reverted = host.revert("play_game", gate.hooks());
-		session.play.end_revert(reverted);
+		core::reload_report reverted;
+		session.play.run_revert([&] { return reverted = host.revert("play_game", gate.hooks()); },
+			[] { BOOST_FAIL("a due revert is not cancelled"); });
 
 		BOOST_TEST((reverted.status == core::reload_status::reloaded));
 		BOOST_TEST(session.revert_requests == 1);
@@ -1290,8 +1291,9 @@ BOOST_AUTO_TEST_CASE(a_restore_that_throws_an_unknown_type_is_taken_back_too)
 	loader.unload("play_game", root);
 }
 
-// A Stop while the revert is due drops it: the revert that comes after it neither stops anything nor writes a report.
-BOOST_AUTO_TEST_CASE(a_stop_while_the_revert_is_due_drops_it)
+// A Stop while the revert is due cancels it on its frame: the new build stays, the host forgets what it could take
+// back, Problems says so, and no report is written.
+BOOST_AUTO_TEST_CASE(a_stop_while_the_revert_is_due_cancels_it)
 {
 	loader.load(build_of(v1_entry()), root);
 	open_level(SYSTEMS_LEVEL);
@@ -1306,11 +1308,18 @@ BOOST_AUTO_TEST_CASE(a_stop_while_the_revert_is_due_drops_it)
 		session.play.stop();
 		BOOST_TEST(!session.play.reverting());
 		BOOST_TEST(!session.play.reloading());
-		const std::size_t told = session.told.size();
-		session.play.end_revert(host.revert("play_game", gate.hooks()));
+		bool reverted = false;
+		session.play.run_revert([&] {
+			reverted = true;
+			return host.revert("play_game", gate.hooks());
+		}, [&] { host.forget_revert("play_game"); });
 
+		BOOST_TEST(!reverted);
 		BOOST_TEST((session.play.state() == edt::play_state::stopped));
-		BOOST_TEST(session.told.size() == told);
+		BOOST_TEST(contexts().game_layer()->descs().is_registered("play_game_v2_desc"));
+		BOOST_TEST((host.revert("play_game", gate.hooks()).status == core::reload_status::refused));
+		BOOST_REQUIRE(!session.told.empty());
+		BOOST_TEST(session.told.back().find("cancelled by Stop") != std::string::npos);
 		BOOST_TEST(!std::filesystem::exists(report_root.path() / ".cache" / "hot_reload" / "last_play_snapshot.json"));
 	}
 	loader.unload("play_game", root);
