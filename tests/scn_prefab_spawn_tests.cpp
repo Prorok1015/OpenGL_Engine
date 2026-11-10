@@ -191,7 +191,8 @@ BOOST_AUTO_TEST_CASE(Spawn_IsRefused_InAWorldNotBuiltFromADesc_UnderAParentThatI
 	BOOST_TEST((scn::spawn_prefab(*reg, segment, std::nullopt, gone) == entt::null));
 
 	BOOST_TEST((scn::spawn_prefab(*reg, tag_of("missing.prefab.desc")) == entt::null));
-	BOOST_TEST(children_of(world_root()).empty());
+	BOOST_TEST(reg->view<scn::spawned_root_component>().empty());
+	BOOST_TEST(children_of(world_root()).size() == 1u); // the level's own node only
 }
 
 BOOST_AUTO_TEST_CASE(Spawn_ByATagNotLoadedYet_LoadsItNow_AndSaysSoOnce)
