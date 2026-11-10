@@ -81,9 +81,11 @@ jobs:
           mkdir -p game_out
           log=game_out/game.log
           rc=0
+          # Not 0: "level loaded" waits for the loads the level started (#656, up to scene/level_settle_seconds = 10 s),
+          # and 20000 uncapped frames end in ~0.5 s on Release. At 1000 fps the cap is >= 20 s.
           timeout 120 "${game_dir}/game.exe" \
             --config apps/game/config/game.cfg --headless --project projects/sandbox \
-            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
+            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 1000 \
             >game_out/stdout.txt 2>"$log" || rc=$?
           tail -20 "$log"
           # What else the process wrote (a CRT assert, a crash report) goes to stdout, not to the log.
