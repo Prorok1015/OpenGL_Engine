@@ -35,8 +35,9 @@ namespace inp
 	};
 
 	// Written into each world's ctx by gs::route_input next to the map (#624): by action id, what of the action reached a
-	// layer of the world that declares it. An action is down when a binding of it is down and reached; an action no layer
-	// declares is never down. Empty (not written): the state alone decides, as before layers declared actions.
+	// layer of the world that declares it and which of that is armed in the memory of fronts of the layer. An action is
+	// down when a binding of it is down and reached, and it is pressed only through a binding that is armed too; an action
+	// no layer declares is never down. Empty (not written): the state alone decides, as before layers declared actions.
 	struct action_input
 	{
 		std::vector<action_reach> reach{};

@@ -36,6 +36,18 @@ namespace
 		}, binding);
 	}
 
+	bool binding_armed(const inp::action_binding& binding, const inp::action_reach& reach)
+	{
+		return std::visit([&reach](auto button) {
+			const auto index = static_cast<std::size_t>(button);
+			if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+				return reach.armed_keys.test(index);
+			} else {
+				return index < inp::mouse_count && reach.armed_buttons.test(index);
+			}
+		}, binding);
+	}
+
 	// A binding counts when it is down and reached a layer of the world that declares the action.
 	bool reached_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
 	{
@@ -45,13 +57,11 @@ namespace
 		return false;
 	}
 
-	// A binding is held but a layer took it: the action must not be armed by that key's release being seen late, so it
-	// stays disarmed until the held binding is let go (INPUT_STACK.md 5). Not reaching is no reason by itself: the cursor
-	// over another world's HUD makes the mouse binding not reach with no button down.
-	bool held_but_not_reached(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	// A press needs a binding that is down, reached and armed in the layer that declares the action (the memory of fronts).
+	bool armed_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
 	{
 		for (const auto& binding : action.bindings) {
-			if (binding_down(binding, state) && !binding_reached(binding, reach)) return true;
+			if (binding_reached(binding, reach) && binding_armed(binding, reach) && binding_down(binding, state)) return true;
 		}
 		return false;
 	}
@@ -129,33 +139,32 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		if (!bound.bound && bound.frozen) continue;
 
 		bool down = false;
-		// A binding held while a layer took it keeps the action disarmed: when the layer lets go with the key still held
-		// (a modal layer closed), the press waits for a release and a new press.
-		bool taken_while_held = false;
+		// Without the memory of fronts every down binding may give a press.
+		bool may_press = true;
 		if (bound.bound) {
 			if (reached && !reached->reach.empty()) {
 				const action_reach none{};
 				const action_reach& reach = id < reached->reach.size() ? reached->reach[id] : none;
 				down = reached_down(list[id], state, reach);
-				taken_while_held = held_but_not_reached(list[id], state, reach);
+				may_press = armed_down(list[id], state, reach);
 			} else {
 				down = action_down(list[id], state);
 			}
 		}
 		if (fresh) {
-			s.armed = bound.bound && !taken_while_held && !down;
+			s.armed = bound.bound && !down;
 			continue;
 		}
 		if (s.held && !down) {
 			s.held = false;
 			s.released = true;
 			emit(id, action_edge::released);
-		} else if (!s.held && down && s.armed) {
+		} else if (!s.held && down && s.armed && may_press) {
 			s.held = true;
 			s.pressed = true;
 			emit(id, action_edge::pressed);
 		}
-		if (!bound.bound || taken_while_held) {
+		if (!bound.bound) {
 			s.armed = false;
 		} else if (!down) {
 			s.armed = true;

@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The input stack of a set of worlds (INPUT_STACK.md): layers that take keys and mouse units for themselves and hide
@@ -20,6 +21,7 @@ namespace inp
 	enum class layer_owner : std::uint8_t { engine, editor, module };
 
 	inline constexpr std::size_t key_count = static_cast<std::size_t>(KEYBOARD_BUTTONS::COUNT);
+	inline constexpr std::size_t mouse_count = static_cast<std::size_t>(MOUSE_BUTTONS::COUNT);
 
 	struct stack_layer_desc
 	{
@@ -65,13 +67,25 @@ namespace inp
 		void remove_world(std::string_view world);
 		const stack_layer_desc* find(std::string_view world, std::string_view name) const;
 		std::size_t size() const { return m_entries.size(); }
+		// Takes the layer away with its memory of fronts; false when there is none.
+		bool remove(std::string_view world, std::string_view name);
+		// Every layer of the owner (a module's layers go when it unloads or reloads), memories included.
+		void remove_owner(layer_owner owner);
+
+		// The memory of fronts of a layer; created empty (not initialized) by memory(). Dropped with the layer, its world or the set.
+		layer_memory& memory(std::string_view world, std::string_view layer);
+		const layer_memory* find_memory(std::string_view world, std::string_view layer) const;
+		std::size_t memory_count() const { return m_memory.size(); }
 
 		// Top first: by `order` (higher first), then by the world's desc_index, then the later added layer first.
 		std::vector<const stack_entry*> ordered() const;
 
 	private:
+		void forget_memory(std::string_view world, std::string_view layer);
+
 		std::vector<stack_entry> m_entries;
 		std::uint64_t m_added = 0;
+		std::map<std::pair<std::string, std::string>, layer_memory> m_memory;
 	};
 
 	// A mouse button held since a press: `captured` when a layer took the press, then `world` is its world.
@@ -90,6 +104,29 @@ namespace inp
 	{
 		std::bitset<key_count> keys;
 		bool buttons = false;
+		// Of the keys and buttons that reached, the ones armed in the layer that declares the action (arm_actions): seen up,
+		// or never held through a layer that took them since (INPUT_STACK.md 5). A press needs a binding that is armed.
+		std::bitset<key_count> armed_keys;
+		std::bitset<mouse_count> armed_buttons;
+	};
+
+	// What of the keys and the buttons reached one layer of the walk (the layer sees what it takes).
+	struct layer_reach
+	{
+		std::string world;
+		std::string layer;
+		std::bitset<key_count> keys;
+		bool buttons = false;
+	};
+
+	// The memory of fronts of one layer, outside the worlds (INPUT_STACK.md 5): the keys and buttons that may give a press
+	// next frame (armed), as plain data. A layer with no memory starts with every key held right now disarmed ("previous =
+	// current"): Escape that opened a menu does not close it. Dropped with the layer.
+	struct layer_memory
+	{
+		bool initialized = false;
+		std::bitset<key_count> armed_keys;
+		std::bitset<mouse_count> armed_buttons;
 	};
 
 	// What reaches a world after the stack has been walked.
@@ -111,6 +148,8 @@ namespace inp
 	struct stack_resolution
 	{
 		std::map<std::string, world_input, std::less<>> worlds;
+		// The live layers, top first: what reached each.
+		std::vector<layer_reach> layers;
 
 		const world_input* find(std::string_view world) const
 		{
@@ -137,6 +176,13 @@ namespace inp
 	// ones of the same world, or all above when it blocks); a modal layer of a world hides the mouse actions of the layers below it.
 	SNK_API stack_resolution resolve(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged, const drag_hold& hold,
 		const action_map* actions = nullptr);
+
+	// After resolve: the memory of fronts of every layer of the stack follows what is physically held (`physical`: the raw
+	// state, not what a world receives), and each action of the resolution learns which of its reached bindings are armed.
+	// A key that is up is armed; one that is held and did not reach a layer (taken above, the layer inactive or not fed)
+	// is not, until it is let go; one that is held and reached keeps what it was. A layer without memory starts with the
+	// held keys disarmed. `actions`: the map of resolve, null when there is none.
+	SNK_API void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
 
 	// The printable keys of INPUT_STACK.md §4.4; Escape, Enter, Tab, F-keys and modifiers are not.
 	SNK_API bool is_text_key(KEYBOARD_BUTTONS key);
