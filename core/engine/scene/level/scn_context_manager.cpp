@@ -257,8 +257,8 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 	// A request of the level loaded before is not for this one.
 	auto& slot = set.level_switch();
 	slot.status = level_switch_status::idle;
-	slot.level = {};
-	slot.loading = {};
+	slot.level = res::tag{};
+	slot.loading = res::res_handle<scn::level_desc>{};
 	set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
 	watch_level(level_tag);
 	return true;
@@ -289,7 +289,7 @@ void scn::context_manager::set_level_set_switchable(bool switchable)
 	slot.closed_said = false;
 	if (!switchable && slot.status == level_switch_status::loading) {
 		slot.status = level_switch_status::idle;
-		slot.loading = {};
+		slot.loading = res::res_handle<scn::level_desc>{};
 	}
 }
 
@@ -313,7 +313,7 @@ void scn::context_manager::apply_level_switches()
 	const auto fail = [](scn::context_set& set, detail::level_switch_slot& slot, std::string_view why) {
 		egLOG_WARN("scene", "request_level '{}' of set '{}': {}; the current level stays", slot.level.view(), set.name(), why);
 		slot.status = level_switch_status::failed;
-		slot.loading = {};
+		slot.loading = res::res_handle<scn::level_desc>{};
 	};
 	// A callback may create or destroy sets: walk a copy.
 	std::vector<scn::context_set*> sets;

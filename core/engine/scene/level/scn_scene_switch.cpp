@@ -38,7 +38,7 @@ bool scn::request_level(const entt::registry& world, const res::tag& level)
 	}
 	slot.status = level_switch_status::loading;
 	slot.level = level;
-	slot.loading = {};
+	slot.loading = res::res_handle<scn::level_desc>{};
 	return true;
 }
 
