@@ -327,7 +327,7 @@ BOOST_AUTO_TEST_CASE(Actions_AModalLayerOfTheSameWorldHidesTheActionsOfItsBaseLa
 {
 	const inp::action_map map = make_actions();
 	inp::input_stack stack;
-	stack.put("game", 0, declaring("world", 0, { "Jump" }));
+	stack.put("game", 0, declaring("world", 0, { "Jump", "Fire" }));
 	inp::stack_layer_desc menu = layer("menu", 1);
 	menu.block_below = true;
 	stack.put("game", 0, std::move(menu));
@@ -336,6 +336,48 @@ BOOST_AUTO_TEST_CASE(Actions_AModalLayerOfTheSameWorldHidesTheActionsOfItsBaseLa
 	BOOST_TEST(!reached(resolved, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
 	// The modal layer is the world's own: the world still sees the key, just not through the layer that declares Jump.
 	BOOST_TEST(resolved.find("game")->keys[key_index(KEYBOARD_BUTTONS::SPACE)]);
+
+	// The click lands on the modal layer of the world: the world gets it, the base layer's mouse action does not.
+	const inp::stack_resolution clicked = inp::resolve(stack, { "game" }, outside, true, {}, &map);
+	BOOST_TEST(clicked.find("game")->buttons);
+	BOOST_TEST(!clicked.find("game")->actions[FIRE].buttons);
+
+	// The same click with no modal layer reaches Fire.
+	inp::input_stack plain;
+	plain.put("game", 0, declaring("world", 0, { "Fire" }));
+	BOOST_TEST(inp::resolve(plain, { "game" }, outside, true, {}, &map).find("game")->actions[FIRE].buttons);
+}
+
+BOOST_AUTO_TEST_CASE(Actions_ADragKeepsTheMouseActionsOfTheLayerThatTookThePress)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	stack.put("ui", 0, region_layer("world", 5, button));
+	stack.put("game", 1, declaring("world", 0, { "Fire" }));
+	// The press landed on the game's layer: the drag is the game's and Fire is reached, the ui's region does not matter.
+	const inp::drag_hold drag{ true, true, "game", "world" };
+	const inp::stack_resolution resolved = inp::resolve(stack, both, inside, true, drag, &map);
+	BOOST_TEST(resolved.find("game")->actions[FIRE].buttons);
+	BOOST_TEST(!resolved.find("ui")->buttons);
+}
+
+BOOST_AUTO_TEST_CASE(Actions_TheDefaultReaderLayerDeclaresEveryAction)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	inp::stack_layer_desc all = layer("world", 5);
+	all.all_actions = true;
+	stack.put("ui", 0, std::move(all));
+	stack.put("game", 1, layer("world", 0));
+	const inp::stack_resolution resolved = inp::resolve(stack, both, outside, false, {}, &map);
+
+	BOOST_TEST(reached(resolved, "ui", JUMP, KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(reached(resolved, "ui", MOVE_LEFT, KEYBOARD_BUTTONS::A));
+	BOOST_TEST(reached(resolved, "ui", MOVE_LEFT, KEYBOARD_BUTTONS::LEFT));
+	// All of them are taken from the world below.
+	BOOST_TEST(!resolved.find("game")->keys[key_index(KEYBOARD_BUTTONS::SPACE)]);
+	BOOST_TEST(!resolved.find("game")->keys[key_index(KEYBOARD_BUTTONS::LEFT)]);
+	BOOST_TEST(resolved.find("game")->keys[key_index(KEYBOARD_BUTTONS::W)]);
 }
 
 BOOST_AUTO_TEST_CASE(Actions_AnActionNoLayerDeclaresIsNeverReached_AndWithoutAMapThereAreNone)

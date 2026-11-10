@@ -26,9 +26,9 @@
 // to the private, heap-held state of scn::event_subscriptions, so no layout a module reads changes; a module that uses
 // observe needs an engine of 3.4 or newer.
 // 3.5 (#624): inp::action_input, a new ctx type (what of an action reached the layers of a world that declare it).
-// Nothing that exists changes layout: stack_layer_desc is the same, inp::world_input is the engine's own result of
-// inp::resolve. inp::update_actions_system and action_state::update changed signature again (the engine's, a module
-// never calls them).
+// inp::stack_layer_desc gains `all_actions` at its end (the layer declares every action); nothing that exists moves.
+// inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
+// gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
 #define SNK_MODULE_API_VERSION 0x0003'0005u // major << 16 | minor
 
 #if defined(_WIN32)

@@ -391,6 +391,32 @@ BOOST_AUTO_TEST_CASE(WithReach_TheOtherBindingKeepsAHalfTakenActionHeld)
 	BOOST_TEST(state.released(FIRE));
 }
 
+BOOST_AUTO_TEST_CASE(WithReach_AKeyHeldWhileTheActionDidNotReach_IsNoPressWhenItReachesAgain)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	const auto space = static_cast<std::size_t>(KB::SPACE);
+	reach.reach[JUMP].keys.set(space);
+	frame();
+
+	// A modal layer takes the key before it is pressed and gives it back while it is still held.
+	reach.reach[JUMP].keys.reset();
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	reach.reach[JUMP].keys.set(space);
+	frame();
+	BOOST_TEST(edge_free(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+
+	// Let go, then pressed again: a press.
+	set(KB::SPACE, false);
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	BOOST_TEST(state.pressed(JUMP));
+}
+
 BOOST_AUTO_TEST_CASE(WithReach_AnActionOutsideTheVectorIsNeverDown)
 {
 	use_reach = true;

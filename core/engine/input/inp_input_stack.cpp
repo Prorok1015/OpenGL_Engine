@@ -69,13 +69,10 @@ namespace
 	{
 		std::vector<declared_action> out;
 		if (!map) return out;
-		for (const std::string& name : layer.actions) {
-			const inp::action_id id = map->id(name);
-			const inp::action* action = map->find(id);
-			if (!action) continue;
+		const auto declare = [&out](inp::action_id id, const inp::action& action) {
 			declared_action declared;
 			declared.id = id;
-			for (const inp::action_binding& binding : action->bindings) {
+			for (const inp::action_binding& binding : action.bindings) {
 				if (const auto* key = std::get_if<KEYBOARD_BUTTONS>(&binding)) {
 					declared.keys.set(static_cast<std::size_t>(*key));
 				} else {
@@ -83,6 +80,15 @@ namespace
 				}
 			}
 			out.push_back(declared);
+		};
+		if (layer.all_actions) {
+			const auto list = map->actions();
+			for (std::size_t id = 0; id < list.size(); ++id) declare(static_cast<inp::action_id>(id), list[id]);
+			return out;
+		}
+		for (const std::string& name : layer.actions) {
+			const inp::action_id id = map->id(name);
+			if (const inp::action* action = map->find(id)) declare(id, *action);
 		}
 		return out;
 	}
@@ -129,11 +135,17 @@ std::vector<const inp::stack_entry*> inp::input_stack::ordered() const
 	return out;
 }
 
-std::optional<std::string> inp::mouse_taker(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor)
+const inp::stack_entry* inp::mouse_taker_entry(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor)
 {
 	for (const stack_entry* entry : live_layers(stack, fed)) {
-		if (takes_click(entry->layer, cursor)) return entry->world;
+		if (takes_click(entry->layer, cursor)) return entry;
 	}
+	return nullptr;
+}
+
+std::optional<std::string> inp::mouse_taker(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor)
+{
+	if (const stack_entry* entry = mouse_taker_entry(stack, fed, cursor)) return entry->world;
 	return std::nullopt;
 }
 
@@ -188,24 +200,46 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 	}
 
 	const auto give = [&out](bool world_input::*part, const std::string& name) { out.worlds[name].*part = true; };
+	// The layers the click or the drag reaches, for the mouse bindings of actions: a modal layer of a world hides the
+	// mouse actions of the layers of that world below it.
+	std::vector<bool> layer_buttons(layers.size(), false);
 
 	// Buttons and wheel: the holder of a drag only; nobody when the holder of the drag is gone; a drag that started outside
 	// the layers never reaches the layer it crosses; else the layer that takes the click (and the ones above it when it
 	// blocks), or everybody when no layer takes it.
 	if (holder_fed) {
 		give(&world_input::buttons, hold.world);
+		std::size_t holder_at = layers.size();
+		for (std::size_t i = 0; i < layers.size() && !hold.layer.empty(); ++i) {
+			if (layers[i]->world == hold.world && layers[i]->layer.name == hold.layer) {
+				holder_at = i;
+				break;
+			}
+		}
+		for (std::size_t i = 0; i < layers.size(); ++i) {
+			if (layers[i]->world != hold.world) continue;
+			if (hold.layer.empty() || (holder_at < layers.size() && i <= holder_at)) layer_buttons[i] = true;
+		}
 	} else if (!orphaned && drag_from_outside) {
 		for (const std::string& name : live_worlds) {
 			if (!hit || name != hit->world) give(&world_input::buttons, name);
 		}
+		for (std::size_t i = 0; i < layers.size(); ++i) {
+			if (!hit || layers[i]->world != hit->world) layer_buttons[i] = true;
+		}
 	} else if (!orphaned && hit) {
 		// A region's click is its world's alone, as it was before layers; a modal's is also seen by the layers above it.
 		give(&world_input::buttons, hit->world);
+		layer_buttons[hit_at] = true;
 		if (hit->layer.block_below) {
 			for (std::size_t i = 0; i < hit_at; ++i) give(&world_input::buttons, layers[i]->world);
 		}
+		for (std::size_t i = 0; i < hit_at; ++i) {
+			if (layers[i]->world == hit->world || hit->layer.block_below) layer_buttons[i] = true;
+		}
 	} else if (!orphaned) {
 		for (const std::string& name : live_worlds) give(&world_input::buttons, name);
+		layer_buttons.assign(layers.size(), true);
 	}
 
 	// Motion is taken by a drag a layer holds or by a layer that blocks, never by a region: a crosshair region must not
@@ -224,8 +258,8 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 	}
 
 	for (std::size_t i = 0; i < layers.size(); ++i) {
+		if (!layer_buttons[i]) continue;
 		world_input& world = out.worlds[layers[i]->world];
-		if (!world.buttons) continue;
 		for (const declared_action& action : declared[i]) {
 			if (action.mouse) world.actions[action.id].buttons = true;
 		}

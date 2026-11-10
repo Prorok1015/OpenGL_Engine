@@ -282,6 +282,55 @@ BOOST_AUTO_TEST_CASE(AModalWorldAbove_TakesTheKeysOfTheActions_AndGivesThemBackW
 	BOOST_TEST(seen[0].world == "game");
 }
 
+BOOST_AUTO_TEST_CASE(AHalfTakenAction_StaysHeldThroughTheOtherKey_AndIsLetGoOnce)
+{
+	auto& game = world("game", 1);
+	auto& ui = world("ui", 0, { "inp::update_input_state" });
+	scn::input_stack_desc declared;
+	declared.actions = { "MoveLeft" };
+	game.set_input_stack(declared);
+	scn::input_stack_desc top;
+	top.order = 5;
+	top.keys = { "A" };
+	ui.set_input_stack(top);
+	auto map = std::make_shared<inp::action_map>();
+	map->add("MoveLeft", { KB::A, KB::LEFT });
+	frame(map);
+
+	// A is taken by the world above, the left arrow reaches the game.
+	key(KB::A, KEY_ACTION::DOWN);
+	key(KB::LEFT, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(pressed(game, "MoveLeft"));
+	frame(map);
+	BOOST_TEST(held(game, "MoveLeft"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
+
+	key(KB::LEFT, KEY_ACTION::UP);
+	frame(map);
+	BOOST_TEST(!held(game, "MoveLeft"));
+	BOOST_TEST(count(inp::action_edge::released) == 1u);
+	frame(map);
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
+	BOOST_TEST(count(inp::action_edge::released) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AnEditSet_KeepsEveryRawKey_TheActionsComeWithPlay)
+{
+	auto& first = world("first", 0);
+	auto& second = world("second", 1);
+	mode(ecs::run_mode::edit);
+	const auto map = jump_on_space();
+	frame(map);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+
+	const auto space = static_cast<std::size_t>(KB::SPACE);
+	BOOST_TEST(first.state().ctx().get<inp::input_state>().keyboard[space]);
+	BOOST_TEST(second.state().ctx().get<inp::input_state>().keyboard[space]);
+	BOOST_TEST(!map_of(first).map);
+}
+
 BOOST_AUTO_TEST_CASE(InPlay_ThePressReachesASubscriberInTheSameFrame)
 {
 	world("a", 0);

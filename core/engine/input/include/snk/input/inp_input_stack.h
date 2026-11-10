@@ -43,6 +43,8 @@ namespace inp
 		// Seen by the layer but passed on (not used yet).
 		std::vector<std::string> listen;
 		layer_owner owner = layer_owner::engine;
+		// Declares every action of the map given to resolve, besides `actions` (the default reader of a set, INPUT_STACK.md 6).
+		bool all_actions = false;
 	};
 
 	struct stack_entry
@@ -78,6 +80,8 @@ namespace inp
 		bool active = false;
 		bool captured = false;
 		std::string world;
+		// The layer that took the press; empty: any layer of `world` (what the mouse bindings of actions reach).
+		std::string layer;
 	};
 
 	// What of one action reaches the layers of a world that declare it (INPUT_STACK.md 3.2): the keyboard keys that no layer
@@ -113,16 +117,24 @@ namespace inp
 			const auto it = worlds.find(world);
 			return it == worlds.end() ? nullptr : &it->second;
 		}
+		world_input* find(std::string_view world)
+		{
+			const auto it = worlds.find(world);
+			return it == worlds.end() ? nullptr : &it->second;
+		}
 	};
 
 	// The world of the top layer that takes a click at `cursor`: a layer with `block_below` or one whose regions hold it.
 	// Only layers of the `fed` worlds count.
 	SNK_API std::optional<std::string> mouse_taker(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor);
+	// The same layer as an entry (its world and name); null when none takes it.
+	SNK_API const stack_entry* mouse_taker_entry(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor);
 
 	// `engaged`: a button is down or the wheel moved this frame. `actions`: the map that gives the names a layer declares their
 	// bindings (#624); a layer takes the keyboard keys of its actions like its `keys`, and the world gets an action when
 	// a binding of it reaches a layer that declares it: A taken above and the arrow key not, the action is still there (OR).
-	// A mouse binding reaches the world that gets the buttons.
+	// A mouse binding reaches the layers that get the click or the drag: the layer it lands on and the ones above it (the
+	// ones of the same world, or all above when it blocks); a modal layer of a world hides the mouse actions of the layers below it.
 	SNK_API stack_resolution resolve(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged, const drag_hold& hold,
 		const action_map* actions = nullptr);
 

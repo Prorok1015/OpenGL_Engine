@@ -25,6 +25,22 @@ namespace
 		return false;
 	}
 
+	// Some binding of the action reaches a layer of the world that declares it (whether it is down or not).
+	bool reachable(const inp::action& action, const inp::action_reach& reach)
+	{
+		for (const auto& binding : action.bindings) {
+			const bool reached = std::visit([&reach](auto button) {
+				if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+					return reach.keys.test(static_cast<std::size_t>(button));
+				} else {
+					return reach.buttons;
+				}
+			}, binding);
+			if (reached) return true;
+		}
+		return false;
+	}
+
 	// A binding counts when it is down and reached a layer of the world that declares the action.
 	bool reached_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
 	{
@@ -114,15 +130,20 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		if (!bound.bound && bound.frozen) continue;
 
 		bool down = false;
+		// An action that reaches no layer of the world cannot be re-armed: when it reaches one again with its key still
+		// held (a modal layer closed), the press waits for a release.
+		bool arms = true;
 		if (bound.bound) {
 			if (reached && !reached->reach.empty()) {
-				down = id < reached->reach.size() && reached_down(list[id], state, reached->reach[id]);
+				const bool in_range = id < reached->reach.size();
+				down = in_range && reached_down(list[id], state, reached->reach[id]);
+				arms = in_range && reachable(list[id], reached->reach[id]);
 			} else {
 				down = action_down(list[id], state);
 			}
 		}
 		if (fresh) {
-			s.armed = bound.bound && !down;
+			s.armed = bound.bound && arms && !down;
 			continue;
 		}
 		if (s.held && !down) {
@@ -134,7 +155,7 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 			s.pressed = true;
 			emit(id, action_edge::pressed);
 		}
-		if (!bound.bound) {
+		if (!bound.bound || !arms) {
 			s.armed = false;
 		} else if (!down) {
 			s.armed = true;
