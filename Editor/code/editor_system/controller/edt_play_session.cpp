@@ -758,6 +758,17 @@ void edt::play_session::set_state(play_state state, play_reason reason)
 	m_events.play_state_changed.emit(state, reason);
 }
 
+void edt::play_session::on_level_switched()
+{
+	if (!active()) return;
+	// The world the camera was in is gone with the old level: nothing of it to save.
+	m_camera_world.clear();
+	// New registries may reuse the old ones' addresses and entity ids: the Game view's and the viewport's picks go.
+	if (m_options.forget_runtime_entities) m_options.forget_runtime_entities();
+	follow_active_world();
+	egLOG_INFO("play", "Play switched to another level; the edited level is unchanged");
+}
+
 void edt::play_session::follow_active_world()
 {
 	const auto contexts = m_services.ctx_manager.lock();

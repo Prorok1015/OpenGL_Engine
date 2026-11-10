@@ -48,7 +48,11 @@
 // 3.8 (#551): scn::spawn_prefab, scn::despawn and scn::bind_prefab_spawning, new functions a game module imports, and
 // the components scn::world_root_component and scn::spawned_root_component; nothing that exists changes layout. A module
 // that spawns prefabs needs an engine of 3.8 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'0008u // major << 16 | minor
+// 3.9 (#564): scn::request_level and scn::level_switch, new functions a game module imports, and the enum and struct
+// they use (scn::level_switch_status, scn::level_switch_state). scn::context_set gains a member at its end; the request
+// itself is a private ctx type of the engine. Nothing a module reads moves. A module that switches levels needs an
+// engine of 3.9 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0009u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.
