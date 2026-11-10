@@ -56,19 +56,19 @@ namespace
 		// ...and is armed there (the memory of fronts) and was not down when the map came in.
 		bool may_press = false;
 		// The bindings (by index) that are down, reached or not.
-		std::uint32_t down_bits = 0;
+		std::uint64_t down_bits = 0;
 	};
 
-	binding_view evaluate(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach, std::uint32_t suppressed)
+	binding_view evaluate(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach, std::uint64_t suppressed)
 	{
 		binding_view view;
 		for (std::size_t i = 0; i < action.bindings.size(); ++i) {
 			const auto& binding = action.bindings[i];
 			if (!binding_down(binding, state)) continue;
-			if (i < 32) view.down_bits |= std::uint32_t{ 1 } << i;
+			if (i < 64) view.down_bits |= std::uint64_t{ 1 } << i;
 			if (!binding_reached(binding, reach)) continue;
 			view.down = true;
-			const bool fresh_binding = i >= 32 || (suppressed & (std::uint32_t{ 1 } << i)) == 0;
+			const bool fresh_binding = i >= 64 || (suppressed & (std::uint64_t{ 1 } << i)) == 0;
 			if (fresh_binding && binding_armed(binding, reach)) view.may_press = true;
 		}
 		return view;
@@ -149,7 +149,7 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		const bool with_reach = reached && !reached->reach.empty();
 		bool down = false;
 		bool may_press = true;
-		std::uint32_t down_bits = 0;
+		std::uint64_t down_bits = 0;
 		if (bound.bound) {
 			if (with_reach) {
 				const action_reach none{};

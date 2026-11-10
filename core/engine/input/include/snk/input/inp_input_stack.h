@@ -97,7 +97,7 @@ namespace inp
 		std::vector<const stack_entry*> ordered() const;
 
 	private:
-		friend void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
+		friend SNK_API void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
 		// Created empty (not initialized) when the layer has none yet.
 		layer_memory& memory(std::string_view world, std::string_view layer);
 		void forget_memory(std::string_view world, std::string_view layer);

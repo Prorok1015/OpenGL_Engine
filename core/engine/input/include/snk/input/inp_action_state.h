@@ -84,7 +84,8 @@ namespace inp
 			bool released = false;
 			bool armed = false;
 			// With action_input: the bindings (by index) that were down when the map came in; they give no press until seen up.
-			std::uint32_t suppressed = 0;
+			// An action has few bindings; those from the 65th on are never suppressed.
+			std::uint64_t suppressed = 0;
 		};
 
 		const slot* at(action_id id) const;
