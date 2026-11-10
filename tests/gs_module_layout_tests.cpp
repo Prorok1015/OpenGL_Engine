@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(a_size_or_alignment_change_of_a_listed_type_changes_the_key
 {
 	struct grown { std::uint64_t a = 0; std::uint64_t b = 0; };
 	BOOST_TEST(gs::detail::layout_of<std::uint64_t>() != gs::detail::layout_of<grown>());
-	BOOST_TEST(gs::detail::layout_of<std::uint32_t, std::uint64_t>() != gs::detail::layout_of<std::uint64_t, std::uint32_t>());
+	BOOST_TEST((gs::detail::layout_of<std::uint32_t, std::uint64_t>() != gs::detail::layout_of<std::uint64_t, std::uint32_t>()));
 	BOOST_TEST(gs::detail::layout_of<std::uint64_t>() == gs::detail::layout_of<std::uint64_t>());
 }
 
