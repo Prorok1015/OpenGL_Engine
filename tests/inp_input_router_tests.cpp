@@ -1043,6 +1043,8 @@ BOOST_AUTO_TEST_CASE(StackCommands_GoWithTheSet)
 	router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
 	router.forget_set("level");
 	BOOST_TEST(router.take_commands("level").empty());
+}
+
 // ---------------------------------------------------------------- inject (#624)
 
 BOOST_AUTO_TEST_CASE(Inject_WaitsForTheSetAndComesOutOnceInOrder)

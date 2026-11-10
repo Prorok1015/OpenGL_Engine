@@ -904,6 +904,8 @@ BOOST_AUTO_TEST_CASE(StackCommands_AModuleCannotRemoveALayerOfTheEngineOrTheEdit
 	BOOST_TEST(kept->active);
 	BOOST_TEST(kept->order == 0);
 	BOOST_TEST(router.stack("level").find("game", "world") != nullptr);
+}
+
 // ---------------------------------------------------------------- inp::input_router::inject (#624)
 
 BOOST_AUTO_TEST_CASE(Inject_IsSeenByThePollTheBusAndTheFixedSteps_FromTheNextRoutedFrame)
