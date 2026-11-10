@@ -388,6 +388,25 @@ BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)
 	BOOST_TEST(view.get<bullet>(view.front()).speed == 0.f);
 }
 
+// #601 (HOT_RELOAD_PLAY.md 7): a field the schema no longer has is dropped, and the report says which type lost one.
+BOOST_AUTO_TEST_CASE(AFieldTheSchemaNoLongerHasIsReportedAsRemoved)
+{
+	scn::world_context source{ 1, "main" };
+	source.state().emplace<bullet>(source.state().create(), bullet{ 7 });
+	scn::snapshot_report report;
+	json::object snapshot = scn::capture_world(source, layer, report);
+	snapshot.at("entities").as_array().at(0).as_object().at("components").as_object().at("test.bullet").as_object()["spin"] = 3;
+
+	scn::world_context target{ 1, "main" };
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
+	BOOST_TEST(restored.removed_fields.at("test.bullet") == 1u);
+	BOOST_TEST(restored.partial.empty());
+	const auto view = target.state().view<bullet>();
+	BOOST_REQUIRE(view.size() == 1u);
+	BOOST_TEST(view.get<bullet>(view.front()).id == 7);
+}
+
 BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 {
 	const auto material_tag = put("plain.material.desc", R"({"__type":"material_desc","queue":"transparent"})");

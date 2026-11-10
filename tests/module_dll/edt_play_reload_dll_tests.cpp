@@ -24,6 +24,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <functional>
 #include <iterator>
 #include <string>
@@ -39,9 +40,10 @@ namespace {
 const std::filesystem::path g_module_path{ SNK_TEST_GAME_DLL_PATH };
 const std::filesystem::path g_v2_path{ SNK_TEST_GAME_DLL_V2_PATH };
 const std::filesystem::path g_failing_path{ SNK_TEST_GAME_DLL_FAILING_PATH };
+const std::filesystem::path g_bad_restore_path{ SNK_TEST_GAME_DLL_BAD_RESTORE_PATH };
 
 constexpr const char* PLAY_LEVEL = R"json({"__type":"level_desc","name":"lv","worlds":[
-	{"__type":"world_desc","name":"w0","systems":["dll::move"],
+	{"__type":"world_desc","name":"w0","systems":["dll::move","dll::keeper"],
 	 "components":{"g":{"__type":"dll_desc","value":2}}}]})json";
 
 struct dll_play_fixture : test_util::module_env
@@ -57,7 +59,13 @@ struct dll_play_fixture : test_util::module_env
 		contexts().set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
 			gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
-		gate.set_play_hooks([this] { play.before_module_swap(); }, [this](const core::reload_report& report) { play.after_module_swap(report); });
+		// The trap is set around Play's restore only: the level, rebuilt in the new layer just before, starts its keeper.
+		gate.set_play_hooks([this] { play.before_module_swap(); }, [this](const core::reload_report& report) {
+			if (trap_restore) std::ofstream{ dll_game::keeper_trap_file } << "trap";
+			play.after_module_swap(report);
+			std::error_code ec;
+			std::filesystem::remove(dll_game::keeper_trap_file, ec);
+		});
 		contexts().level_set().set_mode(ecs::run_mode::edit);
 		auto& catalog = contexts().catalog();
 		if (!catalog.find(entt::type_hash<scn::name_component>::value())) scn::register_engine_components(catalog);
@@ -88,6 +96,13 @@ struct dll_play_fixture : test_util::module_env
 		BOOST_REQUIRE(play.capture_for_reload().empty());
 		const core::reload_report report = host.reload(std::string{ dll_game::module_name }, gate.hooks());
 		play.end_reload();
+		run_reload_polls();
+		return report;
+	}
+
+	// UI frames until the restored set runs.
+	void run_reload_polls()
+	{
 		for (int frame = 0; frame < 10 && play.reloading(); ++frame) {
 			pump();
 			auto polls = std::exchange(reload_polls, {});
@@ -95,7 +110,6 @@ struct dll_play_fixture : test_util::module_env
 				if (poll()) reload_polls.push_back(std::move(poll));
 			}
 		}
-		return report;
 	}
 
 	void run_frame() { contexts().update(std::chrono::duration<float>(0.016f)); }
@@ -126,10 +140,13 @@ struct dll_play_fixture : test_util::module_env
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
 	std::vector<std::function<bool()>> reload_polls;
 	std::vector<std::string> notices;
+	int revert_requests = 0;
+	bool trap_restore = false;
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{
 		.each_frame = [this](const std::string&, std::function<bool()> poll) { reload_polls.push_back(std::move(poll)); },
 		.project_root = project.game, .report_full_snapshot = true,
-		.notify = [this](const std::string& message) { notices.push_back(message); } } };
+		.notify = [this](const std::string& message) { notices.push_back(message); },
+		.revert_module = [this] { ++revert_requests; } } };
 	edt::module_swap_gate gate{ [this](bool before) {
 		if (before) level_ctrl.detach_from_game_layer();
 		else level_ctrl.attach_to_game_layer();
@@ -195,6 +212,52 @@ BOOST_AUTO_TEST_CASE(play_keeps_its_world_when_the_reload_rolls_back_to_the_prev
 	const boost::json::object written = read_report();
 	BOOST_REQUIRE(written.contains("module_reload"));
 	BOOST_TEST(written.at("module_reload").at("status").as_string() == "rolled_back");
+}
+
+// #601 (HOT_RELOAD_PLAY.md 3.5): the new build cannot restore Play (a system of it throws from its constructor); the
+// previous copy is loaded again, Play goes on in it, and the build taken back is not loaded again.
+BOOST_AUTO_TEST_CASE(a_build_play_cannot_be_restored_in_is_taken_back_and_play_goes_on_in_the_previous_copy)
+{
+	project.build(g_module_path);
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	open_level();
+	BOOST_REQUIRE(play.start());
+	run_frame();
+	BOOST_REQUIRE(value_in_play() == 3);
+
+	project.rebuild(g_bad_restore_path);
+	trap_restore = true;
+	const core::reload_report report = reload_play();
+
+	BOOST_CHECK_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	BOOST_TEST(revert_requests == 1);
+	BOOST_TEST(play.reloading());
+
+	// What the editor does on the next UI frame.
+	const core::reload_report reverted = host.revert(std::string{ dll_game::module_name }, gate.hooks());
+	play.end_revert(reverted);
+	trap_restore = false;
+	run_reload_polls();
+
+	BOOST_CHECK_MESSAGE(reverted.status == core::reload_status::reloaded, reverted.message);
+	BOOST_TEST(revert_requests == 1);
+	BOOST_TEST(!play.reloading());
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	BOOST_TEST(test_util::resident(project.copy(0)));
+	BOOST_TEST(!test_util::resident(project.copy(1)));
+	BOOST_TEST(value_in_play() == 3);
+	run_frame();
+	BOOST_TEST(value_in_play() == 4); // the previous copy moves by 1
+	const boost::json::object written = read_report();
+	BOOST_REQUIRE(written.contains("play"));
+	BOOST_TEST(written.at("play").as_string() == "reverted");
+	BOOST_REQUIRE(!notices.empty());
+	BOOST_TEST(notices.back().find("cannot start") != std::string::npos);
+
+	const core::reload_report again = host.reload(std::string{ dll_game::module_name }, gate.hooks());
+	BOOST_TEST((again.status == core::reload_status::refused));
+	BOOST_TEST(play.active());
+	BOOST_TEST(value_in_play() == 4);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

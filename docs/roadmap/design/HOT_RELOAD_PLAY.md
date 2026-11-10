@@ -259,6 +259,8 @@ Restore сверяет снимок с реестрами нового слоя:
 
 Пропажа типа, системы или поля — ожидаемая правка кода, а не ошибка (вопрос 4).
 
+Как это видно (#601): всё перечисленное идёт в лог с категорией `hot_reload`, в отчёт `last_play_snapshot.json` (`dropped_unknown_type`, `dropped_systems`, `field_removed`, `field_kept_default`) и одной строкой в Problems (`hot_reload`). Удалённое поле находит `desc::unknown_keys`: `restore_world` считает такие компоненты в `snapshot_report::removed_fields`. Stateful-системы модульного слоя (`ecs::system_entry::stateful`) из списков миров тоже попадают в отчёт (`systems_restarted`) и в Problems: их поля начинаются заново (§8). Системы движка не упоминаются.
+
 ## 8. Время, Pause, Step, детерминизм
 
 - **Сохраняются:**

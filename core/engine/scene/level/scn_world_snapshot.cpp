@@ -10,6 +10,7 @@
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <algorithm>
 #include <string>
@@ -286,6 +287,9 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 				return;
 			}
 			if (const auto* value = components.if_contains(entry.name); value && value->is_object()) {
+				if (!desc::unknown_keys(*entry.schema, value->as_object()).empty()) {
+					++report.removed_fields[entry.name];
+				}
 				if (!entry.read(*entry.schema, reg, created[i], value->as_object(), read)) {
 					++report.partial[entry.name];
 				}

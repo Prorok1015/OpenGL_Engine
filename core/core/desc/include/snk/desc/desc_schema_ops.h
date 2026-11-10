@@ -116,6 +116,9 @@ namespace desc
 	// empty context.
 	SNK_API void deserialize(const schema_binding& binding, void* obj, const json::object& in);
 	SNK_API void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx);
+	// The keys of `in` deserialize skips: no field (nor a read alias) of the schema names them; "__" keys are not counted.
+	// A field removed or renamed since `in` was written.
+	SNK_API std::vector<std::string> unknown_keys(const schema_binding& binding, const json::object& in);
 
 	// Same schema and object type: member-wise. Otherwise serialize(src) -> deserialize(dst), so only keys both
 	// sides know cross over, with a warning.

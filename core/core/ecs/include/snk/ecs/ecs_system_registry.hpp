@@ -55,6 +55,9 @@ struct system_entry
 	system_run_fn run = nullptr;
 	std::function<system_instance()> make;
 	std::vector<access_entry> access; // deduced from the argument types, for validation only
+	// A system_interface object: what it keeps in its fields starts over whenever its instance is made anew (a module
+	// reload, HOT_RELOAD_PLAY.md 8).
+	bool stateful = false;
 };
 
 // Name -> system registration plus the phase list of the context. Pure data: plans are built

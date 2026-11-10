@@ -877,6 +877,31 @@ namespace desc
 		deserialize(binding, obj, in, read_context{});
 	}
 
+	std::vector<std::string> unknown_keys(const schema_binding& binding, const json::object& in)
+	{
+		std::vector<std::string> known;
+		std::vector<std::string> tokens;
+		const auto remember = [&](const std::string& pointer) {
+			if (json_pointer_tokens(pointer, tokens) && !tokens.empty()) {
+				known.push_back(tokens.front());
+			}
+		};
+		for (const field_schema& field : binding.schema->fields) {
+			remember(field.key);
+			for (const auto& alias : field.read_aliases) {
+				remember(alias);
+			}
+		}
+		std::vector<std::string> unknown;
+		for (const auto& member : in) {
+			const std::string_view key{ member.key() };
+			if (!key.starts_with("__") && std::ranges::find(known, key) == known.end()) {
+				unknown.emplace_back(key);
+			}
+		}
+		return unknown;
+	}
+
 	void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx)
 	{
 		const auto& fields = binding.schema->fields;
