@@ -287,10 +287,18 @@ bool scn::restore_world(world_context& world, const json::object& snapshot, cons
 				return;
 			}
 			if (const auto* value = components.if_contains(entry.name); value && value->is_object()) {
-				if (!desc::unknown_keys(*entry.schema, value->as_object()).empty()) {
+				const json::object& saved = value->as_object();
+				const std::vector<std::string> removed = desc::unknown_keys(*entry.schema, saved);
+				// A field the schema dropped is reported as removed, not as a field that no longer fits.
+				json::object kept;
+				if (!removed.empty()) {
 					++report.removed_fields[entry.name];
+					kept = saved;
+					for (const std::string& key : removed) {
+						kept.erase(key);
+					}
 				}
-				if (!entry.read(*entry.schema, reg, created[i], value->as_object(), read)) {
+				if (!entry.read(*entry.schema, reg, created[i], removed.empty() ? saved : kept, read)) {
 					++report.partial[entry.name];
 				}
 			}
