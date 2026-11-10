@@ -532,6 +532,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.new_level = [this] {
 		if (m_play && m_play->active()) m_play->stop();
 		cancel_level_settle();
+		m_desc_problems.clear(m_context->problems(), "level");
 		m_level_ctrl.new_level();
 	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
@@ -1163,6 +1164,12 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
+	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
+	m_world_problem_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
+		if (id == document_id{} || id != m_desc_prefab_document) return;
+		m_desc_prefab_document = document_id{};
+		m_desc_problems.clear(m_context->problems(), "prefab");
+	}));
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_game_view_panel->set_input_blocked([this] {
 		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
@@ -1578,8 +1585,6 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	// A load that was never finished (begin_level_load called again): its copy goes.
 	if (m_loading_level) abandon_level_load();
 	cancel_level_settle();
-	// The errors of the level being replaced are not this one's; the same level keeps them until its load reports.
-	if (original_tag != m_state.level_tag) m_desc_problems.clear(m_context->problems(), "level");
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
 
@@ -1770,9 +1775,10 @@ bool edt::editor_system::poll_pending_desc()
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
-	// The preview loaded it already: this is the same cached block.
+	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
 	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
-	m_desc_problems.report(m_context->problems(), "prefab:" + tag.string(), diagnostics_of(loaded));
+	m_desc_problems.report(m_context->problems(), "prefab", diagnostics_of(loaded));
+	m_desc_prefab_document = prefab.is_open() ? prefab.id() : document_id{};
 	if (prefab.is_open()) {
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
@@ -1790,7 +1796,6 @@ void edt::editor_system::close_prefab_editor()
 {
 	auto& documents = m_context->documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
-		m_desc_problems.clear(m_context->problems(), "prefab:" + prefab->source_tag().string());
 		documents.close(prefab->id());
 	}
 	m_prefab_panel->set_context(nullptr);

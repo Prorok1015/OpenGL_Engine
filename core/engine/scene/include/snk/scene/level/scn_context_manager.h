@@ -233,11 +233,11 @@ namespace scn
 		std::vector<std::unique_ptr<scn::context_set>> m_sets;
 		scn::context_set* m_level_set = nullptr;
 		std::function<void()> m_on_reload;
-		reload_result_callback m_on_reload_result;
 		res::tag m_pending_level_reload;
 		std::function<void(game_layer_change)> m_on_game_layer_change;
-		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.0). The base's sets
-		// point at it: the destructor clears them before any member goes.
+		// Kept before every later member, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION
+		// 3.0): new members go only after it. The base's sets point at it: the destructor clears them before any member goes.
 		scn::event_subscriptions m_subscriptions;
+		reload_result_callback m_on_reload_result;
 	};
 }

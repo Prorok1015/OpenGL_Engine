@@ -95,7 +95,20 @@ BOOST_AUTO_TEST_CASE(WhatTheCollectorsDropped_IsOneRowForAllScopes)
 	BOOST_REQUIRE(rows.size() == 2u);
 	BOOST_TEST(rows[0].message == "a");
 	BOOST_TEST(rows[1].code == "truncated");
-	BOOST_TEST(rows[1].message == "15 more diagnostics");
+	BOOST_TEST(rows[1].message == "15 more diagnostics truncated");
+}
+
+BOOST_AUTO_TEST_CASE(AReportOfTheSameRows_SetsNothing_AndADropReplacesTheLastDrop)
+{
+	publisher.report(problems, "drop", { warning_at("res://props/a.desc", "", "first") });
+	const auto generation = problems.generation();
+	publisher.report(problems, "drop", { warning_at("res://props/a.desc", "", "first") });
+	BOOST_TEST(problems.generation() == generation); // the panel keeps its selection
+
+	publisher.report(problems, "drop", { warning_at("res://props/b.desc", "", "second") });
+	const auto rows = desc_problems(problems);
+	BOOST_REQUIRE(rows.size() == 1u);
+	BOOST_TEST(rows[0].message == "second");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

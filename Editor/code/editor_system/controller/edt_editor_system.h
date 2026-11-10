@@ -327,8 +327,10 @@ namespace edt {
 		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
 		void refresh_world_problems();
 		world_problem_publisher m_world_problems;
-		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab:<tag>".
+		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab" (the open preview).
 		desc_problem_publisher m_desc_problems;
+		// The prefab preview whose diagnostics the scope "prefab" holds; closing it clears them.
+		document_id m_desc_prefab_document{};
 		std::vector<connection> m_world_problem_connections;
 	};
 }

@@ -10,7 +10,7 @@
 namespace edt
 {
 	// What went wrong in the descs the editor loaded, as the problems of the source "desc" (#596): one set per scope
-	// ("level", "drop", "prefab:<tag>"), so a clean load of one does not hide the errors of another. The source holds the
+	// ("level", "drop", "prefab"), so a clean load of one does not hide the errors of another. The source holds the
 	// union of the scopes and goes away when every scope is empty. Main thread only.
 	class desc_problem_publisher
 	{
@@ -38,6 +38,8 @@ namespace edt
 		void publish(problem_list& problems);
 
 		std::map<std::string, scope_problems, std::less<>> m_scopes;
+		// What the source holds now: an unchanged set is not set again (that would reset the panel's selection).
+		std::vector<problem> m_last;
 		bool m_published = false;
 	};
 }

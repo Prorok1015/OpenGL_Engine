@@ -1,10 +1,17 @@
 #include "edt_desc_problems.h"
+#include <algorithm>
 #include <charconv>
 #include <format>
 #include <utility>
 
 namespace {
 	// The count at the front of a collector's "N more diagnostics"; 1 when the text has none.
+	bool same(const edt::problem& a, const edt::problem& b)
+	{
+		return a.severity == b.severity && a.file == b.file && a.line == b.line && a.column == b.column && a.code == b.code
+			&& a.message == b.message && a.notes == b.notes;
+	}
+
 	std::size_t dropped_count(const std::string& reason)
 	{
 		std::size_t count = 0;
@@ -72,14 +79,17 @@ void edt::desc_problem_publisher::publish(problem_list& problems)
 		problem more;
 		more.severity = problem_severity::warning;
 		more.code = res::diagnostic_kind::truncated;
-		more.message = std::format("{} more diagnostics", dropped);
+		more.message = std::format("{} more diagnostics truncated", dropped);
 		all.push_back(std::move(more));
 	}
 	if (all.empty()) {
 		if (m_published) problems.clear(source);
 		m_published = false;
+		m_last.clear();
 		return;
 	}
+	if (m_published && std::ranges::equal(all, m_last, same)) return;
+	m_last = all;
 	problems.set(source, std::move(all));
 	m_published = true;
 }
