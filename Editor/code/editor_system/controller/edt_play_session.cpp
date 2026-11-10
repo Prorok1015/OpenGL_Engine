@@ -557,13 +557,13 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 			m_options.notify(std::format("Play kept its world across the module reload, not all of it.{}", what));
 		}
 	}
-	const auto started = std::exchange(m_reload_started, {});
+	const auto started = std::exchange(m_reload_started, std::nullopt);
 	if (m_options.project_root.empty()) return;
 
 	boost::json::object out;
 	out["written_at"] = std::format("{:%FT%TZ}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
-	if (started != std::chrono::steady_clock::time_point{}) {
-		out["duration_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(now() - started).count();
+	if (started) {
+		out["duration_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(now() - *started).count();
 	}
 	out["module_reload"] = boost::json::object{ { "status", to_string(outcome.status) }, { "message", outcome.message } };
 	out["play"] = play;

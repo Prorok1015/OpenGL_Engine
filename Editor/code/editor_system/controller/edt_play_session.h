@@ -206,8 +206,8 @@ namespace edt
 		std::optional<reload_snapshot> m_reload;
 		// Why the last capture_for_reload kept nothing: Play restarts instead.
 		std::string m_capture_refusal;
-		// When the reload began (capture_for_reload), for the report's duration; default: not known.
-		std::chrono::steady_clock::time_point m_reload_started{};
+		// When the reload began (capture_for_reload), for the report's duration.
+		std::optional<std::chrono::steady_clock::time_point> m_reload_started;
 		bool m_suspended = false;
 		// How the restored set runs once its resources are there.
 		struct resource_wait
