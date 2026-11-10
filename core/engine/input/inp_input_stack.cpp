@@ -144,6 +144,34 @@ bool inp::input_stack::world_active(std::string_view world) const
 	return !m_off_worlds.contains(world);
 }
 
+inp::stack_snapshot inp::input_stack::snapshot() const
+{
+	stack_snapshot saved;
+	for (const stack_entry& entry : m_entries) {
+		if (entry.layer.owner != layer_owner::engine) saved.layers.push_back({ entry.world, entry.layer });
+	}
+	saved.off_worlds.assign(m_off_worlds.begin(), m_off_worlds.end());
+	return saved;
+}
+
+inp::stack_restore_report inp::input_stack::restore(const stack_snapshot& saved, const std::vector<world_ref>& worlds)
+{
+	stack_restore_report report;
+	for (const stack_snapshot::layer& item : saved.layers) {
+		const auto world = std::ranges::find(worlds, item.world, &world_ref::name);
+		if (world == worlds.end()) {
+			++report.skipped;
+			continue;
+		}
+		put(item.world, world->desc_index, item.desc);
+		++report.restored;
+	}
+	for (const std::string& name : saved.off_worlds) {
+		if (std::ranges::find(worlds, name, &world_ref::name) != worlds.end()) set_world_active(name, false);
+	}
+	return report;
+}
+
 bool inp::input_stack::warn_once(std::string key)
 {
 	return m_warned.insert(std::move(key)).second;

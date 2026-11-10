@@ -109,6 +109,33 @@ namespace inp
 		std::bitset<mouse_count> armed_buttons;
 	};
 
+	struct world_ref
+	{
+		std::string name;
+		std::uint32_t desc_index = 0;
+	};
+
+	// A stack as a hot reload of the module keeps it (HOT_RELOAD_PLAY.md 4.4): the layers that are not the engine's (it puts
+	// the base layer of every world each frame) in the order they were added, and the worlds that are off, as plain data that
+	// outlives the code that pushed them. The memory of fronts is not kept: a restored layer starts with "previous = current".
+	struct stack_snapshot
+	{
+		struct layer
+		{
+			std::string world;
+			stack_layer_desc desc;
+		};
+		std::vector<layer> layers;
+		std::vector<std::string> off_worlds;
+	};
+
+	struct stack_restore_report
+	{
+		std::size_t restored = 0;
+		// Layers of a world that is not in the new run: left out, not an error.
+		std::size_t skipped = 0;
+	};
+
 	class SNK_API input_stack;
 	struct stack_resolution;
 	SNK_API void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
@@ -142,6 +169,11 @@ namespace inp
 		// True the first time `key` is asked for in this stack: a refused command is said once per session of the set (the stack
 		// goes with the set), not every frame it is asked again.
 		bool warn_once(std::string key);
+		// What a hot reload keeps of the stack, and putting it back into the stack of the new run: a layer of a world that is in
+		// `worlds` is put with that world's desc_index (the same name replaces, so doing it twice makes no second layer); the
+		// worlds that were off are switched off again.
+		stack_snapshot snapshot() const;
+		stack_restore_report restore(const stack_snapshot& saved, const std::vector<world_ref>& worlds);
 		std::size_t memory_count() const { return m_memory.size(); }
 
 		// Top first: by `order` (higher first), then by the world's desc_index, then the later added layer first.
@@ -158,12 +190,6 @@ namespace inp
 		std::map<std::pair<std::string, std::string>, layer_memory> m_memory;
 		std::set<std::string, std::less<>> m_off_worlds;
 		std::set<std::string> m_warned;
-	};
-
-	struct world_ref
-	{
-		std::string name;
-		std::uint32_t desc_index = 0;
 	};
 
 	// Applies the commands in order to the stack of a set whose worlds are `worlds` (what gs::route_input knows of them); the

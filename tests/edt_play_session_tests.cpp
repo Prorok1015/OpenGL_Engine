@@ -1041,6 +1041,57 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_a_step_keeps_the_frames_to_step)
 	loader.unload("play_game", root);
 }
 
+// #625 (b): the layers the module put on the input stack of "play" and the worlds it switched off survive a reload, once each.
+BOOST_AUTO_TEST_CASE(a_module_reload_keeps_the_input_layers_of_play_without_duplicates)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	inp::stack_layer_desc menu;
+	menu.name = "menu";
+	menu.owner = inp::layer_owner::module;
+	router.stack("play").put("w0", 0, menu);
+	router.stack("play").set_world_active("w0", false);
+
+	for (int round = 0; round < 2; ++round) {
+		BOOST_REQUIRE(play.capture_for_reload().empty());
+		host.reload("play_game", build_of(round == 0 ? v2_entry() : v1_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+		play.end_reload();
+		settle();
+
+		BOOST_REQUIRE(play_set());
+		BOOST_TEST(router.stack("play").size() == 1u);
+		BOOST_TEST(router.stack("play").find("w0", "menu") != nullptr);
+		BOOST_TEST(!router.stack("play").world_active("w0"));
+	}
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_reload_counts_the_input_that_waited_in_the_queues_of_play)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	router.inject({ "play", "w0" }, "Jump", inp::action_edge::pressed);
+	router.queue_command("play", { .kind = inp::stack_command_kind::set_world_active, .world = "w0", .active = false });
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+	settle();
+
+	const json::object report = read_report();
+	BOOST_TEST(report.at("input_injected_dropped").to_number<int>() == 1);
+	BOOST_TEST(report.at("input_commands_dropped").to_number<int>() == 1);
+	BOOST_TEST(router.take_injected("play").empty());
+	BOOST_TEST(router.take_commands("play").empty());
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
 // A restore that fails (here: a set "play" is already there) stops Play and gives the editor back as Stop does.
 BOOST_AUTO_TEST_CASE(a_failed_restore_stops_play)
 {

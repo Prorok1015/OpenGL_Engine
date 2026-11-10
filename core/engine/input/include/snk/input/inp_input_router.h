@@ -43,6 +43,16 @@ namespace inp
 	{
 	public:
 		explicit input_router(std::shared_ptr<const ecs_input_manager> source);
+		// The token below points at this object: it is never copied or moved.
+		input_router(const input_router&) = delete;
+		input_router& operator=(const input_router&) = delete;
+		~input_router();
+
+		// Every layer of the owner in every set (memories of fronts included) and the commands it queued: what a module's
+		// layers become when the module goes (gs::module_context keeps a cleanup that calls it, INPUT_STACK.md 3.3).
+		void remove_owner(layer_owner owner);
+		// Empty once the router is destroyed: a holder that may outlive it checks it before calling.
+		std::weak_ptr<input_router*> liveness() const { return m_self; }
 
 		// Rect is {x0, y0, x1, y1} in framebuffer pixels, bounds included. Panels bind every frame;
 		// bindings live until clear_bindings(). Overlapping rects: the one bound last wins.
@@ -148,5 +158,6 @@ namespace inp
 		std::map<std::string, std::vector<stack_command>, std::less<>> m_commands;
 		std::map<std::string, std::vector<queued_injection>, std::less<>> m_injected;
 		std::map<std::string, std::set<std::string>, std::less<>> m_warned;
+		std::shared_ptr<input_router*> m_self;
 	};
 }

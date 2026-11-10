@@ -808,4 +808,70 @@ BOOST_AUTO_TEST_CASE(Commands_ARefusalIsSaidOncePerReasonAndLayer)
 	BOOST_TEST(stack.warn_once("remove|game|other|the layer belongs to another owner"));
 }
 
+BOOST_AUTO_TEST_CASE(Snapshot_KeepsTheModulesLayersAndTheOffWorlds_NotTheEnginesBaseLayer)
+{
+	inp::input_stack stack;
+	stack.put("game", 0, layer("world", 0));
+	inp::stack_layer_desc menu = layer("menu", 5);
+	menu.owner = inp::layer_owner::module;
+	stack.put("game", 0, menu);
+	stack.set_world_active("hud", false);
+
+	const inp::stack_snapshot saved = stack.snapshot();
+	BOOST_REQUIRE_EQUAL(saved.layers.size(), 1u);
+	BOOST_TEST(saved.layers[0].world == "game");
+	BOOST_TEST(saved.layers[0].desc.name == "menu");
+	BOOST_REQUIRE_EQUAL(saved.off_worlds.size(), 1u);
+	BOOST_TEST(saved.off_worlds[0] == "hud");
+}
+
+BOOST_AUTO_TEST_CASE(Restore_PutsTheLayersBackWithTheNewDescIndex_AndTwiceMakesNoDuplicate)
+{
+	inp::input_stack old_run;
+	inp::stack_layer_desc menu = layer("menu", 5);
+	menu.owner = inp::layer_owner::module;
+	old_run.put("game", 0, menu);
+	old_run.set_world_active("hud", false);
+	const inp::stack_snapshot saved = old_run.snapshot();
+
+	inp::input_stack fresh;
+	const std::vector<inp::world_ref> worlds{ { "game", 3 }, { "hud", 4 } };
+	const auto first = fresh.restore(saved, worlds);
+	const auto second = fresh.restore(saved, worlds);
+	BOOST_TEST(first.restored == 1u);
+	BOOST_TEST(second.restored == 1u);
+	BOOST_TEST(fresh.size() == 1u);
+	BOOST_TEST(fresh.find("game", "menu") != nullptr);
+	BOOST_TEST(!fresh.world_active("hud"));
+}
+
+BOOST_AUTO_TEST_CASE(Restore_LeavesOutTheLayersOfAWorldThatIsGone_AndCountsThem)
+{
+	inp::input_stack old_run;
+	inp::stack_layer_desc menu = layer("menu", 5);
+	menu.owner = inp::layer_owner::module;
+	old_run.put("gone", 0, menu);
+	old_run.put("game", 1, menu);
+
+	inp::input_stack fresh;
+	const auto report = fresh.restore(old_run.snapshot(), { { "game", 0 } });
+	BOOST_TEST(report.restored == 1u);
+	BOOST_TEST(report.skipped == 1u);
+	BOOST_TEST(fresh.find("gone", "menu") == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(Restore_GivesAHeldKeyNoPress_TheLayerStartsWithPreviousEqualCurrent)
+{
+	inp::input_stack old_run;
+	inp::stack_layer_desc menu = declaring("menu", 5, { "Jump" });
+	menu.owner = inp::layer_owner::module;
+	old_run.put("game", 0, menu);
+
+	inp::input_stack fresh;
+	fresh.restore(old_run.snapshot(), { { "game", 0 } });
+	const inp::action_map map = make_actions();
+	const auto resolved = frame_of(fresh, { "game" }, outside, true, physical_state{}.down(KEYBOARD_BUTTONS::SPACE), map);
+	BOOST_TEST(!armed(resolved, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

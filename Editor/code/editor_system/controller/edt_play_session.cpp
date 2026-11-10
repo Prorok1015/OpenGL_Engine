@@ -350,6 +350,11 @@ std::string edt::play_session::capture_for_reload()
 	snapshot.mode = m_waiting ? m_waiting->mode : play->mode();
 	snapshot.frames_run = m_waiting ? m_waiting->frames_run : play->frames_run();
 	snapshot.pending_steps = m_waiting ? m_waiting->pending_steps : play->pending_steps();
+	if (m_options.input) {
+		snapshot.input_stack = m_options.input->stack(k_play_set).snapshot();
+		snapshot.injected_dropped = m_options.input->take_injected(k_play_set).size();
+		snapshot.stack_commands_dropped = m_options.input->take_commands(k_play_set).size();
+	}
 	m_reload = std::move(snapshot);
 	return {};
 }
@@ -386,7 +391,7 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 		return false;
 	}
 	m_dropped_systems.clear();
-	const reload_snapshot& saved = *m_reload;
+	reload_snapshot& saved = *m_reload;
 	m_worlds_copy = m_document.world_descs;
 
 	scn::context_set& play = contexts->create_set(k_play_set, layer, scn::set_options{ .hot_reload = false });
@@ -437,6 +442,14 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 		scn::restore_blackboard(pending, saved.blackboard_pending, layer->blackboard_types(), read, report);
 		for (const auto& [key, entry] : pending.committed()) {
 			board.write(key, entry.type, entry.type_name, entry.value, ecs::blackboard_data::external_writer);
+		}
+	}
+	if (m_options.input) {
+		std::vector<inp::world_ref> worlds;
+		play.for_each([&](scn::world_context& world) { worlds.push_back({ std::string{ world.get_name() }, world.desc_index() }); });
+		saved.input_stack_restored = m_options.input->stack(k_play_set).restore(saved.input_stack, worlds);
+		if (saved.input_stack_restored.skipped > 0) {
+			egLOG_WARN("hot_reload", "{} input layer(s) belong to a world the new run does not have: left out", saved.input_stack_restored.skipped);
 		}
 	}
 	// Neither run nor shown until what the restored components refer to has loaded (HOT_RELOAD_PLAY.md 6, step 6).
@@ -722,6 +735,10 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 	if (m_reload) {
 		out["bus_events_dropped"] = m_reload->bus_events;
 		out["mail_dropped"] = "unknown (#668)";
+		out["input_layers_restored"] = m_reload->input_stack_restored.restored;
+		out["input_layers_skipped"] = m_reload->input_stack_restored.skipped;
+		out["input_injected_dropped"] = m_reload->injected_dropped;
+		out["input_commands_dropped"] = m_reload->stack_commands_dropped;
 		boost::json::array worlds;
 		for (const saved_world& world : m_reload->worlds) {
 			boost::json::array systems;
