@@ -132,13 +132,16 @@ bash tools/ci/check_windows_deps.sh --runtime-elsewhere "${proj}/build/shipping"
 # ---- 6. editor.exe from the unpacked folder ----
 log="${work}/editor_headless"
 rc=0
+# 1000, not 0: "level loaded" waits up to scene/level_settle_seconds = 10 s for the loads the level started (#669).
 (cd "$root" && timeout 180 bin/editor.exe --config config/editor.cfg --headless --project projects/sandbox \
 	--set editor/startup_level levels/smoke_level.desc editor/exit_after_level_loaded true \
-	app/exit_after_frames 20000 app/headless_target_fps 0 > "${log}.stdout" 2> "${log}.stderr") || rc=$?
+	app/exit_after_frames 20000 app/headless_target_fps 1000 > "${log}.stdout" 2> "${log}.stderr") || rc=$?
 tail -30 "${log}.stderr"
 if [[ $rc -ne 0 ]]; then echo "::error::editor.exe --headless exited with ${rc} (124 = timed out)"; exit 1; fi
 if ! grep -q "level loaded: .*smoke_level.desc" "${log}.stderr"; then
 	echo "::error::the packaged editor did not load the startup level"; exit 1
 fi
+if grep -q "loads still pending after" "${log}.stderr"; then echo "::error::the startup level did not settle (#669)"; exit 1; fi
 if grep -E '\[(error|critical)\]' "${log}.stderr"; then echo "::error::errors in the packaged editor's log"; exit 1; fi
+if grep -F "are still referenced:" "${log}.stderr"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
 echo "the package is complete"

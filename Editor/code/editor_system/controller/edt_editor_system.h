@@ -20,6 +20,7 @@
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/scene/level/scn_start_level.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
 #include <vector>
@@ -99,6 +100,8 @@ namespace edt {
 		void run_implicit_callbacks();
 		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
 		void tick_live_mode();
+		// Once a frame: a loaded level waits for the loads it started before "level loaded" and the exit (#669).
+		void tick_level_settle();
 		// The repository watcher's frame (#485): the `editor_vcs` frame stage. Re-arms it when a probe changed the
 		// service's cached state (never probes itself) and raises editor_events::repository_changed.
 		void tick_repository_watcher();
@@ -252,8 +255,14 @@ namespace edt {
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
-		// Set with editor/exit_after_level_loaded: stops the frame loop once a level load succeeded (CI headless run).
+		// Set with editor/exit_after_level_loaded: stops the frame loop once a loaded level settled (CI headless run).
 		std::function<void()> m_stop_after_level_loaded;
+		ds::task_system* m_tasks = nullptr;
+		// Kept while the level waits: the settle holds a reference to it. Declared first, so it is destroyed after it.
+		std::shared_ptr<scn::context_manager> m_settle_contexts;
+		std::optional<scn::level_settle> m_level_settle;
+		void start_level_settle(const res::tag& level);
+		void cancel_level_settle();
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
