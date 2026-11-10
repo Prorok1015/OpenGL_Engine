@@ -277,6 +277,9 @@ namespace res
 			return count;
 		}
 
+		// Read-only: how many blocks the wait graph holds (waiting or waited for). For tests and diagnostics.
+		std::size_t wait_graph_nodes() const;
+
 		// Read-only: how many alias edges register_alias() holds. For tests and diagnostics.
 		std::size_t alias_edge_count() const {
 			std::shared_lock lock(m_cache_mutex);

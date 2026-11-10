@@ -360,6 +360,55 @@ BOOST_AUTO_TEST_CASE(stop_loading_drops_the_waits_of_a_dependency_still_in_fligh
 	BOOST_TEST(layer->live_resources() == 0u);
 }
 
+// #675: once the loads stopped, a wait asked for afterwards (a main-thread when_all on a block of the parent still in
+// flight) is refused at once, and nothing of it goes into the graph, where it would hold both blocks until the end.
+BOOST_AUTO_TEST_CASE(a_wait_asked_for_after_stop_loading_is_refused_and_leaves_the_graph_alone)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag dependency{ "gate://parent.txt" };
+	gate.files[dependency] = test_util::to_bytes("parent");
+	gate.gate = true;
+	const auto in_flight = rs->require<res::text_resource>(dependency);
+	pump();
+	BOOST_REQUIRE(!in_flight.is_ready());
+	BOOST_REQUIRE(!in_flight.has_error());
+
+	layer->stop_loading();
+	BOOST_REQUIRE(layer->wait_graph_nodes() == 0u);
+	{
+		const auto joined = res::when_all(*layer, in_flight);
+		BOOST_TEST(joined.has_error());
+		BOOST_TEST(joined.error_text().find("Load cancelled") != std::string::npos);
+		BOOST_TEST(layer->wait_graph_nodes() == 0u);
+	}
+
+	gate.release();
+	pump();
+	BOOST_TEST(in_flight.is_ready());
+	BOOST_TEST(layer->wait_graph_nodes() == 0u);
+}
+
+// #675: blocks that have all finished settle a wait at once, so a stopped layer still joins them.
+BOOST_AUTO_TEST_CASE(a_wait_on_finished_blocks_after_stop_loading_is_ready)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag first{ "gate://first.txt" };
+	const res::tag second{ "gate://second.txt" };
+	gate.files[first] = test_util::to_bytes("first");
+	gate.files[second] = test_util::to_bytes("second");
+	const auto a = rs->require<res::text_resource>(first);
+	const auto b = rs->require<res::text_resource>(second);
+	pump();
+	BOOST_REQUIRE(a.is_ready());
+	BOOST_REQUIRE(b.is_ready());
+
+	layer->stop_loading();
+	const auto joined = res::when_all(*layer, a, b);
+	BOOST_TEST(joined.is_ready());
+	BOOST_TEST(!joined.has_error());
+	BOOST_TEST(layer->wait_graph_nodes() == 0u);
+}
+
 // #657: the warning of a destroyed layer names what is still held, so the holder can be found.
 BOOST_AUTO_TEST_CASE(a_destroyed_layer_names_the_resources_still_held)
 {

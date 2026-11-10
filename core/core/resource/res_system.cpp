@@ -145,9 +145,14 @@ struct res::resource_system::wait_graph {
     }
   }
 
-  bool empty() {
+  bool empty() const {
     std::lock_guard lock(m_mutex);
     return m_nodes.empty();
+  }
+
+  std::size_t size() const {
+    std::lock_guard lock(m_mutex);
+    return m_nodes.size();
   }
 
 private:
@@ -221,7 +226,7 @@ private:
     return best;
   }
 
-  std::mutex m_mutex;
+  mutable std::mutex m_mutex;
   node_map m_nodes;
 };
 
@@ -656,8 +661,28 @@ void res::resource_system::await_blocks(
   state->on_done = std::move(on_done);
   state->pending = state->blocks.size();
   state->roles = std::move(roles);
-  // The dependencies (a parent's blocks too) hold only this id, never the state with its continuation.
-  const std::uint64_t id = register_await(state);
+  // Blocks that have all finished settle the wait at once (their edges go as they are added), so it is not refused.
+  const bool waits_for_any = std::ranges::any_of(state->blocks, [](const auto &entry) {
+    return entry.first && !is_finished(*entry.first);
+  });
+  bool stopping = false;
+  std::uint64_t id = 0;
+  {
+    // Under the lock stop_loading sets m_stopping with: it either sees this wait in cancel_parked or we see it stopping.
+    std::lock_guard lock(m_stop_mutex);
+    stopping = m_stopping && waits_for_any;
+    if (!stopping) {
+      // The dependencies (a parent's blocks too) hold only this id, never the state with its continuation.
+      id = register_await(state);
+    }
+  }
+  if (stopping) {
+    // Outside the lock: failing the owner runs its callbacks, which may take m_stop_mutex (run_on_compute).
+    if (!is_finished(*owner)) {
+      owner->set_error("Load cancelled");
+    }
+    return;
+  }
 
   const auto fail_owner = [](const std::shared_ptr<resource_handle> &block, const std::string &message) {
     if (!is_finished(*block)) {
@@ -772,6 +797,10 @@ void res::resource_system::await_blocks(
       });
     });
   }
+}
+
+std::size_t res::resource_system::wait_graph_nodes() const {
+  return m_graph->size();
 }
 
 res::res_handle<res::when_all_result> res::resource_system::when_all_blocks(
