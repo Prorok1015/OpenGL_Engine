@@ -492,6 +492,13 @@ jobs:
       - name: Check GL is used only inside the GL driver
         run: tools/ci/check_no_gl_outside_drivers.sh
 
+      # #620: every component the engine creates on a world is in its component catalog (a hot reload snapshot saves only
+      # those); the catalog test covers the desc spawners, this the sources. Needs no build.
+      - name: Check every engine component is in the catalog
+        run: |
+          python3 tools/ci/check_engine_components.py --self-test
+          python3 tools/ci/check_engine_components.py
+
       # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
       # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure
       # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.
