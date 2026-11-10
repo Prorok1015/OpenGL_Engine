@@ -148,7 +148,7 @@ namespace gs
 			return m_layer.keep(m_layer.subscriptions().observe<T>(std::move(filter), what, std::move(fn)));
 		}
 
-		// The input stack of `set` (module API 3.6). A set that does not exist (`"play"` while Play does not run) gives an empty
+		// The input stack of `set` (module API 3.7). A set that does not exist (`"play"` while Play does not run) gives an empty
 		// handle and an error in the log: the stack lives and dies with its set, the file of the level holds the defaults.
 		input_stack_handle input_stack(std::string_view set) const;
 
