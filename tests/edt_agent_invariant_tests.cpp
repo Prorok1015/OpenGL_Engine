@@ -898,5 +898,53 @@ BOOST_FIXTURE_TEST_CASE(ALoadedLevel_IsReportedOnceItsLoadsSettled_AndNotAfterAN
 	BOOST_CHECK_EQUAL(log.count("levels/test_level.desc"), 0u);
 }
 
+// #596: what a level load reports goes to Problems as the source "desc", with the level's file and the JSON pointer, and a
+// load of the same level without them clears it.
+BOOST_FIXTURE_TEST_CASE(ALevelsDescWarnings_AreProblemsOfTheSourceDesc_UntilItLoadsClean, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	const auto desc_rows = [this] {
+		std::vector<edt::problem> rows;
+		for (const auto& entry : editor().context()->problems().list()) {
+			if (entry.source == "desc") rows.push_back(entry.item);
+		}
+		return rows;
+	};
+	const auto store = [this](std::string_view text) {
+		std::vector<std::byte> bytes(text.size());
+		std::ranges::transform(text, bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+		BOOST_REQUIRE(storage.require<res::resource_system>().store_sync(res::tag::make("levels/desc_problems.desc"), bytes));
+	};
+	constexpr std::string_view with_unknown = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000d1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]}]})json";
+	constexpr std::string_view clean = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000d1","name":"odd"}]}]})json";
+
+	store(with_unknown);
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/desc_problems.desc" } }).ok);
+	pump_level_load();
+	BOOST_REQUIRE_EQUAL(std::string(editor().current_level_tag().relative()), "levels/desc_problems.desc");
+	const auto rows = desc_rows();
+	BOOST_REQUIRE_MESSAGE(!rows.empty(), "no desc problem for the unknown component");
+	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
+	BOOST_REQUIRE(unknown != rows.end());
+	BOOST_TEST(unknown->file == "levels/desc_problems.desc"); // the level's file, not the editor's working copy
+	BOOST_REQUIRE(!unknown->notes.empty());
+	BOOST_TEST(unknown->notes[0].starts_with("/worlds/0"));
+
+	store(clean);
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/desc_problems.desc" } }).ok);
+	pump_level_load();
+	BOOST_TEST(desc_rows().empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 

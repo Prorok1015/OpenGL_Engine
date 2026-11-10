@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_world_problems.h"
+#include "edt_desc_problems.h"
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -326,6 +327,8 @@ namespace edt {
 		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
 		void refresh_world_problems();
 		world_problem_publisher m_world_problems;
+		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab:<tag>".
+		desc_problem_publisher m_desc_problems;
 		std::vector<connection> m_world_problem_connections;
 	};
 }

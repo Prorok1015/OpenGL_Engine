@@ -118,6 +118,16 @@ CFG_VAR_EXT_PATH(cfg_edt_data_path);
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
 
 namespace {
+	template<class T>
+	std::vector<res::diagnostic> diagnostics_of(const res::res_handle<T>& handle)
+	{
+		res::diagnostics_collector collector;
+		handle.collect_into(collector);
+		return collector.items();
+	}
+}
+
+namespace {
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
 	{
@@ -303,6 +313,7 @@ edt::editor_system::~editor_system()
 	}
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
+		ctx_mgr->set_on_reload_result(nullptr);
 	}
 }
 
@@ -1320,6 +1331,10 @@ void edt::editor_system::wire_controller_callbacks()
 	};
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
+		// Also a reload that failed: its errors stay in Problems until a clean one replaces them.
+		ctx_mgr->set_on_reload_result([this](const res::tag&, const res::res_handle<scn::level_desc>& handle) {
+			m_desc_problems.report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag);
+		});
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
 			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
@@ -1563,6 +1578,8 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	// A load that was never finished (begin_level_load called again): its copy goes.
 	if (m_loading_level) abandon_level_load();
 	cancel_level_settle();
+	// The errors of the level being replaced are not this one's; the same level keeps them until its load reports.
+	if (original_tag != m_state.level_tag) m_desc_problems.clear(m_context->problems(), "level");
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
 
@@ -1604,6 +1621,8 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	}
 	if (m_loading_level_handle.has_error()) {
 		scn::report_level_failed(m_loading_level_tag, m_loading_level_handle);
+		m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
+			m_loading_level_tag);
 		if (loaded_out) *loaded_out = false;
 		abandon_level_load();
 		return false;
@@ -1645,6 +1664,9 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	m_state.editor_tag = m_loading_editor_tag;
 	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
 	if (loaded_out) *loaded_out = loaded;
+	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
+	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
+		m_loading_level_tag);
 	if (!loaded) {
 		m_state.level_tag = level_tag_before;
 		m_state.editor_tag = editor_tag_before;
@@ -1706,6 +1728,7 @@ bool edt::editor_system::poll_pending_desc()
 	if (!m_pending_desc_handle.is_valid()) return false;
 	if (m_pending_desc_handle.has_error()) {
 		egLOG_ERROR("Editor/Drop", "Failed to load desc '{}'", m_pending_desc_tag.view());
+		m_desc_problems.report(m_context->problems(), "drop", diagnostics_of(m_pending_desc_handle));
 		m_pending_desc_handle = {};
 		return false;
 	}
@@ -1736,6 +1759,7 @@ bool edt::editor_system::poll_pending_desc()
 		ImGui::EndPopup();
 	}
 
+	m_desc_problems.report(m_context->problems(), "drop", diagnostics_of(m_pending_desc_handle));
 	m_level_ctrl.add_desc_to_scene(m_pending_desc_handle, m_pending_desc_key);
 	m_pending_desc_handle = {};
 	return false;
@@ -1746,6 +1770,9 @@ bool edt::editor_system::poll_pending_desc()
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
+	// The preview loaded it already: this is the same cached block.
+	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
+	m_desc_problems.report(m_context->problems(), "prefab:" + tag.string(), diagnostics_of(loaded));
 	if (prefab.is_open()) {
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
@@ -1763,6 +1790,7 @@ void edt::editor_system::close_prefab_editor()
 {
 	auto& documents = m_context->documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
+		m_desc_problems.clear(m_context->problems(), "prefab:" + prefab->source_tag().string());
 		documents.close(prefab->id());
 	}
 	m_prefab_panel->set_context(nullptr);

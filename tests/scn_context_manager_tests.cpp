@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include <snk/scene/scn_primitives.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/ecs/ecs_channel.hpp>
@@ -288,6 +289,35 @@ BOOST_AUTO_TEST_CASE(HotReload_FailedWorldDescKeepsTheCurrentLevelAndSkipsTheCal
 	BOOST_TEST(lvl.has("w1"));
 	BOOST_TEST(lvl.has("rt"));
 	BOOST_TEST(has_named(lvl.get("w0").state(), "c1")); // not rebuilt
+}
+
+// #596: the editor shows a reload's diagnostics in Problems, those of a reload that failed included.
+BOOST_AUTO_TEST_CASE(HotReload_ReportsEveryReloadThatReadTheFile_AlsoOneThatFailed)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+	std::vector<std::size_t> errors;
+	mgr.set_on_reload_result([&errors, &tag](const res::tag& level, const res::res_handle<scn::level_desc>& handle) {
+		BOOST_TEST((level == tag));
+		res::diagnostics_collector collector;
+		handle.collect_into(collector);
+		errors.push_back(collector.error_count());
+	});
+
+	put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":[]},"memory://t/missing_world.desc"]})");
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+	BOOST_REQUIRE(errors.size() == 1u);
+	BOOST_TEST(errors[0] > 0u);
+
+	put("lv.desc", LEVEL_V1);
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+	BOOST_REQUIRE(errors.size() == 2u);
+	BOOST_TEST(errors[1] == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(HotReload_ADeletedLevelFileKeepsTheLevelWithoutAnError)

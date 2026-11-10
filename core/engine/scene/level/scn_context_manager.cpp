@@ -283,6 +283,7 @@ void scn::context_manager::reload_level(const res::tag& changed_tag)
 		return;
 	}
 	auto level_res = resources_of(get_set(level_set_name)).require_sync<scn::level_desc>(changed_tag);
+	if (m_on_reload_result) m_on_reload_result(changed_tag, level_res);
 	if (!level_res.is_ready()) {
 		egLOG("Level Manager", "Failed to reload level '{0}'", changed_tag.view());
 		return;
