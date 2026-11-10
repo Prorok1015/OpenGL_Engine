@@ -600,6 +600,7 @@ BOOST_AUTO_TEST_CASE(AnActionOfAModule_CountsWhileItRuns)
 	std::string seen;
 	edt::action_desc action;
 	action.id = "ext.gated_action";
+	action.label = "Gated";
 	action.expose_as_tool = false;
 	action.execute = [&](const boost::json::value&) {
 		seen = context->module_unload_refusal();
@@ -765,6 +766,7 @@ BOOST_AUTO_TEST_CASE(ACallbackOfAModuleThatCallsAnother_KeepsTheCountUntilTheOut
 	const auto add = [&](const char* id, edt::action_fn body) {
 		edt::action_desc action;
 		action.id = id;
+		action.label = id;
 		action.expose_as_tool = false;
 		action.execute = std::move(body);
 		module.module_context.add_action(std::move(action));
@@ -800,6 +802,7 @@ BOOST_AUTO_TEST_CASE(AReloadAskedFromAModuleAction_IsRefusedAndTheEditorModulesS
 	core::reload_report from_inside;
 	edt::action_desc action;
 	action.id = "ext.reload_myself";
+	action.label = "Reload myself";
 	action.expose_as_tool = false;
 	action.execute = [&](const boost::json::value&) {
 		from_inside = reload();
