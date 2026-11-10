@@ -38,11 +38,57 @@ void inp::input_router::forget_set(std::string_view set)
 	if (const auto it = m_stacks.find(set); it != m_stacks.end()) {
 		m_stacks.erase(it);
 	}
+	if (const auto it = m_commands.find(set); it != m_commands.end()) {
+		m_commands.erase(it);
+	}
 	if (const auto it = m_injected.find(set); it != m_injected.end()) {
 		m_injected.erase(it);
 	}
 	if (const auto it = m_warned.find(set); it != m_warned.end()) {
 		m_warned.erase(it);
+	}
+}
+
+void inp::input_router::queue_command(std::string_view set, stack_command command)
+{
+	const auto it = m_commands.find(set);
+	auto& queue = it != m_commands.end() ? it->second : m_commands.emplace(std::string{ set }, std::vector<stack_command>{}).first->second;
+	if (queue.size() >= command_limit) {
+		if (warn_once(set, "#command-full")) {
+			egLOG_WARN("input", "set '{}': {} input stack commands are waiting and the set does not take them (Pause); the new ones are dropped", set, command_limit);
+		}
+		return;
+	}
+	queue.push_back(std::move(command));
+}
+
+std::vector<inp::stack_command> inp::input_router::take_commands(std::string_view set)
+{
+	const auto it = m_commands.find(set);
+	if (it == m_commands.end()) return {};
+	std::vector<stack_command> taken = std::move(it->second);
+	m_commands.erase(it);
+	return taken;
+}
+
+std::vector<inp::input_router::dropped_injection> inp::input_router::drop_commands_except(const std::vector<std::string>& sets)
+{
+	std::vector<dropped_injection> dropped;
+	for (auto it = m_commands.begin(); it != m_commands.end();) {
+		if (std::ranges::find(sets, it->first) != sets.end()) {
+			++it;
+			continue;
+		}
+		dropped.push_back({ it->first, it->second.size() });
+		it = m_commands.erase(it);
+	}
+	return dropped;
+}
+
+void inp::input_router::forget_commands(std::string_view set)
+{
+	if (const auto it = m_commands.find(set); it != m_commands.end()) {
+		m_commands.erase(it);
 	}
 }
 

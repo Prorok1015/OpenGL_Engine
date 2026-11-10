@@ -84,6 +84,27 @@ namespace inp
 		// The set went away (Play stopped): its bindings, its mouse hold and its stack are dropped, the default target stays.
 		void forget_set(std::string_view set);
 
+		// What a queue of a set that is not there lost: the set and how many entries.
+		struct dropped_injection
+		{
+			std::string set;
+			std::size_t edges = 0;
+		};
+
+		// A change of the stack of a set from outside the worlds (gs::module_context::input_stack, the editor). It waits for the
+		// next gs::route_input, which applies it after the commands of the systems (INPUT_STACK.md 3.3); while the set is in
+		// Pause it keeps waiting. Main thread only.
+		// A set keeps at most `command_limit` commands: a Pause must not collect what code asks for every frame to apply it all when
+		// the set runs again. Past it the new commands are dropped (warned about once per session of the set).
+		static constexpr std::size_t command_limit = 256;
+		void queue_command(std::string_view set, stack_command command);
+		// The commands queued for the set, in call order; the queue is emptied.
+		std::vector<stack_command> take_commands(std::string_view set);
+		// The queues of commands of sets that are not in `sets` (a handle kept from an earlier session, a typo) are dropped; the
+		// sets that lost some and how many commands.
+		std::vector<dropped_injection> drop_commands_except(const std::vector<std::string>& sets);
+		// A set that starts afresh (Play) gets none of the commands queued before it.
+		void forget_commands(std::string_view set);
 		// An edge of a game action that does not come from the keyboard (an on-screen button, an AI, a replay; INPUT_STACK.md 7,
 		// M12) for the world `target` names. It waits for the next gs::route_input, which hands it to the world as an
 		// inp::action_injection; the layers play no part, the source has chosen the world. For game code and the engine,
@@ -102,11 +123,6 @@ namespace inp
 		// Every edge queued for the worlds of the set, in the order they came; the queue is emptied.
 		std::vector<queued_injection> take_injected(std::string_view set);
 		// The queues of sets that are not in `sets` (a typo, a set that is not started yet) are dropped; what was dropped, per set.
-		struct dropped_injection
-		{
-			std::string set;
-			std::size_t edges = 0;
-		};
 		std::vector<dropped_injection> drop_injected_except(const std::vector<std::string>& sets);
 		// A set that starts afresh (Play) gets none of the edges queued before it.
 		void forget_injected(std::string_view set);
@@ -129,6 +145,7 @@ namespace inp
 		std::optional<input_target> m_default;
 		std::map<std::string, mouse_hold, std::less<>> m_holds;
 		std::map<std::string, input_stack, std::less<>> m_stacks;
+		std::map<std::string, std::vector<stack_command>, std::less<>> m_commands;
 		std::map<std::string, std::vector<queued_injection>, std::less<>> m_injected;
 		std::map<std::string, std::set<std::string>, std::less<>> m_warned;
 	};

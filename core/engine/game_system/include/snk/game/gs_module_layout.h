@@ -6,6 +6,8 @@
 #include <snk/ecs/ecs_signal.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/game/gs_input_stack_handle.h>
+#include <snk/input/inp_input_stack.h>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
@@ -63,7 +65,11 @@ namespace gs
 			// module_context::subscribe/observe build the filter, the slot and the connection the engine keeps.
 			scn::event_filter, scn::observer_slot, ecs::connection,
 			// module_context::run takes the task's description from module code.
-			ds::task_desc>();
+			ds::task_desc,
+			// module_context::input_stack hands the module an input_stack_handle by value; the module builds the layers it
+			// passes (stack_layer_desc), and a system that takes input_stack_control& gets it made in module code by
+			// ecs_invoker's reg.ctx().emplace<T>(), so the module allocates and destroys it.
+			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control>();
 	}
 
 	// module_layout_key() as the engine was built: what the host compares a module's key with.
