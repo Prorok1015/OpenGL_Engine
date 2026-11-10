@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,12 +21,17 @@ namespace edt
 
 	// The editor's problems (problem_list) as a table: severity, file:line, message; the notes are in the row's
 	// tooltip so that every row is one line high and the table clips. Counts per severity in the header double as
-	// filters; a row's context menu copies it.
+	// filters; a row's context menu copies it. With an activate callback a double click, Enter or "Go to" on a row
+	// hands it over with its source.
 	class problems_panel : public panel_base
 	{
 	public:
+		using activate_fn = std::function<void(const std::string& source, const problem& item)>;
+
 		// `problems` must outlive the panel. `project_root` (empty: none) shortens the paths that lie under it.
 		problems_panel(const problem_list& problems, std::filesystem::path project_root);
+
+		void set_on_activate(activate_fn on_activate) { m_on_activate = std::move(on_activate); }
 
 	protected:
 		void on_render() override;
@@ -33,6 +39,7 @@ namespace edt
 	private:
 		struct row
 		{
+			std::string source;
 			problem item;
 			std::string location;
 			std::string tooltip;
@@ -50,5 +57,6 @@ namespace edt
 		std::array<std::size_t, 3> m_counts{};
 		std::array<bool, 3> m_shown{ true, true, true };
 		std::uint64_t m_generation = 0;
+		activate_fn m_on_activate;
 	};
 }
