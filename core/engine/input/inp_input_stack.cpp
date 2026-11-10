@@ -100,6 +100,7 @@ void inp::input_stack::put(std::string_view world, std::uint32_t desc_index, sta
 {
 	for (stack_entry& entry : m_entries) {
 		if (entry.world == world && entry.layer.name == layer.name) {
+			if (entry.desc_index != desc_index) forget_memory(world, layer.name);
 			entry.desc_index = desc_index;
 			entry.layer = std::move(layer);
 			return;

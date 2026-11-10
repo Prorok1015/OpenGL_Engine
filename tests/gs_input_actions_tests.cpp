@@ -375,16 +375,26 @@ BOOST_AUTO_TEST_CASE(AKeyHeldThroughAModalWorld_IsNoPressWhenTheWorldIsOffAndAPr
 
 BOOST_AUTO_TEST_CASE(ANewWorldOnAHeldKey_DoesNotSeeAPress_AndTheDeathOfAWorldDropsItsMemory)
 {
-	auto& game = world("game", 0);
 	const auto map = jump_on_space();
-	frame(map);
+	// The key is already held when the world that reads the actions comes up.
 	key(KB::SPACE, KEY_ACTION::DOWN);
 	frame(map);
-	BOOST_REQUIRE(held(game, "Jump"));
+	auto& game = world("game", 0);
+	frame(map);
+	frame(map);
+	BOOST_TEST(!held(game, "Jump"));
+	BOOST_TEST(seen.empty());
 	const std::size_t memories = router.stack("level").memory_count();
 	BOOST_TEST(memories >= 1u);
 
-	// A world that comes up on a key that is already held starts disarmed for it, and goes again with its memory.
+	// Let go and pressed again: a press.
+	key(KB::SPACE, KEY_ACTION::UP);
+	frame(map);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(pressed(game, "Jump"));
+
+	// Another world comes up on the held key and goes again with its memory.
 	world("menu", 1, { "inp::update_input_state" });
 	frame(map);
 	BOOST_TEST(router.stack("level").memory_count() > memories);
@@ -392,6 +402,49 @@ BOOST_AUTO_TEST_CASE(ANewWorldOnAHeldKey_DoesNotSeeAPress_AndTheDeathOfAWorldDro
 	frame(map);
 	frame(map);
 	BOOST_TEST(router.stack("level").memory_count() == memories);
+}
+
+BOOST_AUTO_TEST_CASE(AKeyPressedInTheFrameTheModalWorldGoesOff_IsAPress)
+{
+	auto& game = world("game", 0);
+	auto& menu = world("menu", 1, { "inp::update_input_state" });
+	scn::input_stack_desc modal;
+	modal.order = 5;
+	modal.block_below = true;
+	menu.set_input_stack(modal);
+	const auto map = jump_on_space();
+	frame(map);
+	frame(map);
+
+	modal.active = false;
+	menu.set_input_stack(modal);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(pressed(game, "Jump"));
+	BOOST_REQUIRE_EQUAL(seen.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AKeyHeldAcrossAFocusChange_DoesNotStopThePressOfAnotherBinding)
+{
+	auto& game = world("game", 0);
+	auto map = std::make_shared<inp::action_map>();
+	map->add("MoveLeft", { KB::A, KB::LEFT });
+	frame(map);
+
+	// A is pressed while the view is not bound and is still held when it is: no press through A.
+	unbind();
+	key(KB::A, KEY_ACTION::DOWN);
+	frame(map);
+	bind();
+	frame(map);
+	BOOST_TEST(!held(game, "MoveLeft"));
+	BOOST_TEST(seen.empty());
+
+	// The left arrow is another binding: it presses.
+	key(KB::LEFT, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(pressed(game, "MoveLeft"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(AnEditSet_KeepsEveryRawKey_TheActionsComeWithPlay)

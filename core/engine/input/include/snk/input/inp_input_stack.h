@@ -67,10 +67,16 @@ namespace inp
 		std::bitset<mouse_count> armed_buttons;
 	};
 
+	class SNK_API input_stack;
+	struct stack_resolution;
+	SNK_API void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
+
 	class SNK_API input_stack
 	{
 	public:
-		// A layer of the world with the same name is replaced and keeps its place of adding.
+		// A layer of the world with the same name is replaced and keeps its place of adding. The same layer put again (the base
+		// layer of every world, every frame) keeps its memory of fronts; one put with another desc_index is a new world's and starts
+		// again.
 		void put(std::string_view world, std::uint32_t desc_index, stack_layer_desc layer);
 		// The worlds that are not in `worlds` lose their layers.
 		void retain_worlds(const std::vector<std::string>& worlds);
@@ -82,8 +88,8 @@ namespace inp
 		// Every layer of the owner (a module's layers go when it unloads or reloads), memories included.
 		void remove_owner(layer_owner owner);
 
-		// The memory of fronts of a layer; created empty (not initialized) by memory(). Dropped with the layer, its world or the set.
-		layer_memory& memory(std::string_view world, std::string_view layer);
+		// The memory of fronts of a layer (arm_actions writes it); dropped with the layer, its world or the set, and when the
+		// world's desc_index changes (put: the world was made again).
 		const layer_memory* find_memory(std::string_view world, std::string_view layer) const;
 		std::size_t memory_count() const { return m_memory.size(); }
 
@@ -91,6 +97,9 @@ namespace inp
 		std::vector<const stack_entry*> ordered() const;
 
 	private:
+		friend void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
+		// Created empty (not initialized) when the layer has none yet.
+		layer_memory& memory(std::string_view world, std::string_view layer);
 		void forget_memory(std::string_view world, std::string_view layer);
 
 		std::vector<stack_entry> m_entries;
@@ -182,7 +191,7 @@ namespace inp
 	// A key that is up is armed; one that is held and did not reach a layer (taken above, the layer inactive or not fed)
 	// is not, until it is let go; one that is held and reached keeps what it was. A layer without memory starts with the
 	// held keys disarmed. `actions`: the map of resolve, null when there is none.
-	SNK_API void arm_actions(input_stack& stack, stack_resolution& resolved, const input_state& physical, const action_map* actions);
+	// (declared above, before input_stack, which it befriends)
 
 	// The printable keys of INPUT_STACK.md §4.4; Escape, Enter, Tab, F-keys and modifiers are not.
 	SNK_API bool is_text_key(KEYBOARD_BUTTONS key);

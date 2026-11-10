@@ -1,5 +1,6 @@
 #include <snk/input/inp_action_state.h>
 #include <snk/common/logger/engine_log.h>
+#include <cstdint>
 #include <type_traits>
 #include <variant>
 
@@ -48,22 +49,29 @@ namespace
 		}, binding);
 	}
 
-	// A binding counts when it is down and reached a layer of the world that declares the action.
-	bool reached_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	struct binding_view
 	{
-		for (const auto& binding : action.bindings) {
-			if (binding_reached(binding, reach) && binding_down(binding, state)) return true;
-		}
-		return false;
-	}
+		// Some binding is down and reached a layer of the world that declares the action.
+		bool down = false;
+		// ...and is armed there (the memory of fronts) and was not down when the map came in.
+		bool may_press = false;
+		// The bindings (by index) that are down, reached or not.
+		std::uint32_t down_bits = 0;
+	};
 
-	// A press needs a binding that is down, reached and armed in the layer that declares the action (the memory of fronts).
-	bool armed_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	binding_view evaluate(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach, std::uint32_t suppressed)
 	{
-		for (const auto& binding : action.bindings) {
-			if (binding_reached(binding, reach) && binding_armed(binding, reach) && binding_down(binding, state)) return true;
+		binding_view view;
+		for (std::size_t i = 0; i < action.bindings.size(); ++i) {
+			const auto& binding = action.bindings[i];
+			if (!binding_down(binding, state)) continue;
+			if (i < 32) view.down_bits |= std::uint32_t{ 1 } << i;
+			if (!binding_reached(binding, reach)) continue;
+			view.down = true;
+			const bool fresh_binding = i >= 32 || (suppressed & (std::uint32_t{ 1 } << i)) == 0;
+			if (fresh_binding && binding_armed(binding, reach)) view.may_press = true;
 		}
-		return false;
+		return view;
 	}
 }
 
@@ -138,20 +146,24 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		s.released = false;
 		if (!bound.bound && bound.frozen) continue;
 
+		const bool with_reach = reached && !reached->reach.empty();
 		bool down = false;
-		// Without the memory of fronts every down binding may give a press.
 		bool may_press = true;
+		std::uint32_t down_bits = 0;
 		if (bound.bound) {
-			if (reached && !reached->reach.empty()) {
+			if (with_reach) {
 				const action_reach none{};
 				const action_reach& reach = id < reached->reach.size() ? reached->reach[id] : none;
-				down = reached_down(list[id], state, reach);
-				may_press = armed_down(list[id], state, reach);
+				const binding_view view = evaluate(list[id], state, reach, s.suppressed);
+				down = view.down;
+				may_press = view.may_press;
+				down_bits = view.down_bits;
 			} else {
 				down = action_down(list[id], state);
 			}
 		}
 		if (fresh) {
+			s.suppressed = down_bits;
 			s.armed = bound.bound && !down;
 			continue;
 		}
@@ -159,7 +171,7 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 			s.held = false;
 			s.released = true;
 			emit(id, action_edge::released);
-		} else if (!s.held && down && s.armed && may_press) {
+		} else if (!s.held && down && may_press && (with_reach || s.armed)) {
 			s.held = true;
 			s.pressed = true;
 			emit(id, action_edge::pressed);
@@ -169,6 +181,7 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		} else if (!down) {
 			s.armed = true;
 		}
+		s.suppressed &= down_bits;
 		if (fixed) fixed->set_held(id, s.held);
 	}
 }

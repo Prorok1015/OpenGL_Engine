@@ -479,6 +479,30 @@ BOOST_AUTO_TEST_CASE(WithReach_AKeyPressedInTheFrameTheModalLayerCloses_IsAPress
 	BOOST_TEST(state.pressed(JUMP));
 }
 
+BOOST_AUTO_TEST_CASE(WithReach_ABindingDownWhenTheMapComesIn_GivesNoPress_ButAnotherBindingDoes)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	reach_key(FIRE, KB::F, true);
+	reach.reach[FIRE].buttons = true;
+	reach.reach[FIRE].armed_buttons.set(static_cast<std::size_t>(MB::LEFT));
+	frame();
+	set(KB::F, true);
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
+
+	// A new map while F is held: F gives no press until it is let go (the memory of fronts says it is armed, the new
+	// state does not trust that), the left button is another binding and does.
+	ref.map = make_map();
+	frame();
+	frame();
+	BOOST_TEST(!state.held(FIRE));
+	BOOST_TEST(edge_free(FIRE));
+	set(MB::LEFT, true);
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
+}
+
 BOOST_AUTO_TEST_CASE(WithReach_AnActionOutsideTheVectorIsNeverDown)
 {
 	use_reach = true;

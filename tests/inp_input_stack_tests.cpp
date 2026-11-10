@@ -577,6 +577,28 @@ BOOST_AUTO_TEST_CASE(Fronts_TheMemoryGoesWithItsLayerItsWorldAndItsOwner)
 	BOOST_TEST(!stack.remove("game", "world"));
 }
 
+BOOST_AUTO_TEST_CASE(Fronts_TheSameLayerPutAgainKeepsItsMemory_AndAWorldMadeAgainStartsAnew)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	stack.put("game", 3, declaring("world", 0, { "Jump" }));
+	physical_state physical;
+	frame_of(stack, { "game" }, outside, false, physical, map);
+
+	// The base layer of every world is put every frame: it is the same layer.
+	physical.down(KEYBOARD_BUTTONS::SPACE);
+	stack.put("game", 3, declaring("world", 0, { "Jump" }));
+	auto held = frame_of(stack, { "game" }, outside, false, physical, map);
+	BOOST_TEST(armed(held, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+
+	// A world of the same name made again (another desc_index) while the key is held starts disarmed for it.
+	stack.put("game", 4, declaring("world", 0, { "Jump" }));
+	BOOST_TEST(stack.find_memory("game", "world") == nullptr);
+	auto again = frame_of(stack, { "game" }, outside, false, physical, map);
+	BOOST_TEST(reached(again, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!armed(again, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+}
+
 BOOST_AUTO_TEST_CASE(Fronts_AWorldThatDiesWhileItTakesAHeldKey_LeavesTheOnesBelowDisarmedUntilItIsLetGo)
 {
 	const inp::action_map map = make_actions();

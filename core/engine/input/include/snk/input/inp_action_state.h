@@ -53,11 +53,13 @@ namespace inp
 
 	class fixed_action_state;
 
-	// An action goes down (pressed) only once it was seen up while the input was bound ("armed", INPUT_STACK.md M4): coming
-	// back to the game view with a key held gives no press. Losing the binding lets every held action go (one released).
-	// A new map (live reload of actions.desc, the reader moving to another world) first releases what the old one held;
-	// then every action starts up and disarmed, and arms once its keys are seen up, so a key held across the change gives
-	// no press. "Up" is what the world receives: a layer that takes a key (a text field) lets the action go and re-arms it.
+	// An action goes down (pressed) only through a binding that was seen up while the input was bound ("armed", INPUT_STACK.md
+	// M4/5): coming back to the game view with a key held gives no press. Losing the binding lets every held action go (one
+	// released). Without action_input (no layers declared the actions) the action itself is armed once all its keys are seen
+	// up. With it the memory of fronts of the layers says which binding is armed, so a key held and taken for good does not
+	// stop the press of another binding of the action. A new map (live reload of actions.desc, the reader moving to another
+	// world) first releases what the old one held; the bindings that are down at that moment give no press until they are
+	// seen up.
 	class SNK_API action_state
 	{
 	public:
@@ -81,6 +83,8 @@ namespace inp
 			bool pressed = false;
 			bool released = false;
 			bool armed = false;
+			// With action_input: the bindings (by index) that were down when the map came in; they give no press until seen up.
+			std::uint32_t suppressed = 0;
 		};
 
 		const slot* at(action_id id) const;
