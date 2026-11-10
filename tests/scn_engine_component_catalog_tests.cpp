@@ -59,7 +59,7 @@ namespace
 		{ "prefab_desc", "structural: the prefab itself, whose nodes are the other descs", false },
 		{ "world_desc", "structural: a world is a prefab, spawned like prefab_desc", false },
 		{ "skin_weights_desc", "creates no component: it registers the weights in rnd::skinning_manager", true },
-		{ "stat_desc", "test-only desc of test_scene_env", true },
+		{ "stat_desc", "test-only desc of test_scene_env: its component is the test's, not the engine's", false },
 	};
 
 	// The desc k_every_desc gives `type` in the components of one of its nodes (with the fields it needs), else none.
