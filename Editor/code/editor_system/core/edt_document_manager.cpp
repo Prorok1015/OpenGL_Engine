@@ -26,7 +26,7 @@ void edt::document_manager::set_preview_kinds(asset_kind_registry& kinds, editor
 	m_kinds = &kinds;
 	m_services = &services;
 	m_problems = problems;
-	m_kind_removals = kinds.on_removed([this](const asset_kind_desc& kind) { kind_removed(kind); });
+	m_kind_removals = kinds.on_preview_removed([this](const asset_preview_desc& preview) { preview_removed(preview); });
 }
 
 edt::document& edt::document_manager::scene()
@@ -69,25 +69,21 @@ void edt::document_manager::set_active(document_id id)
 	m_events.document_activated.emit(id);
 }
 
-edt::previewable_document& edt::document_manager::preview_for(const asset_kind_desc& kind)
+edt::previewable_document& edt::document_manager::instance_of(const asset_preview_desc& preview)
 {
-	const auto known = std::find_if(m_previews.begin(), m_previews.end(), [&kind](const kind_preview& p) { return p.kind_id == kind.id; });
+	const auto known = std::find_if(m_previews.begin(), m_previews.end(), [&preview](const kept_preview& p) { return p.preview_id == preview.id; });
 	if (known != m_previews.end()) return *known->instance;
 
-	const auto make = kind.make_preview;
+	const auto make = preview.make_preview;
 	auto made = make(*m_services);
-	ASSERT_MSG(made, "make_preview of an asset kind made no document");
-	m_previews.push_back({ kind.id, std::move(made) });
+	ASSERT_MSG(made, "make_preview of an asset preview made no document");
+	m_previews.push_back({ preview.id, std::move(made) });
 	return *m_previews.back().instance;
 }
 
-edt::previewable_document* edt::document_manager::open_preview(const res::tag& source)
+edt::previewable_document* edt::document_manager::open_with(const asset_preview_desc& preview, const res::tag& source)
 {
-	ASSERT_MSG(m_kinds && m_services, "document_manager::set_preview_kinds was not called: there is no asset kind to make a preview");
-	const asset_kind_desc* kind = m_kinds->kind_for_preview(source.relative());
-	if (!kind) return nullptr;
-
-	previewable_document& next = preview_for(*kind);
+	previewable_document& next = instance_of(preview);
 	if (m_open_preview) close(m_open_preview->id());
 	if (m_problems) m_problems->clear(k_preview_problem_source);
 
@@ -99,6 +95,20 @@ edt::previewable_document* edt::document_manager::open_preview(const res::tag& s
 		set_active(next.id());
 	}
 	return &next;
+}
+
+edt::previewable_document* edt::document_manager::open_preview(const res::tag& source)
+{
+	ASSERT_MSG(m_kinds && m_services, "document_manager::set_preview_kinds was not called: there is no asset preview to make a document");
+	const asset_preview_desc* preview = m_kinds->preview_for(source.relative());
+	return preview ? open_with(*preview, source) : nullptr;
+}
+
+edt::previewable_document* edt::document_manager::open_preview(std::string_view preview_id, const res::tag& source)
+{
+	ASSERT_MSG(m_kinds && m_services, "document_manager::set_preview_kinds was not called: there is no asset preview to make a document");
+	const asset_preview_desc* preview = m_kinds->find_preview(preview_id);
+	return preview ? open_with(*preview, source) : nullptr;
 }
 
 edt::previewable_document* edt::document_manager::preview()
@@ -123,31 +133,31 @@ void edt::document_manager::close(document_id id)
 	m_events.document_closed.emit(id);
 }
 
-void edt::document_manager::kind_removed(const asset_kind_desc& kind)
+void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 {
-	if (!kind.make_preview) return;
-	const auto known = std::find_if(m_previews.begin(), m_previews.end(), [&kind](const kind_preview& p) { return p.kind_id == kind.id; });
+	const auto known = std::find_if(m_previews.begin(), m_previews.end(), [&preview](const kept_preview& p) { return p.preview_id == preview.id; });
 	if (known == m_previews.end()) return;
 
-	previewable_document& doc = *known->instance;
-	if (m_open_preview == &doc) {
-		if (doc.is_dirty()) {
-			// Nothing saves it any more: the kind's code is going away. Said where a person looks, not only in the log.
-			const std::string message = "the preview '" + doc.title() + "' had unsaved changes and was closed: its asset kind '"
-				+ kind.id + "' was unloaded";
+	// Out of the list before anything is announced: a listener of the close may open another preview, which changes the list.
+	std::unique_ptr<previewable_document> owned = std::move(known->instance);
+	m_previews.erase(known);
+	if (m_open_preview == owned.get()) {
+		if (owned->is_dirty()) {
+			// Nothing saves it any more: the code that made it is going away. Said where a person looks, not only in the log.
+			const std::string message = "the preview '" + owned->title() + "' had unsaved changes and was closed: its asset preview '"
+				+ preview.id + "' was unloaded";
 			egLOG_WARN("Editor/Documents", "{}", message);
 			if (m_problems) {
 				problem item;
 				item.severity = problem_severity::warning;
-				item.file = std::string(doc.source().relative());
+				item.file = std::string(owned->source().relative());
 				item.message = message;
 				m_problems->set(k_preview_problem_source, { std::move(item) });
 			}
 		}
-		close(doc.id());
+		close(owned->id());
 	}
-	// The document may hold what the kind's code made: it goes before the kind does.
-	m_previews.erase(known);
+	// `owned` goes here, after the announcements and while the preview's make_preview is still registered.
 }
 
 void edt::document_manager::for_each(const std::function<void(document&)>& fn)

@@ -41,6 +41,11 @@ namespace edt
 		void add_action(cmd::command_desc command, std::optional<action_ui> ui);
 		void add_inspector(std::string type, inspector_renderer renderer);
 		void add_asset_kind(asset_kind_desc desc);
+		// The document that previews the assets of a suffix (editor API 1.1, #589). Its make_preview runs on the editor's main
+		// thread when the preview opens; the document it makes must run its tasks on tasks() (not on jobs(), which the module
+		// does not own), and its close() and destructor run at unload after shutdown_editor(): they must not rely on
+		// anything the module's shutdown_editor() released.
+		void add_asset_preview(asset_preview_desc desc);
 
 		template<class... Args, class F>
 		void subscribe(signal<Args...>& event, F&& handler)

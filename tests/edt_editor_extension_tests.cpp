@@ -80,7 +80,7 @@ public:
 	{
 		++m_state.previews_destroyed;
 		m_state.preview_destroyed_after_shutdown = m_state.shut_down;
-		m_state.kind_still_registered_when_preview_destroyed = g_probe_editor && g_probe_editor->asset_kinds().find("ext.kind") != nullptr;
+		m_state.kind_still_registered_when_preview_destroyed = g_probe_editor && g_probe_editor->asset_kinds().find_preview("ext.preview") != nullptr;
 	}
 
 	std::string_view kind() const override { return "ext.preview"; }
@@ -144,10 +144,15 @@ public:
 		kind.id = "ext.kind";
 		kind.suffix = ".ext";
 		kind.open = [](edt::editor_context&, const res::tag&) {};
-		kind.make_preview = [&state = m_state, &tasks = context.task_system(), &lifetime = context.tasks()](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> {
+		context.add_asset_kind(std::move(kind));
+
+		edt::asset_preview_desc preview;
+		preview.id = "ext.preview";
+		preview.suffix = ".ext";
+		preview.make_preview = [&state = m_state, &tasks = context.task_system(), &lifetime = context.tasks()](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> {
 			return std::make_unique<probe_preview>(state, tasks, lifetime);
 		};
-		context.add_asset_kind(std::move(kind));
+		context.add_asset_preview(std::move(preview));
 
 		edt::problem item;
 		item.message = "from the module";
@@ -305,6 +310,7 @@ BOOST_AUTO_TEST_CASE(LoadingAModule_RegistersThroughItsContext_AndUnloadingLeave
 		BOOST_CHECK(context->panels().contains("ext.panel"));
 		BOOST_CHECK(context->actions().find("ext.run") != nullptr);
 		BOOST_CHECK(context->asset_kinds().find("ext.kind") != nullptr);
+		BOOST_CHECK(context->asset_kinds().find_preview("ext.preview") != nullptr);
 		BOOST_CHECK_EQUAL(context->panels().size(), before.panels + 1);
 		BOOST_CHECK_EQUAL(context->actions().size(), before.actions + 1);
 		BOOST_CHECK_EQUAL(context->inspectors().size(), before.inspectors + 1);
@@ -316,6 +322,7 @@ BOOST_AUTO_TEST_CASE(LoadingAModule_RegistersThroughItsContext_AndUnloadingLeave
 	}
 	BOOST_CHECK(snapshot() == before);
 	BOOST_CHECK(context->actions().find("ext.run") == nullptr);
+	BOOST_CHECK(context->asset_kinds().find_preview("ext.preview") == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(AModuleLoadedAgain_RegistersWithoutClashingWithTheFirstLoad)
@@ -387,7 +394,8 @@ BOOST_AUTO_TEST_CASE(APreviewOfAModule_IsDestroyedAtUnload_AfterItsTasksStoppedA
 	}
 	BOOST_CHECK_EQUAL(state.previews_destroyed, 1);
 	BOOST_CHECK_MESSAGE(state.preview_destroyed_after_shutdown, "the preview went before the module's tasks were stopped");
-	BOOST_CHECK_MESSAGE(state.kind_still_registered_when_preview_destroyed, "the preview went after its asset kind was gone");
+	BOOST_CHECK_MESSAGE(state.kind_still_registered_when_preview_destroyed, "the preview went after its registration was gone");
+	BOOST_CHECK(context->asset_kinds().find_preview("ext.preview") == nullptr);
 	BOOST_CHECK(context->documents().preview() == nullptr);
 
 	test_util::pump(tasks);
