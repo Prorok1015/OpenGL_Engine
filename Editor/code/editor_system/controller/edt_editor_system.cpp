@@ -660,7 +660,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	reload_options.each_frame = [this](const std::string& id, std::function<bool()> poll) {
 		editor_layer->register_implicit(id, std::move(poll));
 	};
-	reload_options.defer = [this] { return load_in_progress().value_or(std::string{}); };
+	reload_options.defer = [this] {
+		if (auto loading = load_in_progress()) return *loading;
+		// A second reload waits for the first one's restore (#600): its snapshot would see the set held in Pause.
+		if (m_play && m_play->reloading()) return std::string{ "Play is loading the resources of the last reload" };
+		return std::string{};
+	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
 
 	create_live_mode(data);
@@ -1034,11 +1039,17 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };
+	options.each_frame = [this](const std::string& id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
 	options.forget_runtime_entities = [this] {
 		if (m_game_view_panel) m_game_view_panel->forget_runtime_entities();
 		if (m_viewport_panel) m_viewport_panel->forget_runtime_entities();
 	};
 	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
+	if (m_game_view_panel) {
+		m_game_view_panel->set_notice([this] {
+			return m_play && m_play->reloading() ? std::format("Reloading... ({} resources)", m_play->reloading_resources()) : std::string{};
+		});
+	}
 	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this](const core::reload_report& report) {
 		if (m_play) m_play->after_module_swap(report);
 		if (m_modes) m_modes->after_module_swap();

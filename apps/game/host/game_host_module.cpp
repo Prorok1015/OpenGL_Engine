@@ -65,6 +65,9 @@ namespace {
 		switch (state.loader->poll()) {
 		case scn::start_level_loader::state::loaded:
 			state.done = true;
+			// The level's handle came from the game layer, which may be a module's: let it go now, not when the stage
+			// is removed after that layer is gone (#657).
+			state.loader.reset();
 			if (cfg_game_exit_after_level_loaded) {
 				egLOG_INFO("app", "exit after the level loaded (game/exit_after_level_loaded)");
 				data.require<app::app_loop_service_interface>().request_stop();
@@ -72,6 +75,7 @@ namespace {
 			break;
 		case scn::start_level_loader::state::failed:
 			state.done = true;
+			state.loader.reset();
 			stop(data, snk::game_host::k_exit_level_failed);
 			break;
 		case scn::start_level_loader::state::idle:
