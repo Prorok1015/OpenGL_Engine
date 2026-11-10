@@ -165,7 +165,7 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_game_level, "editor/game_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
-	// The run ends with 0 right after the first successful level load (CI: the headless run proves the level loaded).
+	// The run ends with 0 once the first loaded level settled (#669; CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	// "" (not set), true or false: an explicit false wins over the person's own switch (parse_cfg_switch).
@@ -313,6 +313,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Resolve services from data storage -> editor_services (the controllers were built on it already)
 	m_services.ctx_manager = data.require_shared<scn::context_manager>();
+	m_tasks = &data.require<ds::task_system>();
 	// The editor puts its cameras back itself after a restore; a snapshot leaves them out. The base outlives an editor,
 	// so a second editor on the same services finds them registered.
 	if (auto& catalog = m_services.ctx_manager.lock()->catalog(); !catalog.find("edt.editor_camera")) {
@@ -503,6 +504,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.new_level = [this] {
 		if (m_play && m_play->active()) m_play->stop();
+		cancel_level_settle();
 		m_level_ctrl.new_level();
 	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
@@ -1530,6 +1532,7 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
 	// A load that was never finished (begin_level_load called again): its copy goes.
 	if (m_loading_level) abandon_level_load();
+	cancel_level_settle();
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
 
@@ -1624,14 +1627,34 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 		abandon_level_load();
 	}
 	if (loaded) {
-		scn::report_level_loaded(m_state.level_tag);
 		refresh_world_problems();
-		if (m_stop_after_level_loaded) {
-			egLOG_INFO("app", "exit after the level loaded (editor/exit_after_level_loaded)");
-			m_stop_after_level_loaded();
-		}
+		start_level_settle(m_state.level_tag);
 	}
 	return false;
+}
+
+void edt::editor_system::start_level_settle(const res::tag& level)
+{
+	m_settle_contexts = m_services.ctx_manager.lock();
+	ASSERT_MSG(m_settle_contexts && m_tasks, "a level loaded before editor_system::init");
+	m_level_settle.emplace(*m_settle_contexts, m_res, *m_tasks);
+	m_level_settle->start(level);
+}
+
+void edt::editor_system::cancel_level_settle()
+{
+	m_level_settle.reset();
+	m_settle_contexts.reset();
+}
+
+void edt::editor_system::tick_level_settle()
+{
+	if (!m_level_settle || !m_level_settle->poll()) return;
+	cancel_level_settle();
+	if (m_stop_after_level_loaded) {
+		egLOG_INFO("app", "exit after the level loaded (editor/exit_after_level_loaded)");
+		m_stop_after_level_loaded();
+	}
 }
 
 void edt::editor_system::refresh_world_problems()

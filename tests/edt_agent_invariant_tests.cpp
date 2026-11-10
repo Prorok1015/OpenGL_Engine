@@ -13,6 +13,7 @@
 #include <snk/application/app_frame_control.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/gui/gui_null_backend.h>
 #include <snk/gui/gui_platform_backend.h>
@@ -830,6 +831,71 @@ BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNo
 	gui().run_without_drawing([&] { made = registry().invoke("scene.node.create", by_person); });
 	BOOST_TEST_MESSAGE(made.error);
 	BOOST_TEST(made.code != cmd::codes::denied);
+}
+
+// #669: "level loaded" waits for the loads the level started (tick_level_settle), and a level replaced in between is
+// not reported.
+namespace {
+
+struct level_loaded_log
+{
+	level_loaded_log()
+		: sink(engine::add_log_sink([this](std::string_view, engine::log_level, std::string_view message) {
+			if (message.find("level loaded: ") == std::string_view::npos) return;
+			std::lock_guard lock(mutex);
+			lines.emplace_back(message);
+		}))
+	{
+	}
+
+	std::size_t count(std::string_view level)
+	{
+		std::lock_guard lock(mutex);
+		return static_cast<std::size_t>(std::ranges::count_if(lines, [level](const std::string& line) {
+			return line.find(level) != std::string::npos;
+		}));
+	}
+
+	std::mutex mutex;
+	std::vector<std::string> lines;
+	engine::log_sink_handle sink;
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(ALoadedLevel_IsReportedOnceItsLoadsSettled_AndNotAfterANewLevelReplacedIt, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	const auto tick_settle = [this](level_loaded_log& log, std::string_view level) {
+		for (int i = 0; i < 400 && log.count(level) == 0; ++i) {
+			test_util::pump(tasks);
+			editor().tick_level_settle();
+		}
+	};
+	level_loaded_log log;
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_CHECK_EQUAL(log.count("levels/smoke_level.desc"), 0u); // the load is done, the settle has not run yet
+	tick_settle(log, "levels/smoke_level.desc");
+	BOOST_CHECK_EQUAL(log.count("levels/smoke_level.desc"), 1u);
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	pump_level_load();
+	cmd::call make_new;
+	make_new.args = boost::json::object{ { "discard_unsaved", true } };
+	make_new.from = cmd::origin::ui();
+	cmd::result made;
+	gui().run_without_drawing([&] { made = registry().invoke("file.new", make_new); });
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	tick_settle(log, "levels/test_level.desc");
+	BOOST_CHECK_EQUAL(log.count("levels/test_level.desc"), 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

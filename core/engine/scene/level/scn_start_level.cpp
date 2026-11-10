@@ -63,8 +63,8 @@ void scn::report_level_failed(const res::tag& level, const res::res_handle<scn::
 	}
 }
 
-scn::start_level_loader::start_level_loader(context_manager& contexts, res::resource_system& base_resources,
-	ds::task_system& tasks, clock_fn now)
+scn::level_settle::level_settle(context_manager& contexts, res::resource_system& base_resources, ds::task_system& tasks,
+	clock_fn now)
 	: m_contexts(contexts)
 	, m_base_resources(base_resources)
 	, m_tasks(tasks)
@@ -72,13 +72,47 @@ scn::start_level_loader::start_level_loader(context_manager& contexts, res::reso
 {
 }
 
-std::size_t scn::start_level_loader::pending_work() const
+std::size_t scn::level_settle::pending_work() const
 {
 	std::size_t pending = m_base_resources.pending_loads() + m_tasks.pending_main(ds::main_class::general);
 	if (auto* layer = m_contexts.game_layer()) {
 		pending += layer->resources().pending_loads();
 	}
 	return pending;
+}
+
+void scn::level_settle::start(const res::tag& level)
+{
+	m_level = level;
+	m_since = m_now();
+	m_reported = false;
+}
+
+bool scn::level_settle::poll()
+{
+	if (m_reported) {
+		return true;
+	}
+	const std::size_t pending = pending_work();
+	if (pending == 0) {
+		report_level_loaded(m_level);
+		m_reported = true;
+	} else if (const std::chrono::duration<float> waited = m_now() - m_since;
+			   waited.count() >= *cfg_scene_level_settle_seconds) {
+		egLOG_WARN("scene/level", "level '{}' loaded with {} loads still pending after {:.1f} s (scene/level_settle_seconds)",
+			m_level.view(), pending, waited.count());
+		report_level_loaded(m_level);
+		m_reported = true;
+	}
+	return m_reported;
+}
+
+scn::start_level_loader::start_level_loader(context_manager& contexts, res::resource_system& base_resources,
+	ds::task_system& tasks, clock_fn now)
+	: m_contexts(contexts)
+	, m_base_resources(base_resources)
+	, m_settle(contexts, base_resources, tasks, std::move(now))
+{
 }
 
 void scn::start_level_loader::begin(const res::tag& level)
@@ -98,7 +132,7 @@ scn::start_level_loader::state scn::start_level_loader::poll()
 			m_state = state::failed;
 		} else if (m_handle.is_ready()) {
 			if (m_contexts.load_level(m_level)) {
-				m_settling_since = m_now();
+				m_settle.start(m_level);
 				m_state = state::settling;
 			} else {
 				report_level_failed(m_level, m_handle);
@@ -106,18 +140,8 @@ scn::start_level_loader::state scn::start_level_loader::poll()
 			}
 		}
 	}
-	if (m_state == state::settling) {
-		const std::size_t pending = pending_work();
-		if (pending == 0) {
-			report_level_loaded(m_level);
-			m_state = state::loaded;
-		} else if (const std::chrono::duration<float> waited = m_now() - m_settling_since;
-				   waited.count() >= *cfg_scene_level_settle_seconds) {
-			egLOG_WARN("scene/level", "level '{}' loaded with {} loads still pending after {:.1f} s (scene/level_settle_seconds)",
-				m_level.view(), pending, waited.count());
-			report_level_loaded(m_level);
-			m_state = state::loaded;
-		}
+	if (m_state == state::settling && m_settle.poll()) {
+		m_state = state::loaded;
 	}
 	return m_state;
 }

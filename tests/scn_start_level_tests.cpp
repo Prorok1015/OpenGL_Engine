@@ -176,4 +176,29 @@ BOOST_AUTO_TEST_CASE(a_level_with_nothing_left_to_load_is_loaded_on_the_first_po
 	BOOST_TEST(count("level loaded:", engine::log_level::info) == 1u);
 }
 
+// #669: the editor builds its level itself and waits with level_settle alone.
+BOOST_AUTO_TEST_CASE(a_level_settle_reports_once_its_loads_are_done_and_waits_again_after_start)
+{
+	const res::tag first{ "res://first.desc" };
+	const res::tag second{ "res://second.desc" };
+	scn::level_settle settle{ mgr, *rs, tasks, [this] { return now; } };
+	const auto nested = rs->require<res::text_resource>(res::tag{ "gate://nested.txt" });
+	settle.start(first);
+
+	BOOST_TEST(!settle.poll());
+	BOOST_TEST(count("level loaded:", engine::log_level::info) == 0u);
+
+	gate->release();
+	pump();
+	BOOST_REQUIRE(nested.is_ready());
+	BOOST_TEST(settle.poll());
+	BOOST_TEST(settle.poll());
+	BOOST_TEST(count("level loaded: " + std::string{ first.view() }, engine::log_level::info) == 1u);
+
+	settle.start(second);
+	BOOST_TEST(settle.poll());
+	BOOST_TEST(count("level loaded: " + std::string{ second.view() }, engine::log_level::info) == 1u);
+	BOOST_TEST(count("still pending", engine::log_level::warn) == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
