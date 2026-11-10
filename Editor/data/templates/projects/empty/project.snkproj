@@ -5,5 +5,8 @@
     "start_scene": "res://levels/main.desc",
     "input_actions": "res://input/actions.desc",
     "content_roots": ["res"],
-    "modules": [{ "name": "game", "kind": "runtime", "optional": true }]
+    "modules": [
+        { "name": "game", "kind": "runtime", "optional": true },
+        { "name": "game_editor", "kind": "editor", "optional": true }
+    ]
 }
