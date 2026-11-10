@@ -100,6 +100,12 @@ namespace scn {
 
     };
 
+    // The root of a world built from its world_desc; scn::spawn_prefab builds under it by default.
+    struct world_root_component {};
+
+    // A tree scn::spawn_prefab built: a prefab's hot reload leaves it under the node it was spawned under.
+    struct spawned_root_component {};
+
     struct renderable {
 
     };

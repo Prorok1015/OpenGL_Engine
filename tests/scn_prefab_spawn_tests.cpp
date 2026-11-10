@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/common/eng_transform_3d.hpp>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_node_index.h>
@@ -8,10 +10,10 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_transform_system.h>
-#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 // #551: a prefab spawned and removed by game code with one call each, through the real context_set frame and the real
@@ -54,7 +56,7 @@ constexpr const char* LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv
 	{"__type":"world_desc","__version":4,"name":"w",
 	 "systems":["test::spawner","test::despawner","scn::depth_system","scn::transform_system"],
 	 "children":[{"__id":"00000000000000a1","name":"level_node"}]}]})";
-constexpr const char* SEGMENT = R"({"__type":"prefab_desc","__version":4,"children":[
+constexpr const char* SEGMENT = R"({"__type":"prefab_desc","__version":4,"transform":{"position":[0,0,7]},"children":[
 	{"__id":"00000000000000a1","name":"head","transform":{"position":[0,1,0]},
 	 "children":[{"__id":"00000000000000a2","name":"tail"}]}]})";
 
@@ -74,7 +76,21 @@ struct spawn_fixture : test_util::scene_env
 
 	void step() { lvl.update(std::chrono::duration<float>(0.016f)); }
 
-	entt::entity world_root() const { return reg->ctx().get<scn::prefab_spawning>().world_root; }
+	entt::entity world_root() const
+	{
+		const auto roots = reg->view<scn::world_root_component>();
+		BOOST_REQUIRE_EQUAL(roots.size(), 1u);
+		return roots.front();
+	}
+
+	glm::vec3 position_of(entt::entity e) const { return glm::vec3(reg->get<scn::local_transform>(e).local[3]); }
+
+	static eng::transform3d placed_at(glm::vec3 position)
+	{
+		eng::transform3d transform;
+		transform.set_pos(position);
+		return transform;
+	}
 
 	entt::entity at(std::vector<std::uint64_t> path) const { return scn::node_index::get(*reg).find(path); }
 
@@ -105,8 +121,9 @@ BOOST_FIXTURE_TEST_SUITE(ScnPrefabSpawn, spawn_fixture)
 
 BOOST_AUTO_TEST_CASE(Spawn_BuildsThePrefabUnderTheWorldRoot_WithNodePathsOfItsOwn)
 {
-	const entt::entity root = scn::spawn_prefab(*reg, segment, glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, 0.0f, 0.0f)));
+	const entt::entity root = scn::spawn_prefab(*reg, segment, placed_at({ 5.0f, 0.0f, 0.0f }));
 	BOOST_REQUIRE(root != entt::null);
+	BOOST_TEST(reg->all_of<scn::spawned_root_component>(root));
 	BOOST_TEST((reg->get<scn::parent_component>(root).parent == world_root()));
 	BOOST_TEST(lists(world_root(), root));
 	BOOST_REQUIRE_EQUAL(reg->get<scn::node_id_component>(root).path.size(), 1u);
@@ -132,6 +149,22 @@ BOOST_AUTO_TEST_CASE(Spawn_BuildsThePrefabUnderTheWorldRoot_WithNodePathsOfItsOw
 	const glm::vec4 head_at = reg->get<scn::world_transform>(head).world[3];
 	BOOST_TEST(head_at.x == 5.0f);
 	BOOST_TEST(head_at.y == 1.0f);
+	BOOST_TEST(head_at.z == 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(Spawn_WithoutATransform_KeepsThePrefabRootsOwn_WithOne_SetsExactlyIt)
+{
+	const entt::entity own = scn::spawn_prefab(*reg, segment);
+	BOOST_REQUIRE(own != entt::null);
+	BOOST_TEST((position_of(own) == glm::vec3(0.0f, 0.0f, 7.0f)));
+
+	const entt::entity identity = scn::spawn_prefab(*reg, segment, eng::transform3d{});
+	BOOST_REQUIRE(identity != entt::null);
+	BOOST_TEST((reg->get<scn::local_transform>(identity).local == glm::mat4(1.0f)));
+
+	step();
+	BOOST_TEST((glm::vec3(reg->get<scn::world_transform>(own).world[3]) == glm::vec3(0.0f, 0.0f, 7.0f)));
+	BOOST_TEST((glm::vec3(reg->get<scn::world_transform>(identity).world[3]) == glm::vec3(0.0f)));
 }
 
 BOOST_AUTO_TEST_CASE(Spawn_UnderAParent_ExtendsItsPath)
@@ -141,7 +174,7 @@ BOOST_AUTO_TEST_CASE(Spawn_UnderAParent_ExtendsItsPath)
 	const entt::entity head = at({ own_id(first), 0xa1 });
 	BOOST_REQUIRE(head != entt::null);
 
-	const entt::entity second = scn::spawn_prefab(*reg, segment, glm::mat4(1.0f), head);
+	const entt::entity second = scn::spawn_prefab(*reg, segment, std::nullopt, head);
 	BOOST_REQUIRE(second != entt::null);
 	BOOST_TEST((reg->get<scn::parent_component>(second).parent == head));
 	BOOST_TEST(lists(head, second));
@@ -155,18 +188,52 @@ BOOST_AUTO_TEST_CASE(Spawn_IsRefused_InAWorldNotBuiltFromADesc_UnderAParentThatI
 
 	const entt::entity gone = reg->create();
 	reg->destroy(gone);
-	BOOST_TEST((scn::spawn_prefab(*reg, segment, glm::mat4(1.0f), gone) == entt::null));
+	BOOST_TEST((scn::spawn_prefab(*reg, segment, std::nullopt, gone) == entt::null));
 
 	BOOST_TEST((scn::spawn_prefab(*reg, tag_of("missing.prefab.desc")) == entt::null));
 	BOOST_TEST(children_of(world_root()).empty());
 }
 
-BOOST_AUTO_TEST_CASE(Spawn_ByATagNotLoadedYet_LoadsIt)
+BOOST_AUTO_TEST_CASE(Spawn_ByATagNotLoadedYet_LoadsItNow_AndSaysSoOnce)
 {
+	std::size_t waits = 0;
+	const engine::log_sink_handle sink = engine::add_log_sink([&waits](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && message.find("not loaded yet") != std::string_view::npos) ++waits;
+	});
 	const res::tag late = put("late.prefab.desc", SEGMENT);
-	BOOST_TEST((scn::spawn_prefab(*reg, late) != entt::null));
-	BOOST_TEST((scn::spawn_prefab(*reg, late) != entt::null));
-	BOOST_TEST(reg->ctx().get<scn::prefab_spawning>().waited_for.size() <= 1u);
+	// No pump between: only the synchronous load can have built them.
+	const entt::entity first = scn::spawn_prefab(*reg, late);
+	const entt::entity second = scn::spawn_prefab(*reg, late);
+	BOOST_TEST((first != entt::null));
+	BOOST_TEST((second != entt::null));
+	BOOST_TEST(at({ own_id(first), 0xa1, 0xa2 }) != entt::null);
+	BOOST_TEST(waits == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AHotReloadOfThePrefabSpawnedUnder_KeepsTheSpawnedTree)
+{
+	const entt::entity first = scn::spawn_prefab(*reg, segment);
+	BOOST_REQUIRE(first != entt::null);
+	const entt::entity head = at({ own_id(first), 0xa1 });
+	BOOST_REQUIRE(head != entt::null);
+	const entt::entity second = scn::spawn_prefab(*reg, segment, std::nullopt, head);
+	BOOST_REQUIRE(second != entt::null);
+	const entt::entity second_tail = at({ own_id(first), 0xa1, own_id(second), 0xa1, 0xa2 });
+	BOOST_REQUIRE(second_tail != entt::null);
+
+	put("segment.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000a1","name":"head","transform":{"position":[0,2,0]},
+		 "children":[{"__id":"00000000000000a2","name":"tail"}]}]})");
+	rs->signal_changed(segment);
+	pump();
+	scn::trigger_hot_reload(*assembler, *reg, require_loaded<desc::desc_base>(segment));
+
+	BOOST_TEST(reg->valid(head));
+	BOOST_TEST((position_of(head) == glm::vec3(0.0f, 2.0f, 0.0f)));
+	BOOST_TEST(reg->valid(second));
+	BOOST_TEST(lists(head, second));
+	BOOST_TEST(reg->valid(second_tail));
+	step();
 }
 
 BOOST_AUTO_TEST_CASE(DespawnOfAMiddleNode_DuringUpdate_LeavesTheDepthAndTransformSystemsWhole)
@@ -202,6 +269,22 @@ BOOST_AUTO_TEST_CASE(DespawnOfATreeSpawnedInTheSameFrame_RemovesItWhole)
 	step();
 }
 
+BOOST_AUTO_TEST_CASE(SpawnUnderAParentQueuedForDespawn_GoesWithIt)
+{
+	const entt::entity first = scn::spawn_prefab(*reg, segment);
+	BOOST_REQUIRE(first != entt::null);
+	const entt::entity head = at({ own_id(first), 0xa1 });
+	scn::despawn(*reg, first);
+	const entt::entity second = scn::spawn_prefab(*reg, segment, std::nullopt, head);
+	BOOST_REQUIRE(second != entt::null);
+
+	step();
+	BOOST_TEST(!reg->valid(first));
+	BOOST_TEST(!reg->valid(second));
+	BOOST_TEST(!lists(world_root(), first));
+	step();
+}
+
 BOOST_AUTO_TEST_CASE(DespawnTwice_IsOnce_AndTheWorldRootIsRefused)
 {
 	const entt::entity root = scn::spawn_prefab(*reg, segment);
@@ -217,32 +300,31 @@ BOOST_AUTO_TEST_CASE(DespawnTwice_IsOnce_AndTheWorldRootIsRefused)
 	BOOST_TEST(reg->valid(at({ 0xa1 })));
 }
 
-BOOST_AUTO_TEST_CASE(AWorldBuiltAgain_NamesItsAssemblerAndNewRoot)
+BOOST_AUTO_TEST_CASE(AWorldBuiltAgain_SpawnsUnderItsNewRoot)
 {
 	const auto world = level->get_worlds().front().get_sync();
 	BOOST_REQUIRE(world);
 	lvl.reload_context("w", *world, sf, *assembler);
-	entt::registry& rebuilt = lvl.get("w").state();
-	const auto* spawning = rebuilt.ctx().find<scn::prefab_spawning>();
-	BOOST_REQUIRE(spawning);
-	BOOST_TEST(spawning->assembler == assembler.get());
-	BOOST_TEST(rebuilt.valid(spawning->world_root));
-	BOOST_TEST((scn::spawn_prefab(rebuilt, segment) != entt::null));
+	reg = &lvl.get("w").state();
+	const entt::entity spawned = scn::spawn_prefab(*reg, segment);
+	BOOST_REQUIRE(spawned != entt::null);
+	BOOST_TEST((reg->get<scn::parent_component>(spawned).parent == world_root()));
 }
 
 BOOST_AUTO_TEST_CASE(BindPrefabSpawning_FindsTheRootOfARestoredWorld)
 {
+	// What a snapshot restores: the root keeps its marker, nothing is built from the desc.
 	entt::registry restored;
-	BOOST_TEST(!scn::bind_prefab_spawning(restored, *assembler));
 	const entt::entity root = restored.create();
 	restored.emplace<scn::node_id_component>(root);
-	const entt::entity child = restored.create();
-	restored.emplace<scn::node_id_component>(child, std::vector<std::uint64_t>{ 0xa1 });
-	restored.emplace<scn::parent_component>(child, root);
+	BOOST_TEST(!scn::bind_prefab_spawning(restored, *assembler));
+	BOOST_TEST((scn::spawn_prefab(restored, segment) == entt::null));
 
+	restored.emplace<scn::world_root_component>(root);
 	BOOST_REQUIRE(scn::bind_prefab_spawning(restored, *assembler));
-	BOOST_TEST((restored.ctx().get<scn::prefab_spawning>().world_root == root));
-	BOOST_TEST(restored.ctx().get<scn::prefab_spawning>().assembler == assembler.get());
+	const entt::entity spawned = scn::spawn_prefab(restored, segment);
+	BOOST_REQUIRE(spawned != entt::null);
+	BOOST_TEST((restored.get<scn::parent_component>(spawned).parent == root));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

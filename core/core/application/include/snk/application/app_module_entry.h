@@ -32,7 +32,10 @@
 // been built against it, so the minor stays 3.5.
 // inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
-#define SNK_MODULE_API_VERSION 0x0003'0005u // major << 16 | minor
+// 3.6 (#551): scn::spawn_prefab, scn::despawn and scn::bind_prefab_spawning, new functions a game module imports, and
+// the components scn::world_root_component and scn::spawned_root_component; nothing that exists changes layout. A module
+// that spawns prefabs needs an engine of 3.6 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)

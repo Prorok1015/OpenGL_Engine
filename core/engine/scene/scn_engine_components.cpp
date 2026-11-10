@@ -19,6 +19,8 @@ namespace scn
 	BOOST_DESCRIBE_STRUCT(object_component, (), ())
 	BOOST_DESCRIBE_STRUCT(renderable, (), ())
 	BOOST_DESCRIBE_STRUCT(scene_anchor_component, (), ())
+	BOOST_DESCRIBE_STRUCT(world_root_component, (), ())
+	BOOST_DESCRIBE_STRUCT(spawned_root_component, (), ())
 	BOOST_DESCRIBE_STRUCT(directional_light, (), (direction, diffuse, ambient, specular))
 	BOOST_DESCRIBE_STRUCT(mouse_controller_component, (), (movement_speed, rotating_speed, distance, rotation, position,
 		last_mouse_pos, is_moving, is_rotating, input_enabled))
@@ -37,6 +39,8 @@ void scn::register_engine_components(component_catalog& catalog)
 	add_engine_component<object_component>(catalog, "scn.object");
 	add_engine_component<renderable>(catalog, "scn.renderable");
 	add_engine_component<scene_anchor_component>(catalog, "scn.scene_anchor");
+	add_engine_component<world_root_component>(catalog, "scn.world_root");
+	add_engine_component<spawned_root_component>(catalog, "scn.spawned_root");
 	add_engine_component<directional_light>(catalog, "scn.directional_light");
 	add_engine_component<mouse_controller_component>(catalog, "scn.mouse_controller");
 	add_engine_component<screen_anchor_component>(catalog, "scn.screen_anchor");

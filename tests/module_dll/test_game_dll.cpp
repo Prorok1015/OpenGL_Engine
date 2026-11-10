@@ -19,7 +19,6 @@
 
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -113,7 +112,13 @@ struct dll_snake : ecs::system_interface
 {
 	void run(entt::registry& reg)
 	{
-		const glm::mat4 at = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(spawned++), 0.0f, 0.0f));
+		// Entity handles do not survive a rebuild of the world (reload_context, Play's restore): another registry's are dropped.
+		if (owner != &reg) {
+			segments.clear();
+			owner = &reg;
+		}
+		eng::transform3d at;
+		at.set_pos(glm::vec3(static_cast<float>(spawned++), 0.0f, 0.0f));
 		const entt::entity head = scn::spawn_prefab(reg, res::tag{ std::string{ dll_game::segment_tag } }, at);
 		if (head == entt::null) return;
 		segments.push_back(head);
@@ -123,6 +128,7 @@ struct dll_snake : ecs::system_interface
 		}
 	}
 	std::deque<entt::entity> segments;
+	const entt::registry* owner = nullptr;
 	int spawned = 0;
 };
 

@@ -626,6 +626,7 @@ namespace {
 			if (!children_comp) return;
 			for (auto child : children_comp->children) {
 				if (!reg.valid(child)) continue; // destroyed by game code, still listed (#543): unclaimed, a reload drops it
+				if (reg.all_of<scn::spawned_root_component>(child)) continue; // game code's, not the prefab's (#551)
 				entry e{ child, desc::invalid_node_id, {} };
 				if (const auto* path = reg.try_get<scn::node_id_component>(child); path && !path->path.empty())
 					e.id = path->path.back();
@@ -762,7 +763,8 @@ void scn::reconcile(
 	if (auto* children_comp = reg.try_get<scn::children_component>(live)) {
 		auto& children_vec = children_comp->children;
 		for (auto it = children_vec.begin(); it != children_vec.end(); ) {
-			if (!kept.contains(*it)) {
+			const bool spawned = reg.valid(*it) && reg.all_of<scn::spawned_root_component>(*it);
+			if (!kept.contains(*it) && !spawned) {
 				scn::detail::destroy_hierarchy(reg, *it);
 				it = children_vec.erase(it);
 			} else {

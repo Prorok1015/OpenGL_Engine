@@ -1,8 +1,8 @@
 #include <snk/scene/scn_registration_scope.h>
+#include "level/scn_prefab_spawning.h"
 #include <snk/desc/desc_describe.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
-#include <snk/scene/level/scn_prefab_spawn.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_anchor_desc.h>
 #include <snk/scene/scn_animated_node_desc.h>
@@ -143,7 +143,7 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	scope.structural_spawner(world_desc::__type, [prefab_spawn](const ecs_assembler& running, entt::registry& reg, entt::entity e,
 		const desc::desc_base& base, const std::string_view name) {
 		prefab_spawn(running, reg, e, base, name);
-		reg.ctx().insert_or_assign(prefab_spawning{ .assembler = &running, .world_root = e, .waited_for = {} });
+		detail::bind_world_root(reg, running, e);
 	});
 
 	simple_spawner<scene_anchor_desc>(scope, "anchor_desc", assemble_scene_anchor);
