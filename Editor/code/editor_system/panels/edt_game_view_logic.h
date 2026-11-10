@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <entt/entt.hpp>
@@ -14,6 +15,8 @@ namespace edt::game_view
 	{
 		entt::entity entity = entt::null;
 		std::string name;
+		// scn::node_id_component of the camera's node; empty for a camera no desc spawned.
+		std::vector<std::uint64_t> path{};
 	};
 
 	// Game cameras = cameras that edt::camera_redirector gave their own texture.
@@ -26,13 +29,9 @@ namespace edt::game_view
 		// the same registry, otherwise it falls back to the first camera (or none).
 		void refresh(const entt::registry* reg, std::vector<camera_entry> cameras);
 		void select(int index);
-		// The registry was rebuilt (a module reload in Play): a new one may reuse its address and its entity ids.
-		void forget()
-		{
-			m_registry = nullptr;
-			m_cameras.clear();
-			m_selected = entt::null;
-		}
+		// The registry was rebuilt (a module reload in Play): a new one may reuse its address and its entity ids. The
+		// next refresh picks the camera of the same node again, when it is there.
+		void forget();
 
 		[[nodiscard]] const std::vector<camera_entry>& cameras() const { return m_cameras; }
 		[[nodiscard]] int selected_index() const;
@@ -42,6 +41,7 @@ namespace edt::game_view
 		const entt::registry* m_registry = nullptr;
 		std::vector<camera_entry> m_cameras;
 		entt::entity m_selected = entt::null;
+		std::vector<std::uint64_t> m_forgotten_path;
 	};
 
 	// The cameras that draw into `target` (the game cameras of one set share a texture, see camera_redirector) get

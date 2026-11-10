@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "../test_module_env.hpp"
 #include "../test_temp_dir.hpp"
+#include "test_dll_project.hpp"
 #include "test_game_dll_api.h"
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
@@ -51,33 +52,8 @@ std::unique_ptr<app::modules::native_library_source> game_library()
 	return std::make_unique<app::modules::native_library_source>(g_module_path, g_module_path.parent_path());
 }
 
-// Whether the image is still mapped (a leftover reference, or GNU_UNIQUE symbols pinning it on Linux).
-// The loader opens the canonical path; GetModuleHandleW matches it only with backslashes.
-bool resident(const std::filesystem::path& file)
-{
-	std::error_code ec;
-	const std::filesystem::path path = std::filesystem::canonical(file, ec);
-#if defined(_WIN32)
-	return ::GetModuleHandleW(path.c_str()) != nullptr;
-#else
-	void* again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
-	if (again) {
-		::dlclose(again);
-	}
-	return again != nullptr;
-#endif
-}
-
-// The file name core::load_project_modules looks for in <root>/build/bin; the built test library may carry a debug
-// postfix.
-std::string project_library_name(std::string_view module)
-{
-#if defined(_WIN32)
-	return std::string{ module } + ".dll";
-#else
-	return "lib" + std::string{ module } + ".so";
-#endif
-}
+using test_util::project_library_name;
+using test_util::resident;
 
 constexpr const char* DLL_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":["dll::move"],
@@ -87,41 +63,7 @@ constexpr const char* DLL_LEVEL = R"({"__type":"level_desc","name":"lv","worlds"
 
 namespace {
 
-// A project in a temporary folder whose manifest names test_game_dll, with a build of it in build/bin (#435).
-struct dll_project {
-	test_util::temp_dir dir;
-	std::filesystem::path game;
-	std::filesystem::path built;
-
-	dll_project(std::string_view name, ds::app_data_storage& storage)
-		: dir(name)
-	{
-		namespace fs = std::filesystem;
-		fs::create_directories(dir.path() / "game" / "build" / "bin");
-		game = fs::canonical(dir.path() / "game");
-		built = game / "build" / "bin" / project_library_name(dll_game::module_name);
-		prj::project_context project;
-		project.root = game;
-		project.data.name = "Game";
-		project.data.modules.emplace_back();
-		project.data.modules.back().name = std::string{ dll_game::module_name };
-		storage.construct<prj::project_context>(std::move(project));
-	}
-
-	// What a build of the module leaves in build/bin.
-	void build(const std::filesystem::path& library) const
-	{
-		std::filesystem::copy_file(library, built, std::filesystem::copy_options::overwrite_existing);
-		BOOST_REQUIRE_MESSAGE(std::filesystem::is_regular_file(built), "not at the lookup path: " << built.string());
-	}
-
-	// The folder of this process's n-th copy, and the module in it.
-	std::filesystem::path copy_folder(int n) const
-	{
-		return game / ".cache" / "modules" / std::format("{}-{}", platform::current_process_id(), n);
-	}
-	std::filesystem::path copy(int n) const { return copy_folder(n) / project_library_name(dll_game::module_name); }
-};
+using test_util::dll_project;
 
 // The level of DLL_LEVEL after one update: 2 plus the step of the build that runs.
 int moved_value(test_util::module_env& env)
@@ -143,6 +85,22 @@ int moved_value(test_util::module_env& env)
 	return view.get<dll_game::dll_component>(view.front()).value;
 }
 
+}
+
+// The loader opens the canonical path; GetModuleHandleW matches it only with backslashes.
+bool test_util::resident(const std::filesystem::path& file)
+{
+	std::error_code ec;
+	const std::filesystem::path path = std::filesystem::canonical(file, ec);
+#if defined(_WIN32)
+	return ::GetModuleHandleW(path.c_str()) != nullptr;
+#else
+	void* again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+	if (again) {
+		::dlclose(again);
+	}
+	return again != nullptr;
+#endif
 }
 
 BOOST_FIXTURE_TEST_SUITE(app_module_dll_tests, test_util::module_env)
