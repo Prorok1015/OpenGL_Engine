@@ -162,6 +162,8 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 				down = action_down(list[id], state);
 			}
 		}
+		// Only a binding that gives the action a press (reached, armed, not suppressed) holds it against an injected release.
+		const bool held_by_keys = down && (with_reach ? may_press : s.armed);
 		if (fresh) {
 			s.suppressed = down_bits;
 			s.armed = bound.bound && !down;
@@ -193,7 +195,7 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 					emit(id, action_edge::pressed);
 				} else {
 					s.injected = false;
-					if (!s.held || down) continue;
+					if (!s.held || held_by_keys) continue;
 					s.held = false;
 					s.released = true;
 					emit(id, action_edge::released);

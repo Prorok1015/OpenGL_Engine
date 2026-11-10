@@ -662,6 +662,45 @@ BOOST_AUTO_TEST_CASE(Inject_ANewMapLetsTheInjectedHoldGoWithOneReleased_AndTakes
 	BOOST_TEST(state.held(FIRE));
 }
 
+BOOST_AUTO_TEST_CASE(Inject_AReleaseIsNotHeldBackByAKeyThatGivesNoPress)
+{
+	use_reach = true;
+	reach.reach.resize(2);
+	// Space is held when the world gets the input back: it reaches the layer but is not armed, so it never pressed Jump.
+	set(KB::SPACE, true);
+	reach_key(JUMP, KB::SPACE, false);
+	frame();
+	BOOST_TEST(!state.held(JUMP));
+
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	inject(JUMP, inp::action_edge::released);
+	frame();
+	BOOST_TEST(state.released(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+
+	frame();
+	BOOST_TEST(!state.held(JUMP));
+	BOOST_TEST(edge_free(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_AReleaseIsHeldBackByAnArmedKeyThatHoldsTheAction)
+{
+	use_reach = true;
+	reach.reach.resize(2);
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	set(KB::SPACE, true);
+	reach_key(JUMP, KB::SPACE, true);
+	frame();
+	inject(JUMP, inp::action_edge::released);
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(edge_free(JUMP));
+}
+
 BOOST_AUTO_TEST_CASE(Inject_AnIdOutsideTheMapIsIgnored)
 {
 	frame();

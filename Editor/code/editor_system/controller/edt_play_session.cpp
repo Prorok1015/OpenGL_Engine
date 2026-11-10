@@ -96,6 +96,8 @@ bool edt::play_session::start(play_reason reason)
 	m_worlds_copy = m_document.world_descs;
 	const std::vector<std::string> names = m_document.world_names;
 	const std::vector<std::vector<std::string>> systems = m_document.worlds_systems_list;
+	// What was injected into "play" before it started is not for this session.
+	if (m_options.input) m_options.input->forget_injected(k_play_set);
 	scn::context_set& play = contexts->create_set(k_play_set, contexts->game_layer(), scn::set_options{ .hot_reload = false });
 	// Before the contexts: a context takes the mode, seed and time scale of its set when it is created.
 	play.set_mode(ecs::run_mode::play);

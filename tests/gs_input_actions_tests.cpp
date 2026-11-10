@@ -738,6 +738,74 @@ BOOST_AUTO_TEST_CASE(Inject_IsSeenByThePollTheBusAndTheFixedSteps_FromTheNextRou
 	BOOST_TEST(probe_of(w).released == 1);
 }
 
+BOOST_AUTO_TEST_CASE(Inject_APauseKeepsTheEdgesInTheQueue_AndTheReleaseAfterItLetsGoOnce)
+{
+	auto& w = world("a", 0);
+	const auto map = jump_on_space();
+	frame(map);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	BOOST_TEST(held(w, "Jump"));
+
+	mode(ecs::run_mode::pause);
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::released);
+	frame(map);
+	frame(map);
+	BOOST_TEST(held(w, "Jump"));
+
+	mode(ecs::run_mode::play);
+	frame(map);
+	BOOST_TEST(!held(w, "Jump"));
+	frame(map);
+	BOOST_TEST(!held(w, "Jump"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
+	BOOST_TEST(count(inp::action_edge::released) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_AWorldFrozenInAStepKeepsItsEdges_AndGetsThemWhenItRunsAgain)
+{
+	auto& w = world("a", 0);
+	const auto map = jump_on_space();
+	unbind();
+	frame(map);
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	BOOST_TEST(held(w, "Jump"));
+
+	mode(ecs::run_mode::step);
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::released);
+	frame(map);
+	frame(map);
+	BOOST_TEST(bound_of(w).frozen);
+	BOOST_TEST(held(w, "Jump"));
+
+	mode(ecs::run_mode::play);
+	frame(map);
+	BOOST_TEST(!held(w, "Jump"));
+	BOOST_TEST(count(inp::action_edge::released) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_IntoASetThatIsNotThere_IsDroppedAndNotGivenToTheNextOneOfThatName)
+{
+	world("a", 0);
+	const auto map = jump_on_space();
+	frame(map);
+
+	router.inject({ "later", "a" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	BOOST_TEST(router.take_injected("later").empty());
+
+	mgr.create_set("later");
+	auto& later = mgr.create_context("later", "a", scn::context_kind::level, WITH_ACTIONS);
+	later.set_desc_index(0);
+	router.set_default_target(inp::input_target{ .set = "later" });
+	frame(map);
+	frame(map);
+	BOOST_TEST(!held(later, "Jump"));
+	BOOST_TEST(seen.empty());
+}
+
 BOOST_AUTO_TEST_CASE(Inject_NeedsNeitherAKeyNorTheInputOfTheWorld)
 {
 	auto& w = world("a", 0);

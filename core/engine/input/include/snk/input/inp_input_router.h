@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -97,6 +98,18 @@ namespace inp
 		void inject(const input_target& target, std::string action, action_edge edge);
 		// Every edge queued for the worlds of the set, in the order they came; the queue is emptied.
 		std::vector<queued_injection> take_injected(std::string_view set);
+		// The queues of sets that are not in `sets` (a typo, a set that is not started yet) are dropped; what was dropped, per set.
+		struct dropped_injection
+		{
+			std::string set;
+			std::size_t edges = 0;
+		};
+		std::vector<dropped_injection> drop_injected_except(const std::vector<std::string>& sets);
+		// A set that starts afresh (Play) gets none of the edges queued before it.
+		void forget_injected(std::string_view set);
+		// True the first time `key` is asked for in the set, until the set is forgotten: a warning of one session of the set is
+		// said again in the next.
+		bool warn_once(std::string_view set, std::string key);
 
 		// Buttons released, deltas zero, the cursor where it last was.
 		static inp::input_state neutral(const inp::input_state& raw);
@@ -114,5 +127,6 @@ namespace inp
 		std::map<std::string, mouse_hold, std::less<>> m_holds;
 		std::map<std::string, input_stack, std::less<>> m_stacks;
 		std::map<std::string, std::vector<queued_injection>, std::less<>> m_injected;
+		std::map<std::string, std::set<std::string>, std::less<>> m_warned;
 	};
 }

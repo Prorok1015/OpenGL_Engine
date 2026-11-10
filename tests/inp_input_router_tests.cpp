@@ -1027,6 +1027,42 @@ BOOST_AUTO_TEST_CASE(Inject_WithoutAWorld_IsDropped)
 	BOOST_TEST(router.take_injected("level").empty());
 }
 
+BOOST_AUTO_TEST_CASE(Inject_TheQueuesOfSetsThatAreNotThereAreDropped_AndTheOthersStay)
+{
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "play", "a" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "play", "b" }, "Jump", inp::action_edge::released);
+	router.inject({ "typo", "a" }, "Jump", inp::action_edge::pressed);
+
+	const auto dropped = router.drop_injected_except({ "level" });
+	BOOST_REQUIRE_EQUAL(dropped.size(), 2u);
+	std::size_t edges = 0;
+	for (const auto& item : dropped) edges += item.edges;
+	BOOST_TEST(edges == 3u);
+	BOOST_TEST(router.take_injected("level").size() == 1u);
+	BOOST_TEST(router.take_injected("play").empty());
+	BOOST_TEST(router.drop_injected_except({ "level" }).empty());
+}
+
+BOOST_AUTO_TEST_CASE(Inject_ASetThatStartsAfreshDoesNotGetWhatWasQueuedBefore)
+{
+	router.inject({ "play", "a" }, "Jump", inp::action_edge::pressed);
+	router.forget_injected("play");
+	BOOST_TEST(router.take_injected("play").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Warnings_AreSaidOncePerSession_AndAgainAfterTheSetIsForgotten)
+{
+	BOOST_TEST(router.warn_once("play", "#key"));
+	BOOST_TEST(!router.warn_once("play", "#key"));
+	BOOST_TEST(router.warn_once("play", "#other"));
+	BOOST_TEST(router.warn_once("level", "#key"));
+
+	router.forget_set("play");
+	BOOST_TEST(router.warn_once("play", "#key"));
+	BOOST_TEST(!router.warn_once("level", "#key"));
+}
+
 BOOST_AUTO_TEST_CASE(Inject_GoesWithTheSet)
 {
 	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);

@@ -51,8 +51,8 @@ namespace inp
 
 	// Written into each world's ctx by gs::route_input (#624): the edges queued with input_router::inject since the last
 	// frame, with the action names turned into ids of the map the world reads. Applied by inp::update_actions in the same
-	// frame, in order, as real presses and releases (INPUT_STACK.md 7); the layers play no part. Nothing is kept: a frame
-	// that does not run inp::update_actions (Pause) or a world that is frozen in a Step loses them.
+	// frame, in order, as real presses and releases (INPUT_STACK.md 7); the layers play no part. A Pause and a world frozen
+	// in a Step do not run inp::update_actions: the edges wait in the router until a frame that does.
 	struct action_injection
 	{
 		std::vector<injected_edge> edges{};
@@ -89,7 +89,8 @@ namespace inp
 
 		// One frame of inp::update_actions; the edges also go to `events` when it is given.
 		// `injected`: edges that do not come from the keyboard. A pressed one holds the action until a released one comes,
-		// whatever the real keys do, and survives losing the binding; a released one lets go unless a real binding still holds it.
+		// whatever the real keys do, and survives losing the binding; a released one lets go unless a binding that gives the
+		// action a press (reached, armed, not suppressed) still holds it.
 		void update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
 			ecs::event_writer<action_event>* events, fixed_action_state* fixed = nullptr, const action_input* reached = nullptr,
 			const action_injection* injected = nullptr);

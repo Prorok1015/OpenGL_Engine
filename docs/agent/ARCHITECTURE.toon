@@ -116,7 +116,7 @@ game_actions: res/input/actions.desc (manifest input_actions) -> gs::input_actio
         keeps inp::action_state (held/pressed/released, armed rule) and emits inp::action_event on the world's bus.
         inp::input_router::inject({set, world}, action, edge) (#624 PR c) queues an edge that is not a key: route_input hands it over as inp::action_injection
         (ids of the world's map), update_actions applies it as a real press/release (a pressed holds until a released, layers play no part); unknown action,
-        world without actions or a frame without update_actions: warned once, dropped.
+        world without actions: warned once per session, dropped; Pause / a world frozen in a Step keep the edges queued until update_actions runs; a set that is not there loses its queue every frame.
         fixed_update systems read inp::fixed_action_state: edges queue (<=8, pairs dropped) and each fixed step
         (world_context::write_fixed_time -> begin_step) takes one; held = the frame's level.
 world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).
