@@ -36,6 +36,25 @@ void inp::input_router::forget_set(std::string_view set)
 	if (const auto it = m_stacks.find(set); it != m_stacks.end()) {
 		m_stacks.erase(it);
 	}
+	if (const auto it = m_commands.find(set); it != m_commands.end()) {
+		m_commands.erase(it);
+	}
+}
+
+void inp::input_router::queue_command(std::string_view set, stack_command command)
+{
+	const auto it = m_commands.find(set);
+	auto& queue = it != m_commands.end() ? it->second : m_commands.emplace(std::string{ set }, std::vector<stack_command>{}).first->second;
+	queue.push_back(std::move(command));
+}
+
+std::vector<inp::stack_command> inp::input_router::take_commands(std::string_view set)
+{
+	const auto it = m_commands.find(set);
+	if (it == m_commands.end()) return {};
+	std::vector<stack_command> taken = std::move(it->second);
+	m_commands.erase(it);
+	return taken;
 }
 
 inp::input_stack& inp::input_router::stack(std::string_view set)

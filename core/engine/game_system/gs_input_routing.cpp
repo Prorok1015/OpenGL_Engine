@@ -201,6 +201,34 @@ namespace
 		ctx.insert_or_assign(inp::action_input{ in ? std::move(in->actions) : std::vector<inp::action_reach>{} });
 	}
 
+	// The commands of the systems (worlds in the order of their desc_index, each in call order), then those queued from outside.
+	void apply_stack_commands(inp::input_router& router, const std::vector<entry>& entries, std::string_view set, inp::input_stack& stack)
+	{
+		std::vector<const entry*> by_file;
+		by_file.reserve(entries.size());
+		std::vector<inp::world_ref> worlds;
+		worlds.reserve(entries.size());
+		for (const auto& e : entries) {
+			by_file.push_back(&e);
+			worlds.push_back({ std::string{ e.context->get_name() }, e.context->desc_index() });
+		}
+		std::ranges::stable_sort(by_file, [](const entry* a, const entry* b) { return a->context->desc_index() < b->context->desc_index(); });
+
+		std::vector<inp::stack_command> commands;
+		for (const entry* e : by_file) {
+			auto* control = e->context->state().ctx().find<inp::input_stack_control>();
+			if (!control || control->empty()) continue;
+			for (inp::stack_command& command : control->take()) {
+				if (command.world.empty() && command.kind != inp::stack_command_kind::set_world_active) command.world = e->context->get_name();
+				commands.push_back(std::move(command));
+			}
+		}
+		for (inp::stack_command& command : router.take_commands(set)) {
+			commands.push_back(std::move(command));
+		}
+		inp::apply_commands(stack, commands, worlds);
+	}
+
 	void route_set(inp::input_router& router, scn::context_set& set, const std::shared_ptr<const inp::action_map>& actions)
 	{
 		const inp::input_state& raw = router.raw_state();
@@ -222,6 +250,10 @@ namespace
 		const entry* reader = actions_reader(entries, set_name, live_actions != nullptr);
 
 		inp::input_stack& stack = router.stack(set.name());
+		// A Pause keeps the commands waiting: the layers stay as they are until it goes (INPUT_STACK.md 3.4).
+		if (set.mode() != ecs::run_mode::pause) {
+			apply_stack_commands(router, entries, set_name, stack);
+		}
 		std::vector<std::string> present;
 		std::vector<std::string> fed;
 		for (const auto& e : entries) {

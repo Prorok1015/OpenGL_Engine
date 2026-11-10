@@ -82,6 +82,13 @@ namespace inp
 		// The set went away (Play stopped): its bindings, its mouse hold and its stack are dropped, the default target stays.
 		void forget_set(std::string_view set);
 
+		// A change of the stack of a set from outside the worlds (gs::module_context::input_stack, the editor). It waits for the
+		// next gs::route_input, which applies it after the commands of the systems (INPUT_STACK.md 3.3); while the set is in
+		// Pause it keeps waiting. Main thread only.
+		void queue_command(std::string_view set, stack_command command);
+		// The commands queued for the set, in call order; the queue is emptied.
+		std::vector<stack_command> take_commands(std::string_view set);
+
 		// Buttons released, deltas zero, the cursor where it last was.
 		static inp::input_state neutral(const inp::input_state& raw);
 
@@ -97,5 +104,6 @@ namespace inp
 		std::optional<input_target> m_default;
 		std::map<std::string, mouse_hold, std::less<>> m_holds;
 		std::map<std::string, input_stack, std::less<>> m_stacks;
+		std::map<std::string, std::vector<stack_command>, std::less<>> m_commands;
 	};
 }

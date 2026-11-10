@@ -116,6 +116,10 @@ game_actions: res/input/actions.desc (manifest input_actions) -> gs::input_actio
         keeps inp::action_state (held/pressed/released, armed rule) and emits inp::action_event on the world's bus.
         fixed_update systems read inp::fixed_action_state: edges queue (<=8, pairs dropped) and each fixed step
         (world_context::write_fixed_time -> begin_step) takes one; held = the frame's level.
+input_stack_commands (#625 a): systems take inp::input_stack_control (ctx; push/replace/remove/set_active/set_order for their own world's layers,
+        set_world_active(world,bool) for any), outside code gs::module_context::input_stack(set) -> gs::input_stack_handle (router.queue_command).
+        gs::route_input applies them at the start of the next frame (systems by desc_index, then outside; Pause keeps them waiting) with
+        inp::apply_commands; owner rule: a layer is changed only by its own layer_owner (module for commands from code); world off = input_stack::world_active.
 world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).
         context_set::for_each does NOT preserve desc order — see CONSTRAINTS [13C].
         Editor derives parallel world arrays from the ordered world_descs vector

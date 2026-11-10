@@ -1,5 +1,6 @@
 #include <snk/game/gs_game_module.h>
 #include <snk/command/cmd_registry.h>
+#include <snk/input/inp_input_router.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
@@ -38,7 +39,8 @@ namespace {
 			m_storage.attach(borrowed(m_layer->components()));
 			// Borrowed like the rest: the layer destroys its hot reload manager while its resources are still there.
 			m_storage.attach(borrowed(*m_layer->hot_reload()));
-			m_storage.construct<gs::module_context>(*m_layer, root.require_shared<cmd::command_registry>().get(), m_tasks);
+			m_storage.construct<gs::module_context>(*m_layer, root.require_shared<cmd::command_registry>().get(), m_tasks,
+				root.has_value<inp::input_router>() ? &root.require<inp::input_router>() : nullptr, &m_contexts);
 			m_current = module;
 		}
 
@@ -133,6 +135,54 @@ ds::task_handle<void> gs::module_context::run(ds::lane lane, ds::task_desc desc,
 		return m_tasks->run(lane, std::move(desc), m_layer.tasks(), set->tasks(), std::move(fn));
 	}
 	return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::move(fn));
+}
+
+gs::input_stack_handle gs::module_context::input_stack(std::string_view set) const
+{
+	if (!m_input) {
+		egLOG_ERROR("input", "module_context::input_stack('{}'): the engine has no input router", set);
+		return {};
+	}
+	if (!m_contexts || !m_contexts->find_set(set)) {
+		egLOG_ERROR("input", "module_context::input_stack('{}'): there is no such set (the stack of \"play\" is there while Play runs)", set);
+		return {};
+	}
+	return input_stack_handle{ m_input, std::string{ set } };
+}
+
+void gs::input_stack_handle::send(inp::stack_command command)
+{
+	if (m_router) m_router->queue_command(m_set, std::move(command));
+}
+
+void gs::input_stack_handle::push(std::string_view world, inp::stack_layer_desc layer)
+{
+	send({ .kind = inp::stack_command_kind::push, .world = std::string{ world }, .layer = std::move(layer) });
+}
+
+void gs::input_stack_handle::replace(std::string_view world, inp::stack_layer_desc layer)
+{
+	send({ .kind = inp::stack_command_kind::replace, .world = std::string{ world }, .layer = std::move(layer) });
+}
+
+void gs::input_stack_handle::remove(std::string_view world, std::string_view layer)
+{
+	send({ .kind = inp::stack_command_kind::remove, .world = std::string{ world }, .name = std::string{ layer } });
+}
+
+void gs::input_stack_handle::set_active(std::string_view world, std::string_view layer, bool active)
+{
+	send({ .kind = inp::stack_command_kind::set_active, .world = std::string{ world }, .name = std::string{ layer }, .active = active });
+}
+
+void gs::input_stack_handle::set_order(std::string_view world, std::string_view layer, int order)
+{
+	send({ .kind = inp::stack_command_kind::set_order, .world = std::string{ world }, .name = std::string{ layer }, .order = order });
+}
+
+void gs::input_stack_handle::set_world_active(std::string_view world, bool active)
+{
+	send({ .kind = inp::stack_command_kind::set_world_active, .world = std::string{ world }, .active = active });
 }
 
 std::string gs::module_resource_prefix(std::string_view module)

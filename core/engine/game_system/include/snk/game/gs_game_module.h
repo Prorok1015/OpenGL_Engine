@@ -7,6 +7,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/config/cfg_api.h>
+#include <snk/input/inp_input_stack.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/common/snk_api.h>
 #include <functional>
@@ -17,6 +18,7 @@
 
 namespace scn { class context_manager; }
 namespace cmd { class command_registry; }
+namespace inp { class input_router; }
 
 namespace gs
 {
@@ -63,14 +65,44 @@ namespace gs
 	// other tag, res:// included, is refused with std::logic_error.
 	SNK_API std::string module_resource_prefix(std::string_view module);
 
+	// The stack of the input layers of one set, for code that runs outside the systems (a module's setup, an event handler of
+	// the engine); the systems of a world use inp::input_stack_control instead. The commands are not applied now: they wait for
+	// the next frame's gs::route_input (INPUT_STACK.md 3.3). The layers it pushes belong to the module (inp::layer_owner::module):
+	// it can change or remove only those, and a command on another owner's layer is logged and skipped. Empty (false) when
+	// the set did not exist: every call then does nothing.
+	class SNK_API input_stack_handle
+	{
+	public:
+		input_stack_handle() = default;
+		input_stack_handle(inp::input_router* router, std::string set) : m_router(router), m_set(std::move(set)) {}
+		explicit operator bool() const { return m_router != nullptr; }
+
+		// A layer of `world`; one of the module with the same name is replaced, so a repeated setup makes no second layer.
+		void push(std::string_view world, inp::stack_layer_desc layer);
+		// Like push, but the layer must exist already.
+		void replace(std::string_view world, inp::stack_layer_desc layer);
+		void remove(std::string_view world, std::string_view layer);
+		void set_active(std::string_view world, std::string_view layer, bool active);
+		void set_order(std::string_view world, std::string_view layer, int order);
+		// Every layer of the world, of any owner, on or off (the base layer too).
+		void set_world_active(std::string_view world, bool active);
+
+	private:
+		void send(inp::stack_command command);
+
+		inp::input_router* m_router = nullptr;
+		std::string m_set;
+	};
+
 	// What a game module registers in the engine outside its layer (MODULE_LAYER.md §5), in its layer's storage
 	// (data.require<gs::module_context>()). Every registration is kept by the layer and removed when the layer goes, so
 	// the engine holds nothing that refers to the module.
 	class SNK_API module_context
 	{
 	public:
-		module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks)
-			: m_layer(layer), m_commands(commands), m_tasks(tasks) {}
+		module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks,
+			inp::input_router* input = nullptr, const scn::context_manager* contexts = nullptr)
+			: m_layer(layer), m_commands(commands), m_tasks(tasks), m_input(input), m_contexts(contexts) {}
 
 		// A command in the process-wide registry; false when there is none or it refused the command (logged).
 		bool add_command(cmd::command_desc desc);
@@ -108,11 +140,17 @@ namespace gs
 			return m_layer.keep(m_layer.subscriptions().observe<T>(std::move(filter), what, std::move(fn)));
 		}
 
+		// The input stack of `set` (module API 3.6). A set that does not exist (`"play"` while Play does not run) gives an empty
+		// handle and an error in the log: the stack lives and dies with its set, the file of the level holds the defaults.
+		input_stack_handle input_stack(std::string_view set) const;
+
 	private:
 		scn::scene_layer& m_layer;
 		cmd::command_registry* m_commands = nullptr;
 		ds::task_system* m_tasks = nullptr;
 		cfg::config_view m_config;
+		inp::input_router* m_input = nullptr;
+		const scn::context_manager* m_contexts = nullptr;
 	};
 
 	// The engine's module_layer_factory: while a game module is loaded its layer is the game layer, and a fresh empty

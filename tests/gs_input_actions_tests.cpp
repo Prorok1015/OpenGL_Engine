@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/game/gs_game_module.h>
 #include <snk/game/gs_input_actions.h>
 #include <snk/game/gs_input_routing.h>
 #include <snk/input/inp_action_state.h>
@@ -11,6 +12,7 @@
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -60,6 +62,21 @@ void fixed_probe_system(const inp::fixed_action_state& actions, fixed_probe& out
 	++out.steps;
 }
 
+const std::vector<std::string> WITH_STACK_SCRIPT{ "inp::update_input_state", "inp::update_actions", "test::stack_script" };
+
+// What a game system would do with the stack, set by the test and run once by the system in the next update.
+struct stack_script
+{
+	std::function<void(inp::input_stack_control&)> run;
+};
+
+void stack_script_system(inp::input_stack_control& routes, stack_script& script)
+{
+	if (!script.run) return;
+	script.run(routes);
+	script.run = nullptr;
+}
+
 std::shared_ptr<const inp::action_map> jump_on_space()
 {
 	auto map = std::make_shared<inp::action_map>();
@@ -77,6 +94,7 @@ struct actions_fixture : test_util::scene_env
 	{
 		inp::register_ecs_input_system(sf, source);
 		sf.register_system<&fixed_probe_system>("test::fixed_probe", { .phase = ecs::phase::fixed_update });
+		sf.register_system<&stack_script_system>("test::stack_script", { .phase = ecs::phase::update });
 		mgr.add_event<inp::action_event>();
 		router.set_default_target(inp::input_target{ .set = "level" });
 		subscription = mgr.subscribe<inp::action_event>({}, [this](ecs::bus_context& ctx, const ecs::envelope<inp::action_event>& e) {
@@ -120,6 +138,23 @@ struct actions_fixture : test_util::scene_env
 		return w;
 	}
 	static const fixed_probe& probe_of(scn::world_context& w) { return w.state().ctx().get<fixed_probe>(); }
+
+	// A world with a system that runs what the test sets with run_in, like game code asking for changes of the stack.
+	scn::world_context& script_world(std::string_view name, uint32_t desc_index)
+	{
+		auto& w = world(name, desc_index, WITH_STACK_SCRIPT);
+		w.state().ctx().emplace<stack_script>();
+		return w;
+	}
+	static void run_in(scn::world_context& w, std::function<void(inp::input_stack_control&)> fn)
+	{
+		w.state().ctx().get<stack_script>().run = std::move(fn);
+	}
+	static bool key_in(scn::world_context& w, KB k)
+	{
+		return w.state().ctx().get<inp::input_state>().keyboard[static_cast<std::size_t>(k)];
+	}
+	bool world_on(std::string_view name) { return router.stack("level").world_active(name); }
 
 	void unbind() { router.set_default_target(inp::input_target{ .set = "nowhere" }); }
 	void bind() { router.set_default_target(inp::input_target{ .set = "level" }); }
@@ -703,6 +738,172 @@ BOOST_AUTO_TEST_CASE(Fixed_APressDuringPause_IsSeenByTheStepOfAStep)
 	mgr.get_set("level").step(1);
 	frame(map);
 	BOOST_TEST(probe_of(w).released == 1);
+}
+
+// ---------------------------------------------------------------- the stack from code (#625)
+
+BOOST_AUTO_TEST_CASE(StackCommands_ASystemSwitchesAWorldOff_FromTheNextFrame)
+{
+	auto& game = script_world("game", 0);
+	auto& minimap = world("minimap", 1, { "inp::update_input_state" });
+	const auto map = jump_on_space();
+	frame(map);
+	key(KB::W, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(world_on("minimap"));
+	BOOST_TEST(key_in(minimap, KB::W));
+
+	run_in(game, [](inp::input_stack_control& routes) { routes.set_world_active("minimap", false); });
+	frame(map);
+	BOOST_TEST(world_on("minimap"));
+	BOOST_TEST(key_in(minimap, KB::W));
+
+	frame(map);
+	BOOST_TEST(!world_on("minimap"));
+	BOOST_TEST(!key_in(minimap, KB::W));
+	BOOST_TEST(key_in(game, KB::W));
+
+	run_in(game, [](inp::input_stack_control& routes) { routes.set_world_active("minimap", true); });
+	frame(map);
+	frame(map);
+	BOOST_TEST(world_on("minimap"));
+	BOOST_TEST(key_in(minimap, KB::W));
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_ASystemPushesALayerOfItsWorld_AndARepeatedPushMakesNoSecondOne)
+{
+	auto& game = script_world("game", 0);
+	const auto map = jump_on_space();
+	frame(map);
+	const std::size_t before = router.stack("level").size();
+
+	const auto push_menu = [](inp::input_stack_control& routes) {
+		inp::stack_layer_desc menu;
+		menu.name = "menu";
+		menu.order = 10;
+		menu.block_below = true;
+		routes.push(menu);
+	};
+	run_in(game, push_menu);
+	frame(map);
+	BOOST_TEST(router.stack("level").find("game", "menu") == nullptr);
+	frame(map);
+	const auto* menu = router.stack("level").find("game", "menu");
+	BOOST_REQUIRE(menu != nullptr);
+	BOOST_TEST((menu->owner == inp::layer_owner::module));
+	BOOST_TEST(router.stack("level").size() == before + 1u);
+	BOOST_TEST(menu->block_below);
+	BOOST_TEST(menu->order == 10);
+
+	run_in(game, push_menu);
+	frame(map);
+	frame(map);
+	BOOST_TEST(router.stack("level").size() == before + 1u);
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_TheSystemsOfTheWorldsGoInTheOrderOfTheFile_NotOfTheIds_ThenTheExternalOnes)
+{
+	// "b" is made first, so its id is lower; the file puts "a" first.
+	auto& b = script_world("b", 1);
+	auto& a = script_world("a", 0);
+	world("target", 2, { "inp::update_input_state" });
+	const auto map = jump_on_space();
+	frame(map);
+
+	run_in(a, [](inp::input_stack_control& routes) { routes.set_world_active("target", false); });
+	run_in(b, [](inp::input_stack_control& routes) { routes.set_world_active("target", true); });
+	frame(map);
+	frame(map);
+	BOOST_TEST(world_on("target"));
+
+	run_in(a, [](inp::input_stack_control& routes) { routes.set_world_active("target", true); });
+	run_in(b, [](inp::input_stack_control& routes) { routes.set_world_active("target", true); });
+	frame(map);
+	gs::input_stack_handle(&router, "level").set_world_active("target", false);
+	frame(map);
+	BOOST_TEST(!world_on("target"));
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_PauseFreezesTheStack_TheCommandsWaitForTheEnd)
+{
+	auto& game = script_world("game", 0);
+	world("minimap", 1, { "inp::update_input_state" });
+	const auto map = jump_on_space();
+	frame(map);
+
+	run_in(game, [](inp::input_stack_control& routes) { routes.set_world_active("minimap", false); });
+	frame(map);
+	gs::input_stack_handle(&router, "level").push("game", [] { inp::stack_layer_desc l; l.name = "menu"; return l; }());
+	mode(ecs::run_mode::pause);
+	frame(map);
+	frame(map);
+	BOOST_TEST(world_on("minimap"));
+	BOOST_TEST(router.stack("level").find("game", "menu") == nullptr);
+
+	mode(ecs::run_mode::play);
+	frame(map);
+	BOOST_TEST(!world_on("minimap"));
+	BOOST_TEST(router.stack("level").find("game", "menu") != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_TheModuleContextGivesTheStackOfASetThatIsThere_AndNothingForOneThatIsNot)
+{
+	world("game", 0);
+	world("minimap", 1, { "inp::update_input_state" });
+	const auto map = jump_on_space();
+	frame(map);
+
+	auto& layer = mgr.create_layer();
+	gs::module_context context(layer, nullptr, nullptr, &router, &mgr);
+	BOOST_TEST(!context.input_stack("play"));
+	BOOST_TEST(!gs::module_context(layer, nullptr, nullptr, nullptr, &mgr).input_stack("level"));
+
+	auto stack = context.input_stack("level");
+	BOOST_REQUIRE(stack);
+	stack.set_world_active("minimap", false);
+	BOOST_TEST(world_on("minimap"));
+	frame(map);
+	BOOST_TEST(!world_on("minimap"));
+
+	auto menu = inp::stack_layer_desc{};
+	menu.name = "menu";
+	stack.push("game", menu);
+	stack.push("game", menu);
+	frame(map);
+	const auto* pushed = router.stack("level").find("game", "menu");
+	BOOST_REQUIRE(pushed != nullptr);
+	BOOST_TEST((pushed->owner == inp::layer_owner::module));
+	BOOST_TEST(router.stack("level").size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_AModuleCannotRemoveALayerOfTheEngineOrTheEditor)
+{
+	world("game", 0);
+	const auto map = jump_on_space();
+	frame(map);
+	inp::stack_layer_desc panel;
+	panel.name = "panel";
+	panel.owner = inp::layer_owner::editor;
+	router.stack("level").put("game", 0, panel);
+
+	auto& layer = mgr.create_layer();
+	auto stack = gs::module_context(layer, nullptr, nullptr, &router, &mgr).input_stack("level");
+	BOOST_REQUIRE(stack);
+	stack.remove("game", "panel");
+	stack.remove("game", "world");
+	stack.set_active("game", "panel", false);
+	stack.set_order("game", "panel", 99);
+	inp::stack_layer_desc takeover;
+	takeover.name = "panel";
+	stack.push("game", takeover);
+	frame(map);
+
+	const auto* kept = router.stack("level").find("game", "panel");
+	BOOST_REQUIRE(kept != nullptr);
+	BOOST_TEST((kept->owner == inp::layer_owner::editor));
+	BOOST_TEST(kept->active);
+	BOOST_TEST(kept->order == 0);
+	BOOST_TEST(router.stack("level").find("game", "world") != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

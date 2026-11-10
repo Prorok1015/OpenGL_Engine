@@ -1,4 +1,5 @@
 #include <snk/input/inp_input_stack.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <bitset>
 #include <iterator>
@@ -48,7 +49,9 @@ namespace
 	std::vector<const inp::stack_entry*> live_layers(const inp::input_stack& stack, const std::vector<std::string>& fed)
 	{
 		std::vector<const inp::stack_entry*> out = stack.ordered();
-		std::erase_if(out, [&fed](const inp::stack_entry* entry) { return !entry->layer.active || !is_fed(fed, entry->world); });
+		std::erase_if(out, [&fed, &stack](const inp::stack_entry* entry) {
+			return !entry->layer.active || !stack.world_active(entry->world) || !is_fed(fed, entry->world);
+		});
 		return out;
 	}
 
@@ -100,7 +103,10 @@ void inp::input_stack::put(std::string_view world, std::uint32_t desc_index, sta
 {
 	for (stack_entry& entry : m_entries) {
 		if (entry.world == world && entry.layer.name == layer.name) {
-			if (entry.desc_index != desc_index) forget_memory(world, layer.name);
+			if (entry.desc_index != desc_index) {
+				forget_memory(world, layer.name);
+				m_off_worlds.erase(std::string{ world });
+			}
 			entry.desc_index = desc_index;
 			entry.layer = std::move(layer);
 			return;
@@ -113,12 +119,34 @@ void inp::input_stack::retain_worlds(const std::vector<std::string>& worlds)
 {
 	std::erase_if(m_entries, [&worlds](const stack_entry& entry) { return !is_fed(worlds, entry.world); });
 	std::erase_if(m_memory, [&worlds](const auto& item) { return !is_fed(worlds, item.first.first); });
+	std::erase_if(m_off_worlds, [&worlds](const std::string& world) { return !is_fed(worlds, world); });
 }
 
 void inp::input_stack::remove_world(std::string_view world)
 {
 	std::erase_if(m_entries, [world](const stack_entry& entry) { return entry.world == world; });
 	std::erase_if(m_memory, [world](const auto& item) { return item.first.first == world; });
+	if (const auto it = m_off_worlds.find(world); it != m_off_worlds.end()) m_off_worlds.erase(it);
+}
+
+void inp::input_stack::set_world_active(std::string_view world, bool active)
+{
+	if (active) {
+		if (const auto it = m_off_worlds.find(world); it != m_off_worlds.end()) m_off_worlds.erase(it);
+	} else {
+		m_off_worlds.emplace(world);
+	}
+}
+
+bool inp::input_stack::world_active(std::string_view world) const
+{
+	return !m_off_worlds.contains(world);
+}
+
+inp::stack_layer_desc* inp::input_stack::find(std::string_view world, std::string_view name)
+{
+	const auto it = std::ranges::find_if(m_entries, [&](const stack_entry& entry) { return entry.world == world && entry.layer.name == name; });
+	return it == m_entries.end() ? nullptr : &it->layer;
 }
 
 bool inp::input_stack::remove(std::string_view world, std::string_view name)
@@ -390,4 +418,107 @@ std::string_view inp::mouse_button_name(MOUSE_BUTTONS button)
 {
 	const auto index = static_cast<std::size_t>(button);
 	return index < std::size(k_mouse_names) ? k_mouse_names[index] : std::string_view{};
+}
+
+void inp::input_stack_control::push(stack_layer_desc layer)
+{
+	m_commands.push_back({ .kind = stack_command_kind::push, .layer = std::move(layer) });
+}
+
+void inp::input_stack_control::replace(stack_layer_desc layer)
+{
+	m_commands.push_back({ .kind = stack_command_kind::replace, .layer = std::move(layer) });
+}
+
+void inp::input_stack_control::remove(std::string name)
+{
+	m_commands.push_back({ .kind = stack_command_kind::remove, .name = std::move(name) });
+}
+
+void inp::input_stack_control::set_active(std::string name, bool active)
+{
+	m_commands.push_back({ .kind = stack_command_kind::set_active, .name = std::move(name), .active = active });
+}
+
+void inp::input_stack_control::set_order(std::string name, int order)
+{
+	m_commands.push_back({ .kind = stack_command_kind::set_order, .name = std::move(name), .order = order });
+}
+
+void inp::input_stack_control::set_world_active(std::string world, bool active)
+{
+	m_commands.push_back({ .kind = stack_command_kind::set_world_active, .world = std::move(world), .active = active });
+}
+
+std::vector<inp::stack_command> inp::input_stack_control::take()
+{
+	return std::exchange(m_commands, {});
+}
+
+namespace
+{
+	constexpr std::string_view k_command_names[] = { "push", "replace", "remove", "set_active", "set_order", "set_world_active" };
+
+	void refuse(const inp::stack_command& command, std::string_view why)
+	{
+		const std::string& layer = command.kind == inp::stack_command_kind::push || command.kind == inp::stack_command_kind::replace
+			? command.layer.name : command.name;
+		egLOG_ERROR("input", "input stack: {} '{}' in world '{}' refused: {}", k_command_names[static_cast<std::size_t>(command.kind)], layer, command.world, why);
+	}
+}
+
+std::size_t inp::apply_commands(input_stack& stack, const std::vector<stack_command>& commands, const std::vector<world_ref>& worlds)
+{
+	std::size_t applied = 0;
+	for (const stack_command& command : commands) {
+		const auto world = std::ranges::find(worlds, command.world, &world_ref::name);
+		if (world == worlds.end()) {
+			refuse(command, "no such world in the set");
+			continue;
+		}
+		if (command.kind == stack_command_kind::set_world_active) {
+			stack.set_world_active(command.world, command.active);
+			++applied;
+			continue;
+		}
+
+		const bool puts = command.kind == stack_command_kind::push || command.kind == stack_command_kind::replace;
+		const std::string& name = puts ? command.layer.name : command.name;
+		if (name.empty()) {
+			refuse(command, "the layer has no name");
+			continue;
+		}
+		stack_layer_desc* existing = stack.find(command.world, name);
+		if (existing && existing->owner != command.source) {
+			refuse(command, "the layer belongs to another owner");
+			continue;
+		}
+		if (!existing && command.kind != stack_command_kind::push) {
+			refuse(command, "no such layer");
+			continue;
+		}
+
+		switch (command.kind) {
+		case stack_command_kind::push:
+		case stack_command_kind::replace: {
+			stack_layer_desc layer = command.layer;
+			layer.owner = command.source;
+			stack.put(command.world, world->desc_index, std::move(layer));
+			break;
+		}
+		case stack_command_kind::remove:
+			stack.remove(command.world, name);
+			break;
+		case stack_command_kind::set_active:
+			existing->active = command.active;
+			break;
+		case stack_command_kind::set_order:
+			existing->order = command.order;
+			break;
+		case stack_command_kind::set_world_active:
+			break;
+		}
+		++applied;
+	}
+	return applied;
 }

@@ -115,13 +115,16 @@ struct stack_layer_desc {
 Несколько команд на один и тот же слой за кадр: побеждает последняя по этому порядку.
 
 ```cpp
-// Системы мира — ctx-ресурс своего мира:
+// Системы мира — ctx-ресурс своего мира (имена действий — из actions.desc):
 void map_system(const inp::action_state& a, inp::input_stack_control& routes) {
-    if (a.pressed(k_map)) routes.push({ .name = "map", .order = 10, .block_below = true });
-    if (a.pressed(k_close)) routes.remove("map");
+    if (a.pressed("ToggleMap")) routes.push({ .name = "map", .order = 10, .block_below = true });
+    if (a.pressed("CloseMap")) routes.remove("map");
 }
-// Вне систем (настройка модуля, редактор):
-module_context.input_stack("play").set_active("minimap", "world", false);
+// Вне систем (настройка модуля, редактор): ручка gs::input_stack_handle, мир и слой называются явно.
+auto stack = module_context.input_stack("play");
+stack.set_world_active("minimap", false);                    // выключить весь мир, в том числе его базовый слой
+stack.push("game", { .name = "dialog", .order = 5, .block_below = true });
+// stack.set_active("minimap", "world", false) — ошибка в лог: базовый слой «world» принадлежит engine
 ```
 
 Операции `inp::input_stack_control`:
@@ -140,6 +143,7 @@ module_context.input_stack("play").set_active("minimap", "world", false);
   - Слои и команды принадлежат набору. При выгрузке и при перезагрузке кода набор уничтожается вместе со слоем модуля. От модуля в стеке ничего не остаётся, в памяти `inp::input_router` нет указателей на код модуля.
   - При перезагрузке кода во время Play набор `play` **восстанавливается из снимка вместе со своим стеком**: слои, их поля, активность и порядок — простые данные снимка (`HOT_RELOAD_PLAY.md`).
   - Если новая версия модуля снова кладёт те же слои при настройке, это замена по имени (см. выше), а не дубль.
+- **Как сделано (#625, PR a).** `inp::stack_command` — простые данные (вид, мир, слой, поля, источник). `inp::input_stack_control` — ctx-ресурс системы: копит команды в списке, владелец `module`. `gs::input_stack_handle` (из `module_context::input_stack(set)`) кладёт команды в очередь набора в `inp::input_router`. В начале `route_input` набора `apply_stack_commands` забирает команды систем (миры по `desc_index`, внутри мира по порядку вызова), затем внешние, и `inp::apply_commands` применяет их по порядку. Чужой слой, слой без имени, `replace` несуществующего, неизвестный мир — `egLOG_ERROR` и пропуск. Неактивность мира — флаг `input_stack::world_active`, а не поле слоя: базовый слой кладётся заново каждый кадр и сбросил бы свой `active`. Флаг стирается вместе с миром (в том числе мир, созданный заново). `module_context::input_stack(set)` для набора, которого нет, или без роутера ввода даёт пустую ручку и ошибку в лог. **Модульный API 3.6.** Остаётся для (b): снимок стека в hot reload и `remove_owner(module)` при выгрузке модуля. До него слои модуля остаются в стеке набора после выгрузки модуля.
 - **По умолчанию активны все слои.** Неактивный мир не получает ничего. Игра сама переключает активный мир — это и есть ответ на «два 3D-мира» (вопрос М6).
 
 ### 3.4. Режимы набора
@@ -233,8 +237,8 @@ module_context.input_stack("play").set_active("minimap", "world", false);
    - Память фронтов вне миров с очисткой, повторное взведение.
    - Тесты: перехват и возврат, наполовину забранное действие, новый слой при зажатой клавише, смерть мира.
 3. **Управление из кода.**
-   - `inp::input_stack_control` (ctx-ресурс), `module_context::input_stack`, применение со следующего кадра, заморозка в Pause.
-   - Стек в снимке набора: вместе с #600 или сразу после него.
+   - (a) `inp::input_stack_control` (ctx-ресурс), `module_context::input_stack`, применение со следующего кадра, заморозка в Pause, правило владельца (#625).
+   - (b) Стек в снимке набора для hot reload и `remove_owner(module)` при выгрузке модуля: #601 уже слит.
 
 ## 9. Вопросы владельцу
 

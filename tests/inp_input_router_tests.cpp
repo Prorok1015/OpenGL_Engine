@@ -1001,4 +1001,27 @@ BOOST_AUTO_TEST_CASE(UpdateStage_RoutesBeforeTheContextsRunAndRebuildsTheBinding
 	BOOST_TEST(stage_router.binding_count() == 0u); // consumed: the panels bind again next frame
 }
 
+// ---------------------------------------------------------------- stack commands (#625)
+
+BOOST_AUTO_TEST_CASE(StackCommands_WaitForTheSetAndComeOutOnceInOrder)
+{
+	router.queue_command("level", { .kind = inp::stack_command_kind::push, .world = "a", .layer = { .name = "menu" } });
+	router.queue_command("level", { .kind = inp::stack_command_kind::remove, .world = "a", .name = "menu" });
+	router.queue_command("other", { .kind = inp::stack_command_kind::set_world_active, .world = "b", .active = false });
+
+	const auto taken = router.take_commands("level");
+	BOOST_REQUIRE_EQUAL(taken.size(), 2u);
+	BOOST_TEST((taken[0].kind == inp::stack_command_kind::push));
+	BOOST_TEST((taken[1].kind == inp::stack_command_kind::remove));
+	BOOST_TEST(router.take_commands("level").empty());
+	BOOST_TEST(router.take_commands("other").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(StackCommands_GoWithTheSet)
+{
+	router.queue_command("level", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false });
+	router.forget_set("level");
+	BOOST_TEST(router.take_commands("level").empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

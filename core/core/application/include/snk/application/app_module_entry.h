@@ -32,7 +32,11 @@
 // been built against it, so the minor stays 3.5.
 // inp::world_input and inp::drag_hold are the engine's own (the result and an argument of inp::resolve), which also
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
-#define SNK_MODULE_API_VERSION 0x0003'0005u // major << 16 | minor
+// 3.6 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
+// methods; module_context is made by the engine and gains two members at its end), the ctx type inp::input_stack_control
+// (a system's list of stack commands, methods exported), inp::stack_command and inp::stack_layer_desc::owner already there.
+// A module built for 3.5 never calls them and still loads; one that uses them needs an engine of 3.6 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0006u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)
