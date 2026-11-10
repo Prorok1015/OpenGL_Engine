@@ -95,6 +95,9 @@ namespace inp
 			std::string action;
 			action_edge edge = action_edge::pressed;
 		};
+		// A set keeps at most `injection_limit` edges: a Pause or a long frozen Step must not collect what code injects every frame
+		// to fire it all when the set runs again. Past it the new edges are dropped (warned about once per session of the set).
+		static constexpr std::size_t injection_limit = 256;
 		void inject(const input_target& target, std::string action, action_edge edge);
 		// Every edge queued for the worlds of the set, in the order they came; the queue is emptied.
 		std::vector<queued_injection> take_injected(std::string_view set);

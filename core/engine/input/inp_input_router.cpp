@@ -52,7 +52,14 @@ void inp::input_router::inject(const input_target& target, std::string action, a
 		egLOG_WARN("input", "inject '{}' into set '{}' names no world, dropped", action, target.set);
 		return;
 	}
-	m_injected[target.set].push_back(queued_injection{ target.context, std::move(action), edge });
+	auto& queue = m_injected[target.set];
+	if (queue.size() >= injection_limit) {
+		if (warn_once(target.set, "#inject-full")) {
+			egLOG_WARN("input", "set '{}': {} injected edges are waiting and the set does not take them (Pause, a frozen Step); the new ones are dropped", target.set, injection_limit);
+		}
+		return;
+	}
+	queue.push_back(queued_injection{ target.context, std::move(action), edge });
 }
 
 std::vector<inp::input_router::queued_injection> inp::input_router::take_injected(std::string_view set)

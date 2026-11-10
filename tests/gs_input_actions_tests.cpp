@@ -773,12 +773,14 @@ BOOST_AUTO_TEST_CASE(Inject_AWorldFrozenInAStepKeepsItsEdges_AndGetsThemWhenItRu
 	frame(map);
 	BOOST_TEST(held(w, "Jump"));
 
-	mode(ecs::run_mode::step);
+	mode(ecs::run_mode::pause);
 	router.inject({ "level", "a" }, "Jump", inp::action_edge::released);
 	frame(map);
+	mgr.get_set("level").step(1);
 	frame(map);
 	BOOST_TEST(bound_of(w).frozen);
 	BOOST_TEST(held(w, "Jump"));
+	BOOST_TEST(count(inp::action_edge::released) == 0u);
 
 	mode(ecs::run_mode::play);
 	frame(map);

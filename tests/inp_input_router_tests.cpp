@@ -1044,6 +1044,19 @@ BOOST_AUTO_TEST_CASE(Inject_TheQueuesOfSetsThatAreNotThereAreDropped_AndTheOther
 	BOOST_TEST(router.drop_injected_except({ "level" }).empty());
 }
 
+BOOST_AUTO_TEST_CASE(Inject_AQueueThatIsNotTakenStopsAtTheLimit_ForEachSet)
+{
+	for (std::size_t i = 0; i < inp::input_router::injection_limit + 50; ++i) {
+		router.inject({ "level", "a" }, "Jump", i % 2 == 0 ? inp::action_edge::pressed : inp::action_edge::released);
+	}
+	router.inject({ "other", "a" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(router.take_injected("level").size() == inp::input_router::injection_limit);
+	BOOST_TEST(router.take_injected("other").size() == 1u);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(router.take_injected("level").size() == 1u);
+}
+
 BOOST_AUTO_TEST_CASE(Inject_ASetThatStartsAfreshDoesNotGetWhatWasQueuedBefore)
 {
 	router.inject({ "play", "a" }, "Jump", inp::action_edge::pressed);
