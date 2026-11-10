@@ -131,8 +131,7 @@ BOOST_AUTO_TEST_CASE(EverySpawnableDescIsInThePrefab)
 	std::vector<std::string> spawned;
 	collect_types(boost::json::parse(k_every_desc), spawned);
 	std::size_t checked = 0;
-	for (const std::string& type : descs->get_component_type_names()) {
-		if (!assembler->has_spawner(type)) continue;
+	for (const std::string& type : assembler->spawner_types()) {
 		++checked;
 		const bool in_prefab = std::ranges::find(spawned, type) != spawned.end();
 		const bool excused = std::ranges::any_of(k_not_spawned, [&](const not_spawned& entry) { return entry.type == type; });
