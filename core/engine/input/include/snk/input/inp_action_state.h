@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/input/inp_actions.h>
 #include <snk/input/inp_events.hpp>
+#include <snk/input/inp_input_stack.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/common/snk_api.h>
 #include <cstddef>
@@ -25,11 +26,20 @@ namespace inp
 		action_edge edge = action_edge::pressed;
 	};
 
-	// Written into each world's ctx by gs::route_input: the actions the world reads. Empty for a world that gets none
-	// (until #624 only the first world of a set in the level file that runs inp::update_actions, INPUT_STACK.md M6).
+	// Written into each world's ctx by gs::route_input: the actions the world reads. Empty for a world that gets none: a
+	// world reads the actions its layers declare (INPUT_STACK.md 3.2); a layer that declares none and is the base layer
+	// of the first world in the level file that runs inp::update_actions declares all of them (M6, the default).
 	struct action_map_ref
 	{
 		std::shared_ptr<const action_map> map{};
+	};
+
+	// Written into each world's ctx by gs::route_input next to the map (#624): by action id, what of the action reached a
+	// layer of the world that declares it. An action is down when a binding of it is down and reached; an action no layer
+	// declares is never down. Empty (not written): the state alone decides, as before layers declared actions.
+	struct action_input
+	{
+		std::vector<action_reach> reach{};
 	};
 
 	// Written by gs::route_input. `bound`: the router fed this world the input this frame. `frozen`: not bound while its
@@ -61,7 +71,7 @@ namespace inp
 
 		// One frame of inp::update_actions; the edges also go to `events` when it is given.
 		void update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-			ecs::event_writer<action_event>* events, fixed_action_state* fixed = nullptr);
+			ecs::event_writer<action_event>* events, fixed_action_state* fixed = nullptr, const action_input* reached = nullptr);
 
 	private:
 		struct slot
@@ -130,5 +140,5 @@ namespace inp
 
 	// The system "inp::update_actions": phase input, after inp::update_input_state, not run in Edit or Pause.
 	SNK_API void update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-		const input_bound& bound, const action_map_ref& actions, action_state& out, fixed_action_state& fixed);
+		const input_bound& bound, const action_map_ref& actions, const action_input& reached, action_state& out, fixed_action_state& fixed);
 }

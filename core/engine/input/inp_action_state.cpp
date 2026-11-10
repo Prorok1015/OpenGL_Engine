@@ -24,6 +24,37 @@ namespace
 		}
 		return false;
 	}
+
+	bool binding_reached(const inp::action_binding& binding, const inp::action_reach& reach)
+	{
+		return std::visit([&reach](auto button) {
+			if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+				return reach.keys.test(static_cast<std::size_t>(button));
+			} else {
+				return reach.buttons;
+			}
+		}, binding);
+	}
+
+	// A binding counts when it is down and reached a layer of the world that declares the action.
+	bool reached_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	{
+		for (const auto& binding : action.bindings) {
+			if (binding_reached(binding, reach) && binding_down(binding, state)) return true;
+		}
+		return false;
+	}
+
+	// A binding is held but a layer took it: the action must not be armed by that key's release being seen late, so it
+	// stays disarmed until the held binding is let go (INPUT_STACK.md 5). Not reaching is no reason by itself: the cursor
+	// over another world's HUD makes the mouse binding not reach with no button down.
+	bool held_but_not_reached(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	{
+		for (const auto& binding : action.bindings) {
+			if (binding_down(binding, state) && !binding_reached(binding, reach)) return true;
+		}
+		return false;
+	}
 }
 
 const inp::action_state::slot* inp::action_state::at(action_id id) const
@@ -70,7 +101,7 @@ bool inp::action_state::released(std::string_view name) const
 }
 
 void inp::action_state::update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-	ecs::event_writer<action_event>* events, fixed_action_state* fixed)
+	ecs::event_writer<action_event>* events, fixed_action_state* fixed, const action_input* reached)
 {
 	const auto emit = [events, fixed](action_id id, action_edge edge) {
 		if (events && events->bound()) events->emit(action_event{ id, edge });
@@ -97,9 +128,22 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		s.released = false;
 		if (!bound.bound && bound.frozen) continue;
 
-		const bool down = bound.bound && action_down(list[id], state);
+		bool down = false;
+		// A binding held while a layer took it keeps the action disarmed: when the layer lets go with the key still held
+		// (a modal layer closed), the press waits for a release and a new press.
+		bool taken_while_held = false;
+		if (bound.bound) {
+			if (reached && !reached->reach.empty()) {
+				const action_reach none{};
+				const action_reach& reach = id < reached->reach.size() ? reached->reach[id] : none;
+				down = reached_down(list[id], state, reach);
+				taken_while_held = held_but_not_reached(list[id], state, reach);
+			} else {
+				down = action_down(list[id], state);
+			}
+		}
 		if (fresh) {
-			s.armed = bound.bound && !down;
+			s.armed = bound.bound && !taken_while_held && !down;
 			continue;
 		}
 		if (s.held && !down) {
@@ -111,7 +155,7 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 			s.pressed = true;
 			emit(id, action_edge::pressed);
 		}
-		if (!bound.bound) {
+		if (!bound.bound || taken_while_held) {
 			s.armed = false;
 		} else if (!down) {
 			s.armed = true;
@@ -209,7 +253,7 @@ void inp::fixed_action_state::set_held(action_id id, bool held)
 }
 
 void inp::update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-	const input_bound& bound, const action_map_ref& actions, action_state& out, fixed_action_state& fixed)
+	const input_bound& bound, const action_map_ref& actions, const action_input& reached, action_state& out, fixed_action_state& fixed)
 {
-	out.update(actions, state, bound, &events, &fixed);
+	out.update(actions, state, bound, &events, &fixed, &reached);
 }

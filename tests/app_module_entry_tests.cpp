@@ -54,6 +54,8 @@ std::uint32_t api_3_1() { return 0x0003'0001u; }
 std::uint32_t api_3_2() { return 0x0003'0002u; }
 // A module built before gs::module_context::observe.
 std::uint32_t api_3_3() { return 0x0003'0003u; }
+// A module built before inp::action_input.
+std::uint32_t api_3_4() { return 0x0003'0004u; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -181,10 +183,20 @@ BOOST_AUTO_TEST_CASE(TheFixedActionsAreMinor3_3_AndAModuleBuiltFor3_2StillLoads)
 BOOST_AUTO_TEST_CASE(ComponentObserversAreMinor3_4_AndAModuleBuiltFor3_3StillLoads)
 {
 	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 4u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 4u);
 	auto entry = generated_entry();
 	entry.api_version = &api_3_3;
 	entry.build_info = +[]() { return info_with(api_3_3(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(ActionReachIsMinor3_5_AndAModuleBuiltFor3_4StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 5u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_4;
+	entry.build_info = +[]() { return info_with(api_3_4(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
 	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 

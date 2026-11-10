@@ -67,6 +67,8 @@ namespace inp
 			bool active = false;
 			bool captured = false;
 			input_target owner;
+			// The layer of `owner` that took the press.
+			std::string layer{};
 		};
 		mouse_hold hold(std::string_view set) const {
 			const auto it = m_holds.find(set);
