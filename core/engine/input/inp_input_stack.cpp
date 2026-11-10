@@ -1,6 +1,8 @@
 #include <snk/input/inp_input_stack.h>
 #include <algorithm>
+#include <bitset>
 #include <iterator>
+#include <variant>
 
 namespace
 {
@@ -54,6 +56,36 @@ namespace
 	{
 		return layer.block_below || region_holds(layer, cursor);
 	}
+
+	// An action a layer names, with the bindings of the map.
+	struct declared_action
+	{
+		inp::action_id id = inp::invalid_action;
+		std::bitset<inp::key_count> keys;
+		bool mouse = false;
+	};
+
+	std::vector<declared_action> declared_by(const inp::stack_layer_desc& layer, const inp::action_map* map)
+	{
+		std::vector<declared_action> out;
+		if (!map) return out;
+		for (const std::string& name : layer.actions) {
+			const inp::action_id id = map->id(name);
+			const inp::action* action = map->find(id);
+			if (!action) continue;
+			declared_action declared;
+			declared.id = id;
+			for (const inp::action_binding& binding : action->bindings) {
+				if (const auto* key = std::get_if<KEYBOARD_BUTTONS>(&binding)) {
+					declared.keys.set(static_cast<std::size_t>(*key));
+				} else {
+					declared.mouse = true;
+				}
+			}
+			out.push_back(declared);
+		}
+		return out;
+	}
 }
 
 void inp::input_stack::put(std::string_view world, std::uint32_t desc_index, stack_layer_desc layer)
@@ -105,21 +137,35 @@ std::optional<std::string> inp::mouse_taker(const input_stack& stack, const std:
 	return std::nullopt;
 }
 
-inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged, const drag_hold& hold)
+inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged, const drag_hold& hold,
+	const action_map* actions)
 {
 	stack_resolution out;
 	for (const std::string& world : fed) out.worlds[world];
 	const std::vector<const stack_entry*> layers = live_layers(stack, fed);
 
+	std::vector<std::vector<declared_action>> declared;
+	declared.reserve(layers.size());
+	for (const stack_entry* entry : layers) declared.push_back(declared_by(entry->layer, actions));
+	if (actions) {
+		for (auto& [name, world] : out.worlds) world.actions.assign(actions->size(), action_reach{});
+	}
+
 	for (std::size_t k = 0; k < key_count; ++k) {
 		const auto key = static_cast<KEYBOARD_BUTTONS>(k);
-		for (const stack_entry* entry : layers) {
+		for (std::size_t i = 0; i < layers.size(); ++i) {
+			const stack_entry* entry = layers[i];
 			world_input& world = out.worlds[entry->world];
 			world.keys[k] = true;
-			if (takes_key(entry->layer, key)) {
-				if (entry->layer.whole_keyboard || entry->layer.text_keys) world.keyboard_focus = true;
-				break;
+			bool takes_action = false;
+			for (const declared_action& action : declared[i]) {
+				if (!action.keys.test(k)) continue;
+				world.actions[action.id].keys.set(k);
+				takes_action = true;
 			}
+			const bool takes_own = takes_key(entry->layer, key);
+			if (takes_own && (entry->layer.whole_keyboard || entry->layer.text_keys)) world.keyboard_focus = true;
+			if (takes_own || takes_action) break;
 		}
 	}
 
@@ -174,6 +220,14 @@ inp::stack_resolution inp::resolve(const input_stack& stack, const std::vector<s
 		for (const stack_entry* entry : layers) {
 			give(&world_input::motion, entry->world);
 			if (entry->layer.block_below) break;
+		}
+	}
+
+	for (std::size_t i = 0; i < layers.size(); ++i) {
+		world_input& world = out.worlds[layers[i]->world];
+		if (!world.buttons) continue;
+		for (const declared_action& action : declared[i]) {
+			if (action.mouse) world.actions[action.id].buttons = true;
 		}
 	}
 

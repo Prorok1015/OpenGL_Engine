@@ -214,6 +214,74 @@ BOOST_AUTO_TEST_CASE(TwoWorldsWithTheSystem_TheFirstInTheLevelFileGetsTheActions
 	BOOST_TEST(seen[0].world == "first");
 }
 
+BOOST_AUTO_TEST_CASE(TheDefaultReader_TakesTheKeysOfTheActionsFromTheWorldsBelowIt)
+{
+	auto& first = world("first", 0);
+	auto& second = world("second", 1);
+	const auto map = jump_on_space();
+	frame(map);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	key(KB::W, KEY_ACTION::DOWN);
+	frame(map);
+
+	const auto space = static_cast<std::size_t>(KB::SPACE);
+	const auto w = static_cast<std::size_t>(KB::W);
+	BOOST_TEST(first.state().ctx().get<inp::input_state>().keyboard[space]);
+	BOOST_TEST(!second.state().ctx().get<inp::input_state>().keyboard[space]);
+	// Only the keys of actions: the rest goes to both worlds.
+	BOOST_TEST(first.state().ctx().get<inp::input_state>().keyboard[w]);
+	BOOST_TEST(second.state().ctx().get<inp::input_state>().keyboard[w]);
+}
+
+BOOST_AUTO_TEST_CASE(AWorldThatDeclaresItsActions_ReadsThemAndTheDefaultReaderGoes)
+{
+	auto& first = world("first", 0);
+	auto& second = world("second", 1);
+	scn::input_stack_desc declared;
+	declared.actions = { "Jump" };
+	second.set_input_stack(declared);
+	const auto map = jump_on_space();
+	frame(map);
+
+	BOOST_TEST(!map_of(first).map);
+	BOOST_TEST(map_of(second).map == map);
+
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(pressed(second, "Jump"));
+	BOOST_TEST(!held(first, "Jump"));
+	BOOST_REQUIRE_EQUAL(seen.size(), 1u);
+	BOOST_TEST(seen[0].world == "second");
+}
+
+BOOST_AUTO_TEST_CASE(AModalWorldAbove_TakesTheKeysOfTheActions_AndGivesThemBackWhenItIsOff)
+{
+	auto& game = world("game", 0);
+	auto& menu = world("menu", 1, { "inp::update_input_state" });
+	scn::input_stack_desc modal;
+	modal.order = 5;
+	modal.block_below = true;
+	menu.set_input_stack(modal);
+	const auto map = jump_on_space();
+	frame(map);
+
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(!held(game, "Jump"));
+	BOOST_TEST(seen.empty());
+
+	key(KB::SPACE, KEY_ACTION::UP);
+	frame(map);
+	modal.active = false;
+	menu.set_input_stack(modal);
+	frame(map);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(pressed(game, "Jump"));
+	BOOST_REQUIRE_EQUAL(seen.size(), 1u);
+	BOOST_TEST(seen[0].world == "game");
+}
+
 BOOST_AUTO_TEST_CASE(InPlay_ThePressReachesASubscriberInTheSameFrame)
 {
 	world("a", 0);

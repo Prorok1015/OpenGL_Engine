@@ -27,7 +27,7 @@ struct actions_fixture
 {
 	void frame()
 	{
-		state.update(ref, keys, bound, nullptr, &fixed);
+		state.update(ref, keys, bound, nullptr, &fixed, use_reach ? &reach : nullptr);
 	}
 
 	// One fixed step; what it sees of Jump.
@@ -48,6 +48,9 @@ struct actions_fixture
 
 	bool edge_free(inp::action_id id) const { return !state.pressed(id) && !state.released(id); }
 
+	// What reached the layers that declare the actions (#624); not given, the state alone decides.
+	bool use_reach = false;
+	inp::action_input reach{};
 	inp::action_map_ref ref{ make_map() };
 	inp::input_state keys{};
 	inp::input_bound bound{ .bound = true, .frozen = false };
@@ -336,6 +339,67 @@ BOOST_AUTO_TEST_CASE(Fixed_ByNameIsById)
 	BOOST_TEST(fixed.held("Jump"));
 	BOOST_TEST(!fixed.pressed("Fire"));
 	BOOST_TEST(!fixed.released("Dash"));
+}
+
+BOOST_AUTO_TEST_CASE(WithReach_AnActionIsDownOnlyThroughABindingThatReachedALayerOfTheWorld)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	frame();
+
+	set(KB::SPACE, true);
+	frame();
+	BOOST_TEST(!state.held(JUMP));
+
+	reach.reach[JUMP].keys.set(static_cast<std::size_t>(KB::SPACE));
+	frame();
+	BOOST_TEST(state.pressed(JUMP));
+
+	// A layer above takes the key: the action is let go, once.
+	reach.reach[JUMP].keys.reset();
+	frame();
+	BOOST_TEST(state.released(JUMP));
+	frame();
+	BOOST_TEST(edge_free(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(WithReach_TheOtherBindingKeepsAHalfTakenActionHeld)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	// Fire is the left button or F: the button reached, F did not.
+	reach.reach[FIRE].buttons = true;
+	frame();
+
+	set(KB::F, true);
+	frame();
+	BOOST_TEST(!state.held(FIRE));
+
+	reach.reach[FIRE].keys.set(static_cast<std::size_t>(KB::F));
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
+
+	// F is taken again but the button is down and reached: still held, no edge.
+	set(MB::LEFT, true);
+	reach.reach[FIRE].keys.reset();
+	frame();
+	BOOST_TEST(state.held(FIRE));
+	BOOST_TEST(edge_free(FIRE));
+
+	set(MB::LEFT, false);
+	frame();
+	BOOST_TEST(state.released(FIRE));
+}
+
+BOOST_AUTO_TEST_CASE(WithReach_AnActionOutsideTheVectorIsNeverDown)
+{
+	use_reach = true;
+	reach.reach.assign(1, inp::action_reach{});
+	frame();
+	set(MB::LEFT, true);
+	frame();
+	frame();
+	BOOST_TEST(!state.held(FIRE));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

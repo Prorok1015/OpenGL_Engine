@@ -24,6 +24,22 @@ namespace
 		}
 		return false;
 	}
+
+	// A binding counts when it is down and reached a layer of the world that declares the action.
+	bool reached_down(const inp::action& action, const inp::input_state& state, const inp::action_reach& reach)
+	{
+		for (const auto& binding : action.bindings) {
+			const bool reached = std::visit([&reach](auto button) {
+				if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+					return reach.keys.test(static_cast<std::size_t>(button));
+				} else {
+					return reach.buttons;
+				}
+			}, binding);
+			if (reached && binding_down(binding, state)) return true;
+		}
+		return false;
+	}
 }
 
 const inp::action_state::slot* inp::action_state::at(action_id id) const
@@ -70,7 +86,7 @@ bool inp::action_state::released(std::string_view name) const
 }
 
 void inp::action_state::update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-	ecs::event_writer<action_event>* events, fixed_action_state* fixed)
+	ecs::event_writer<action_event>* events, fixed_action_state* fixed, const action_input* reached)
 {
 	const auto emit = [events, fixed](action_id id, action_edge edge) {
 		if (events && events->bound()) events->emit(action_event{ id, edge });
@@ -97,7 +113,14 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		s.released = false;
 		if (!bound.bound && bound.frozen) continue;
 
-		const bool down = bound.bound && action_down(list[id], state);
+		bool down = false;
+		if (bound.bound) {
+			if (reached && !reached->reach.empty()) {
+				down = id < reached->reach.size() && reached_down(list[id], state, reached->reach[id]);
+			} else {
+				down = action_down(list[id], state);
+			}
+		}
 		if (fresh) {
 			s.armed = bound.bound && !down;
 			continue;
@@ -209,7 +232,7 @@ void inp::fixed_action_state::set_held(action_id id, bool held)
 }
 
 void inp::update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-	const input_bound& bound, const action_map_ref& actions, action_state& out, fixed_action_state& fixed)
+	const input_bound& bound, const action_map_ref& actions, const action_input& reached, action_state& out, fixed_action_state& fixed)
 {
-	out.update(actions, state, bound, &events, &fixed);
+	out.update(actions, state, bound, &events, &fixed, &reached);
 }

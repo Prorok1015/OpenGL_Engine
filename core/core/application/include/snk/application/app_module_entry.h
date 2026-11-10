@@ -25,7 +25,11 @@
 // 3.4 (#600): gs::module_context::observe (component observers the hot reload in Play mutes). The mute depth is appended
 // to the private, heap-held state of scn::event_subscriptions, so no layout a module reads changes; a module that uses
 // observe needs an engine of 3.4 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'0004u // major << 16 | minor
+// 3.5 (#624): inp::action_input, a new ctx type (what of an action reached the layers of a world that declare it).
+// Nothing that exists changes layout: stack_layer_desc is the same, inp::world_input is the engine's own result of
+// inp::resolve. inp::update_actions_system and action_state::update changed signature again (the engine's, a module
+// never calls them).
+#define SNK_MODULE_API_VERSION 0x0003'0005u // major << 16 | minor
 
 #if defined(_WIN32)
 #define SNK_MODULE_EXPORT __declspec(dllexport)

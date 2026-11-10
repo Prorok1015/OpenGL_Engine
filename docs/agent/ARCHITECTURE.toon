@@ -110,8 +110,9 @@ world_bus: events inside one world (ecs_bus.hpp, docs/roadmap/design/WORLD_BUS.m
         event_subscriptions::mute_observers() (restore in Play); never registry.on_construct<T>() directly in a module.
         A subscriber's emit goes to the next delivery, its changer()/spawner() edits land right after the delivery.
 game_actions: res/input/actions.desc (manifest input_actions) -> gs::input_actions (watch, rebuild) -> gs::route_input
-        writes inp::input_bound and inp::action_map_ref into each world (map only for the first world of a set by desc_index
-        that lists inp::update_actions, bound or not, until #624). System "inp::update_actions" (listed in the world's systems after inp::update_input_state)
+        writes inp::input_bound, inp::action_map_ref and inp::action_input into each world (#624: a layer declares actions and takes their keys, the world
+        gets an action when a binding reached a layer that declares it; the map goes to worlds that list inp::update_actions and declare
+        actions in the level's input_stack, else to the first world of the set by desc_index that lists it, whose base layer declares all, bound or not). System "inp::update_actions" (listed in the world's systems after inp::update_input_state)
         keeps inp::action_state (held/pressed/released, armed rule) and emits inp::action_event on the world's bus.
         fixed_update systems read inp::fixed_action_state: edges queue (<=8, pairs dropped) and each fixed step
         (world_context::write_fixed_time -> begin_step) takes one; held = the frame's level.
