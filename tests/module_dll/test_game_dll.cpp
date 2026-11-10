@@ -189,7 +189,8 @@ SNK_MODULE_EXPORT const struct snk_module_build_info* snk_module_build_info()
 }
 SNK_MODULE_EXPORT ::app::modules::module_interface* snk_create_module() { return new test_game_dll_module(); }
 SNK_MODULE_EXPORT void snk_destroy_module(::app::modules::module_interface* module) { delete module; }
-SNK_MODULE_EXPORT std::uint64_t snk_module_layout_key() { return SNK_DETAIL_MODULE_LAYOUT_KEY; }
+// Another layout too: the host reports the api, which says what to change, not the layout (#614).
+SNK_MODULE_EXPORT std::uint64_t snk_module_layout_key() { return ::gs::module_layout_key() ^ 1u; }
 }
 #else
 SNK_DECLARE_MODULE(test_game_dll_module)

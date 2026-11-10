@@ -533,13 +533,37 @@ BOOST_AUTO_TEST_CASE(a_reload_to_a_build_against_other_layouts_is_refused_and_th
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 
 	project.rebuild(g_bad_layout_path);
-	const auto report = host.reload(std::string{ dll_game::module_name });
+	int hooks_called = 0;
+	core::reload_hooks hooks;
+	hooks.before_swap = [&] { ++hooks_called; };
+	hooks.after_swap = [&](const core::reload_report&) { ++hooks_called; };
+	const auto report = host.reload(std::string{ dll_game::module_name }, hooks);
 
 	BOOST_TEST((report.status == core::reload_status::refused));
 	BOOST_CHECK_MESSAGE(report.message.find("rebuild the project") != std::string::npos, report.message);
+	BOOST_TEST(hooks_called == 0); // refused before the running module was touched
 	BOOST_TEST(resident(project.copy(0)));
 	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
 	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// A build that is refused for its api and has another layout too is reported for the api: the version check comes first.
+BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_reported_for_its_api_even_with_another_layout)
+{
+	dll_project project("dll_layout_api", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, checked_layouts());
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	project.rebuild(g_bad_api_path);
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("api major") != std::string::npos, report.message);
+	BOOST_CHECK_MESSAGE(report.message.find("layout") == std::string::npos, report.message);
+	BOOST_TEST(resident(project.copy(0)));
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();
 }

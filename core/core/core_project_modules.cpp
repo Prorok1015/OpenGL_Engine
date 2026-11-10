@@ -256,6 +256,11 @@ namespace {
 			return source;
 		}
 		return std::make_unique<checked_module_source>(std::move(source), [layout_key](const app::modules::module_entry& entry) {
+			// The version, the compiler and the flags first: prepare reports their own message (debug/release, another
+			// major), which says what to change; a layout message would only say "rebuild".
+			if (!app::modules::check_module_entry(entry).empty()) {
+				return std::string{};
+			}
 			return app::modules::check_module_layout(entry, layout_key);
 		});
 	}

@@ -215,7 +215,9 @@ BOOST_AUTO_TEST_CASE(TheLayoutKeyIsMinor3_6_AndAModuleBuiltFor3_5WithoutItStillL
 	BOOST_TEST(app::modules::check_module_layout(entry, 0x1234u).empty());
 }
 
-// Without snk/game/gs_module_layout.h the generated export reports 0, which no host checks.
+// Without snk/game/gs_module_layout.h the generated export reports 0, which no host checks. This TU does not include it,
+// and neither does the shared PCH (cmake/pch/snk_pch.h: standard and third-party headers only); if either did, the
+// export would report the engine's key and this test would fail.
 BOOST_AUTO_TEST_CASE(AModuleThatDoesNotKnowTheLayoutsReportsZeroAndIsNotChecked)
 {
 	const module_entry entry = generated_entry();
