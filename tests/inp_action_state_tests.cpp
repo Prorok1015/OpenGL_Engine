@@ -351,7 +351,15 @@ BOOST_AUTO_TEST_CASE(WithReach_AnActionIsDownOnlyThroughABindingThatReachedALaye
 	frame();
 	BOOST_TEST(!state.held(JUMP));
 
+	// The key reaches a layer while it is still held: it was taken when it went down, so no press.
 	reach.reach[JUMP].keys.set(static_cast<std::size_t>(KB::SPACE));
+	frame();
+	BOOST_TEST(edge_free(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+
+	set(KB::SPACE, false);
+	frame();
+	set(KB::SPACE, true);
 	frame();
 	BOOST_TEST(state.pressed(JUMP));
 
@@ -367,28 +375,25 @@ BOOST_AUTO_TEST_CASE(WithReach_TheOtherBindingKeepsAHalfTakenActionHeld)
 {
 	use_reach = true;
 	reach.reach.assign(2, inp::action_reach{});
-	// Fire is the left button or F: the button reached, F did not.
-	reach.reach[FIRE].buttons = true;
+	// Fire is the left button or F: F reached, the button did not.
+	reach.reach[FIRE].keys.set(static_cast<std::size_t>(KB::F));
 	frame();
 
 	set(KB::F, true);
 	frame();
-	BOOST_TEST(!state.held(FIRE));
-
-	reach.reach[FIRE].keys.set(static_cast<std::size_t>(KB::F));
-	frame();
 	BOOST_TEST(state.pressed(FIRE));
 
-	// F is taken again but the button is down and reached: still held, no edge.
+	// The button goes down but is taken: F still holds the action, no edge.
 	set(MB::LEFT, true);
-	reach.reach[FIRE].keys.reset();
 	frame();
 	BOOST_TEST(state.held(FIRE));
 	BOOST_TEST(edge_free(FIRE));
 
-	set(MB::LEFT, false);
+	// F is let go: the button is down and taken, so the action goes.
+	set(KB::F, false);
 	frame();
 	BOOST_TEST(state.released(FIRE));
+	BOOST_TEST(!state.held(FIRE));
 }
 
 BOOST_AUTO_TEST_CASE(WithReach_AKeyHeldWhileTheActionDidNotReach_IsNoPressWhenItReachesAgain)
@@ -412,6 +417,33 @@ BOOST_AUTO_TEST_CASE(WithReach_AKeyHeldWhileTheActionDidNotReach_IsNoPressWhenIt
 	// Let go, then pressed again: a press.
 	set(KB::SPACE, false);
 	frame();
+	set(KB::SPACE, true);
+	frame();
+	BOOST_TEST(state.pressed(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(WithReach_TheCursorOverAnotherWorldWithoutAButton_DoesNotDisarmTheClickOfTheNextFrame)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	frame();
+	// The cursor is over the HUD of another world: Fire does not reach, no button is down.
+	frame();
+	frame();
+	// The cursor leaves and the click lands in the same frame.
+	reach.reach[FIRE].buttons = true;
+	set(MB::LEFT, true);
+	frame();
+	BOOST_TEST(state.pressed(FIRE));
+}
+
+BOOST_AUTO_TEST_CASE(WithReach_AKeyPressedInTheFrameTheModalLayerCloses_IsAPress)
+{
+	use_reach = true;
+	reach.reach.assign(2, inp::action_reach{});
+	frame();
+	frame();
+	reach.reach[JUMP].keys.set(static_cast<std::size_t>(KB::SPACE));
 	set(KB::SPACE, true);
 	frame();
 	BOOST_TEST(state.pressed(JUMP));
