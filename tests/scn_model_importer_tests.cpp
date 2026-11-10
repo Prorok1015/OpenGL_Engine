@@ -4,6 +4,11 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
+#include <format>
+#include <initializer_list>
+#include <optional>
+#include <string>
+#include <utility>
 
 // scn::model_importer_adapter: Assimp -> prefab_desc conversion, driven by tiny in-memory models.
 
@@ -99,6 +104,47 @@ struct importer_fixture : test_util::scene_env
 		json::object o;
 		d.serialize(o);
 		return o;
+	}
+
+	static const json::object* first_mesh_node(const json::object& node)
+	{
+		if (const auto* components = node.if_contains("components"); components && components->is_object()) {
+			if (const auto* mesh = components->as_object().if_contains("mesh_node_desc")) {
+				return &mesh->as_object();
+			}
+		}
+		if (const auto* children = node.if_contains("children"); children && children->is_array()) {
+			for (const auto& child : children->as_array()) {
+				if (const auto* found = first_mesh_node(child.as_object())) {
+					return found;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	// Imports, as memory://models/<folder>/tex.obj, a triangle whose .mtl gives `reference` as its diffuse map: the tag
+	// its texture desc loads, if it got one. A folder per call: the texture descs are named after the model's folder.
+	std::optional<std::string> imported_diffuse_data(const std::string& folder, const std::string& reference)
+	{
+		rs->store(res::tag{ "memory://models/" + folder + "/tex.mtl" }, test_util::to_bytes("newmtl skin\nKd 1 1 1\nmap_Kd " + reference + "\n"));
+		const std::string obj = "mtllib tex.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0.5 1\nvn 0 0 1\no Tri\nusemtl skin\nf 1/1/1 2/2/1 3/3/1\n";
+		const auto prefab = import((folder + "/tex.obj").c_str(), obj.c_str());
+		BOOST_REQUIRE(prefab);
+		const auto out = serialized(*prefab);
+		const json::object* mesh = first_mesh_node(out);
+		BOOST_REQUIRE(mesh);
+		const auto& material = mesh->at("material").as_object();
+		BOOST_TEST_MESSAGE(json::serialize(material));
+		BOOST_REQUIRE(material.at("name").as_string() == "skin");
+		const auto* samplers = material.if_contains("samplers");
+		if (!samplers) {
+			return std::nullopt;
+		}
+		const auto it = ram->files.find(res::tag{ std::string_view{ samplers->at(0).as_string() } });
+		BOOST_REQUIRE(it != ram->files.end());
+		const auto texture = json::parse(std::string_view(reinterpret_cast<const char*>(it->second.data()), it->second.size())).as_object();
+		return std::string(texture.at("data").as_string());
 	}
 
 };
@@ -242,6 +288,33 @@ BOOST_AUTO_TEST_CASE(Obj_SameNamedMeshesUnderOneNodeGetUniqueChildren)
 BOOST_AUTO_TEST_CASE(Garbage_DataYieldsNoPrefab)
 {
 	BOOST_TEST(!import("broken.gltf", "this is not a model"));
+}
+
+// #631: a model names its files relative to itself; they are read in its folder and protocol, never above the root.
+BOOST_AUTO_TEST_CASE(Obj_ATextureWrittenRelativeToTheModel_IsReadInTheModelsFolder)
+{
+	int index = 0;
+	for (const auto& [reference, expected] : std::initializer_list<std::pair<const char*, const char*>>{
+		{ "textures/a.png", "memory://models/c0/textures/a.png" },
+		{ "textures\\a.png", "memory://models/c1/textures/a.png" },
+		{ "./textures/../a.png", "memory://models/c2/a.png" },
+		{ "../shared/a.png", "memory://models/shared/a.png" } }) {
+		BOOST_TEST_CONTEXT(reference) {
+			const std::optional<std::string> data = imported_diffuse_data(std::format("c{}", index++), reference);
+			BOOST_REQUIRE(data.has_value());
+			BOOST_TEST(*data == expected);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Obj_ATextureAboveTheProtocolsRootOrAbsolute_IsNotLoaded)
+{
+	int index = 0;
+	for (const char* reference : { "../../../a.png", "../../../../etc/passwd.png", "/etc/a.png", "C:/a.png", "C:\\a.png" }) {
+		BOOST_TEST_CONTEXT(reference) {
+			BOOST_TEST(!imported_diffuse_data(std::format("r{}", index++), reference).has_value());
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

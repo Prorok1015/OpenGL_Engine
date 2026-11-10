@@ -1,6 +1,10 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/resource/res_model_reference.h>
 #include <snk/resource/res_tag.h>
+#include <optional>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 
 BOOST_AUTO_TEST_SUITE(ResTagTests)
 
@@ -97,6 +101,102 @@ BOOST_AUTO_TEST_CASE(MoveConstructor) {
 	res::tag moved(std::move(t));
 	BOOST_CHECK_EQUAL(moved.get_hash(), hash);
 	BOOST_TEST(moved.is_valid());
+}
+
+namespace {
+	struct parsed_tag
+	{
+		std::string_view text;
+		std::string_view string;
+		std::string_view protocol;
+		std::string_view relative;
+		std::string_view path;
+		std::string_view name;
+	};
+}
+
+// #631: the protocol is the scheme before the only "://" of the text, nothing else; a text without one keeps all of it.
+BOOST_AUTO_TEST_CASE(Protocol_IsOnlyTheSchemeBeforeTheOnlySeparator) {
+	const parsed_tag table[] = {
+		{ "res://a/b.png", "res://a/b.png", "res", "a/b.png", "a/", "b.png" },
+		{ "materials/a.mat.desc", "materials/a.mat.desc", "", "materials/a.mat.desc", "materials/", "a.mat.desc" },
+		{ "user/xsecret.desc", "user/xsecret.desc", "", "user/xsecret.desc", "user/", "xsecret.desc" },
+		{ "user/xa.png", "user/xa.png", "", "user/xa.png", "user/", "xa.png" },
+		{ "a.png", "a.png", "", "a.png", "", "a.png" },
+		{ "res://a/b:c.png", "res://a/b:c.png", "res", "a/b:c.png", "a/", "b:c.png" },
+		{ "user:/xa.png", "user:/xa.png", "", "user:/xa.png", "user:/", "xa.png" },
+		{ "C:/x.frag", "C:/x.frag", "", "C:/x.frag", "C:/", "x.frag" },
+		{ "C:\\x.frag", "C:/x.frag", "", "C:/x.frag", "C:/", "x.frag" },
+		{ "c:\\\\path", "c://path", "c", "path", "", "path" },
+		{ "\\\\", "//", "", "//", "//", "" },
+		{ "res:\\\\a\\b.png", "res://a/b.png", "res", "a/b.png", "a/", "b.png" },
+		{ "res:/a.png", "res:/a.png", "", "res:/a.png", "res:/", "a.png" },
+		{ "res://res://a.png", "res://res://a.png", "", "res://res://a.png", "res://res://", "a.png" },
+		{ "res://user://a.png", "res://user://a.png", "", "res://user://a.png", "res://user://", "a.png" },
+		{ "a:b://x", "a:b://x", "", "a:b://x", "a:b://", "x" },
+		{ "a/b://x", "a/b://x", "", "a/b://x", "a/b://", "x" },
+		{ "x-y.z+1_://a", "x-y.z+1_://a", "x-y.z+1_", "a", "", "a" },
+		{ "1x://a", "1x://a", "", "1x://a", "1x://", "a" },
+		{ "RES://a.png", "RES://a.png", "RES", "a.png", "", "a.png" },
+		{ "", "", "", "", "", "" },
+		{ "://a.png", "://a.png", "", "://a.png", "://", "a.png" },
+		{ "res://", "res://", "res", "", "", "" },
+		{ "res://a/", "res://a/", "res", "a/", "a/", "" },
+		{ "res:///abs", "res:///abs", "res", "/abs", "/", "abs" },
+	};
+	for (const parsed_tag& row : table) {
+		BOOST_TEST_CONTEXT(row.text) {
+			const res::tag t{ row.text };
+			BOOST_TEST(t.string() == row.string);
+			BOOST_TEST(t.protocol() == row.protocol);
+			BOOST_TEST(res::tag::protocol_of(t.view()) == row.protocol);
+			BOOST_TEST(t.relative() == row.relative);
+			BOOST_TEST(t.path() == row.path);
+			BOOST_TEST(t.name() == row.name);
+			BOOST_TEST(t.is_valid() == !row.text.empty());
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ProtocolOf_IsAConstantExpression) {
+	static_assert(res::tag::protocol_of("res://a.png") == "res");
+	static_assert(res::tag::protocol_of("user/a.png").empty());
+	static_assert(res::tag::protocol_of("a:b://c").empty());
+	BOOST_TEST(true);
+}
+
+BOOST_AUTO_TEST_CASE(NoProtocolReason_SaysHowToWriteTheTag) {
+	BOOST_TEST(res::no_protocol_reason(res::tag{ "materials/a.mat.desc" })
+		== "'materials/a.mat.desc' has no protocol: write res://materials/a.mat.desc");
+}
+
+// #631: what a model refers to is read next to it, in its protocol, and never above that protocol's root.
+BOOST_AUTO_TEST_CASE(ModelReference_IsReadInTheModelsFolderAndProtocol) {
+	const res::tag model{ "memory://models/m/tex.obj" };
+	const std::pair<std::string_view, std::string_view> resolved[] = {
+		{ "textures/a.png", "memory://models/m/textures/a.png" },
+		{ "textures\\a.png", "memory://models/m/textures/a.png" },
+		{ "a//b/./c.png", "memory://models/m/a/b/c.png" },
+		{ "user/a.png", "memory://models/m/user/a.png" },
+		{ "../a.png", "memory://models/a.png" },
+		{ "../../a.png", "memory://a.png" },
+		{ "memory://models/m/tex.mtl", "memory://models/m/tex.mtl" },
+		{ "memory://models/m/../n/x.bin", "memory://models/n/x.bin" },
+	};
+	for (const auto& [reference, expected] : resolved) {
+		BOOST_TEST_CONTEXT(reference) {
+			const std::optional<res::tag> found = res::model_reference_tag(model, reference);
+			BOOST_REQUIRE(found.has_value());
+			BOOST_TEST(found->view() == expected);
+		}
+	}
+	for (const std::string_view reference : { "../../../a.png", "memory://../x.png", "memory://models/../../x", "res://a.png",
+		"user://a.png", "/abs.png", "C:/a.png", "c:\\a.png", "a:b://c", "", "a\x01.png" }) {
+		BOOST_TEST_CONTEXT(reference) {
+			BOOST_TEST(!res::model_reference_tag(model, reference).has_value());
+		}
+	}
+	BOOST_TEST(!res::model_reference_tag(res::tag{ "models/m.obj" }, "a.png").has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

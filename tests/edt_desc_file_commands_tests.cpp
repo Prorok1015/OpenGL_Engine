@@ -3,6 +3,7 @@
 #include "test_temp_dir.hpp"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
+#include "edt_tag_text.h"
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
@@ -13,6 +14,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // desc.read / desc.create / desc.write (#550): the paths, the schema check before a byte is written, the version
@@ -548,6 +550,41 @@ BOOST_AUTO_TEST_CASE(AnAgentsChange_IsAnnounced)
 	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
 	BOOST_TEST(actions[0].command == "desc.create");
 	BOOST_TEST(actions[0].target == "materials/e.mat.desc");
+}
+
+// #631: the checks read a protocol exactly as res::tag does (one rule, res::tag::protocol_of), and a text res::tag gives
+// any protocol is refused unless it is a good res:// tag: as a __parent and as a plain string.
+BOOST_AUTO_TEST_CASE(TheChecksReadTheProtocolAsResTagDoes_AndRefuseEveryTextWithAnotherOne)
+{
+	const auto errors_of = [&](const json::value& content) {
+		std::size_t errors = 0;
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, content, "res://materials/t.mat.desc")) {
+			if (item.severity == res::diagnostic_severity::error) ++errors;
+		}
+		return errors;
+	};
+	constexpr std::string_view good = "res://materials/ok.mat.desc";
+	for (const std::string_view text : { "a:b://x", "://x", "res://", "res:///abs", "RES://a.png", "\\\\", "c:\\\\path",
+		"user/xsecret.desc", "user:/xa.png", "user\\xa.png", "res://res://a.png", "res://user://a.png", "x-y://a",
+		"materials/a.mat.desc", "res:/a.png", "res/a.png", good }) {
+		BOOST_TEST_CONTEXT(text) {
+			const res::tag tag{ text };
+			BOOST_TEST(edt::tag_protocol(edt::tag_text_normalized(text)) == tag.protocol());
+			const json::object as_parent{ { "__type", "material_desc" }, { "__parent", text } };
+			const json::object as_text{ { "__type", "material_desc" }, { "defines", json::array{ json::string(text) } } };
+			if (text == good) {
+				BOOST_TEST(errors_of(as_parent) == 0u);
+				BOOST_TEST(errors_of(as_text) == 0u);
+			} else {
+				BOOST_TEST(errors_of(as_parent) > 0u);
+				if (!tag.protocol().empty()) {
+					BOOST_TEST(errors_of(as_text) > 0u);
+				}
+			}
+		}
+	}
+	const json::object plain{ { "__type", "material_desc" }, { "defines", json::array{ "materials/a.mat.desc" } } };
+	BOOST_TEST(errors_of(plain) == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

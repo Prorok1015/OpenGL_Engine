@@ -33,22 +33,52 @@ namespace res
 			return tag{ default_protocol(), path };
 		}
 
+		// The protocol of a tag text whose backslashes are already slashes: the scheme before its only "://", where the
+		// scheme is [A-Za-z][A-Za-z0-9+._-]*. Anything else has none (#631): "user/x.png", "user:/x.png", "a:b://x",
+		// "res://res://x". A tag without a protocol keeps its text, and no resolver serves it.
+		static constexpr std::string_view protocol_of(const std::string_view normalized) noexcept
+		{
+			constexpr std::string_view separator = "://";
+			const std::size_t end = normalized.find(separator);
+			if (end == std::string_view::npos || end == 0) {
+				return {};
+			}
+			if (normalized.find(separator, end + separator.size()) != std::string_view::npos) {
+				return {};
+			}
+			const std::string_view scheme = normalized.substr(0, end);
+			if (!is_ascii_letter(scheme.front())) {
+				return {};
+			}
+			for (const char c : scheme) {
+				const bool allowed = is_ascii_letter(c) || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-' || c == '_';
+				if (!allowed) {
+					return {};
+				}
+			}
+			return scheme;
+		}
+
 	public:
 		explicit tag(const std::string_view tag_path)
 			: full_(tag_path)
 		{
 			std::ranges::replace(full_, '\\', '/');
-			protocol_ = { 0, static_cast<int>(full_.find_first_of("://")) };
-			const std::size_t name_start_idx = full_.find_last_of("/\\");
-			const std::size_t path_start_idx = full_.find_first_of("/\\") + 1;
-			path_ = { static_cast<int>(path_start_idx + 1), static_cast<int>(name_start_idx - path_start_idx) };
-			name_ = { static_cast<int>(name_start_idx + 1), static_cast<int>(full_.length() - name_start_idx - 1) };
+			const std::string_view text = full_;
+			const std::size_t protocol_length = protocol_of(text).size();
+			const std::size_t relative_start = protocol_length == 0 ? 0 : protocol_length + 3;
+			const std::size_t last_slash = text.find_last_of('/');
+			const std::size_t name_start = last_slash == std::string_view::npos || last_slash < relative_start ? relative_start : last_slash + 1;
+			protocol_ = { 0, static_cast<int>(protocol_length) };
+			path_ = { static_cast<int>(relative_start), static_cast<int>(name_start - relative_start) };
+			name_ = { static_cast<int>(name_start), static_cast<int>(text.size() - name_start) };
 		}
 
 		explicit tag(const std::string_view pref, const std::string_view path) 
 			: tag(std::vformat("{0}://{1}", std::make_format_args(pref, path)))
 		{
 			ASSERT_MSG(path.find("://") == std::string_view::npos, "Path already has protocol!");
+			ASSERT_MSG(pref.empty() || protocol() == pref, "'{}' is not a protocol name", pref);
 		}
 
 		constexpr tag() noexcept = default;
@@ -77,6 +107,8 @@ namespace res
 		friend SNK_API res::tag operator+ (const res::tag& a, const res::tag& b);
 
 	private:
+		static constexpr bool is_ascii_letter(const char c) noexcept { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+
 		// {offset, length} spans into full_ (was glm::ivec2; POD-ified to drop the glm include).
 		struct span { int x = 0; int y = 0; };
 		std::string full_;
@@ -87,6 +119,12 @@ namespace res
 
 	// Namespace-scope declaration: the friend declaration above cannot carry the export attribute.
 	SNK_API res::tag operator+ (const res::tag& a, const res::tag& b);
+
+	// Why a tag without a protocol names nothing, and how to write it (#631).
+	inline std::string no_protocol_reason(const tag& t)
+	{
+		return std::format("'{}' has no protocol: write {}://{}", t.view(), tag::default_protocol(), t.view());
+	}
 
 	inline std::ostream& operator<<(std::ostream& os, const tag& t) {
 		return os << t.string();

@@ -9,6 +9,7 @@
 
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/resource/res_model_reference.h>
 #include <snk/resource/res_path_sanitize.h>
 
 #include <snk/scene/scn_glm_json_convert.h>
@@ -178,7 +179,13 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			desc["__type"] = "texture_2d_desc";
 			desc["__parent"] = "res://base_texture.desc";
 			desc["name"] = texture_name;
-			desc["data"] = json::value_from(tag + res::tag::make(data_name));
+			const std::optional<res::tag> data_tag = res::model_reference_tag(tag, data_name);
+			if (!data_tag) {
+				egLOG_WARN("loader", "model '{}': texture '{}' is absolute, in another protocol or above its root: not loaded",
+					tag.view(), texture_name);
+				return {};
+			}
+			desc["data"] = json::value_from(*data_tag);
 
 			std::string data = json::serialize(desc);
 			std::vector<std::byte> desc_data(data.size());

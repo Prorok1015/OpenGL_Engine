@@ -49,6 +49,10 @@ namespace edt::schema_ui
 	// "m_near_distance" -> "Near distance"
 	std::string display_label(const desc::field_schema& field);
 
+	// Why the text of a tag field names nothing (#631): it has no protocol ("materials/a.mat.desc"). Empty for an empty
+	// text and for a text with a protocol, mounted or not.
+	std::string tag_text_problem(std::string_view text);
+
 	// A value of `kind` that is "nothing yet" (0, "", [0,0,0], first enum item, ...); null for custom and entity.
 	boost::json::value zero_value(const desc::field_schema& field, const desc::schema_registry& registry);
 
