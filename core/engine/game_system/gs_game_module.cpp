@@ -7,6 +7,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <format>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 
@@ -149,6 +150,20 @@ gs::input_stack_handle gs::module_context::input_stack(std::string_view set) con
 	}
 	return input_stack_handle{ m_input, std::string{ set } };
 }
+
+gs::input_stack_handle::input_stack_handle(inp::input_router* router, std::string set) : m_router(router), m_set(std::move(set)) {}
+
+gs::input_stack_handle::input_stack_handle(input_stack_handle&& other) noexcept
+	: m_router(std::exchange(other.m_router, nullptr)), m_set(std::move(other.m_set)) {}
+
+gs::input_stack_handle& gs::input_stack_handle::operator=(input_stack_handle&& other) noexcept
+{
+	m_router = std::exchange(other.m_router, nullptr);
+	m_set = std::move(other.m_set);
+	return *this;
+}
+
+gs::input_stack_handle::~input_stack_handle() = default;
 
 void gs::input_stack_handle::send(inp::stack_command command)
 {

@@ -73,8 +73,15 @@ namespace gs
 	class SNK_API input_stack_handle
 	{
 	public:
+		// Made by the engine and handed to the module by value; the code that makes, moves and destroys it is the engine's
+		// (exported), so the set name is never freed by a heap the engine did not allocate it from.
 		input_stack_handle() = default;
-		input_stack_handle(inp::input_router* router, std::string set) : m_router(router), m_set(std::move(set)) {}
+		input_stack_handle(inp::input_router* router, std::string set);
+		input_stack_handle(input_stack_handle&& other) noexcept;
+		input_stack_handle& operator=(input_stack_handle&& other) noexcept;
+		input_stack_handle(const input_stack_handle&) = delete;
+		input_stack_handle& operator=(const input_stack_handle&) = delete;
+		~input_stack_handle();
 		explicit operator bool() const { return m_router != nullptr; }
 
 		// A layer of `world`; one of the module with the same name is replaced, so a repeated setup makes no second layer.
