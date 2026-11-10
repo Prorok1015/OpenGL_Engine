@@ -79,6 +79,10 @@ done
 if ls "${root}/bin" | grep -Ei '^(vcruntime|msvcp|concrt|vccorlib)[0-9_]*d\.dll$'; then
 	echo "::error::the debug MSVC runtime is not redistributable"; status=1
 fi
+# The decoder's test build has flags that sleep, allocate and start copies of itself: it is for the unit tests only.
+if find "${root}" -iname 'snk_model_decoder_selftest*' | grep -q .; then
+	echo "::error::the package holds the decoder's self-test build (snk_model_decoder_selftest)"; status=1
+fi
 ls -l "${root}/bin"
 
 # ---- 3. dependencies ----
