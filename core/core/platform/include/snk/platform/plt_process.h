@@ -50,6 +50,10 @@ namespace platform
 		// Below normal priority (Windows) / nice 10 for the child's process group (POSIX), so a background build
 		// leaves the machine usable. Failing to lower it is not an error.
 		bool low_priority = false;
+		// Windows: the most memory the child may commit (a job limit; a child that goes over fails its allocation).
+		// POSIX: not applied here (posix_spawn has no hook between fork and exec); the child limits itself, as
+		// snk_model_decoder does with RLIMIT_AS. Zero: no limit.
+		std::uint64_t memory_limit_bytes = 0;
 		// Set: the child's stderr gets a pipe of its own, and its lines (split as stdout's are; raw_output does not
 		// apply) go here while stdout's still go to `on_line`. The two callbacks never run at the same time; on
 		// Windows this one runs on a helper thread. Null: stderr shares stdout's pipe.

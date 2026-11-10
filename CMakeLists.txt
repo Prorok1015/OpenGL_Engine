@@ -156,6 +156,7 @@ add_subdirectory(Editor)
 # The shipping host `game` (#591): static engine only, the counterpart of the editor's shared-only executable.
 add_subdirectory(apps/game)
 add_subdirectory(tools/desc_resave)
+add_subdirectory(tools/model_decoder)
 snk_isolate_third_party_warnings()
 
 enable_testing()
@@ -191,6 +192,15 @@ if(MSVC)
 	target_compile_options(unit_tests PRIVATE /bigobj)
 endif()
 # desc_repo_roundtrip_tests loads the descs the repository ships.
+if(SNK_WITH_ASSIMP AND NOT TARGET snk_model_decoder)
+	message(FATAL_ERROR "snk_model_decoder is not configured: the decoder process tests would silently not run (#647)")
+endif()
+if(TARGET snk_model_decoder)
+	# The process tests (edt_decode_runner_tests) start the real decoder, and the test build of it for the self-test flags.
+	add_dependencies(unit_tests snk_model_decoder snk_model_decoder_selftest)
+	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>"
+		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
+endif()
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/projects/sandbox")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")

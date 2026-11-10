@@ -90,7 +90,7 @@ struct import_options {
 - [ ] Логика построения дерева (bone, keyframes, mesh, children) не дублируется
 
 ### US-34-3: Расширить импорт текстур — PBR карты
-**Файлы:** `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/scene/adapters/scn_assimp_helpers.h`
+**Файлы:** `Editor/code/model_import/edt_model_importer.cpp`, `core/engine/scene/adapters/scn_assimp_helpers.h`
 **Зависимости:** US-34-1
 
 Добавить импорт текстурных типов, часто встречающихся в PBR-моделях (glTF, FBX).
@@ -122,7 +122,7 @@ struct import_options {
 - [ ] Работает для моделей со смешанными мешами (часть с UV, часть без)
 
 ### US-34-5: Import options + UI настроек импорта
-**Файлы:** `Editor/code/editor_system/import/edt_model_importer.h`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `Editor/code/editor_system/import/edt_import_options_dialog.h` (новый), `Editor/code/editor_system/import/edt_import_options_dialog.cpp` (новый)
+**Файлы:** `Editor/code/model_import/edt_model_importer.h`, `Editor/code/model_import/edt_model_importer.cpp`, `Editor/code/editor_system/import/edt_import_options_dialog.h` (новый), `Editor/code/editor_system/import/edt_import_options_dialog.cpp` (новый)
 
 Добавить структуру `import_options` и ImGui-диалог для настройки перед импортом.
 
@@ -149,7 +149,7 @@ struct import_options {
 - [ ] Flip UVs добавляет `aiProcess_FlipUVs` к флагам Assimp
 
 ### US-34-6: Импорт камер и источников света
-**Файлы:** `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/scene/adapters/scn_assimp_helpers.h`
+**Файлы:** `Editor/code/model_import/edt_model_importer.cpp`, `core/engine/scene/adapters/scn_assimp_helpers.h`
 **Зависимости:** US-34-5
 
 Assimp извлекает `aiCamera` и `aiLight`. Нужно генерировать соответствующие `camera_desc` и `directional_light_desc` компоненты в префабе.

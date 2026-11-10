@@ -9,6 +9,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/editor/editor_module.h>
+#include <edt_decode_runner.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
 #include <string>
@@ -107,6 +108,12 @@ int main(int argc, char* argv[])
 		project_host.load_all();
 		// After `game`: a game_editor registers into the editor on top of it (#588).
 		project_host.load_editor_modules();
+		// The run folders of model decoders whose editor crashed (#647).
+		try {
+			edt::decode_runner::remove_stale_folders();
+		} catch (const std::exception& e) {
+			egLOG_WARN("app", "cleanup of the folders of ended model decoders failed: {}", e.what());
+		}
 
 		app::application editor;
 		result = editor.run(app_storage);
