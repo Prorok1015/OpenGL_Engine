@@ -471,7 +471,7 @@ BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSameResourcesAsOneInTheP
 	std::vector<std::pair<std::string, std::size_t>> process_blobs;
 	for (const res::tag& tag : through_process.created_tags) {
 		const auto block = rs->fetch_data(tag);
-		BOOST_REQUIRE_MESSAGE(block.has_value(), std::string(tag.view()));
+		BOOST_REQUIRE_MESSAGE(block != nullptr, std::string(tag.view()));
 		process_blobs.emplace_back(std::string(tag.view()), block->get().size());
 		rs->erase(tag);
 	}
@@ -484,7 +484,7 @@ BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSameResourcesAsOneInTheP
 	std::vector<std::pair<std::string, std::size_t>> own_blobs;
 	for (const res::tag& tag : in_process.created_tags) {
 		const auto block = rs->fetch_data(tag);
-		BOOST_REQUIRE(block.has_value());
+		BOOST_REQUIRE(block != nullptr);
 		own_blobs.emplace_back(std::string(tag.view()), block->get().size());
 	}
 	std::sort(process_blobs.begin(), process_blobs.end());
