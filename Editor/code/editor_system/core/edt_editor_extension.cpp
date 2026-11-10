@@ -45,6 +45,11 @@ void edt::editor_module_context::add_asset_kind(asset_kind_desc desc)
 	m_scope.keep(m_editor.asset_kinds().add(std::move(desc)));
 }
 
+void edt::editor_module_context::add_asset_preview(asset_preview_desc desc)
+{
+	m_scope.keep(m_editor.asset_kinds().add_preview(std::move(desc)));
+}
+
 edt::editor_extension::editor_extension() = default;
 
 edt::editor_extension::~editor_extension()

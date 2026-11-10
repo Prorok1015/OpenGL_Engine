@@ -183,6 +183,7 @@ jobs:
           if grep -q "watching files under" "$log"; then echo "::error::a file watcher started"; exit 1; fi
           if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
+          if grep -F "are still referenced:" "$log"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
 
       # #591: the host links no editor, MCP or git code and does not load snk_engine (it is the static engine).
       - name: Game host dependency check
@@ -213,6 +214,7 @@ jobs:
           if ! grep -q "level loaded: .*main.desc" "$log"; then echo "::error::the start level did not load"; exit 1; fi
           if ! grep -q "static game system ran" "$log"; then echo "::error::the module's system did not run"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the static game host log"; exit 1; fi
+          if grep -F "are still referenced:" "$log"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
           trap - EXIT
 
   # The shared engine (snk_engine, the default since #223) with the project template's game module built against the
@@ -708,6 +710,7 @@ jobs:
           grep -q "watching files under" "$err"
           grep -q "level '.*smoke_level.desc' watched for hot reload" "$err"
           if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless log"; exit 1; fi
+          if grep -F "are still referenced:" "$err"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
 
           rc=0
           env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$EDITOR_BIN" --config Editor/config/editor.cfg --headless \
@@ -797,6 +800,7 @@ jobs:
             echo "::error::the editor did not enter game mode"; tail -20 "$log"; exit 1
           fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game mode log"; exit 1; fi
+          if grep -F "are still referenced:" "$log"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
 
       # The same deterministic run, but the picture is taken inside the process: capture/on_settled makes the editor
       # run the command viewport.capture (rnd::driver::read_texture -> PNG) once the scene settled. It is the Scene

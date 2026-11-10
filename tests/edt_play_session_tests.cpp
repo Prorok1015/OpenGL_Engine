@@ -1,3 +1,4 @@
+#include "edt_prefab_preview_kinds.hpp"
 #include <boost/test/unit_test.hpp>
 #include "test_module_env.hpp"
 #include "null_engine_fixture.hpp"
@@ -272,7 +273,8 @@ struct play_fixture : test_util::module_env
 	edt::editor_services services;
 	edt::scene_document state;
 	edt::editor_events events;
-	edt::document_manager documents{ state, edt::prefab_preview(services), events };
+	edt::document_manager documents{ state, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
 	edt::selection_service selection{ events };
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };
@@ -1793,7 +1795,8 @@ struct engine_play_fixture : test_util::null_engine_fixture
 	edt::editor_services services;
 	edt::scene_document state;
 	edt::editor_events events;
-	edt::document_manager documents{ state, edt::prefab_preview(services), events };
+	edt::document_manager documents{ state, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
 	edt::selection_service selection{ events };
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };

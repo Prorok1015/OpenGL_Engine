@@ -326,7 +326,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_services.base_assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(m_res, m_rnd, m_gui, m_services,
-		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state, prefab_preview(m_services));
+		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
 	m_context->adopt(register_state_commands(m_context->actions().commands(), state_command_sources{
 		m_context->documents(), m_context->selection(), m_services, m_context->asset_kinds(),
 		[&res = m_res] { return res.get_resource_layers(); } }));
