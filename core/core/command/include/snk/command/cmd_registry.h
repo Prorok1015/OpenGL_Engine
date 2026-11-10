@@ -71,6 +71,11 @@ namespace cmd
 		//   that call, so a policy that turned to deny meanwhile wins.
 		void set_policy_gate(std::shared_ptr<policy_gate> gate);
 
+		// A rule on the arguments of every call from an agent, asked after the policy gate and before the schema:
+		// a result refuses the call, nullopt lets it go on. Unlike the gate, no policy lifts it (#681). null removes it.
+		using agent_argument_check = std::function<std::optional<result>(const command_desc& command, const call& request)>;
+		void set_agent_argument_check(agent_argument_check check);
+
 		// A person said yes to the ticket of a confirmation_required answer. False for a ticket that is unknown or
 		// has expired.
 		bool approve(std::string_view ticket);
@@ -127,6 +132,7 @@ namespace cmd
 		std::chrono::steady_clock::time_point now() const;
 
 		std::shared_ptr<policy_gate> m_gate;
+		agent_argument_check m_agent_argument_check;
 		std::function<std::chrono::steady_clock::time_point()> m_clock;
 		std::vector<confirmation_ticket> m_tickets;
 		std::vector<std::shared_ptr<entry>> m_commands;

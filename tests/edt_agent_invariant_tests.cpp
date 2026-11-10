@@ -797,6 +797,17 @@ BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNo
 		pump_frames();
 	}
 	BOOST_TEST(log.count() == 0u);
+
+	// A person's call is not checked: the person decides what the editor parses.
+	cmd::call by_person;
+	by_person.args = boost::json::parse(R"json({
+		"parent": { "context": "3d_scene", "path": [] }, "name": "sky",
+		"components": { "sky": { "type": "skybox_desc", "fields": { "material": "res://models/agent_named.glb" } } } })json");
+	by_person.from = cmd::origin::ui();
+	cmd::result made;
+	gui().run_without_drawing([&] { made = registry().invoke("scene.node.create", by_person); });
+	BOOST_TEST_MESSAGE(made.error);
+	BOOST_TEST(made.code != cmd::codes::denied);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
