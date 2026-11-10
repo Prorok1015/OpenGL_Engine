@@ -51,6 +51,9 @@ namespace components {
 		stages.add_stage("editor_live", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
 			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_live_mode();
 		});
+		stages.add_stage("editor_level_settle", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_level_settle();
+		});
 		// #485: stats of the repository's files (at most every 500 ms), never git.
 		stages.add_stage("editor_vcs", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
 			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_repository_watcher();
