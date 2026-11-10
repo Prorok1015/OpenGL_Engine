@@ -11,6 +11,7 @@
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/input/inp_input_router.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -23,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <map>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -126,6 +128,7 @@ bool edt::play_session::start(play_reason reason)
 	follow_active_world();
 	egLOG_INFO("play", "Play started: {} world(s), seed {}", m_worlds_copy.size(), m_seed);
 	++m_run_number;
+	m_reload_number = 0;
 	set_state(play_state::playing, reason);
 	return true;
 }
@@ -269,11 +272,12 @@ namespace {
 std::string edt::play_session::capture_for_reload()
 {
 	m_reload.reset();
+	m_capture_refusal.clear();
 	const auto contexts = m_services.ctx_manager.lock();
 	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
 	if (!play) return {};
 	scn::scene_layer* layer = play->layer();
-	if (!layer) return "the set 'play' has no layer";
+	if (!layer) return m_capture_refusal = "the set 'play' has no layer";
 
 	// Every world of the set, also one the game added while playing.
 	std::string refusal;
@@ -285,7 +289,7 @@ std::string edt::play_session::capture_for_reload()
 			refusal = std::format("the world '{}' holds {}, which no snapshot can save", world.get_name(), strays.front().type);
 		}
 	});
-	if (!refusal.empty()) return refusal;
+	if (!refusal.empty()) return m_capture_refusal = refusal;
 
 	reload_snapshot snapshot;
 	play->for_each([&](scn::world_context& world) {
@@ -338,7 +342,7 @@ void edt::play_session::suspend_for_swap()
 	m_suspended = true;
 }
 
-bool edt::play_session::restore_after_swap()
+bool edt::play_session::restore_after_swap(scn::snapshot_report& report)
 {
 	const auto contexts = m_services.ctx_manager.lock();
 	scn::scene_layer* layer = contexts ? contexts->game_layer() : nullptr;
@@ -352,7 +356,6 @@ bool edt::play_session::restore_after_swap()
 	play.set_time_scale(m_time_scale);
 	desc::read_context read;
 	read.system = &layer->descs();
-	scn::snapshot_report report;
 	{
 		// The entities existed already: the module's observers must not count them again (HOT_RELOAD_PLAY.md 6, step 4).
 		const auto muted = layer->subscriptions().mute_observers();
@@ -393,6 +396,7 @@ bool edt::play_session::restore_after_swap()
 	level.set_active(false);
 	level.for_each([](scn::world_context& world) { world.set_extract(false); });
 	follow_active_world();
+	++m_reload_number;
 
 	egLOG_INFO("play", "Play kept its world across the module reload: {} world(s), {} entities, {} bus event(s) and the mail "
 		"in flight dropped (count unknown, #668)", saved.worlds.size(), report.entities, saved.bus_events);
@@ -469,7 +473,10 @@ void edt::play_session::after_module_swap(const core::reload_report& report)
 {
 	if (std::exchange(m_suspended, false)) {
 		const bool built = report.status == core::reload_status::reloaded || report.status == core::reload_status::rolled_back;
-		if (!built || !restore_after_swap()) {
+		scn::snapshot_report restored;
+		const bool kept = built && restore_after_swap(restored);
+		report_reload(report, restored, kept ? "kept" : "stopped");
+		if (!kept) {
 			egLOG_WARN("play", "Play stopped: its world was not brought back after the module reload ({})",
 				built ? std::string{ "the restore failed" } : report.message);
 			stop(play_reason::stopped_for_reload);
@@ -482,11 +489,83 @@ void edt::play_session::after_module_swap(const core::reload_report& report)
 	m_reload.reset();
 	if (!std::exchange(m_resume_after_swap, false)) return;
 	const bool paused = std::exchange(m_paused_before_swap, false);
-	if (start(play_reason::module_reloaded)) {
+	const bool started = start(play_reason::module_reloaded);
+	if (started) {
 		if (paused) pause(play_reason::module_reloaded);
 		egLOG_INFO("play", "Play started again after the game module was reloaded");
 	} else {
 		egLOG_WARN("play", "Play did not start again after the game module was reloaded");
+	}
+	report_reload(report, {}, started ? "restarted" : "stopped");
+	m_capture_refusal.clear();
+}
+
+namespace {
+	boost::json::object counts_json(const std::map<std::string, std::size_t>& counts)
+	{
+		boost::json::object out;
+		for (const auto& [type, count] : counts) out[type] = count;
+		return out;
+	}
+
+	std::string counts_text(const std::map<std::string, std::size_t>& counts)
+	{
+		std::string out;
+		for (const auto& [type, count] : counts) out += std::format("{}{} ({})", out.empty() ? "" : ", ", type, count);
+		return out;
+	}
+}
+
+void edt::play_session::report_reload(const core::reload_report& outcome, const scn::snapshot_report& restored, std::string_view play)
+{
+	scn::snapshot_report dropped = m_reload ? m_reload->report : scn::snapshot_report{};
+	const std::size_t captured_entities = dropped.entities;
+	merge_into(dropped, restored);
+	dropped.entities = captured_entities;
+	const bool lost_something = !dropped.unsaved.empty() || !dropped.unknown.empty() || !dropped.partial.empty();
+
+	if (m_options.notify) {
+		if (play == "stopped") {
+			m_options.notify("Play stopped: its state was not brought back after the game module was reloaded.");
+		} else if (play == "restarted") {
+			m_options.notify(m_capture_refusal.empty()
+				? std::string{ "Play started again after the game module was reloaded: its state was not kept." }
+				: std::format("Play started again after the game module was reloaded: its state was not kept ({}).", m_capture_refusal));
+		} else if (lost_something) {
+			std::string what;
+			if (!dropped.unsaved.empty()) what += std::format(" Dropped, no schema: {}.", counts_text(dropped.unsaved));
+			if (!dropped.unknown.empty()) what += std::format(" Dropped, unknown to the new build: {}.", counts_text(dropped.unknown));
+			if (!dropped.partial.empty()) what += std::format(" A field kept its default: {}.", counts_text(dropped.partial));
+			m_options.notify(std::format("Play kept its world across the module reload, not all of it.{}", what));
+		}
+	}
+	if (m_options.project_root.empty()) return;
+
+	boost::json::object out;
+	out["module_reload"] = boost::json::object{ { "status", to_string(outcome.status) }, { "message", outcome.message } };
+	out["play"] = play;
+	if (!m_capture_refusal.empty()) out["not_kept_because"] = m_capture_refusal;
+	out["entities"] = dropped.entities;
+	out["dropped_no_schema"] = counts_json(dropped.unsaved);
+	out["dropped_unknown_type"] = counts_json(dropped.unknown);
+	out["field_kept_default"] = counts_json(dropped.partial);
+	if (m_reload) {
+		out["bus_events_dropped"] = m_reload->bus_events;
+		out["mail_dropped"] = "unknown (#668)";
+		boost::json::array worlds;
+		for (const saved_world& world : m_reload->worlds) {
+			boost::json::array systems;
+			for (const std::string& system : world.systems) systems.emplace_back(system);
+			worlds.emplace_back(boost::json::object{ { "name", world.name }, { "systems", std::move(systems) },
+				{ "input_layer", world.input_layer }, { "state", world.state } });
+		}
+		out["worlds"] = std::move(worlds);
+		out["blackboard"] = m_reload->blackboard;
+		out["blackboard_pending"] = m_reload->blackboard_pending;
+	}
+	if (const auto error = prj::write_project_file(m_options.project_root, std::filesystem::path{ ".cache" } / "hot_reload" / "last_play_snapshot.json",
+			prj::to_indented_json(out))) {
+		egLOG_WARN("play", "the module reload report was not written: {}", *error);
 	}
 }
 

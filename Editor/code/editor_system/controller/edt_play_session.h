@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -54,6 +55,11 @@ namespace edt
 		std::function<std::chrono::steady_clock::time_point()> now{};
 		// What the restored set waits for; null: the loads in flight of the game layer (resource_system::pending_loads).
 		std::function<std::size_t()> pending_resources{};
+		// Every module reload that met a running Play writes what it kept and dropped to
+		// <project_root>/.cache/hot_reload/last_play_snapshot.json (HOT_RELOAD_PLAY.md 3.1). Empty: no report.
+		std::filesystem::path project_root{};
+		// Tells the person when a module reload dropped part of Play's state or restarted or stopped Play. Null: the log only.
+		std::function<void(const std::string& message)> notify{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
@@ -99,6 +105,8 @@ namespace edt
 		// Which Start this is (1 for the first of the editor's life): a mark that outlives a Stop, for anything that must
 		// not be taken over by the next session (a runtime.query cursor).
 		std::uint64_t run_number() const { return m_run_number; }
+		// How many module reloads this Start's set was rebuilt by: entity ids taken before one name other entities.
+		std::uint64_t reload_number() const { return m_reload_number; }
 		// The worlds of the set "play" in its order; empty when stopped.
 		std::vector<std::string> world_names() const;
 
@@ -113,7 +121,12 @@ namespace edt
 		// a snapshot cannot save).
 		std::string capture_for_reload();
 		// The reload call returned: a snapshot no swap used (the build was refused before the swap) is dropped.
-		void end_reload() { if (!m_suspended) m_reload.reset(); }
+		void end_reload()
+		{
+			if (m_suspended) return;
+			m_reload.reset();
+			m_capture_refusal.clear();
+		}
 
 		// The game module is swapped (module_swap_gate). With a snapshot the set "play" goes and the session stays
 		// playing or paused, with nothing announced; after_module_swap rebuilds it from the snapshot in the new layer
@@ -142,8 +155,10 @@ namespace edt
 		void wait_for_resources();
 		void end_wait(bool timed_out);
 		std::chrono::steady_clock::time_point now() const;
-		// False: the set "play" may be left half built (stop() takes it).
-		bool restore_after_swap();
+		// False: the set "play" may be left half built (stop() takes it). `restored` gets what the restore dropped.
+		bool restore_after_swap(scn::snapshot_report& restored);
+		// `play`: kept, stopped or restarted.
+		void report_reload(const core::reload_report& outcome, const scn::snapshot_report& restored, std::string_view play);
 
 		scene_document& m_document;
 		editor_services& m_services;
@@ -159,6 +174,7 @@ namespace edt
 		bool m_paused_before_swap = false;
 		bool m_stopping = false;
 		std::uint64_t m_run_number = 0;
+		std::uint64_t m_reload_number = 0;
 
 		// The copies the set "play" was built from; they live as long as it.
 		std::vector<scn::world_desc> m_worlds_copy;
@@ -184,6 +200,8 @@ namespace edt
 			std::size_t bus_events = 0;
 		};
 		std::optional<reload_snapshot> m_reload;
+		// Why the last capture_for_reload kept nothing: Play restarts instead.
+		std::string m_capture_refusal;
 		bool m_suspended = false;
 		// How the restored set runs once its resources are there.
 		struct resource_wait

@@ -4,6 +4,9 @@
 #include "edt_game_view_logic.h"
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_node_index.h>
+#include <cstdint>
+#include <vector>
 
 namespace {
 
@@ -134,6 +137,52 @@ BOOST_AUTO_TEST_CASE(WorldSwitchResetsThePick)
 	// Entity ids repeat between registries, so index 1 of w0 must not leak into w1.
 	sel.refresh(&w1, edt::game_view::collect_cameras(w1));
 	BOOST_TEST((sel.selected() == first_of_w1));
+}
+
+BOOST_AUTO_TEST_CASE(AForgottenPickComesBackByTheNodePathOfItsCamera)
+{
+	edt::game_view::selection sel;
+	{
+		entt::registry before;
+		before.emplace<scn::node_id_component>(add_game_camera(before, "A"), std::vector<std::uint64_t>{ 1 });
+		before.emplace<scn::node_id_component>(add_game_camera(before, "B"), std::vector<std::uint64_t>{ 2, 5 });
+		redirect(before);
+		sel.refresh(&before, edt::game_view::collect_cameras(before));
+		sel.select(1);
+		sel.forget();
+	}
+	// The rebuilt world spawns its nodes in another order: the entity ids moved, the paths did not.
+	entt::registry after;
+	add_game_camera(after, "Unnamed");
+	const auto b = add_game_camera(after, "B");
+	after.emplace<scn::node_id_component>(b, std::vector<std::uint64_t>{ 2, 5 });
+	after.emplace<scn::node_id_component>(add_game_camera(after, "A"), std::vector<std::uint64_t>{ 1 });
+	redirect(after);
+	sel.refresh(&after, edt::game_view::collect_cameras(after));
+	BOOST_TEST((sel.selected() == b));
+
+	// Only the first refresh after the forget looks for it.
+	sel.select(0);
+	sel.refresh(&after, edt::game_view::collect_cameras(after));
+	BOOST_TEST(sel.selected_index() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AForgottenPickWhoseNodeIsGoneFallsBackToTheFirstCamera)
+{
+	edt::game_view::selection sel;
+	entt::registry before;
+	add_game_camera(before, "A");
+	before.emplace<scn::node_id_component>(add_game_camera(before, "B"), std::vector<std::uint64_t>{ 2 });
+	redirect(before);
+	sel.refresh(&before, edt::game_view::collect_cameras(before));
+	sel.select(1);
+	sel.forget();
+
+	entt::registry after;
+	const auto a = add_game_camera(after, "A");
+	redirect(after);
+	sel.refresh(&after, edt::game_view::collect_cameras(after));
+	BOOST_TEST((sel.selected() == a));
 }
 
 BOOST_AUTO_TEST_CASE(EveryCameraOfThePickedTargetGetsTheViewportAcrossWorlds)

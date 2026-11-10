@@ -1036,6 +1036,8 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		options.play_profile = data.require<prj::project_context>().play_profile_dir();
 		options.editor_profile = user_roots;
 	}
+	if (data.has_value<prj::project_context>()) options.project_root = data.require<prj::project_context>().root;
+	options.notify = [this](const std::string& message) { m_context->dialogs().message(message_level::warning, message); };
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };

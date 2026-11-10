@@ -61,6 +61,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -194,6 +195,35 @@ struct unsaved_thing
 	int value = 0;
 };
 
+// A component the catalog knows without a schema: a reload drops it and says so.
+struct schemaless_thing
+{
+	int value = 0;
+};
+
+// Holds the data of every request while `gate` is set, until release(): a load whose raw data arrives late.
+class gated_resolver : public test_util::ram_resolver
+{
+public:
+	explicit gated_resolver(const std::string_view prt) : ram_resolver(prt) {}
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		if (!gate) return ram_resolver::resolve(tag);
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		held.emplace_back(block, files.at(tag));
+		return block;
+	}
+
+	void release()
+	{
+		for (auto& [block, data] : std::exchange(held, {})) block->set_ready(std::move(data));
+	}
+
+	bool gate = false;
+	mutable std::vector<std::pair<std::shared_ptr<core::res::res_control_block<std::vector<std::byte>>>, std::vector<std::byte>>> held;
+};
+
 struct play_fixture : test_util::module_env
 {
 	play_fixture()
@@ -280,10 +310,14 @@ struct play_fixture : test_util::module_env
 	inp::input_router router{ std::make_shared<inp::ecs_input_manager>() };
 	// What editor_system's start_blocker says (a level or an asset loading); nullopt: nothing blocks.
 	std::optional<std::string> start_blocked;
+	// The project a module reload writes its report into, and what it told the person.
+	test_util::temp_dir report_root{ "edt_play_reload_report" };
+	std::vector<std::string> notices;
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router,
 		.start_blocker = [this] { return start_blocked; }, .forget_runtime_entities = [this] { ++forgotten; },
 		.each_frame = [this](const std::string& id, std::function<bool()> poll) { reload_polls.emplace_back(id, std::move(poll)); },
-		.now = [this] { return clock; }, .pending_resources = [this] { return pending_resources; } } };
+		.now = [this] { return clock; }, .pending_resources = [this] { return pending_resources; },
+		.project_root = report_root.path(), .notify = [this](const std::string& message) { notices.push_back(message); } } };
 	// What a restore waits for (the game layer's loads in flight in the editor): the tests decide when it is there.
 	std::size_t pending_resources = 0;
 	int forgotten = 0;
@@ -318,6 +352,13 @@ struct play_fixture : test_util::module_env
 		play.after_module_swap(k_reloaded);
 		BOOST_REQUIRE(play.reloading());
 	}
+	json::object read_report() const
+	{
+		std::ifstream in(report_root.path() / ".cache" / "hot_reload" / "last_play_snapshot.json", std::ios::binary);
+		const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+		return text.empty() ? json::object{} : json::parse(text).as_object();
+	}
+
 	std::vector<state_change> seen;
 	edt::connection seen_connection = events.play_state_changed.subscribe([this](edt::play_state s, edt::play_reason r) {
 		seen.emplace_back(s, r);
@@ -987,6 +1028,77 @@ BOOST_AUTO_TEST_CASE(a_failed_restore_stops_play)
 	loader.unload("play_game", root);
 }
 
+// #600 PR 3b (HOT_RELOAD_PLAY.md 3.1): the reload leaves what it kept and dropped in the project's .cache, and tells the
+// person what Play lost.
+BOOST_AUTO_TEST_CASE(a_module_reload_writes_its_report_and_tells_what_play_lost)
+{
+	if (!contexts().catalog().find("test.schemaless")) contexts().catalog().add<schemaless_thing>("test.schemaless", nullptr);
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	entt::registry& world = play_set()->find("w0")->state();
+	world.emplace<schemaless_thing>(world.create(), schemaless_thing{ 3 });
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+	settle();
+
+	BOOST_TEST(play.active());
+	BOOST_TEST(play.reload_number() == 1u);
+	BOOST_REQUIRE(notices.size() == 1u);
+	BOOST_TEST(notices.front().find("test.schemaless (1)") != std::string::npos);
+	const json::object report = read_report();
+	BOOST_REQUIRE(report.contains("play"));
+	BOOST_TEST(report.at("play").as_string() == "kept");
+	BOOST_TEST(report.at("module_reload").at("status").as_string() == "reloaded");
+	BOOST_TEST(report.at("dropped_no_schema").at("test.schemaless").to_number<int>() == 1);
+	BOOST_TEST(report.at("mail_dropped").is_string());
+	BOOST_REQUIRE(report.at("worlds").as_array().size() == 1u);
+	BOOST_TEST(report.at("worlds").as_array()[0].at("name").as_string() == "w0");
+	BOOST_TEST(report.at("worlds").as_array()[0].at("state").is_object());
+
+	// A new Start counts its reloads from zero.
+	play.stop();
+	BOOST_REQUIRE(play.start());
+	BOOST_TEST(play.reload_number() == 0u);
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_reload_that_restarts_or_stops_play_says_why)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	entt::registry& world = play_set()->find("w0")->state();
+	world.emplace<unsaved_thing>(world.create());
+	BOOST_REQUIRE(!play.capture_for_reload().empty());
+	host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+	play.end_reload();
+
+	BOOST_REQUIRE(notices.size() == 1u);
+	BOOST_TEST(notices.back().find("started again") != std::string::npos);
+	BOOST_TEST(notices.back().find("unsaved_thing") != std::string::npos);
+	json::object report = read_report();
+	BOOST_REQUIRE(report.contains("play"));
+	BOOST_TEST(report.at("play").as_string() == "restarted");
+	BOOST_TEST(report.at("not_kept_because").as_string().find("unsaved_thing") != std::string::npos);
+	BOOST_TEST(!report.contains("worlds"));
+
+	BOOST_REQUIRE(play.capture_for_reload().empty());
+	play.before_module_swap();
+	play.after_module_swap(core::reload_report{ core::reload_status::lost, "the module is gone" });
+	BOOST_REQUIRE(notices.size() == 2u);
+	BOOST_TEST(notices.back().find("Play stopped") != std::string::npos);
+	report = read_report();
+	BOOST_TEST(report.at("play").as_string() == "stopped");
+	BOOST_TEST(report.at("module_reload").at("status").as_string() == "lost");
+	BOOST_TEST(report.at("module_reload").at("message").as_string() == "the module is gone");
+
+	loader.unload("play_game", root);
+}
+
 // #600 PR 3a (HOT_RELOAD_PLAY.md 6, step 6): the restored set is neither run nor shown, and Play's commands wait, until
 // what its components refer to has loaded.
 BOOST_AUTO_TEST_CASE(a_restore_waits_for_its_resources_hidden_and_busy)
@@ -1075,6 +1187,50 @@ BOOST_AUTO_TEST_CASE(a_second_reload_during_the_wait_keeps_the_mode_to_restore)
 	BOOST_TEST(play.frames_run() == frames);
 
 	play.stop();
+	loader.unload("play_game", root);
+}
+
+// What the restored set waits for, unless a caller says otherwise, is the game layer's own loads in flight: here a desc
+// of the module whose raw data the resolver holds back.
+BOOST_AUTO_TEST_CASE(a_restore_waits_for_the_loads_in_flight_of_the_game_layer)
+{
+	const auto stored = ram->files;
+	rs->unregistrate_resolver(res::tag::memory);
+	auto& gated = rs->registrate_resolver<gated_resolver>(res::tag::memory);
+	gated.files = stored;
+	ram = &gated;
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	std::vector<std::function<bool()>> polls;
+	edt::play_session waiting{ state, services, world_ctrl, selection, events, edt::play_session_options{
+		.each_frame = [&polls](const std::string&, std::function<bool()> poll) { polls.push_back(std::move(poll)); } } };
+	BOOST_REQUIRE(waiting.start());
+	pump();
+	BOOST_REQUIRE(waiting.capture_for_reload().empty());
+	waiting.before_module_swap();
+
+	const res::tag held_tag = put("held.desc", R"json({"__type":"play_game_desc"})json");
+	gated.gate = true;
+	const auto held = contexts().game_layer()->resources().require<desc::desc_base>(held_tag);
+	pump();
+	BOOST_REQUIRE(!held.is_ready());
+	BOOST_REQUIRE(contexts().game_layer()->resources().pending_loads() > 0u);
+	waiting.after_module_swap(k_reloaded);
+
+	BOOST_TEST(waiting.reloading());
+	BOOST_TEST(waiting.reloading_resources() > 0u);
+	BOOST_REQUIRE(polls.size() == 1u);
+	BOOST_TEST(polls.front()()); // still loading: the poll stays
+
+	gated.gate = false;
+	gated.release();
+	pump();
+	BOOST_TEST(held.is_ready());
+	BOOST_TEST(!polls.front()());
+	BOOST_TEST(!waiting.reloading());
+	BOOST_TEST(play_set()->active());
+
+	waiting.stop();
 	loader.unload("play_game", root);
 }
 
@@ -1732,6 +1888,44 @@ BOOST_AUTO_TEST_CASE(a_cursor_is_good_for_one_query_of_one_play_session_and_cont
 	const mcp::call_result old_session = call_tool("runtime_query", "{" + filter + R"json(,"cursor":")json" + cursor + "\"}");
 	BOOST_TEST(old_session.is_error);
 	BOOST_TEST(text_of_error(old_session).find("now frame") != std::string::npos);
+}
+
+// #600 PR 3b: while a module reload rebuilds Play's world the runtime commands answer busy; afterwards the answers carry
+// the reload's number, and a cursor of before it is stale even when the frame count is the same.
+BOOST_AUTO_TEST_CASE(runtime_commands_are_busy_during_a_module_reload_and_a_cursor_of_before_it_is_stale)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	entt::registry& reg = play_set()->get("w0").state();
+	for (int i = 0; i < 3; ++i) reg.emplace<scn::name_component>(reg.create(), "spawn");
+	BOOST_REQUIRE(play.pause());
+	const std::string filter = R"json("filter":{"name_glob":"spawn"})json";
+	const mcp::call_result page = call_tool("runtime_query", "{" + filter + R"json(,"page_size":1})json");
+	BOOST_REQUIRE(!page.is_error);
+	BOOST_TEST(page.structured.as_object().at("reload").to_number<int>() == 0);
+	const std::string cursor(page.structured.as_object().at("next_cursor").as_string());
+	const std::int64_t frame = page.structured.as_object().at("frame").to_number<std::int64_t>();
+
+	restore_waiting();
+	BOOST_TEST(commands.invoke("runtime.query", json::object{}, cmd::origin::agent("agent-1")).code == "busy");
+	BOOST_TEST(commands.invoke("runtime.get", json::object{ { "entity", 0 } }, cmd::origin::agent("agent-1")).code == "busy");
+	const mcp::call_result busy = call_tool("runtime_query", "{}");
+	BOOST_TEST(busy.is_error);
+	BOOST_TEST(text_of_error(busy).find("module reload") != std::string::npos);
+
+	settle();
+	const mcp::call_result stale = call_tool("runtime_query", "{" + filter + R"json(,"cursor":")json" + cursor + "\"}");
+	BOOST_TEST(stale.is_error);
+	BOOST_TEST(text_of_error(stale).find("module reload") != std::string::npos);
+	const mcp::call_result fresh = call_tool("runtime_query", "{" + filter + "}");
+	BOOST_REQUIRE(!fresh.is_error);
+	BOOST_TEST(fresh.structured.as_object().at("reload").to_number<int>() == 1);
+	BOOST_TEST(fresh.structured.as_object().at("frame").to_number<std::int64_t>() == frame);
+	BOOST_TEST(fresh.structured.as_object().at("items").as_array().size() == 3u);
+
+	play.stop();
+	loader.unload("play_game", root);
 }
 
 BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answers_the_same_twice)
