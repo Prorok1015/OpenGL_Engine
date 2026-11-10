@@ -1087,7 +1087,7 @@ BOOST_FIXTURE_TEST_CASE(GoingToARowOfAWorldFile_SelectsItsNodeInThatWorld, desc_
 	BOOST_TEST(selection.current().path == (std::vector<std::uint64_t>{ 0xf2 }), boost::test_tools::per_element());
 }
 
-BOOST_FIXTURE_TEST_CASE(GoingToARowOfALevelThatIsNoLongerOpen_LoadsNothing, desc_problems_fixture)
+BOOST_FIXTURE_TEST_CASE(ARowOfALevelThatIsNoLongerOpen_LoadsAndSelectsNothing, desc_problems_fixture)
 {
 	open_level(k_level_with_unknown);
 	const auto rows = desc_rows();

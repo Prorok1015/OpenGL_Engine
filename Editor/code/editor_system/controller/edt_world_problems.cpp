@@ -90,8 +90,10 @@ void edt::world_problem_publisher::refresh(problem_list& problems, const scene_d
 		now.push_back(std::move(entry.item));
 		worlds.push_back(std::move(entry.world));
 	}
-	m_worlds = std::move(worlds);
-	if (m_published && now.size() == m_last.size() && std::equal(now.begin(), now.end(), m_last.begin(), same)) return;
+	if (m_published && now.size() == m_last.size() && std::equal(now.begin(), now.end(), m_last.begin(), same)) {
+		m_worlds = std::move(worlds);
+		return;
+	}
 	if (now.empty()) {
 		if (m_published) problems.clear(source);
 		m_published = false;
@@ -100,6 +102,7 @@ void edt::world_problem_publisher::refresh(problem_list& problems, const scene_d
 		m_published = true;
 	}
 	m_last = std::move(now);
+	m_worlds = std::move(worlds);
 }
 
 std::optional<std::string> edt::world_problem_publisher::world_of(const problem& row) const
