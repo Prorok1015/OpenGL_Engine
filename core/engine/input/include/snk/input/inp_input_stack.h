@@ -57,6 +57,16 @@ namespace inp
 		std::uint64_t added = 0;
 	};
 
+	// The memory of fronts of one layer, outside the worlds (INPUT_STACK.md 5): the keys and buttons that may give a press
+	// next frame (armed), as plain data. A layer with no memory starts with every key held right now disarmed ("previous =
+	// current"): Escape that opened a menu does not close it. Dropped with the layer.
+	struct layer_memory
+	{
+		bool initialized = false;
+		std::bitset<key_count> armed_keys;
+		std::bitset<mouse_count> armed_buttons;
+	};
+
 	class SNK_API input_stack
 	{
 	public:
@@ -117,16 +127,6 @@ namespace inp
 		std::string layer;
 		std::bitset<key_count> keys;
 		bool buttons = false;
-	};
-
-	// The memory of fronts of one layer, outside the worlds (INPUT_STACK.md 5): the keys and buttons that may give a press
-	// next frame (armed), as plain data. A layer with no memory starts with every key held right now disarmed ("previous =
-	// current"): Escape that opened a menu does not close it. Dropped with the layer.
-	struct layer_memory
-	{
-		bool initialized = false;
-		std::bitset<key_count> armed_keys;
-		std::bitset<mouse_count> armed_buttons;
 	};
 
 	// What reaches a world after the stack has been walked.
