@@ -40,7 +40,7 @@ std::vector<std::byte> to_bytes(std::string_view s)
 	return out;
 }
 
-std::string load(const res::vfs_resolver& r, const char* tag)
+std::string load(const res::vfs_resolver& r, std::string_view tag)
 {
 	auto block = r.resolve(res::tag{ tag });
 	block->wait();
@@ -299,6 +299,42 @@ BOOST_FIXTURE_TEST_CASE(NotMountedProtocol_TheErrorNamesTheMountedOnes, layers_f
 	BOOST_TEST(!created);
 	BOOST_TEST(created.error == expected);
 	BOOST_TEST(sys.remove(res::tag{ "cache://thumbs/a.png" }).error == expected);
+}
+
+// #631: whatever a tag without a protocol begins with, it reaches no resolver, and the error says how to write it.
+BOOST_FIXTURE_TEST_CASE(ATagWithoutAProtocol_ReachesNoMount_AndTheErrorSaysToWriteRes, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path user = dir.path() / "player";
+	const fs::path scratch = dir.path() / "scratch";
+	dir.write("player/xa.png", "secret");
+	dir.write("player/a.png", "secret");
+	fs::create_directories(scratch);
+	res::resource_system sys(tasks, res::resource_system::shipping_mount_table(engine, { project }, user, scratch));
+
+	BOOST_TEST(sys.not_mounted_error(res::tag{ "materials/a.mat.desc" })
+		== "'materials/a.mat.desc' has no protocol: write res://materials/a.mat.desc");
+	for (const char* text : { "user/xa.png", "user:/xa.png", "user\\xa.png", "a:b://xa.png", "res://user://a.png", "shaders/pbr.frag" }) {
+		BOOST_TEST_CONTEXT(text) {
+			const res::tag tag{ text };
+			BOOST_TEST(tag.protocol().empty());
+			BOOST_TEST(!sys.exists(tag));
+			BOOST_TEST(!sys.fetch_data(tag));
+			const res::file_operation created = sys.create_sync(tag, to_bytes("x"));
+			BOOST_TEST(!created);
+			BOOST_TEST(created.error.find("has no protocol: write res://") != std::string::npos);
+		}
+	}
+	BOOST_TEST(read_file(user / "a.png") == "secret");
+	BOOST_TEST(read_file(user / "xa.png") == "secret");
+
+	res::vfs_resolver layered("res", { engine, project });
+	BOOST_TEST(load(layered, "res:///etc/passwd").rfind("ERR:", 0) == 0u);
+	BOOST_TEST(load(layered, "res://shaders\\..\\..\\..\\engine\\shaders\\pbr.frag").rfind("ERR:", 0) == 0u);
+	BOOST_TEST(load(layered, "res://a\\..\\..\\x").rfind("ERR:", 0) == 0u);
+	using namespace std::string_view_literals;
+	BOOST_TEST(load(layered, "res://shaders/pbr.frag\0.txt"sv).rfind("ERR:", 0) == 0u);
+	BOOST_TEST(!sys.exists(res::tag{ "res://levels/main.desc\0x"sv }));
 }
 
 BOOST_FIXTURE_TEST_CASE(Store_OverAnEngineOnlyFileIsLogged, layers_fixture)

@@ -146,6 +146,30 @@ BOOST_AUTO_TEST_CASE(ASchemaWarningOfAnInlineDescIsAtTheOwnersFieldPath)
 	BOOST_TEST(items[0].json_path == "/material/uniforms/albedo");
 }
 
+// #631: a tag without a protocol names nothing; the file says where it is and how to write it.
+BOOST_AUTO_TEST_CASE(ATagFieldWithoutAProtocol_IsAWarningAtTheField_AndTheTextIsKept)
+{
+	put("mat.desc", R"json({"__type":"material_desc","shader_fragment":"shaders/a.frag"})json");
+	const auto items = diagnostics_of("mat.desc");
+	const auto it = std::ranges::find_if(items, [](const res::diagnostic& d) { return d.json_path == "/shader_fragment"; });
+	BOOST_REQUIRE_MESSAGE(it != items.end(), "no diagnostic at /shader_fragment");
+	BOOST_TEST((it->severity == res::diagnostic_severity::warning));
+	BOOST_TEST(it->kind == res::diagnostic_kind::schema);
+	BOOST_TEST(it->resource == where("mat.desc"));
+	BOOST_TEST(it->reason == "'shaders/a.frag' has no protocol: write res://shaders/a.frag");
+}
+
+// Reported like any reference that does not load (#595): a load error of the referenced tag, here with the fix.
+BOOST_AUTO_TEST_CASE(ADescFieldWithoutAProtocol_IsALoadErrorOfThatTag_WithTheFix)
+{
+	put("sky.desc", R"json({"__type":"skybox_desc","material":"materials/a.mat.desc"})json");
+	const auto items = diagnostics_of("sky.desc");
+	const res::diagnostic* failed = find(items, res::diagnostic_kind::load, "materials/a.mat.desc");
+	BOOST_REQUIRE_MESSAGE(failed, "no load error of materials/a.mat.desc");
+	BOOST_TEST((failed->severity == res::diagnostic_severity::error));
+	BOOST_TEST(failed->reason == "'materials/a.mat.desc' has no protocol: write res://materials/a.mat.desc");
+}
+
 BOOST_AUTO_TEST_CASE(AnUnknownPrefabComponentIsAWarningAtItsPath)
 {
 	put("node.prefab.desc", R"({"__type":"prefab_desc","children":[

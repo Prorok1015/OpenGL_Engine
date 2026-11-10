@@ -1,6 +1,7 @@
 #include "edt_schema_inspector.h"
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
+#include <snk/resource/res_tag.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -509,6 +510,14 @@ namespace
 			}
 			ImGui::EndDragDropTarget();
 		}
+		// Below the field, so the drop target above stays the text field.
+		if (asset) {
+			if (const std::string problem = edt::schema_ui::tag_text_problem(value.as_string()); !problem.empty()) {
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+				ImGui::TextWrapped("%s", problem.c_str());
+				ImGui::PopStyleColor();
+			}
+		}
 		return changed;
 	}
 
@@ -689,6 +698,15 @@ edt::schema_ui::widget_spec edt::schema_ui::describe_widget(const desc::field_sc
 		}
 	}
 	return spec;
+}
+
+std::string edt::schema_ui::tag_text_problem(std::string_view text)
+{
+	const res::tag tag{ text };
+	if (text.empty() || !tag.protocol().empty()) {
+		return {};
+	}
+	return res::no_protocol_reason(tag);
 }
 
 std::string edt::schema_ui::display_label(const desc::field_schema& field)

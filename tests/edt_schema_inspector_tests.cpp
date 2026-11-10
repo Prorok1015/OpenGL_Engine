@@ -228,6 +228,17 @@ BOOST_AUTO_TEST_CASE(DisplayLabel_IsTheMemberNameWithoutPrefix)
 	BOOST_TEST(ui::display_label(field) == "Direction");
 }
 
+// #631: a tag field's text without a protocol names nothing; the field says so and how to write it.
+BOOST_AUTO_TEST_CASE(TagTextProblem_OnlyForATextWithoutAProtocol)
+{
+	BOOST_TEST(ui::tag_text_problem("shaders/a.frag") == "'shaders/a.frag' has no protocol: write res://shaders/a.frag");
+	BOOST_TEST(!ui::tag_text_problem("user/xa.png").empty());
+	BOOST_TEST(!ui::tag_text_problem("user:/xa.png").empty());
+	BOOST_TEST(ui::tag_text_problem("").empty());
+	BOOST_TEST(ui::tag_text_problem("res://shaders/a.frag").empty());
+	BOOST_TEST(ui::tag_text_problem("memory://A").empty());
+}
+
 // ---------------------------------------------------------------- the schema UI draws the fields
 
 BOOST_AUTO_TEST_CASE(Draw_ShowsTheFieldsOfTheSchema)

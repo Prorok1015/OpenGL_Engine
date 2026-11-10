@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_prefab_desc.h>
+#include "scn_hierarchy_destroy.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_desc.h>
@@ -614,19 +615,6 @@ namespace {
 		}
 	}
 
-	// A parent may still list a child that game code destroyed with a bare reg.destroy (#543).
-	void destroy_entity_hierarchy(entt::registry& reg, entt::entity entity)
-	{
-		if (!reg.valid(entity)) return;
-		if (auto* children_comp = reg.try_get<scn::children_component>(entity)) {
-			auto children = children_comp->children;
-			for (auto child : children) {
-				destroy_entity_hierarchy(reg, child);
-			}
-		}
-		reg.destroy(entity);
-	}
-
 	// Live children of a node, claimed by node id (their node_id_component) or, for nodes that carry no id, by name.
 	class live_children {
 	public:
@@ -638,6 +626,7 @@ namespace {
 			if (!children_comp) return;
 			for (auto child : children_comp->children) {
 				if (!reg.valid(child)) continue; // destroyed by game code, still listed (#543): unclaimed, a reload drops it
+				if (reg.all_of<scn::spawned_root_component>(child)) continue; // game code's, not the prefab's (#551)
 				entry e{ child, desc::invalid_node_id, {} };
 				if (const auto* path = reg.try_get<scn::node_id_component>(child); path && !path->path.empty())
 					e.id = path->path.back();
@@ -713,7 +702,9 @@ void scn::reconcile(
 			// A transform the node spells out places the instance; otherwise the prefab root's does, with the
 			// target-[] transform records applied. Taken before the prefab_instance below replaces `node`.
 			const glm::mat4 placement = (node.has_transform ? node : expanded).get_local_transform();
-			if (!node.has_transform || !reg.all_of<scn::local_transform>(live)) {
+			// Where game code moved a spawned tree is the game's state: a reload of its prefab keeps it (#551).
+			const bool kept_by_game = mode == reconcile_mode::reload && reg.all_of<scn::spawned_root_component, scn::local_transform>(live);
+			if (!kept_by_game && (!node.has_transform || !reg.all_of<scn::local_transform>(live))) {
 				reg.emplace_or_replace<scn::local_transform>(live, placement);
 			}
 			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, node });
@@ -774,8 +765,9 @@ void scn::reconcile(
 	if (auto* children_comp = reg.try_get<scn::children_component>(live)) {
 		auto& children_vec = children_comp->children;
 		for (auto it = children_vec.begin(); it != children_vec.end(); ) {
-			if (!kept.contains(*it)) {
-				destroy_entity_hierarchy(reg, *it);
+			const bool spawned = reg.valid(*it) && reg.all_of<scn::spawned_root_component>(*it);
+			if (!kept.contains(*it) && !spawned) {
+				scn::detail::destroy_hierarchy(reg, *it);
 				it = children_vec.erase(it);
 			} else {
 				++it;

@@ -21,7 +21,7 @@ namespace scn {
 // class so that the serializer generated for schema_desc sees the attributes.
 namespace desc {
 	// The render targets are runtime tags in the memory:// store: an element without a protocol gets "memory://", as before
-	// (res::tag(std::string) slices garbage from a string without one). Written as an array of the tag strings. Read from an
+	// (res::tag gives a string without one no protocol, which nothing loads). Written as an array of the tag strings. Read from an
 	// array, or from a single string: that is the legacy "texture" key, read as color_targets[0]. More tags than the camera
 	// has slots do not fit.
 	template<>
