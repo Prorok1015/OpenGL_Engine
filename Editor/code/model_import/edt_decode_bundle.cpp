@@ -2,8 +2,10 @@
 #include <boost/json/parse_options.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/stream_parser.hpp>
+#include <snk/platform/plt_beneath.h>
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <format>
 #include <fstream>
 #include <string_view>
@@ -25,11 +27,11 @@ void put_u64(std::string& out, std::uint64_t value)
 	for (int i = 0; i < 8; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xFF));
 }
 
-// A reader over the file that knows how much of it is left, so a declared size is checked before it is used.
+// A reader over the bytes of the file that knows how much of them is left, so a declared size is checked before it is used.
 class bounded_reader
 {
 public:
-	bounded_reader(std::ifstream& in, std::uint64_t size) : m_in(in), m_left(size) {}
+	explicit bounded_reader(const std::vector<std::byte>& bytes) : m_bytes(bytes), m_left(bytes.size()) {}
 
 	std::uint64_t left() const { return m_left; }
 
@@ -37,8 +39,8 @@ public:
 	{
 		if (count > m_left) return false;
 		if (count > 0) {
-			m_in.read(static_cast<char*>(into), static_cast<std::streamsize>(count));
-			if (static_cast<std::uint64_t>(m_in.gcount()) != count) return false;
+			std::memcpy(into, m_bytes.data() + m_position, static_cast<std::size_t>(count));
+			m_position += static_cast<std::size_t>(count);
 		}
 		m_left -= count;
 		return true;
@@ -63,9 +65,17 @@ public:
 	}
 
 private:
-	std::ifstream& m_in;
+	const std::vector<std::byte>& m_bytes;
+	std::size_t m_position = 0;
 	std::uint64_t m_left;
 };
+
+// The most a bundle under `limits` can take: the head, the manifest, and per blob its tag, its two sizes and its bytes.
+std::uint64_t largest_bundle(const edt::bundle_limits& limits)
+{
+	constexpr std::uint64_t k_head = 4 + 4 + 8 + 8;
+	return k_head + limits.max_manifest_bytes + limits.max_total_bytes + limits.max_blobs * (4 + 8 + limits.max_tag_bytes);
+}
 
 }
 
@@ -131,16 +141,26 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 		return result;
 	};
 
-	// A regular file, not a link or a FIFO: the file may have been made by the process that is being distrusted.
+	// The file was made by the process that is being distrusted: it is opened without following a link and without
+	// blocking (a FIFO cannot hold the worker), and checked to be a regular file through the handle it is read from, so
+	// nothing swapped between a check and the read is seen. Too big to be a bundle under the limits: nothing is read.
 	std::error_code ec;
-	if (std::filesystem::symlink_status(file, ec).type() != std::filesystem::file_type::regular || ec) {
-		return refuse("the bundle is not a regular file");
+	const std::filesystem::path folder = std::filesystem::canonical(file.parent_path(), ec);
+	if (ec || file.filename().empty()) return refuse("the bundle file cannot be opened");
+	platform::beneath::read_request request;
+	request.root = folder;
+	request.leaf = file.filename();
+	request.max_bytes = largest_bundle(limits);
+	std::vector<std::byte> contents;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, contents);
+	switch (read.status) {
+	case platform::beneath::read_status::ok: break;
+	case platform::beneath::read_status::not_regular: return refuse("the bundle is not a regular file");
+	case platform::beneath::read_status::too_large: return refuse("the bundle is bigger than the limits allow");
+	case platform::beneath::read_status::missing: return refuse("the bundle file is missing");
+	default: return refuse("the bundle file cannot be read");
 	}
-	const std::uint64_t size = std::filesystem::file_size(file, ec);
-	if (ec) return refuse("the bundle file cannot be read");
-	std::ifstream in(file, std::ios::binary);
-	if (!in) return refuse("the bundle file cannot be opened");
-	bounded_reader reader(in, size);
+	bounded_reader reader(contents);
 
 	std::array<char, 4> magic{};
 	std::uint32_t version = 0;

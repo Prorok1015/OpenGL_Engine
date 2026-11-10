@@ -66,23 +66,6 @@ std::vector<std::string> clean_environment()
 	return env;
 }
 
-// What the child printed is the model's doing: a line with a control character must not forge log lines or move the
-// cursor of a terminal.
-std::string printable(std::string_view line)
-{
-	std::string out;
-	out.reserve(line.size());
-	for (const char c : line) {
-		const auto byte = static_cast<unsigned char>(c);
-		if ((byte < 0x20 && c != '\t') || byte == 0x7f) {
-			out += std::format("\\x{:02x}", byte);
-		} else {
-			out.push_back(c);
-		}
-	}
-	return out;
-}
-
 std::string utf8_text(const fs::path& path)
 {
 	const auto text = path.u8string();
@@ -152,14 +135,19 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	options.environment = clean_environment();
 	options.low_priority = true;
 	options.memory_limit_bytes = m_config.memory_limit_bytes;
-	options.on_stderr_line = [](std::string_view line) { egLOG_WARN("edt/decoder", "{}", printable(line)); };
+	decode_log_budget budget;
+	options.on_stderr_line = [&budget](std::string_view line) {
+		if (budget.take(line.size())) egLOG_WARN("edt/decoder", "{}", decode_log_text(line));
+	};
 	// The child compares its parent with this at start: an editor that died before the child looked is not mistaken for
 	// a live parent (getppid() would then be 1 or a subreaper).
 	std::vector<std::string> arguments{ "--request", utf8_text(request_file), "--out", utf8_text(out_file),
 		"--parent-pid", std::to_string(platform::current_process_id()) };
 	arguments.insert(arguments.end(), m_config.extra_arguments.begin(), m_config.extra_arguments.end());
 	const platform::process_result result = platform::run_process(m_config.decoder, arguments,
-		options, [](std::string_view line) { egLOG_INFO("edt/decoder", "{}", printable(line)); }, child_stop.get_token());
+		options, [&budget](std::string_view line) {
+			if (budget.take(line.size())) egLOG_INFO("edt/decoder", "{}", decode_log_text(line));
+		}, child_stop.get_token());
 
 	{
 		std::lock_guard lock(timer_mutex);
@@ -199,4 +187,48 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 std::size_t edt::decode_runner::remove_stale_folders()
 {
 	return core::res::remove_stale_scratch_dirs(k_scratch_name);
+}
+
+// What the child printed is the model's doing: a line with a control character must not forge log lines or move the
+// cursor of a terminal.
+std::string edt::decode_log_text(std::string_view line)
+{
+	std::string out;
+	out.reserve(line.size());
+	const auto byte_at = [&line](std::size_t i) -> unsigned { return i < line.size() ? static_cast<unsigned char>(line[i]) : 0u; };
+	const auto escape = [&out](unsigned byte) { out += std::format("\\x{:02x}", byte); };
+	for (std::size_t i = 0; i < line.size(); ++i) {
+		const unsigned byte = byte_at(i);
+		if ((byte < 0x20 && byte != '\t') || byte == 0x7f) {
+			escape(byte);
+			continue;
+		}
+		// What a terminal or a log viewer treats as a control or reorders text by, in UTF-8: C1 controls (U+0080..U+009F),
+		// U+061C, U+200E/F, the bidi embeddings and overrides (U+202A..U+202E), the line and paragraph separators
+		// (U+2028, U+2029) and the isolates (U+2066..U+2069).
+		std::size_t length = 1;
+		if (byte == 0xC2 && byte_at(i + 1) >= 0x80 && byte_at(i + 1) <= 0x9F) length = 2;
+		else if (byte == 0xD8 && byte_at(i + 1) == 0x9C) length = 2;
+		else if (byte == 0xE2 && byte_at(i + 1) == 0x80 && (byte_at(i + 2) == 0x8E || byte_at(i + 2) == 0x8F || (byte_at(i + 2) >= 0xA8 && byte_at(i + 2) <= 0xAE))) length = 3;
+		else if (byte == 0xE2 && byte_at(i + 1) == 0x81 && byte_at(i + 2) >= 0xA6 && byte_at(i + 2) <= 0xA9) length = 3;
+		if (length > 1) {
+			for (std::size_t k = 0; k < length; ++k) escape(byte_at(i + k));
+			i += length - 1;
+		} else {
+			out.push_back(static_cast<char>(byte));
+		}
+	}
+	return out;
+}
+
+bool edt::decode_log_budget::take(std::size_t bytes)
+{
+	const std::lock_guard lock(m_mutex);
+	if (m_done) return false;
+	if (++m_lines > k_max_lines || (m_bytes += bytes) > k_max_bytes) {
+		m_done = true;
+		egLOG_WARN("edt/decoder", "the decoder's output is cut here: more than {} lines or {} KiB; the rest is dropped", k_max_lines, k_max_bytes / 1024);
+		return false;
+	}
+	return true;
 }

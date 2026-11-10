@@ -3,9 +3,13 @@
 #include "edt_decode_bundle.h"
 #include <boost/json/object.hpp>
 #include <boost/json/serialize.hpp>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <string>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 // The bundle the decoder process writes and the editor reads back (#647): the reader treats the file as untrusted
 // input, so a size the file cannot hold is refused before anything is allocated.
@@ -173,5 +177,47 @@ BOOST_AUTO_TEST_CASE(TheTotalOfAllResources_IsLimitedToo)
 	BOOST_CHECK(!result.ok());
 	BOOST_CHECK(result.error.find("together") != std::string::npos);
 }
+
+BOOST_AUTO_TEST_CASE(AFileBiggerThanTheLimitsAllow_IsRefusedWithoutBeingRead)
+{
+	edt::decode_bundle bundle;
+	bundle.blobs.push_back({ "memory://a/one.bin", std::vector<std::byte>(500) });
+	std::string error;
+	const fs::path file = dir.path() / "big.bin";
+	BOOST_REQUIRE_MESSAGE(edt::write_bundle(file, bundle, error), error);
+	edt::bundle_limits limits;
+	limits.max_manifest_bytes = 10;
+	limits.max_total_bytes = 10;
+	limits.max_blobs = 0;
+	const edt::bundle_read_result result = edt::read_bundle(file, limits);
+	BOOST_CHECK(!result.ok());
+	BOOST_CHECK_MESSAGE(result.error.find("bigger than the limits") != std::string::npos, result.error);
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(ALinkAtTheBundle_IsRefused_NotFollowed)
+{
+	edt::decode_bundle bundle;
+	std::string error;
+	const fs::path real = dir.path() / "real.bin";
+	BOOST_REQUIRE_MESSAGE(edt::write_bundle(real, bundle, error), error);
+	const fs::path link = dir.path() / "link.bin";
+	fs::create_symlink(real, link);
+	const edt::bundle_read_result result = edt::read_bundle(link);
+	BOOST_CHECK(!result.ok());
+	BOOST_CHECK_MESSAGE(result.error.find("not a regular file") != std::string::npos, result.error);
+}
+
+BOOST_AUTO_TEST_CASE(AFifoAtTheBundle_IsRefused_AndDoesNotHoldTheReader)
+{
+	const fs::path fifo = dir.path() / "fifo.bin";
+	BOOST_REQUIRE_EQUAL(::mkfifo(fifo.c_str(), 0600), 0);
+	const auto started = std::chrono::steady_clock::now();
+	const edt::bundle_read_result result = edt::read_bundle(fifo);
+	BOOST_CHECK(!result.ok());
+	BOOST_CHECK_MESSAGE(result.error.find("not a regular file") != std::string::npos, result.error);
+	BOOST_CHECK_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
