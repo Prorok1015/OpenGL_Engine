@@ -77,6 +77,8 @@ namespace core
 		reload_status status = reload_status::refused;
 		// Empty when reloaded; otherwise why, for the user.
 		std::string message;
+		// The module the swap was for; empty when nothing was swapped.
+		std::string module{};
 	};
 
 	struct reload_hooks
@@ -125,6 +127,8 @@ namespace core
 		// running module did not change). Refused without calling the hooks: a reload runs, an editor module, nothing
 		// to take back, or the module is not loaded. A compiled-in module can be taken back too.
 		reload_report revert(const std::string& name, const reload_hooks& hooks = {});
+		// Drops what revert() could take back for `name` (a revert asked for and then cancelled): a later revert() refuses.
+		void forget_revert(const std::string& name);
 
 		// The library reload() would copy, if the project's build output has one.
 		std::optional<std::filesystem::path> build_output(const std::string& name) const;

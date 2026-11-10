@@ -1,5 +1,7 @@
 #pragma once
 #include <snk/editor/edt_problem_list.h>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace scn
@@ -25,8 +27,20 @@ namespace edt
 		// The problems alone, for the tests.
 		static std::vector<problem> collect(const scene_document& scene, const scn::context_set* level);
 
+		// The world a row of the source is about (Problems' "Go to"); nullopt for a row the source does not hold now.
+		std::optional<std::string> world_of(const problem& row) const;
+
 	private:
+		struct world_problem
+		{
+			problem item;
+			std::string world;
+		};
+		static std::vector<world_problem> collect_by_world(const scene_document& scene, const scn::context_set* level);
+
 		std::vector<problem> m_last;
+		// Parallel to m_last.
+		std::vector<std::string> m_worlds;
 		bool m_published = false;
 	};
 }

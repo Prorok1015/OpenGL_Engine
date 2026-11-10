@@ -125,6 +125,24 @@ namespace {
 		handle.collect_into(collector);
 		return collector.items();
 	}
+
+	// Where the diagnostics of a load of the level lead, by that load (`copy` is its working copy, `file` its own file).
+	edt::desc_problem_publisher::locator level_locator(const res::res_handle<scn::level_desc>& handle, const res::tag& copy,
+		const res::tag& file)
+	{
+		if (!handle.is_ready()) return {};
+		struct located
+		{
+			// Kept with its worlds: their roots point into it.
+			std::shared_ptr<scn::level_desc> desc;
+			edt::level_worlds worlds;
+		};
+		auto held = std::make_shared<located>();
+		held->desc = handle.get_sync();
+		if (!held->desc) return {};
+		held->worlds = edt::level_worlds_of(*held->desc, file.string(), { copy.string(), file.string() });
+		return [held](const res::diagnostic& item) { return edt::locate_desc(held->worlds, item.resource, item.json_path); };
+	}
 }
 
 namespace {
@@ -485,6 +503,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	add_panel(m_console_panel, dock_slot::bottom_right, true);
 	m_problems_panel = std::make_shared<problems_panel>(m_context->problems(), data.has_value<prj::project_context>()
 		? data.require<prj::project_context>().root : std::filesystem::path{});
+	m_problems_panel->set_on_activate([this](const std::string& source, const problem& item) { go_to_problem(source, item); });
 	add_panel(m_problems_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
@@ -668,14 +687,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (!data.has_value<core::project_module_host>()) return std::nullopt;
 		return data.require<core::project_module_host>().build_output(module);
 	};
-	reload_options.reload = [this, &data](const std::string& module) {
+	const auto reload_module = [this, &data](const std::string& module, bool retry_taken_back) {
 		core::reload_report report = data.has_value<core::project_module_host>()
-			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks())
+			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks(), retry_taken_back)
 			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
 		// A snapshot before_reload took and no swap used goes, whatever the outcome.
 		if (m_play) m_play->end_reload();
+		// The build loaded but could not restore Play: it is taken back next frame, so it is not reported as running.
+		if (report.status == core::reload_status::reloaded && m_play && m_play->reverting()) {
+			report.status = core::reload_status::rolled_back;
+			report.message = std::format("it could not restore Play ({}); it is being taken back, the previous build loads again",
+				m_play->restore_failure());
+		}
 		return report;
 	};
+	reload_options.reload = [reload_module](const std::string& module) { return reload_module(module, false); };
+	// Only a person loads a build the host took back again (#601): live mode would loop.
+	reload_options.reload_by_person = [reload_module](const std::string& module) { return reload_module(module, true); };
 	// Play keeps its world across the swap (#600): the snapshot is taken after every check, right before it.
 	reload_options.before_reload = [this](const std::string&) { return m_play ? m_play->capture_for_reload() : std::string{}; };
 	reload_options.building = [this] { return m_game_builder && m_game_builder->is_manual_build_running(); };
@@ -1073,6 +1101,22 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	if (data.has_value<prj::project_context>()) options.project_root = data.require<prj::project_context>().root;
 	options.report_full_snapshot = cfg_hot_reload_dump_snapshot;
 	// The problems list, not a dialog: live mode reloads on every build, and a dialog each time would be in the way.
+	// Never from inside the swap: the host refuses a revert while a reload runs, so it waits for the next UI frame.
+	options.revert_module = [this, &data](const std::string& module) {
+		editor_layer->register_implicit("edt/revert_game_module", [this, &data, module] {
+			if (!m_play) return false;
+			core::project_module_host* host = data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
+			m_play->run_revert(
+				[&] {
+					return host ? host->revert(module, m_swap_gate.hooks())
+						: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
+				},
+				[&] {
+					if (host) host->forget_revert(module);
+				});
+			return false;
+		});
+	};
 	options.notify = [this](const std::string& message) {
 		if (message.empty()) {
 			m_context->problems().clear("hot_reload");
@@ -1340,7 +1384,8 @@ void edt::editor_system::wire_controller_callbacks()
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
 		// Also a reload that failed: its errors stay in Problems until a clean one replaces them.
 		ctx_mgr->set_on_reload_result([this](const res::tag&, const res::res_handle<scn::level_desc>& handle) {
-			m_desc_problems.report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag);
+			m_desc_problems.report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag,
+				level_locator(handle, m_state.editor_tag, m_state.level_tag));
 		});
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
 			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
@@ -1671,7 +1716,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
-		m_loading_level_tag);
+		m_loading_level_tag, level_locator(m_loading_level_handle, m_loading_editor_tag, m_loading_level_tag));
 	if (!loaded) {
 		m_state.level_tag = level_tag_before;
 		m_state.editor_tag = editor_tag_before;
@@ -1718,6 +1763,68 @@ void edt::editor_system::refresh_world_problems()
 {
 	if (!m_context) return;
 	m_world_problems.refresh(m_context->problems(), m_state, m_services.level_set());
+}
+
+void edt::editor_system::go_to_problem(const std::string& source, const problem& item)
+{
+	if (source == desc_problem_publisher::source) {
+		if (const auto target = m_desc_problems.target_of(item)) go_to(*target);
+		return;
+	}
+	if (source == world_problem_publisher::source) {
+		const auto world = m_world_problems.world_of(item);
+		if (!world) return;
+		desc_target target;
+		target.level = m_state.level_tag.string();
+		target.world = *world;
+		go_to(target);
+	}
+}
+
+void edt::editor_system::go_to(const desc_target& target)
+{
+	if (!target.world.empty()) {
+		if (target.level != m_state.level_tag.string()) {
+			egLOG_INFO("editor", "open the level '{}' to go to the node", target.level);
+			return;
+		}
+		if (m_play && m_play->active()) {
+			egLOG_INFO("editor", "stop Play to go to the node");
+			return;
+		}
+		const auto found = std::ranges::find(m_state.world_names, target.world);
+		const auto index = static_cast<std::size_t>(found - m_state.world_names.begin());
+		if (found == m_state.world_names.end() || index >= m_state.world_descs.size()) {
+			egLOG_INFO("editor", "the world '{}' is no longer in the level", target.world);
+			return;
+		}
+		if (!target.path.empty()) {
+			const auto address = scene_editor::resolve_node_path(m_state.world_descs[index].get_root().children, target.path);
+			if (!address.owner || !address.target.empty()) {
+				egLOG_INFO("editor", "the node of this problem is no longer in the world '{}'", target.world);
+				return;
+			}
+		}
+		if (m_state.active_world_idx != static_cast<int>(index)) {
+			m_world_ctrl.select_world(static_cast<int>(index));
+			// A world the level set does not build is refused: the selection must not point into an inactive world.
+			if (m_state.active_world_idx != static_cast<int>(index)) {
+				egLOG_INFO("editor", "the world '{}' could not be made active", target.world);
+				return;
+			}
+		}
+		if (target.path.empty()) return;
+		selection value;
+		value.document = m_state.id();
+		value.world = target.world;
+		value.path = target.path;
+		m_context->selection().select(std::move(value));
+		return;
+	}
+	if (target.resource.empty()) return;
+	if (!m_context->asset_kinds().open(*m_context, res::tag{ target.resource })) {
+		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
+	}
 }
 
 std::optional<std::string> edt::editor_system::load_in_progress() const

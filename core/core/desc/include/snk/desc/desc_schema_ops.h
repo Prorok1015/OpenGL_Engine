@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <typeinfo>
@@ -116,6 +117,13 @@ namespace desc
 	// empty context.
 	SNK_API void deserialize(const schema_binding& binding, void* obj, const json::object& in);
 	SNK_API void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx);
+	// The keys of `in` deserialize skips: no field (nor a read alias) of the schema names them; "__" keys are not counted.
+	// A field removed or renamed since `in` was written.
+	SNK_API std::vector<std::string> unknown_keys(const schema_binding& binding, const json::object& in);
+	// The top-level keys the schema reads (its fields and their read aliases): computed once per type, for unknown_keys over
+	// many objects of it.
+	SNK_API std::vector<std::string> known_keys(const schema_binding& binding);
+	SNK_API std::vector<std::string> unknown_keys(std::span<const std::string> known, const json::object& in);
 
 	// Same schema and object type: member-wise. Otherwise serialize(src) -> deserialize(dst), so only keys both
 	// sides know cross over, with a warning.

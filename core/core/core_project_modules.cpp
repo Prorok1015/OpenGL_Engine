@@ -553,6 +553,11 @@ core::reload_report core::project_module_host::reload(const std::string& name, s
 	return swap(name, std::move(next), previous, hooks, std::nullopt);
 }
 
+void core::project_module_host::forget_revert(const std::string& name)
+{
+	m_revert.erase(name);
+}
+
 core::reload_report core::project_module_host::revert(const std::string& name, const reload_hooks& hooks)
 {
 	const auto refused = [&](std::string why) {
@@ -642,6 +647,7 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		hooks.before_swap();
 	}
 	const auto finish = [&](reload_report report) {
+		report.module = name;
 		// Only a new build in place can be taken back, once.
 		if (report.status != reload_status::reloaded) {
 			m_revert.erase(name);

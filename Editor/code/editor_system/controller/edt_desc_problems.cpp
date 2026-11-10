@@ -35,21 +35,26 @@ edt::problem edt::desc_problem_publisher::to_problem(const res::diagnostic& item
 }
 
 void edt::desc_problem_publisher::report(problem_list& problems, const std::string& scope, const std::vector<res::diagnostic>& items,
-	const res::tag& copy, const res::tag& file)
+	const res::tag& copy, const res::tag& file, const locator& locate)
 {
+	const bool renames = copy.is_valid() && file.is_valid();
+	const auto shown_name = [&](const std::string& resource) {
+		return renames && resource == copy.view() ? file.string() : resource;
+	};
 	scope_problems now;
 	for (const res::diagnostic& item : items) {
 		if (item.kind == res::diagnostic_kind::truncated) {
 			now.dropped += dropped_count(item.reason);
 			continue;
 		}
-		if (copy.is_valid() && file.is_valid() && item.resource == copy.view()) {
-			res::diagnostic renamed = item;
-			renamed.resource = file.string();
-			now.items.push_back(to_problem(renamed));
-		} else {
-			now.items.push_back(to_problem(item));
-		}
+		res::diagnostic shown = item;
+		shown.resource = shown_name(item.resource);
+		now.items.push_back(to_problem(shown));
+		desc_target target;
+		if (locate) target = locate(item);
+		else target.resource = shown.resource;
+		target.resource = shown_name(target.resource);
+		now.targets.push_back(std::move(target));
 	}
 	if (now.items.empty() && now.dropped == 0) {
 		clear(problems, scope);
@@ -65,6 +70,21 @@ void edt::desc_problem_publisher::clear(problem_list& problems, std::string_view
 	if (found == m_scopes.end()) return;
 	m_scopes.erase(found);
 	publish(problems);
+}
+
+std::optional<edt::desc_target> edt::desc_problem_publisher::target_of(const problem& row) const
+{
+	// The same row can be in two scopes (a world file dropped and loaded with the level): the one that names a world
+	// leads further than the file.
+	std::optional<desc_target> found;
+	for (const auto& [scope, set] : m_scopes) {
+		for (std::size_t i = 0; i < set.items.size(); ++i) {
+			if (!same(set.items[i], row)) continue;
+			if (!set.targets[i].world.empty()) return set.targets[i];
+			if (!found) found = set.targets[i];
+		}
+	}
+	return found;
 }
 
 void edt::desc_problem_publisher::publish(problem_list& problems)

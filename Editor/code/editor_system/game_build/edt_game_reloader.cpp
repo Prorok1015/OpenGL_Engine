@@ -111,7 +111,7 @@ std::optional<std::string> edt::game_reloader::pick(const std::string& module) c
 core::reload_report edt::game_reloader::reload(const std::string& module)
 {
 	std::string who = module;
-	core::reload_report report = attempt(module, who);
+	core::reload_report report = attempt(module, who, true);
 	return tell(who, std::move(report));
 }
 
@@ -199,10 +199,10 @@ bool edt::game_reloader::any_build_running() const
 core::reload_report edt::game_reloader::reload_quiet(const std::string& module)
 {
 	std::string who = module;
-	return attempt(module, who);
+	return attempt(module, who, false);
 }
 
-core::reload_report edt::game_reloader::attempt(const std::string& module, std::string& who)
+core::reload_report edt::game_reloader::attempt(const std::string& module, std::string& who, bool by_person)
 {
 	if (m_options.building && m_options.building()) {
 		return { core::reload_status::refused, "a build is running" };
@@ -227,7 +227,7 @@ core::reload_report edt::game_reloader::attempt(const std::string& module, std::
 			egLOG_WARN("editor", "The Play state is not kept across the reload of '{}': {}. Play restarts.", *name, restart);
 		}
 	}
-	return m_options.reload(*name);
+	return by_person && m_options.reload_by_person ? m_options.reload_by_person(*name) : m_options.reload(*name);
 }
 
 core::reload_report edt::game_reloader::tell(const std::string& module, core::reload_report report)
