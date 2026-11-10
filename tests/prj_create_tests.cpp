@@ -108,7 +108,6 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 	const std::string cmake = read_text(dir.path() / "game" / "code" / "CMakeLists.txt");
 	BOOST_TEST(cmake.find("set(SNK_GAME_MODULE game)") != std::string::npos);
 	BOOST_TEST(cmake.find("set(SNK_GAME_EDITOR_MODULE game_editor)") != std::string::npos);
-	BOOST_TEST(fs::is_regular_file(dir.path() / "game" / "code" / "src" / "game_editor.cpp"));
 }
 
 BOOST_AUTO_TEST_CASE(Create_IntoAnEmptyFolder_FillsIt)

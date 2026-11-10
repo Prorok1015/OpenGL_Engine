@@ -90,6 +90,11 @@ if(SNK_GAME_EDITOR)
 	if(TARGET snk::editor_api)
 		add_library(game_editor SHARED src/game_editor.cpp)
 		target_link_libraries(game_editor PRIVATE snk::engine snk::engine_api snk::editor_api)
+		# snk_engine.dll exports only SNK_API, so the module's desc code (boost::json) needs its own copy of Boost.JSON, which the
+		# SDK carries for MSVC only.
+		if(MSVC AND TARGET snk::thirdparty_boost_json)
+			target_link_libraries(game_editor PRIVATE snk::thirdparty_boost_json)
+		endif()
 		target_compile_definitions(game_editor PRIVATE "SNK_GAME_EDITOR_MODULE_NAME=\"${SNK_GAME_EDITOR_MODULE}\"")
 		snk_module_output(game_editor "${SNK_GAME_EDITOR_MODULE}")
 	else()

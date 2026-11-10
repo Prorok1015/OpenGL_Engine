@@ -40,7 +40,9 @@ bool draw_game_note(scn::prefab_desc::prefab_comp_node& comp)
 	const std::size_t size = std::min(text.size(), sizeof(buffer) - 1);
 	std::copy_n(text.data(), size, buffer);
 	buffer[size] = '\0';
-	if (!ImGui::InputText("Text", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+	ImGui::InputText("Text", buffer, sizeof(buffer));
+	// The change is taken when the field is left or Enter is pressed: one edit, not one per keystroke.
+	if (!ImGui::IsItemDeactivatedAfterEdit()) {
 		return false;
 	}
 	comp.overrides["text"] = std::string(buffer);
@@ -61,7 +63,8 @@ public:
 		panel.panel = std::make_shared<hello_panel>(context.selection());
 		context.add_panel(std::move(panel));
 
-		// A desc type of this project, not a built-in one: the editor refuses a second renderer for a built-in type.
+		// A desc type of this project, not a built-in one: the editor refuses a second renderer for a built-in type. The
+		// type itself is the game module's to register (game_module.cpp); until a node of it exists, this stays unused.
 		context.add_inspector("game_note", draw_game_note);
 	}
 };
