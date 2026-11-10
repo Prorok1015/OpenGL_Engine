@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_events.hpp>
 #include <snk/input/inp_input_stack.h>
@@ -82,6 +83,21 @@ namespace inp
 		// The set went away (Play stopped): its bindings, its mouse hold and its stack are dropped, the default target stays.
 		void forget_set(std::string_view set);
 
+		// An edge of a game action that does not come from the keyboard (an on-screen button, an AI, a replay; INPUT_STACK.md 7,
+		// M12) for the world `target` names. It waits for the next gs::route_input, which hands it to the world as an
+		// inp::action_injection; the layers play no part, the source has chosen the world. For game code and the engine,
+		// main thread only. An edge for a world that is not there then, one that reads no actions or an action its map does
+		// not have is warned about and dropped.
+		struct queued_injection
+		{
+			std::string world;
+			std::string action;
+			action_edge edge = action_edge::pressed;
+		};
+		void inject(const input_target& target, std::string action, action_edge edge);
+		// Every edge queued for the worlds of the set, in the order they came; the queue is emptied.
+		std::vector<queued_injection> take_injected(std::string_view set);
+
 		// Buttons released, deltas zero, the cursor where it last was.
 		static inp::input_state neutral(const inp::input_state& raw);
 
@@ -97,5 +113,6 @@ namespace inp
 		std::optional<input_target> m_default;
 		std::map<std::string, mouse_hold, std::less<>> m_holds;
 		std::map<std::string, input_stack, std::less<>> m_stacks;
+		std::map<std::string, std::vector<queued_injection>, std::less<>> m_injected;
 	};
 }

@@ -43,6 +43,21 @@ namespace inp
 		std::vector<action_reach> reach{};
 	};
 
+	struct injected_edge
+	{
+		action_id action = invalid_action;
+		action_edge edge = action_edge::pressed;
+	};
+
+	// Written into each world's ctx by gs::route_input (#624): the edges queued with input_router::inject since the last
+	// frame, with the action names turned into ids of the map the world reads. Applied by inp::update_actions in the same
+	// frame, in order, as real presses and releases (INPUT_STACK.md 7); the layers play no part. Nothing is kept: a frame
+	// that does not run inp::update_actions (Pause) or a world that is frozen in a Step loses them.
+	struct action_injection
+	{
+		std::vector<injected_edge> edges{};
+	};
+
 	// Written by gs::route_input. `bound`: the router fed this world the input this frame. `frozen`: not bound while its
 	// set runs a Step, so the actions stay as the pause left them instead of being let go.
 	struct input_bound
@@ -73,8 +88,11 @@ namespace inp
 		bool released(std::string_view name) const;
 
 		// One frame of inp::update_actions; the edges also go to `events` when it is given.
+		// `injected`: edges that do not come from the keyboard. A pressed one holds the action until a released one comes,
+		// whatever the real keys do, and survives losing the binding; a released one lets go unless a real binding still holds it.
 		void update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-			ecs::event_writer<action_event>* events, fixed_action_state* fixed = nullptr, const action_input* reached = nullptr);
+			ecs::event_writer<action_event>* events, fixed_action_state* fixed = nullptr, const action_input* reached = nullptr,
+			const action_injection* injected = nullptr);
 
 	private:
 		struct slot
@@ -83,6 +101,8 @@ namespace inp
 			bool pressed = false;
 			bool released = false;
 			bool armed = false;
+			// Held by an injected press, not yet let go by an injected release.
+			bool injected = false;
 			// With action_input: the bindings (by index) that were down when the map came in; they give no press until seen up.
 			// An action has few bindings; those from the 65th on are never suppressed.
 			std::uint64_t suppressed = 0;
@@ -146,5 +166,6 @@ namespace inp
 
 	// The system "inp::update_actions": phase input, after inp::update_input_state, not run in Edit or Pause.
 	SNK_API void update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-		const input_bound& bound, const action_map_ref& actions, const action_input& reached, action_state& out, fixed_action_state& fixed);
+		const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
+		action_state& out, fixed_action_state& fixed);
 }

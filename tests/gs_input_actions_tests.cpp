@@ -705,4 +705,102 @@ BOOST_AUTO_TEST_CASE(Fixed_APressDuringPause_IsSeenByTheStepOfAStep)
 	BOOST_TEST(probe_of(w).released == 1);
 }
 
+// ---------------------------------------------------------------- inp::input_router::inject (#624)
+
+BOOST_AUTO_TEST_CASE(Inject_IsSeenByThePollTheBusAndTheFixedSteps_FromTheNextRoutedFrame)
+{
+	auto& w = fixed_world();
+	const auto map = jump_on_space();
+	frame(map, 0.02f);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(!held(w, "Jump"));
+	BOOST_TEST(seen.empty());
+
+	frame(map, 0.02f);
+	BOOST_TEST(pressed(w, "Jump"));
+	BOOST_TEST(held(w, "Jump"));
+	BOOST_REQUIRE_EQUAL(seen.size(), 1u);
+	BOOST_TEST(seen[0].world == "a");
+	BOOST_TEST(seen[0].action == map->id("Jump"));
+	BOOST_TEST((seen[0].edge == inp::action_edge::pressed));
+	BOOST_TEST(probe_of(w).pressed == 1);
+
+	frame(map, 0.02f);
+	BOOST_TEST(held(w, "Jump"));
+	BOOST_TEST(!pressed(w, "Jump"));
+	BOOST_TEST(seen.size() == 1u);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::released);
+	frame(map, 0.02f);
+	BOOST_TEST(!held(w, "Jump"));
+	BOOST_TEST(count(inp::action_edge::released) == 1u);
+	BOOST_TEST(probe_of(w).released == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_NeedsNeitherAKeyNorTheInputOfTheWorld)
+{
+	auto& w = world("a", 0);
+	unbind();
+	const auto map = jump_on_space();
+	frame(map);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	BOOST_TEST(!bound_of(w).bound);
+	BOOST_TEST(pressed(w, "Jump"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
+
+	frame(map);
+	BOOST_TEST(held(w, "Jump"));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_ARealPressOfTheSameActionGivesNoSecondPress)
+{
+	auto& w = world("a", 0);
+	const auto map = jump_on_space();
+	frame(map);
+
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(map);
+	BOOST_TEST(held(w, "Jump"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_IntoAWorldThatReadsNoActions_ANameTheMapDoesNotHaveOrAMissingWorld_IsDropped)
+{
+	auto& reader = world("reader", 0);
+	auto& other = world("other", 1);
+	const auto map = jump_on_space();
+	frame(map);
+
+	router.inject({ "level", "other" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "level", "reader" }, "Nope", inp::action_edge::pressed);
+	router.inject({ "level", "ghost" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "level", "" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	frame(map);
+
+	BOOST_TEST(!held(reader, "Jump"));
+	BOOST_TEST(!held(other, "Jump"));
+	BOOST_TEST(seen.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Inject_ADroppedEdgeIsNotKeptForALaterFrame)
+{
+	auto& w = world("a", 0);
+	const auto map = jump_on_space();
+	frame(map);
+
+	mode(ecs::run_mode::edit);
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	frame(map);
+	mode(ecs::run_mode::play);
+	frame(map);
+	BOOST_TEST(!held(w, "Jump"));
+	BOOST_TEST(seen.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

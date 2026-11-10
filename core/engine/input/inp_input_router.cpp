@@ -1,5 +1,6 @@
 #include <snk/input/inp_input_router.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <string_view>
 #include <vector>
 
@@ -36,6 +37,27 @@ void inp::input_router::forget_set(std::string_view set)
 	if (const auto it = m_stacks.find(set); it != m_stacks.end()) {
 		m_stacks.erase(it);
 	}
+	if (const auto it = m_injected.find(set); it != m_injected.end()) {
+		m_injected.erase(it);
+	}
+}
+
+void inp::input_router::inject(const input_target& target, std::string action, action_edge edge)
+{
+	if (target.context.empty()) {
+		egLOG_WARN("input", "inject '{}' into set '{}' names no world, dropped", action, target.set);
+		return;
+	}
+	m_injected[target.set].push_back(queued_injection{ target.context, std::move(action), edge });
+}
+
+std::vector<inp::input_router::queued_injection> inp::input_router::take_injected(std::string_view set)
+{
+	const auto it = m_injected.find(set);
+	if (it == m_injected.end()) return {};
+	std::vector<queued_injection> taken = std::move(it->second);
+	m_injected.erase(it);
+	return taken;
 }
 
 inp::input_stack& inp::input_router::stack(std::string_view set)

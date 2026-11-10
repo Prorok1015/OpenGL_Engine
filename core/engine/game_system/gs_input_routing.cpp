@@ -174,9 +174,40 @@ namespace
 		return &e == reader || (declares_actions(*e.context) && lists_update_actions(*e.context));
 	}
 
+	using queued_injections = std::vector<inp::input_router::queued_injection>;
+
+	// What was injected into the world, with the names turned into ids of the map it reads (the map warns once about a name
+	// it does not have). A world that reads no actions gets nothing.
+	inp::action_injection injection_for(const entry& e, const std::shared_ptr<const inp::action_map>& map, std::string_view set, const queued_injections& queued)
+	{
+		inp::action_injection injection;
+		for (const auto& item : queued) {
+			if (item.world != e.context->get_name()) continue;
+			if (!map) {
+				if (warn_once(std::string{ set } + "#inject:" + item.world)) {
+					egLOG_WARN("input", "inject '{}': world '{}' of '{}' reads no actions, dropped", item.action, item.world, set);
+				}
+				continue;
+			}
+			const inp::action_id id = map->id(item.action);
+			if (id != inp::invalid_action) injection.edges.push_back({ id, item.edge });
+		}
+		return injection;
+	}
+
+	void warn_about_lost_injections(const std::vector<entry>& entries, std::string_view set, const queued_injections& queued)
+	{
+		for (const auto& item : queued) {
+			const bool there = std::ranges::any_of(entries, [&item](const entry& e) { return e.context->get_name() == item.world; });
+			if (!there && warn_once(std::string{ set } + "#inject-gone:" + item.world)) {
+				egLOG_WARN("input", "inject '{}': no world '{}' in '{}', dropped", item.action, item.world, set);
+			}
+		}
+	}
+
 	// Mouse and keyboard parts of the full state are given out separately: a context may take the
 	// keyboard of a focused text field while the mouse belongs to someone else. The cursor position goes to everyone.
-	void write(const entry& e, inp::world_input* in, const inp::input_bound& bound, std::shared_ptr<const inp::action_map> actions)
+	void write(const entry& e, inp::world_input* in, const inp::input_bound& bound, std::shared_ptr<const inp::action_map> actions, inp::action_injection injection)
 	{
 		inp::input_state state = e.routed.state;
 		const inp::input_state neutral = inp::input_router::neutral(state);
@@ -199,6 +230,7 @@ namespace
 		ctx.insert_or_assign(bound);
 		ctx.insert_or_assign(inp::action_map_ref{ std::move(actions) });
 		ctx.insert_or_assign(inp::action_input{ in ? std::move(in->actions) : std::vector<inp::action_reach>{} });
+		ctx.insert_or_assign(std::move(injection));
 	}
 
 	void route_set(inp::input_router& router, scn::context_set& set, const std::shared_ptr<const inp::action_map>& actions)
@@ -248,10 +280,13 @@ namespace
 		// The memory of fronts of every layer follows the physical state; the actions learn what is armed (INPUT_STACK.md 5).
 		inp::arm_actions(stack, resolved, raw, live_actions.get());
 
+		const queued_injections injected = router.take_injected(set_name);
+		warn_about_lost_injections(entries, set_name, injected);
 		const bool stepping = set.mode() == ecs::run_mode::step;
 		for (const auto& e : entries) {
 			const inp::input_bound bound{ e.routed.focused, stepping && !e.routed.focused };
-			write(e, resolved.find(e.context->get_name()), bound, reads_actions(e, reader) ? live_actions : no_actions);
+			const auto& read = reads_actions(e, reader) ? live_actions : no_actions;
+			write(e, resolved.find(e.context->get_name()), bound, read, injection_for(e, read, set_name, injected));
 		}
 	}
 }

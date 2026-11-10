@@ -27,8 +27,12 @@ struct actions_fixture
 {
 	void frame()
 	{
-		state.update(ref, keys, bound, nullptr, &fixed, use_reach ? &reach : nullptr);
+		state.update(ref, keys, bound, nullptr, &fixed, use_reach ? &reach : nullptr, &injection);
+		injection.edges.clear();
 	}
+
+	// For the next frame only, as gs::route_input hands it over.
+	void inject(inp::action_id id, inp::action_edge edge) { injection.edges.push_back({ id, edge }); }
 
 	// One fixed step; what it sees of Jump.
 	struct seen_step
@@ -58,6 +62,7 @@ struct actions_fixture
 	// What reached the layers that declare the actions (#624); not given, the state alone decides.
 	bool use_reach = false;
 	inp::action_input reach{};
+	inp::action_injection injection{};
 	inp::action_map_ref ref{ make_map() };
 	inp::input_state keys{};
 	inp::input_bound bound{ .bound = true, .frozen = false };
@@ -512,6 +517,158 @@ BOOST_AUTO_TEST_CASE(WithReach_AnActionOutsideTheVectorIsNeverDown)
 	frame();
 	frame();
 	BOOST_TEST(!state.held(FIRE));
+}
+
+// ---------------------------------------------------------------- inject (#624)
+
+BOOST_AUTO_TEST_CASE(Inject_APressHoldsTheActionWithoutAnyKey_UntilAReleaseComes)
+{
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(state.pressed(JUMP));
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(step().pressed);
+
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(edge_free(JUMP));
+
+	inject(JUMP, inp::action_edge::released);
+	frame();
+	BOOST_TEST(state.released(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+	BOOST_TEST(step().released);
+
+	frame();
+	BOOST_TEST(edge_free(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_APressOfAnActionAlreadyHeldByAKey_IsNoSecondPress)
+{
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	BOOST_TEST(state.pressed(JUMP));
+
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(edge_free(JUMP));
+
+	set(KB::SPACE, false);
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(edge_free(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_TheKeysComeAndGoWhileInjectedHeld_ThenTheReleaseLetsGo)
+{
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	set(KB::SPACE, true);
+	frame();
+	set(KB::SPACE, false);
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(edge_free(JUMP));
+
+	inject(JUMP, inp::action_edge::released);
+	frame();
+	BOOST_TEST(state.released(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_AReleaseWhileAKeyHoldsTheAction_KeepsItHeldUntilTheKeyGoes)
+{
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	set(KB::SPACE, true);
+	frame();
+
+	inject(JUMP, inp::action_edge::released);
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(edge_free(JUMP));
+
+	set(KB::SPACE, false);
+	frame();
+	BOOST_TEST(state.released(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_APressAndAReleaseInOneFrame_GiveBothEdgesAndTheFixedStepsSeeThemInOrder)
+{
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	inject(JUMP, inp::action_edge::released);
+	frame();
+	BOOST_TEST(state.pressed(JUMP));
+	BOOST_TEST(state.released(JUMP));
+	BOOST_TEST(!state.held(JUMP));
+
+	const auto first = step();
+	BOOST_TEST(first.pressed);
+	const auto second = step();
+	BOOST_TEST(second.released);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_LosingTheBindingLetsTheKeysGoButNotTheInjectedHold)
+{
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	inject(FIRE, inp::action_edge::pressed);
+	frame();
+	set(KB::F, true);
+	frame();
+
+	bound = { .bound = false, .frozen = false };
+	frame();
+	BOOST_TEST(state.held(JUMP));
+	BOOST_TEST(state.held(FIRE));
+	BOOST_TEST(edge_free(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_AFrozenWorldLosesTheEdges)
+{
+	frame();
+	bound = { .bound = false, .frozen = true };
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(!state.held(JUMP));
+
+	bound = { .bound = true, .frozen = false };
+	frame();
+	BOOST_TEST(!state.held(JUMP));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_ANewMapLetsTheInjectedHoldGoWithOneReleased_AndTakesAnEdgeOfThatFrame)
+{
+	frame();
+	inject(JUMP, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(state.held(JUMP));
+
+	ref.map = make_map();
+	inject(FIRE, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(!state.held(JUMP));
+	BOOST_TEST(state.held(FIRE));
+	BOOST_TEST(state.pressed(FIRE));
+
+	set(KB::F, false);
+	frame();
+	BOOST_TEST(state.held(FIRE));
+}
+
+BOOST_AUTO_TEST_CASE(Inject_AnIdOutsideTheMapIsIgnored)
+{
+	frame();
+	inject(inp::action_id{ 7 }, inp::action_edge::pressed);
+	frame();
+	BOOST_TEST(edge_free(JUMP));
+	BOOST_TEST(edge_free(FIRE));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

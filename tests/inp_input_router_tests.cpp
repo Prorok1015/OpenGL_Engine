@@ -1001,4 +1001,37 @@ BOOST_AUTO_TEST_CASE(UpdateStage_RoutesBeforeTheContextsRunAndRebuildsTheBinding
 	BOOST_TEST(stage_router.binding_count() == 0u); // consumed: the panels bind again next frame
 }
 
+// ---------------------------------------------------------------- inject (#624)
+
+BOOST_AUTO_TEST_CASE(Inject_WaitsForTheSetAndComesOutOnceInOrder)
+{
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	router.inject({ "level", "b" }, "Fire", inp::action_edge::pressed);
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::released);
+	router.inject({ "other", "a" }, "Jump", inp::action_edge::pressed);
+
+	const auto taken = router.take_injected("level");
+	BOOST_REQUIRE_EQUAL(taken.size(), 3u);
+	BOOST_TEST(taken[0].world == "a");
+	BOOST_TEST(taken[0].action == "Jump");
+	BOOST_TEST((taken[0].edge == inp::action_edge::pressed));
+	BOOST_TEST(taken[1].world == "b");
+	BOOST_TEST((taken[2].edge == inp::action_edge::released));
+	BOOST_TEST(router.take_injected("level").empty());
+	BOOST_TEST(router.take_injected("other").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Inject_WithoutAWorld_IsDropped)
+{
+	router.inject({ "level", "" }, "Jump", inp::action_edge::pressed);
+	BOOST_TEST(router.take_injected("level").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Inject_GoesWithTheSet)
+{
+	router.inject({ "level", "a" }, "Jump", inp::action_edge::pressed);
+	router.forget_set("level");
+	BOOST_TEST(router.take_injected("level").empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

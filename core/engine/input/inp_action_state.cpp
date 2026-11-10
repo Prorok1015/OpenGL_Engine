@@ -119,7 +119,7 @@ bool inp::action_state::released(std::string_view name) const
 }
 
 void inp::action_state::update(const action_map_ref& actions, const input_state& state, const input_bound& bound,
-	ecs::event_writer<action_event>* events, fixed_action_state* fixed, const action_input* reached)
+	ecs::event_writer<action_event>* events, fixed_action_state* fixed, const action_input* reached, const action_injection* injected)
 {
 	const auto emit = [events, fixed](action_id id, action_edge edge) {
 		if (events && events->bound()) events->emit(action_event{ id, edge });
@@ -165,23 +165,41 @@ void inp::action_state::update(const action_map_ref& actions, const input_state&
 		if (fresh) {
 			s.suppressed = down_bits;
 			s.armed = bound.bound && !down;
-			continue;
+		} else {
+			if (s.held && !down && !s.injected) {
+				s.held = false;
+				s.released = true;
+				emit(id, action_edge::released);
+			} else if (!s.held && down && may_press && (with_reach || s.armed)) {
+				s.held = true;
+				s.pressed = true;
+				emit(id, action_edge::pressed);
+			}
+			if (!bound.bound) {
+				s.armed = false;
+			} else if (!down) {
+				s.armed = true;
+			}
+			s.suppressed &= down_bits;
 		}
-		if (s.held && !down) {
-			s.held = false;
-			s.released = true;
-			emit(id, action_edge::released);
-		} else if (!s.held && down && may_press && (with_reach || s.armed)) {
-			s.held = true;
-			s.pressed = true;
-			emit(id, action_edge::pressed);
+		if (injected) {
+			for (const injected_edge& edge : injected->edges) {
+				if (edge.action != id) continue;
+				if (edge.edge == action_edge::pressed) {
+					s.injected = true;
+					if (s.held) continue;
+					s.held = true;
+					s.pressed = true;
+					emit(id, action_edge::pressed);
+				} else {
+					s.injected = false;
+					if (!s.held || down) continue;
+					s.held = false;
+					s.released = true;
+					emit(id, action_edge::released);
+				}
+			}
 		}
-		if (!bound.bound) {
-			s.armed = false;
-		} else if (!down) {
-			s.armed = true;
-		}
-		s.suppressed &= down_bits;
 		if (fixed) fixed->set_held(id, s.held);
 	}
 }
@@ -275,7 +293,8 @@ void inp::fixed_action_state::set_held(action_id id, bool held)
 }
 
 void inp::update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
-	const input_bound& bound, const action_map_ref& actions, const action_input& reached, action_state& out, fixed_action_state& fixed)
+	const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
+	action_state& out, fixed_action_state& fixed)
 {
-	out.update(actions, state, bound, &events, &fixed, &reached);
+	out.update(actions, state, bound, &events, &fixed, &reached, &injected);
 }
