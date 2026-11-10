@@ -178,7 +178,7 @@ BOOST_AUTO_TEST_CASE(Spawn_UnderAParent_ExtendsItsPath)
 	BOOST_REQUIRE(second != entt::null);
 	BOOST_TEST((reg->get<scn::parent_component>(second).parent == head));
 	BOOST_TEST(lists(head, second));
-	BOOST_TEST(at({ own_id(first), 0xa1, own_id(second), 0xa1, 0xa2 }) != entt::null);
+	BOOST_TEST((at({ own_id(first), 0xa1, own_id(second), 0xa1, 0xa2 }) != entt::null));
 }
 
 BOOST_AUTO_TEST_CASE(Spawn_IsRefused_InAWorldNotBuiltFromADesc_UnderAParentThatIsGone_OrForAPrefabThatDoesNotLoad)
@@ -206,7 +206,7 @@ BOOST_AUTO_TEST_CASE(Spawn_ByATagNotLoadedYet_LoadsItNow_AndSaysSoOnce)
 	const entt::entity second = scn::spawn_prefab(*reg, late);
 	BOOST_TEST((first != entt::null));
 	BOOST_TEST((second != entt::null));
-	BOOST_TEST(at({ own_id(first), 0xa1, 0xa2 }) != entt::null);
+	BOOST_TEST((at({ own_id(first), 0xa1, 0xa2 }) != entt::null));
 	BOOST_TEST(waits == 1u);
 }
 
