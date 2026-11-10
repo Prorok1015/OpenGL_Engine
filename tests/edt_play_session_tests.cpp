@@ -49,6 +49,7 @@
 #include <snk/scene/scn_time.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/level/scn_scene_switch.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/level/scn_level_desc.h>
