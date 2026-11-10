@@ -245,6 +245,8 @@ namespace
 		// button with nobody until it is released: it must not fall through to the others.
 		const inp::drag_hold drag{ hold.active, hold.captured, hold.owner.set == set_name ? hold.owner.context : std::string{}, hold.layer };
 		inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, drag, live_actions.get());
+		// The memory of fronts of every layer follows the physical state; the actions learn what is armed (INPUT_STACK.md 5).
+		inp::arm_actions(stack, resolved, raw, live_actions.get());
 
 		const bool stepping = set.mode() == ecs::run_mode::step;
 		for (const auto& e : entries) {

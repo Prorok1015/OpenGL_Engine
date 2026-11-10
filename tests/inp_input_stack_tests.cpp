@@ -62,6 +62,31 @@ bool reached(const inp::stack_resolution& resolved, const char* world, inp::acti
 	return in && action < in->actions.size() && in->actions[action].keys.test(key_index(key));
 }
 
+// What is physically down, as the router keeps it.
+struct physical_state
+{
+	physical_state& down(KEYBOARD_BUTTONS key) { state.keyboard[key_index(key)] = true; return *this; }
+	physical_state& up(KEYBOARD_BUTTONS key) { state.keyboard[key_index(key)] = false; return *this; }
+	physical_state& down(inp::MOUSE_BUTTONS button) { state.mouse[static_cast<std::size_t>(button)] = true; return *this; }
+	physical_state& up(inp::MOUSE_BUTTONS button) { state.mouse[static_cast<std::size_t>(button)] = false; return *this; }
+	inp::input_state state{};
+};
+
+// resolve and arm_actions of one frame.
+inp::stack_resolution frame_of(inp::input_stack& stack, const std::vector<std::string>& fed, glm::vec2 cursor, bool engaged,
+	const physical_state& physical, const inp::action_map& map)
+{
+	inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, {}, &map);
+	inp::arm_actions(stack, resolved, physical.state, &map);
+	return resolved;
+}
+
+bool armed(const inp::stack_resolution& resolved, const char* world, inp::action_id action, KEYBOARD_BUTTONS key)
+{
+	const inp::world_input* in = resolved.find(world);
+	return in && action < in->actions.size() && in->actions[action].armed_keys.test(key_index(key));
+}
+
 const std::vector<std::string> both{ "game", "ui" };
 const glm::vec2 outside{ 300.f, 300.f };
 const glm::vec2 inside{ 20.f, 20.f };
@@ -425,6 +450,181 @@ BOOST_AUTO_TEST_CASE(Actions_AMouseBindingFollowsTheClickRulesOfTheLayers)
 	menu.block_below = true;
 	stack.put("ui", 0, std::move(menu));
 	BOOST_TEST(!inp::resolve(stack, both, outside, true, {}, &map).find("game")->actions[FIRE].buttons);
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_AKeyHeldWhileTakenIsNotArmedWhenItReachesAgain_UntilItIsLetGo)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	inp::stack_layer_desc menu = layer("world", 5);
+	menu.keys.push_back(KEYBOARD_BUTTONS::SPACE);
+	stack.put("ui", 0, menu);
+	stack.put("game", 1, declaring("world", 0, { "Jump" }));
+	physical_state physical;
+
+	// Up: armed everywhere.
+	frame_of(stack, both, outside, false, physical, map);
+	// Held while the menu takes it: not reached, and the game's layer forgets that it was armed.
+	physical.down(KEYBOARD_BUTTONS::SPACE);
+	auto taken = frame_of(stack, both, outside, false, physical, map);
+	BOOST_TEST(!reached(taken, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!armed(taken, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+
+	// The menu goes while the key is still held: it reaches the game, but is not armed.
+	BOOST_REQUIRE(stack.remove("ui", "world"));
+	auto given_back = frame_of(stack, both, outside, false, physical, map);
+	BOOST_TEST(reached(given_back, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!armed(given_back, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+
+	// Let go: armed again; pressed again: reached and armed, a press.
+	physical.up(KEYBOARD_BUTTONS::SPACE);
+	frame_of(stack, both, outside, false, physical, map);
+	physical.down(KEYBOARD_BUTTONS::SPACE);
+	BOOST_TEST(armed(frame_of(stack, both, outside, false, physical, map), "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_ANewLayerDoesNotSeeAKeyThatIsAlreadyHeldAsAPress)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	stack.put("game", 0, declaring("world", 0, { "Jump" }));
+	physical_state physical;
+	frame_of(stack, { "game" }, outside, false, physical, map);
+
+	// The menu opens on a key that is still down (Escape that opened it must not close it): the new layer starts disarmed.
+	physical.down(KEYBOARD_BUTTONS::ESCAPE);
+	inp::stack_layer_desc menu = declaring("menu", 5, { "Close" });
+	const inp::action_map closing = [] {
+		inp::action_map out;
+		out.add("Close", { KEYBOARD_BUTTONS::ESCAPE });
+		return out;
+	}();
+	stack.put("game", 0, menu);
+	auto opened = frame_of(stack, { "game" }, outside, false, physical, closing);
+	BOOST_TEST(reached(opened, "game", 0, KEYBOARD_BUTTONS::ESCAPE));
+	BOOST_TEST(!armed(opened, "game", 0, KEYBOARD_BUTTONS::ESCAPE));
+
+	physical.up(KEYBOARD_BUTTONS::ESCAPE);
+	frame_of(stack, { "game" }, outside, false, physical, closing);
+	physical.down(KEYBOARD_BUTTONS::ESCAPE);
+	BOOST_TEST(armed(frame_of(stack, { "game" }, outside, false, physical, closing), "game", 0, KEYBOARD_BUTTONS::ESCAPE));
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_OneBindingHeldAndTakenForGood_DoesNotDisarmTheOther)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	inp::stack_layer_desc top = layer("world", 5);
+	top.keys.push_back(KEYBOARD_BUTTONS::A);
+	stack.put("ui", 0, top);
+	stack.put("game", 1, declaring("world", 0, { "MoveLeft" }));
+	physical_state physical;
+	frame_of(stack, both, outside, false, physical, map);
+
+	physical.down(KEYBOARD_BUTTONS::A);
+	frame_of(stack, both, outside, false, physical, map);
+	physical.down(KEYBOARD_BUTTONS::LEFT);
+	auto resolved = frame_of(stack, both, outside, false, physical, map);
+	BOOST_TEST(!armed(resolved, "game", MOVE_LEFT, KEYBOARD_BUTTONS::A));
+	BOOST_TEST(armed(resolved, "game", MOVE_LEFT, KEYBOARD_BUTTONS::LEFT));
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_TheMouseOverAnotherLayerWithoutAButton_LeavesTheClickArmed)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	stack.put("ui", 0, region_layer("world", 5, button));
+	stack.put("game", 1, declaring("world", 0, { "Fire" }));
+	physical_state physical;
+
+	// The cursor is over the ui's region, no button down: Fire does not reach, and stays armed.
+	frame_of(stack, both, inside, false, physical, map);
+	frame_of(stack, both, inside, false, physical, map);
+	physical.down(inp::MOUSE_BUTTONS::LEFT);
+	const auto clicked = frame_of(stack, both, outside, true, physical, map);
+	const inp::action_reach& fire = clicked.find("game")->actions[FIRE];
+	BOOST_TEST(fire.buttons);
+	BOOST_TEST(fire.armed_buttons.test(static_cast<std::size_t>(inp::MOUSE_BUTTONS::LEFT)));
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_TheMemoryGoesWithItsLayerItsWorldAndItsOwner)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	stack.put("game", 0, declaring("world", 0, { "Jump" }));
+	inp::stack_layer_desc modules_menu = layer("menu", 5);
+	modules_menu.owner = inp::layer_owner::module;
+	stack.put("game", 0, modules_menu);
+	stack.put("hud", 1, declaring("world", 0, { "Jump" }));
+	physical_state physical;
+	frame_of(stack, { "game", "hud" }, outside, false, physical, map);
+	BOOST_TEST(stack.memory_count() == 3u);
+
+	// A module unloads (or reloads): its layers and their memory go, the engine's stay.
+	stack.remove_owner(inp::layer_owner::module);
+	BOOST_TEST(stack.memory_count() == 2u);
+	BOOST_TEST(stack.find_memory("game", "menu") == nullptr);
+	BOOST_TEST(stack.find_memory("game", "world") != nullptr);
+
+	// A world dies: the memory of its layers goes.
+	stack.retain_worlds({ "game" });
+	BOOST_TEST(stack.memory_count() == 1u);
+	BOOST_TEST(stack.find_memory("hud", "world") == nullptr);
+
+	// One layer is removed.
+	BOOST_TEST(stack.remove("game", "world"));
+	BOOST_TEST(stack.memory_count() == 0u);
+	BOOST_TEST(!stack.remove("game", "world"));
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_TheSameLayerPutAgainKeepsItsMemory_AndAWorldMadeAgainStartsAnew)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	stack.put("game", 3, declaring("world", 0, { "Jump" }));
+	physical_state physical;
+	frame_of(stack, { "game" }, outside, false, physical, map);
+
+	// The base layer of every world is put every frame: it is the same layer.
+	physical.down(KEYBOARD_BUTTONS::SPACE);
+	stack.put("game", 3, declaring("world", 0, { "Jump" }));
+	auto held = frame_of(stack, { "game" }, outside, false, physical, map);
+	BOOST_TEST(armed(held, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+
+	// A world of the same name made again (another desc_index) while the key is held starts disarmed for it.
+	stack.put("game", 4, declaring("world", 0, { "Jump" }));
+	BOOST_TEST(stack.find_memory("game", "world") == nullptr);
+	auto again = frame_of(stack, { "game" }, outside, false, physical, map);
+	BOOST_TEST(reached(again, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!armed(again, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+}
+
+BOOST_AUTO_TEST_CASE(Fronts_AWorldThatDiesWhileItTakesAHeldKey_LeavesTheOnesBelowDisarmedUntilItIsLetGo)
+{
+	const inp::action_map map = make_actions();
+	inp::input_stack stack;
+	inp::stack_layer_desc menu = layer("world", 5);
+	menu.block_below = true;
+	stack.put("menu", 0, menu);
+	stack.put("game", 1, declaring("world", 0, { "Jump" }));
+	const std::vector<std::string> fed{ "game", "menu" };
+	physical_state physical;
+	frame_of(stack, fed, outside, false, physical, map);
+
+	physical.down(KEYBOARD_BUTTONS::SPACE);
+	frame_of(stack, fed, outside, false, physical, map);
+
+	// The menu world dies with the key held: its memory goes, the game's layer is still disarmed for that key.
+	stack.retain_worlds({ "game" });
+	BOOST_TEST(stack.find_memory("menu", "world") == nullptr);
+	auto after = frame_of(stack, { "game" }, outside, false, physical, map);
+	BOOST_TEST(reached(after, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!armed(after, "game", JUMP, KEYBOARD_BUTTONS::SPACE));
+
+	physical.up(KEYBOARD_BUTTONS::SPACE);
+	frame_of(stack, { "game" }, outside, false, physical, map);
+	physical.down(KEYBOARD_BUTTONS::SPACE);
+	BOOST_TEST(armed(frame_of(stack, { "game" }, outside, false, physical, map), "game", JUMP, KEYBOARD_BUTTONS::SPACE));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
