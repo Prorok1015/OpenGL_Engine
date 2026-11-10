@@ -34,6 +34,7 @@ namespace scn  { class ecs_assembler; class level_desc; }
 namespace ecs  { class system_factory; }
 namespace platform { class secret_store; }
 namespace inp  { class input_router; }
+namespace cmd  { class command_registry; }
 
 namespace edt {
 	class agent_server;
@@ -300,6 +301,8 @@ namespace edt {
 		// The policy and the confirmations behind the MCP server (editor/agent_server, editor/mcp_stdio, off by default);
 		// null when both are off.
 		std::unique_ptr<agent_access> m_agent_access;
+		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
+		cmd::command_registry* m_agent_argument_checks = nullptr;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		std::filesystem::path m_agent_server_settings_file;
