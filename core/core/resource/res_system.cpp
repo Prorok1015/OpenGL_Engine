@@ -661,8 +661,24 @@ void res::resource_system::await_blocks(
   state->on_done = std::move(on_done);
   state->pending = state->blocks.size();
   state->roles = std::move(roles);
-  // The dependencies (a parent's blocks too) hold only this id, never the state with its continuation.
-  const std::uint64_t id = register_await(state);
+  bool stopping = false;
+  std::uint64_t id = 0;
+  {
+    // Under the lock stop_loading sets m_stopping with: it either sees this wait in cancel_parked or we see it stopping.
+    std::lock_guard lock(m_stop_mutex);
+    stopping = m_stopping;
+    if (!stopping) {
+      // The dependencies (a parent's blocks too) hold only this id, never the state with its continuation.
+      id = register_await(state);
+    }
+  }
+  if (stopping) {
+    // Outside the lock: failing the owner runs its callbacks, which may take m_stop_mutex (run_on_compute).
+    if (!is_finished(*owner)) {
+      owner->set_error("Load cancelled");
+    }
+    return;
+  }
 
   const auto fail_owner = [](const std::shared_ptr<resource_handle> &block, const std::string &message) {
     if (!is_finished(*block)) {
