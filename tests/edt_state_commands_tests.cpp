@@ -291,7 +291,7 @@ BOOST_AUTO_TEST_CASE(SceneQuery_ACursorFromBeforeAnEditIsStale)
 	const auto again = call("scene.query", R"({"page_size":2})");
 	BOOST_REQUIRE(again.ok);
 	BOOST_TEST(at(again, "/generation").as_uint64() == generation + 1);
-	BOOST_TEST(call("scene.query", R"({"page_size":2,"cursor":")" + cursor_of(again) + "\"}").ok);
+	BOOST_TEST(call("scene.query", R"({"page_size":2,"cursor":")" + cursor_of(again) + R"("})").ok);
 }
 
 BOOST_AUTO_TEST_CASE(SceneQuery_ACursorOfAnotherQueryOrGarbageIsRefused)
@@ -305,7 +305,7 @@ BOOST_AUTO_TEST_CASE(SceneQuery_ACursorOfAnotherQueryOrGarbageIsRefused)
 
 	for (const char* garbage : { "x", "1.2.3", "1.2.3.zz", "" }) {
 		BOOST_TEST_CONTEXT(garbage) {
-			BOOST_TEST(call("scene.query", std::string(R"({"cursor":")") + garbage + "\"}").code == cmd::codes::invalid_args);
+			BOOST_TEST(call("scene.query", std::string(R"({"cursor":")") + garbage + R"("})").code == cmd::codes::invalid_args);
 		}
 	}
 }
@@ -696,7 +696,7 @@ BOOST_AUTO_TEST_CASE(AssetQuery_FiltersByGlobKindAndDirectory)
 
 	for (const char* bad : { "..", "../x", "models/../../x", "/etc" }) {
 		BOOST_TEST_CONTEXT(bad) {
-			BOOST_TEST(call("asset.query", std::string(R"({"directory":")") + bad + "\"}").code == cmd::codes::invalid_args);
+			BOOST_TEST(call("asset.query", std::string(R"({"directory":")") + bad + R"("})").code == cmd::codes::invalid_args);
 		}
 	}
 }
@@ -731,15 +731,15 @@ BOOST_AUTO_TEST_CASE(AssetQuery_DirectoryAndPatternsCannotReachOutsideTheLayers)
 BOOST_AUTO_TEST_CASE(Globs_AreBoundedAndCursorsMustBePlainText)
 {
 	const std::string many_stars = "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
-	BOOST_TEST(call("asset.query", R"({"glob":")" + many_stars + "\"}").code == cmd::codes::invalid_args);
-	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":")" + many_stars + "\"}}").code == cmd::codes::invalid_args);
-	BOOST_TEST(call("asset.query", R"({"glob":")" + std::string(129, 'a') + "\"}").code == cmd::codes::invalid_args);
-	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":")" + std::string(129, 'a') + "\"}}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("asset.query", R"({"glob":")" + many_stars + R"("})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":")" + many_stars + R"("}})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("asset.query", R"({"glob":")" + std::string(129, 'a') + R"("})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":")" + std::string(129, 'a') + R"("}})").code == cmd::codes::invalid_args);
 	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":"a\u0000"}})").code == cmd::codes::invalid_args);
 
 	// A run of stars is one star: the same answer, and it does not count against the limit.
 	const std::string run(40, '*');
-	BOOST_TEST((names_of_tags(call("asset.query", R"({"glob":")" + run + "ship" + run + "\"}")) == std::vector<std::string>{ "res://models/ship.glb" }));
+	BOOST_TEST((names_of_tags(call("asset.query", R"({"glob":")" + run + "ship" + run + R"("})")) == std::vector<std::string>{ "res://models/ship.glb" }));
 	BOOST_TEST((names_of(call("scene.query", R"({"filter":{"name_glob":"C)" + run + R"(2"}})")) == std::vector<std::string>{ "Crate2" }));
 
 	for (const char* cursor_json : { R"({"cursor":"1.2.3.\u0001"})", R"({"cursor":"a\\b"})" }) {
@@ -749,8 +749,8 @@ BOOST_AUTO_TEST_CASE(Globs_AreBoundedAndCursorsMustBePlainText)
 		}
 	}
 	const std::string long_cursor = std::string(600, '1');
-	BOOST_TEST(call("scene.query", R"({"cursor":")" + long_cursor + "\"}").code == cmd::codes::invalid_args);
-	BOOST_TEST(call("asset.query", R"({"cursor":")" + long_cursor + "\"}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"cursor":")" + long_cursor + R"("})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("asset.query", R"({"cursor":")" + long_cursor + R"("})").code == cmd::codes::invalid_args);
 }
 
 BOOST_AUTO_TEST_CASE(Replies_NeverCarryBytesThatAreNotUtf8)
