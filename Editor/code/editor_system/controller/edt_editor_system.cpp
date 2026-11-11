@@ -1342,7 +1342,8 @@ void edt::editor_system::create_panels(bool capture_log)
 	m_console_panel = std::make_shared<console_panel>();
 	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
 	m_asset_browser_panel->set_layers(m_res.get_resource_layers());
-	m_asset_browser_panel->set_ui_probe(std::make_shared<ui_probe>(cfg_ui_probe));
+	if (cfg_ui_probe)
+		m_asset_browser_panel->set_ui_probe(std::make_shared<ui_probe>());
 	if (const auto code_roots = m_res.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_res, code_tree_model{ code_roots.back() },
 			[](const std::filesystem::path& file) { return platform::open_in_shell(file); } };
