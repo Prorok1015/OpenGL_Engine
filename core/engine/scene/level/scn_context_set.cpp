@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_context_set.h>
+#include "scn_level_switch_slot.h"
 #include <snk/scene/scn_scene_layer.h>
 #include <algorithm>
 #include <utility>
@@ -27,6 +28,7 @@ scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_
 	, m_hot_reload_manager(options.hot_reload ? std::move(hot_manager) : std::shared_ptr<scn::hot_reload_manager>{})
 	, m_channel(m_name, std::move(channel_types))
 	, m_event_types(event_types ? std::move(event_types) : std::make_shared<ecs::bus_registry>())
+	, m_level_switch(std::make_unique<detail::level_switch_slot>())
 {
 }
 
@@ -76,6 +78,8 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 	begin_frame_channel(mode);
 
 	for (const auto& [id, context] : m_contexts) {
+		// Every frame: a restore or a rebuild may have replaced what the world's ctx held.
+		context->state().ctx().insert_or_assign(detail::level_switch_port{ this });
 		context->begin_frame(dt);
 	}
 
@@ -226,6 +230,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 		w.set_catalog(&m_layer->catalog());
 	}
 	m_channel.attach(id, w.get_name(), w.state());
+	w.state().ctx().insert_or_assign(detail::level_switch_port{ this });
 	bind_events(w).set_mode(m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue);
 	w.seed(m_seed);
 	w.set_mode(m_mode);

@@ -214,6 +214,22 @@ namespace app::modules {
 			return it != m_entries.end() && it->layer ? it->layer->unload_refusal() : std::string{};
 		}
 
+		// The name of an initialized module that depends on `name` (unload(name) refuses while one is there); empty when none
+		// does. Lets a host check before it touches anything.
+		std::string dependent_of(std::string_view name) const {
+			for (const auto& other : m_entries) {
+				if (other.state != module_state::initialized || other.module->name() == name) {
+					continue;
+				}
+				for (const auto dep : other.module->depends_on()) {
+					if (dep == name) {
+						return std::string{ other.module->name() };
+					}
+				}
+			}
+			return {};
+		}
+
 		void register_all_services(ds::app_data_storage& data) {
 			ensure_sorted();
 			for (auto& e : m_entries) {

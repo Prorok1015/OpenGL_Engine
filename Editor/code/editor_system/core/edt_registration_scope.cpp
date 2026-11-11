@@ -29,12 +29,12 @@ void edt::registration_scope::keep(connection handle)
 
 int edt::registration_scope::running_callbacks() const
 {
-	return ds::detail::running_callbacks(m_tasks);
+	return ds::detail::running_callbacks(m_tasks) + m_callbacks.running();
 }
 
 void edt::registration_scope::stop_tasks()
 {
-	ASSERT_MSG(ds::detail::running_callbacks(m_tasks) == 0,
+	ASSERT_MSG(running_callbacks() == 0,
 		"registration_scope: unloaded from inside one of the module's own callbacks");
 	m_tasks.refuse_new_tasks();
 	m_tasks.cancel_tasks();

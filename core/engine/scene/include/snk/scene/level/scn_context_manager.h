@@ -79,6 +79,16 @@ namespace scn
 		bool has_pending_level_reload() const { return m_pending_level_reload.is_valid(); }
 		void apply_pending_level_reload();
 
+		// scn::request_level (#564): a set whose request is ready is rebuilt from the new level desc at the start of
+		// update(), before any set runs; the kind of its worlds stays (Play's worlds stay kind::play). True while a
+		// request of any set still loads (a module reload waits for it, HOT_RELOAD_PLAY.md 5).
+		bool level_switch_pending() const;
+		// False: request_level refuses the set "level" at once (the editor: that set is the edited level). Kept across
+		// set_game_layer.
+		void set_level_set_switchable(bool switchable);
+		// After a set was rebuilt by a request (the editor rebinds Play's camera and input to the new worlds).
+		void set_on_level_switched(std::function<void(scn::context_set&)> cb) { m_on_level_switched = std::move(cb); }
+
 		// Called after every successful hot reload of the level (world list or only the systems
 		// changed), so owners of per-world data (the editor) can resync. Contexts that are not
 		// `kind::level` survive the reload.
@@ -212,6 +222,13 @@ namespace scn
 	private:
 		// The set "level" again from the changed level desc (only the level contexts), then m_on_reload.
 		void reload_level(const res::tag& changed_tag);
+		// Watches the level desc of the set "level" for hot reload, when the set takes part in it.
+		void watch_level(const res::tag& level_tag);
+		// Carries out every request whose level is ready, or marks it failed.
+		void apply_level_switches();
+		// Asks the resources for every requested level not asked for yet.
+		void start_level_loads();
+		void switch_level(scn::context_set& set, const res::tag& level_tag, const scn::level_desc& desc);
 		std::unique_ptr<scn::context_set> make_set(std::string_view name, scn::scene_layer* layer, scn::set_options options = {});
 		// The services that build the worlds of `set`: its layer's, or the base's.
 		ecs::system_factory& systems_of(const scn::context_set& set) { return set.layer() ? set.layer()->systems() : m_system_factory; }
@@ -245,6 +262,8 @@ namespace scn
 		// 3.0): new members go only after it. The base's sets point at it: the destructor clears them before any member goes.
 		scn::event_subscriptions m_subscriptions;
 		reload_result_callback m_on_reload_result;
+		bool m_level_set_switchable = true;
+		std::function<void(scn::context_set&)> m_on_level_switched;
 		std::shared_ptr<const bool> m_alive = std::make_shared<const bool>(true);
 	};
 }

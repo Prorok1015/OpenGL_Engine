@@ -332,6 +332,7 @@ edt::editor_system::~editor_system()
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
 		ctx_mgr->set_on_reload_result(nullptr);
+		ctx_mgr->set_on_level_switched(nullptr);
 	}
 }
 
@@ -722,6 +723,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	reload_options.defer = [this] {
 		if (auto loading = load_in_progress()) return *loading;
+		if (const auto contexts = m_services.ctx_manager.lock(); contexts && contexts->level_switch_pending()) {
+			return std::string{ "the game is switching to another level" };
+		}
 		// A second reload waits for the first one's restore (#600): its snapshot would see the set held in Pause.
 		if (m_play && m_play->reloading()) return std::string{ "Play is loading the resources of the last reload" };
 		return std::string{};
@@ -1389,6 +1393,11 @@ void edt::editor_system::wire_controller_callbacks()
 		});
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
 			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
+		});
+		// The set "level" is the edited document: a game's request_level only ever replaces the worlds of Play (#564).
+		ctx_mgr->set_level_set_switchable(false);
+		ctx_mgr->set_on_level_switched([this](scn::context_set& set) {
+			if (set.name() == k_play_set && m_play) m_play->on_level_switched();
 		});
 	}
 }

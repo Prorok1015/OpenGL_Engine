@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_api.h"
+#include "edt_callback_gate.h"
 #include "edt_editor_events.h"
 #include "edt_registration.h"
 #include <snk/common/ds/ds_task_system.hpp>
@@ -42,13 +43,16 @@ namespace edt
 		void clear();
 
 		std::size_t kept_count() const { return m_registrations.size() + m_connections.size(); }
-		// The module's callbacks (continuations of its tasks) that run now: unloading from inside one of them would
-		// destroy the code that runs it.
+		// The module's callbacks that run now (continuations of its tasks and the callbacks callbacks() counts): unloading
+		// from inside one of them would destroy the code that runs it.
 		int running_callbacks() const;
+		// Counts the callbacks the module registered (panels, actions, inspectors, asset kinds, event handlers).
+		callback_gate& callbacks() { return m_callbacks; }
 
 	private:
 		ds::task_system& m_tasks_system;
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
+		callback_gate m_callbacks;
 		std::vector<registration> m_registrations;
 		std::vector<connection> m_connections;
 		std::vector<std::function<void()>> m_cleanups;

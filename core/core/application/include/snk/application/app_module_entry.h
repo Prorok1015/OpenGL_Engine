@@ -50,6 +50,10 @@
 // that spawns prefabs needs an engine of 3.8 or newer.
 // 3.9 (#697): desc_system::get_field_desc, inline in module code, refuses a reference to user://, cache://, code://, edt:// through
 // the new export resource_system::refused_block; a module built for 3.9 needs an engine of 3.9. No layout changes.
+// 3.10 (#564): scn::request_level and scn::level_switch, new functions a game module imports, and the enum and struct
+// they use (scn::level_switch_status, scn::level_switch_state). scn::context_set gains a member at its end; the request
+// itself is a private ctx type of the engine. Nothing a module reads moves. A module that switches levels needs an
+// engine of 3.10 or newer.
 // 3.11 (#606): components without a C++ type. scn::register_schema_component, scn::schema_component_registration,
 // component_catalog::add_schema_component, scn::holds and the blob accessors are new exports; context_manager gains
 // members at its end (engine-made, not in the layout key). A module that registers one needs an engine of 3.11 or newer.
