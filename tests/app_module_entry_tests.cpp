@@ -62,6 +62,10 @@ std::uint32_t api_3_5() { return 0x0003'0005u; }
 std::uint32_t api_3_6() { return 0x0003'0006u; }
 // A module built before scn::spawn_prefab.
 std::uint32_t api_3_7() { return 0x0003'0007u; }
+// A module built before resource_system::refused_block (#697).
+std::uint32_t api_3_8() { return 0x0003'0008u; }
+// A module built before scn::request_level.
+std::uint32_t api_3_9() { return 0x0003'0009u; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -247,6 +251,26 @@ BOOST_AUTO_TEST_CASE(PrefabSpawnIsMinor3_8_AndAModuleBuiltFor3_7StillLoads)
 	auto entry = generated_entry();
 	entry.api_version = &api_3_7;
 	entry.build_info = +[]() { return info_with(api_3_7(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(RefusedReferencesAreMinor3_9_AndAModuleBuiltFor3_8StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 9u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_8;
+	entry.build_info = +[]() { return info_with(api_3_8(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(LevelSwitchIsMinor3_10_AndAModuleBuiltFor3_9StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 10u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_9;
+	entry.build_info = +[]() { return info_with(api_3_9(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
 	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 
