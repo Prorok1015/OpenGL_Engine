@@ -1142,4 +1142,36 @@ BOOST_AUTO_TEST_CASE(StackCommands_AQueueThatIsNotTakenStopsAtTheLimit_ForEachSe
 	BOOST_TEST(router.take_commands("level").size() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(RemoveOwner_TakesTheModulesLayersFromEverySet_AndItsQueuedCommands)
+{
+	inp::stack_layer_desc module_layer;
+	module_layer.name = "menu";
+	module_layer.owner = inp::layer_owner::module;
+	inp::stack_layer_desc editor_layer;
+	editor_layer.name = "tool";
+	editor_layer.owner = inp::layer_owner::editor;
+	router.stack("level").put("a", 0, module_layer);
+	router.stack("play").put("a", 0, module_layer);
+	router.stack("play").put("a", 0, editor_layer);
+	router.queue_command("play", { .kind = inp::stack_command_kind::set_world_active, .world = "a", .active = false, .source = inp::layer_owner::module });
+
+	router.remove_owner(inp::layer_owner::module);
+
+	BOOST_TEST(router.stack("level").size() == 0u);
+	BOOST_TEST(router.stack("play").size() == 1u);
+	BOOST_TEST(router.stack("play").find("a", "tool") != nullptr);
+	BOOST_TEST(router.take_commands("play").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Liveness_EndsWithTheRouter)
+{
+	std::weak_ptr<inp::input_router*> token;
+	{
+		inp::input_router other{ source };
+		token = other.liveness();
+		BOOST_TEST(!token.expired());
+	}
+	BOOST_TEST(token.expired());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
