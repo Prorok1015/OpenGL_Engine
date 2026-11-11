@@ -233,10 +233,7 @@ json::value find_material_texture(
 				desc["name"] = emb_tag.pure_name();
 				desc["data"] = json::value_from(emb_tag);
 
-				std::string s = json::serialize(desc);
-				std::vector<std::byte> desc_data(s.size());
-				std::memcpy(desc_data.data(), s.data(), s.size());
-				res_sys.store(desc_tag, desc_data);
+				res_sys.store(desc_tag, desc::pretty_json_bytes(desc));
 				out_tags.created.push_back(desc_tag);
 			}
 			out_tags.all.push_back(desc_tag);
@@ -276,10 +273,7 @@ json::value find_material_texture(
 			desc["name"] = texture_name;
 			desc["data"] = json::value_from(tex_data_tag);
 
-			std::string s = json::serialize(desc);
-			std::vector<std::byte> desc_data(s.size());
-			std::memcpy(desc_data.data(), s.data(), s.size());
-			res_sys.store(desc_tag, desc_data);
+			res_sys.store(desc_tag, desc::pretty_json_bytes(desc));
 			out_tags.created.push_back(desc_tag);
 		}
 		out_tags.all.push_back(desc_tag);
@@ -368,10 +362,7 @@ json::value process_material(
 		std::format("{0}materials/{1}.mat.desc", mem_prefix, res::sanitize_relative_path(mat_name)) };
 
 	if (!already_there(out_tags, res_sys, mat_tag)) {
-		std::string s = json::serialize(jsmaterial);
-		std::vector<std::byte> data(s.size());
-		std::memcpy(data.data(), s.data(), s.size());
-		res_sys.store(mat_tag, data);
+		res_sys.store(mat_tag, desc::pretty_json_bytes(jsmaterial));
 		out_tags.created.push_back(mat_tag);
 	}
 	out_tags.all.push_back(mat_tag);
