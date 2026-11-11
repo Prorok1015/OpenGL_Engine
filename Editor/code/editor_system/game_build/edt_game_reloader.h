@@ -3,6 +3,7 @@
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
+#include <snk/project/prj_project.h>
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -18,10 +19,25 @@ namespace edt
 	class action_registry;
 	class dialog_service;
 
+	// The modules a build reports and a reload may take (#664): the project's runtime modules first, in manifest order, then its
+	// editor modules, so a reload without a name keeps taking the game module.
+	std::vector<std::string> project_module_names(const prj::project_context& project);
+
 	struct game_reloader_options
 	{
-		// The runtime modules of the open project's manifest; empty without a project.
+		// The modules of the open project's manifest: the runtime ones first, then the editor ones (#664); empty without a
+		// project. A reload without a module name takes the first of them that has a build.
 		std::function<std::vector<std::string>()> modules;
+		// `module` is an editor module (kind "editor"): it reloads on its own, with no Play snapshot and no swap gate, and is
+		// not reloaded when it is the build already in use. Null: none is.
+		std::function<bool(const std::string& module)> is_editor_module;
+		// The running copy of `module` was made from the build output as it is now (project_module_host::is_current). Used for
+		// editor modules only: the reload of the game module reloaded them already. Null: never.
+		std::function<bool(const std::string& module)> is_current;
+		// Reloading `module` unloads editor modules (an editor module, or any module while editor modules are loaded): the
+		// action then never reloads inside the call, which may come from one of their callbacks (a panel's button), but on the
+		// next UI frame (each_frame), as for a live build. Null: never.
+		std::function<bool(const std::string& module)> unloads_editor_modules;
 		// The build of a module in the project's build output, if there is one.
 		std::function<std::optional<std::filesystem::path>(const std::string& module)> build_output;
 		// Swaps the running module for its new build (core::project_module_host::reload with the editor's hooks).
@@ -68,33 +84,44 @@ namespace edt
 
 		// Why build.reload_game_module is disabled; empty when it is enabled. Looks at the disk at most once a second.
 		[[nodiscard]] std::string disabled_reason() const;
-		// Empty `module`: the first runtime module that has a build.
+		// Empty `module`: the first runtime module that has a build, else every editor module that has one (a build of
+		// `game_editor` alone); a module named is reloaded whatever else is built, current or not.
 		core::reload_report reload(const std::string& module);
-		// reload without the message for a build not taken: the caller reports it (live mode, #445).
+		// reload without the message for a build not taken: the caller reports it (live mode, #445). An editor module that is
+		// the build in use is not reloaded again ("already up to date"): live mode asks for every module a build made.
 		core::reload_report reload_quiet(const std::string& module);
 		// Both of the above refuse while `defer` names a reason. These wait instead: now, or on the first frame without
 		// a reason (each_frame), and hand the report to `done`. Without each_frame: now. Requests for a module that
 		// already waits join that wait: one swap, every `done` gets its report, and the messages are shown when any
 		// request was not quiet. A reloader destroyed while a reload waits never calls its `done`.
-		void reload_when_ready(const std::string& module);
+		// `only_if_stale`: an editor module that is the build in use is skipped (the reload after a build asks for every
+		// module the build made, and the reload of the game module reloaded the editor modules already); a request of the
+		// person's (false) that joins the wait makes it a real reload.
+		void reload_when_ready(const std::string& module, bool only_if_stale = false);
 		void reload_quiet_when_ready(const std::string& module, std::function<void(const core::reload_report&)> done);
 		// Why a reload must wait now; empty: it may run.
 		[[nodiscard]] std::string defer_reason() const;
 
 	private:
-		std::optional<std::string> pick(const std::string& module) const;
-		// `who` gets the module the report is about: the picked one, else `module`.
-		core::reload_report attempt(const std::string& module, std::string& who, bool by_person);
+		// The built modules a request for `module` reloads: the one named; none named: the first runtime module, else every editor module.
+		std::vector<std::string> targets(const std::string& module) const;
+		bool is_editor(const std::string& module) const;
+		// A build runs, a live build is being stopped or `defer` names a reason: the reload is refused for now.
+		std::optional<core::reload_report> holding_back() const;
+		core::reload_report reload_one(const std::string& module, bool by_person, bool skip_current);
+		// All the targets of `module`: the first report that was not `reloaded`, else the last. Each is told to the person when `tell_it`.
+		core::reload_report run(const std::string& module, bool tell_it, bool skip_current);
 		core::reload_report tell(const std::string& module, core::reload_report report);
 		// The action during a live build or while `defer` names a reason: stops the live build and queues the reload
 		// until nothing holds it. {status: queued} or the refusal.
 		action_result queue_action_reload(const std::string& module);
 		// Joins or starts the wait of `module` (k_wait_frame_id): polls until neither a build nor `defer` holds it.
-		void wait_then_reload(const std::string& module, bool quiet, std::function<void(const core::reload_report&)> done);
+		void wait_then_reload(const std::string& module, bool quiet, std::function<void(const core::reload_report&)> done, bool only_if_stale);
 
 		struct waiting_reload
 		{
 			bool tell = false;
+			bool only_if_stale = true;
 			std::vector<std::function<void(const core::reload_report&)>> done{};
 		};
 		bool any_build_running() const;

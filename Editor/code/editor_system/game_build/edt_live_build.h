@@ -93,8 +93,11 @@ namespace edt
 		// The copy in use was made from the build/bin file as it is now (core::project_module_host::is_current).
 		// Null: never, so every reload is requested.
 		std::function<bool(const std::string& module)> is_loaded_current;
-		// The project's runtime modules: what reload_now looks at before any live build succeeded. Null: none.
+		// The project's modules, the runtime ones first, then the editor ones (#664): what reload_now looks at before any live
+		// build succeeded. Null: none.
 		std::function<std::vector<std::string>()> modules;
+		// `module` is an editor module: the problems of its reload say so. Null: none is.
+		std::function<bool(const std::string& module)> is_editor_module;
 		// A module reload is queued for the next UI frame (#435's or live mode's); no build starts meanwhile, since it
 		// would refuse the reload. Null: never.
 		std::function<bool()> reload_pending;
