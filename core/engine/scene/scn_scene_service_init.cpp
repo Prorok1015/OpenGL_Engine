@@ -5,6 +5,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/input/inp_action_state.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_camera_controller_system.h>
 #include <snk/scene/scn_component_catalog.h>
@@ -16,6 +17,11 @@
 #include <snk/render/rnd_frame_assembler.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/render/rnd_render_system.h>
+
+void scn::register_engine_event_types(scn::context_manager &contexts) {
+  contexts.add_event<inp::action_event>();
+  contexts.add_event<scn::animation_finished>();
+}
 
 void scn::scene_init(ds::app_data_storage &store) {
   auto &desc_sys = store.require<desc::desc_system>();
@@ -33,9 +39,9 @@ void scn::scene_init(ds::app_data_storage &store) {
       resource, assembler, sfactory,
       store.require_shared<scn::hot_reload_manager>());
   scn::register_engine_components(contexts.catalog());
-  contexts.add_event<inp::action_event>();
-  // Engine event types (contexts.add_event<T>(), WORLD_BUS.md) go above this line: a layer takes the base's types
-  // as they are when it is created, and add_event refuses once a layer exists.
+  scn::register_engine_event_types(contexts);
+  // Engine event types go into register_engine_event_types, above this line: a layer takes the base's types as they
+  // are when it is created, and add_event refuses once a layer exists.
   // The game worlds always live in a layer, empty until a game module fills it (MODULE_LAYER.md).
   contexts.set_game_layer(&contexts.create_layer());
   store.construct<rnd::skinning_manager>();

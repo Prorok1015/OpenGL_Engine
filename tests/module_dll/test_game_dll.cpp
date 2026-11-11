@@ -4,6 +4,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
@@ -133,6 +134,13 @@ void dll_animate(entt::registry& reg, entt::view<entt::get_t<scn::animation_cont
 	}
 }
 
+void dll_back_to_idle(entt::registry& reg, const ecs::event_reader<scn::animation_finished>& finished)
+{
+	for (const auto& e : finished.events()) {
+		if (reg.valid(e.payload.entity)) scn::play_animation(reg, e.payload.entity, "idle");
+	}
+}
+
 // One call to spawn a segment, one to remove one: no hand-made entities, no cleanup of the systems' queues.
 struct dll_snake : ecs::system_interface
 {
@@ -197,6 +205,8 @@ private:
 		});
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
 		layer.systems().register_system<&dll_animate>(std::string{ dll_game::animate_system_name });
+		layer.systems().register_system<&dll_back_to_idle>(std::string{ dll_game::back_to_idle_system_name },
+			{ .phase = ecs::phase::post_update });
 		layer.systems().register_system<&dll_keeper::run, dll_keeper>(std::string{ dll_game::keeper_system_name }, {});
 		layer.systems().register_system<&dll_snake::run, dll_snake>(std::string{ dll_game::snake_system_name }, {});
 		layer.systems().register_system<&dll_menu>(std::string{ dll_game::menu_system_name });

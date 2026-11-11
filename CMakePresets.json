@@ -169,6 +169,13 @@
       "cacheVariables": { "SNK_ENGINE_SHARED": "OFF" }
     },
     {
+      "name": "ci-windows-msvc-pch-debug",
+      "inherits": "ci-windows-msvc-debug",
+      "displayName": "CI Windows MSVC Debug shared engine with PCH",
+      "description": "The shared engine with precompiled headers forced on (#557): AUTO turns them off on MSVC with sccache, so no other Windows build compiles through the PCH",
+      "cacheVariables": { "SNK_PCH": "ON" }
+    },
+    {
       "name": "ci-windows-msvc-static-release",
       "inherits": "ci-windows-msvc-release",
       "displayName": "CI Windows MSVC Release static engine (SDK)",

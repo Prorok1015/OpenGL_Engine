@@ -229,3 +229,22 @@ wasm — инструмент разработки; при упаковке дв
   - `user://` создан в `resource/user_path`;
   - временная папка запуска не осталась.
 - Этим закрыт критерий #160 «собираются режимы DLL и STATIC»: шаблон собирает `game.dll` (DLL) и исполняемый файл со статическим движком (STATIC).
+
+## Файлы проекта: общие и личные (#556)
+
+Шаблон `Editor/data/templates/projects/empty/.gitignore` держит личное вне git. Новый проект после работы редактора даёт чистый `git status`; проверяется тестом `RealRepository_TheProjectTemplate_KeepsWhatTheEditorWritesOutOfGit`.
+
+| Путь | Что это | В git |
+|---|---|---|
+| `project.snkproj` | манифест проекта | да |
+| `res/` | ресурсы игры | да |
+| `code/` (кроме `CMakeUserPresets.json`) | исходники модулей, `CMakeLists.txt`, `CMakePresets.json` команды | да |
+| `.snk/agent_policy.json` | политика агентов проекта | да |
+| `code/CMakeUserPresets.json` | личные define и jobs (#444) | нет |
+| `build/` | деревья сборки | нет |
+| `.cache/` | `memory://`, тестовые профили `user://` (`user_profile/`, `play_profile/`), копии модулей (`modules/`), отчёты hot reload | нет |
+| `.snk/*`, кроме `agent_policy.json` | `mcp.json` (подключение и токен), `build.json` (настройки сборки) | нет |
+| `logs/` | журнал редактора (`logger/file`, по умолчанию `logs/engine.log`) | нет |
+| `layout_settings.ini` | раскладка окон редактора | нет |
+
+`logs/` и `layout_settings.ini` пишутся относительно текущей папки процесса, а не корня проекта. В проект они попадают, если редактор запущен из его папки. Перенос в `.cache/` и в настройки пользователя — #713.

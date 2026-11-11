@@ -68,6 +68,8 @@ std::uint32_t api_3_8() { return 0x0003'0008u; }
 std::uint32_t api_3_9() { return 0x0003'0009u; }
 // A module built before gs::module_context::register_component (#606).
 std::uint32_t api_3_11() { return 0x0003'000Bu; }
+// A module built before scn::animation_finished.
+std::uint32_t api_3_12() { return 0x0003'000Cu; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -283,6 +285,16 @@ BOOST_AUTO_TEST_CASE(SchemaComponentsOfAModuleAreMinor3_12_AndAModuleBuiltFor3_1
 	auto entry = generated_entry();
 	entry.api_version = &api_3_11;
 	entry.build_info = +[]() { return info_with(api_3_11(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnimationFinishedIsMinor3_13_AndAModuleBuiltFor3_12StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 13u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_12;
+	entry.build_info = +[]() { return info_with(api_3_12(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
 	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 
