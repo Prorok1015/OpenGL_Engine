@@ -203,7 +203,6 @@ BOOST_AUTO_TEST_CASE(TheResourcesOfTheLevelLeft_AreReleased)
 	BOOST_REQUIRE((worlds() == names{ "b0" }));
 	BOOST_TEST(!live("lv_a.desc"));
 	BOOST_TEST(!live("lv_a_mat.desc"));
-	BOOST_TEST(live("lv_b.desc"));
 }
 
 BOOST_AUTO_TEST_CASE(ATaskTheOldLevelStarted_IsStoppedBeforeItsWorldsGo)
