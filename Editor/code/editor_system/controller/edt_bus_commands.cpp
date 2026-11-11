@@ -107,9 +107,19 @@ namespace {
 		out["reload"] = static_cast<std::int64_t>(at.play->reload_number());
 	}
 
-	// "inp::action_event" is asked for as itself or as "action_event".
-	bool type_matches(std::string_view type, std::string_view wanted)
+	// entt's name as MSVC spells it ("struct inp::action_event") without the keyword, as GCC and Clang spell it.
+	std::string_view plain_type_name(std::string_view type)
 	{
+		for (const std::string_view keyword : { "struct ", "class ", "enum ", "union " }) {
+			if (type.starts_with(keyword)) return type.substr(keyword.size());
+		}
+		return type;
+	}
+
+	// "inp::action_event" is asked for as itself or as "action_event".
+	bool type_matches(std::string_view full, std::string_view wanted)
+	{
+		const std::string_view type = plain_type_name(full);
 		if (type == wanted) return true;
 		return type.size() > wanted.size() + 2 && type.ends_with(wanted) && type.substr(type.size() - wanted.size() - 2, 2) == "::";
 	}
@@ -181,7 +191,7 @@ namespace {
 		for (auto it = picked.rbegin(); it != picked.rend(); ++it) {
 			const ecs::bus_journal_entry& entry = **it;
 			json::object event;
-			event["type"] = safe_string(entry.type);
+			event["type"] = safe_string(plain_type_name(entry.type));
 			event["delivery"] = static_cast<std::int64_t>(entry.delivery);
 			event["seq"] = static_cast<std::int64_t>(entry.seq);
 			event["from"] = entry.from ? json::value(safe_string(*entry.from)) : json::value(nullptr);
