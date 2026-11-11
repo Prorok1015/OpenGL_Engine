@@ -68,12 +68,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Linux dependencies
+      - name: Install Linux packages
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
@@ -235,12 +234,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
-            xvfb libgl1-mesa-dri xdotool imagemagick
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev xvfb libgl1-mesa-dri xdotool imagemagick
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -326,11 +323,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -422,11 +418,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -523,11 +518,13 @@ jobs:
             rm -rf "$bin/CMakeCache.txt" "$bin/CMakeFiles"
           done
 
-      - name: Install dependencies
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Install Python tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
           python3 -m pip install --user gcovr
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
@@ -645,12 +642,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
-            xvfb libgl1-mesa-dri xdotool imagemagick
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev xvfb libgl1-mesa-dri xdotool imagemagick
 
       # Own ccache key; the preset is the one the removed Linux GCC Debug build job used.
       - name: Set up compiler cache
@@ -873,11 +868,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev jq
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev jq
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -952,11 +946,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
