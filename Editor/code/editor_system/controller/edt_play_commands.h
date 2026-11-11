@@ -10,6 +10,7 @@
 namespace edt
 {
 	class action_registry;
+	class dialog_service;
 	class play_session;
 
 	struct play_commands_deps
@@ -19,6 +20,10 @@ namespace edt
 		std::function<play_session*()> play{};
 		// A person's gesture is in progress: an agent's play.start gets `busy` (as scene.*). Null: never.
 		std::function<bool()> person_is_editing{};
+		// Asks the person whether to play past the errors of the check before Play (#597). Null: the menu only refuses.
+		dialog_service* dialogs = nullptr;
+		// Shows the Problems panel ("Show problems" of that question). Null: the button does nothing.
+		std::function<void()> show_problems{};
 	};
 
 	// The Play menu as commands for people and agents alike (US-63-C, #491), all of agent category `play`:
@@ -28,6 +33,10 @@ namespace edt
 	// "play" simulated since Start (context_set::frames_run), `worlds` its worlds. A call of an agent origin changes the
 	// state with play_reason::agent, any other with user. Menu items are enabled as before (Play while a person edits:
 	// no; Step: only paused); an agent's call is judged by the command alone and gets the reason of a refusal.
+	// play.start first runs the check before Play (#597): with an error, a call that is not a person's is `failed` and
+	// a person's is `needs_input`, both with `{problems: [{severity, code, message, world, path?, json_path?}]}`; the
+	// menu item (activate) then asks "Play anyway / Show problems / Cancel" (headless: cancelled, logged). Only that
+	// answer lets Play past the errors, once; an agent has no way around them.
 	[[nodiscard]] std::vector<registration> register_play_commands(action_registry& actions, play_commands_deps deps);
 
 	struct play_frame_commands
