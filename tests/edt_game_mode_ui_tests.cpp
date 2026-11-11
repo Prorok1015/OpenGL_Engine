@@ -1,20 +1,28 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_panel_registry.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
+#include "edt_agent_confirmations.h"
+#include "edt_agent_policy.h"
 #include "edt_dockspace.h"
 #include "edt_editor_layer.h"
 #include "edt_editor_mode.h"
 #include "edt_input_binding.h"
+#include "test_temp_dir.hpp"
 #include <snk/editor/edt_panel_base.h>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <chrono>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 // Game mode (#294) on a bare ImGui context: the dock layout outlives a stretch without the DockSpace, the full-window
 // Game view binds no input under a popup, and the start level of --game is only a res:// tag. The loading screen of
@@ -68,6 +76,101 @@ struct empty_panel : edt::panel_base
 
 protected:
 	void on_render() override {}
+};
+
+
+// #470: the shortcuts of the editor and the two kinds of question that can wait for a person. One action on F5 stands for
+// Ctrl+S and the others (any chord goes through the same pass); `modal_active` is what editor_system wires.
+struct shortcut_rig
+{
+	shortcut_rig()
+	{
+		dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+		edt::action_desc press;
+		press.id = "t.press";
+		press.label = "Press";
+		press.menu_path = "File";
+		press.shortcut = "F5";
+		press.execute = edt::no_args([this] { ++presses; });
+		registrations.push_back(actions.add(std::move(press)));
+		layouts.modal_active = [this] { return dialogs.pending() > 0; };
+	}
+
+	// The shortcut pass and the dialogs in the order of the editor's frame, plus what `extra` draws (a window).
+	void draw()
+	{
+		edt::draw_layouts(dock, panels, actions, layouts);
+		if (extra) extra();
+		dialogs.update();
+	}
+	void frame()
+	{
+		ui.frame([this] { draw(); });
+	}
+	void press(ImGuiKey key)
+	{
+		ui.frame_with_key(key, [this] { draw(); });
+	}
+	void ask_modal(int& answered, std::optional<std::size_t>& choice)
+	{
+		dialogs.choose("Question", "Really?", { "Yes", "No" }, [&](std::optional<std::size_t> picked) {
+			choice = picked;
+			++answered;
+		});
+	}
+
+	ui_frames ui;
+	edt::panel_registry panels;
+	edt::action_registry actions;
+	std::vector<edt::registration> registrations;
+	edt::dockspace dock;
+	edt::dialog_service dialogs;
+	edt::editor_layouts layouts;
+	std::function<void()> extra;
+	int presses = 0;
+};
+
+// A real question of an agent (agent_confirmations), drawn by draw_agent_confirmations: an ordinary window.
+struct agent_question
+{
+	agent_question()
+	{
+		cmd::command_desc desc;
+		desc.id = "code.create";
+		desc.category = cmd::agent_category::code_files;
+		desc.summary = "does code.create";
+		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.invoke = [](const cmd::call&) { return cmd::result::success(); };
+		registrations.push_back(commands.add(std::move(desc)));
+		gate->set_can_ask(true);
+		gate->set_session_grants(&grants);
+		commands.set_policy_gate(gate);
+		confirmations = std::make_unique<edt::agent_confirmations>(commands, grants, [this] { return now; });
+	}
+
+	// Answers what still waits, into `finished`: it must go before the members it uses.
+	~agent_question()
+	{
+		confirmations.reset();
+	}
+
+	void ask()
+	{
+		cmd::call request;
+		request.args = boost::json::object{};
+		request.from = cmd::origin::agent("s1");
+		confirmations->invoke("code.create", std::move(request), [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
+	}
+
+	test_util::temp_dir dir{ "edt_modal_shortcuts" };
+	cmd::command_registry commands;
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	edt::session_grants grants;
+	std::shared_ptr<edt::agent_policy_gate> gate = std::make_shared<edt::agent_policy_gate>(policy);
+	std::chrono::steady_clock::time_point now{};
+	std::vector<cmd::registration> registrations;
+	std::vector<cmd::result> finished;
+	std::unique_ptr<edt::agent_confirmations> confirmations;
 };
 
 }
@@ -214,6 +317,67 @@ BOOST_AUTO_TEST_CASE(TheGameLevel_IsOnlyAPortableResTag)
 			"res://c:/main.desc", "RES://levels/main.desc", "../main.desc" }) {
 		BOOST_TEST(!edt::game_level_problem(refused).empty(), refused);
 	}
+}
+
+BOOST_AUTO_TEST_CASE(Shortcuts_DoNotFireWhileADialogModalWaits_AndEscapeStillCancelsIt)
+{
+	shortcut_rig rig;
+	rig.press(ImGuiKey_F5);
+	BOOST_TEST(rig.presses == 1);
+
+	int answered = 0;
+	std::optional<std::size_t> choice = 0u;
+	rig.ask_modal(answered, choice);
+	BOOST_REQUIRE(rig.dialogs.pending() == 1u);
+	rig.frame();
+	rig.frame();
+	rig.press(ImGuiKey_F5);
+	BOOST_TEST(rig.presses == 1);
+	BOOST_TEST(rig.dialogs.pending() == 1u);
+
+	rig.press(ImGuiKey_Escape);
+	BOOST_TEST(answered == 1);
+	BOOST_TEST(!choice.has_value());
+	BOOST_TEST(rig.dialogs.pending() == 0u);
+
+	rig.press(ImGuiKey_F5);
+	BOOST_TEST(rig.presses == 2);
+}
+
+BOOST_AUTO_TEST_CASE(Shortcuts_KeepWorkingUnderTheAgentQuestion_ButNotUnderAModalDialogAboveIt)
+{
+	shortcut_rig rig;
+	agent_question agent;
+	rig.extra = [&agent] { edt::draw_agent_confirmations(*agent.confirmations); };
+	agent.ask();
+	BOOST_REQUIRE(agent.confirmations->pending().size() == 1u);
+	rig.frame();
+	rig.frame();
+
+	rig.press(ImGuiKey_F5);
+	BOOST_TEST(rig.presses == 1);
+	// Its window reads no key: Enter and Escape change nothing there, as before.
+	rig.press(ImGuiKey_Enter);
+	rig.press(ImGuiKey_Escape);
+	BOOST_TEST(agent.confirmations->pending().size() == 1u);
+	BOOST_TEST(agent.finished.empty());
+
+	int answered = 0;
+	std::optional<std::size_t> choice = 0u;
+	rig.ask_modal(answered, choice);
+	rig.frame();
+	rig.frame();
+	rig.press(ImGuiKey_F5);
+	BOOST_TEST(rig.presses == 1);
+
+	rig.press(ImGuiKey_Escape);
+	BOOST_TEST(answered == 1);
+	BOOST_TEST(!choice.has_value());
+	BOOST_TEST(agent.confirmations->pending().size() == 1u);
+	BOOST_TEST(agent.finished.empty());
+
+	rig.press(ImGuiKey_F5);
+	BOOST_TEST(rig.presses == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

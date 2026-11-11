@@ -311,6 +311,7 @@ edt::editor_system::~editor_system()
 	if (editor_layer) {
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
 		editor_layer->set_loading_screen(nullptr, nullptr);
+		editor_layer->set_modal_probe(nullptr);
 	}
 	m_mode_changed.disconnect();
 	m_modes.reset();
@@ -1253,6 +1254,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	editor_layer->set_loading_screen(
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
 		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label())); });
+	editor_layer->set_modal_probe([this] { return m_context->dialogs().pending() > 0; });
 	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});

@@ -16,7 +16,9 @@ edt::drawn_layout edt::draw_layouts(dockspace& dock, panel_registry& panels, act
 	// Before either layout, so a shortcut also works without the menu bar; an action that switches the layout
 	// takes effect in this frame. In game mode the other keys belong to the game.
 	const std::function<bool(std::string_view)> any;
-	fire_shortcuts(actions, game() ? layouts.game_shortcuts : any);
+	if (!(layouts.modal_active && layouts.modal_active())) {
+		fire_shortcuts(actions, game() ? layouts.game_shortcuts : any);
+	}
 	if (game()) {
 		dock.keep_alive();
 		layouts.draw_game();
