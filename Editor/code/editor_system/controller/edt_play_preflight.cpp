@@ -145,11 +145,19 @@ namespace {
 		void check_component(const std::string& key, const scn::prefab_desc::prefab_comp_node& component,
 			const std::vector<std::uint64_t>& path, const std::string& json_path)
 		{
-			const std::string& type = component.type_name.empty() ? key : component.type_name;
 			if (component.parent_desc.is_valid() && component.parent_desc.has_error()) {
 				add(edt::problem_severity::error, "missing_resource", std::format("component '{}': its __parent '{}' did not load", key,
 					component.parent_desc.get_tag().view()), path, json_path + "/__parent");
+				if (component.type_name.empty()) return;
 			}
+			// `"key": "<tag>"` names no type: it is the type of the desc it refers to, as the assembler spawns it.
+			std::string type = component.type_name;
+			if (type.empty() && component.parent_desc.is_valid()) {
+				// Still loading: the check waits for nothing, so there is no type to judge yet.
+				if (!component.parent_desc.is_ready()) return;
+				type = std::string(component.parent_desc->get_type());
+			}
+			if (type.empty()) type = key;
 			if (services.descs && !services.descs->is_registered(type)) {
 				add(edt::problem_severity::error, "unknown_component", std::format("component '{}': the type '{}' is not registered", key, type),
 					path, json_path);

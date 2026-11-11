@@ -3011,6 +3011,19 @@ BOOST_AUTO_TEST_CASE(a_web_address_in_a_text_field_does_not_stop_an_agent)
 	BOOST_TEST(!edt::has_errors(found));
 }
 
+BOOST_AUTO_TEST_CASE(a_component_given_as_a_tag_has_the_type_of_the_desc_it_refers_to)
+{
+	open_level();
+	const res::tag stat = put("stat_ref.desc", R"({"__type":"stat_desc","hp":2})");
+	scn::prefab_desc::prefab_comp_node given;
+	given.parent_desc = rs->require_sync<desc::desc_base>(stat);
+	BOOST_REQUIRE(given.parent_desc.is_ready());
+	// The key is a name, not a type (`"skybox": "res://skybox/skybox.desc"` of the sandbox's level).
+	crate().components["skybox"] = std::move(given);
+
+	BOOST_TEST(edt::run_play_preflight(state, checks()).empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_parent_that_did_not_load_is_an_error)
 {
 	open_level();
