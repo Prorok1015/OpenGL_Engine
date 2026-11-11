@@ -50,7 +50,10 @@
 // that spawns prefabs needs an engine of 3.8 or newer.
 // 3.9 (#697): desc_system::get_field_desc, inline in module code, refuses a reference to user://, cache://, code://, edt:// through
 // the new export resource_system::refused_block; a module built for 3.9 needs an engine of 3.9. No layout changes.
-#define SNK_MODULE_API_VERSION 0x0003'0009u // major << 16 | minor
+// 3.11 (#606): components without a C++ type. scn::register_schema_component, scn::schema_component_registration,
+// component_catalog::add_schema_component, scn::holds and the blob accessors are new exports; context_manager gains
+// members at its end (engine-made, not in the layout key). A module that registers one needs an engine of 3.11 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'000Bu // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

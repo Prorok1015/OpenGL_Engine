@@ -6,6 +6,8 @@
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/common/eng_profiler.h>
+#include <snk/common/logger/engine_log.h>
+#include <unordered_set>
 
 scn::world_context::world_context(uint32_t id, std::string_view name)
 	: m_id(id), m_name(name)
@@ -132,7 +134,14 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 			if (auto type = ecs::find_meta(layer_meta, id)) {
 				if (auto func = type.func(ecs::loader_get_h)) {
 					func.invoke({}, &loader, static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
+					continue;
 				}
+			}
+			// Not silent (#606): a component without meta (one without a C++ type among them, until it is moved here)
+			// loses what the commands gave it. Once per storage id, the drop repeats every frame.
+			static std::unordered_set<entt::id_type> warned;
+			if (warned.insert(id).second) {
+				egLOG_WARN("ecs", "commands for the component of storage id {} are dropped: it has no meta to move it into the world", id);
 			}
 		}
 

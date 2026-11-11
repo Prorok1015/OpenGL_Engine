@@ -22,6 +22,8 @@ namespace desc
 
 		const type_schema& schema() const { return *m_binding->schema; }
 		const schema_binding& binding() const { return *m_binding; }
+		// The values as the schema lays them out: what a component without a C++ type holds in its world (#606).
+		const dyn_blob& blob() const { return m_blob; }
 
 		// Field by its key; null for an unknown key.
 		json::value get(std::string_view key) const;
