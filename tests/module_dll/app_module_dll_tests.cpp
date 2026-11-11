@@ -11,6 +11,7 @@
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/scn_animation_job.h>
@@ -115,6 +116,48 @@ bool test_util::resident(const std::filesystem::path& file)
 	}
 	return again != nullptr;
 #endif
+}
+
+// #558: a prefab_node copied in a module linked as the template's `game` (no Boost.JSON of its own) links, and the
+// copy, with JSON the module allocated, is read and freed by the engine's code after the module is gone.
+BOOST_AUTO_TEST_CASE(a_prefab_node_copied_in_a_module_outlives_the_module)
+{
+	scn::prefab_desc::prefab_node node;
+	node.name = "root";
+	node.components["mesh_node_desc"].overrides["value"] = 7;
+	scn::prefab_desc::prefab_node child;
+	child.name = "child";
+	node.children.push_back(child);
+
+	using copy_fn = scn::prefab_desc::prefab_node* (*)(const scn::prefab_desc::prefab_node*);
+	scn::prefab_desc::prefab_node* copy = nullptr;
+#if defined(_WIN32)
+	HMODULE library = ::LoadLibraryW(std::filesystem::path(SNK_TEST_COPY_PREFAB_DLL_PATH).c_str());
+	BOOST_REQUIRE(library != nullptr);
+	const auto copy_node = reinterpret_cast<copy_fn>(::GetProcAddress(library, "snk_test_copy_prefab_node"));
+	BOOST_REQUIRE(copy_node != nullptr);
+	copy = copy_node(&node);
+	BOOST_REQUIRE(::FreeLibrary(library));
+#else
+	void* library = ::dlopen(SNK_TEST_COPY_PREFAB_DLL_PATH, RTLD_NOW | RTLD_LOCAL);
+	BOOST_REQUIRE(library != nullptr);
+	const auto copy_node = reinterpret_cast<copy_fn>(::dlsym(library, "snk_test_copy_prefab_node"));
+	BOOST_REQUIRE(copy_node != nullptr);
+	copy = copy_node(&node);
+	BOOST_REQUIRE(::dlclose(library) == 0);
+#endif
+	BOOST_REQUIRE(!resident(SNK_TEST_COPY_PREFAB_DLL_PATH));
+	std::unique_ptr<scn::prefab_desc::prefab_node> owned(copy);
+	BOOST_REQUIRE(owned != nullptr);
+	BOOST_TEST(owned->name == "root");
+	BOOST_REQUIRE(owned->children.size() == 1u);
+	BOOST_TEST(owned->children[0].name == "child");
+	BOOST_TEST(owned->components.at("mesh_node_desc").overrides.at("value").to_number<int>() == 7);
+	const json::value& written = owned->components.at("mod").overrides.at("written_in_module");
+	BOOST_TEST((written == json::array{ 1, 2, 3 }));
+	// Grown and freed by the engine's code: the default storage names no resource of the unloaded module.
+	owned->components.at("mod").overrides["written_in_module"].as_array().push_back(4);
+	owned.reset();
 }
 
 BOOST_FIXTURE_TEST_SUITE(app_module_dll_tests, test_util::module_env)
