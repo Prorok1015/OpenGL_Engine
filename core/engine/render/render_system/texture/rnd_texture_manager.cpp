@@ -119,6 +119,13 @@ rnd::texture_id rnd::texture_manager::require(const res::tag& tag)
 {
 	ASSERT_MSG(on_owner_thread(), "texture_manager::require: main thread only");
 	const texture_id id = slot_of(tag);
+	// The tag comes from a material's samplers (#697): the rule of what data may load holds here too. The slot stays empty.
+	if (std::string why = res::reference_problem(tag); !why.empty()) {
+		if (m_refused.insert(tag).second) {
+			egLOG_WARN("render/texture", "{}", why);
+		}
+		return id;
+	}
 	slot& target = m_slots[id.index - 1];
 	if (target.owner) {
 		return id;

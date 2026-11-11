@@ -8,12 +8,23 @@ struct edt::panel_registry::entry
 {
 	std::uint64_t key = 0;
 	panel_desc desc;
+	callback_gate* gate = nullptr;
 };
 
 edt::panel_registry::panel_registry() = default;
 edt::panel_registry::~panel_registry() = default;
 
 edt::registration edt::panel_registry::add(panel_desc desc)
+{
+	return add_entry(std::move(desc), nullptr);
+}
+
+edt::registration edt::panel_registry::add(panel_desc desc, callback_gate& gate)
+{
+	return add_entry(std::move(desc), &gate);
+}
+
+edt::registration edt::panel_registry::add_entry(panel_desc desc, callback_gate* gate)
 {
 	if (desc.id.empty() || !desc.panel) {
 		egLOG_ERROR("Editor/Panels", "panel '{}' not registered: it needs an id and a panel", desc.id);
@@ -33,6 +44,7 @@ edt::registration edt::panel_registry::add(panel_desc desc)
 	auto added = std::make_shared<entry>();
 	added->key = m_next_key++;
 	added->desc = std::move(desc);
+	added->gate = gate;
 	const std::uint64_t key = added->key;
 	m_entries.push_back(std::move(added));
 	return registration(m_alive, [this, key] { remove(key); });
@@ -84,6 +96,12 @@ void edt::panel_registry::render_all()
 	// By index: a panel may add or remove registrations while it draws.
 	for (std::size_t i = 0; i < m_entries.size(); ++i) {
 		const std::shared_ptr<panel_base> panel = m_entries[i]->desc.panel;
-		panel->render();
+		callback_gate* const gate = m_entries[i]->gate;
+		if (gate) {
+			const callback_gate::guard running(*gate);
+			panel->render();
+		} else {
+			panel->render();
+		}
 	}
 }

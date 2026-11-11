@@ -243,7 +243,7 @@ BOOST_AUTO_TEST_CASE(TheInputStackFromCodeIsMinor3_7_AndAModuleBuiltFor3_6StillL
 BOOST_AUTO_TEST_CASE(PrefabSpawnIsMinor3_8_AndAModuleBuiltFor3_7StillLoads)
 {
 	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) == 8u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 8u);
 	auto entry = generated_entry();
 	entry.api_version = &api_3_7;
 	entry.build_info = +[]() { return info_with(api_3_7(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };

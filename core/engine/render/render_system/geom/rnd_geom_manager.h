@@ -28,5 +28,6 @@ namespace rnd
 		driver::driver_interface* drv;
 		std::unordered_map<res::tag, std::unique_ptr<driver::vertex_array_interface>> cache;
 		std::unordered_map<res::tag, res::res_handle<rnd::geometry_desc>> loading;
+		std::unordered_set<res::tag> refused;
 	};
 }

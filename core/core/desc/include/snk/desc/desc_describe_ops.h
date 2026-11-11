@@ -252,6 +252,12 @@ namespace desc
 						// Kept as written, so a save does not change the file; nothing can load it (#631).
 						::res::report_load_warning(::res::diagnostic_kind::schema, ctx.field_pointer, ::res::no_protocol_reason(value));
 					}
+					const std::string_view owner_protocol = ctx.owner ? ctx.owner->get_tag().protocol() : std::string_view{};
+					if (std::string why = ::res::reference_problem(value, owner_protocol); !why.empty()) {
+						// Emptied, so whatever loads the field later (a renderer) is never handed the tag (#697).
+						::res::report_load_warning(::res::diagnostic_kind::reference, ctx.field_pointer, std::move(why));
+						value = res::tag{};
+					}
 					return true;
 				} else if constexpr (natural == field_kind::entity) {
 					if (in.is_null()) {

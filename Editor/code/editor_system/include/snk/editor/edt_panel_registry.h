@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_api.h"
+#include "edt_callback_gate.h"
 #include "edt_panel_base.h"
 #include "edt_registration.h"
 #include <cstddef>
@@ -53,6 +54,8 @@ namespace edt
 		// id/title that differs from the panel's own is an error: it is logged and nothing is registered
 		// (the returned registration is not active).
 		[[nodiscard]] registration add(panel_desc desc);
+		// A module's panel: its drawing counts in `gate`, which must outlive the registration.
+		[[nodiscard]] registration add(panel_desc desc, callback_gate& gate);
 
 		bool contains(std::string_view id) const;
 		panel_base* find(std::string_view id) const;
@@ -69,6 +72,7 @@ namespace edt
 
 	private:
 		struct entry;
+		registration add_entry(panel_desc desc, callback_gate* gate);
 		void remove(std::uint64_t key);
 
 		std::vector<std::shared_ptr<entry>> m_entries;

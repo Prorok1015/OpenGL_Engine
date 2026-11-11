@@ -126,6 +126,21 @@ namespace res
 		return std::format("'{}' has no protocol: write {}://{}", t.view(), tag::default_protocol(), t.view());
 	}
 
+	// Why a desc's data may not refer to `reference` (#697), or empty. Data refers to res://, engine://, memory:// and to the
+	// protocol of the desc it is in (`owner_protocol`, empty when unknown); never to user://, cache://, code://, edt:// or an
+	// unknown scheme, which hold the player's, the editor's or the project's own files. cache:// is never a desc's own
+	// protocol: cache://user_profile/ is user://. A tag without a protocol names nothing anyway: no_protocol_reason.
+	inline std::string reference_problem(const tag& reference, const std::string_view owner_protocol = {})
+	{
+		const std::string_view protocol = reference.protocol();
+		if (protocol.empty() || protocol == tag::default_protocol() || protocol == tag::engine || protocol == tag::memory
+			|| (protocol == owner_protocol && protocol != tag::cache)) {
+			return {};
+		}
+		return std::format("'{}': a desc may refer to res://, engine://, memory:// or its own protocol, not '{}://'",
+			reference.view(), protocol);
+	}
+
 	inline std::ostream& operator<<(std::ostream& os, const tag& t) {
 		return os << t.string();
 	}
