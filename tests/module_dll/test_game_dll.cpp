@@ -188,6 +188,11 @@ protected:
 	}
 
 private:
+	static std::string write_dll_event(const dll_game::dll_event& event)
+	{
+		return "{\"written_by\":\"dll\",\"value\":" + std::to_string(event.value) + "}";
+	}
+
 	static void register_everything(scn::scene_layer& layer, ds::app_data_storage& data)
 	{
 		layer.descs().register_component_desc<dll_desc>(dll_game::desc_type);
@@ -207,6 +212,7 @@ private:
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },
 			desc::bind_described<dll_game::dll_component>(dll_game::component_name, 1, desc::schema_kind::component));
 		ecs::register_component<dll_game::dll_component>(layer.meta());
+		layer.events().add<dll_game::dll_event>({}, &write_dll_event);
 		auto& service = data.construct<dll_service>();
 
 		// Only when the host stored them: it checks that the callbacks are registered (held_count).

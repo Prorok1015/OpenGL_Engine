@@ -33,7 +33,7 @@ void scn::scene_init(ds::app_data_storage &store) {
       resource, assembler, sfactory,
       store.require_shared<scn::hot_reload_manager>());
   scn::register_engine_components(contexts.catalog());
-  contexts.add_event<inp::action_event>();
+  contexts.add_event<inp::action_event>({}, &inp::action_event_json);
   // Engine event types (contexts.add_event<T>(), WORLD_BUS.md) go above this line: a layer takes the base's types
   // as they are when it is created, and add_event refuses once a layer exists.
   // The game worlds always live in a layer, empty until a game module fills it (MODULE_LAYER.md).

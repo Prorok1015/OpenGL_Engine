@@ -15,6 +15,7 @@
 #include "edt_play_commands.h"
 #include "edt_play_session.h"
 #include "edt_runtime_commands.h"
+#include "edt_bus_commands.h"
 #include "edt_agent_access.h"
 #include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
@@ -71,6 +72,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1778,6 +1780,17 @@ BOOST_AUTO_TEST_SUITE_END()
 // allow), and app.advance only during Play.
 namespace {
 
+// An event of the game (#605): world.events shows it with the payload its writer makes.
+struct bus_ping
+{
+	int n = 0;
+};
+
+std::string write_bus_ping(const bus_ping& ping)
+{
+	return std::format(R"json({{"n":{}}})json", ping.n);
+}
+
 struct play_commands_fixture : play_fixture
 {
 	~play_commands_fixture()
@@ -1822,6 +1835,8 @@ struct play_commands_fixture : play_fixture
 	std::vector<edt::registration> scene_commands = edt::register_scene_commands(commands,
 		{ documents, selection, services, [this] { return editing; } });
 	std::vector<edt::registration> runtime_commands = edt::register_runtime_commands(commands,
+		{ .play = [this] { return &play; }, .play_set = [this] { return play_set(); } });
+	std::vector<edt::registration> bus_commands = edt::register_bus_commands(commands,
 		{ .play = [this] { return &play; }, .play_set = [this] { return play_set(); } });
 	app::frame_control frame_control;
 	app::frame_command_registrations core_frame_commands = app::register_frame_commands(commands, frame_control);
@@ -2383,6 +2398,54 @@ BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answe
 
 	scn::snapshot_report after_report;
 	BOOST_TEST(json::serialize(scn::capture_world(world, catalog, after_report)) == before);
+}
+
+BOOST_AUTO_TEST_CASE(world_events_and_input_actions_are_an_error_outside_play)
+{
+	for (const char* tool : { "world_events", "input_actions" }) {
+		const mcp::call_result refused = call_tool(tool);
+		BOOST_TEST(refused.is_error);
+		BOOST_TEST(text_of_error(refused).find("no Play session: world events exist only while Play runs") != std::string::npos);
+	}
+	BOOST_TEST((commands.find("world.events")->category == cmd::agent_category::read));
+	BOOST_TEST((commands.find("input.actions")->category == cmd::agent_category::read));
+	BOOST_TEST(!commands.find("world.events")->mutates);
+}
+
+BOOST_AUTO_TEST_CASE(world_events_shows_what_the_bus_of_a_play_world_delivered)
+{
+	BOOST_REQUIRE(contexts().game_layer()->events().add<bus_ping>({}, &write_bus_ping));
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::world_context* world = play_set()->find("w0");
+	BOOST_REQUIRE((world != nullptr));
+	auto* bus = world->state().ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE((bus != nullptr));
+	BOOST_REQUIRE((bus->journal() != nullptr)); // Play turns it on
+	bus->post(bus_ping{ 7 });
+	bus->post(bus_ping{ 8 });
+	run_frames(1);
+
+	const mcp::call_result shown = call_tool("world_events", R"json({"world":"w0","type":"bus_ping","last":1})json");
+	BOOST_REQUIRE(!shown.is_error);
+	const json::object& out = shown.structured.as_object();
+	BOOST_TEST((out.at("source").as_string() == "play"));
+	const json::array& events = out.at("events").as_array();
+	BOOST_REQUIRE(events.size() == 1u);
+	const json::object& event = events[0].as_object();
+	BOOST_TEST((event.at("payload") == json::parse(R"json({"n":8})json")));
+	BOOST_TEST(event.at("seq").to_number<std::int64_t>() == 1);
+	BOOST_TEST((event.at("from").as_string() == "")); // an external post
+
+	const mcp::call_result other_set = call_tool("world_events", R"json({"set":"level"})json");
+	BOOST_TEST(other_set.is_error); // the level and the editor's worlds are never shown
+
+	const mcp::call_result actions = call_tool("input_actions");
+	BOOST_REQUIRE(!actions.is_error);
+	const json::array& worlds = actions.structured.as_object().at("worlds").as_array();
+	BOOST_REQUIRE(!worlds.empty());
+	BOOST_TEST((worlds[0].as_object().at("world").as_string() == "w0"));
+	BOOST_TEST(actions.structured.as_object().at("stack").is_null()); // no input router here
 }
 
 BOOST_AUTO_TEST_SUITE_END()

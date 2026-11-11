@@ -15,6 +15,12 @@ namespace dll_game {
 	// Moves every animated model one clip on per frame with scn::play_animation (#563): idle -> walk -> jump (once).
 	inline constexpr std::string_view animate_system_name = "dll::animate";
 	inline constexpr std::string_view component_name = "dll.component";
+	// An event type of the module with a payload writer of the module's code (#605): the bus journal reaches the writer
+	// through ecs::detail::bus_journal_source, which only a type made by a module built for 3.14 has.
+	struct dll_event
+	{
+		int value = 0;
+	};
 	// A system of the module that keeps state in its fields (#601). The bad_restore build's one cannot start while the
 	// file keeper_trap_file (an absolute path in the build tree) exists: Play cannot be restored in that build.
 	inline constexpr std::string_view keeper_system_name = "dll::keeper";

@@ -1,6 +1,7 @@
 #include <snk/input/inp_action_state.h>
 #include <snk/common/logger/engine_log.h>
 #include <cstdint>
+#include <format>
 #include <type_traits>
 #include <variant>
 
@@ -299,4 +300,31 @@ void inp::update_actions_system(ecs::event_writer<action_event>& events, const i
 	action_state& out, fixed_action_state& fixed)
 {
 	out.update(actions, state, bound, &events, &fixed, &reached, &injected);
+}
+
+void inp::update_and_trace_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
+	const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
+	action_state& out, fixed_action_state& fixed, action_trace& trace)
+{
+	out.update(actions, state, bound, &events, &fixed, &reached, &injected);
+	++trace.updates;
+	if (trace.map != actions.map) {
+		trace.map = actions.map;
+		trace.last_edges.clear();
+	}
+	const std::size_t count = actions.map ? actions.map->size() : 0;
+	trace.last_edges.resize(count);
+	for (std::size_t id = 0; id < count; ++id) {
+		const auto action = static_cast<action_id>(id);
+		if (out.pressed(action)) {
+			trace.last_edges[id] = action_trace::edge{ trace.updates, action_edge::pressed };
+		} else if (out.released(action)) {
+			trace.last_edges[id] = action_trace::edge{ trace.updates, action_edge::released };
+		}
+	}
+}
+
+std::string inp::action_event_json(const action_event& event)
+{
+	return std::format(R"({{"action":{},"edge":"{}"}})", event.action, event.edge == action_edge::pressed ? "pressed" : "released");
 }

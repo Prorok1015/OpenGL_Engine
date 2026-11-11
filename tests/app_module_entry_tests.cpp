@@ -66,6 +66,8 @@ std::uint32_t api_3_7() { return 0x0003'0007u; }
 std::uint32_t api_3_8() { return 0x0003'0008u; }
 // A module built before scn::request_level.
 std::uint32_t api_3_9() { return 0x0003'0009u; }
+// A module built before the bus journal (#605).
+std::uint32_t api_3_13() { return 0x0003'000Du; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -271,6 +273,16 @@ BOOST_AUTO_TEST_CASE(LevelSwitchIsMinor3_10_AndAModuleBuiltFor3_9StillLoads)
 	auto entry = generated_entry();
 	entry.api_version = &api_3_9;
 	entry.build_info = +[]() { return info_with(api_3_9(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheBusJournalIsMinor3_14_AndAModuleBuiltFor3_13StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 14u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_13;
+	entry.build_info = +[]() { return info_with(api_3_13(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
 	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 

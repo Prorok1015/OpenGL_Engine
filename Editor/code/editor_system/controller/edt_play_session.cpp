@@ -1,4 +1,5 @@
 #include "edt_play_session.h"
+#include "edt_bus_commands.h"
 #include "edt_input_target.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
@@ -46,6 +47,15 @@ edt::play_session::play_session(scene_document& document, editor_services& servi
 	m_world_changed = m_events.active_world_changed.subscribe([this](document_id) {
 		if (active()) follow_active_world();
 	});
+}
+
+namespace
+{
+	// world.events reads it (#605); only the worlds of Play keep one.
+	void keep_bus_journal(scn::world_context& world)
+	{
+		if (auto* bus = world.state().ctx().find<ecs::world_bus>()) bus->enable_journal(edt::play_journal_capacity);
+	}
 }
 
 edt::play_session::~play_session()
@@ -120,6 +130,7 @@ bool edt::play_session::start(play_reason reason)
 				i < systems.size() ? systems[i] : copy.get_systems());
 			world.set_input_layer(copy.get_input_layer());
 			world.set_input_stack(copy.get_input_stack());
+			keep_bus_journal(world);
 			const entt::entity root = world.state().create();
 			m_services.assembler()->spawn_from_desc(world.state(), root, copy, name);
 		}
@@ -423,6 +434,7 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 			scn::world_context& world = contexts->create_context(k_play_set, world_saved.name, scn::context_kind::play, systems);
 			world.set_input_layer(world_saved.input_layer);
 			world.set_input_stack(world_saved.input_stack);
+			keep_bus_journal(world);
 			scn::snapshot_report world_report;
 			const bool restored = scn::restore_world(world, world_saved.state, layer->catalog(), read, world_report);
 			for (const auto& [type, count] : world_report.unknown) {
