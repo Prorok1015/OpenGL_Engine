@@ -54,6 +54,7 @@
 #include "edt_live_mode.h"
 #include "edt_play_commands.h"
 #include "edt_runtime_commands.h"
+#include "edt_bus_commands.h"
 #include "edt_play_session.h"
 #include "edt_editor_mode.h"
 #include "edt_editor_mode_commands.h"
@@ -1206,6 +1207,14 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 				const auto manager = m_services.ctx_manager.lock();
 				return manager ? manager->find_set(k_play_set) : nullptr;
 			} })) {
+		m_registrations.push_back(std::move(command));
+	}
+	// world.events / input.actions (#605): the bus journal and the actions of Play, read-only.
+	for (auto& command : register_bus_commands(m_context->actions().commands(),
+			{ .play = [this] { return m_play.get(); }, .play_set = [this]() -> scn::context_set* {
+				const auto manager = m_services.ctx_manager.lock();
+				return manager ? manager->find_set(k_play_set) : nullptr;
+			}, .input = [this]() -> const inp::input_router* { return m_input_router; } })) {
 		m_registrations.push_back(std::move(command));
 	}
 	// app.advance / app.resume step the editor's whole frame loop: an agent gets them only during Play.

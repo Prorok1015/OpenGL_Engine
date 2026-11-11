@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -165,8 +167,33 @@ namespace inp
 		std::vector<slot> m_slots{};
 	};
 
+	// What inp::update_actions did in a world, for MCP's input.actions (WORLD_BUS.md 3.7): by action id of `map`, the
+	// update that gave the action's last edge. Starts again when the world reads another map.
+	struct action_trace
+	{
+		struct edge
+		{
+			// Of `updates`: 1 for the first frame that ran inp::update_actions.
+			std::uint64_t update = 0;
+			action_edge kind = action_edge::pressed;
+		};
+
+		std::uint64_t updates = 0;
+		std::shared_ptr<const action_map> map{};
+		// The first delivery of the world's bus (ecs::world_bus::deliveries) whose action_event ids all belong to `map`: the
+		// frame that brings a new map also sends the releases of the old one.
+		std::uint64_t map_since_delivery = 0;
+		std::vector<std::optional<edge>> last_edges{};
+	};
+
 	// The system "inp::update_actions": phase input, after inp::update_input_state, not run in Edit or Pause.
 	SNK_API void update_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
 		const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
 		action_state& out, fixed_action_state& fixed);
+	// The same, keeping the trace too: what the engine registers as "inp::update_actions" (module API 3.14).
+	SNK_API void update_and_trace_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
+		const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
+		action_state& out, fixed_action_state& fixed, action_trace& trace, const ecs::world_bus& bus);
+	// action_event as the bus journal shows it: {"action": id, "edge": "pressed" | "released"}.
+	SNK_API std::string action_event_json(const action_event& event);
 }

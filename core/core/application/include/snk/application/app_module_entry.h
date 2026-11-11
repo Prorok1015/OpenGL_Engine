@@ -67,7 +67,13 @@
 // component through its module_context needs an engine of 3.12 or newer.
 // 3.13 (#563): the engine event type scn::animation_finished (the end of a clip without loop on the world bus). A module
 // that reads or subscribes to it needs an engine that registers it, 3.13 or newer. Nothing that exists changes layout.
-#define SNK_MODULE_API_VERSION 0x0003'000Du // major << 16 | minor
+// 3.14 (#605): the bus journal (ecs::bus_journal, world_bus::enable_journal/journal, ecs::detail::bus_journal_source)
+// and bus_registry::add<T>(schema, payload_writer) are new; bus_type_impl<T> gains a base, which only modules built for
+// 3.14 have: the journal of a type of an older module holds the place of its events, not their sender or payload.
+// bus_slot, bus_slot_impl and the layout key are unchanged; bus_state, input_router gain members at their end
+// (engine-made). inp::action_trace, inp::update_and_trace_actions_system and scn::animation_finished_json are new. A
+// module that gives its events a payload writer needs an engine of 3.14 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'000Eu // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

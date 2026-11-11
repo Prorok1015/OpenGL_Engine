@@ -1,6 +1,26 @@
 #include <snk/ecs/ecs_bus.hpp>
 #include <algorithm>
+#include <format>
 #include <limits>
+
+ecs::detail::bus_journal_source::~bus_journal_source() = default;
+
+ecs::bus_journal::bus_journal(size_t capacity) : m_capacity(std::max<size_t>(capacity, 1)) {}
+
+void ecs::bus_journal::record(std::string_view type, uint64_t delivery, uint32_t seq, std::optional<std::string_view> from, std::string payload)
+{
+	if (payload.size() > max_payload_bytes) {
+		payload = std::format(R"({{"truncated":true,"bytes":{}}})", payload.size());
+	}
+	if (m_entries.size() >= m_capacity) m_entries.pop_front();
+	bus_journal_entry entry;
+	entry.type = std::string{ type };
+	entry.delivery = delivery;
+	entry.seq = seq;
+	if (from) entry.from = std::string{ *from };
+	entry.payload = std::move(payload);
+	m_entries.push_back(std::move(entry));
+}
 
 ecs::world_bus::world_bus() : m_state(std::make_unique<detail::bus_state>()) {}
 ecs::world_bus::~world_bus() = default;
@@ -85,6 +105,7 @@ void ecs::world_bus::deliver()
 	++st.deliveries;
 	// Every window is filled before any subscriber runs, so a subscriber of one type reads the others' new windows.
 	for (const auto& slot : m_slots) slot->fill_window();
+	if (st.journal) record_journal(*st.journal);
 	for (const auto& slot : m_slots) slot->freeze_subscribers();
 
 	st.delivering = true;
@@ -107,5 +128,42 @@ size_t ecs::world_bus::clear()
 		dropped += slot->queued() + slot->window_size();
 		slot->clear();
 	}
+	if (st.journal) st.journal->clear();
 	return dropped;
+}
+
+void ecs::world_bus::enable_journal(size_t capacity)
+{
+	state().journal = std::make_unique<bus_journal>(capacity);
+}
+
+void ecs::world_bus::disable_journal()
+{
+	state().journal.reset();
+}
+
+const ecs::bus_journal* ecs::world_bus::journal() const
+{
+	return state().journal.get();
+}
+
+void ecs::world_bus::record_journal(bus_journal& journal) const
+{
+	const uint64_t delivery = state().deliveries;
+	for (size_t i = 0; i < m_slots.size() && m_types && i < m_types->size(); ++i) {
+		if (m_slots[i]->window_size() == 0) continue;
+		const detail::bus_type& type = m_types->type(i);
+		if (const auto* source = dynamic_cast<const detail::bus_journal_source*>(&type)) {
+			try {
+				source->record(*m_slots[i], delivery, journal);
+			} catch (...) {
+				egLOG_ERROR("scene", "world '{}': the journal could not record the events of {}", state().world, type.name());
+			}
+			continue;
+		}
+		// A module built before the journal: only where its events stand.
+		for (size_t seq = 0; seq < m_slots[i]->window_size(); ++seq) {
+			journal.record(type.name(), delivery, static_cast<uint32_t>(seq), std::nullopt, {});
+		}
+	}
 }

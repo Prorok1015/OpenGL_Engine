@@ -90,6 +90,10 @@ namespace inp
 		void clear_holds() { m_holds.clear(); }
 		// The layers of a set (INPUT_STACK.md); gs::route_input keeps the base layer of every world in it.
 		input_stack& stack(std::string_view set);
+		// The live layers of the set's last gs::route_input, top first, with what reached each (MCP's input.actions); null
+		// before the set's first frame.
+		const std::vector<layer_reach>* last_layers(std::string_view set) const;
+		void set_last_layers(std::string_view set, std::vector<layer_reach> layers);
 		std::size_t hold_count() const { return m_holds.size(); }
 		// The set went away (Play stopped): its bindings, its mouse hold and its stack are dropped, the default target stays.
 		void forget_set(std::string_view set);
@@ -159,5 +163,7 @@ namespace inp
 		std::map<std::string, std::vector<queued_injection>, std::less<>> m_injected;
 		std::map<std::string, std::set<std::string>, std::less<>> m_warned;
 		std::shared_ptr<input_router*> m_self;
+		// Last: input_router is made by the engine, but keep the older members where they were.
+		std::map<std::string, std::vector<layer_reach>, std::less<>> m_last_layers;
 	};
 }

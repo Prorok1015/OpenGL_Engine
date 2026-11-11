@@ -1,7 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_system.h>
+#include <entt/entt.hpp>
 #include <memory>
 
 // The state of the game actions in one world (#604 PR 2, WORLD_BUS.md 4.2), frame by frame, without a scene: the rule
@@ -708,6 +710,49 @@ BOOST_AUTO_TEST_CASE(Inject_AnIdOutsideTheMapIsIgnored)
 	frame();
 	BOOST_TEST(edge_free(JUMP));
 	BOOST_TEST(edge_free(FIRE));
+}
+
+BOOST_AUTO_TEST_CASE(TheTraceKeepsTheUpdateOfEachActionsLastEdge)
+{
+	// The system as the engine registers it: its edges go to the world's bus (#605).
+	ecs::bus_registry types;
+	types.add<inp::action_event>({}, &inp::action_event_json);
+	entt::registry reg;
+	auto& bus = reg.ctx().emplace<ecs::world_bus>();
+	BOOST_REQUIRE(bus.bind(types, reg, "w"));
+	auto& events = reg.ctx().get<ecs::event_writer<inp::action_event>>();
+	inp::action_trace trace;
+	const auto run = [&] { inp::update_and_trace_actions_system(events, keys, bound, ref, reach, injection, state, fixed, trace, bus); };
+
+	run();
+	BOOST_TEST(trace.updates == 1u);
+	BOOST_TEST(trace.map_since_delivery == 1u); // the first map: this frame's delivery
+	BOOST_REQUIRE(trace.last_edges.size() == 2u);
+	BOOST_TEST(!trace.last_edges[JUMP].has_value());
+
+	set(KB::SPACE, true);
+	run();
+	BOOST_REQUIRE(trace.last_edges[JUMP].has_value());
+	BOOST_TEST(trace.last_edges[JUMP]->update == 2u);
+	BOOST_TEST((trace.last_edges[JUMP]->kind == inp::action_edge::pressed));
+
+	run();
+	BOOST_TEST(trace.last_edges[JUMP]->update == 2u); // held: no new edge
+
+	set(KB::SPACE, false);
+	run();
+	BOOST_TEST(trace.last_edges[JUMP]->update == 4u);
+	BOOST_TEST((trace.last_edges[JUMP]->kind == inp::action_edge::released));
+	BOOST_TEST(!trace.last_edges[FIRE].has_value());
+
+	// Another map starts the trace again, from the delivery after the one carrying the old map's releases.
+	bus.deliver();
+	ref.map = make_map();
+	run();
+	BOOST_TEST((trace.map == ref.map));
+	BOOST_TEST(trace.map_since_delivery == 3u);
+	BOOST_TEST(!trace.last_edges[JUMP].has_value());
+	BOOST_TEST(inp::action_event_json({ JUMP, inp::action_edge::pressed }) == R"json({"action":0,"edge":"pressed"})json");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

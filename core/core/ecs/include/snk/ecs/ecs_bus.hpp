@@ -9,6 +9,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -36,6 +37,43 @@ enum class bus_mode : uint8_t
 	discard,
 };
 
+// Turns a payload into JSON text for the journal (MCP, WORLD_BUS.md 3.7). Called by the engine on the main thread; an
+// exception it throws gives the payload {"error":"writer threw"}.
+template <class T>
+using payload_writer = std::string (*)(const T&);
+
+// One delivered event as the journal keeps it.
+struct bus_journal_entry
+{
+	std::string type;
+	// Of world_bus::deliveries().
+	uint64_t delivery = 0;
+	uint32_t seq = 0;
+	// The sender (empty: an external post). Null for a type its module registered before the journal existed: only
+	// the event's place in the delivery is known.
+	std::optional<std::string> from;
+	// JSON text; empty when the type has no payload writer. One longer than max_payload_bytes is replaced by
+	// {"truncated":true,"bytes":N}, so it stays valid JSON.
+	std::string payload;
+};
+
+// The last delivered events of one world, oldest first (WORLD_BUS.md 3.7). Off unless world_bus::enable_journal.
+class SNK_API bus_journal
+{
+public:
+	static constexpr size_t max_payload_bytes = 4096;
+
+	explicit bus_journal(size_t capacity);
+	void record(std::string_view type, uint64_t delivery, uint32_t seq, std::optional<std::string_view> from, std::string payload);
+	size_t capacity() const { return m_capacity; }
+	const std::deque<bus_journal_entry>& entries() const { return m_entries; }
+	void clear() { m_entries.clear(); }
+
+private:
+	size_t m_capacity = 0;
+	std::deque<bus_journal_entry> m_entries;
+};
+
 namespace detail {
 
 struct bus_state
@@ -48,6 +86,8 @@ struct bus_state
 	// Set by the world between its delivery and the end of its frame: an emit then waits a frame.
 	bool after_delivery = false;
 	std::thread::id owner = std::this_thread::get_id();
+	// Last: module code reads the members above inline (the engine makes this state).
+	std::unique_ptr<bus_journal> journal;
 
 	bool on_owner_thread() const { return std::this_thread::get_id() == owner; }
 };
@@ -228,6 +268,16 @@ private:
 	std::optional<typename signal<const envelope<T>&>::frozen> m_frozen;
 };
 
+// What a bus_type made by a module built before the journal lacks: the engine finds it with dynamic_cast, so such a
+// type only gives the place of its events. Its typeinfo is the engine's (out-of-line destructor).
+class SNK_API bus_journal_source
+{
+public:
+	virtual ~bus_journal_source();
+	// Appends the window of `slot` (made by this type) to `journal`.
+	virtual void record(const bus_slot& slot, uint64_t delivery, bus_journal& journal) const = 0;
+};
+
 class bus_type
 {
 public:
@@ -242,9 +292,13 @@ public:
 };
 
 template <class T>
-struct bus_type_impl final : bus_type
+struct bus_type_impl final : bus_type, bus_journal_source
 {
-	explicit bus_type_impl(std::string schema_text) : m_schema(std::move(schema_text)) {}
+	explicit bus_type_impl(std::string schema_text, payload_writer<T> write = nullptr)
+		: m_schema(std::move(schema_text))
+		, m_write(write)
+	{
+	}
 
 	entt::id_type hash() const override { return entt::type_hash<T>::value(); }
 	std::string_view name() const override { return entt::type_name<T>::value(); }
@@ -259,8 +313,28 @@ struct bus_type_impl final : bus_type
 		registry.ctx().template emplace<event_reader<T>>().m_slot = &typed;
 	}
 
+	void record(const bus_slot& slot, uint64_t delivery, bus_journal& journal) const override
+	{
+		// The ring would drop the older ones anyway: a flood does not run the writer more than the ring holds.
+		std::span<const envelope<T>> window = static_cast<const bus_slot_impl<T>&>(slot).window();
+		if (window.size() > journal.capacity()) window = window.last(journal.capacity());
+		for (const auto& e : window) {
+			std::string payload;
+			if (m_write) {
+				// One bad payload must not cost the frame or the other entries.
+				try {
+					payload = m_write(e.payload);
+				} catch (...) {
+					payload = R"({"error":"writer threw"})";
+				}
+			}
+			journal.record(name(), delivery, e.seq, std::string_view{ e.from }, std::move(payload));
+		}
+	}
+
 private:
 	std::string m_schema;
+	payload_writer<T> m_write = nullptr;
 };
 
 } // namespace detail
@@ -299,14 +373,32 @@ public:
 	{
 	}
 
-	// False when the type is already registered (here or in the parent). `schema` is the payload's JSON Schema,
-	// shown by MCP (#605); without it MCP shows only the envelope.
+	// False when the type is already registered (here or in the parent). `schema` is the payload's JSON Schema; the
+	// journal (MCP, #605) shows the payload `write` makes of it, without a writer only the envelope.
 	template <class T>
 	bool add(std::string schema = {})
 	{
+		return add<T>(std::move(schema), nullptr);
+	}
+
+	template <class T>
+	bool add(std::string schema, payload_writer<T> write)
+	{
 		static_assert(std::copy_constructible<T>, "a bus event type must be copyable");
 		if (index_of<T>()) return false;
-		m_types.push_back(std::make_unique<detail::bus_type_impl<T>>(std::move(schema)));
+		m_types.push_back(std::make_unique<detail::bus_type_impl<T>>(std::move(schema), write));
+		return true;
+	}
+
+	// A type made outside add<T> (a test plays one of a module built before 3.14, whose bus_type_impl has no journal).
+	// False for null or a type already registered.
+	bool add_type(std::unique_ptr<detail::bus_type> added)
+	{
+		if (!added) return false;
+		for (size_t i = 0; i < size(); ++i) {
+			if (type(i).hash() == added->hash()) return false;
+		}
+		m_types.push_back(std::move(added));
 		return true;
 	}
 
@@ -400,10 +492,19 @@ public:
 	void deliver();
 
 	// Drops the queue and the windows (code reload); returns how many events were dropped. Not from a subscriber.
+	// The journal is emptied too.
 	size_t clear();
+
+	// Keeps the last `capacity` delivered events (WORLD_BUS.md 3.7; the editor turns it on in the worlds of Play). A
+	// second call starts it again empty. Off by default: then a delivery only checks that it is off.
+	void enable_journal(size_t capacity);
+	void disable_journal();
+	// Null while the journal is off.
+	const bus_journal* journal() const;
 
 private:
 	detail::bus_state& state() const;
+	void record_journal(bus_journal& journal) const;
 	// Binds the types the registry of the last bind() got since (a type registered after this world was made).
 	void bind_new();
 
