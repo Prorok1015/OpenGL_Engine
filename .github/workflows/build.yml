@@ -46,30 +46,6 @@ permissions:
   contents: read
 
 jobs:
-  # #219, temporary: which MSVC toolsets the Windows images carry (is 14.44 there?). Removed by the next commit.
-  msvc-toolsets:
-    name: MSVC toolsets (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, windows-2025]
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: List Visual Studio installs and MSVC toolsets
-        run: |
-          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
-          "$vswhere" -all -products '*' -format text | grep -E '^(installationPath|installationVersion|displayName|catalog_productDisplayVersion):' || true
-          for vs in "/c/Program Files/Microsoft Visual Studio"/*/*; do
-            [ -d "$vs/VC/Tools/MSVC" ] || continue
-            echo "== $vs"
-            ls -1 "$vs/VC/Tools/MSVC"
-            ls -1 "$vs/VC/Auxiliary/Build" || true
-          done
-          "$vswhere" -all -products '*' -requires Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64 -property installationPath || true
-
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -81,7 +57,7 @@ jobs:
       # The same two jobs in both tiers: the Windows Release builds moved to the Windows package jobs (#223).
       matrix:
         include:
-          - { name: "Windows MSVC Debug", os: windows-latest, preset: ci-windows-msvc-debug }
+          - { name: "Windows MSVC Debug", os: windows-2025, preset: ci-windows-msvc-debug }
           - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests game test_static_game_host }
 
     env:
@@ -99,11 +75,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
+      # The engine is built with the oldest MSVC it supports (#219): toolset 14.44 (_MSC_VER 1944), installed in the
+      # windows-2025 image next to VS 18's own 14.51.
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          toolset: "14.44"
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache

@@ -34,7 +34,14 @@
 5. **Синглтоны.** `config_manager::instance` (`cfg_api.cpp:19`), логгер (spdlog спрятан за `SNK_API`, `logger/engine_log.h:13-38`) и кадровый аллокатор (`thread_local` в `mem_allocator.cpp:50` за `SNK_API frame_allocator()`) живут в одном экземпляре **только в shared-сборке**. В статике каждая DLL получит свою копию, поэтому модель (2) требует `SNK_ENGINE_SHARED`. Кадровая память не должна переживать перезагрузку. `thread_local` RNG в заголовке `desc_node_id.h:18` — свой на бинарник; это безвредно.
 6. **Куча и типы.** Через границу ходят STL-типы — допустимо при одном `/MD` CRT (решение §3.2). `ds_store` без `std::any` (EPIC-29 #58). Модуль уничтожает тот бинарник, что его создал (`app_module_entry.h:81-95`).
 
-**MSVC.** CI: `windows-latest` + `ilammy/msvc-dev-cmd@v1` без `toolset` (`build.yml:36-47,71-73`, `release.yml:19-27`), то есть берётся самая свежая VS из образа; версия не закреплена. ADR-03 фиксирует VS 18 как среду разработки (`CHIMERA_ROADMAP.md:125`).
+**MSVC.** Было: `windows-latest` + `ilammy/msvc-dev-cmd@v1` без `toolset`, то есть самая свежая VS из образа. **Сделано в #219.**
+- Движок собирается toolset 14.44 на `windows-2025`: образ `windows-2025-vs2026`, VS 18.11 с toolset 14.29, 14.44 и 14.51. Так собираются Windows MSVC Debug и Windows package.
+- Windows package check нарочно собирает шаблон и потребителя самым свежим toolset образа.
+- `snake_sdkConfig.cmake` записывает `SNK_MSVC_VERSION`. Через `SnkMsvcCheck.cmake` он отказывает потребителю с более старым MSVC или статическим CRT.
+- `check_module_entry` (`compiler_problem`) отклоняет модуль, у которого `_MSC_VER` ниже, чем у хоста.
+- Корневой `CMakeLists.txt` не собирает движок MSVC ниже 1944.
+
+ADR-03 фиксирует VS 18 как среду разработки (`CHIMERA_ROADMAP.md:125`).
 
 ## 2. Решение
 
