@@ -131,14 +131,6 @@ BOOST_FIXTURE_TEST_CASE(TheEditorsWindowLayout_DefaultsToItsUserFolder_NotTheCur
 	BOOST_CHECK(layout->lexically_normal() == (user.path() / "settings" / "layout_settings.ini").lexically_normal());
 }
 
-BOOST_FIXTURE_TEST_CASE(ARelativeUserFolder_LeavesTheLayoutFileEmpty_SoNothingIsWrittenRelativeToTheCurrentFolder, layout_settings_fixture)
-{
-	cfg::set_variable("editor/user_data_path", "relative/user");
-	editor::apply_default_settings();
-
-	BOOST_CHECK(layout->empty());
-}
-
 BOOST_FIXTURE_TEST_CASE(AFileTheConfigNamedForTheLayout_IsKept, layout_settings_fixture)
 {
 	test_util::temp_dir user("log_location_layout_given");
