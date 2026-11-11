@@ -312,7 +312,8 @@ void engine::set_log_file(std::string_view path)
 	}
 
 	// The replay and the swap are one step under the lock: a line logged meanwhile is either in the snapshot or goes to
-	// the new sinks, never both.
+	// the new sinks, never both. A line written to the old sinks just before the swap but journaled after the snapshot is not in
+	// the file (it stays in the console).
 	std::lock_guard lock(s_logger_mutex);
 	if (new_sink && !s_file_sink) {
 		replay_journal_into(*new_sink);
