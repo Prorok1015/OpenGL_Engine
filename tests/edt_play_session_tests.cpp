@@ -16,6 +16,7 @@
 #include "edt_play_preflight.h"
 #include "edt_play_session.h"
 #include "edt_runtime_commands.h"
+#include "edt_bus_commands.h"
 #include "edt_agent_access.h"
 #include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
@@ -40,6 +41,7 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
 #include <snk/mcp/mcp_host.h>
@@ -75,6 +77,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1786,6 +1789,17 @@ BOOST_AUTO_TEST_SUITE_END()
 // allow), and app.advance only during Play.
 namespace {
 
+// An event of the game (#605): world.events shows it with the payload its writer makes.
+struct bus_ping
+{
+	int n = 0;
+};
+
+std::string write_bus_ping(const bus_ping& ping)
+{
+	return std::format(R"json({{"n":{}}})json", ping.n);
+}
+
 struct play_commands_fixture : play_fixture
 {
 	~play_commands_fixture()
@@ -1830,6 +1844,8 @@ struct play_commands_fixture : play_fixture
 	std::vector<edt::registration> scene_commands = edt::register_scene_commands(commands,
 		{ documents, selection, services, [this] { return editing; } });
 	std::vector<edt::registration> runtime_commands = edt::register_runtime_commands(commands,
+		{ .play = [this] { return &play; }, .play_set = [this] { return play_set(); } });
+	std::vector<edt::registration> bus_commands = edt::register_bus_commands(commands,
 		{ .play = [this] { return &play; }, .play_set = [this] { return play_set(); } });
 	app::frame_control frame_control;
 	app::frame_command_registrations core_frame_commands = app::register_frame_commands(commands, frame_control);
@@ -2391,6 +2407,95 @@ BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answe
 
 	scn::snapshot_report after_report;
 	BOOST_TEST(json::serialize(scn::capture_world(world, catalog, after_report)) == before);
+}
+
+BOOST_AUTO_TEST_CASE(world_events_and_input_actions_are_an_error_outside_play)
+{
+	// Registered: a schema the registry does not take drops the command with only a log line.
+	BOOST_REQUIRE((commands.find("world.events") != nullptr));
+	BOOST_REQUIRE((commands.find("input.actions") != nullptr));
+	for (const char* tool : { "world_events", "input_actions" }) {
+		const mcp::call_result refused = call_tool(tool);
+		BOOST_TEST(refused.is_error);
+		BOOST_TEST(text_of_error(refused).find("no Play session: world events exist only while Play runs") != std::string::npos);
+	}
+	BOOST_TEST((commands.find("world.events")->category == cmd::agent_category::read));
+	BOOST_TEST((commands.find("input.actions")->category == cmd::agent_category::read));
+	BOOST_TEST(!commands.find("world.events")->mutates);
+}
+
+BOOST_AUTO_TEST_CASE(world_events_names_an_action_only_once_the_map_holds_for_its_delivery)
+{
+	// The fixture's base registers the engine event types as scene_init does, inp::action_event with its payload writer.
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::world_context* world = play_set()->find("w0");
+	BOOST_REQUIRE((world != nullptr));
+	auto* bus = world->state().ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE((bus != nullptr));
+
+	auto map = std::make_shared<inp::action_map>();
+	map->add("Jump", { inp::KEYBOARD_BUTTONS::SPACE });
+	const std::shared_ptr<const inp::action_map> held = map;
+	world->state().ctx().insert_or_assign(inp::action_map_ref{ held });
+	// The map came this frame: its delivery still carries the old map's releases.
+	inp::action_trace trace;
+	trace.map = held;
+	trace.map_since_delivery = bus->deliveries() + 2;
+	world->state().ctx().insert_or_assign(std::move(trace));
+
+	bus->post(inp::action_event{ 0, inp::action_edge::released });
+	run_frames(1);
+	bus->post(inp::action_event{ 0, inp::action_edge::pressed });
+	run_frames(1);
+
+	const mcp::call_result shown = call_tool("world_events", R"json({"world":"w0","type":"action_event","last":2})json");
+	BOOST_REQUIRE(!shown.is_error);
+	const json::array& events = shown.structured.as_object().at("events").as_array();
+	BOOST_REQUIRE(events.size() == 2u);
+	const json::object& changing = events[0].as_object().at("payload").as_object();
+	BOOST_TEST(!changing.contains("name")); // the frame of the change: no name rather than a wrong one
+	BOOST_TEST((changing.at("edge").as_string() == "released"));
+	const json::object& later = events[1].as_object().at("payload").as_object();
+	BOOST_REQUIRE(later.contains("name"));
+	BOOST_TEST((later.at("name").as_string() == "Jump"));
+	BOOST_TEST(later.at("action").to_number<std::int64_t>() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(world_events_shows_what_the_bus_of_a_play_world_delivered)
+{
+	BOOST_REQUIRE(contexts().game_layer()->events().add<bus_ping>({}, &write_bus_ping));
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::world_context* world = play_set()->find("w0");
+	BOOST_REQUIRE((world != nullptr));
+	auto* bus = world->state().ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE((bus != nullptr));
+	BOOST_REQUIRE((bus->journal() != nullptr)); // Play turns it on
+	bus->post(bus_ping{ 7 });
+	bus->post(bus_ping{ 8 });
+	run_frames(1);
+
+	const mcp::call_result shown = call_tool("world_events", R"json({"world":"w0","type":"bus_ping","last":1})json");
+	BOOST_REQUIRE(!shown.is_error);
+	const json::object& out = shown.structured.as_object();
+	BOOST_TEST((out.at("source").as_string() == "play"));
+	const json::array& events = out.at("events").as_array();
+	BOOST_REQUIRE(events.size() == 1u);
+	const json::object& event = events[0].as_object();
+	BOOST_TEST((event.at("payload") == json::parse(R"json({"n":8})json")));
+	BOOST_TEST(event.at("seq").to_number<std::int64_t>() == 1);
+	BOOST_TEST((event.at("from").as_string() == "")); // an external post
+
+	const mcp::call_result other_set = call_tool("world_events", R"json({"set":"level"})json");
+	BOOST_TEST(other_set.is_error); // the level and the editor's worlds are never shown
+
+	const mcp::call_result actions = call_tool("input_actions");
+	BOOST_REQUIRE(!actions.is_error);
+	const json::array& worlds = actions.structured.as_object().at("worlds").as_array();
+	BOOST_REQUIRE(!worlds.empty());
+	BOOST_TEST((worlds[0].as_object().at("world").as_string() == "w0"));
+	BOOST_TEST(actions.structured.as_object().at("stack").is_null()); // no input router here
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -3419,6 +3524,72 @@ BOOST_AUTO_TEST_CASE(a_refusal_of_another_kind_is_said_not_greyed)
 	BOOST_TEST(waiting[0].text.find("a level is loading") != std::string::npos);
 	BOOST_TEST(!play.active());
 	BOOST_TEST(preflight_runs == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// #613: a level the load refuses late (its desc does not load) leaves the editor on the level before it: the worlds, the
+// document, its guid.
+BOOST_FIXTURE_TEST_SUITE(edt_level_load_refusal_tests, play_fixture)
+
+BOOST_AUTO_TEST_CASE(a_level_refused_at_the_end_of_its_load_leaves_the_editor_on_the_old_one)
+{
+	open_level();
+	state.level_guid = "guid-of-the-old-level";
+	const std::string document_before = level_json();
+	const std::vector<std::string> worlds_before = state.world_names;
+
+	const res::tag broken = put("broken_lv.desc", "{ this is no json");
+	auto handle = services.resources()->require<scn::level_desc>(broken);
+	pump();
+	const res::tag editor_before = state.editor_tag;
+	state.editor_tag = broken;
+	BOOST_TEST(!level_ctrl.finish_level_load(handle));
+	state.editor_tag = editor_before;
+
+	BOOST_TEST(state.level_guid == "guid-of-the-old-level");
+	BOOST_TEST(state.world_names == worlds_before, boost::test_tools::per_element());
+	BOOST_TEST(level_json() == document_before);
+	BOOST_TEST(contexts().level_set().find("w0") != nullptr);
+	BOOST_TEST(contexts().level_set().find("w1") != nullptr);
+}
+
+// The editor reads the new level, the level set cannot (the file is broken; only the editor's resource system has the
+// level pinned under its tag): load_level refuses after the editor's read succeeded, the way poll_level_load meets it.
+BOOST_AUTO_TEST_CASE(a_level_the_level_set_refuses_after_the_editor_read_it_leaves_the_document_and_its_watch)
+{
+	contexts().set_game_layer(nullptr);
+	const res::tag old_level = open_level();
+	state.level_guid = "guid-of-the-old-level";
+	const std::string document_before = level_json();
+	const std::vector<std::string> worlds_before = state.world_names;
+	BOOST_REQUIRE(level_ctrl.watched_tag() == old_level);
+
+	const res::tag readable = put("other_lv.desc", LEVEL);
+	const res::tag copy = put("other_lv_copy.desc", "{ this is no json");
+	auto& editor_side = contexts().create_layer(&tasks);
+	const auto good = editor_side.resources().require_sync<scn::level_desc>(readable);
+	BOOST_REQUIRE(good.is_ready());
+	editor_side.resources().pin_resource(copy, scn::level_desc(*good));
+	const std::shared_ptr<void> restore_base_resources(nullptr, [this](void*) {
+		services.base_resources = rs.get();
+		level_ctrl.watch_level();
+	});
+	services.base_resources = &editor_side.resources();
+	auto handle = services.resources()->require_sync<scn::level_desc>(copy);
+	BOOST_REQUIRE(handle.is_ready());
+
+	level_ctrl.unwatch_level();
+	BOOST_TEST(!level_ctrl.take_loaded_level(handle, readable, copy));
+
+	BOOST_TEST(state.level_tag == old_level);
+	BOOST_TEST(state.editor_tag == old_level);
+	BOOST_TEST(level_ctrl.watched_tag() == old_level);
+	BOOST_TEST(state.level_guid == "guid-of-the-old-level");
+	BOOST_TEST(state.world_names == worlds_before, boost::test_tools::per_element());
+	BOOST_TEST(level_json() == document_before);
+	BOOST_TEST(contexts().level_set().find("w0") != nullptr);
+	BOOST_TEST(contexts().level_set().find("w1") != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

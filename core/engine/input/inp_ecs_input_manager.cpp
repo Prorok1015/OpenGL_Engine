@@ -8,7 +8,7 @@ void inp::register_ecs_input_system(ecs::system_factory& factory, std::shared_pt
 {
 	factory.register_system<&ecs_input_manager::update_input_state_system>("inp::update_input_state",
 		{ .phase = ecs::phase::input, .run_in_edit = true }, std::move(manager));
-	factory.register_system<&inp::update_actions_system>("inp::update_actions",
+	factory.register_system<&inp::update_and_trace_actions_system>("inp::update_actions",
 		{ .phase = ecs::phase::input, .after = { "inp::update_input_state" } });
 }
 

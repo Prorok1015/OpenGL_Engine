@@ -8,9 +8,11 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/platform/plt_process.h>
 #include <snk/desc/desc_base.hpp>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/scn_animation_job.h>
@@ -115,6 +117,48 @@ bool test_util::resident(const std::filesystem::path& file)
 	}
 	return again != nullptr;
 #endif
+}
+
+// #558: a prefab_node copied in a module linked as the template's `game` (no Boost.JSON of its own) links, and the
+// copy, with JSON the module allocated, is read and freed by the engine's code after the module is gone.
+BOOST_AUTO_TEST_CASE(a_prefab_node_copied_in_a_module_outlives_the_module)
+{
+	scn::prefab_desc::prefab_node node;
+	node.name = "root";
+	node.components["mesh_node_desc"].overrides["value"] = 7;
+	scn::prefab_desc::prefab_node child;
+	child.name = "child";
+	node.children.push_back(child);
+
+	using copy_fn = scn::prefab_desc::prefab_node* (*)(const scn::prefab_desc::prefab_node*);
+	scn::prefab_desc::prefab_node* copy = nullptr;
+#if defined(_WIN32)
+	HMODULE library = ::LoadLibraryW(std::filesystem::path(SNK_TEST_COPY_PREFAB_DLL_PATH).c_str());
+	BOOST_REQUIRE(library != nullptr);
+	const auto copy_node = reinterpret_cast<copy_fn>(::GetProcAddress(library, "snk_test_copy_prefab_node"));
+	BOOST_REQUIRE(copy_node != nullptr);
+	copy = copy_node(&node);
+	BOOST_REQUIRE(::FreeLibrary(library));
+#else
+	void* library = ::dlopen(SNK_TEST_COPY_PREFAB_DLL_PATH, RTLD_NOW | RTLD_LOCAL);
+	BOOST_REQUIRE(library != nullptr);
+	const auto copy_node = reinterpret_cast<copy_fn>(::dlsym(library, "snk_test_copy_prefab_node"));
+	BOOST_REQUIRE(copy_node != nullptr);
+	copy = copy_node(&node);
+	BOOST_REQUIRE(::dlclose(library) == 0);
+#endif
+	BOOST_REQUIRE(!resident(SNK_TEST_COPY_PREFAB_DLL_PATH));
+	std::unique_ptr<scn::prefab_desc::prefab_node> owned(copy);
+	BOOST_REQUIRE(owned != nullptr);
+	BOOST_TEST(owned->name == "root");
+	BOOST_REQUIRE(owned->children.size() == 1u);
+	BOOST_TEST(owned->children[0].name == "child");
+	BOOST_TEST(owned->components.at("mesh_node_desc").overrides.at("value").to_number<int>() == 7);
+	const json::value& written = owned->components.at("mod").overrides.at("written_in_module");
+	BOOST_TEST((written == json::array{ 1, 2, 3 }));
+	// Grown and freed by the engine's code: the default storage names no resource of the unloaded module.
+	owned->components.at("mod").overrides["written_in_module"].as_array().push_back(4);
+	owned.reset();
 }
 
 BOOST_FIXTURE_TEST_SUITE(app_module_dll_tests, test_util::module_env)
@@ -252,6 +296,29 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_REQUIRE(after != nullptr);
 	BOOST_TEST(!after->catalog().find(dll_game::schema_component_name));
 	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
+}
+
+// #605: the journal finds the module's bus_journal_source with dynamic_cast across the library boundary and calls the
+// payload writer of the module's code.
+BOOST_AUTO_TEST_CASE(the_bus_journal_shows_the_payload_a_module_writes)
+{
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", DLL_LEVEL)));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	auto* bus = world->state().ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE(bus != nullptr);
+	bus->set_mode(ecs::bus_mode::queue);
+	bus->enable_journal(8);
+	bus->post(dll_game::dll_event{ 5 });
+	bus->deliver();
+	BOOST_REQUIRE(bus->journal() != nullptr);
+	const auto& entries = bus->journal()->entries();
+	BOOST_REQUIRE(entries.size() == 1u);
+	BOOST_TEST(entries[0].payload == R"json({"written_by":"dll","value":5})json");
+	BOOST_TEST(entries[0].from.has_value()); // not taken for a type of an older module
+	BOOST_TEST(entries[0].type.find("dll_event") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)

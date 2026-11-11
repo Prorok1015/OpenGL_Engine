@@ -8,6 +8,7 @@
 #include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_model.h>
 #include <chrono>
+#include <format>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -221,7 +222,7 @@ struct finish_fixture : test_util::scene_env
 	static std::shared_ptr<ecs::bus_registry> make_events()
 	{
 		auto out = std::make_shared<ecs::bus_registry>();
-		out->add<scn::animation_finished>();
+		out->add<scn::animation_finished>({}, &scn::animation_finished_json);
 		return out;
 	}
 
@@ -287,6 +288,28 @@ BOOST_AUTO_TEST_CASE(TheSameClipPlayedAgainAfterItsEndTellsItsEndAgain)
 	BOOST_REQUIRE(g_heard.size() == 2u);
 	BOOST_TEST(g_heard[1].clip == "jump");
 	BOOST_TEST((g_heard[1].entity == model));
+}
+
+// #605: world.events shows the end of a clip with the model and the clip's name.
+BOOST_AUTO_TEST_CASE(TheBusJournalShowsTheModelAndTheClipThatEnded)
+{
+	const entt::entity model = add_model(k_hearing);
+	auto* bus = reg->ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE((bus != nullptr));
+	bus->enable_journal(8);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	for (int i = 0; i < 3; ++i) frame(0.2f);
+
+	BOOST_REQUIRE((bus->journal() != nullptr));
+	const auto& entries = bus->journal()->entries();
+	BOOST_REQUIRE(entries.size() == 1u);
+	BOOST_TEST(entries[0].payload == std::format(R"json({{"entity":{},"clip":"jump"}})json", entt::to_integral(model)));
+	BOOST_TEST(entries[0].type.find("animation_finished") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheJournalPayloadEscapesTheClipAndWritesNoEntityAsNull)
+{
+	BOOST_TEST(scn::animation_finished_json({ entt::null, "say \"hi\"" }) == R"json({"entity":null,"clip":"say \"hi\""})json");
 }
 
 BOOST_AUTO_TEST_CASE(ALoopGoingRoundTellsNothing)
