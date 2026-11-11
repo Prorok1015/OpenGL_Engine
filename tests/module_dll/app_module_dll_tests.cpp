@@ -203,10 +203,12 @@ BOOST_AUTO_TEST_CASE(module_code_hears_the_end_of_a_clip_and_plays_idle_again)
 	reg.emplace<scn::animation_controller_component>(model);
 	BOOST_REQUIRE(scn::play_animation(reg, model, "jump", false)); // 0.5 s
 
-	contexts().update(std::chrono::duration<float>(0.3f));
+	// Under max_frame_dt (0.25 s): 0.2 + 0.2 stays inside the clip.
+	contexts().update(std::chrono::duration<float>(0.2f));
+	contexts().update(std::chrono::duration<float>(0.2f));
 	BOOST_TEST(reg.get<scn::animation_controller_component>(model).current_animation == "jump");
 	// The clip ends in this frame; the module's system after the delivery point hears it in the same frame.
-	contexts().update(std::chrono::duration<float>(0.3f));
+	contexts().update(std::chrono::duration<float>(0.2f));
 	const auto& controller = reg.get<scn::animation_controller_component>(model);
 	BOOST_TEST(controller.current_animation == "idle");
 	BOOST_TEST(controller.playing);
