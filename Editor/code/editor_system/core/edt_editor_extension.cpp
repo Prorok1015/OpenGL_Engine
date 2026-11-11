@@ -130,25 +130,39 @@ void edt::editor_module_context::add_inspector(std::string type, inspector_rende
 	m_scope.keep(m_editor.inspectors().add(std::move(type), counted(m_scope.callbacks(), std::move(renderer))));
 }
 
-void edt::editor_module_context::add_asset_kind(asset_kind_desc desc)
+void edt::editor_module_context::add_asset_kind(module_asset_kind_desc desc)
 {
-	desc.open = counted(m_scope.callbacks(), std::move(desc.open));
-	desc.drop_into_scene = counted(m_scope.callbacks(), std::move(desc.drop_into_scene));
-	m_scope.keep(m_editor.asset_kinds().add(std::move(desc)));
+	asset_kind_desc kind;
+	kind.id = std::move(desc.id);
+	kind.suffix = std::move(desc.suffix);
+	kind.icon = std::move(desc.icon);
+	const auto bind = [this](std::function<void(editor_module_context&, const res::tag&)> action) {
+		std::function<void(editor_context&, const res::tag&)> bound;
+		if (action) {
+			bound = [this, action = std::move(action)](editor_context&, const res::tag& tag) { action(*this, tag); };
+		}
+		return counted(m_scope.callbacks(), std::move(bound));
+	};
+	kind.open = bind(std::move(desc.open));
+	kind.drop_into_scene = bind(std::move(desc.drop_into_scene));
+	m_scope.keep(m_editor.asset_kinds().add(std::move(kind)));
 }
 
-void edt::editor_module_context::add_asset_preview(asset_preview_desc desc)
+void edt::editor_module_context::add_asset_preview(module_asset_preview_desc desc)
 {
+	asset_preview_desc preview;
+	preview.id = std::move(desc.id);
+	preview.suffix = std::move(desc.suffix);
 	if (desc.make_preview) {
-		desc.make_preview = [&gate = m_scope.callbacks(), make = std::move(desc.make_preview)](edt::editor_services& services)
+		preview.make_preview = [this, &gate = m_scope.callbacks(), make = std::move(desc.make_preview)](edt::editor_services&)
 			-> std::unique_ptr<edt::previewable_document> {
 			const edt::callback_gate::guard running(gate);
-			std::unique_ptr<edt::previewable_document> made = make(services);
+			std::unique_ptr<edt::previewable_document> made = make(*this);
 			if (!made) return nullptr;
 			return std::make_unique<counted_preview>(gate, std::move(made));
 		};
 	}
-	m_scope.keep(m_editor.asset_kinds().add_preview(std::move(desc)));
+	m_scope.keep(m_editor.asset_kinds().add_preview(std::move(preview)));
 }
 
 edt::editor_extension::editor_extension() = default;
@@ -203,9 +217,15 @@ std::string edt::check_editor_api_version(std::uint32_t (*module_api_version)())
 	}
 	const std::uint32_t version = module_api_version();
 	const std::uint32_t host = SNK_EDITOR_API_VERSION;
-	if (app::modules::api_major(version) != app::modules::api_major(host)) {
-		return "editor api major version " + std::to_string(app::modules::api_major(version))
-			+ " does not match host major " + std::to_string(app::modules::api_major(host));
+	const std::uint32_t module_major = app::modules::api_major(version);
+	const std::uint32_t host_major = app::modules::api_major(host);
+	if (module_major < host_major) {
+		return "built against editor api " + std::to_string(module_major) + "." + std::to_string(app::modules::api_minor(version))
+			+ ", this editor serves " + std::to_string(host_major) + ".x: rebuild the project against the current SDK";
+	}
+	if (module_major > host_major) {
+		return "built against editor api " + std::to_string(module_major) + "." + std::to_string(app::modules::api_minor(version))
+			+ ", this editor serves " + std::to_string(host_major) + ".x: update the editor, or rebuild the project against this SDK";
 	}
 	if (app::modules::api_minor(version) > app::modules::api_minor(host)) {
 		return "module needs editor api minor " + std::to_string(app::modules::api_minor(version))
