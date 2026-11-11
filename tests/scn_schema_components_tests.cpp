@@ -76,12 +76,19 @@ desc::type_schema schema_from(const char* text)
 	return desc::parse_type_schema(boost::json::parse(text).as_object());
 }
 
-// A dynamic desc of `text`'s layout, as a cached desc read under some registration of the name would be.
+// A dynamic desc of `text`'s layout, as a cached desc read under some registration of the name would be. Its type is
+// set as desc_system::create_instance sets it (set_type is not public).
+struct typed_dynamic_desc : desc::dynamic_desc {
+	explicit typed_dynamic_desc(std::shared_ptr<const desc::schema_binding> binding)
+		: desc::dynamic_desc(std::move(binding))
+	{
+		set_type(schema().name);
+	}
+};
+
 std::shared_ptr<desc::dynamic_desc> desc_of(const char* text, const desc::schema_registry& resolve)
 {
-	auto made = std::make_shared<desc::dynamic_desc>(desc::bind_runtime(schema_from(text), resolve));
-	made->set_type(made->schema().name);
-	return made;
+	return std::make_shared<typed_dynamic_desc>(desc::bind_runtime(schema_from(text), resolve));
 }
 
 desc::type_schema schema_in_code(std::string name)
@@ -270,7 +277,7 @@ BOOST_AUTO_TEST_CASE(a_schema_alone_registers_a_component)
 	BOOST_TEST((layer->catalog().find(id) == entry));
 	BOOST_TEST(scn::is_schema_component(*entry));
 	BOOST_TEST(entry->saved());
-	BOOST_TEST((layer->components().find("mod.health") != nullptr));
+	BOOST_TEST(layer->components().find("mod.health").has_value());
 	BOOST_TEST(layer->descs().is_registered("mod.health"));
 	BOOST_TEST(!descs->is_registered("mod.health")); // the base desc system is left alone
 }
@@ -304,7 +311,7 @@ BOOST_AUTO_TEST_CASE(a_taken_name_or_id_is_refused_and_nothing_is_left_behind)
 		"name": "mod.y", "kind": "component", "fields": [ { "name": "v", "kind": "i32" } ] })json"));
 	BOOST_TEST(!by_id);
 	BOOST_TEST(nothing_registered("mod.y"));
-	BOOST_TEST((layer->components().find("mod.x") != nullptr));
+	BOOST_TEST(layer->components().find("mod.x").has_value());
 
 	// A version its migrations do not lead to (none registered: version 1).
 	auto versioned = scn::register_schema_component(mgr, *layer, schema_from(R"json({
