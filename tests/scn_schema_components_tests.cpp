@@ -610,7 +610,7 @@ BOOST_AUTO_TEST_CASE(a_snapshot_maps_the_entity_fields_to_the_restored_entities)
 	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
 	scn::world_context target{ 1, "copy" };
 	entt::registry& to = target.state();
-	to.create(); // shifts the ids: a field keeping the raw id would name another entity
+	static_cast<void>(to.create()); // shifts the ids: a field keeping the raw id would name another entity
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
 
@@ -628,8 +628,8 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_move_the_component_and_map_its_entities)
 	BOOST_REQUIRE(static_cast<bool>(link));
 	mgr.create_set("s", layer);
 	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
-	world.state().create(); // the world's ids differ from the sandbox's
-	world.state().create();
+	static_cast<void>(world.state().create()); // the world's ids differ from the sandbox's
+	static_cast<void>(world.state().create());
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
@@ -702,7 +702,7 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_a_snapsh
 	scn::snapshot_report captured;
 	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
 	scn::world_context target{ 1, "copy" };
-	target.state().create();
+	static_cast<void>(target.state().create());
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
 
@@ -723,8 +723,8 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_the_sand
 	BOOST_REQUIRE(static_cast<bool>(deep));
 	mgr.create_set("s", layer);
 	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
-	world.state().create();
-	world.state().create();
+	static_cast<void>(world.state().create());
+	static_cast<void>(world.state().create());
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
 	}
