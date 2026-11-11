@@ -15,6 +15,12 @@ namespace dll_game {
 	// Moves every animated model one clip on per frame with scn::play_animation (#563): idle -> walk -> jump (once).
 	inline constexpr std::string_view animate_system_name = "dll::animate";
 	inline constexpr std::string_view component_name = "dll.component";
+	// A component without a C++ type (#606), registered from this schema through module_context::register_component.
+	inline constexpr std::string_view schema_component_name = "dll.schema_health";
+	inline constexpr const char* schema_component_json = R"json({
+		"name": "dll.schema_health", "kind": "component",
+		"fields": [ { "name": "hp", "kind": "f32", "default": 10 }, { "name": "target", "kind": "entity" } ]
+	})json";
 	// A system of the module that keeps state in its fields (#601). The bad_restore build's one cannot start while the
 	// file keeper_trap_file (an absolute path in the build tree) exists: Play cannot be restored in that build.
 	inline constexpr std::string_view keeper_system_name = "dll::keeper";

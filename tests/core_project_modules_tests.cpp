@@ -937,7 +937,7 @@ BOOST_AUTO_TEST_CASE(an_editor_module_is_loaded_after_the_game_and_unloaded_on_r
 BOOST_AUTO_TEST_CASE(an_editor_module_of_another_editor_api_version_is_refused_and_the_game_goes_on)
 {
 	core::project_modules_options options = options_for(&refusal);
-	options.check_editor_module = [](const app::modules::module_entry&) { return std::string{ "editor api major version 9 does not match host major 1" }; };
+	options.check_editor_module = [](const app::modules::module_entry&) { return std::string{ "built against editor api 1.2, this editor serves 2.x: rebuild the project against the current SDK" }; };
 	core::project_module_host strict(loader, root, options);
 	const auto report = strict.load_editor_modules();
 

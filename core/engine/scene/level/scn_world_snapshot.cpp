@@ -146,7 +146,11 @@ scn::entity_writer::components scn::entity_writer::write(const entt::registry& r
 			continue;
 		}
 		json::object value;
-		entry->write(*entry->schema, reg, entity, value);
+		// Not written (a blob of another layout): saved as {} it would come back as the defaults, so it is unsaved.
+		if (!entry->write(*entry->schema, reg, entity, value)) {
+			out.unsaved.push_back(entry->name);
+			continue;
+		}
 		out.saved[entry->name] = std::move(value);
 	}
 	return out;

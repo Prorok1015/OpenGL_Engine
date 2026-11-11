@@ -7,7 +7,73 @@
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/desc_schema_ops.h>
+#include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_schema_components.h>
+#include <entt/entity/snapshot.hpp>
+#include <cstdint>
+#include <optional>
 #include <unordered_set>
+#include <vector>
+
+namespace
+{
+	using sandbox_blob_pool = entt::storage_for_t<desc::dyn_blob, ecs::sandbox_entity>;
+
+	// The world entities the loader made for the sandbox ones. A raw id the sandbox does not have may name another
+	// entity of the world: it reads as none, as an entity member of a C++ component does.
+	class loader_remap final : public desc::entity_remap
+	{
+	public:
+		explicit loader_remap(const entt::continuous_loader& loader) : m_loader(loader) {}
+
+		std::optional<std::uint32_t> find(std::uint32_t saved) const override
+		{
+			const auto entity = static_cast<entt::entity>(saved);
+			if (!m_loader.contains(entity)) {
+				return std::nullopt;
+			}
+			return entt::to_integral(m_loader.map(entity));
+		}
+
+	private:
+		const entt::continuous_loader& m_loader;
+	};
+
+	struct schema_pool
+	{
+		const sandbox_blob_pool* pool = nullptr;
+		entt::id_type id = 0;
+		const desc::schema_binding* schema = nullptr;
+	};
+
+	// After every pool is in, so an entity field may name a sandbox entity whose world counterpart a later pool made:
+	// the loader makes the world entity of an owner only when it loads one of its pools.
+	void map_schema_pool(entt::registry& state, const entt::continuous_loader& loader, const schema_pool& moved)
+	{
+		const loader_remap entities{ loader };
+		auto& placed = state.storage<desc::dyn_blob>(moved.id);
+		for (const ecs::sandbox_entity owner : static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>&>(*moved.pool)) {
+			const auto remote = static_cast<entt::entity>(entt::to_integral(owner));
+			if (!loader.contains(remote)) {
+				continue;
+			}
+			const entt::entity local = loader.map(remote);
+			if (!placed.contains(local)) {
+				continue;
+			}
+			desc::dyn_blob& blob = placed.get(local);
+			// Of another size it was made against another layout of the schema: reading it by this one's offsets overruns
+			// it. Known gap: a blob of another layout of the same size passes, and its bytes are read (and its "entities"
+			// mapped) where this layout places them; the data is wrong, the memory stays in bounds (DESC_SCHEMA.md).
+			desc::dyn_ref ref{ &blob, 0 };
+			if (blob.bytes.size() != moved.schema->schema->layout.size || !desc::remap_entities(*moved.schema, &ref, entities)) {
+				egLOG_ERROR("ecs", "a '{}' component from the commands is dropped: its blob is not laid out by the registered schema", moved.schema->schema->name);
+				placed.remove(local);
+			}
+		}
+	}
+}
 
 scn::world_context::world_context(uint32_t id, std::string_view name)
 	: m_id(id), m_name(name)
@@ -113,6 +179,11 @@ void scn::world_context::run_phase(size_t order_index, ecs::run_mode mode, const
 
 void scn::world_context::apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta)
 {
+	apply_commands(state, layer_meta, nullptr);
+}
+
+void scn::world_context::apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta, const component_catalog* catalog)
+{
 	if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
 		changer->apply(state);
 	}
@@ -127,6 +198,7 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 			loader.get<entt::entity>(archive);
 		}
 
+		std::vector<schema_pool> schema_pools;
 		for (auto [id, storage] : sandbox->storage()) {
 			if (id == entt::type_hash<ecs::sandbox_entity>::value()) continue;
 			if (storage.empty()) continue;
@@ -137,8 +209,18 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 					continue;
 				}
 			}
-			// Not silent (#606): a component without meta (one without a C++ type among them, until it is moved here)
-			// loses what the commands gave it. Once per storage id, the drop repeats every frame. Unsynchronized:
+			if (catalog && storage.type() == entt::type_id<desc::dyn_blob>()) {
+				if (const scn::component_entry* entry = catalog->find(id); entry && scn::is_schema_component(*entry)) {
+					// Through the loader, as a C++ component goes: it makes the world entities of the owners.
+					const auto& pool = static_cast<const sandbox_blob_pool&>(storage);
+					ecs::sandbox_loader_archive archive{ loader, pool };
+					loader.get<desc::dyn_blob>(archive, id);
+					schema_pools.push_back({ &pool, id, entry->schema.get() });
+					continue;
+				}
+			}
+			// Not silent (#606): a component without meta, or one without a C++ type the catalog does not know, loses
+			// what the commands gave it. Once per storage id, the drop repeats every frame. Unsynchronized:
 			// apply_commands runs on the main thread only.
 			static std::unordered_set<entt::id_type> warned;
 			if (warned.insert(id).second) {
@@ -146,6 +228,9 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 			}
 		}
 
+		for (const schema_pool& moved : schema_pools) {
+			map_schema_pool(state, loader, moved);
+		}
 		sandbox->clear();
 	}
 }

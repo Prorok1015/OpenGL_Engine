@@ -73,8 +73,8 @@ edt::editor_context* g_probe_editor = nullptr;
 class probe_preview final : public edt::previewable_document
 {
 public:
-	probe_preview(probe_state& state, ds::task_system& tasks, const ds::lifetime& lifetime)
-		: m_state(state), m_tasks(tasks), m_lifetime(lifetime)
+	probe_preview(probe_state& state, edt::editor_module_context& context)
+		: m_state(state), m_context(context)
 	{
 		++m_state.previews_made;
 	}
@@ -97,8 +97,8 @@ public:
 		m_source = source;
 		m_open = true;
 		probe_state& state = m_state;
-		m_tasks.run(ds::lane::compute, ds::task_desc{ "preview task" }, m_lifetime, [](ds::task_context&) {})
-			.then_main(m_lifetime, [&state](ds::task_result<void>&) {
+		m_context.run(ds::lane::compute, ds::task_desc{ "preview task" }, [](ds::task_context&) {})
+			.then_main(m_context.tasks(), [&state](ds::task_result<void>&) {
 				if (state.previews_destroyed > 0) ++state.preview_continuations_after_destroy;
 				else ++state.preview_continuations;
 			});
@@ -108,8 +108,7 @@ public:
 
 private:
 	probe_state& m_state;
-	ds::task_system& m_tasks;
-	const ds::lifetime& m_lifetime;
+	edt::editor_module_context& m_context;
 	std::string m_title = "probe preview";
 	res::tag m_source;
 	bool m_open = false;
@@ -145,24 +144,24 @@ public:
 
 		context.add_inspector("ext_component", [](scn::prefab_desc::prefab_comp_node&) { return false; });
 
-		edt::asset_kind_desc kind;
+		edt::module_asset_kind_desc kind;
 		kind.id = "ext.kind";
 		kind.suffix = ".ext";
-		kind.open = [](edt::editor_context&, const res::tag&) {};
+		kind.open = [](edt::editor_module_context&, const res::tag&) {};
 		context.add_asset_kind(std::move(kind));
 
-		edt::asset_preview_desc preview;
+		edt::module_asset_preview_desc preview;
 		preview.id = "ext.preview";
 		preview.suffix = ".ext";
-		preview.make_preview = [&state = m_state, &tasks = context.task_system(), &lifetime = context.tasks()](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> {
-			return std::make_unique<probe_preview>(state, tasks, lifetime);
+		preview.make_preview = [&state = m_state](edt::editor_module_context& module) -> std::unique_ptr<edt::previewable_document> {
+			return std::make_unique<probe_preview>(state, module);
 		};
 		context.add_asset_preview(std::move(preview));
 
 		edt::problem item;
 		item.message = "from the module";
 		context.set_problems("ext.problems", { item });
-		context.subscribe(context.events().document_changed, [this](edt::document_id, std::uint64_t) { ++m_state.document_changes; });
+		context.subscribe(&edt::editor_events::document_changed, [this](edt::document_id, std::uint64_t) { ++m_state.document_changes; });
 
 		probe_state& state = m_state;
 		context.start_job(ds::lane::compute, ds::task_desc{ "probe job" },
@@ -175,8 +174,7 @@ public:
 				if (state.shut_down_generation >= generation) ++state.callbacks_after_shutdown;
 			});
 
-		context.task_system().run(ds::lane::compute, ds::task_desc{ "probe task" }, context.tasks(),
-			[](ds::task_context&) {})
+		context.run(ds::lane::compute, ds::task_desc{ "probe task" }, [](ds::task_context&) {})
 			.then_main(context.tasks(), [&state, generation](ds::task_result<void>&) {
 				++state.continuations_run;
 				if (state.shut_down_generation >= generation) ++state.callbacks_after_shutdown;
@@ -251,7 +249,8 @@ struct extension_fixture : test_util::null_engine_fixture
 	}
 
 	// A project whose manifest names a game module and a game_editor, and a host that loads them from compiled-in entries.
-	std::unique_ptr<core::project_module_host> make_host()
+	// `refusal_reason` (optional) gets what the host's check said about the module it refused.
+	std::unique_ptr<core::project_module_host> make_host(std::uint32_t (*reported_editor_api)() = nullptr, std::string* refusal_reason = nullptr)
 	{
 		std::filesystem::create_directories(dir.path() / "game");
 		prj::project_context project;
@@ -266,9 +265,15 @@ struct extension_fixture : test_util::null_engine_fixture
 		host_data.construct<prj::project_context>(std::move(project));
 		core::project_modules_options options;
 		options.with_editor_modules = true;
-		options.check_editor_module = [](const app::modules::module_entry& entry) { return edt::check_editor_api_version(entry.editor_api_version); };
+		options.check_editor_module = [refusal_reason](const app::modules::module_entry& entry) {
+			std::string reason = edt::check_editor_api_version(entry.editor_api_version);
+			if (refusal_reason && !reason.empty()) *refusal_reason = reason;
+			return reason;
+		};
 		options.editor_unload_refusal = [this] { return context->module_unload_refusal(); };
-		options.compiled_in.emplace("ext_editor", SNK_EDITOR_MODULE_ENTRY(ext_probe_));
+		app::modules::module_entry editor_entry = SNK_EDITOR_MODULE_ENTRY(ext_probe_);
+		if (reported_editor_api) editor_entry.editor_api_version = reported_editor_api;
+		options.compiled_in.emplace("ext_editor", editor_entry);
 		options.compiled_in.emplace("ext_game", SNK_MODULE_ENTRY(ext_game_));
 		return std::make_unique<core::project_module_host>(loader, host_data, std::move(options));
 	}
@@ -448,19 +453,39 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItC
 	reported = host;
 	BOOST_CHECK(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty());
 
-	// 1.1 added add_asset_preview (#589): a module built against 1.0 does not call it and is served as before.
-	reported = 0x0001'0000u;
-	BOOST_CHECK_MESSAGE(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty(), "a module built against editor api 1.0 is refused");
+	// 2.0 (#663) closed the paths past the scope: a module built against 1.x calls what is gone and is refused, whatever its minor.
+	for (const std::uint32_t old_version : { 0x0001'0000u, 0x0001'0001u, 0x0001'0002u }) {
+		reported = old_version;
+		const std::string older_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
+		BOOST_CHECK_MESSAGE(older_major.find("rebuild the project") != std::string::npos, older_major);
+		BOOST_CHECK_MESSAGE(older_major.find("1.") != std::string::npos && older_major.find("2.x") != std::string::npos, older_major);
+	}
 
 	reported = host + (1u << 16);
 	const std::string newer_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
-	BOOST_CHECK_MESSAGE(newer_major.find("major") != std::string::npos, newer_major);
+	BOOST_CHECK_MESSAGE(newer_major.find("update the editor") != std::string::npos, newer_major);
 
 	reported = host + 1u;
 	const std::string newer_minor = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
 	BOOST_CHECK_MESSAGE(newer_minor.find("minor") != std::string::npos, newer_minor);
 
 	BOOST_CHECK(!edt::check_editor_api_version(nullptr).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstEditorApi1_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)
+{
+	const counts before = snapshot();
+	std::string reason;
+	auto host = make_host([]() -> std::uint32_t { return 0x0001'0002u; }, &reason);
+	BOOST_REQUIRE(host->load_all().loaded == std::vector<std::string>{ "ext_game" });
+
+	const auto report = host->load_editor_modules();
+	BOOST_CHECK_MESSAGE(reason.find("rebuild the project") != std::string::npos, reason);
+	BOOST_CHECK(report.loaded.empty());
+	BOOST_CHECK(report.refused == std::vector<std::string>{ "ext_editor" });
+	BOOST_CHECK(!host->has_editor_modules());
+	BOOST_CHECK_EQUAL(state.generations, 0);
+	BOOST_CHECK(snapshot() == before);
 }
 
 BOOST_AUTO_TEST_CASE(ARefusedModule_TouchesNothing_SoTheGameKeepsWorking)
@@ -535,6 +560,30 @@ BOOST_AUTO_TEST_CASE(AnEditorModuleReloadedOnItsOwn_LeavesTheEditorAsItWas_Witho
 	BOOST_CHECK_GE(state.continuations_run, 1);
 	context->events().document_changed.emit(edt::document_id{}, 7);
 	BOOST_CHECK_EQUAL(state.document_changes, 1); // the new copy's handler only: the old one is gone with its scope
+}
+
+// #663: a rebuilt game_editor made against editor API 1.x is not taken either: the reload says why, and the running copy stays.
+BOOST_AUTO_TEST_CASE(AReloadToAnEditorModuleBuiltAgainstEditorApi1_IsRefusedWithTheRebuildMessage_AndTheRunningCopyStays)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	const counts loaded = snapshot();
+	const int shutdowns_before = state.shutdowns;
+
+	const auto old_build = [] {
+		app::modules::module_entry entry = SNK_EDITOR_MODULE_ENTRY(ext_probe_);
+		entry.editor_api_version = []() -> std::uint32_t { return 0x0001'0002u; };
+		return std::make_unique<app::modules::static_module_source>("ext_editor", entry);
+	};
+	const auto current_build = [] { return std::make_unique<app::modules::static_module_source>("ext_editor", SNK_EDITOR_MODULE_ENTRY(ext_probe_)); };
+	const auto report = host->reload("ext_editor", old_build(), current_build);
+
+	BOOST_CHECK_EQUAL(core::to_string(report.status), "refused");
+	BOOST_CHECK_MESSAGE(report.message.find("rebuild the project") != std::string::npos, report.message);
+	BOOST_CHECK_EQUAL(state.shutdowns, shutdowns_before);
+	BOOST_CHECK(snapshot() == loaded);
+	BOOST_CHECK(context->panels().contains("ext.panel"));
 }
 
 BOOST_AUTO_TEST_CASE(UnloadingFromInsideAModuleCallback_IsRefusedNotAttempted)
@@ -624,7 +673,7 @@ BOOST_AUTO_TEST_CASE(AnEventHandlerOfAModule_CountsWhileItRuns)
 {
 	callback_scope_fixture module(*this);
 	std::string seen;
-	module.module_context.subscribe(context->events().document_changed, [&](edt::document_id, std::uint64_t) {
+	module.module_context.subscribe(&edt::editor_events::document_changed, [&](edt::document_id, std::uint64_t) {
 		seen = context->module_unload_refusal();
 	});
 
@@ -671,10 +720,10 @@ BOOST_AUTO_TEST_CASE(AnAssetKindOfAModule_CountsWhileItOpens)
 {
 	callback_scope_fixture module(*this);
 	std::string seen;
-	edt::asset_kind_desc kind;
+	edt::module_asset_kind_desc kind;
 	kind.id = "ext_gated_kind";
 	kind.suffix = ".ext_gated";
-	kind.open = [&](edt::editor_context&, const res::tag&) { seen = context->module_unload_refusal(); };
+	kind.open = [&](edt::editor_module_context&, const res::tag&) { seen = context->module_unload_refusal(); };
 	module.module_context.add_asset_kind(std::move(kind));
 
 	const edt::asset_kind_desc* registered = context->asset_kinds().kind_for_open("a.ext_gated");
@@ -751,10 +800,10 @@ BOOST_AUTO_TEST_CASE(APreviewOfAModule_CountsInItsFactoryAndInEveryCallTheEditor
 	std::vector<std::string> seen;
 	std::string made_while;
 	callback_scope_fixture module(*this);
-	edt::asset_preview_desc preview;
+	edt::module_asset_preview_desc preview;
 	preview.id = "ext.gated_preview";
 	preview.suffix = ".gprev";
-	preview.make_preview = [&](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> {
+	preview.make_preview = [&](edt::editor_module_context&) -> std::unique_ptr<edt::previewable_document> {
 		made_while = context->module_unload_refusal();
 		return std::make_unique<gated_preview>(*context, seen);
 	};

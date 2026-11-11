@@ -19,6 +19,8 @@
 namespace scn
 {
 	// Where a context came from; a reload of the level touches only `level` contexts.
+	class component_catalog;
+
 	enum class context_kind : uint8_t { level, runtime, preview, play };
 
 	// One simulation unit: a single world with its own registry, system list, execution plan,
@@ -73,13 +75,18 @@ namespace scn
 
 		bool has_phase_work(size_t order_index) const;
 		void run_phase(size_t order_index, ecs::run_mode mode, const ecs::runtime_context& ctx) const;
-		void apply_commands() { apply_commands(m_state, m_meta); }
+		void apply_commands() { apply_commands(m_state, m_meta, m_catalog); }
 		// Moves the sandbox entities into `state`; component types are looked up in `layer_meta` (a module layer's
 		// meta context, MODULE_LAYER.md), then in the engine's.
 		static void apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta = nullptr);
+		// The same, and the pools of the components without a C++ type `catalog` knows are moved too (#606), their
+		// entity fields mapped as the sandbox entities are.
+		static void apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta, const component_catalog* catalog);
 
 		// The meta context of the layer the context belongs to; null: the engine's only.
 		void set_meta(const entt::meta_ctx* meta) { m_meta = meta; }
+		// The catalog of the layer the context belongs to (its components without a C++ type); null: none.
+		void set_catalog(const component_catalog* catalog) { m_catalog = catalog; }
 
 		// The context owns its time. begin_frame advances the stepper by the mode's rules and
 		// writes delta_time and update_alpha into the registry ctx; the fixed steps it allows are
@@ -124,5 +131,7 @@ namespace scn
 		// After the older fields: inline accessors (state()) of a game module built earlier keep their offsets.
 		uint32_t m_desc_index = 0;
 		std::optional<input_stack_desc> m_input_stack;
+		// Last (#606): the members above keep their offsets for a game module built earlier.
+		const component_catalog* m_catalog = nullptr;
 	};
 } // namespace scn

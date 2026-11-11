@@ -229,6 +229,9 @@ namespace desc
 					fail(path, "default must be a string");
 				}
 				return value;
+			case field_kind::entity:
+				// Entities are runtime ids of one registry: a number would name whatever entity has it.
+				fail(path, "an entity field has no default but null");
 			case field_kind::array: {
 				if (!value.is_array()) {
 					fail(path, "default must be an array");
