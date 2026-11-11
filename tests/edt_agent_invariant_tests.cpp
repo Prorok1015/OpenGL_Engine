@@ -639,6 +639,9 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
 	pump_level_load();
 	BOOST_TEST(!cancel_item_enabled());
+	const res::tag watched = editor().watched_level_tag();
+	BOOST_REQUIRE(watched.is_valid());
+	BOOST_TEST(watched == editor().current_editor_tag());
 
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
 	BOOST_REQUIRE(editor().level_load_in_progress());
@@ -651,6 +654,7 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 	BOOST_TEST(std::string(cancelled.value.as_object().at("level").as_string()).ends_with("levels/test_level.desc"));
 	BOOST_TEST(!editor().level_load_in_progress());
 	BOOST_TEST(!cancel_item_enabled());
+	BOOST_TEST(editor().watched_level_tag() == watched);
 	BOOST_TEST(std::ranges::any_of(said, [](const std::string& line) {
 		return line.find("test_level.desc") != std::string::npos && line.find("cancelled by an agent") != std::string::npos;
 	}));

@@ -1712,6 +1712,7 @@ cmd::result edt::editor_system::cancel_level_load(const cmd::origin& from)
 	if (!m_loading_level) return cmd::result::failure(cmd::codes::failed, "no level is loading");
 	const res::tag level = m_loading_level_tag;
 	abandon_level_load();
+	m_level_ctrl.resume_watch();
 	const char* who = from.kind == cmd::origin_kind::agent ? "an agent" : from.kind == cmd::origin_kind::ui ? "a person"
 		: from.kind == cmd::origin_kind::test ? "a test" : "the game";
 	egLOG_INFO("editor", "the load of level '{}' was cancelled by {}{}", level.view(), who,
@@ -1735,6 +1736,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 			m_loading_level_tag);
 		if (loaded_out) *loaded_out = false;
 		abandon_level_load();
+		m_level_ctrl.resume_watch();
 		return false;
 	}
 
@@ -1771,20 +1773,12 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
-	// The level takes the new file only now; finish_level_load reads it, and a failure puts the old one back.
-	const res::tag level_tag_before = m_state.level_tag;
 	const res::tag editor_tag_before = m_state.editor_tag;
-	m_state.level_tag = m_loading_level_tag;
-	m_state.editor_tag = m_loading_editor_tag;
-	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
+	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag);
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
 		m_loading_level_tag, level_locator(m_loading_level_handle, m_loading_editor_tag, m_loading_level_tag));
-	if (!loaded) {
-		m_state.level_tag = level_tag_before;
-		m_state.editor_tag = editor_tag_before;
-	}
 	if (loaded) {
 		// The previous level's working copy has no user left: the level set was rebuilt from the new one.
 		release_level_load();

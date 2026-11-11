@@ -100,6 +100,8 @@ namespace edt {
 		const res::tag& current_level_tag() const { return m_state.level_tag; }
 		// The working copy the document's level is read from (`memory://editor/loading/<n>/<name>.desc`).
 		const res::tag& current_editor_tag() const { return m_state.editor_tag; }
+		// The level file hot reload follows (empty while a load runs).
+		const res::tag& watched_level_tag() const { return m_level_ctrl.watched_tag(); }
 
 		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
 		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
