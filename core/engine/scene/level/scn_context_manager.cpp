@@ -58,12 +58,17 @@ scn::context_manager::~context_manager()
 	m_sets.clear();
 }
 
-void scn::context_manager::clear_component_pools(entt::id_type id)
+void scn::context_manager::clear_component_pools(entt::id_type id, const scn::scene_layer& layer)
 {
-	for_each([id](scn::world_context& world) {
-		if (auto* pool = world.state().storage(id)) {
-			pool->clear();
+	for_each_set([id, &layer](scn::context_set& set) {
+		if (set.layer() != &layer) {
+			return;
 		}
+		set.for_each([id](scn::world_context& world) {
+			if (auto* pool = world.state().storage(id)) {
+				pool->clear();
+			}
+		});
 	});
 }
 

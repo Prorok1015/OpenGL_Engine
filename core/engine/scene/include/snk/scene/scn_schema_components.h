@@ -33,8 +33,9 @@ namespace scn
 	// without a C++ type cannot answer through that function, which is not handed the component's id.
 	SNK_API bool holds(const component_entry& entry, const entt::registry& reg, entt::entity entity);
 
-	// Undoes a register_schema_component: the component's pools are cleared in every world of every set of the manager,
-	// then its spawner, catalog entry, name and desc type go. Keep it in the layer (scene_layer::keep): it must not
+	// Undoes a register_schema_component: the component's pools are cleared in every world of every set of its layer
+	// (a sibling layer registers the name on its own and keeps its worlds), then its spawner, catalog entry, name and
+	// desc type go. Keep it in the layer (scene_layer::keep): it must not
 	// outlive the layer, and the layer drops it after its own worlds are gone.
 	class SNK_API schema_component_registration
 	{
@@ -64,6 +65,8 @@ namespace scn
 	// Registers a component described only by `schema` (a component schema, `is_component`) in `layer`: its desc type
 	// (dynamic_desc), a spawner that copies the desc's blob into the world, its name and id (components()) and a catalog
 	// entry, so snapshots, hot reload and runtime.get see it. Empty (logged, nothing registered) when the schema is no
-	// component, cannot be bound, or its name, desc type or id is taken in the layer or below.
+	// component, cannot be bound, is not the version its migrations lead to, or its name, desc type or id is taken in
+	// the layer or below. A schema built in code gets its layout here. The spawner refuses a desc read by another
+	// layout of the schema (one cached from an earlier registration of the name).
 	SNK_API schema_component_registration register_schema_component(context_manager& manager, scene_layer& layer, desc::type_schema schema);
 }

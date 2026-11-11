@@ -53,6 +53,8 @@
 // 3.11 (#606): components without a C++ type. scn::register_schema_component, scn::schema_component_registration,
 // component_catalog::add_schema_component, scn::holds and the blob accessors are new exports; context_manager gains
 // members at its end (engine-made, not in the layout key). A module that registers one needs an engine of 3.11 or newer.
+// A module built before 3.11 that walks the catalog must not call entry.contains on such an entry (it asserts in debug
+// and answers false in release): it learns of them only by being rebuilt, and then asks through scn::holds.
 #define SNK_MODULE_API_VERSION 0x0003'000Bu // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

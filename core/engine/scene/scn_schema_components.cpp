@@ -7,6 +7,8 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/core/hashed_string.hpp>
 #include <entt/entity/registry.hpp>
+#include <exception>
+#include <format>
 #include <typeinfo>
 #include <utility>
 
@@ -21,10 +23,33 @@ namespace
 		return false;
 	}
 
+	// Whether blobs of `a` can be read through `b`: same bytes at the same offsets, field by field.
+	bool same_layout(const desc::schema_binding& a, const desc::schema_binding& b)
+	{
+		if (&a == &b) {
+			return true;
+		}
+		if (a.schema->layout != b.schema->layout || a.ops.size() != b.ops.size()) {
+			return false;
+		}
+		for (std::size_t i = 0; i < a.ops.size(); ++i) {
+			const desc::field_ops& x = a.ops[i];
+			const desc::field_ops& y = b.ops[i];
+			if (x.kind != y.kind || x.element != y.element || x.offset != y.offset || !x.nested != !y.nested) {
+				return false;
+			}
+			if (x.nested && !same_layout(*x.nested, *y.nested)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool write(const desc::schema_binding& schema, const entt::registry& reg, entt::entity entity, json::object& out)
 	{
 		const desc::dyn_blob* blob = scn::find_schema_component(reg, entity, scn::schema_component_id(schema.schema->name));
-		if (!blob) {
+		// A blob of another size was laid out by another schema: reading it by this one's offsets overruns it.
+		if (!blob || blob->bytes.size() != schema.schema->layout.size) {
 			return false;
 		}
 		// serialize only reads through the reference.
@@ -42,11 +67,16 @@ namespace
 		return desc::check_override_object(*schema.schema, in).status == desc::override_status::valid;
 	}
 
-	void spawn(entt::id_type id, entt::registry& reg, entt::entity entity, const desc::desc_base& source)
+	void spawn(entt::id_type id, const desc::schema_binding& registered, entt::registry& reg, entt::entity entity, const desc::desc_base& source)
 	{
 		const auto* dynamic = dynamic_cast<const desc::dynamic_desc*>(&source);
 		if (!dynamic) {
 			egLOG_ERROR("scene", "component without a C++ type: the desc of '{}' is not a dynamic_desc", source.get_type());
+			return;
+		}
+		// A desc read by an earlier registration of the name (still cached) lays its blob out by that schema.
+		if (!same_layout(dynamic->binding(), registered)) {
+			egLOG_ERROR("scene", "component without a C++ type '{}' not spawned: its desc was read by another layout of the schema", source.get_type());
 			return;
 		}
 		scn::emplace_schema_component(reg, entity, id, dynamic->blob());
@@ -153,9 +183,10 @@ void scn::schema_component_registration::reset()
 		return;
 	}
 	// Blobs laid out by this schema must not outlive it: a schema of the same name registered again may lay them out
-	// otherwise. A hot reload snapshots the worlds before the old layer goes.
+	// otherwise. Only the worlds of this layer: a sibling layer (the next one of a hot reload) has its own registration
+	// of the name, and its worlds hold blobs of that one.
 	if (!m_manager_alive.expired()) {
-		m_manager->clear_component_pools(m_id);
+		m_manager->clear_component_pools(m_id, *layer);
 	}
 	layer->assembler().unregister_desc_spawner(m_name);
 	layer->catalog().remove(m_name);
@@ -191,37 +222,57 @@ scn::schema_component_registration scn::register_schema_component(context_manage
 	if (layer.descs().is_registered(name) || layer.descs().find_schema(name)) {
 		return refuse("a desc type of that name exists");
 	}
+	if (layer.assembler().has_spawner(name)) {
+		return refuse("a spawner of that name exists");
+	}
+	// desc_system::register_schema only asserts this; a release build would register the wrong version.
+	if (const int current = layer.descs().current_version(name); schema.version != current) {
+		return refuse(std::format("the schema is version {}, its migrations lead to version {}", schema.version, current));
+	}
 
-	const desc::type_schema* stored = layer.descs().register_schema(std::move(schema));
-	if (!stored || !layer.descs().is_registered(name)) {
-		layer.descs().unregister_desc(name);
-		return refuse("its schema cannot be bound (a nested or enum schema it names is missing?)");
-	}
-	std::shared_ptr<const desc::schema_binding> binding = desc::bind_runtime(*stored, layer.descs().schemas());
-	if (!binding) {
-		layer.descs().unregister_desc(name);
-		return refuse("its schema cannot be bound");
-	}
-	if (!layer.components().add(name, id)) {
-		layer.descs().unregister_desc(name);
-		return refuse("the component registry refused it");
-	}
-	if (!layer.catalog().add_schema_component(name, binding)) {
-		layer.components().remove(name);
-		layer.descs().unregister_desc(name);
-		return refuse("the catalog refused it");
-	}
-	const auto spawner = [id](entt::registry& reg, entt::entity entity, const desc::desc_base& source, std::string_view) {
-		spawn(id, reg, entity, source);
-	};
-	const auto patcher = [id](entt::registry& reg, entt::entity entity, const desc::desc_base& source) {
-		spawn(id, reg, entity, source);
-	};
-	if (!layer.assembler().register_desc_spawner(name, spawner, patcher)) {
+	// Every step below may have run or thrown half-way; the name was free in the layer, so all of it is ours to undo.
+	const auto undo = [&] {
+		layer.assembler().unregister_desc_spawner(name);
 		layer.catalog().remove(name);
 		layer.components().remove(name);
 		layer.descs().unregister_desc(name);
-		return refuse("the assembler refused its spawner");
+	};
+	try {
+		// A schema built in code rather than parsed has no layout yet, and bind_runtime throws without one.
+		if (schema.layout.size == 0 && !schema.fields.empty()) {
+			desc::compute_layout(schema, &layer.descs().schemas());
+		}
+		const desc::type_schema* stored = layer.descs().register_schema(std::move(schema));
+		if (!stored || !layer.descs().is_registered(name)) {
+			undo();
+			return refuse("its schema cannot be bound (a nested or enum schema it names is missing?)");
+		}
+		std::shared_ptr<const desc::schema_binding> binding = desc::bind_runtime(*stored, layer.descs().schemas());
+		if (!binding) {
+			undo();
+			return refuse("its schema cannot be bound");
+		}
+		if (!layer.components().add(name, id)) {
+			undo();
+			return refuse("the component registry refused it");
+		}
+		if (!layer.catalog().add_schema_component(name, binding)) {
+			undo();
+			return refuse("the catalog refused it");
+		}
+		const auto spawner = [id, binding](entt::registry& reg, entt::entity entity, const desc::desc_base& source, std::string_view) {
+			spawn(id, *binding, reg, entity, source);
+		};
+		const auto patcher = [id, binding](entt::registry& reg, entt::entity entity, const desc::desc_base& source) {
+			spawn(id, *binding, reg, entity, source);
+		};
+		if (!layer.assembler().register_desc_spawner(name, spawner, patcher)) {
+			undo();
+			return refuse("the assembler refused its spawner");
+		}
+	} catch (const std::exception& error) {
+		undo();
+		return refuse(error.what());
 	}
 	return schema_component_registration{ manager, layer, name, id };
 }

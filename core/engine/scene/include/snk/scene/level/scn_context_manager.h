@@ -161,8 +161,9 @@ namespace scn
 		scn::component_catalog& catalog() { return m_catalog; }
 		const scn::component_catalog& catalog() const { return m_catalog; }
 
-		// Empties the pool `id` in every world of every set (a component without a C++ type that goes, #606).
-		void clear_component_pools(entt::id_type id);
+		// Empties the pool `id` in every world of every set of `layer` (a component without a C++ type of that layer
+		// goes, #606). Sets of other layers keep theirs: a sibling layer registers the name on its own.
+		void clear_component_pools(entt::id_type id, const scn::scene_layer& layer);
 		// Expires when the manager starts going away: what may outlive it checks this before calling into it.
 		std::weak_ptr<const bool> lifetime_token() const { return m_alive; }
 

@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/common/logger/engine_log_sinks.h>
+#include <snk/desc/desc_dynamic.h>
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
@@ -10,9 +12,11 @@
 #include <snk/scene/scn_schema_components.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
+#include <format>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 // Components without a C++ type (#606, DESC_SCHEMA.md section 3): registered in a layer from a schema alone, spawned
 // from a level, saved by snapshots, and gone with their pools when the registration goes.
@@ -45,6 +49,50 @@ desc::type_schema schema_from(const char* text)
 	return desc::parse_type_schema(boost::json::parse(text).as_object());
 }
 
+// A dynamic desc of `text`'s layout, as a cached desc read under some registration of the name would be.
+std::shared_ptr<desc::dynamic_desc> desc_of(const char* text, const desc::schema_registry& resolve)
+{
+	auto made = std::make_shared<desc::dynamic_desc>(desc::bind_runtime(schema_from(text), resolve));
+	made->set_type(made->schema().name);
+	return made;
+}
+
+desc::type_schema schema_in_code(std::string name)
+{
+	desc::type_schema schema;
+	schema.name = std::move(name);
+	schema.kind = desc::schema_kind::component;
+	schema.is_component = true;
+	desc::field_schema field;
+	field.name = "v";
+	field.key = "/v";
+	field.kind = desc::field_kind::i32;
+	field.default_value = 5;
+	schema.fields.push_back(std::move(field));
+	return schema;
+}
+
+struct log_capture {
+	log_capture()
+	{
+		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn) warnings.push_back(std::format("{}: {}", category, message));
+		});
+	}
+
+	std::size_t count(std::string_view part) const
+	{
+		std::size_t found = 0;
+		for (const auto& w : warnings) {
+			found += w.find(part) != std::string::npos ? 1u : 0u;
+		}
+		return found;
+	}
+
+	std::vector<std::string> warnings;
+	engine::log_sink_handle sink; // last: removed first
+};
+
 struct schema_fixture : test_util::scene_env {
 	schema_fixture()
 		: hot(std::make_shared<scn::hot_reload_manager>(*assembler, *rs))
@@ -63,7 +111,7 @@ struct schema_fixture : test_util::scene_env {
 	bool nothing_registered(std::string_view name) const
 	{
 		return !layer->components().find(name) && !layer->catalog().find(name) && !layer->descs().is_registered(name)
-			&& !layer->descs().find_schema(name);
+			&& !layer->descs().find_schema(name) && !layer->assembler().has_spawner(name);
 	}
 
 	// The world's single entity with the health component.
@@ -141,6 +189,45 @@ BOOST_AUTO_TEST_CASE(a_taken_name_or_id_is_refused_and_nothing_is_left_behind)
 		"name": "mod.plain", "kind": "struct", "fields": [ { "name": "v", "kind": "i32" } ] })json"));
 	BOOST_TEST(!plain);
 	BOOST_TEST(nothing_registered("mod.plain"));
+
+	// Only the id: another name holds hashed_string("mod.y").
+	BOOST_REQUIRE(layer->components().add("mod.x", scn::schema_component_id("mod.y")));
+	auto by_id = scn::register_schema_component(mgr, *layer, schema_from(R"json({
+		"name": "mod.y", "kind": "component", "fields": [ { "name": "v", "kind": "i32" } ] })json"));
+	BOOST_TEST(!by_id);
+	BOOST_TEST(nothing_registered("mod.y"));
+	BOOST_TEST((layer->components().find("mod.x") != nullptr));
+
+	// A version its migrations do not lead to (none registered: version 1).
+	auto versioned = scn::register_schema_component(mgr, *layer, schema_from(R"json({
+		"name": "mod.versioned", "version": 2, "kind": "component", "fields": [ { "name": "v", "kind": "i32" } ] })json"));
+	BOOST_TEST(!versioned);
+	BOOST_TEST(nothing_registered("mod.versioned"));
+}
+
+BOOST_AUTO_TEST_CASE(a_schema_built_in_code_gets_its_layout_or_leaves_nothing_behind)
+{
+	auto built = scn::register_schema_component(mgr, *layer, schema_in_code("mod.built"));
+	BOOST_REQUIRE(static_cast<bool>(built));
+	const scn::component_entry& entry = *layer->catalog().find("mod.built");
+	entt::registry reg;
+	const entt::entity entity = reg.create();
+	BOOST_TEST(entry.read(*entry.schema, reg, entity, boost::json::object{}, read_context()));
+	boost::json::object out;
+	BOOST_TEST(entry.write(*entry.schema, reg, entity, out));
+	BOOST_TEST(out.at("v").to_number<std::int64_t>() == 5);
+
+	// Its layout cannot be computed (the nested schema is missing): the throw is caught and rolled back.
+	desc::type_schema broken = schema_in_code("mod.broken");
+	desc::field_schema nested;
+	nested.name = "s";
+	nested.key = "/s";
+	nested.kind = desc::field_kind::structure;
+	nested.ref_type = "mod.missing";
+	broken.fields.push_back(std::move(nested));
+	auto refused = scn::register_schema_component(mgr, *layer, std::move(broken));
+	BOOST_TEST(!refused);
+	BOOST_TEST(nothing_registered("mod.broken"));
 }
 
 BOOST_AUTO_TEST_CASE(a_level_spawns_the_component_with_its_values)
@@ -189,6 +276,34 @@ BOOST_AUTO_TEST_CASE(the_catalog_reads_and_writes_the_component)
 	const entt::entity other = reg.create();
 	boost::json::object none;
 	BOOST_TEST(!entry.write(*entry.schema, reg, other, none));
+}
+
+BOOST_AUTO_TEST_CASE(a_desc_of_another_layout_is_not_spawned)
+{
+	auto health = register_health(k_health_v2_schema);
+	BOOST_REQUIRE(static_cast<bool>(health));
+	entt::registry reg;
+	const entt::entity entity = reg.create();
+
+	const auto stale = desc_of(k_health_schema, layer->descs().schemas());
+	layer->assembler().spawn_from_desc(reg, entity, *stale);
+	BOOST_TEST((scn::find_schema_component(reg, entity, health.id()) == nullptr));
+
+	const auto current = desc_of(k_health_v2_schema, layer->descs().schemas());
+	layer->assembler().spawn_from_desc(reg, entity, *current);
+	BOOST_TEST((scn::find_schema_component(reg, entity, health.id()) != nullptr));
+}
+
+BOOST_AUTO_TEST_CASE(a_blob_of_another_size_is_not_read)
+{
+	auto health = register_health();
+	BOOST_REQUIRE(static_cast<bool>(health));
+	const scn::component_entry& entry = *layer->catalog().find("mod.health");
+	entt::registry reg;
+	const entt::entity entity = reg.create();
+	scn::emplace_schema_component(reg, entity, health.id(), desc::dyn_blob{});
+	boost::json::object out;
+	BOOST_TEST(!entry.write(*entry.schema, reg, entity, out));
 }
 
 BOOST_AUTO_TEST_CASE(a_stray_pool_is_named_by_its_id)
@@ -275,6 +390,29 @@ BOOST_AUTO_TEST_CASE(the_layer_drops_a_kept_registration_after_its_worlds)
 	BOOST_TEST(nothing_registered("mod.health"));
 }
 
+BOOST_AUTO_TEST_CASE(the_next_layer_of_a_hot_reload_keeps_its_components)
+{
+	scn::scene_layer& previous = *layer;
+	previous.keep(register_health());
+	auto& next = mgr.create_layer();
+	// A sibling, not a child: the name is free in it.
+	auto next_health = scn::register_schema_component(mgr, next, schema_from(k_health_schema));
+	BOOST_REQUIRE(static_cast<bool>(next_health));
+
+	mgr.set_game_layer(&next);
+	layer = &next;
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", k_level)));
+	pump();
+	auto& world = mgr.level_set().get("w0");
+	BOOST_REQUIRE((health_holder(world.state()) != entt::null));
+
+	mgr.destroy_layer(previous); // drops the previous registration, as activate() does after the switch
+	const entt::entity holder = health_holder(world.state());
+	BOOST_REQUIRE((holder != entt::null));
+	BOOST_TEST(value_of(world.state(), holder).at("hp").to_number<double>() == 42.0);
+	BOOST_TEST((layer->catalog().find("mod.health") != nullptr));
+}
+
 BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 {
 	auto health = register_health();
@@ -286,11 +424,19 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 		world.state().ctx().emplace<ecs::entity_spawner>();
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
-	const auto spawned = sandbox.create();
-	sandbox.storage<desc::dyn_blob>(health.id()).emplace(spawned);
+	// An id no other test drops: the warning is given once per id for the process.
+	const entt::id_type id = scn::schema_component_id("mod.sandbox_only");
+	const std::string id_text = std::to_string(id);
+	log_capture log;
 
+	sandbox.storage<desc::dyn_blob>(id).emplace(sandbox.create());
 	world.apply_commands();
+	BOOST_TEST(log.count(id_text) == 1u);
 	BOOST_TEST((health_holder(world.state()) != entt::null)); // the level's entity keeps its own; PR-2 moves the rest
+
+	sandbox.storage<desc::dyn_blob>(id).emplace(sandbox.create());
+	world.apply_commands();
+	BOOST_TEST(log.count(id_text) == 1u); // once per id, not every frame
 }
 
 BOOST_AUTO_TEST_SUITE_END()
