@@ -30,6 +30,7 @@ bool edt::mesh_node_visible(const scn::prefab_desc::prefab_comp_node& comp)
 
 void edt::set_mesh_node_visible(scn::prefab_desc::prefab_comp_node& comp, bool visible)
 {
+	if (visible == mesh_node_visible(comp)) return;
 	// Written out even when true: the base may hide the mesh by an override of its own node, which the renderer
 	// cannot see, and override_edit::diff keeps no removed key.
 	comp.overrides["visible"] = visible;

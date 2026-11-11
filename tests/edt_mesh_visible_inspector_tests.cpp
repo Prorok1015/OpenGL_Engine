@@ -78,6 +78,13 @@ BOOST_AUTO_TEST_CASE(AnUntouchedBox_ChangesNothing_AndAReadOnlyInspectorKeepsNot
 	BOOST_TEST(!edt::edit_against_parent(node, &parent_fields(), [](scn::prefab_desc::prefab_comp_node&) { return false; }));
 	BOOST_TEST(node.overrides.empty());
 
+	// Showing a mesh its visible parent already shows leaves no record.
+	BOOST_TEST(edt::edit_against_parent(node, &parent_fields(), [](scn::prefab_desc::prefab_comp_node& scratch) {
+		edt::set_mesh_node_visible(scratch, true);
+		return true;
+	}));
+	BOOST_TEST(node.overrides.empty());
+
 	BOOST_TEST(!edt::edit_against_parent(node, &parent_fields(), [](scn::prefab_desc::prefab_comp_node& scratch) {
 		edt::set_mesh_node_visible(scratch, false);
 		return true;
