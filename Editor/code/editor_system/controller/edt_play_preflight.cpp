@@ -48,6 +48,17 @@ namespace {
 		return a.severity == b.severity && a.file == b.file && a.code == b.code && a.message == b.message && a.notes == b.notes;
 	}
 
+	bool is_tag_kind(desc::field_kind kind)
+	{
+		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
+	}
+
+	// A field the schema says holds a tag (or a list of them): its value is a reference, whatever it looks like.
+	bool is_tag_field(const desc::field_schema& field)
+	{
+		return is_tag_kind(field.kind) || (field.kind == desc::field_kind::array && is_tag_kind(field.element));
+	}
+
 	struct walker
 	{
 		const edt::scene_document& scene;
@@ -72,10 +83,9 @@ namespace {
 			out.push_back(std::move(found));
 		}
 
-		// A string is taken for a reference when it names a scheme ("scheme://..."): a plain name is not one.
-		void check_reference(const std::string& text, const std::vector<std::uint64_t>& path, const std::string& json_path)
+		void check_tag(const std::string& text, const std::vector<std::uint64_t>& path, const std::string& json_path)
 		{
-			if (text.find("://") == std::string::npos) return;
+			if (text.empty()) return;
 			const res::tag reference{ text };
 			if (std::string why = reference.protocol().empty() ? res::no_protocol_reason(reference)
 				: res::reference_problem(reference, scene.level_tag.protocol()); !why.empty()) {
@@ -87,16 +97,48 @@ namespace {
 			}
 		}
 
-		void check_values(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
+		// The strings of a tag field; an object there is an inline desc, not a reference.
+		void check_tags(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
 		{
 			if (const auto* text = value.if_string()) {
-				check_reference(std::string(*text), path, json_path);
+				check_tag(std::string(text->data(), text->size()), path, json_path);
+			} else if (const auto* array = value.if_array()) {
+				for (std::size_t i = 0; i < array->size(); ++i) check_tags((*array)[i], path, std::format("{}/{}", json_path, i));
+			}
+		}
+
+		// A field of no known type may hold any text (a label, a web address): only a reference the level may make
+		// (res://, engine://, memory://, its own protocol) to a file that is not there is reported, and as a warning.
+		void check_loose(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
+		{
+			if (const auto* text = value.if_string()) {
+				const std::string_view view(text->data(), text->size());
+				if (view.find("://") == std::string_view::npos) return;
+				const res::tag reference{ std::string(view) };
+				if (reference.protocol().empty() || !res::reference_problem(reference, scene.level_tag.protocol()).empty()) return;
+				if (services.resources && !services.resources->exists(reference)) {
+					add(edt::problem_severity::warning, "missing_resource", std::format("'{}' does not exist", view), path, json_path);
+				}
 			} else if (const auto* object = value.if_object()) {
 				for (const auto& member : *object) {
-					check_values(member.value(), path, json_path + "/" + pointer_token(member.key()));
+					check_loose(member.value(), path, json_path + "/" + pointer_token(std::string_view(member.key().data(), member.key().size())));
 				}
 			} else if (const auto* array = value.if_array()) {
-				for (std::size_t i = 0; i < array->size(); ++i) check_values((*array)[i], path, std::format("{}/{}", json_path, i));
+				for (std::size_t i = 0; i < array->size(); ++i) check_loose((*array)[i], path, std::format("{}/{}", json_path, i));
+			}
+		}
+
+		void check_fields(const json::object& fields, const desc::type_schema* schema, const std::vector<std::uint64_t>& path,
+			const std::string& json_path)
+		{
+			for (const auto& member : fields) {
+				const std::string_view key(member.key().data(), member.key().size());
+				if (key.starts_with("__")) continue;
+				const std::string at = json_path + "/" + pointer_token(key);
+				const desc::field_schema* field = schema ? schema->find_field(key) : nullptr;
+				if (!field && schema) field = schema->find_field("/" + std::string(key));
+				if (field && is_tag_field(*field)) check_tags(member.value(), path, at);
+				else check_loose(member.value(), path, at);
 			}
 		}
 
@@ -113,26 +155,25 @@ namespace {
 					path, json_path);
 				return;
 			}
-			if (services.descs) {
-				if (const desc::type_schema* schema = services.descs->find_schema(type)) {
-					// What the desc system keeps beside the fields (__version, __type) is no field of the schema.
-					json::object fields;
-					for (const auto& member : component.overrides) {
-						if (!member.key().starts_with("__")) fields.emplace(member.key(), member.value());
-					}
-					const desc::override_failure bad = desc::check_override_object(*schema, fields, nullptr, &services.descs->schemas());
-					if (bad.status != desc::override_status::valid) {
-						add(edt::problem_severity::error, "schema", std::format("component '{}' ({}): {} ({})", key, type,
-							std::string_view(bad.pointer).substr(bad.pointer.empty() ? 0 : 1),
-							bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"), path, json_path + bad.pointer);
-					}
+			const desc::type_schema* schema = services.descs ? services.descs->find_schema(type) : nullptr;
+			if (schema) {
+				// What the desc system keeps beside the fields (__version, __type) is no field of the schema.
+				json::object fields;
+				for (const auto& member : component.overrides) {
+					if (!member.key().starts_with("__")) fields.emplace(member.key(), member.value());
+				}
+				const desc::override_failure bad = desc::check_override_object(*schema, fields, nullptr, &services.descs->schemas());
+				if (bad.status != desc::override_status::valid) {
+					add(edt::problem_severity::error, "schema", std::format("component '{}' ({}): {} ({})", key, type,
+						std::string_view(bad.pointer).substr(bad.pointer.empty() ? 0 : 1),
+						bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"), path, json_path + bad.pointer);
 				}
 			}
 			if (services.assembler && !services.assembler->has_spawner(type)) {
 				add(edt::problem_severity::warning, "no_spawner", std::format("component '{}': nothing spawns the type '{}', it makes no component",
 					key, type), path, json_path);
 			}
-			check_values(json::value(component.overrides), path, json_path);
+			check_fields(component.overrides, schema, path, json_path);
 			if (services.check_component) {
 				services.check_component(edt::preflight_component{ world, path, key, component, json_path }, out);
 			}
@@ -185,7 +226,38 @@ std::vector<edt::preflight_problem> edt::run_play_preflight(const scene_document
 
 bool edt::has_errors(const std::vector<preflight_problem>& problems)
 {
-	return std::ranges::any_of(problems, [](const preflight_problem& p) { return p.item.severity == problem_severity::error; });
+	return error_count(problems) != 0;
+}
+
+std::size_t edt::error_count(const std::vector<preflight_problem>& problems)
+{
+	return static_cast<std::size_t>(std::ranges::count_if(problems, [](const preflight_problem& p) { return p.item.severity == problem_severity::error; }));
+}
+
+json::object edt::problems_json(const std::vector<preflight_problem>& problems)
+{
+	json::array rows;
+	rows.reserve(problems.size());
+	for (const preflight_problem& p : problems) {
+		json::object row;
+		row["severity"] = p.item.severity == problem_severity::error ? "error" : "warning";
+		row["code"] = json::string_view(p.item.code.data(), p.item.code.size());
+		row["message"] = json::string_view(p.item.message.data(), p.item.message.size());
+		row["world"] = json::string_view(p.target.world.data(), p.target.world.size());
+		if (!p.target.path.empty()) {
+			json::array path;
+			for (const std::uint64_t id : p.target.path) {
+				const std::string hex = std::format("{:016x}", id);
+				path.emplace_back(json::string_view(hex.data(), hex.size()));
+			}
+			row["path"] = std::move(path);
+		}
+		if (!p.item.notes.empty()) row["json_path"] = json::string_view(p.item.notes.front().data(), p.item.notes.front().size());
+		rows.emplace_back(std::move(row));
+	}
+	json::object value;
+	value["problems"] = std::move(rows);
+	return value;
 }
 
 void edt::play_preflight_publisher::publish(problem_list& problems, std::vector<preflight_problem> found)

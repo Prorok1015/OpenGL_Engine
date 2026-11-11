@@ -10,9 +10,9 @@
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/string_view.hpp>
-#include <algorithm>
 #include <cstdint>
 #include <format>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -57,39 +57,12 @@ namespace {
 
 	constexpr std::size_t k_problems_in_dialog = 5;
 
-	json::object problems_value(const std::vector<edt::preflight_problem>& found)
-	{
-		json::array problems;
-		problems.reserve(found.size());
-		for (const edt::preflight_problem& p : found) {
-			json::object row;
-			row["severity"] = p.item.severity == edt::problem_severity::error ? "error" : "warning";
-			row["code"] = json::string_view(p.item.code.data(), p.item.code.size());
-			row["message"] = json::string_view(p.item.message.data(), p.item.message.size());
-			row["world"] = json::string_view(p.target.world.data(), p.target.world.size());
-			if (!p.target.path.empty()) {
-				json::array path;
-				for (const std::uint64_t id : p.target.path) {
-					const std::string hex = std::format("{:016x}", id);
-					path.emplace_back(json::string_view(hex.data(), hex.size()));
-				}
-				row["path"] = std::move(path);
-			}
-			if (!p.item.notes.empty()) row["json_path"] = json::string_view(p.item.notes.front().data(), p.item.notes.front().size());
-			problems.emplace_back(std::move(row));
-		}
-		json::object value;
-		value["problems"] = std::move(problems);
-		return value;
-	}
-
-	// The check found errors: an agent (or a script) is refused, a person is asked by the menu item (needs_input).
+	// The check refused Play: an agent (or a script) gets the list, a person is asked by the menu item (needs_input).
 	cmd::result refused_by_check(const cmd::call& call, const std::vector<edt::preflight_problem>& found)
 	{
-		const auto errors = std::ranges::count_if(found, [](const edt::preflight_problem& p) { return p.item.severity == edt::problem_severity::error; });
 		const bool person = call.from.kind == cmd::origin_kind::ui;
-		return cmd::result{ false, person ? cmd::codes::needs_input : cmd::codes::failed, problems_value(found),
-			std::format("the check before Play found {} error(s); see `problems` (Problems, source 'play')", errors) };
+		return cmd::result{ false, person ? cmd::codes::needs_input : cmd::codes::failed, edt::problems_json(found),
+			std::format("the check before Play found {} error(s); see `problems` (Problems, source 'play')", edt::error_count(found)) };
 	}
 
 	std::string question_text(const json::value& value)
@@ -145,11 +118,12 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	const auto unavailable = [] { return cmd::result::failure(cmd::codes::failed, "Play is not available"); };
 	const auto reloading = [] { return cmd::result::failure(cmd::codes::busy, "module reload in progress"); };
 	std::vector<registration> out;
-	out.reserve(6);
+	out.reserve(7);
 
 	cmd::command_desc start = play_command("play.start",
 		"Start Play of the scene as it is edited (saved or not); while paused, resume it. Returns the play status "
-		"(frame: frames the play set simulated since Start, not app.advance's frame)");
+		"(frame: frames the play set simulated since Start, not app.advance's frame). An error of the check before Play refuses "
+		"it: failed with {problems: [{severity, code, message, world, path?, json_path?}]}");
 	start.enabled = [session] { return session() != nullptr; };
 	start.invoke = [session, unavailable, reloading, editing = deps.person_is_editing](const cmd::call& call) {
 		play_session* play = session();
@@ -165,10 +139,10 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 			return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
 		}
 		if (auto refused = play->start_refusal()) return cmd::result::failure(cmd::codes::failed, *refused);
-		// Only a person's own answer to the question lets Play past the errors.
-		const bool allowed = call.from.kind == cmd::origin_kind::ui && play->problems_allowed();
-		if (const auto found = play->check_before_play(); has_errors(found) && !allowed) return refused_by_check(call, found);
-		if (!play->start(reason_of(call))) return cmd::result::failure(cmd::codes::failed, "Play did not start: see the log");
+		if (!play->start(reason_of(call))) {
+			if (has_errors(play->last_check())) return refused_by_check(call, play->last_check());
+			return cmd::result::failure(cmd::codes::failed, "Play did not start: see the log");
+		}
 		return cmd::result::success(status_of(play));
 	};
 	action_ui start_ui = menu_item("Play");
@@ -186,7 +160,13 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 			|| (!play->active() && (says_why || !play->start_refusal()) && !(editing && editing())));
 	};
 	if (deps.dialogs) {
-		start_ui.activate = [&actions, session, dialogs = deps.dialogs, show_problems = deps.show_problems] {
+		// The question can be answered after the commands are gone (the dialog queue outlives them, and `session` and
+		// `show_problems` reach their owner): a registration of its own holds this token.
+		auto alive = std::make_shared<int>(0);
+		const std::weak_ptr<int> token = alive;
+		std::weak_ptr<void> held_by_registration = alive;
+		out.push_back(registration(std::move(held_by_registration), [keep = std::move(alive)]() mutable { keep.reset(); }));
+		start_ui.activate = [&actions, session, token, dialogs = deps.dialogs, show_problems = deps.show_problems] {
 			const action_result outcome = actions.invoke("play.start", json::object{});
 			if (outcome.ok) return;
 			if (outcome.code != cmd::codes::needs_input) {
@@ -194,7 +174,8 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 				return;
 			}
 			dialogs->choose("Play with problems?", question_text(outcome.value), { "Play anyway", "Show problems", "Cancel" },
-				[&actions, session, show_problems](std::optional<std::size_t> answer) {
+				[&actions, session, token, show_problems](std::optional<std::size_t> answer) {
+					if (token.expired()) return;
 					if (!answer) {
 						// Headless: nobody answers, Play stays off.
 						egLOG_WARN("play", "Play not started: the check before Play found errors and nobody allowed it, see Problems (source 'play')");

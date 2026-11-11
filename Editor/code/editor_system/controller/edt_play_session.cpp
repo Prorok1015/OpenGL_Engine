@@ -71,13 +71,9 @@ std::optional<std::string> edt::play_session::start_refusal() const
 	return std::nullopt;
 }
 
-std::vector<edt::preflight_problem> edt::play_session::check_before_play() const
-{
-	return m_options.preflight ? m_options.preflight() : std::vector<preflight_problem>{};
-}
-
 bool edt::play_session::start(play_reason reason)
 {
+	m_last_check.clear();
 	if (auto refused = start_refusal()) {
 		egLOG_WARN("play", "Play not started: {}", *refused);
 		return false;
@@ -86,9 +82,10 @@ bool edt::play_session::start(play_reason reason)
 	if (reason == play_reason::user || reason == play_reason::agent) {
 		// Only a person allows it: an agent's start is never let through.
 		const bool allowed = std::exchange(m_problems_allowed, false) && reason == play_reason::user;
-		if (const auto found = check_before_play(); has_errors(found) && !allowed) {
-			const auto errors = std::ranges::count_if(found, [](const preflight_problem& p) { return p.item.severity == problem_severity::error; });
-			egLOG_WARN("play", "Play not started: the check before Play found {} error(s), see Problems (source 'play')", errors);
+		if (m_options.preflight) m_last_check = m_options.preflight();
+		if (has_errors(m_last_check) && !allowed) {
+			egLOG_WARN("play", "Play not started ({}): the check before Play found {} error(s), see Problems (source 'play')",
+				play_reason_name(reason), error_count(m_last_check));
 			return false;
 		}
 	}

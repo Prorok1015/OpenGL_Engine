@@ -2,6 +2,8 @@
 #include "edt_desc_location.h"
 #include <snk/editor/edt_problem_list.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <boost/json/object.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -49,13 +51,18 @@ namespace edt
 	};
 
 	// Checks the document before Play: the systems of every world (a name not registered, twice, a phase never added,
-	// an ordering that cannot hold), the resources its components refer to (a reference res::tag or the rule of #697
-	// refuses, a file that is not there, a __parent that did not load) and its components (a type not registered or
+	// an ordering that cannot hold), the resources its components refer to (in a field its schema types as a tag: a
+	// reference res::tag or the rule of #697 refuses, a file that is not there; a __parent that did not load: errors; in
+	// any other field only a reference the level may make to a file that is not there, a warning) and its components (a type not registered or
 	// whose fields its schema refuses are errors, a type without a spawner a warning). Reads only: nothing is loaded or
 	// written (a file is only looked for). Errors stop Play until a person confirms; warnings only show.
 	[[nodiscard]] std::vector<preflight_problem> run_play_preflight(const scene_document& scene, const play_preflight_services& services);
 
 	[[nodiscard]] bool has_errors(const std::vector<preflight_problem>& problems);
+	[[nodiscard]] std::size_t error_count(const std::vector<preflight_problem>& problems);
+	// {problems: [{severity, code, message, world, path? (hex node ids), json_path?}]}: the answer of play.start and
+	// editor.mode.toggle when the check refuses Play.
+	[[nodiscard]] boost::json::object problems_json(const std::vector<preflight_problem>& problems);
 
 	// The source "play" of Problems: the last check before Play, with where each row leads. Main thread only.
 	class play_preflight_publisher

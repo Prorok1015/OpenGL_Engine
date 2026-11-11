@@ -106,8 +106,9 @@ namespace edt
 		// load in flight (start_blocker), a leftover set "play", an error of the check before Play (a start by a person or
 		// an agent; see allow_problems_once).
 		bool start(play_reason reason = play_reason::user);
-		// Runs the check before Play now (options.preflight); empty without one.
-		std::vector<preflight_problem> check_before_play() const;
+		// What the check of the last start() found; empty when that start was not checked (refused before it, a restart
+		// after a module reload, no options.preflight). play.start and editor.mode answer a refusal with it.
+		const std::vector<preflight_problem>& last_check() const { return m_last_check; }
 		// A person saw the problems and plays anyway: the next start() lets errors of the check through, once.
 		void allow_problems_once() { m_problems_allowed = true; }
 		bool problems_allowed() const { return m_problems_allowed; }
@@ -282,5 +283,6 @@ namespace edt
 		std::string m_camera_world;
 		connection m_world_changed;
 		bool m_problems_allowed = false;
+		std::vector<preflight_problem> m_last_check;
 	};
 }
