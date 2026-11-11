@@ -643,12 +643,21 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 	BOOST_REQUIRE(watched.is_valid());
 	BOOST_TEST(watched == editor().current_editor_tag());
 
+	// Without a frame between them: the frame of invoke_as_agent may finish the load.
+	const auto invoke_in_this_frame = [this](const std::string& id) {
+		cmd::call request;
+		request.args = boost::json::object{};
+		request.from = cmd::origin::agent("agent-invariant-test");
+		cmd::result outcome;
+		gui().run_without_drawing([&] { outcome = registry().invoke(id, request); });
+		return outcome;
+	};
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
 	BOOST_REQUIRE(editor().level_load_in_progress());
 	BOOST_TEST(cancel_item_enabled());
-	BOOST_TEST(invoke_as_agent("file.save", boost::json::object{}).code == "busy");
+	BOOST_TEST(invoke_in_this_frame("file.save").code == "busy");
 
-	const cmd::result cancelled = invoke_as_agent("level.cancel_load", boost::json::object{});
+	const cmd::result cancelled = invoke_in_this_frame("level.cancel_load");
 	BOOST_REQUIRE_MESSAGE(cancelled.ok, cancelled.error);
 	BOOST_TEST(cancelled.value.as_object().at("cancelled").as_bool());
 	BOOST_TEST(std::string(cancelled.value.as_object().at("level").as_string()).ends_with("levels/test_level.desc"));
