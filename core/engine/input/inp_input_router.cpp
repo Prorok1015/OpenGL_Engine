@@ -15,8 +15,24 @@ namespace
 
 inp::input_router::input_router(std::shared_ptr<const ecs_input_manager> source)
 	: m_source(std::move(source))
+	, m_self(std::make_shared<input_router*>(this))
 {
 	ASSERT_MSG(m_source, "input_router needs the input source");
+}
+
+inp::input_router::~input_router()
+{
+	*m_self = nullptr;
+}
+
+void inp::input_router::remove_owner(layer_owner owner)
+{
+	for (auto& [set, stack] : m_stacks) {
+		stack.remove_owner(owner);
+	}
+	for (auto& [set, queue] : m_commands) {
+		std::erase_if(queue, [owner](const stack_command& command) { return command.source == owner; });
+	}
 }
 
 void inp::input_router::bind(input_target target, const glm::ivec4& rect)
@@ -55,7 +71,7 @@ void inp::input_router::queue_command(std::string_view set, stack_command comman
 	auto& queue = it != m_commands.end() ? it->second : m_commands.emplace(std::string{ set }, std::vector<stack_command>{}).first->second;
 	if (queue.size() >= command_limit) {
 		if (warn_once(set, "#command-full")) {
-			egLOG_WARN("input", "set '{}': {} input stack commands are waiting and the set does not take them (Pause); the new ones are dropped", set, command_limit);
+			egLOG_WARN("input", "set '{}': {} input stack commands are waiting and the set does not take them (Pause or a burst of more than {} in a frame); the new ones are dropped", set, command_limit, command_limit);
 		}
 		return;
 	}

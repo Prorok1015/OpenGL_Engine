@@ -72,9 +72,10 @@ namespace gs
 	class SNK_API module_context
 	{
 	public:
+		// With an input router, the layer keeps a cleanup that takes every input stack layer of the module away when the layer goes
+		// (unload, code reload): a module's layers never outlive it in a set that survives it.
 		module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks,
-			inp::input_router* input = nullptr, const scn::context_manager* contexts = nullptr)
-			: m_layer(layer), m_commands(commands), m_tasks(tasks), m_input(input), m_contexts(contexts) {}
+			inp::input_router* input = nullptr, const scn::context_manager* contexts = nullptr);
 
 		// A command in the process-wide registry; false when there is none or it refused the command (logged).
 		bool add_command(cmd::command_desc desc);

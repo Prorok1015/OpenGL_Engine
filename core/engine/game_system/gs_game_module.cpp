@@ -138,6 +138,34 @@ ds::task_handle<void> gs::module_context::run(ds::lane lane, ds::task_desc desc,
 	return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::move(fn));
 }
 
+namespace {
+
+	// What the layer keeps for the module's input stack layers: when the layer is destroyed it takes them out of every set. The
+	// router may already be gone (the application shutting down), which its liveness token says.
+	class module_input_cleanup
+	{
+	public:
+		explicit module_input_cleanup(std::weak_ptr<inp::input_router*> router) : m_router(std::move(router)) {}
+		module_input_cleanup(module_input_cleanup&&) noexcept = default;
+		module_input_cleanup& operator=(module_input_cleanup&&) noexcept = default;
+		~module_input_cleanup()
+		{
+			if (const auto alive = m_router.lock(); alive && *alive) (*alive)->remove_owner(inp::layer_owner::module);
+		}
+
+	private:
+		std::weak_ptr<inp::input_router*> m_router;
+	};
+
+}
+
+gs::module_context::module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks,
+	inp::input_router* input, const scn::context_manager* contexts)
+	: m_layer(layer), m_commands(commands), m_tasks(tasks), m_input(input), m_contexts(contexts)
+{
+	if (m_input) m_layer.keep(module_input_cleanup{ m_input->liveness() });
+}
+
 gs::input_stack_handle gs::module_context::input_stack(std::string_view set) const
 {
 	if (!m_input) {

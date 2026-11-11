@@ -4,6 +4,11 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
+#include <format>
+#include <initializer_list>
+#include <optional>
+#include <string>
+#include <utility>
 
 // scn::model_importer_adapter: Assimp -> prefab_desc conversion, driven by tiny in-memory models.
 
@@ -55,6 +60,29 @@ f 4/1 5/2 6/3
 // from x=0 at t=0 to x=10 at t=2.
 constexpr const char* GLTF_TRIANGLE = R"GLTF({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"Parent","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"children":[1,2]},{"name":"Child","mesh":0,"translation":[0,5,0]},{"name":"Tilted","rotation":[0.23911761839433449,0.3696438106143861,-0.09904576054128762,0.8923991008325228]}],"meshes":[{"name":"TriMesh","primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],"materials":[{"name":"Red","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}],"animations":[{"name":"Move","samplers":[{"input":4,"output":5,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}],"buffers":[{"byteLength":136,"uri":"data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAABAAIAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAIEEAAAAAAAAAAA=="}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6},{"buffer":0,"byteOffset":104,"byteLength":8},{"buffer":0,"byteOffset":112,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2]},{"bufferView":5,"componentType":5126,"count":2,"type":"VEC3"}]})GLTF";
 
+// The buffer GLTF_TRIANGLE embeds, as the bytes of a .bin file next to the model.
+constexpr unsigned char GLTF_TRIANGLE_BIN[] = {
+	0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x80, 0x3f,
+	0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x41,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// GLTF_TRIANGLE with its buffer read from `uri` instead of embedded.
+std::string gltf_with_buffer_uri(std::string_view uri)
+{
+	std::string text = GLTF_TRIANGLE;
+	const std::size_t begin = text.find("data:application/octet-stream;base64,");
+	const std::size_t end = text.find('"', begin);
+	text.replace(begin, end - begin, uri);
+	return text;
+}
+
 // The child of a node (or of the file root) with the given name; children are an array of named nodes.
 const json::value& child_named(const json::value& node, std::string_view name)
 {
@@ -99,6 +127,47 @@ struct importer_fixture : test_util::scene_env
 		json::object o;
 		d.serialize(o);
 		return o;
+	}
+
+	static const json::object* first_mesh_node(const json::object& node)
+	{
+		if (const auto* components = node.if_contains("components"); components && components->is_object()) {
+			if (const auto* mesh = components->as_object().if_contains("mesh_node_desc")) {
+				return &mesh->as_object();
+			}
+		}
+		if (const auto* children = node.if_contains("children"); children && children->is_array()) {
+			for (const auto& child : children->as_array()) {
+				if (const auto* found = first_mesh_node(child.as_object())) {
+					return found;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	// Imports, as memory://models/<folder>/tex.obj, a triangle whose .mtl gives `reference` as its diffuse map: the tag
+	// its texture desc loads, if it got one. A folder per call: the texture descs are named after the model's folder.
+	std::optional<std::string> imported_diffuse_data(const std::string& folder, const std::string& reference)
+	{
+		rs->store(res::tag{ "memory://models/" + folder + "/tex.mtl" }, test_util::to_bytes("newmtl skin\nKd 1 1 1\nmap_Kd " + reference + "\n"));
+		const std::string obj = "mtllib tex.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0.5 1\nvn 0 0 1\no Tri\nusemtl skin\nf 1/1/1 2/2/1 3/3/1\n";
+		const auto prefab = import((folder + "/tex.obj").c_str(), obj.c_str());
+		BOOST_REQUIRE(prefab);
+		const auto out = serialized(*prefab);
+		const json::object* mesh = first_mesh_node(out);
+		BOOST_REQUIRE(mesh);
+		const auto& material = mesh->at("material").as_object();
+		BOOST_TEST_MESSAGE(json::serialize(material));
+		BOOST_REQUIRE(material.at("name").as_string() == "skin");
+		const auto* samplers = material.if_contains("samplers");
+		if (!samplers) {
+			return std::nullopt;
+		}
+		const auto it = ram->files.find(res::tag{ std::string_view{ samplers->at(0).as_string() } });
+		BOOST_REQUIRE(it != ram->files.end());
+		const auto texture = json::parse(std::string_view(reinterpret_cast<const char*>(it->second.data()), it->second.size())).as_object();
+		return std::string(texture.at("data").as_string());
 	}
 
 };
@@ -242,6 +311,48 @@ BOOST_AUTO_TEST_CASE(Obj_SameNamedMeshesUnderOneNodeGetUniqueChildren)
 BOOST_AUTO_TEST_CASE(Garbage_DataYieldsNoPrefab)
 {
 	BOOST_TEST(!import("broken.gltf", "this is not a model"));
+}
+
+// #631: a model names its files relative to itself; they are read in its folder and protocol, never above the root.
+BOOST_AUTO_TEST_CASE(Obj_ATextureWrittenRelativeToTheModel_IsReadInTheModelsFolder)
+{
+	int index = 0;
+	for (const auto& [reference, expected] : std::initializer_list<std::pair<const char*, const char*>>{
+		{ "textures/a.png", "memory://models/c0/textures/a.png" },
+		{ "textures\\a.png", "memory://models/c1/textures/a.png" },
+		{ "./textures/../a.png", "memory://models/c2/a.png" },
+		{ "../shared/a.png", "memory://models/shared/a.png" } }) {
+		BOOST_TEST_CONTEXT(reference) {
+			const std::optional<std::string> data = imported_diffuse_data(std::format("c{}", index++), reference);
+			BOOST_REQUIRE(data.has_value());
+			BOOST_TEST(*data == expected);
+		}
+	}
+}
+
+// #631: a .bin the model names is opened through the importer's IO system, in the model's folder and never above the root.
+BOOST_AUTO_TEST_CASE(Gltf_ABufferNextToTheModel_IsRead_OneAboveTheRootIsNot)
+{
+	const std::string bin(reinterpret_cast<const char*>(GLTF_TRIANGLE_BIN), sizeof(GLTF_TRIANGLE_BIN));
+	rs->store(res::tag{ "memory://models/g0/data/tri.bin" }, test_util::to_bytes(bin));
+	const auto beside = import("g0/tri.gltf", gltf_with_buffer_uri("data/tri.bin").c_str());
+	BOOST_REQUIRE(beside);
+	BOOST_TEST(has_child(serialized(*beside), "Child"));
+
+	rs->store(res::tag{ "memory://tri.bin" }, test_util::to_bytes(bin));
+	BOOST_TEST(!import("g1/tri.gltf", gltf_with_buffer_uri("../../../tri.bin").c_str()));
+	BOOST_TEST(!import("g2/tri.gltf", gltf_with_buffer_uri("../c:/tri.bin").c_str()));
+}
+
+BOOST_AUTO_TEST_CASE(Obj_ATextureAboveTheProtocolsRootOrAbsolute_IsNotLoaded)
+{
+	int index = 0;
+	for (const char* reference : { "../../../a.png", "../../../../etc/passwd.png", "/etc/a.png", "C:/a.png", "C:\\a.png",
+		"../c:/a.png", "a.png:stream", "\\\\server\\share\\a.png", "..\\..\\..\\a.png" }) {
+		BOOST_TEST_CONTEXT(reference) {
+			BOOST_TEST(!imported_diffuse_data(std::format("r{}", index++), reference).has_value());
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

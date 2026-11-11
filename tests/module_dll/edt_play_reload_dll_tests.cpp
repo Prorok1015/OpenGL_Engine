@@ -17,8 +17,10 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/level/scn_prefab_spawn.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <chrono>
@@ -45,6 +47,14 @@ const std::filesystem::path g_bad_restore_path{ SNK_TEST_GAME_DLL_BAD_RESTORE_PA
 constexpr const char* PLAY_LEVEL = R"json({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":["dll::move","dll::keeper"],
 	 "components":{"g":{"__type":"dll_desc","value":2}}}]})json";
+
+// #551: the module's snake, alone in the world.
+constexpr const char* SNAKE_LEVEL = R"json({"__type":"level_desc","name":"lv","worlds":[
+	{"__type":"world_desc","name":"w0","systems":["dll::snake"]}]})json";
+constexpr const char* SEGMENT = R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"scale"}]})json";
+// A prefab with a component of the module: only the assembler of the layer loaded now can build it.
+constexpr const char* MARKED = R"json({"__type":"prefab_desc","__version":4,"children":[
+	{"__id":"00000000000000c1","name":"mark","components":{"g":{"__type":"dll_desc","value":7}}}]})json";
 
 struct dll_play_fixture : test_util::module_env
 {
@@ -81,9 +91,9 @@ struct dll_play_fixture : test_util::module_env
 		root.destruct<prj::project_context>();
 	}
 
-	void open_level()
+	void open_level(const char* level = PLAY_LEVEL)
 	{
-		const res::tag tag = put("lv.desc", PLAY_LEVEL);
+		const res::tag tag = put("lv.desc", level);
 		state.editor_tag = tag;
 		state.level_tag = tag;
 		auto handle = services.resources()->require_sync<scn::level_desc>(tag);
@@ -121,6 +131,23 @@ struct dll_play_fixture : test_util::module_env
 		if (!world) return -1;
 		auto view = world->state().view<dll_game::dll_component>();
 		return view.size() == 1u ? view.get<dll_game::dll_component>(view.front()).value : -1;
+	}
+
+	scn::world_context* play_world()
+	{
+		scn::context_set* set = contexts().find_set(edt::k_play_set);
+		return set ? set->find("w0") : nullptr;
+	}
+
+	std::size_t segments_in_play()
+	{
+		scn::world_context* world = play_world();
+		if (!world) return 0;
+		std::size_t count = 0;
+		for (auto&& [e, name] : world->state().view<scn::name_component>().each()) {
+			if (name.name == dll_game::segment_name) ++count;
+		}
+		return count;
 	}
 
 	boost::json::object read_report() const
@@ -185,6 +212,62 @@ BOOST_AUTO_TEST_CASE(play_keeps_its_world_across_a_reload_of_the_library_and_run
 	BOOST_TEST(written.at("play").as_string() == "kept");
 	BOOST_REQUIRE(written.at("worlds").as_array().size() == 1u);
 	BOOST_TEST(written.at("worlds").as_array()[0].at("state").is_object()); // report_full_snapshot
+}
+
+// #551: the game spawns and removes a prefab with one call each; after a reload in Play the world spawns with the new
+// layer's assembler, not the unloaded library's.
+BOOST_AUTO_TEST_CASE(a_snake_spawns_and_despawns_with_one_call_each_and_spawns_again_after_a_reload_in_play)
+{
+	project.build(g_module_path);
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	put("dll_segment.prefab.desc", SEGMENT);
+	open_level(SNAKE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	for (std::size_t frame = 0; frame < dll_game::snake_length + 3; ++frame) run_frame();
+	BOOST_TEST(segments_in_play() == dll_game::snake_length);
+
+	project.rebuild(g_v2_path);
+	const core::reload_report report = reload_play();
+	BOOST_REQUIRE_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	scn::world_context* world = play_world();
+	BOOST_REQUIRE(world);
+	// Built by the new build's spawner: the unloaded library's assembler would run code that is gone (the ASan job).
+	const res::tag marked = put("dll_marked.prefab.desc", MARKED);
+	const entt::entity mark = scn::spawn_prefab(world->state(), marked);
+	BOOST_REQUIRE(mark != entt::null);
+	std::vector<int> values;
+	for (auto&& [e, component] : world->state().view<dll_game::dll_component>().each()) values.push_back(component.value);
+	BOOST_TEST(values == std::vector<int>{ 7 }, boost::test_tools::per_element());
+
+	const entt::entity spawned = scn::spawn_prefab(world->state(), res::tag{ std::string{ dll_game::segment_tag } });
+	BOOST_REQUIRE(spawned != entt::null);
+	BOOST_TEST(world->state().all_of<scn::children_component>(spawned));
+	scn::despawn(world->state(), spawned);
+	run_frame(); // the new build's snake runs too
+	BOOST_TEST(!world->state().valid(spawned));
+	BOOST_TEST(segments_in_play() >= dll_game::snake_length);
+}
+
+// #551: a despawn asked for between two frames is carried out before Play's snapshot, not lost in it.
+BOOST_AUTO_TEST_CASE(a_despawn_queued_before_a_reload_in_play_is_carried_out_before_the_snapshot)
+{
+	project.build(g_module_path);
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	put("dll_segment.prefab.desc", SEGMENT);
+	open_level();
+	BOOST_REQUIRE(play.start());
+	run_frame();
+	scn::world_context* world = play_world();
+	BOOST_REQUIRE(world);
+	const entt::entity spawned = scn::spawn_prefab(world->state(), res::tag{ std::string{ dll_game::segment_tag } });
+	BOOST_REQUIRE(spawned != entt::null);
+	BOOST_REQUIRE(segments_in_play() == 1u);
+	scn::despawn(world->state(), spawned);
+
+	project.rebuild(g_v2_path);
+	const core::reload_report report = reload_play();
+	BOOST_REQUIRE_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	BOOST_TEST(segments_in_play() == 0u);
 }
 
 // The new build fails to register: the previous copy is loaded again and Play goes on in it.

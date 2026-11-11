@@ -126,11 +126,13 @@ namespace res
 
 		// Why a request to `protocol` fails when this run has no resolver for it: the protocols it has instead.
 		std::string not_mounted_error(std::string_view protocol) const;
+		// Why a request for `tag` finds no resolver: it has no protocol (#631), or its protocol is not mounted.
+		std::string not_mounted_error(const tag& tag) const;
 
 		bool exists(const tag& tag) const {
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/exists", "{}", not_mounted_error(tag.protocol()));
+				egLOG_WARN("resource/exists", "{}", not_mounted_error(tag));
 				return false;
 			}
 			return resolvers.at(tag.protocol())->exists(tag);
@@ -141,7 +143,7 @@ namespace res
 			check_writable(tag);
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "{}", not_mounted_error(tag.protocol()));
+				egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
 				return false;
 			}
 
@@ -153,7 +155,7 @@ namespace res
 			check_writable(tag);
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "{}", not_mounted_error(tag.protocol()));
+				egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
 				return false;
 			}
 			return resolvers.at(tag.protocol())->store_sync(tag, data);
@@ -165,7 +167,7 @@ namespace res
 			check_writable(tag);
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				std::string error = not_mounted_error(tag.protocol());
+				std::string error = not_mounted_error(tag);
 				egLOG_WARN("resource/store", "{}", error);
 				return file_operation::failure(std::move(error));
 			}
@@ -371,7 +373,7 @@ namespace res
 		{
 			const auto& resolvers = root().m_resolvers;
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/require", "{}", not_mounted_error(tag.protocol()));
+				egLOG_WARN("resource/require", "{}", not_mounted_error(tag));
 				return data{};
 			}
 

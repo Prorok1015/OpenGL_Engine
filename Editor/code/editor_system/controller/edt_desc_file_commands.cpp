@@ -377,8 +377,6 @@ namespace {
 		return key == "__type" || key == "__version" || key == "__guid" || key == "__id" || key == "__parent";
 	}
 
-	// The protocol is read the way res::tag reads it, not by looking for "://" (edt_tag_text.h, shared with the decoder's checks).
-	std::string_view leading_protocol(const std::string& text) { return edt::tag_leading_protocol(text); }
 	bool is_other_protocol(std::string_view protocol) { return edt::is_other_tag_protocol(protocol); }
 
 	// The custom fields that hold names, not tags (#604: action names and key names). Only the strict tag rule is off for
@@ -396,16 +394,17 @@ namespace {
 		return edt::check_agent_folder(text).error;
 	}
 
-	// Empty when `text` as a plain string value cannot reach another protocol: it names none, or it is a good res:// tag.
+	// Empty when `text` as a plain string value cannot reach another protocol: res::tag gives it none, it does not begin like
+	// a mounted one ("user/x", edt_tag_text.h) and holds no "://"; or it is a good res:// tag.
 	std::string loose_tag_problem(std::string_view text)
 	{
 		const std::string normalized = edt::tag_text_normalized(text);
-		const std::string_view protocol = leading_protocol(normalized);
-		if (protocol.empty()) return {};
-		if (protocol == "res") return strict_tag_problem(normalized);
-		const bool scheme = normalized.size() > protocol.size() + 2 && normalized.compare(protocol.size(), 3, "://") == 0;
-		if (is_other_protocol(protocol) || scheme) {
-			return std::format("'{}' is not a place a project file may refer to: only res://<path> tags are written", std::string(protocol).substr(0, 40));
+		const std::string_view protocol = edt::tag_protocol(normalized);
+		const std::string_view prefix = edt::protocol_like_prefix(normalized);
+		if (protocol == "res" || (protocol.empty() && prefix == "res")) return strict_tag_problem(normalized);
+		if (!protocol.empty() || is_other_protocol(prefix) || normalized.find("://") != std::string::npos) {
+			const std::string_view named = protocol.empty() ? prefix : protocol;
+			return std::format("'{}' is not a place a project file may refer to: only res://<path> tags are written", std::string(named).substr(0, 40));
 		}
 		return {};
 	}
