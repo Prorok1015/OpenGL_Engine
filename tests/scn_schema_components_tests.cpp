@@ -413,6 +413,33 @@ BOOST_AUTO_TEST_CASE(the_next_layer_of_a_hot_reload_keeps_its_components)
 	BOOST_TEST((layer->catalog().find("mod.health") != nullptr));
 }
 
+BOOST_AUTO_TEST_CASE(a_reset_while_the_layer_lives_leaves_a_sibling_set_alone)
+{
+	auto& sibling = mgr.create_layer();
+	auto mine = register_health();
+	auto theirs = scn::register_schema_component(mgr, sibling, schema_from(k_health_schema));
+	BOOST_REQUIRE(static_cast<bool>(mine));
+	BOOST_REQUIRE(static_cast<bool>(theirs));
+
+	mgr.create_set("mine", layer);
+	mgr.create_set("theirs", &sibling);
+	auto& my_world = mgr.create_context("mine", "w", scn::context_kind::runtime);
+	auto& their_world = mgr.create_context("theirs", "w", scn::context_kind::runtime);
+	scn::emplace_schema_component(my_world.state(), my_world.state().create(), mine.id(), desc::dyn_blob{});
+	scn::emplace_schema_component(their_world.state(), their_world.state().create(), theirs.id(), desc::dyn_blob{});
+
+	mine.reset();
+	const auto* my_pool = std::as_const(my_world.state()).storage<desc::dyn_blob>(theirs.id());
+	BOOST_TEST((my_pool == nullptr || my_pool->empty()));
+	const auto* their_pool = std::as_const(their_world.state()).storage<desc::dyn_blob>(theirs.id());
+	BOOST_REQUIRE((their_pool != nullptr));
+	BOOST_TEST(their_pool->size() == 1u);
+	BOOST_TEST((sibling.catalog().find("mod.health") != nullptr));
+
+	theirs.reset();
+	mgr.destroy_layer(sibling);
+}
+
 BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 {
 	auto health = register_health();
