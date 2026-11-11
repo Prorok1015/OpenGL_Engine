@@ -45,6 +45,17 @@ void inp::input_router::clear_bindings()
 	m_bindings.clear();
 }
 
+const std::vector<inp::layer_reach>* inp::input_router::last_layers(std::string_view set) const
+{
+	const auto it = m_last_layers.find(set);
+	return it == m_last_layers.end() ? nullptr : &it->second;
+}
+
+void inp::input_router::set_last_layers(std::string_view set, std::vector<layer_reach> layers)
+{
+	m_last_layers.insert_or_assign(std::string{ set }, std::move(layers));
+}
+
 void inp::input_router::forget_set(std::string_view set)
 {
 	std::erase_if(m_bindings, [set](const binding& b) { return b.target.set == set; });
@@ -53,6 +64,9 @@ void inp::input_router::forget_set(std::string_view set)
 	}
 	if (const auto it = m_stacks.find(set); it != m_stacks.end()) {
 		m_stacks.erase(it);
+	}
+	if (const auto it = m_last_layers.find(set); it != m_last_layers.end()) {
+		m_last_layers.erase(it);
 	}
 	if (const auto it = m_commands.find(set); it != m_commands.end()) {
 		m_commands.erase(it);

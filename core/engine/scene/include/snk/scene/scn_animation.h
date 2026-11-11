@@ -23,6 +23,9 @@ namespace scn
 		std::string clip;
 	};
 
+	// Its payload in the bus journal (#605): {"entity":<entt id as a number, null for entt::null>,"clip":"<name>"}.
+	SNK_API std::string animation_finished_json(const animation_finished& event);
+
 	// Plays the clip named `clip` of the entity's animation_collection_component on its
 	// animation_controller_component. `entity` is the one holding both (the model root), never one of its nodes.
 	// - Another clip, or this clip once it stopped (a clip without loop that reached its end), starts from 0.

@@ -8,6 +8,7 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/platform/plt_process.h>
 #include <snk/desc/desc_base.hpp>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
@@ -295,6 +296,29 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_REQUIRE(after != nullptr);
 	BOOST_TEST(!after->catalog().find(dll_game::schema_component_name));
 	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
+}
+
+// #605: the journal finds the module's bus_journal_source with dynamic_cast across the library boundary and calls the
+// payload writer of the module's code.
+BOOST_AUTO_TEST_CASE(the_bus_journal_shows_the_payload_a_module_writes)
+{
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", DLL_LEVEL)));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	auto* bus = world->state().ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE(bus != nullptr);
+	bus->set_mode(ecs::bus_mode::queue);
+	bus->enable_journal(8);
+	bus->post(dll_game::dll_event{ 5 });
+	bus->deliver();
+	BOOST_REQUIRE(bus->journal() != nullptr);
+	const auto& entries = bus->journal()->entries();
+	BOOST_REQUIRE(entries.size() == 1u);
+	BOOST_TEST(entries[0].payload == R"json({"written_by":"dll","value":5})json");
+	BOOST_TEST(entries[0].from.has_value()); // not taken for a type of an older module
+	BOOST_TEST(entries[0].type.find("dll_event") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)

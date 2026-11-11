@@ -166,6 +166,16 @@ namespace scn
 			}
 			return m_event_types->add<T>(std::move(schema));
 		}
+		// The same with the writer the bus journal turns a payload into JSON with (WORLD_BUS.md 3.7).
+		template <typename T>
+		bool add_event(std::string schema, ecs::payload_writer<T> write)
+		{
+			if (!ENGINE_VERIFY(m_layers.empty(), "context_manager: event type {} is registered after a layer exists; "
+							   "register engine event types before the first create_layer", entt::type_name<T>::value())) {
+				return false;
+			}
+			return m_event_types->add<T>(std::move(schema), write);
+		}
 
 		// The runtime types of the base (the engine's components, scene_init); every layer's catalog lies over it.
 		scn::component_catalog& catalog() { return m_catalog; }
