@@ -300,7 +300,7 @@ jobs:
           grep -q "editor module 'game_editor' loaded" headless_out/template/editor.log
 
       # #160: the editor as installed (components editor + snake_sdk) finds config/editor.cfg next to its bin/ folder,
-      # from another working directory, without --config. lib/ holds the shared engine: the installed editor has no rpath.
+      # from another working directory, without --config. LD_LIBRARY_PATH: the installed editor has no rpath yet (#722).
       - name: The installed editor opens a project without --config
         run: |
           prefix="${RUNNER_TEMP}/editor_prefix"
