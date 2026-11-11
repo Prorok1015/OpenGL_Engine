@@ -62,6 +62,7 @@ std::uint32_t api_3_5() { return 0x0003'0005u; }
 std::uint32_t api_3_6() { return 0x0003'0006u; }
 // A module built before scn::spawn_prefab.
 std::uint32_t api_3_7() { return 0x0003'0007u; }
+std::uint32_t api_3_11() { return 0x0003'000Bu; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -247,6 +248,16 @@ BOOST_AUTO_TEST_CASE(PrefabSpawnIsMinor3_8_AndAModuleBuiltFor3_7StillLoads)
 	auto entry = generated_entry();
 	entry.api_version = &api_3_7;
 	entry.build_info = +[]() { return info_with(api_3_7(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(SchemaComponentsOfAModuleAreMinor3_12_AndAModuleBuiltFor3_11StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 12u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_11;
+	entry.build_info = +[]() { return info_with(api_3_11(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
 	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 

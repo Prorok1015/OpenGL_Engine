@@ -44,19 +44,20 @@ namespace
 		const desc::schema_binding& schema)
 	{
 		const loader_remap entities{ loader };
+		const std::uint64_t layout = desc::layout_fingerprint(schema);
 		for (const ecs::sandbox_entity owner : static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>&>(pool)) {
 			const auto target = static_cast<entt::entity>(entt::to_integral(owner));
 			if (!loader.contains(target)) {
 				continue;
 			}
 			desc::dyn_blob blob = pool.get(owner);
-			// Made by module code against another layout of the schema: reading it by this one's offsets overruns it.
-			if (blob.bytes.size() != schema.schema->layout.size) {
+			// Made against another layout of the schema (or by hand): its bytes are not where this one reads them, and
+			// mapping its "entities" would overwrite other fields.
+			desc::dyn_ref ref{ &blob, 0 };
+			if (blob.layout != layout || blob.bytes.size() != schema.schema->layout.size || !desc::remap_entities(schema, &ref, entities)) {
 				egLOG_ERROR("ecs", "a '{}' component from the commands is dropped: its blob is not laid out by the registered schema", schema.schema->name);
 				continue;
 			}
-			desc::dyn_ref ref{ &blob, 0 };
-			desc::remap_entities(schema, &ref, entities);
 			scn::emplace_schema_component(state, loader.map(target), id, std::move(blob));
 		}
 	}

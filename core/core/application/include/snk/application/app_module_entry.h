@@ -55,7 +55,8 @@
 // members at its end (engine-made, not in the layout key). A module that registers one needs an engine of 3.11 or newer.
 // A module built before 3.11 that walks the catalog must not call entry.contains on such an entry (it asserts in debug
 // and answers false in release): it learns of them only by being rebuilt, and then asks through scn::holds.
-// 3.12 (#606 PR-2): gs::module_context::register_component and desc::remap_entities are new exports; the module_context
+// 3.12 (#606 PR-2): gs::module_context::register_component, desc::remap_entities and desc::layout_fingerprint are new
+// exports, desc::dyn_blob gains its layout fingerprint at its end; the module_context
 // constructor (engine-made) takes a mutable context_manager; world_context gains an apply_commands overload and a member
 // at its end (engine-made, not in the layout key). An entity field of a runtime blob reads and writes as one of a C++ type:
 // no entity is null (not 0), a number is read only through a snapshot's entity map. A module that registers a

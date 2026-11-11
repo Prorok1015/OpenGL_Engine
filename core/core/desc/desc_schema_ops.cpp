@@ -895,9 +895,32 @@ namespace desc
 	{
 		dyn_blob blob;
 		blob.bytes.assign(binding.schema->layout.size, std::byte{ 0 });
+		blob.layout = layout_fingerprint(binding);
 		dyn_ref ref{ &blob, 0 };
 		apply_defaults(binding, ref);
 		return blob;
+	}
+
+	std::uint64_t layout_fingerprint(const schema_binding& binding)
+	{
+		// FNV-1a over the numbers that place the bytes.
+		std::uint64_t hash = 0xcbf2'9ce4'8422'2325ull;
+		const auto mix = [&hash](std::uint64_t value) {
+			for (int i = 0; i < 8; ++i) {
+				hash ^= (value >> (i * 8)) & 0xFFu;
+				hash *= 0x0000'0100'0000'01B3ull;
+			}
+		};
+		mix(binding.schema->layout.size);
+		mix(binding.schema->layout.alignment);
+		mix(binding.ops.size());
+		for (const field_ops& ops : binding.ops) {
+			mix(static_cast<std::uint64_t>(ops.kind));
+			mix(static_cast<std::uint64_t>(ops.element));
+			mix(ops.offset);
+			mix(ops.nested ? layout_fingerprint(*ops.nested) : 0u);
+		}
+		return hash == 0 ? 1u : hash;
 	}
 
 	void serialize(const schema_binding& binding, const void* obj, json::object& out)
@@ -1054,8 +1077,12 @@ namespace desc
 		return false;
 	}
 
-	void remap_entities(const schema_binding& binding, void* obj, const entity_remap& entities)
+	bool remap_entities(const schema_binding& binding, void* obj, const entity_remap& entities)
 	{
+		const auto* checked = static_cast<const dyn_ref*>(obj);
+		if (!checked || !checked->blob || std::uint64_t{ checked->base } + binding.schema->layout.size > checked->blob->bytes.size()) {
+			return false;
+		}
 		const auto remapped = [&entities](std::uint32_t raw) {
 			if (raw == null_entity) {
 				return null_entity;
@@ -1085,5 +1112,6 @@ namespace desc
 				}
 			}
 		}
+		return true;
 	}
 }

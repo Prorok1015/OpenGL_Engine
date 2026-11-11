@@ -38,7 +38,22 @@ constexpr const char* k_health_v2_schema = R"json({
 	"name": "mod.health", "kind": "component",
 	"fields": [
 		{ "name": "label", "kind": "string", "default": "v2" },
-		{ "name": "hp", "kind": "f32", "default": 50 }
+		{ "name": "hp", "kind": "f32", "default": 50 },
+		{ "name": "shield", "kind": "i32", "default": 3 }
+	]
+})json";
+
+constexpr const char* k_inner_schema = R"json({
+	"name": "mod.inner", "kind": "struct", "fields": [ { "name": "target", "kind": "entity" } ]
+})json";
+
+// Entities in a nested structure and in an array.
+constexpr const char* k_deep_schema = R"json({
+	"name": "mod.deep", "kind": "component",
+	"fields": [
+		{ "name": "n", "kind": "i32" },
+		{ "name": "inner", "kind": "structure", "ref_type": "mod.inner" },
+		{ "name": "many", "kind": "array", "element": "entity" }
 	]
 })json";
 
@@ -192,6 +207,44 @@ struct schema_fixture : test_util::scene_env {
 	}
 
 	static boost::json::value raw(entt::entity entity) { return boost::json::value(static_cast<std::uint64_t>(entt::to_integral(entity))); }
+
+	scn::schema_component_registration register_deep()
+	{
+		layer->descs().register_schema(schema_from(k_inner_schema));
+		return scn::register_schema_component(mgr, *layer,
+			desc::parse_type_schema(boost::json::parse(k_deep_schema).as_object(), &layer->descs().schemas()));
+	}
+
+	const desc::schema_binding& deep_binding() const { return *layer->catalog().find("mod.deep")->schema; }
+
+	// A mod.deep blob of `n` whose entity fields hold the raw ids of `in` as they are.
+	desc::dyn_blob deep_blob(const boost::json::object& in) const
+	{
+		desc::dyn_blob blob = desc::make_blob(deep_binding());
+		desc::dyn_ref ref{ &blob, 0 };
+		const identity_remap identity;
+		desc::read_context ctx;
+		ctx.entities = &identity;
+		desc::deserialize(deep_binding(), &ref, in, ctx);
+		return blob;
+	}
+
+	boost::json::object deep_of(const entt::registry& reg, int n) const
+	{
+		const auto* pool = reg.storage<desc::dyn_blob>(scn::schema_component_id("mod.deep"));
+		if (pool) {
+			for (const entt::entity entity : static_cast<const entt::sparse_set&>(*pool)) {
+				desc::dyn_ref ref{ const_cast<desc::dyn_blob*>(&pool->get(entity)), 0 };
+				boost::json::object out;
+				desc::serialize(deep_binding(), &ref, out);
+				if (out.at("n").to_number<std::int64_t>() == n) {
+					out["__entity"] = raw(entity);
+					return out;
+				}
+			}
+		}
+		return {};
+	}
 
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
@@ -503,7 +556,9 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 	pump();
 	auto& world = mgr.level_set().get("w0");
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
 	// An id no other test drops: the warning is given once per id for the process.
@@ -569,7 +624,9 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_move_the_component_and_map_its_entities)
 	world.state().create(); // the world's ids differ from the sandbox's
 	world.state().create();
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
 	const auto first = sandbox.create();
@@ -598,7 +655,9 @@ BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_is_dropped)
 	mgr.create_set("s", layer);
 	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
 	sandbox.storage<desc::dyn_blob>(health.id()).emplace(sandbox.create(), desc::dyn_blob{});
@@ -617,6 +676,171 @@ BOOST_AUTO_TEST_CASE(a_component_written_by_no_layout_is_reported_unsaved)
 	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
 	BOOST_TEST(captured.unsaved.count("mod.health") == 1u);
 	BOOST_TEST(boost::json::serialize(snapshot).find("mod.health") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_a_snapshot)
+{
+	auto deep = register_deep();
+	BOOST_REQUIRE(static_cast<bool>(deep));
+	scn::world_context source{ 1, "main" };
+	entt::registry& from = source.state();
+	const entt::entity pointee = from.create();
+	const entt::entity pointer = from.create();
+	scn::emplace_schema_component(from, pointee, deep.id(), deep_blob(boost::json::object{ { "n", 2 } }));
+	boost::json::object in{ { "n", 1 } };
+	in["inner"] = boost::json::object{ { "target", raw(pointee) } };
+	in["many"] = boost::json::array{ raw(pointee), 999999 };
+	scn::emplace_schema_component(from, pointer, deep.id(), deep_blob(in));
+
+	scn::snapshot_report captured;
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	scn::world_context target{ 1, "copy" };
+	target.state().create();
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
+
+	const boost::json::object restored_pointer = deep_of(target.state(), 1);
+	const boost::json::object restored_pointee = deep_of(target.state(), 2);
+	BOOST_REQUIRE(!restored_pointer.empty());
+	BOOST_REQUIRE(!restored_pointee.empty());
+	BOOST_TEST((restored_pointer.at("inner").as_object().at("target") == restored_pointee.at("__entity")));
+	const boost::json::array& many = restored_pointer.at("many").as_array();
+	BOOST_REQUIRE(many.size() == 2u);
+	BOOST_TEST((many[0] == restored_pointee.at("__entity")));
+	BOOST_TEST(many[1].is_null()); // not in the snapshot
+}
+
+BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_the_sandbox)
+{
+	auto deep = register_deep();
+	BOOST_REQUIRE(static_cast<bool>(deep));
+	mgr.create_set("s", layer);
+	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
+	world.state().create();
+	world.state().create();
+	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
+	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
+	const auto first = sandbox.create();
+	const auto second = sandbox.create();
+	const boost::json::value second_raw(static_cast<std::uint64_t>(entt::to_integral(second)));
+	boost::json::object in{ { "n", 1 } };
+	in["inner"] = boost::json::object{ { "target", second_raw } };
+	in["many"] = boost::json::array{ second_raw, 4000 };
+	auto& pool = sandbox.storage<desc::dyn_blob>(deep.id());
+	pool.emplace(first, deep_blob(in));
+	pool.emplace(second, deep_blob(boost::json::object{ { "n", 2 } }));
+
+	world.apply_commands();
+	const boost::json::object moved_first = deep_of(world.state(), 1);
+	const boost::json::object moved_second = deep_of(world.state(), 2);
+	BOOST_REQUIRE(!moved_first.empty());
+	BOOST_REQUIRE(!moved_second.empty());
+	BOOST_TEST((moved_first.at("inner").as_object().at("target") == moved_second.at("__entity")));
+	const boost::json::array& many = moved_first.at("many").as_array();
+	BOOST_REQUIRE(many.size() == 2u);
+	BOOST_TEST((many[0] == moved_second.at("__entity")));
+	BOOST_TEST(many[1].is_null()); // not a sandbox entity
+}
+
+BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_of_the_same_size_is_dropped)
+{
+	auto link = register_health(k_link_schema);
+	BOOST_REQUIRE(static_cast<bool>(link));
+	mgr.create_set("s", layer);
+	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
+	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
+	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
+	// The fields of mod.link swapped: the same size, its entity where n is.
+	const auto swapped = desc::bind_runtime(schema_from(R"json({
+		"name": "mod.link", "kind": "component",
+		"fields": [ { "name": "target", "kind": "entity" }, { "name": "n", "kind": "i32" } ] })json"), layer->descs().schemas());
+	desc::dyn_blob blob = desc::make_blob(*swapped);
+	BOOST_REQUIRE(blob.bytes.size() == link_blob(1, std::nullopt).bytes.size());
+	sandbox.storage<desc::dyn_blob>(link.id()).emplace(sandbox.create(), std::move(blob));
+
+	world.apply_commands();
+	const auto* pool = std::as_const(world.state()).storage<desc::dyn_blob>(link.id());
+	BOOST_TEST((pool == nullptr || pool->empty()));
+}
+
+BOOST_AUTO_TEST_CASE(an_entity_number_is_not_read_without_an_entity_map)
+{
+	auto deep = register_deep();
+	BOOST_REQUIRE(static_cast<bool>(deep));
+	desc::dyn_blob blob = desc::make_blob(deep_binding());
+	desc::dyn_ref ref{ &blob, 0 };
+	boost::json::object in{ { "n", 1 } };
+	in["inner"] = boost::json::object{ { "target", 5 } };
+	in["many"] = boost::json::array{ 5 };
+	desc::deserialize(deep_binding(), &ref, in, read_context());
+	boost::json::object out;
+	desc::serialize(deep_binding(), &ref, out);
+	BOOST_TEST(out.at("n").to_number<std::int64_t>() == 1);
+	BOOST_TEST(out.at("inner").as_object().at("target").is_null());
+	BOOST_TEST(!(out.contains("many") && out.at("many").is_array() && !out.at("many").as_array().empty()));
+}
+
+BOOST_AUTO_TEST_CASE(copying_an_entity_array_keeps_its_entities)
+{
+	auto deep = register_deep();
+	BOOST_REQUIRE(static_cast<bool>(deep));
+	boost::json::object in{ { "n", 1 } };
+	in["many"] = boost::json::array{ 7, nullptr };
+	desc::dyn_blob from = deep_blob(in);
+	desc::dyn_blob to = desc::make_blob(deep_binding());
+	desc::dyn_ref source{ &from, 0 };
+	desc::dyn_ref copy{ &to, 0 };
+	for (const desc::field_ops& ops : deep_binding().ops) {
+		ops.assign(ops, &copy, &source);
+	}
+	boost::json::object out;
+	desc::serialize(deep_binding(), &copy, out);
+	const boost::json::array& many = out.at("many").as_array();
+	BOOST_REQUIRE(many.size() == 2u);
+	BOOST_TEST(many[0].to_number<std::uint64_t>() == 7u);
+	BOOST_TEST(many[1].is_null());
+}
+
+BOOST_AUTO_TEST_CASE(remap_entities_refuses_a_blob_too_small_for_the_binding)
+{
+	auto link = register_health(k_link_schema);
+	BOOST_REQUIRE(static_cast<bool>(link));
+	desc::dyn_blob blob;
+	desc::dyn_ref ref{ &blob, 0 };
+	const identity_remap identity;
+	BOOST_TEST(!desc::remap_entities(*layer->catalog().find("mod.link")->schema, &ref, identity));
+}
+
+BOOST_AUTO_TEST_CASE(an_array_of_structures_is_refused)
+{
+	layer->descs().register_schema(schema_from(k_inner_schema));
+	auto listy = scn::register_schema_component(mgr, *layer, desc::parse_type_schema(boost::json::parse(R"json({
+		"name": "mod.listy", "kind": "component",
+		"fields": [ { "name": "items", "kind": "array", "element": "structure", "ref_type": "mod.inner" } ] })json").as_object(),
+		&layer->descs().schemas()));
+	BOOST_TEST(!listy);
+	BOOST_TEST(nothing_registered("mod.listy"));
+}
+
+BOOST_AUTO_TEST_CASE(an_entity_field_takes_no_default_but_null)
+{
+	BOOST_CHECK_THROW(schema_from(R"json({ "name": "mod.d", "kind": "component",
+		"fields": [ { "name": "e", "kind": "entity", "default": 5 } ] })json"), std::exception);
+	BOOST_CHECK_THROW(schema_from(R"json({ "name": "mod.d", "kind": "component",
+		"fields": [ { "name": "e", "kind": "array", "element": "entity", "default": [5] } ] })json"), std::exception);
+	BOOST_CHECK_NO_THROW(schema_from(R"json({ "name": "mod.d", "kind": "component",
+		"fields": [ { "name": "e", "kind": "entity", "default": null } ] })json"));
+}
+
+BOOST_AUTO_TEST_CASE(a_null_fits_an_entity)
+{
+	BOOST_TEST(desc::json_fits(desc::field_kind::entity, desc::field_kind::boolean, nullptr, boost::json::value(nullptr)));
+	BOOST_TEST(desc::json_fits(desc::field_kind::array, desc::field_kind::entity, nullptr, boost::json::parse("[null, 3]")));
+	BOOST_TEST(!desc::json_fits(desc::field_kind::entity, desc::field_kind::boolean, nullptr, boost::json::value("x")));
 }
 
 BOOST_AUTO_TEST_CASE(a_hot_reload_to_another_layout_keeps_the_fields_both_have)
@@ -645,6 +869,10 @@ BOOST_AUTO_TEST_CASE(a_hot_reload_to_another_layout_keeps_the_fields_both_have)
 	BOOST_TEST(value.at("hp").to_number<double>() == 42.0);
 	BOOST_TEST((value.at("label").as_string() == "boss"));
 	BOOST_TEST(!value.contains("armor"));
+	BOOST_TEST(value.at("shield").to_number<std::int64_t>() == 3); // new in v2: its default
+	// A field v2 dropped is reported as removed (the value is not lost silently), not as one that no longer fits.
+	BOOST_TEST(restored.removed_fields.count("mod.health") == 1u);
+	BOOST_TEST(restored.partial.count("mod.health") == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
