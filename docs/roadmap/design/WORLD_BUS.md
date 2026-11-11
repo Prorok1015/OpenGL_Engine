@@ -145,6 +145,7 @@ input → pre_update → fixed_update ×N → update → [apply_commands] → Д
 | стадия `update`: `route_input` | `input_state`, `input_focus`, `action_map` → ctx | 0 |
 | `begin_frame_channel` набора | почта N-1 → inbox N | 1 кадр (почта) |
 | фаза `input`: `inp::update_actions` | `action_state` мира (только его действия), `action_event` → шина | 0 |
+| фаза `update`: `scn::animation_controller_update` | `scn::animation_finished` (конец клипа без loop, #563) → шина | 0 |
 | фазы `input`…`update` | `event_writer` → очередь | — |
 | **точка доставки** | подписчики, окно `event_reader` | 0 для подписчиков и систем после точки; 1 кадр для систем до неё |
 | игровые фазы `after(update)`, `post_update`…`late_update` | читают окно; поздние `emit` → следующая доставка | 1 кадр для поздних |

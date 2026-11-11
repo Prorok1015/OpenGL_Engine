@@ -8,6 +8,7 @@
 #include <snk/game/gs_game_module.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/scn_scene_service_init.h>
 #include <memory>
 
 // The engine side a game module is loaded into: the scene services and the command registry in a root storage, a
@@ -31,6 +32,7 @@ namespace test_util {
 			root.attach(borrowed(sf));
 			root.attach(borrowed(commands));
 			auto& contexts = root.construct<scn::context_manager>(*rs, *assembler, sf, hot);
+			scn::register_engine_event_types(contexts);
 			contexts.set_game_layer(&contexts.create_layer(&tasks));
 			root.construct<app::modules::module_layer_factory, gs::game_layer_factory>(contexts, &tasks);
 		}
