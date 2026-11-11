@@ -24,8 +24,9 @@ struct mesh_visible_fixture : test_util::null_engine_fixture
 		mesh_ref out;
 		storage.require<scn::context_manager>().level_set().for_each([&out](scn::world_context& w) {
 			if (out.reg) return;
-			for (auto [ent, mat] : w.state().view<scn::material_desc_component, scn::mesh_component, scn::renderable>().each()) {
-				if (mat.mlt_desc.get()) {
+			const auto drawn = w.state().view<scn::material_desc_component, scn::mesh_component, scn::renderable>();
+			for (const auto ent : drawn) {
+				if (drawn.get<scn::material_desc_component>(ent).mlt_desc.get()) {
 					out = { &w.state(), ent };
 					return;
 				}
