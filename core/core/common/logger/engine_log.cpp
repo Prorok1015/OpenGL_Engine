@@ -1,15 +1,18 @@
 #include <snk/common/logger/engine_log_sinks.h>
 
 #include <spdlog/spdlog.h>
+#include <spdlog/details/log_msg.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -58,7 +61,9 @@ namespace {
 	std::uint64_t s_journal_next_seq = 1;
 	// -1: follow the logger's own level; otherwise the lowest engine::log_level the journal keeps.
 	std::atomic<int> s_journal_min_level{ -1 };
-	std::string s_log_file_path = "logs/engine.log";
+	// Empty: no log file. The first line a process logs creates the logger, and a default path would put a file in whatever
+	// folder the process was started from; the host names the file when it knows where logs belong (core::resolve_log_path).
+	std::string s_log_file_path;
 
 	spdlog::level::level_enum to_spdlog_level(engine::log_level level)
 	{
@@ -74,6 +79,9 @@ namespace {
 
 	spdlog::sink_ptr make_file_sink(std::string_view path)
 	{
+		if (path.empty()) {
+			return nullptr;
+		}
 		try {
 			auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
 				std::string(path), MAX_FILE_SIZE, MAX_FILE_COUNT);
@@ -100,6 +108,42 @@ namespace {
 			s_journal.pop_front();
 		}
 		s_journal.push_back(std::move(entry));
+	}
+
+	// The newest messages the journal holds, written into a log file that is attached late: what the process logged before
+	// its config named the file (the project it opened...). Bounded; what does not fit is counted in one line.
+	constexpr std::size_t REPLAY_MAX_ENTRIES = 2000;
+	constexpr std::size_t REPLAY_MAX_BYTES = 256 * 1024;
+
+	void replay_journal_into(spdlog::sinks::sink& sink)
+	{
+		std::vector<engine::log_entry> newest_first;
+		std::uint64_t logged = 0;
+		{
+			std::lock_guard lock(s_journal_mutex);
+			logged = s_journal_next_seq - 1;
+			std::size_t bytes = 0;
+			for (auto it = s_journal.rbegin(); it != s_journal.rend() && newest_first.size() < REPLAY_MAX_ENTRIES; ++it) {
+				bytes += it->text.size() + it->category.size() + 48;
+				if (bytes > REPLAY_MAX_BYTES && !newest_first.empty()) {
+					break;
+				}
+				newest_first.push_back(*it);
+			}
+		}
+		if (newest_first.empty()) {
+			return;
+		}
+		const std::uint64_t lost = logged - newest_first.size();
+		if (lost > 0) {
+			const std::string note = std::to_string(lost) + " earlier log lines are not in this file (it keeps the newest "
+				+ std::to_string(newest_first.size()) + " from before the log file was chosen)";
+			sink.log(spdlog::details::log_msg(std::chrono::system_clock::now(), spdlog::source_loc{}, "logger", spdlog::level::warn, note));
+		}
+		for (auto it = newest_first.rbegin(); it != newest_first.rend(); ++it) {
+			sink.log(spdlog::details::log_msg(it->time, spdlog::source_loc{}, it->category, to_spdlog_level(it->level), it->text));
+		}
+		sink.flush();
 	}
 
 	bool category_matches(const std::string& wanted, const std::string& category)
@@ -261,18 +305,34 @@ void engine::set_log_file(std::string_view path)
 
 	if (!s_initialized) return; // will be applied in init_logger()
 
-	auto new_sink = make_file_sink(path);
-	if (!new_sink) return;
+	spdlog::sink_ptr new_sink;
+	if (!path.empty()) {
+		new_sink = make_file_sink(path);
+		if (!new_sink) return;
+	}
+
+	bool had_file = false;
+	{
+		std::lock_guard lock(s_logger_mutex);
+		had_file = s_file_sink != nullptr;
+	}
+	if (new_sink && !had_file) {
+		replay_journal_into(*new_sink);
+	}
 
 	std::lock_guard lock(s_logger_mutex);
 
-	// Replace the old file sink in the global sinks list
+	// Replace the old file sink (an empty path: drop it)
 	if (s_file_sink) {
 		auto it = std::find(s_sinks.begin(), s_sinks.end(), s_file_sink);
 		if (it != s_sinks.end()) {
-			*it = new_sink;
+			if (new_sink) {
+				*it = new_sink;
+			} else {
+				s_sinks.erase(it);
+			}
 		}
-	} else {
+	} else if (new_sink) {
 		s_sinks.push_back(new_sink);
 	}
 	s_file_sink = new_sink;

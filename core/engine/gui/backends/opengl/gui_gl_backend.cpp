@@ -1,9 +1,13 @@
 #include <snk/gui_gl/gui_gl_backend.h>
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include "backends/imgui_impl_opengl3.h"
+
+#include <filesystem>
+#include <system_error>
 
 gui::gl::gl_imgui_backend::gl_imgui_backend(rnd::driver::driver_interface& drv)
     : imgui_backend_interface(drv)
@@ -37,7 +41,9 @@ void gui::gl::gl_imgui_backend::init()
 
     ImGui_ImplOpenGL3_Init("#version 330 core");
     // TODO: change to load from memory
-    ImGui::LoadIniSettingsFromDisk(get_settings_filename().c_str());
+    if (!get_settings_filename().empty()) {
+        ImGui::LoadIniSettingsFromDisk(get_settings_filename().c_str());
+    }
 }
 
 void gui::gl::gl_imgui_backend::rebuild_fonts(float scale)
@@ -71,7 +77,11 @@ void gui::gl::gl_imgui_backend::render()
 void gui::gl::gl_imgui_backend::shutdown()
 {
     // TODO: change to save to memory
-    ImGui::SaveIniSettingsToDisk(get_settings_filename().c_str());
+    if (!get_settings_filename().empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(fs_paths::path_from_utf8(get_settings_filename()).parent_path(), ec);
+        ImGui::SaveIniSettingsToDisk(get_settings_filename().c_str());
+    }
     ImGui_ImplOpenGL3_Shutdown();
     ImGui::DestroyContext();
 }

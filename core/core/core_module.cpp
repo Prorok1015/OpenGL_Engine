@@ -15,14 +15,18 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/core/core_log_location.h>
+#include <snk/resource/res_shipping_dirs.h>
 #include <snk/project/prj_project.h>
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <format>
 #include <utility>
 
 namespace {
+	// A relative path is taken from the log root (<project>/.cache, else the user's log folder), never from the current folder (#713).
 	CFG_VAR_DEF_STRING(cfg_log_file,  "logger/file",  "logs/engine.log");
 	CFG_VAR_DEF_STRING(cfg_log_level, "logger/level", "");
 	// How many of the newest log messages the journal keeps (log.read); 0 turns it off.
@@ -52,7 +56,7 @@ namespace {
 	// --headless: there is no window to pick a project in, so a run without --project is a project error.
 	CFG_VAR_DEF_BOOL(cfg_project_required, "project/required", false);
 
-	// Captures all keys under "logger/category_file":
+	// Captures all keys under "logger/category_file" (relative to the log root, like logger/file):
 	//   logger/category_file/edt       → logs/editor.log
 	//   logger/category_file/resource  → logs/resource.log
 	cfg::variable_map cfg_log_category_files{"logger/category_file"};
@@ -86,6 +90,57 @@ namespace {
 		if (str == "warn")  return engine::log_level::warn;
 		if (str == "error") return engine::log_level::error;
 		return engine::log_level::info;
+	}
+}
+
+namespace {
+	// resource/user_path: user:// of a read-only project (res_resource_service_init.cpp declares the same variable).
+	CFG_VAR_DEF_PATH(cfg_user_path_for_logs, "resource/user_path", "");
+
+	// Where this process's log files go: with a project its .cache (trusted: the project root, so a .cache that is a link out
+	// of it gets no file); with a read-only project (a shipped game, #593: nothing is written in it) the folder of its user://;
+	// else the user's log folder.
+	struct log_place
+	{
+		std::filesystem::path root;
+		std::filesystem::path trusted;
+	};
+
+	log_place place_for_logs(ds::app_data_storage& data)
+	{
+		if (data.has_value<prj::project_context>()) {
+			const auto& project = data.require<prj::project_context>();
+			if (::res::resource_system::read_only_project()) {
+				return { cfg_user_path_for_logs->empty() ? core::res::player_data_dir(project.data.name) : std::filesystem::absolute(*cfg_user_path_for_logs), {} };
+			}
+			return { project.cache_dir(), project.root };
+		}
+		return { core::user_log_root(), {} };
+	}
+
+	// The absolute path a `logger/*` value is written to, empty (and a warning) when it is not written.
+	std::string log_file_for(std::string_view setting, std::string_view configured, const log_place& place)
+	{
+		if (place.root.empty()) {
+			egLOG_WARN("logger", "{} '{}' is not written: there is no folder for log files (no project is open and none of LOCALAPPDATA, XDG_STATE_HOME, HOME is set)", setting, configured);
+			return {};
+		}
+		const std::filesystem::path path = core::resolve_log_path(configured, place.root);
+		if (path.empty()) {
+			egLOG_WARN("logger", "{} '{}' is not written: a relative path must stay inside {}", setting, configured, place.root.string());
+			return {};
+		}
+		if (const std::string problem = core::log_path_problem(place.trusted, path); !problem.empty()) {
+			egLOG_WARN("logger", "{} '{}' is not written: {}", setting, configured, problem);
+			return {};
+		}
+		// The logger takes a narrow path; one that the code page cannot name (MSVC throws) is not written.
+		try {
+			return path.string();
+		} catch (const std::exception& e) {
+			egLOG_WARN("logger", "{} is not written: its path cannot be used as a file name here ({})", setting, e.what());
+			return {};
+		}
 	}
 }
 
@@ -177,9 +232,12 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 {
 	// Apply logger config before other services start logging
 	{
+		const log_place place = place_for_logs(data);
 		const std::string& file = *cfg_log_file;
 		if (!file.empty()) {
-			engine::set_log_file(file);
+			if (const std::string path = log_file_for("logger/file", file, place); !path.empty()) {
+				engine::set_log_file(path);
+			}
 		}
 
 		const int journal_capacity = static_cast<int>(cfg_log_journal_capacity);
@@ -200,8 +258,10 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 		}
 
 		// Per-category file sinks
-		for (const auto& [category, path] : cfg_log_category_files.entries()) {
-			engine::set_category_file(category, path);
+		for (const auto& [category, configured] : cfg_log_category_files.entries()) {
+			if (const std::string path = log_file_for(std::format("logger/category_file/{}", category), configured, place); !path.empty()) {
+				engine::set_category_file(category, path);
+			}
 		}
 
 		// Per-category log levels
