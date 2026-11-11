@@ -304,11 +304,13 @@ void inp::update_actions_system(ecs::event_writer<action_event>& events, const i
 
 void inp::update_and_trace_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
 	const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
-	action_state& out, fixed_action_state& fixed, action_trace& trace)
+	action_state& out, fixed_action_state& fixed, action_trace& trace, const ecs::world_bus& bus)
 {
 	out.update(actions, state, bound, &events, &fixed, &reached, &injected);
 	++trace.updates;
 	if (trace.map != actions.map) {
+		// This frame's edges go to the next delivery; with an old map they include its releases.
+		trace.map_since_delivery = bus.deliveries() + (trace.map ? 2 : 1);
 		trace.map = actions.map;
 		trace.last_edges.clear();
 	}

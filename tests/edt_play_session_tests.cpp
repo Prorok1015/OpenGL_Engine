@@ -2402,6 +2402,9 @@ BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answe
 
 BOOST_AUTO_TEST_CASE(world_events_and_input_actions_are_an_error_outside_play)
 {
+	// Registered: a schema the registry does not take drops the command with only a log line.
+	BOOST_REQUIRE((commands.find("world.events") != nullptr));
+	BOOST_REQUIRE((commands.find("input.actions") != nullptr));
 	for (const char* tool : { "world_events", "input_actions" }) {
 		const mcp::call_result refused = call_tool(tool);
 		BOOST_TEST(refused.is_error);

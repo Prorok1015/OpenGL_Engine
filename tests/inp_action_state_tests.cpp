@@ -722,10 +722,11 @@ BOOST_AUTO_TEST_CASE(TheTraceKeepsTheUpdateOfEachActionsLastEdge)
 	BOOST_REQUIRE(bus.bind(types, reg, "w"));
 	auto& events = reg.ctx().get<ecs::event_writer<inp::action_event>>();
 	inp::action_trace trace;
-	const auto run = [&] { inp::update_and_trace_actions_system(events, keys, bound, ref, reach, injection, state, fixed, trace); };
+	const auto run = [&] { inp::update_and_trace_actions_system(events, keys, bound, ref, reach, injection, state, fixed, trace, bus); };
 
 	run();
 	BOOST_TEST(trace.updates == 1u);
+	BOOST_TEST(trace.map_since_delivery == 1u); // the first map: this frame's delivery
 	BOOST_REQUIRE(trace.last_edges.size() == 2u);
 	BOOST_TEST(!trace.last_edges[JUMP].has_value());
 
@@ -744,10 +745,12 @@ BOOST_AUTO_TEST_CASE(TheTraceKeepsTheUpdateOfEachActionsLastEdge)
 	BOOST_TEST((trace.last_edges[JUMP]->kind == inp::action_edge::released));
 	BOOST_TEST(!trace.last_edges[FIRE].has_value());
 
-	// Another map starts the trace again.
+	// Another map starts the trace again, from the delivery after the one carrying the old map's releases.
+	bus.deliver();
 	ref.map = make_map();
 	run();
 	BOOST_TEST((trace.map == ref.map));
+	BOOST_TEST(trace.map_since_delivery == 3u);
 	BOOST_TEST(!trace.last_edges[JUMP].has_value());
 	BOOST_TEST(inp::action_event_json({ JUMP, inp::action_edge::pressed }) == R"json({"action":0,"edge":"pressed"})json");
 }

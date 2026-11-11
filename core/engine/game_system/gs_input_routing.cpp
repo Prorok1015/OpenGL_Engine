@@ -321,7 +321,6 @@ namespace
 		inp::stack_resolution resolved = inp::resolve(stack, fed, cursor, engaged, drag, live_actions.get());
 		// The memory of fronts of every layer follows the physical state; the actions learn what is armed (INPUT_STACK.md 5).
 		inp::arm_actions(stack, resolved, raw, live_actions.get());
-		router.set_last_layers(set_name, resolved.layers);
 
 		// A Pause does not run inp::update_actions: the edges wait for it, like the commands of the stack.
 		const queued_injections injected = set.mode() == ecs::run_mode::pause ? queued_injections{} : router.take_injected(set_name);
@@ -338,6 +337,8 @@ namespace
 			}
 			write(e, resolved.find(e.context->get_name()), bound, read, std::move(injection));
 		}
+		// The worlds' input is written: the layers are not needed any more this frame.
+		router.set_last_layers(set_name, std::move(resolved.layers));
 	}
 }
 

@@ -180,6 +180,9 @@ namespace inp
 
 		std::uint64_t updates = 0;
 		std::shared_ptr<const action_map> map{};
+		// The first delivery of the world's bus (ecs::world_bus::deliveries) whose action_event ids all belong to `map`: the
+		// frame that brings a new map also sends the releases of the old one.
+		std::uint64_t map_since_delivery = 0;
 		std::vector<std::optional<edge>> last_edges{};
 	};
 
@@ -190,7 +193,7 @@ namespace inp
 	// The same, keeping the trace too: what the engine registers as "inp::update_actions" (module API 3.14).
 	SNK_API void update_and_trace_actions_system(ecs::event_writer<action_event>& events, const input_state& state,
 		const input_bound& bound, const action_map_ref& actions, const action_input& reached, const action_injection& injected,
-		action_state& out, fixed_action_state& fixed, action_trace& trace);
+		action_state& out, fixed_action_state& fixed, action_trace& trace, const ecs::world_bus& bus);
 	// action_event as the bus journal shows it: {"action": id, "edge": "pressed" | "released"}.
 	SNK_API std::string action_event_json(const action_event& event);
 }

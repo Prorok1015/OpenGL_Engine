@@ -315,7 +315,10 @@ struct bus_type_impl final : bus_type, bus_journal_source
 
 	void record(const bus_slot& slot, uint64_t delivery, bus_journal& journal) const override
 	{
-		for (const auto& e : static_cast<const bus_slot_impl<T>&>(slot).window()) {
+		// The ring would drop the older ones anyway: a flood does not run the writer more than the ring holds.
+		std::span<const envelope<T>> window = static_cast<const bus_slot_impl<T>&>(slot).window();
+		if (window.size() > journal.capacity()) window = window.last(journal.capacity());
+		for (const auto& e : window) {
 			std::string payload;
 			if (m_write) {
 				// One bad payload must not cost the frame or the other entries.

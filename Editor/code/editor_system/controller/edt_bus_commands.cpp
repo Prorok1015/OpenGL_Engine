@@ -123,6 +123,19 @@ namespace {
 		return parsed;
 	}
 
+	// The payload of inp::action_event holds the action id only (its writer has no map): the name comes from the map the
+	// world reads now. An event older than a change of the map gets no name rather than a wrong one.
+	void name_action(json::value& payload, const inp::action_map* map, std::uint64_t map_since_delivery, std::uint64_t delivery)
+	{
+		if (!map || delivery < map_since_delivery || !payload.is_object()) return;
+		json::object& fields = payload.as_object();
+		const json::value* id = fields.if_contains("action");
+		if (!id || !id->is_number()) return;
+		const auto action = id->to_number<std::int64_t>();
+		if (action < 0 || static_cast<std::size_t>(action) >= map->size()) return;
+		fields["name"] = safe_string(map->actions()[static_cast<std::size_t>(action)].name);
+	}
+
 	cmd::result world_events(const edt::bus_commands_deps& deps, const cmd::call& call)
 	{
 		const json::object& args = call.args.as_object();
@@ -152,6 +165,12 @@ namespace {
 			if (type.empty() || type_matches(it->type, type)) picked.push_back(&*it);
 		}
 
+		const auto* map_ref = std::as_const(world->state()).ctx().find<inp::action_map_ref>();
+		const auto* trace = std::as_const(world->state()).ctx().find<inp::action_trace>();
+		// The first delivery the map was in use for; unknown (no trace of this map): name nothing.
+		std::uint64_t map_since = UINT64_MAX;
+		if (trace && map_ref && trace->map == map_ref->map) map_since = trace->map_since_delivery;
+
 		json::object out;
 		write_header(out, *at);
 		out["world"] = safe_string(world->get_name());
@@ -166,7 +185,11 @@ namespace {
 			event["delivery"] = static_cast<std::int64_t>(entry.delivery);
 			event["seq"] = static_cast<std::int64_t>(entry.seq);
 			event["from"] = entry.from ? json::value(safe_string(*entry.from)) : json::value(nullptr);
-			event["payload"] = payload_of(entry.payload);
+			json::value payload = payload_of(entry.payload);
+			if (type_matches(entry.type, "inp::action_event")) {
+				name_action(payload, map_ref && map_ref->map ? map_ref->map.get() : nullptr, map_since, entry.delivery);
+			}
+			event["payload"] = std::move(payload);
 			events.push_back(std::move(event));
 		}
 		out["events"] = std::move(events);
@@ -273,7 +296,7 @@ std::vector<edt::registration> edt::register_bus_commands(cmd::command_registry&
 	events.args_schema = parse_schema(std::format(R"json({{"type":"object","properties":{{
 		"world":{{"type":"string","description":"world name; default the first world of Play"}},
 		"set":{{"type":"string","enum":["play"],"description":"only the worlds of Play are shown"}},
-		"type":{{"type":"string","maxLength":{},"description":"only this event type: its full name (inp::action_event) or the part after the last ::"}},
+		"type":{{"type":"string","description":"only this event type, at most {} bytes: its full name (inp::action_event) or the part after the last ::"}},
 		"last":{{"type":"integer","minimum":1,"maximum":{},"description":"how many of the latest events, default {}"}}}},"additionalProperties":false}})json",
 		k_max_type_filter, play_journal_capacity, k_default_last));
 	events.result_schema = parse_schema(std::format(R"({{"type":"object","properties":{{{},
