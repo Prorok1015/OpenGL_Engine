@@ -13,6 +13,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/core/core_log_location.h>
@@ -127,7 +128,7 @@ namespace {
 		}
 		const std::filesystem::path path = core::resolve_log_path(configured, place.root);
 		if (path.empty()) {
-			egLOG_WARN("logger", "{} '{}' is not written: a relative path must stay inside {}", setting, configured, place.root.string());
+			egLOG_WARN("logger", "{} '{}' is not written: a relative path must stay inside {}", setting, configured, fs_paths::utf8_of(place.root));
 			return {};
 		}
 		if (const std::string problem = core::log_path_problem(place.trusted, path); !problem.empty()) {
