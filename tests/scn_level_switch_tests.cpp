@@ -62,7 +62,8 @@ constexpr const char* LEVEL_A = R"({"__type":"level_desc","name":"a","worlds":[
 		"m":{"components":{"mesh":{"__type":"mesh_node_desc","material":"memory://t/lv_a_mat.desc"}}}}},
 	{"__type":"world_desc","name":"a1","systems":[]}]})";
 constexpr const char* LEVEL_B = R"({"__type":"level_desc","name":"b","worlds":[
-	{"__type":"world_desc","name":"b0","systems":["count","request"],"children":{"s":{"components":{"stat":{"__type":"stat_desc","hp":2}}}}}]})";
+	{"__type":"world_desc","name":"b0","systems":["count","request"],"children":{"s":{"components":{"stat":{"__type":"stat_desc","hp":2}}},
+		"m":{"components":{"mesh":{"__type":"mesh_node_desc","material":"memory://t/lv_b_mat.desc"}}}}}]})";
 constexpr const char* LEVEL_C = R"({"__type":"level_desc","name":"c","worlds":[
 	{"__type":"world_desc","name":"c0","systems":[]}]})";
 
@@ -79,6 +80,7 @@ struct switch_fixture : test_util::scene_env
 		sf.register_system<&sys_ping>("ping", { .phase = ecs::phase::update });
 		mgr.add_event<ping>();
 		put("lv_a_mat.desc", R"({"__type":"material_desc","queue":"opaque"})");
+		put("lv_b_mat.desc", R"({"__type":"material_desc","queue":"opaque"})");
 		level_a = put("lv_a.desc", LEVEL_A);
 		level_b = put("lv_b.desc", LEVEL_B);
 		level_c = put("lv_c.desc", LEVEL_C);
@@ -203,6 +205,7 @@ BOOST_AUTO_TEST_CASE(TheResourcesOfTheLevelLeft_AreReleased)
 	BOOST_REQUIRE((worlds() == names{ "b0" }));
 	BOOST_TEST(!live("lv_a.desc"));
 	BOOST_TEST(!live("lv_a_mat.desc"));
+	BOOST_TEST(live("lv_b_mat.desc")); // the new level's world holds its own
 }
 
 BOOST_AUTO_TEST_CASE(ATaskTheOldLevelStarted_IsStoppedBeforeItsWorldsGo)
