@@ -204,7 +204,8 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_REQUIRE(pool != nullptr);
 	BOOST_REQUIRE(pool->size() == 1u);
 	json::object saved;
-	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), *pool->begin(), saved));
+	const entt::entity holder = *static_cast<const entt::sparse_set&>(*pool).begin();
+	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), holder, saved));
 	BOOST_TEST(saved.at("hp").to_number<double>() == 7.0);
 	BOOST_TEST(saved.at("target").is_null()); // no value in the desc: no entity, not entity 0
 

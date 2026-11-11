@@ -174,7 +174,7 @@ struct schema_fixture : test_util::scene_env {
 			return entt::null;
 		}
 		const scn::component_entry& entry = *layer->catalog().find("mod.link");
-		for (const entt::entity entity : *pool) {
+		for (const entt::entity entity : static_cast<const entt::sparse_set&>(*pool)) {
 			boost::json::object out;
 			if (entry.write(*entry.schema, reg, entity, out) && out.at("n").to_number<std::int64_t>() == n) {
 				return entity;
