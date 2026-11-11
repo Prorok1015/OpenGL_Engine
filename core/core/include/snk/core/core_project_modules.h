@@ -143,6 +143,16 @@ namespace core
 		// "editor" is loaded after `game`. One that is missing, refused or fails to register is reported and logged; the
 		// editor keeps running without it. reload() unloads them before the game module goes and loads them again after it.
 		project_modules_report load_editor_modules();
+		// Takes the new build of the editor module `name` (#664) without touching the game module or the other editor
+		// modules: the copy is made from the build output and checked next to the running module (entry, name, editor
+		// api version, layout key) before anything is unloaded; then before_swap, the running module goes (refused, nothing
+		// touched, when editor_unload_refusal says one of the module's callbacks is on the stack, or another loaded module
+		// depends on it), the new one is loaded in its place, and if it fails the previous copy is loaded again
+		// (rolled_back; lost when that fails too: the module stays unloaded until the next build). A module that is not
+		// loaded (lost, refused at start) is loaded by this. Then after_swap. Nothing is taken back: an editor module has
+		// no Play to restore. Same rules as reload(): main thread, never from one of the module's callbacks (it would be
+		// refused), a compiled-in module is not reloaded by name.
+		reload_report reload_editor_module(const std::string& name, const reload_hooks& hooks = {});
 		// Unloads the loaded editor modules, the last loaded first (each one's registrations go with it). Empty when
 		// done (or none was loaded); otherwise why nothing was unloaded.
 		std::string unload_editor_modules();
@@ -189,6 +199,10 @@ namespace core
 		reload_report swap(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 			const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
 			const std::optional<loaded_copy>& copy, bool keep_copy = false);
+		// The swap of an editor module (reload_editor_module): `copy` is null for a compiled-in or test source.
+		reload_report swap_editor(const std::string& name, std::unique_ptr<app::modules::module_source> next,
+			const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
+			const std::optional<loaded_copy>& copy);
 		void remove_unused_copies() const;
 
 		app::modules::module_loader& m_loader;
