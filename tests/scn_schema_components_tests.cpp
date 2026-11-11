@@ -576,9 +576,7 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 	pump();
 	auto& world = mgr.level_set().get("w0");
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
-		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
-	}
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
 	// An id no other test drops: the warning is given once per id for the process.
@@ -645,9 +643,7 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_move_the_component_and_map_its_entities)
 	static_cast<void>(world.state().create()); // the world's ids differ from the sandbox's
 	static_cast<void>(world.state().create());
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
-		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
-	}
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
 	const auto first = sandbox.create();
@@ -676,9 +672,7 @@ BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_is_dropped)
 	mgr.create_set("s", layer);
 	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
-		if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
-	}
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
 	sandbox.storage<desc::dyn_blob>(health.id()).emplace(sandbox.create(), desc::dyn_blob{});
