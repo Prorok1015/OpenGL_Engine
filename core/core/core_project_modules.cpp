@@ -797,6 +797,11 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 			fs::remove_all(copy->folder, ec);
 		}
 	};
+	if (!m_options.with_editor_modules || !m_options.check_editor_module) {
+		drop_copy();
+		egLOG_ERROR("project", "editor module '{}' not reloaded: the host does not load editor modules", name);
+		return { reload_status::refused, "the host does not load editor modules" };
+	}
 	const auto checked = [&](std::unique_ptr<app::modules::module_source> source) {
 		return std::make_unique<checked_module_source>(std::move(source), m_options.check_editor_module);
 	};
@@ -818,18 +823,22 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 		return { reload_status::refused, std::move(problem) };
 	}
 	const bool was_loaded = m_loader.state(name) == app::modules::module_state::initialized;
-	// A callback of an editor module is on the stack: unloading would destroy the code that runs it. Asked before
-	// anything is touched, and not asked again (a refusal is final for this call).
-	if (was_loaded && m_options.editor_unload_refusal) {
-		if (std::string why = m_options.editor_unload_refusal(); !why.empty()) {
+	// Everything that can refuse is asked before anything is touched (no before_swap yet): one of the module's callbacks is
+	// on the stack (unloading would destroy the code that runs it), its layer refuses, or a loaded module depends on it.
+	if (was_loaded) {
+		std::string refusal;
+		if (m_options.editor_unload_refusal) {
+			refusal = m_options.editor_unload_refusal();
+		}
+		if (refusal.empty()) {
+			refusal = m_loader.layer_unload_refusal(name);
+		}
+		if (!refusal.empty()) {
 			prepared.reset();
 			drop_copy();
-			egLOG_ERROR("project", "editor module '{}' not reloaded: it could not be unloaded: {}", name, why);
-			return { reload_status::refused, std::format("the editor module could not be unloaded: {}", why) };
+			egLOG_ERROR("project", "editor module '{}' not reloaded: it could not be unloaded: {}", name, refusal);
+			return { reload_status::refused, std::format("the editor module could not be unloaded: {}", refusal) };
 		}
-	}
-	if (was_loaded) {
-		// Asked before anything is touched: the loader would refuse the unload anyway.
 		if (const std::string dependent = m_loader.dependent_of(name); !dependent.empty()) {
 			prepared.reset();
 			drop_copy();
@@ -837,6 +846,17 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 			return { reload_status::refused, std::format("the module '{}' depends on it", dependent) };
 		}
 	}
+	// Made before anything is unloaded: nothing that can throw is left between a module that loaded and finish (after_swap).
+	// The module goes to the end of the list: a new build may depend on a module that was loaded after the old one, and
+	// unload_editor_modules unloads the last loaded first.
+	m_editor_loaded.reserve(m_editor_loaded.size() + 1);
+	auto& copies = m_copies[name];
+	std::optional<loaded_copy> next_current = copy;
+	const auto move_to_the_end = [&] {
+		std::erase(m_editor_loaded, name);
+		m_editor_loaded.push_back(name);
+	};
+
 	if (hooks.before_swap) {
 		hooks.before_swap();
 	}
@@ -855,8 +875,6 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 	};
 
 	if (was_loaded) {
-		// The loader refuses while a loaded module depends on this one ("initialized module '...' depends on it"); the
-		// module is then still there and nothing changed.
 		problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
 		if (m_loader.state(name) == app::modules::module_state::initialized) {
 			prepared.reset();
@@ -868,16 +886,14 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 			egLOG_ERROR("project", "editor module '{}': {}", name, problem);
 		}
 	}
-	auto& copies = m_copies[name];
 	problem = guarded([&] { m_loader.load(std::move(*prepared), m_data); return std::string{}; });
 	prepared.reset();
 	if (problem.empty()) {
 		if (copy) {
-			copies.previous = std::exchange(copies.current, *copy);
+			copies.previous = std::move(copies.current);
+			copies.current = std::move(next_current);
 		}
-		if (!was_loaded) {
-			m_editor_loaded.push_back(name);
-		}
+		move_to_the_end();
 		return finish({ reload_status::reloaded, {} });
 	}
 	drop_copy();
@@ -897,6 +913,7 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 		return load_module(m_loader, m_data, checked(previous()), name, m_options.layout_key);
 	});
 	if (rollback.empty()) {
+		move_to_the_end();
 		return finish({ reload_status::rolled_back, std::format("the new build failed, the previous one runs again: {}", problem) });
 	}
 	return lost(std::format("the new build failed: {}; the previous one failed to load again: {}", problem, rollback));

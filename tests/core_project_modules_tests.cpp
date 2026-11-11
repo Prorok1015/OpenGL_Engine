@@ -141,6 +141,24 @@ struct editor_dependent_module final : app::modules::module_interface
 	std::vector<std::string_view> depends_on() const override { return { "test_editor" }; }
 };
 
+// An editor module with no dependencies (loaded after test_editor), and the next build of test_editor that needs it.
+struct editor_b_module final : app::modules::module_interface
+{
+	void register_services(ds::app_data_storage&) override { g_editor_events.push_back("editor_b:register"); }
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage&) override { g_editor_events.push_back("editor_b:shutdown"); }
+	std::string_view name() const override { return "test_editor_b"; }
+};
+
+struct editor_needs_b_module final : app::modules::module_interface
+{
+	void register_services(ds::app_data_storage&) override { g_editor_events.push_back("editor_needs_b:register"); }
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage&) override { g_editor_events.push_back("editor_needs_b:shutdown"); }
+	std::string_view name() const override { return "test_editor"; }
+	std::vector<std::string_view> depends_on() const override { return { "test_editor_b" }; }
+};
+
 // A game module whose task continuation asks the host for a reload of its own module (from inside its callback).
 std::function<void()> g_reload_from_a_callback;
 
@@ -169,6 +187,8 @@ SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_probe_, editor_probe_module)
 SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_probe_v2_, editor_probe_v2_module)
 SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_failing_, editor_failing_module)
 SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_dependent_, editor_dependent_module)
+SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_b_, editor_b_module)
+SNK_DECLARE_EDITOR_MODULE_PREFIXED(editor_needs_b_, editor_needs_b_module)
 SNK_DECLARE_MODULE_PREFIXED(self_reload_, self_reload_game_module)
 SNK_DECLARE_MODULE_PREFIXED(reload_v1_, reload_v1)
 SNK_DECLARE_MODULE_PREFIXED(reload_v2_, reload_v2)
@@ -220,6 +240,16 @@ app::modules::module_entry editor_failing_entry()
 app::modules::module_entry editor_dependent_entry()
 {
 	return SNK_EDITOR_MODULE_ENTRY(editor_dependent_);
+}
+
+app::modules::module_entry editor_b_entry()
+{
+	return SNK_EDITOR_MODULE_ENTRY(editor_b_);
+}
+
+app::modules::module_entry editor_needs_b_entry()
+{
+	return SNK_EDITOR_MODULE_ENTRY(editor_needs_b_);
 }
 
 std::string check_editor_entry(const app::modules::module_entry& entry)
@@ -1091,6 +1121,38 @@ BOOST_AUTO_TEST_CASE(an_editor_module_another_one_depends_on_is_not_reloaded_and
 
 	BOOST_TEST((two.reload("test_editor_b", compiled(editor_dependent_entry()), rollback_to(editor_dependent_entry()), hooks).status
 		== core::reload_status::reloaded));
+}
+
+BOOST_AUTO_TEST_CASE(an_editor_module_reloaded_into_a_build_that_needs_a_later_one_still_unloads_in_order)
+{
+	core::project_modules_options options = options_for(&refusal);
+	options.compiled_in.emplace("test_editor_b", editor_b_entry());
+	root.require<prj::project_context>().data.modules.push_back(manifest_module("test_editor_b", prj::module_kind::editor));
+	core::project_module_host two(loader, root, options);
+	BOOST_REQUIRE((two.load_editor_modules().loaded == std::vector<std::string>{ "test_editor", "test_editor_b" }));
+
+	// The new build of test_editor depends on test_editor_b, which was loaded after it: it goes behind it in the unload order.
+	BOOST_REQUIRE((two.reload("test_editor", compiled(editor_needs_b_entry()), rollback_to(editor_probe_entry()), hooks).status
+		== core::reload_status::reloaded));
+	g_editor_events.clear();
+
+	BOOST_TEST(two.unload_editor_modules().empty());
+	BOOST_TEST((g_editor_events == std::vector<std::string>{ "editor_needs_b:shutdown", "editor_b:shutdown" }), boost::test_tools::per_element());
+	BOOST_TEST(!two.has_editor_modules());
+}
+
+BOOST_AUTO_TEST_CASE(a_host_that_loads_no_editor_modules_refuses_the_reload_of_one_without_throwing)
+{
+	core::project_modules_options options = options_for(&refusal);
+	options.check_editor_module = nullptr;
+	core::project_module_host without_check(loader, root, options);
+	g_editor_events.clear();
+
+	const auto report = without_check.reload("test_editor", compiled(editor_probe_v2_entry()), rollback_to(editor_probe_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("editor modules") != std::string::npos);
+	BOOST_TEST(g_editor_events.empty());
 }
 
 BOOST_AUTO_TEST_CASE(a_second_reload_of_an_editor_module_is_refused_while_one_runs_and_a_module_that_is_not_an_editor_one_is_not_taken)

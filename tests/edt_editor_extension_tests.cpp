@@ -53,8 +53,11 @@ struct probe_state
 	bool throw_in_shutdown = false;
 	std::string refusal_inside_a_callback;
 	bool saw_refusal_inside_a_callback = false;
-	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then.
+	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then. A callback counts
+	// when its own copy of the module (generation) was shut down already: a reload makes a second copy.
 	int callbacks_after_shutdown = 0;
+	int generations = 0;
+	int shut_down_generation = 0;
 	// The preview the module's asset kind makes (#589): when it is destroyed, and what the editor looked like then.
 	int previews_made = 0;
 	int previews_destroyed = 0;
@@ -122,6 +125,8 @@ public:
 
 	void register_editor(edt::editor_module_context& context) override
 	{
+		m_generation = ++m_state.generations;
+		const int generation = m_generation;
 		edt::panel_desc panel;
 		panel.id = "ext.panel";
 		panel.title = "Ext";
@@ -165,16 +170,16 @@ public:
 				++state.job_bodies_run;
 				return 0;
 			},
-			[&state](ds::task_result<int>&) {
+			[&state, generation](ds::task_result<int>&) {
 				++state.job_results_delivered;
-				if (state.shut_down) ++state.callbacks_after_shutdown;
+				if (state.shut_down_generation >= generation) ++state.callbacks_after_shutdown;
 			});
 
 		context.task_system().run(ds::lane::compute, ds::task_desc{ "probe task" }, context.tasks(),
 			[](ds::task_context&) {})
-			.then_main(context.tasks(), [&state](ds::task_result<void>&) {
+			.then_main(context.tasks(), [&state, generation](ds::task_result<void>&) {
 				++state.continuations_run;
-				if (state.shut_down) ++state.callbacks_after_shutdown;
+				if (state.shut_down_generation >= generation) ++state.callbacks_after_shutdown;
 				if (g_probe_editor) {
 					state.refusal_inside_a_callback = g_probe_editor->module_unload_refusal();
 					state.saw_refusal_inside_a_callback = true;
@@ -186,11 +191,13 @@ public:
 	{
 		++m_state.shutdowns;
 		m_state.shut_down = true;
+		m_state.shut_down_generation = m_generation;
 		if (m_state.throw_in_shutdown) throw std::runtime_error("shutdown_editor failed");
 	}
 
 private:
 	probe_state& m_state;
+	int m_generation = 0;
 };
 
 struct ext_game_module final : app::modules::module_interface
@@ -504,7 +511,9 @@ BOOST_AUTO_TEST_CASE(AnEditorModuleReloadedOnItsOwn_LeavesTheEditorAsItWas_Witho
 	auto host = make_host();
 	host->load_all();
 	host->load_editor_modules();
-	test_util::pump(tasks);
+	// The old copy's task bodies run, its main-thread continuation and job result wait in the queue through the reload.
+	while (tasks.run_one(ds::lane::compute) || tasks.run_one(ds::lane::io)) {}
+	BOOST_REQUIRE_EQUAL(state.continuations_run, 0);
 	const counts loaded = snapshot();
 	const int shutdowns_before = state.shutdowns;
 	const std::size_t problem_sources = context->problems().sources().size();
@@ -517,9 +526,13 @@ BOOST_AUTO_TEST_CASE(AnEditorModuleReloadedOnItsOwn_LeavesTheEditorAsItWas_Witho
 	BOOST_CHECK(context->panels().contains("ext.panel"));
 	BOOST_CHECK_EQUAL(context->problems().sources().size(), problem_sources);
 	BOOST_CHECK(loader.state("ext_game") == app::modules::module_state::initialized);
+	BOOST_CHECK_EQUAL(state.generations, 2);
 
 	test_util::pump(tasks);
+	// What the old copy had queued ran before its shutdown (or was dropped); nothing of it ran after, and the new copy's own work ran.
 	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+	BOOST_CHECK_GE(state.job_results_delivered, 1);
+	BOOST_CHECK_GE(state.continuations_run, 1);
 	context->events().document_changed.emit(edt::document_id{}, 7);
 	BOOST_CHECK_EQUAL(state.document_changes, 1); // the new copy's handler only: the old one is gone with its scope
 }
