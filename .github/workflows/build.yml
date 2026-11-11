@@ -29,7 +29,7 @@ on:
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
 # Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
-# Full adds: Linux GCC Shared (the project template's game module, #434), Linux TSan, SDK package (Linux),
+# Full adds: Windows MSVC Shared+PCH (#557), Linux GCC Shared (the project template's game module, #434), Linux TSan, SDK package (Linux),
 # Windows package (Release, Debug, check: the release archives, #223), Extract benchmark (#505: on a PR it only
 # builds, so a warning that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes
 # and by hand only). Every build uses the shared engine but Linux Clang Debug and the static SDK halves (#223).
@@ -54,11 +54,11 @@ jobs:
       # PCH is off in the ci-linux-clang-debug preset: it catches headers that compile only thanks to the PCH.
       # It is also the one static-engine build with the unit tests (#223); a static build has no editor executable, but it
       # has the shipping host `game` (#591), which runs the sandbox's start level headless below.
-      # The same two jobs in both tiers: the Windows Release builds moved to the Windows package jobs (#223).
+      # The Windows Release builds moved to the Windows package jobs (#223).
+      # Full adds Windows MSVC Shared+PCH (#557): the only Windows build that compiles through the precompiled header
+      # (sccache cannot cache /Yu, so it is a cold build), with the shared engine where core/ exports IMGUI_API.
       matrix:
-        include:
-          - { name: "Windows MSVC Debug", os: windows-latest, preset: ci-windows-msvc-debug }
-          - { name: "Linux Clang Debug", os: ubuntu-latest, preset: ci-linux-clang-debug, targets: unit_tests game test_static_game_host }
+        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"},{"name":"Windows MSVC Shared+PCH","os":"windows-latest","preset":"ci-windows-msvc-pch-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache

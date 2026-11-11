@@ -1,5 +1,14 @@
+# What is personal to one machine stays out of git (the full list of the project's files, shared and personal: the
+# engine's docs/roadmap/design/DISTRIBUTION.md).
+# Build trees.
 build/
+# Regenerated data: memory://, the test profiles of user://, module copies, hot reload reports.
 .cache/
+# The editor's own files (the MCP connection file with its token, build settings), except the team's agent policy.
 .snk/*
 !.snk/agent_policy.json
+# Per-user CMake presets (defines, jobs).
 code/CMakeUserPresets.json
+# Written in the folder the editor runs from: its log and the layout of its windows.
+logs/
+/layout_settings.ini

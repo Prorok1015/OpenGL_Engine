@@ -86,7 +86,8 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 	// agent policy (.snk/agent_policy.json, AI_INTEGRATION section 5) stays in. A checkout may turn the file into CRLF.
 	const std::vector<std::string> ignore = lines_of(read_text(dir.path() / "game" / ".gitignore"));
 	const auto has_line = [&ignore](std::string_view line) { return std::ranges::find(ignore, line) != ignore.end(); };
-	for (const char* line : { "build/", ".cache/", ".snk/*", "!.snk/agent_policy.json", "code/CMakeUserPresets.json" }) {
+	for (const char* line : { "build/", ".cache/", ".snk/*", "!.snk/agent_policy.json", "code/CMakeUserPresets.json", "logs/",
+			 "/layout_settings.ini" }) {
 		BOOST_TEST_INFO("line: " << line);
 		BOOST_TEST(has_line(line));
 	}
