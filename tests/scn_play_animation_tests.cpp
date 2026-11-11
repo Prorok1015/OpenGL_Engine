@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_animation.h>
@@ -8,7 +9,10 @@
 #include <snk/scene/scn_model.h>
 #include <chrono>
 #include <limits>
+#include <memory>
+#include <type_traits>
 #include <string>
+#include <vector>
 
 // play_animation (#563): game code switches the clip of a model with one call.
 
@@ -159,6 +163,184 @@ BOOST_AUTO_TEST_CASE(OnlyTheEntityThatHoldsTheControllerPlays)
 	BOOST_TEST(!scn::play_animation(*reg, bare, "walk"));
 	BOOST_TEST(reg->get<scn::animation_controller_component>(bare).current_animation.empty());
 	BOOST_TEST(!reg->get<scn::animation_controller_component>(bare).playing);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The end of a clip without loop on the world bus (#563): scn::animation_finished.
+namespace {
+
+// The layout is part of the module API (#563): a field added, removed or retyped shows here.
+struct animation_finished_layout
+{
+	entt::entity entity;
+	std::string clip;
+};
+static_assert(std::is_aggregate_v<scn::animation_finished>);
+static_assert(sizeof(scn::animation_finished) == sizeof(animation_finished_layout));
+static_assert(alignof(scn::animation_finished) == alignof(animation_finished_layout));
+static_assert(std::is_same_v<decltype(scn::animation_finished::entity), entt::entity>);
+static_assert(std::is_same_v<decltype(scn::animation_finished::clip), std::string>);
+
+struct heard_finish
+{
+	entt::entity entity = entt::null;
+	std::string clip;
+	bool alive = false;
+};
+
+std::vector<heard_finish> g_heard;
+
+// After the delivery point: it gets the clip's end the frame it happens.
+void hear_finished(const ecs::event_reader<scn::animation_finished>& in, entt::registry& reg)
+{
+	for (const auto& e : in.events()) g_heard.push_back({ e.payload.entity, e.payload.clip, reg.valid(e.payload.entity) });
+}
+
+// Destroys a model whose clip just stopped, in the frame it stops, before the delivery.
+void destroy_stopped(entt::registry& reg, entt::view<entt::get_t<scn::animation_controller_component>> models)
+{
+	std::vector<entt::entity> stopped;
+	for (auto [model, controller] : models.each()) {
+		if (!controller.playing && !controller.current_animation.empty()) stopped.push_back(model);
+	}
+	for (const entt::entity model : stopped) reg.destroy(model);
+}
+
+struct finish_fixture : test_util::scene_env
+{
+	finish_fixture() : events(make_events()), set("play", nullptr, nullptr, {}, events)
+	{
+		g_heard.clear();
+		scn::init_animation_system(sf);
+		sf.register_system<&hear_finished>("test::hear_finished", { .phase = ecs::phase::post_update });
+		sf.register_system<&destroy_stopped>("test::destroy_stopped",
+			{ .phase = ecs::phase::update, .after = { "scn::animation_controller_update" } });
+	}
+
+	static std::shared_ptr<ecs::bus_registry> make_events()
+	{
+		auto out = std::make_shared<ecs::bus_registry>();
+		out->add<scn::animation_finished>();
+		return out;
+	}
+
+	entt::entity add_model(std::vector<std::string> systems)
+	{
+		auto& world = set.create_context("w", 0);
+		set.add_systems(world, systems, sf);
+		reg = &world.state();
+		const entt::entity model = reg->create();
+		scn::animation_collection_component collection;
+		collection.clips = load<scn::animation_collection_desc>(put("clips.desc", CLIPS))->clips;
+		reg->emplace<scn::animation_collection_component>(model, std::move(collection));
+		reg->emplace<scn::animation_controller_component>(model);
+		return model;
+	}
+
+	void frame(float seconds) { set.update(std::chrono::duration<float>(seconds)); }
+
+	std::shared_ptr<ecs::bus_registry> events;
+	ecs::system_factory sf;
+	scn::context_set set;
+	entt::registry* reg = nullptr;
+};
+
+const std::vector<std::string> k_hearing{ "scn::animation_controller_update", "test::hear_finished" };
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(ScnAnimationFinishedTests, finish_fixture)
+
+BOOST_AUTO_TEST_CASE(AClipWithoutLoopTellsItsEndOnceTheFrameItEnds)
+{
+	const entt::entity model = add_model(k_hearing);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false)); // 0.5 s
+	frame(0.2f);
+	frame(0.2f);
+	BOOST_TEST(g_heard.empty());
+
+	frame(0.2f);
+	BOOST_REQUIRE(g_heard.size() == 1u);
+	BOOST_TEST((g_heard[0].entity == model));
+	BOOST_TEST(g_heard[0].clip == "jump");
+	BOOST_TEST(g_heard[0].alive);
+	BOOST_TEST(!reg->get<scn::animation_controller_component>(model).playing);
+
+	frame(0.2f);
+	frame(0.2f);
+	BOOST_TEST(g_heard.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheSameClipPlayedAgainAfterItsEndTellsItsEndAgain)
+{
+	const entt::entity model = add_model(k_hearing);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	for (int i = 0; i < 3; ++i) frame(0.2f);
+	BOOST_REQUIRE(g_heard.size() == 1u);
+
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	frame(0.2f);
+	frame(0.2f);
+	BOOST_TEST(g_heard.size() == 1u);
+	frame(0.2f);
+	BOOST_REQUIRE(g_heard.size() == 2u);
+	BOOST_TEST(g_heard[1].clip == "jump");
+	BOOST_TEST((g_heard[1].entity == model));
+}
+
+BOOST_AUTO_TEST_CASE(ALoopGoingRoundTellsNothing)
+{
+	const entt::entity model = add_model(k_hearing);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "walk")); // 0.5 s, loop
+	for (int i = 0; i < 6; ++i) frame(0.2f);
+	BOOST_TEST(g_heard.empty());
+	BOOST_TEST(reg->get<scn::animation_controller_component>(model).playing);
+}
+
+BOOST_AUTO_TEST_CASE(AClipReplacedOrStoppedBeforeItsEndTellsNothing)
+{
+	const entt::entity model = add_model(k_hearing);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	frame(0.2f);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "walk"));
+	for (int i = 0; i < 4; ++i) frame(0.2f);
+	BOOST_TEST(g_heard.empty());
+
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	frame(0.2f);
+	reg->get<scn::animation_controller_component>(model).playing = false;
+	for (int i = 0; i < 4; ++i) frame(0.2f);
+	BOOST_TEST(g_heard.empty());
+
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false, 0.0f));
+	for (int i = 0; i < 4; ++i) frame(0.2f);
+	BOOST_TEST(g_heard.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AModelDestroyedInTheFrameItsClipEnds_IsHeardAsGone)
+{
+	const entt::entity model = add_model({ "scn::animation_controller_update", "test::destroy_stopped", "test::hear_finished" });
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	for (int i = 0; i < 3; ++i) frame(0.2f);
+
+	BOOST_REQUIRE(g_heard.size() == 1u);
+	BOOST_TEST(g_heard[0].clip == "jump");
+	BOOST_TEST(!g_heard[0].alive);
+	BOOST_TEST(!reg->valid(model));
+}
+
+BOOST_AUTO_TEST_CASE(InEditTheEndIsNotKeptForLater)
+{
+	const entt::entity model = add_model(k_hearing);
+	set.set_mode(ecs::run_mode::edit);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	for (int i = 0; i < 4; ++i) frame(0.2f); // the controller runs in Edit, the bus drops what it emits
+	BOOST_REQUIRE(!reg->get<scn::animation_controller_component>(model).playing);
+
+	set.set_mode(ecs::run_mode::play);
+	frame(0.2f);
+	BOOST_TEST(g_heard.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
