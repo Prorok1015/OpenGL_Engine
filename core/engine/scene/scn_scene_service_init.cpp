@@ -20,7 +20,7 @@
 
 void scn::register_engine_event_types(scn::context_manager &contexts) {
   contexts.add_event<inp::action_event>({}, &inp::action_event_json);
-  contexts.add_event<scn::animation_finished>();
+  contexts.add_event<scn::animation_finished>({}, &scn::animation_finished_json);
 }
 
 void scn::scene_init(ds::app_data_storage &store) {

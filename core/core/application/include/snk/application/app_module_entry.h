@@ -71,8 +71,8 @@
 // and bus_registry::add<T>(schema, payload_writer) are new; bus_type_impl<T> gains a base, which only modules built for
 // 3.14 have: the journal of a type of an older module holds the place of its events, not their sender or payload.
 // bus_slot, bus_slot_impl and the layout key are unchanged; bus_state, input_router gain members at their end
-// (engine-made). inp::action_trace and inp::update_and_trace_actions_system are new. A module that gives its events a
-// payload writer needs an engine of 3.14 or newer.
+// (engine-made). inp::action_trace, inp::update_and_trace_actions_system and scn::animation_finished_json are new. A
+// module that gives its events a payload writer needs an engine of 3.14 or newer.
 #define SNK_MODULE_API_VERSION 0x0003'000Eu // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
