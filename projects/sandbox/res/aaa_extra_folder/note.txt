@@ -1,1 +1,0 @@
-temporary: #646 check, removed in the next commit
