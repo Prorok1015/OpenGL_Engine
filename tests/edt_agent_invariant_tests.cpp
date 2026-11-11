@@ -350,6 +350,18 @@ struct agent_editor_fixture : scratch_dirs, test_util::null_engine_fixture
 		return outcome;
 	}
 
+	// No implicit callback runs and no task is pumped: a level load begun by the call (file.open begins it inside the
+	// call) stays in progress until a later frame polls it, whatever the io thread does meanwhile.
+	cmd::result invoke_as_agent_without_a_frame(const std::string& id, const boost::json::value& args = boost::json::object{})
+	{
+		cmd::call request;
+		request.args = args;
+		request.from = cmd::origin::agent("agent-invariant-test");
+		cmd::result outcome;
+		gui().run_without_drawing([&] { outcome = registry().invoke(id, request); });
+		return outcome;
+	}
+
 	// Ids, not descriptors: a command may register or remove others while it runs.
 	std::size_t call_every_agent_command()
 	{
@@ -643,21 +655,14 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 	BOOST_REQUIRE(watched.is_valid());
 	BOOST_TEST(watched == editor().current_editor_tag());
 
-	// Without a frame between them: the frame of invoke_as_agent may finish the load.
-	const auto invoke_in_this_frame = [this](const std::string& id) {
-		cmd::call request;
-		request.args = boost::json::object{};
-		request.from = cmd::origin::agent("agent-invariant-test");
-		cmd::result outcome;
-		gui().run_without_drawing([&] { outcome = registry().invoke(id, request); });
-		return outcome;
-	};
-	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
-	BOOST_REQUIRE(editor().level_load_in_progress());
+	// No frame from the open to the cancel: only a frame's poll could end the load.
+	BOOST_REQUIRE(invoke_as_agent_without_a_frame("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	BOOST_REQUIRE_MESSAGE(editor().level_load_in_progress(), "file.open must leave the load in progress until a frame polls it");
 	BOOST_TEST(cancel_item_enabled());
-	BOOST_TEST(invoke_in_this_frame("file.save").code == "busy");
+	BOOST_TEST(invoke_as_agent_without_a_frame("file.save").code == "busy");
+	BOOST_REQUIRE(editor().level_load_in_progress());
 
-	const cmd::result cancelled = invoke_in_this_frame("level.cancel_load");
+	const cmd::result cancelled = invoke_as_agent_without_a_frame("level.cancel_load");
 	BOOST_REQUIRE_MESSAGE(cancelled.ok, cancelled.error);
 	BOOST_TEST(cancelled.value.as_object().at("cancelled").as_bool());
 	BOOST_TEST(std::string(cancelled.value.as_object().at("level").as_string()).ends_with("levels/test_level.desc"));
@@ -699,8 +704,9 @@ BOOST_FIXTURE_TEST_CASE(ACancelAfterTheLoadEnded_ChangesNothing, agent_editor_fi
 	BOOST_TEST(late.error.find("no level is loading") != std::string::npos);
 	BOOST_TEST(std::string(editor().current_level_tag().relative()) == "levels/smoke_level.desc");
 
-	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
-	BOOST_REQUIRE(invoke_as_agent("level.cancel_load", boost::json::object{}).ok);
+	BOOST_REQUIRE(invoke_as_agent_without_a_frame("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	BOOST_REQUIRE_MESSAGE(editor().level_load_in_progress(), "file.open must leave the load in progress until a frame polls it");
+	BOOST_REQUIRE(invoke_as_agent_without_a_frame("level.cancel_load").ok);
 	const cmd::result twice = invoke_as_agent("level.cancel_load", boost::json::object{});
 	BOOST_TEST(twice.code == "disabled");
 	BOOST_TEST(std::string(editor().current_level_tag().relative()) == "levels/smoke_level.desc");
