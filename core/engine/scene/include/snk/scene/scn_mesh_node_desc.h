@@ -17,7 +17,8 @@ namespace scn {
 	//     "vx_end": 24,
 	//     "ind_begin": 0,
 	//     "ind_end": 36,
-	//     "material": "res://material.desc"
+	//     "material": "res://material.desc",
+	//     "visible": false              // only when hidden: absent means visible (#560)
 	//   }
 	class SNK_API mesh_node_desc : public desc::desc_base
 	{
@@ -46,6 +47,7 @@ namespace scn {
 		std::size_t ind_begin = 0;
 		std::size_t ind_end = 0;
 		res::res_handle<scn::material_desc> material;
+		bool visible = true;
 	};
 
 	SNK_API void assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name);

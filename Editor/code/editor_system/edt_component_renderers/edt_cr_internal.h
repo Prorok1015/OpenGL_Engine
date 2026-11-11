@@ -33,5 +33,10 @@ struct renderer_registrar {
 // Called exclusively from edt_component_renderers.cpp.
 void edt_cr_skin_register(renderer_registrar& registry);
 void edt_cr_animation_register(renderer_registrar& registry);
+void edt_cr_mesh_register(renderer_registrar& registry);
+
+// The Visible box of mesh_node_desc (#560), apart from ImGui: the value the node draws with, and its edit.
+bool mesh_node_visible(const scn::prefab_desc::prefab_comp_node& comp);
+void set_mesh_node_visible(scn::prefab_desc::prefab_comp_node& comp, bool visible);
 
 } // namespace edt
