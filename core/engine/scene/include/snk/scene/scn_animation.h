@@ -13,8 +13,10 @@ namespace scn
 	// An event of the world bus (WORLD_BUS.md): a clip without loop reached its end and its controller stopped on the
 	// last frame. scn::animation_controller_update emits it in phase update, so subscribers and the systems after the
 	// delivery point get it the same frame. Not sent for a clip replaced or stopped before its end, nor when a loop goes
-	// round. `entity` (the model root, as given to play_animation) may be destroyed by the time it is delivered, by a
-	// system later in the same frame: check registry.valid(entity). Part of the module API: its layout stays as it is.
+	// round. A clip that lands exactly on its end is not over yet: the end is past it (strictly), so the event comes the
+	// next frame. Setting `playing` back to true on a stopped controller by hand plays the last frame again and sends the
+	// event again. `entity` (the model root, as given to play_animation) may be destroyed by the time it is delivered, by
+	// a system later in the same frame: check registry.valid(entity). Part of the module API: its layout stays as it is.
 	struct animation_finished
 	{
 		entt::entity entity = entt::null;

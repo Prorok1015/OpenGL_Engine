@@ -10,6 +10,7 @@
 #include <chrono>
 #include <limits>
 #include <memory>
+#include <type_traits>
 #include <string>
 #include <vector>
 
@@ -169,6 +170,18 @@ BOOST_AUTO_TEST_SUITE_END()
 // The end of a clip without loop on the world bus (#563): scn::animation_finished.
 namespace {
 
+// The layout is part of the module API (#563): a field added, removed or retyped shows here.
+struct animation_finished_layout
+{
+	entt::entity entity;
+	std::string clip;
+};
+static_assert(std::is_aggregate_v<scn::animation_finished>);
+static_assert(sizeof(scn::animation_finished) == sizeof(animation_finished_layout));
+static_assert(alignof(scn::animation_finished) == alignof(animation_finished_layout));
+static_assert(std::is_same_v<decltype(scn::animation_finished::entity), entt::entity>);
+static_assert(std::is_same_v<decltype(scn::animation_finished::clip), std::string>);
+
 struct heard_finish
 {
 	entt::entity entity = entt::null;
@@ -257,6 +270,23 @@ BOOST_AUTO_TEST_CASE(AClipWithoutLoopTellsItsEndOnceTheFrameItEnds)
 	frame(0.2f);
 	frame(0.2f);
 	BOOST_TEST(g_heard.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheSameClipPlayedAgainAfterItsEndTellsItsEndAgain)
+{
+	const entt::entity model = add_model(k_hearing);
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	for (int i = 0; i < 3; ++i) frame(0.2f);
+	BOOST_REQUIRE(g_heard.size() == 1u);
+
+	BOOST_REQUIRE(scn::play_animation(*reg, model, "jump", false));
+	frame(0.2f);
+	frame(0.2f);
+	BOOST_TEST(g_heard.size() == 1u);
+	frame(0.2f);
+	BOOST_REQUIRE(g_heard.size() == 2u);
+	BOOST_TEST(g_heard[1].clip == "jump");
+	BOOST_TEST((g_heard[1].entity == model));
 }
 
 BOOST_AUTO_TEST_CASE(ALoopGoingRoundTellsNothing)
