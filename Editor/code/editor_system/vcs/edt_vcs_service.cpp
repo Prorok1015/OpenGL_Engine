@@ -1865,8 +1865,9 @@ bool edt::vcs_service::marker_moved(const fs::path& project) const
 {
 	const vcs::repository_marker_state marker = vcs::repository_marker(project, vcs::stat_entry);
 	if (marker.path != m_probed_marker.path) return true;
-	// A working repository writes into `.git` all the time; only a broken one is worth probing again when written.
-	return !m_state.available && marker.stamp != m_probed_marker.stamp;
+	// Only a `.git` git did not take is worth probing again when written: a working repository writes into it all the
+	// time, and after a probe timeout each write would block the main thread for the whole timeout again.
+	return m_state.code == "not_a_repository" && marker.stamp != m_probed_marker.stamp;
 }
 
 const edt::vcs_service::state& edt::vcs_service::info()

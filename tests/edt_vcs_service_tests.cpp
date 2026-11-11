@@ -3187,6 +3187,34 @@ BOOST_AUTO_TEST_CASE(ARevParseThatHangs_TimesOutAndTurnsVersionControlOff)
 	BOOST_TEST(service->start_branches(cmd::origin_kind::ui).code == "vcs_unavailable");
 }
 
+// #561: after a probe timeout a write into `.git` (an IDE, another git's index.lock) probes nothing: only a project
+// that is no repository is probed again when its marker is written.
+BOOST_AUTO_TEST_CASE(AfterAProbeTimeout_AWriteIntoTheGitFolder_ProbesNothing)
+{
+	fs::create_directories(base / ".git");
+	auto options = fake_options();
+	options.probe_timeout = std::chrono::milliseconds(100);
+	options.run = [this](const fs::path&, const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		calls.push_back(args);
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.45.1\n");
+			return exited(0);
+		}
+		return hang_until_stopped(stop);
+	};
+	make_service(std::move(options));
+	const auto probes = [this] {
+		return std::count_if(calls.begin(), calls.end(), [](const auto& args) { return has_arg(args, "--absolute-git-dir"); });
+	};
+	BOOST_REQUIRE(service->info().code == "vcs_unavailable");
+	BOOST_REQUIRE(probes() == 1);
+
+	write(base / ".git" / "index.lock", "another tool");
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 1);
+}
+
 BOOST_AUTO_TEST_CASE(AGitThatCannotStart_IsVcsUnavailable)
 {
 	command = [](const std::vector<std::string>&, const platform::process_options&,
@@ -4606,7 +4634,7 @@ BOOST_AUTO_TEST_CASE(ADanglingGitLink_IsNoMarker_UntilItsTargetAppears)
 	std::error_code ec;
 	fs::create_directory_symlink(base / "target", base / ".git", ec);
 	if (ec) {
-		BOOST_TEST_MESSAGE("no symbolic links here: " << ec.message());
+		BOOST_WARN_MESSAGE(false, "skipped: no symbolic links here: " << ec.message());
 		return;
 	}
 	make_service(fake_options());

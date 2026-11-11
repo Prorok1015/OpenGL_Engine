@@ -121,7 +121,7 @@ namespace edt
 
 		// The cached state; the repository is looked up again when the project root changed or its marker did (the first
 		// `.git` in the project folder or a parent, vcs::repository_marker: a stat per folder, no git; while the state is
-		// unavailable its write time and size count too), so a `git init` or a deleted `.git` in the open project is seen
+		// not_a_repository its write time and size count too), so a `git init` or a deleted `.git` in the open project is seen
 		// by the next call (#561). An unchanged marker runs no git.
 		const state& info();
 		// The cached state as it is, never probing (what info() returned last).
