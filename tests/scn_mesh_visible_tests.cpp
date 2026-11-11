@@ -69,7 +69,7 @@ BOOST_AUTO_TEST_CASE(AMeshFileWithoutTheField_IsVisible_AndIsWrittenBackUnchange
 	boost::json::object written;
 	mesh->serialize(written);
 	BOOST_TEST(!written.contains("visible"));
-	BOOST_TEST(without_internal_keys(written) == without_internal_keys(boost::json::parse(text).as_object()));
+	BOOST_TEST((without_internal_keys(written) == without_internal_keys(boost::json::parse(text).as_object())));
 }
 
 BOOST_AUTO_TEST_CASE(AHiddenMesh_KeepsVisibleFalseThroughAFile)

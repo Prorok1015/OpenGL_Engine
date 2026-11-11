@@ -47,13 +47,13 @@ BOOST_AUTO_TEST_CASE(HidingAMeshOfItsParent_KeepsOnlyVisibleFalse_ThroughTheInsp
 		return true;
 	});
 	BOOST_TEST(changed);
-	BOOST_TEST(node.overrides == (boost::json::object{ { "visible", false } }));
+	BOOST_TEST((node.overrides == boost::json::object{ { "visible", false } }));
 	BOOST_TEST(!edt::mesh_node_visible(node));
 
 	// With data of its own the renderer edits the node itself.
 	edt::set_mesh_node_visible(node, true);
 	BOOST_TEST(edt::mesh_node_visible(node));
-	BOOST_TEST(node.overrides == (boost::json::object{ { "visible", true } }));
+	BOOST_TEST((node.overrides == boost::json::object{ { "visible", true } }));
 }
 
 // The base hides the mesh by an override of its own node: the parent's data the inspector passes says false while the
@@ -69,7 +69,7 @@ BOOST_AUTO_TEST_CASE(ShowingAMeshItsBaseHides_LeavesVisibleTrue_ThroughTheInspec
 		return true;
 	});
 	BOOST_TEST(changed);
-	BOOST_TEST(node.overrides == (boost::json::object{ { "visible", true } }));
+	BOOST_TEST((node.overrides == boost::json::object{ { "visible", true } }));
 }
 
 BOOST_AUTO_TEST_CASE(AnUntouchedBox_ChangesNothing_AndAReadOnlyInspectorKeepsNothing)
