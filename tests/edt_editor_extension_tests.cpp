@@ -498,6 +498,32 @@ BOOST_AUTO_TEST_CASE(AGameReload_RegistersTheGameEditorAgain_WithoutClashingWith
 	BOOST_CHECK(snapshot() == loaded);
 }
 
+// #664: one game_editor module reloads without the game module; what the old copy registered goes, the new copy's replaces it.
+BOOST_AUTO_TEST_CASE(AnEditorModuleReloadedOnItsOwn_LeavesTheEditorAsItWas_WithoutDuplicatesOrCallbacksOfTheOldCopy)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	test_util::pump(tasks);
+	const counts loaded = snapshot();
+	const int shutdowns_before = state.shutdowns;
+	const std::size_t problem_sources = context->problems().sources().size();
+
+	const auto source = [] { return std::make_unique<app::modules::static_module_source>("ext_editor", SNK_EDITOR_MODULE_ENTRY(ext_probe_)); };
+	const auto report = host->reload("ext_editor", source(), source);
+	BOOST_CHECK_EQUAL(core::to_string(report.status), "reloaded");
+	BOOST_CHECK_EQUAL(state.shutdowns, shutdowns_before + 1);
+	BOOST_CHECK(snapshot() == loaded);
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK_EQUAL(context->problems().sources().size(), problem_sources);
+	BOOST_CHECK(loader.state("ext_game") == app::modules::module_state::initialized);
+
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+	context->events().document_changed.emit(edt::document_id{}, 7);
+	BOOST_CHECK_EQUAL(state.document_changes, 1); // the new copy's handler only: the old one is gone with its scope
+}
+
 BOOST_AUTO_TEST_CASE(UnloadingFromInsideAModuleCallback_IsRefusedNotAttempted)
 {
 	auto host = make_host();
