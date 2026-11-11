@@ -1,8 +1,8 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 
-// #558: a game module that copies a prefab_node, linked as the project template links `game` (snk::engine and
-// snk::engine_api, nothing else). The copy runs the module's own Boost.JSON code (json::object's copy constructor).
+// #558: a game module that copies a prefab_node, linked as the project template links `game` (snk::engine,
+// snk::engine_api and, on MSVC, a Boost.JSON of its own). The copy runs the module's Boost.JSON code.
 
 #if defined(_WIN32)
 #define SNK_TEST_COPY_EXPORT extern "C" __declspec(dllexport)

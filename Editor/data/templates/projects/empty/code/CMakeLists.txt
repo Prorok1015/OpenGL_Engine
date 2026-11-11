@@ -81,6 +81,14 @@ endfunction()
 
 add_library(game SHARED src/game_module.cpp)
 target_link_libraries(game PRIVATE snk::engine snk::engine_api)
+# snk_engine.dll exports only SNK_API, so desc code in the module (copying a prefab_node, boost::json values) needs its
+# own copy of Boost.JSON, which the SDK carries for MSVC only (#558). Values the module makes with the default
+# storage_ptr hold no pointer into the module (Boost.JSON 1.84: a null storage_ptr reaches the default resource of the
+# code that runs, ::operator new/delete), and the module shares the engine's C runtime (/MD), so the engine may keep
+# and free them after the module is unloaded or reloaded.
+if(MSVC AND TARGET snk::thirdparty_boost_json)
+	target_link_libraries(game PRIVATE snk::thirdparty_boost_json)
+endif()
 target_compile_definitions(game PRIVATE "SNK_GAME_MODULE_NAME=\"${SNK_GAME_MODULE}\"")
 snk_module_output(game "${SNK_GAME_MODULE}")
 
@@ -90,8 +98,7 @@ if(SNK_GAME_EDITOR)
 	if(TARGET snk::editor_api)
 		add_library(game_editor SHARED src/game_editor.cpp)
 		target_link_libraries(game_editor PRIVATE snk::engine snk::engine_api snk::editor_api)
-		# snk_engine.dll exports only SNK_API, so the module's desc code (boost::json) needs its own copy of Boost.JSON, which the
-		# SDK carries for MSVC only.
+		# Boost.JSON of its own on MSVC, as `game` above (#558).
 		if(MSVC AND TARGET snk::thirdparty_boost_json)
 			target_link_libraries(game_editor PRIVATE snk::thirdparty_boost_json)
 		endif()

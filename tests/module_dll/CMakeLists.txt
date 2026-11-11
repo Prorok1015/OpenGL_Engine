@@ -27,10 +27,13 @@ foreach(_variant IN ITEMS "" v2 failing bad_api bad_restore bad_layout)
 	add_dependencies(unit_tests ${_target})
 endforeach()
 
-# #558: a module that copies a prefab_node, linked as the project template links `game`: snk::engine and snk::engine_api
-# only, no Boost.JSON of its own. It is loaded and unloaded by app_module_dll_tests.
+# #558: a module that copies a prefab_node, linked as the project template links `game` (Boost.JSON of its own on MSVC).
+# app_module_dll_tests reads and frees the copy after the module is unloaded.
 add_library(test_copy_prefab_dll SHARED test_copy_prefab_dll.cpp)
 target_link_libraries(test_copy_prefab_dll PRIVATE snk::engine snk::engine_api snk::sanitizers)
+if(MSVC)
+	target_link_libraries(test_copy_prefab_dll PRIVATE Boost::json)
+endif()
 add_dependencies(unit_tests test_copy_prefab_dll)
 
 # edt_play_reload_dll_tests: Play kept across a reload of these builds (#600, HOT_RELOAD_PLAY.md 11).
