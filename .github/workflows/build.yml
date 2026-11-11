@@ -840,7 +840,7 @@ jobs:
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/drag_drop_asset.actions --size 1920x1080 \
             --shot headless_out/drag_drop/final.png \
-            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true
           tools/headless/check_smoke.sh headless_out/drag_drop/final.png headless_out/drag_drop/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/drag_drop/editor.log 'Editor/Drop' "Added 'base_material' to scene"
 

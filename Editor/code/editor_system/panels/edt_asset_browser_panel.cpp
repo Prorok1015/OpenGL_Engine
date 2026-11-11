@@ -34,6 +34,14 @@ namespace edt
 	{
 	}
 
+	void asset_browser_panel::on_hidden()
+	{
+		if (m_ui_probe) {
+			m_ui_probe->begin_pass("asset_browser");
+			m_ui_probe->end_pass("asset_browser");
+		}
+	}
+
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
 	{
 		m_layers = std::move(layers);
@@ -179,6 +187,9 @@ namespace edt
 			if (at_root) ImGui::EndDisabled();
 		}
 
+		if (m_ui_probe)
+			m_ui_probe->begin_pass("asset_browser");
+
 		const size_t top_layer = m_layers.size() - 1;
 		for (const auto& e : m_entries) {
 			// Entries that come from a lower layer are dimmed; the tooltip names the layer root.
@@ -186,6 +197,15 @@ namespace edt
 			if (from_lower_layer)
 				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			ImGui::Selectable(e.label.c_str());
+			if (m_ui_probe) {
+				if (ImGui::IsItemVisible()) {
+					const ImVec2 item_min = ImGui::GetItemRectMin();
+					const ImVec2 item_max = ImGui::GetItemRectMax();
+					m_ui_probe->report("asset_browser", e.src.name, item_min.x, item_min.y, item_max.x, item_max.y);
+				} else {
+					m_ui_probe->report_hidden("asset_browser", e.src.name);
+				}
+			}
 			if (from_lower_layer)
 				ImGui::PopStyleColor();
 			if (ImGui::IsItemHovered() && m_layers.size() > 1)
@@ -221,6 +241,9 @@ namespace edt
 				}
 			}
 		}
+
+		if (m_ui_probe)
+			m_ui_probe->end_pass("asset_browser");
 
 		if (m_entries.empty())
 			ImGui::TextDisabled("(empty)");
