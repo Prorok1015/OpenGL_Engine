@@ -11,7 +11,9 @@
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
@@ -177,6 +179,38 @@ BOOST_AUTO_TEST_CASE(module_code_switches_the_clips_of_a_model_with_play_animati
 	BOOST_TEST(controller.duration == 6.0f);
 	BOOST_TEST(controller.ticks_per_second == 12.0f);
 	BOOST_TEST(!controller.loop);
+	BOOST_TEST(controller.current_time == 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(module_code_hears_the_end_of_a_clip_and_plays_idle_again)
+{
+	scn::init_animation_system(sf);
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(contexts().load_level(put("anim_end_lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":["scn::animation_controller_update","dll::back_to_idle"]}]})")));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	contexts().level_set().set_mode(ecs::run_mode::play);
+	auto& reg = world->state();
+
+	const entt::entity model = reg.create();
+	scn::animation_collection_component collection;
+	collection.clips = load<scn::animation_collection_desc>(put("dll_end_clips.desc", R"({"__type":"animation_collection_desc","clips":[
+		{"__type":"animation_clip_desc","name":"idle","duration":20.0,"ticks_per_second":10.0},
+		{"__type":"animation_clip_desc","name":"jump","duration":6.0,"ticks_per_second":12.0}]})"))->clips;
+	reg.emplace<scn::animation_collection_component>(model, std::move(collection));
+	reg.emplace<scn::animation_controller_component>(model);
+	BOOST_REQUIRE(scn::play_animation(reg, model, "jump", false)); // 0.5 s
+
+	contexts().update(std::chrono::duration<float>(0.3f));
+	BOOST_TEST(reg.get<scn::animation_controller_component>(model).current_animation == "jump");
+	// The clip ends in this frame; the module's system after the delivery point hears it in the same frame.
+	contexts().update(std::chrono::duration<float>(0.3f));
+	const auto& controller = reg.get<scn::animation_controller_component>(model);
+	BOOST_TEST(controller.current_animation == "idle");
+	BOOST_TEST(controller.playing);
+	BOOST_TEST(controller.loop);
 	BOOST_TEST(controller.current_time == 0.0f);
 }
 

@@ -14,6 +14,8 @@ namespace dll_game {
 	inline constexpr std::string_view system_name = "dll::move";
 	// Moves every animated model one clip on per frame with scn::play_animation (#563): idle -> walk -> jump (once).
 	inline constexpr std::string_view animate_system_name = "dll::animate";
+	// After the delivery point: a model whose clip without loop ended (scn::animation_finished) plays idle again.
+	inline constexpr std::string_view back_to_idle_system_name = "dll::back_to_idle";
 	inline constexpr std::string_view component_name = "dll.component";
 	// A system of the module that keeps state in its fields (#601). The bad_restore build's one cannot start while the
 	// file keeper_trap_file (an absolute path in the build tree) exists: Play cannot be restored in that build.

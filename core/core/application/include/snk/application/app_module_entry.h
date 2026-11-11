@@ -54,7 +54,10 @@
 // they use (scn::level_switch_status, scn::level_switch_state). scn::context_set gains a member at its end; the request
 // itself is a private ctx type of the engine. Nothing a module reads moves. A module that switches levels needs an
 // engine of 3.10 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'000Au // major << 16 | minor
+// 3.13 (#563): the engine event type scn::animation_finished (the end of a clip without loop on the world bus). A module
+// that reads or subscribes to it needs an engine that registers it, 3.13 or newer. Nothing that exists changes layout.
+// (3.11 and 3.12 are taken by #703 and #706.)
+#define SNK_MODULE_API_VERSION 0x0003'000Du // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

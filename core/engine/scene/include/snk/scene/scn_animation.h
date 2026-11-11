@@ -1,5 +1,7 @@
 #pragma once
+#include <entt/entity/entity.hpp>
 #include <entt/fwd.hpp>
+#include <string>
 #include <string_view>
 #include <snk/common/snk_api.h>
 
@@ -7,6 +9,17 @@ namespace scn
 {
 	struct animation_controller_component;
 	class animation_clip_desc;
+
+	// An event of the world bus (WORLD_BUS.md): a clip without loop reached its end and its controller stopped on the
+	// last frame. scn::animation_controller_update emits it in phase update, so subscribers and the systems after the
+	// delivery point get it the same frame. Not sent for a clip replaced or stopped before its end, nor when a loop goes
+	// round. `entity` (the model root, as given to play_animation) may be destroyed by the time it is delivered, by a
+	// system later in the same frame: check registry.valid(entity). Part of the module API: its layout stays as it is.
+	struct animation_finished
+	{
+		entt::entity entity = entt::null;
+		std::string clip;
+	};
 
 	// Plays the clip named `clip` of the entity's animation_collection_component on its
 	// animation_controller_component. `entity` is the one holding both (the model root), never one of its nodes.
