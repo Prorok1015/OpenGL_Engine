@@ -56,7 +56,7 @@ namespace
 	inp::stack_layer_desc base_layer(const entry& e, bool declare_all)
 	{
 		inp::stack_layer_desc layer;
-		layer.name = "world";
+		layer.name = inp::base_layer_name;
 		layer.order = e.context->input_layer();
 		if (e.capture) {
 			layer.regions = e.capture->regions;

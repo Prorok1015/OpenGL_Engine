@@ -29,6 +29,8 @@ namespace res
 		inline constexpr std::string_view unknown_component = "unknown_component";
 		// A desc of one type where another is expected (a material file as a level, #615). The load itself succeeded.
 		inline constexpr std::string_view type_mismatch = "type_mismatch";
+		// A reference a desc may not make (res::reference_problem, #697): the field is left empty, nothing is loaded.
+		inline constexpr std::string_view reference = "reference";
 		// Any other failure of a load (no file, no adapter, a parse error, ...).
 		inline constexpr std::string_view load = "load";
 		// The collector's own entry when it kept no more: "N more diagnostics".

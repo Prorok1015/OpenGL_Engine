@@ -29,9 +29,9 @@ static desc::desc_system& shared_desc_system()
 BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
 {
 	scn::material_desc src;
-	src.vertex_shader = res::tag{ "shd://obj.vert" };
-	src.fragment_shader = res::tag{ "shd://obj.frag" };
-	src.geometry_shader = res::tag{ "shd://obj.geom" };
+	src.vertex_shader = res::tag{ "res://shaders/obj.vert" };
+	src.fragment_shader = res::tag{ "res://shaders/obj.frag" };
+	src.geometry_shader = res::tag{ "res://shaders/obj.geom" };
 	src.defines = { "USE_NORMAL_MAP", "USE_SPECULAR_MAP" };
 	src.queue = scn::pass_queue::MIX;
 	src.albedo = ds::color{ 0.1f, 0.2f, 0.3f, 0.4f };

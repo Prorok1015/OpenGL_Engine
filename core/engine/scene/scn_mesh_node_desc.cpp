@@ -20,14 +20,14 @@ void scn::mesh_node_desc::deserialize(desc::desc_system& desc_system, const json
 
 void scn::mesh_node_desc::serialize(json::object& data) const
 {
-	if (geometry.is_valid())
-		data["geometry"] = json::value_from(geometry->get_tag());
+	if (geometry.get_tag().is_valid())
+		data["geometry"] = json::value_from(geometry.get_tag());
 	data["vx_begin"] = vx_begin;
 	data["vx_end"] = vx_end;
 	data["ind_begin"] = ind_begin;
 	data["ind_end"] = ind_end;
-	if (material.is_valid())
-		data["material"] = json::value_from(material->get_tag());
+	if (material.get_tag().is_valid())
+		data["material"] = json::value_from(material.get_tag());
 }
 
 void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name)
@@ -40,7 +40,7 @@ void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_nod
 
 	reg.emplace_or_replace<scn::mesh_component>(e, scn::mesh_component{ .mesh = mesh_data });
 
-	if (desc.geometry.is_valid())
+	if (desc.geometry.is_valid() && !desc.geometry.has_error() && desc.geometry.get_tag().is_valid())
 		reg.emplace_or_replace<scn::geometry_component>(e, scn::geometry_component{ .geom_tag = desc.geometry.get_tag() });
 
 	if (desc.material.is_valid())

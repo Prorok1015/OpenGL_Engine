@@ -876,6 +876,29 @@ BOOST_AUTO_TEST_CASE(StackCommands_TheModuleContextGivesTheStackOfASetThatIsTher
 	BOOST_TEST(router.stack("level").size() == 3u);
 }
 
+BOOST_AUTO_TEST_CASE(StackCommands_AfterTheModuleUnloads_NoLayerOfItIsInAnySet_AndItsQueueIsEmpty)
+{
+	world("game", 0);
+	const auto map = jump_on_space();
+	frame(map);
+
+	auto& layer = mgr.create_layer();
+	gs::module_context context(layer, nullptr, nullptr, &router, &mgr);
+	auto stack = context.input_stack("level");
+	inp::stack_layer_desc menu;
+	menu.name = "menu";
+	stack.push("game", menu);
+	frame(map);
+	BOOST_REQUIRE(router.stack("level").find("game", "menu") != nullptr);
+	stack.set_world_active("game", false);
+
+	mgr.destroy_layer(layer);
+
+	BOOST_TEST(router.stack("level").find("game", "menu") == nullptr);
+	BOOST_TEST(router.stack("level").find("game", "world") != nullptr);
+	BOOST_TEST(router.take_commands("level").empty());
+}
+
 BOOST_AUTO_TEST_CASE(StackCommands_AModuleCannotRemoveALayerOfTheEngineOrTheEditor)
 {
 	world("game", 0);

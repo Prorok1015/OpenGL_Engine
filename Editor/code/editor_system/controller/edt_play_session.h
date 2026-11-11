@@ -3,6 +3,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/input/inp_input_stack.h>
 #include <snk/scene/level/scn_input_stack_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_world_snapshot.h>
@@ -225,6 +226,11 @@ namespace edt
 			std::uint32_t pending_steps = 0;
 			scn::snapshot_report report{};
 			std::size_t bus_events = 0;
+			// The layers a module put on the input stack of "play" and the worlds it switched off; the fronts memory and the queues are not kept.
+			inp::stack_snapshot input_stack{};
+			std::size_t injected_dropped = 0;
+			std::size_t stack_commands_dropped = 0;
+			inp::stack_restore_report input_stack_restored{};
 			// Systems of the module's layer that keep state in their fields: it starts over.
 			std::vector<std::string> systems_restarted;
 		};

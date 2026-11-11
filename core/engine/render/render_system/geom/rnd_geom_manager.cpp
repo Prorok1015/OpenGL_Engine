@@ -16,6 +16,14 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 {
     ASSERT_MSG(geom_tag.is_valid(), "geom tag is invalid!");
 
+	// The tag comes from a component, which anything may have written (#697): the rule of what data may load holds here too.
+	if (std::string why = res::reference_problem(geom_tag); !why.empty()) {
+		if (refused.insert(geom_tag).second) {
+			egLOG_WARN("render/geometry", "{}", why);
+		}
+		return nullptr;
+	}
+
 	if (auto* va = find_geometry(geom_tag)) {
 		return va;
 	}
