@@ -337,6 +337,8 @@ namespace
 			}
 			write(e, resolved.find(e.context->get_name()), bound, read, std::move(injection));
 		}
+		// The worlds' input is written: the layers are not needed any more this frame.
+		router.set_last_layers(set_name, std::move(resolved.layers));
 	}
 }
 

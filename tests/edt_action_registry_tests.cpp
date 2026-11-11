@@ -1097,7 +1097,9 @@ const std::vector<std::string> bad_agent_paths{
 	"levels/x\ny.desc", "res://", "x",
 	"levels/CON.desc", "levels/con.txt.desc", "levels/Nul.desc", "levels/aux/x.desc", "PRN/x.desc", "levels/COM1.desc", "levels/lpt9.desc",
 	"levels/com0.desc", "levels/x.desc.", "levels/dir./x.desc", "levels/dir /x.desc", "levels/a<b.desc", "levels/a|b.desc",
-	"levels/a?b.desc", "levels/a*b.desc", "levels/a\"b.desc", "levels/a>b.desc" };
+	"levels/a?b.desc", "levels/a*b.desc", "levels/a\"b.desc", "levels/a>b.desc",
+	// #613: the console's buffers, any case, as a file or a folder.
+	"levels/CONIN$.desc", "levels/conout$.desc", "levels/Conin$/a.desc", "CONOUT$/x.desc" };
 
 }
 

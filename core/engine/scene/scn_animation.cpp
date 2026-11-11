@@ -3,9 +3,22 @@
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/common/logger/engine_log.h>
+#include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <cmath>
 #include <string>
+
+std::string scn::animation_finished_json(const animation_finished& event)
+{
+	boost::json::object out;
+	if (event.entity == entt::null) {
+		out["entity"] = nullptr;
+	} else {
+		out["entity"] = entt::to_integral(event.entity);
+	}
+	out["clip"] = event.clip;
+	return boost::json::serialize(out);
+}
 
 void scn::select_animation_clip(animation_controller_component& controller, const animation_clip_desc& clip)
 {

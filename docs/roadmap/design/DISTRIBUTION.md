@@ -17,6 +17,8 @@
 
 **Экспорт.** `SNK_API` (`core/core/common/include/snk/common/snk_api.h`), hidden visibility, `/wd4251` (`cmake/SnkTarget.cmake:6-15`). ImGui экспортируется из `snk_engine` (`SnkTarget.cmake:70-76`); потребители получают `IMGUI_API=dllimport` через INTERFACE (`core/engine/CMakeLists.txt:13`) — один ImGui-контекст. assimp и Boost.JSON — отдельные статические копии в редакторе (`editor_system/CMakeLists.txt:22-28`).
 
+**Boost.JSON в модуле игры (#558).** На MSVC модуль игры (`game` и `game_editor` шаблона) сам линкует `snk::thirdparty_boost_json`. Причина: `snk_engine.dll` экспортирует только `SNK_API`, а код desc в модуле (копия `prefab_node`, значения `boost::json`) без своей копии Boost.JSON не линкуется (LNK2019). Переносить ссылку в `snk::engine` нельзя: по правилу #581 у него нет интерфейсных ссылок (`check_sdk_shared_set.py`). Две копии безопасны. Значение, созданное модулем со `storage_ptr` по умолчанию, не хранит указателя в модуль: в Boost.JSON 1.84 пустой `storage_ptr` берёт ресурс по умолчанию того кода, который выполняется, то есть `::operator new/delete`. CRT общий (`/MD`), поэтому движок может хранить и освобождать такое значение и после выгрузки модуля. На Linux используется копия движка. Сборку и регресс проверяют `tests/module_dll` (`test_copy_prefab_dll`) и `tests/package_consumer` (`package_consumer_module`).
+
 **SDK.** `cmake --install` → пакет `snake_sdk` 0.2.0 (`cmake/SnkInstall.cmake:29`, `install(TARGETS … RUNTIME bin)` `:235-239`).
 - Правил для PDB нет. CI-конфигурации Debug/RelWithDebInfo собираются с `/Z7` (`cmake/SnkBuildCache.cmake:69-74`); PDB при этом пишет линкер `/DEBUG`.
 - Потребитель — `tests/package_consumer` (Linux static/shared, Windows shared; `build.yml:388-528`).
