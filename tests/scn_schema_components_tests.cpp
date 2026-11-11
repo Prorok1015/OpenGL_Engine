@@ -744,7 +744,7 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_the_sand
 	BOOST_TEST(many[1].is_null()); // not a sandbox entity
 }
 
-BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_of_the_same_size_is_dropped)
+BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_and_size_is_dropped)
 {
 	auto link = register_health(k_link_schema);
 	BOOST_REQUIRE(static_cast<bool>(link));
@@ -754,12 +754,13 @@ BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_of_the_same_size_is_droppe
 		world.state().ctx().emplace<ecs::entity_spawner>();
 	}
 	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
-	// The fields of mod.link swapped: the same size, its entity where n is.
-	const auto swapped = desc::bind_runtime(schema_from(R"json({
+	// An older mod.link with one more field: a real blob of make_blob, larger than the registered layout.
+	const auto older = desc::bind_runtime(schema_from(R"json({
 		"name": "mod.link", "kind": "component",
-		"fields": [ { "name": "target", "kind": "entity" }, { "name": "n", "kind": "i32" } ] })json"), layer->descs().schemas());
-	desc::dyn_blob blob = desc::make_blob(*swapped);
-	BOOST_REQUIRE(blob.bytes.size() == link_blob(1, std::nullopt).bytes.size());
+		"fields": [ { "name": "n", "kind": "i32" }, { "name": "target", "kind": "entity" }, { "name": "extra", "kind": "u64" } ] })json"),
+		layer->descs().schemas());
+	desc::dyn_blob blob = desc::make_blob(*older);
+	BOOST_REQUIRE(blob.bytes.size() != link_blob(1, std::nullopt).bytes.size());
 	sandbox.storage<desc::dyn_blob>(link.id()).emplace(sandbox.create(), std::move(blob));
 
 	world.apply_commands();

@@ -44,17 +44,17 @@ namespace
 		const desc::schema_binding& schema)
 	{
 		const loader_remap entities{ loader };
-		const std::uint64_t layout = desc::layout_fingerprint(schema);
 		for (const ecs::sandbox_entity owner : static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>&>(pool)) {
 			const auto target = static_cast<entt::entity>(entt::to_integral(owner));
 			if (!loader.contains(target)) {
 				continue;
 			}
 			desc::dyn_blob blob = pool.get(owner);
-			// Made against another layout of the schema (or by hand): its bytes are not where this one reads them, and
-			// mapping its "entities" would overwrite other fields.
+			// Of another size it was made against another layout of the schema: reading it by this one's offsets overruns
+			// it. Known gap: a blob of another layout of the same size passes, and its bytes are read (and its "entities"
+			// mapped) where this layout places them; the data is wrong, the memory stays in bounds (DESC_SCHEMA.md).
 			desc::dyn_ref ref{ &blob, 0 };
-			if (blob.layout != layout || blob.bytes.size() != schema.schema->layout.size || !desc::remap_entities(schema, &ref, entities)) {
+			if (blob.bytes.size() != schema.schema->layout.size || !desc::remap_entities(schema, &ref, entities)) {
 				egLOG_ERROR("ecs", "a '{}' component from the commands is dropped: its blob is not laid out by the registered schema", schema.schema->name);
 				continue;
 			}

@@ -854,6 +854,9 @@ namespace desc
 		return true;
 	}
 
+	// Arrays of structures and of custom values bind, but their elements stay opaque JSON: an entity inside one is not
+	// mapped (remap_entities, read_entity). register_schema_component refuses them; any other path that brings runtime
+	// blobs from a desc into a registry must refuse them as well.
 	std::shared_ptr<const schema_binding> bind_runtime(type_schema schema, const schema_registry& resolve)
 	{
 		auto binding = std::make_shared<schema_binding>();
@@ -895,32 +898,9 @@ namespace desc
 	{
 		dyn_blob blob;
 		blob.bytes.assign(binding.schema->layout.size, std::byte{ 0 });
-		blob.layout = layout_fingerprint(binding);
 		dyn_ref ref{ &blob, 0 };
 		apply_defaults(binding, ref);
 		return blob;
-	}
-
-	std::uint64_t layout_fingerprint(const schema_binding& binding)
-	{
-		// FNV-1a over the numbers that place the bytes.
-		std::uint64_t hash = 0xcbf2'9ce4'8422'2325ull;
-		const auto mix = [&hash](std::uint64_t value) {
-			for (int i = 0; i < 8; ++i) {
-				hash ^= (value >> (i * 8)) & 0xFFu;
-				hash *= 0x0000'0100'0000'01B3ull;
-			}
-		};
-		mix(binding.schema->layout.size);
-		mix(binding.schema->layout.alignment);
-		mix(binding.ops.size());
-		for (const field_ops& ops : binding.ops) {
-			mix(static_cast<std::uint64_t>(ops.kind));
-			mix(static_cast<std::uint64_t>(ops.element));
-			mix(ops.offset);
-			mix(ops.nested ? layout_fingerprint(*ops.nested) : 0u);
-		}
-		return hash == 0 ? 1u : hash;
 	}
 
 	void serialize(const schema_binding& binding, const void* obj, json::object& out)

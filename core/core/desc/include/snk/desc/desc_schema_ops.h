@@ -83,8 +83,6 @@ namespace desc
 	{
 		std::vector<std::byte> bytes;
 		std::vector<json::value> handles;
-		// layout_fingerprint of the binding make_blob laid it out by; 0: unknown (a blob built by hand).
-		std::uint64_t layout = 0;
 	};
 
 	// Address of a (possibly nested) struct inside a blob.
@@ -108,9 +106,6 @@ namespace desc
 
 	// A zeroed blob of schema.layout.size bytes with every field set to its default (an entity field: no entity).
 	SNK_API dyn_blob make_blob(const schema_binding& binding);
-	// Never 0. Two runtime bindings with the same fingerprint lay a blob out alike: size, and each field's kind, element
-	// kind and offset, nested structures included.
-	SNK_API std::uint64_t layout_fingerprint(const schema_binding& binding);
 	// Rewrites every entity `obj` (a dyn_ref into a runtime blob) names through `entities`, in nested structures and
 	// entity arrays too: one it does not know becomes no entity, as entities restored from a snapshot do. For a blob
 	// moved into another registry (#606). False, and nothing changed, when the blob is too small for the binding.
