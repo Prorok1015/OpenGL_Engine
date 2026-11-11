@@ -39,6 +39,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
 #include <snk/mcp/mcp_host.h>
@@ -2413,6 +2414,45 @@ BOOST_AUTO_TEST_CASE(world_events_and_input_actions_are_an_error_outside_play)
 	BOOST_TEST((commands.find("world.events")->category == cmd::agent_category::read));
 	BOOST_TEST((commands.find("input.actions")->category == cmd::agent_category::read));
 	BOOST_TEST(!commands.find("world.events")->mutates);
+}
+
+BOOST_AUTO_TEST_CASE(world_events_names_an_action_only_once_the_map_holds_for_its_delivery)
+{
+	// As the engine registers it (the base registry of this fixture has no engine event types).
+	BOOST_REQUIRE(contexts().game_layer()->events().add<inp::action_event>({}, &inp::action_event_json));
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::world_context* world = play_set()->find("w0");
+	BOOST_REQUIRE((world != nullptr));
+	auto* bus = world->state().ctx().find<ecs::world_bus>();
+	BOOST_REQUIRE((bus != nullptr));
+
+	auto map = std::make_shared<inp::action_map>();
+	map->add("Jump", { inp::KEYBOARD_BUTTONS::SPACE });
+	const std::shared_ptr<const inp::action_map> held = map;
+	world->state().ctx().insert_or_assign(inp::action_map_ref{ held });
+	// The map came this frame: its delivery still carries the old map's releases.
+	inp::action_trace trace;
+	trace.map = held;
+	trace.map_since_delivery = bus->deliveries() + 2;
+	world->state().ctx().insert_or_assign(std::move(trace));
+
+	bus->post(inp::action_event{ 0, inp::action_edge::released });
+	run_frames(1);
+	bus->post(inp::action_event{ 0, inp::action_edge::pressed });
+	run_frames(1);
+
+	const mcp::call_result shown = call_tool("world_events", R"json({"world":"w0","type":"action_event","last":2})json");
+	BOOST_REQUIRE(!shown.is_error);
+	const json::array& events = shown.structured.as_object().at("events").as_array();
+	BOOST_REQUIRE(events.size() == 2u);
+	const json::object& changing = events[0].as_object().at("payload").as_object();
+	BOOST_TEST(!changing.contains("name")); // the frame of the change: no name rather than a wrong one
+	BOOST_TEST((changing.at("edge").as_string() == "released"));
+	const json::object& later = events[1].as_object().at("payload").as_object();
+	BOOST_REQUIRE(later.contains("name"));
+	BOOST_TEST((later.at("name").as_string() == "Jump"));
+	BOOST_TEST(later.at("action").to_number<std::int64_t>() == 0);
 }
 
 BOOST_AUTO_TEST_CASE(world_events_shows_what_the_bus_of_a_play_world_delivered)
