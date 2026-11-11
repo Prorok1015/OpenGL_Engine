@@ -53,7 +53,13 @@ mapfile -t mirror_hosts < <(ubuntu_mirror_hosts)
 
 for attempt in $(seq 1 "${attempts}"); do
 	if [[ ${#mirror_hosts[@]} -gt 0 ]] && ! any_host_resolves "${mirror_hosts[@]}"; then
-		echo "::warning title=apt::attempt ${attempt}/${attempts}: DNS does not resolve any Ubuntu mirror (${mirror_hosts[*]}), apt skipped"
+		control_host=packages.microsoft.com
+		if any_host_resolves "${control_host}"; then
+			control_result="${control_host} resolves"
+		else
+			control_result="${control_host} does not resolve either"
+		fi
+		echo "::warning title=apt::attempt ${attempt}/${attempts}: DNS does not resolve any Ubuntu mirror (${mirror_hosts[*]}; ${control_result}), apt skipped"
 		pause_before_next_attempt "${attempt}"
 		continue
 	fi
