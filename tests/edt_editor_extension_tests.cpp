@@ -249,7 +249,8 @@ struct extension_fixture : test_util::null_engine_fixture
 	}
 
 	// A project whose manifest names a game module and a game_editor, and a host that loads them from compiled-in entries.
-	std::unique_ptr<core::project_module_host> make_host(std::uint32_t (*reported_editor_api)() = nullptr)
+	// `refusal_reason` (optional) gets what the host's check said about the module it refused.
+	std::unique_ptr<core::project_module_host> make_host(std::uint32_t (*reported_editor_api)() = nullptr, std::string* refusal_reason = nullptr)
 	{
 		std::filesystem::create_directories(dir.path() / "game");
 		prj::project_context project;
@@ -264,7 +265,11 @@ struct extension_fixture : test_util::null_engine_fixture
 		host_data.construct<prj::project_context>(std::move(project));
 		core::project_modules_options options;
 		options.with_editor_modules = true;
-		options.check_editor_module = [](const app::modules::module_entry& entry) { return edt::check_editor_api_version(entry.editor_api_version); };
+		options.check_editor_module = [refusal_reason](const app::modules::module_entry& entry) {
+			std::string reason = edt::check_editor_api_version(entry.editor_api_version);
+			if (refusal_reason && !reason.empty()) *refusal_reason = reason;
+			return reason;
+		};
 		options.editor_unload_refusal = [this] { return context->module_unload_refusal(); };
 		app::modules::module_entry editor_entry = SNK_EDITOR_MODULE_ENTRY(ext_probe_);
 		if (reported_editor_api) editor_entry.editor_api_version = reported_editor_api;
@@ -470,10 +475,12 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItC
 BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstEditorApi1_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)
 {
 	const counts before = snapshot();
-	auto host = make_host([]() -> std::uint32_t { return 0x0001'0002u; });
+	std::string reason;
+	auto host = make_host([]() -> std::uint32_t { return 0x0001'0002u; }, &reason);
 	BOOST_REQUIRE(host->load_all().loaded == std::vector<std::string>{ "ext_game" });
 
 	const auto report = host->load_editor_modules();
+	BOOST_CHECK_MESSAGE(reason.find("rebuild the project") != std::string::npos, reason);
 	BOOST_CHECK(report.loaded.empty());
 	BOOST_CHECK(report.refused == std::vector<std::string>{ "ext_editor" });
 	BOOST_CHECK(!host->has_editor_modules());

@@ -46,6 +46,8 @@ namespace
 		bool has_agent_changes() const override { return run([&] { return m_inner->has_agent_changes(); }); }
 		bool edits_locked() const override { return run([&] { return m_inner->edits_locked(); }); }
 		void accept_agent_changes() override { run([&] { m_inner->accept_agent_changes(); }); }
+		// The host binds no module preview to the events today. If it ever does, the module's document would get a mutable
+		// editor_events (it could emit the host's events): bind it through a wrapper, never this pointer.
 		void bind_events(edt::editor_events* events) override { run([&] { m_inner->bind_events(events); }); }
 		void open(const res::tag& source) override { run([&] { m_inner->open(source); }); }
 		void close() override { run([&] { m_inner->close(); }); }
