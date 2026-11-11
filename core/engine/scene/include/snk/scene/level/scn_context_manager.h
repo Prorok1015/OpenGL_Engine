@@ -171,6 +171,12 @@ namespace scn
 		scn::component_catalog& catalog() { return m_catalog; }
 		const scn::component_catalog& catalog() const { return m_catalog; }
 
+		// Empties the pool `id` in every world of every set of `layer` (a component without a C++ type of that layer
+		// goes, #606). Sets of other layers keep theirs: a sibling layer registers the name on its own.
+		void clear_component_pools(entt::id_type id, const scn::scene_layer& layer);
+		// Expires when the manager starts going away: what may outlive it checks this before calling into it.
+		std::weak_ptr<const bool> lifetime_token() const { return m_alive; }
+
 		// Entry of code outside the phases (editor, game shell) into the channel of a set. The
 		// message is delivered at the next exchange of that set, before the contexts' own messages.
 		template <typename T>
@@ -258,5 +264,6 @@ namespace scn
 		reload_result_callback m_on_reload_result;
 		bool m_level_set_switchable = true;
 		std::function<void(scn::context_set&)> m_on_level_switched;
+		std::shared_ptr<const bool> m_alive = std::make_shared<const bool>(true);
 	};
 }

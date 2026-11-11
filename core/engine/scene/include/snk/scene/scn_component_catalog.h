@@ -114,6 +114,8 @@ namespace scn
 		read_fn read = nullptr;
 		const std::type_info* object_type = nullptr;
 
+		// Whether an entity has it: scn::holds (scn_schema_components.h), which also answers for a component without a
+		// C++ type, whose `contains` cannot.
 		bool saved() const { return schema && (category == component_category::data || category == component_category::ctx); }
 	};
 
@@ -165,6 +167,11 @@ namespace scn
 			entry.read = &detail::read_ctx<T>;
 			return add_entry(std::move(entry));
 		}
+
+		// A component without a C++ type (#606, scn_schema_components.h): `schema` is a runtime binding
+		// (desc::bind_runtime), the id is schema_component_id(name). Its functions are the engine's, never a module's.
+		// Ask scn::holds whether an entity has it: the entry's `contains` cannot answer for it. nullptr as above.
+		const component_entry* add_schema_component(std::string name, std::shared_ptr<const desc::schema_binding> schema);
 
 		// Removes one of this layer's entries; false for an unknown name or one of the parent's. Pointers to the entry
 		// handed out before are dangling afterwards.
@@ -227,7 +234,8 @@ namespace scn
 	};
 
 	// A storage of `reg` holding at least one component whose type `catalog` does not know. entt's own entity
-	// storage and storages left empty (a type no entity has any more) are not listed. `type` is entt's type name.
+	// storage and storages left empty (a type no entity has any more) are not listed. `type` is entt's type name, or names
+	// the id of a pool of a component without a C++ type.
 	struct unregistered_storage
 	{
 		entt::id_type id = 0;

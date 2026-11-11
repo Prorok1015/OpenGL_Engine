@@ -4,6 +4,7 @@
 #include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_schema_components.h>
 #include <snk/scene/scn_time.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/ecs/ecs_channel.hpp>
@@ -112,7 +113,7 @@ scn::entity_writer::entity_writer(const component_catalog& catalog)
 bool scn::entity_writer::editor_only(const entt::registry& reg, entt::entity entity) const
 {
 	for (const auto* entry : m_editor_only) {
-		if (entry->contains(reg, entity)) {
+		if (scn::holds(*entry, reg, entity)) {
 			return true;
 		}
 	}
@@ -123,7 +124,7 @@ std::vector<std::string> scn::entity_writer::present(const entt::registry& reg, 
 {
 	std::vector<std::string> names;
 	for (const auto* entry : m_data) {
-		if (entry->contains(reg, entity)) {
+		if (scn::holds(*entry, reg, entity)) {
 			names.push_back(entry->name);
 		}
 	}
@@ -137,7 +138,7 @@ scn::entity_writer::components scn::entity_writer::write(const entt::registry& r
 		if (only && std::ranges::find(*only, entry->name) == only->end()) {
 			continue;
 		}
-		if (!entry->contains(reg, entity)) {
+		if (!scn::holds(*entry, reg, entity)) {
 			continue;
 		}
 		if (!entry->saved()) {
@@ -187,7 +188,7 @@ json::object scn::capture_world(const world_context& world, const component_cata
 
 	json::object resources;
 	for (const auto* entry : ctx) {
-		if (!entry->contains(reg, entt::null)) {
+		if (!scn::holds(*entry, reg, entt::null)) {
 			continue;
 		}
 		if (!entry->saved()) {
