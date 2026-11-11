@@ -12,4 +12,4 @@ snk_component_headers(${PROJECT_NAME})
 # gui_backend_interface is PUBLIC: gui_system.h's public API returns gui::imgui_backend_interface*
 # (get_backend_interface). gui_gl_backend is PRIVATE: gui_init constructs the concrete GL backend
 # now that window no longer owns it (EPIC-49 US-49-9).
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::application PRIVATE snk::window PRIVATE snk::desc_system PRIVATE snk::resource_system PRIVATE snk::render PUBLIC snk::gui_backend_interface PRIVATE snk::gui_gl_backend)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::application PRIVATE snk::window PRIVATE snk::desc_system PRIVATE snk::resource_system PRIVATE snk::config_system PRIVATE snk::render PUBLIC snk::gui_backend_interface PRIVATE snk::gui_gl_backend)

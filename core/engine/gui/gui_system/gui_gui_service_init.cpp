@@ -11,10 +11,16 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_binary.h>
+#include <snk/common/fs_paths.h>
+#include <snk/config/cfg_variables.h>
 #include <filesystem>
 #include <vector>
 
 namespace {
+// Where the window layout (ImGui's ini) is loaded from and saved to; empty: it is not kept on disk, so a process writes no
+// file into the folder it was started from (#713). The editor sets a default in the user's folder (editor::apply_default_settings).
+CFG_VAR_DEF_PATH(cfg_gui_layout_file, "gui/layout_file", "");
+
 // The shipped UI font (core/res, base layer). Not an error when it is absent: the backend keeps the built-in
 // ImGui font, so the editor starts and looks as it did before the font was added.
 std::vector<std::byte> load_ui_font_bytes(res::resource_system& resources)
@@ -55,8 +61,11 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	}
 	auto& backend = *backend_ptr;
 	backend.set_dpi_scale(wnd_system.get_active_content_scale());
+	// Before init(), which loads the layout from it.
+	backend.set_settings_filename(fs_paths::utf8_of(*cfg_gui_layout_file));
 	backend.init();
-	const auto is_exist = std::filesystem::exists(backend.get_settings_filename());
+	std::error_code layout_ec;
+	const auto is_exist = !cfg_gui_layout_file->empty() && std::filesystem::exists(*cfg_gui_layout_file, layout_ec);
 	backend.set_initial_layout_by_default(!is_exist);
 
 	auto& platform = data.construct<::gui::platform_backend>(*window);

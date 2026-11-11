@@ -16,12 +16,12 @@
 #include <utility>
 
 std::filesystem::path edt::agent_project_dir(const std::filesystem::path& configured,
-	const std::optional<std::filesystem::path>& project_root)
+	const std::optional<std::filesystem::path>& project_root, const std::filesystem::path& without_project)
 {
 	if (!configured.empty()) {
 		return configured;
 	}
-	return project_root ? *project_root : std::filesystem::current_path();
+	return project_root ? *project_root : without_project;
 }
 
 namespace {

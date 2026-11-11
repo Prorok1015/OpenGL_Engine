@@ -32,7 +32,7 @@ std::filesystem::path edt::default_user_data_dir()
 {
 #ifdef _WIN32
 	const std::string base = environment_value("APPDATA");
-	if (!base.empty()) {
+	if (!base.empty() && std::filesystem::path{ base }.is_absolute()) {
 		return std::filesystem::path{ base } / "Snake" / "Editor";
 	}
 #else
@@ -41,7 +41,7 @@ std::filesystem::path edt::default_user_data_dir()
 		return std::filesystem::path{ data_home } / "snake" / "editor";
 	}
 	const std::string home = environment_value("HOME");
-	if (!home.empty()) {
+	if (!home.empty() && std::filesystem::path{ home }.is_absolute()) {
 		return std::filesystem::path{ home } / ".local" / "share" / "snake" / "editor";
 	}
 #endif

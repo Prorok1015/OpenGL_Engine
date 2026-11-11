@@ -35,9 +35,11 @@ namespace engine
 	// Set log level for a specific category. Overrides the global level.
 	SNK_API void set_category_level(std::string_view category, log_level level);
 
-	// Set the global log file path. Replaces the default "logs/engine.log".
-	// Call before init_logger() or at any time - existing loggers are updated.
-	void set_log_file(std::string_view path);
+	// Set the global log file path. There is none until this is called (an empty path: none), so a process writes no file into
+	// the folder it was started from. Call before init_logger() or at any time - existing loggers are updated. The first
+	// file attached to a running logger also gets what the journal holds of the process's earlier lines (the newest 2000 /
+	// 256 KiB; a line says how many are missing).
+	SNK_API void set_log_file(std::string_view path);
 
 	// Add a dedicated file sink for a specific category.
 	// Messages from this category will go to both the global sinks and this file.

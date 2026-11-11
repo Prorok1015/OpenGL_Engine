@@ -4,6 +4,7 @@
 #include "edt_data_protocol.h"
 #include <snk/resource/resources/res_resource_text.h>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -146,5 +147,23 @@ BOOST_AUTO_TEST_CASE(DefaultUserDataDir_NamesTheEditorFolderOfTheProduct)
 	BOOST_TEST(path.filename() == "editor");
 #endif
 }
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(DefaultUserDataDir_IgnoresARelativeHome_SoNothingIsWrittenBesideTheCurrentFolder)
+{
+	const char* old_home = std::getenv("HOME");
+	const char* old_xdg = std::getenv("XDG_DATA_HOME");
+	const std::string saved_home = old_home ? old_home : "";
+	const std::string saved_xdg = old_xdg ? old_xdg : "";
+	setenv("HOME", "relative_home", 1);
+	unsetenv("XDG_DATA_HOME");
+
+	const auto path = edt::default_user_data_dir();
+
+	if (old_home) setenv("HOME", saved_home.c_str(), 1); else unsetenv("HOME");
+	if (old_xdg) setenv("XDG_DATA_HOME", saved_xdg.c_str(), 1);
+	BOOST_TEST(path.is_absolute());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
