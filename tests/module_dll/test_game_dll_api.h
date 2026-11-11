@@ -14,6 +14,8 @@ namespace dll_game {
 	inline constexpr std::string_view system_name = "dll::move";
 	// Moves every animated model one clip on per frame with scn::play_animation (#563): idle -> walk -> jump (once).
 	inline constexpr std::string_view animate_system_name = "dll::animate";
+	// After the delivery point: a model whose clip without loop ended (scn::animation_finished) plays idle again.
+	inline constexpr std::string_view back_to_idle_system_name = "dll::back_to_idle";
 	inline constexpr std::string_view component_name = "dll.component";
 	// A component without a C++ type (#606), registered from this schema through module_context::register_component.
 	inline constexpr std::string_view schema_component_name = "dll.schema_health";
