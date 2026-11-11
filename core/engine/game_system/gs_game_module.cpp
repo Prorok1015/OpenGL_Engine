@@ -4,6 +4,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/scn_schema_components.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <format>
 #include <stdexcept>
@@ -160,10 +161,24 @@ namespace {
 }
 
 gs::module_context::module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks,
-	inp::input_router* input, const scn::context_manager* contexts)
+	inp::input_router* input, scn::context_manager* contexts)
 	: m_layer(layer), m_commands(commands), m_tasks(tasks), m_input(input), m_contexts(contexts)
 {
 	if (m_input) m_layer.keep(module_input_cleanup{ m_input->liveness() });
+}
+
+bool gs::module_context::register_component(desc::type_schema schema)
+{
+	if (!m_contexts) {
+		egLOG_ERROR("scene", "module_context::register_component('{}'): the engine has no context manager", schema.name);
+		return false;
+	}
+	auto registration = scn::register_schema_component(*m_contexts, m_layer, std::move(schema));
+	if (!registration) {
+		return false;
+	}
+	m_layer.keep(std::move(registration));
+	return true;
 }
 
 gs::input_stack_handle gs::module_context::input_stack(std::string_view set) const

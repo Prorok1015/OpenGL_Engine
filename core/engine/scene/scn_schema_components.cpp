@@ -9,6 +9,7 @@
 #include <entt/entity/registry.hpp>
 #include <exception>
 #include <format>
+#include <string>
 #include <typeinfo>
 #include <utility>
 
@@ -43,6 +44,25 @@ namespace
 			}
 		}
 		return true;
+	}
+
+	// The key of a field that is an array of structures or of custom values, nested ones included; empty: none. Their
+	// elements are opaque JSON to the runtime ops, so an entity inside one would cross registries unmapped.
+	std::string unsupported_array(const desc::schema_binding& binding, const std::string& prefix = {})
+	{
+		for (std::size_t i = 0; i < binding.ops.size(); ++i) {
+			const desc::field_ops& ops = binding.ops[i];
+			const std::string key = prefix + binding.schema->fields[i].key;
+			if (ops.kind == desc::field_kind::array && (ops.element == desc::field_kind::structure || ops.element == desc::field_kind::custom)) {
+				return key;
+			}
+			if (ops.nested) {
+				if (std::string found = unsupported_array(*ops.nested, key); !found.empty()) {
+					return found;
+				}
+			}
+		}
+		return {};
 	}
 
 	bool write(const desc::schema_binding& schema, const entt::registry& reg, entt::entity entity, json::object& out)
@@ -251,6 +271,10 @@ scn::schema_component_registration scn::register_schema_component(context_manage
 		if (!binding) {
 			undo();
 			return refuse("its schema cannot be bound");
+		}
+		if (const std::string field = unsupported_array(*binding); !field.empty()) {
+			undo();
+			return refuse(std::format("its field '{}' is an array of structures or custom values, not supported yet", field));
 		}
 		if (!layer.components().add(name, id)) {
 			undo();
