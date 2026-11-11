@@ -118,8 +118,9 @@ namespace edt
 		vcs_service(const vcs_service&) = delete;
 		vcs_service& operator=(const vcs_service&) = delete;
 
-		// The cached state; the repository is looked up again when the project root changed. Only a new project root
-		// probes again: a `git init` in the open project is seen after a project switch or a restart.
+		// The cached state; the repository is looked up again when the project root changed or its marker did (the first
+		// `.git` in the project folder or a parent, vcs::repository_marker: a stat per folder, no git), so a `git init` or
+		// a deleted `.git` in the open project is seen by the next call (#561). An unchanged marker runs no git.
 		const state& info();
 		// The cached state as it is, never probing (what info() returned last).
 		const state& cached_state() const { return m_state; }
@@ -359,6 +360,8 @@ namespace edt
 		std::vector<std::string> m_environment;
 		state m_state;
 		std::optional<std::filesystem::path> m_probed_project;
+		// The repository marker the cached state was probed with.
+		std::optional<std::filesystem::path> m_probed_marker;
 		bool m_probed = false;
 		bool m_git_found = false;
 		vcs_write_permissions m_write_permissions;

@@ -412,6 +412,63 @@ BOOST_AUTO_TEST_CASE(WithoutAGitDir_ItIsOff_AndReArmingReportsNothing)
 	BOOST_TEST(only_refs());
 }
 
+// #561: without a repository the watcher looks only for the project's marker (a `.git` folder or file in the project
+// folder or a parent) and reports refs once when it appears or goes, so the Git panel asks vcs.info, which probes again.
+BOOST_AUTO_TEST_CASE(WithoutARepository_AGitFolderOrFileAppearingOrGoing_IsReportedOnce)
+{
+	const fs::path project{ "/plain/game" };
+	make_dir(project);
+	watcher = std::make_unique<watcher_t>(ports());
+	watcher->watch_marker(project);
+	BOOST_TEST(!watcher->armed());
+	BOOST_TEST(watcher->watching_marker());
+	BOOST_TEST(nothing());
+
+	make_dir(project / ".git");
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+	remove(project / ".git");
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+
+	// A linked worktree or a submodule: `.git` is a file (`gitdir: ...`).
+	write(project / ".git", 30);
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+	remove(project / ".git");
+	BOOST_TEST(only_refs());
+
+	// git init in a parent folder makes the project part of that repository.
+	make_dir(fs::path{ "/plain" } / ".git");
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+}
+
+BOOST_AUTO_TEST_CASE(WatchingTheMarker_PollsNoMoreOftenThanEvery500Ms_AndArmingEndsIt)
+{
+	const fs::path project{ "/plain/game" };
+	make_dir(project);
+	watcher = std::make_unique<watcher_t>(ports());
+	watcher->watch_marker(project);
+	BOOST_TEST(nothing());
+	make_dir(project / ".git");
+	now += watcher_t::k_poll_interval / 2;
+	const std::size_t before = stats;
+	BOOST_TEST(!watcher->tick().any());
+	BOOST_TEST(stats == before);
+	now += watcher_t::k_poll_interval / 2;
+	BOOST_TEST(watcher->tick().refs);
+
+	watcher->set_paths(git_dir, git_dir, repo, repo);
+	BOOST_TEST(watcher->armed());
+	BOOST_TEST(!watcher->watching_marker());
+	BOOST_TEST(nothing());
+	watcher->watch_marker({});
+	BOOST_TEST(!watcher->watching_marker());
+	BOOST_TEST(!watcher->armed());
+	BOOST_TEST(nothing());
+}
+
 BOOST_AUTO_TEST_CASE(TheDefaultPorts_ReadARealFolder_WithoutThrowing)
 {
 	const fs::path missing = fs::temp_directory_path() / "snk_edt_repository_watcher_missing" / "nothing";
