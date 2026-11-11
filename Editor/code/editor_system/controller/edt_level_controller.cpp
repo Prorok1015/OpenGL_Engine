@@ -133,20 +133,18 @@ bool edt::level_controller::quick_save_level()
 
 bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle)
 {
-	// Cleared first so a failed load cannot leave the previous level's guid to be written into the new file.
-	m_state.level_guid.clear();
-
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return false;
 
+	// Everything that can refuse the level first (#613): a refusal leaves the worlds, the document and the watched file as
+	// they were, so the caller puts the old tags back on a level that is still the old one.
+	auto level_res = m_services.resources()->require_sync<scn::level_desc>(m_state.editor_tag);
+	if (!level_res.is_ready()) {
+		egLOG_ERROR("Editor/LoadLevel", "Level desc '{}' failed to load", m_state.editor_tag.view());
+		return false;
+	}
 	if (ctx_mgr->load_level(m_state.editor_tag)) {
 		watch_level();
-
-		auto level_res = m_services.resources()->require_sync<scn::level_desc>(m_state.editor_tag);
-		if (!level_res.is_ready()) {
-			egLOG_ERROR("Editor/LoadLevel", "Level desc '{}' failed to load", m_state.editor_tag.view());
-			return false;
-		}
 		m_state.level_guid = level_res->get_guid();
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());

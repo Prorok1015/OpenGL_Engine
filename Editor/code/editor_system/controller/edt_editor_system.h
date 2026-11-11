@@ -2,6 +2,8 @@
 #include "edt_world_problems.h"
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
+#include "edt_slow_load_notice.h"
+#include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -236,6 +238,7 @@ namespace edt {
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
+		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
 		// succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused). Every load has a
 		// working copy of its own (`memory://editor/loading/<n>/<name>.desc`), so one that is abandoned never overwrites
@@ -245,6 +248,9 @@ namespace edt {
 		std::uint32_t m_load_serial = 0;
 		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
 		void abandon_level_load();
+		// level.cancel_load, Esc in the loading window: the load goes, the level is the one before it. Main thread, as
+		// every load step: it never meets a load half finished.
+		cmd::result cancel_level_load(const cmd::origin& from);
 		// The load is over: forgets its tags and handle. The working copy stays (it is the document's now).
 		void release_level_load();
 		// Removes the working copy of a load (only `memory://editor/loading/...`; the document's other copies are not touched).

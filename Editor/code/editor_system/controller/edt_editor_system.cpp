@@ -609,6 +609,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
+	m_registrations.push_back(m_context->actions().add({ .id = "level.cancel_load", .label = "Cancel Level Load",
+		.menu_path = "File", .separator_before = true,
+		// While nothing loads the registry answers `disabled` with this reason: a cancel that comes after the load ended changes nothing.
+		.disabled_reason = [] { return std::string{ "no level is loading" }; },
+		.execute_call = [this](const cmd::call& call) { return cancel_level_load(call.from); },
+		.result_schema = boost::json::parse(R"json({
+			"type": "object",
+			"properties": { "cancelled": { "type": "boolean" }, "level": { "type": "string" } },
+			"required": ["cancelled", "level"],
+			"additionalProperties": false
+		})json"),
+		.enabled = [this] { return m_loading_level; },
+		.category = cmd::agent_category::scene_edit }));
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); })) {
 		m_registrations.push_back(std::move(action));
 	}
@@ -1667,6 +1680,7 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 
 	m_loading_level_handle = game_resources.require<scn::level_desc>(m_loading_editor_tag);
 	m_loading_level = true;
+	m_slow_load.start(slow_load_notice::clock::now());
 	return true;
 }
 
@@ -1692,6 +1706,22 @@ void edt::editor_system::abandon_level_load()
 	erase_loading_copy(copy);
 }
 
+cmd::result edt::editor_system::cancel_level_load(const cmd::origin& from)
+{
+	// A load that finished or failed is no longer one: nothing to undo, and the level stays as that load left it.
+	if (!m_loading_level) return cmd::result::failure(cmd::codes::failed, "no level is loading");
+	const res::tag level = m_loading_level_tag;
+	abandon_level_load();
+	const char* who = from.kind == cmd::origin_kind::agent ? "an agent" : from.kind == cmd::origin_kind::ui ? "a person"
+		: from.kind == cmd::origin_kind::test ? "a test" : "the game";
+	egLOG_INFO("editor", "the load of level '{}' was cancelled by {}{}", level.view(), who,
+		from.session.empty() ? std::string{} : " (session " + from.session + ")");
+	boost::json::object out;
+	out["cancelled"] = true;
+	out["level"] = boost::json::string_view(level.view().data(), level.view().size());
+	return cmd::result::success(std::move(out));
+}
+
 bool edt::editor_system::poll_level_load(bool* loaded_out)
 {
 	// The load was refused (not a level) or is gone: nothing to wait for.
@@ -1709,6 +1739,10 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	}
 
 	if (!m_loading_level_handle.is_ready()) {
+		if (const auto waited = m_slow_load.due(slow_load_notice::clock::now())) {
+			egLOG_WARN("editor", "level '{}' is still loading after {} s; level.cancel_load (File > Cancel Level Load) cancels it",
+				m_loading_level_tag.view(), waited->count());
+		}
 		ImGui::OpenPopup("Loading Level##edt_load");
 		if (ImGui::BeginPopupModal("Loading Level##edt_load", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
@@ -1716,7 +1750,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
 				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
 				if (loaded_out) *loaded_out = false;
-				abandon_level_load();
+				static_cast<void>(cancel_level_load(cmd::origin::ui()));
 				ImGui::CloseCurrentPopup();
 				ImGui::EndPopup();
 				return false;

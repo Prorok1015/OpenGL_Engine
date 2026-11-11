@@ -614,6 +614,85 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCannotSaveWhileALevelLoads_AndTheOldLevelFileIsKe
 	BOOST_CHECK(bytes_of_resource(storage.require<res::resource_system>(), "levels/test_level.desc") == next_before);
 }
 
+// #613: a load an agent cancels goes, the level stays the one before it, and the editor saves and opens again.
+BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+	const auto cancel_item_enabled = [this] {
+		for (const auto& item : editor().context()->actions().items("File")) {
+			if (item.id == "level.cancel_load") return item.enabled;
+		}
+		BOOST_FAIL("File > Cancel Level Load is missing");
+		return false;
+	};
+	std::vector<std::string> said;
+	const auto sink = engine::add_log_sink([&said](std::string_view category, engine::log_level, std::string_view message) {
+		if (category == "editor") said.emplace_back(message);
+	});
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_TEST(!cancel_item_enabled());
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	BOOST_REQUIRE(editor().level_load_in_progress());
+	BOOST_TEST(cancel_item_enabled());
+	BOOST_TEST(invoke_as_agent("file.save", boost::json::object{}).code == "busy");
+
+	const cmd::result cancelled = invoke_as_agent("level.cancel_load", boost::json::object{});
+	BOOST_REQUIRE_MESSAGE(cancelled.ok, cancelled.error);
+	BOOST_TEST(cancelled.value.as_object().at("cancelled").as_bool());
+	BOOST_TEST(std::string(cancelled.value.as_object().at("level").as_string()).ends_with("levels/test_level.desc"));
+	BOOST_TEST(!editor().level_load_in_progress());
+	BOOST_TEST(!cancel_item_enabled());
+	BOOST_TEST(std::ranges::any_of(said, [](const std::string& line) {
+		return line.find("test_level.desc") != std::string::npos && line.find("cancelled by an agent") != std::string::npos;
+	}));
+
+	// Frames after the cancel finish nothing: the level is the one before it.
+	for (int i = 0; i < 20; ++i) {
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+		test_util::pump(tasks);
+	}
+	BOOST_TEST(std::string(editor().current_level_tag().relative()) == "levels/smoke_level.desc");
+	BOOST_TEST(invoke_as_agent("file.save", boost::json::object{}).ok);
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	pump_level_load();
+	BOOST_TEST(std::string(editor().current_level_tag().relative()) == "levels/test_level.desc");
+}
+
+// #613: a cancel that comes after the load ended (it loaded, or it was cancelled already) changes nothing and says why.
+BOOST_FIXTURE_TEST_CASE(ACancelAfterTheLoadEnded_ChangesNothing, agent_editor_fixture)
+{
+	const auto pump_level_load = [this] {
+		for (int i = 0; i < 400 && editor().level_load_in_progress(); ++i) {
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			test_util::pump(tasks);
+		}
+		BOOST_REQUIRE(!editor().level_load_in_progress());
+	};
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
+	pump_level_load();
+	const cmd::result late = invoke_as_agent("level.cancel_load", boost::json::object{});
+	BOOST_TEST(!late.ok);
+	BOOST_TEST(late.code == "disabled");
+	BOOST_TEST(late.error.find("no level is loading") != std::string::npos);
+	BOOST_TEST(std::string(editor().current_level_tag().relative()) == "levels/smoke_level.desc");
+
+	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
+	BOOST_REQUIRE(invoke_as_agent("level.cancel_load", boost::json::object{}).ok);
+	const cmd::result twice = invoke_as_agent("level.cancel_load", boost::json::object{});
+	BOOST_TEST(twice.code == "disabled");
+	BOOST_TEST(std::string(editor().current_level_tag().relative()) == "levels/smoke_level.desc");
+}
+
 // The working copy of a load is its own: a second level with the same file name from another folder, abandoned, leaves the
 // copy the document's level is read from as it was.
 BOOST_FIXTURE_TEST_CASE(AnAbandonedLoadOfASameNamedLevel_LeavesTheEditedLevelsCopyAlone, agent_editor_fixture)
