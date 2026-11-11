@@ -99,7 +99,9 @@ function(snk_apply_target_defaults)
 				snk_target_defaults(${_t})
 				snk_pch_apply(${_t})
 				# Everything compiled under core/ ends up in snk_engine: it exports (SNK_API).
-				if(SNK_ENGINE_SHARED)
+				# Not the PCH owner: core/ (dllexport) and the rest (dllimport) reuse its PCH, and MSVC refuses a /D the PCH
+				# was built with under another value (C4651, #557). An extra /D at use is allowed; the PCH has no ImGui header.
+				if(SNK_ENGINE_SHARED AND NOT _t STREQUAL "snk_pch")
 					get_target_property(_src ${_t} SOURCE_DIR)
 					string(FIND "${_src}/" "${CMAKE_SOURCE_DIR}/core/" _in_core)
 					if(_in_core EQUAL 0)
