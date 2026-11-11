@@ -130,7 +130,8 @@ struct schema_fixture : test_util::scene_env {
 	entt::entity health_holder(const entt::registry& reg) const
 	{
 		const auto* pool = reg.storage<desc::dyn_blob>(scn::schema_component_id("mod.health"));
-		return pool && pool->size() == 1u ? *pool->begin() : entt::null;
+		// Through the entity set: the storage's own iterator walks the blobs.
+		return pool && pool->size() == 1u ? *static_cast<const entt::sparse_set&>(*pool).begin() : entt::null;
 	}
 
 	boost::json::object value_of(const entt::registry& reg, entt::entity entity) const
