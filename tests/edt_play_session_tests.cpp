@@ -3284,8 +3284,8 @@ BOOST_AUTO_TEST_CASE(headless_nobody_answers_play_stays_off_and_the_log_says_why
 
 	BOOST_TEST(dialogs.pending() == 0u);
 	BOOST_TEST(!play.active());
-	BOOST_REQUIRE(warnings.size() == 1u);
-	BOOST_TEST(warnings[0].find("nobody allowed it") != std::string::npos);
+	// The refusal of start() and the cancelled question.
+	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("nobody allowed it") != std::string::npos; }) == 1);
 }
 
 BOOST_AUTO_TEST_CASE(a_refusal_of_another_kind_is_said_not_greyed)
