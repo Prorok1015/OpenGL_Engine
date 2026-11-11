@@ -32,6 +32,9 @@ void editor::apply_default_settings()
 		return;
 	}
 	const std::filesystem::path user_data = cfg_edt_user_data_path->empty() ? edt::default_user_data_dir() : std::filesystem::path{ *cfg_edt_user_data_path };
+	if (!user_data.is_absolute()) {
+		return;
+	}
 	cfg::set_variable("gui/layout_file", fs_paths::utf8_of(user_data / "settings" / "layout_settings.ini"));
 }
 

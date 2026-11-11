@@ -311,16 +311,12 @@ void engine::set_log_file(std::string_view path)
 		if (!new_sink) return;
 	}
 
-	bool had_file = false;
-	{
-		std::lock_guard lock(s_logger_mutex);
-		had_file = s_file_sink != nullptr;
-	}
-	if (new_sink && !had_file) {
+	// The replay and the swap are one step under the lock: a line logged meanwhile is either in the snapshot or goes to
+	// the new sinks, never both.
+	std::lock_guard lock(s_logger_mutex);
+	if (new_sink && !s_file_sink) {
 		replay_journal_into(*new_sink);
 	}
-
-	std::lock_guard lock(s_logger_mutex);
 
 	// Replace the old file sink (an empty path: drop it)
 	if (s_file_sink) {

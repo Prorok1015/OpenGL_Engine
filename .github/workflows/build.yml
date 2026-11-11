@@ -198,6 +198,11 @@ jobs:
           if [ -n "$(find "$empty" -mindepth 1)" ]; then
             echo "::error::the game host wrote into the folder it was started from (#713):"; find "$empty" -mindepth 1; exit 1
           fi
+          if [ "$(tree_hash "$project")" != "$before" ]; then
+            echo "::error::the game host started in an empty folder changed its project folder"; exit 1
+          fi
+          grep -q "mounted read-only; user:// in $user_dir" "$RUNNER_TEMP/game_cwd.log"
+          if grep -E '\[(error|critical)\]' "$RUNNER_TEMP/game_cwd.log"; then echo "::error::errors in the log of the host started in an empty folder"; exit 1; fi
 
       # #591: the host links no editor, MCP or git code and does not load snk_engine (it is the static engine).
       - name: Game host dependency check
@@ -878,6 +883,14 @@ jobs:
             -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true
           tools/headless/check_smoke.sh headless_out/drag_drop/final.png headless_out/drag_drop/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/drag_drop/editor.log 'Editor/Drop' "Added 'base_material' to scene"
+
+      # #713: every run above started with the repository root as the working directory (a GL backend under Xvfb included):
+      # none of them may have left the layout file or a log folder there.
+      - name: Smoke runs leave nothing in the working directory
+        run: |
+          for leftover in layout_settings.ini logs imgui.ini; do
+            if [ -e "$leftover" ]; then echo "::error::a run wrote $leftover into the working directory (#713)"; exit 1; fi
+          done
 
       - name: Upload screenshots, diff images and logs
         if: always()

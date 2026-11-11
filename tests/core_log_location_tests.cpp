@@ -36,6 +36,14 @@ BOOST_AUTO_TEST_CASE(TheUserLogRoot_IsLocalAppDataOnWindows_AndTheXdgStateFolder
 	BOOST_CHECK(core::user_log_root_for(false, "", "", "").empty());
 }
 
+BOOST_AUTO_TEST_CASE(ARelativeBaseFolder_IsNotAPlace_TheNextCandidateOrNoFileIsTaken)
+{
+	BOOST_CHECK(core::user_log_root_for(true, "AppData/Local", "", "").empty());
+	BOOST_CHECK(core::user_log_root_for(false, "", "", "home/a").empty());
+	BOOST_CHECK(core::user_log_root_for(false, "", "state", "home/a").empty());
+	BOOST_CHECK(core::user_log_root_for(false, "", "state", "/home/a") == fs::path("/home/a") / ".local" / "state" / "snake");
+}
+
 BOOST_AUTO_TEST_CASE(ARelativeLogPath_IsTakenFromTheLogRoot_NotFromTheCurrentFolder)
 {
 	const fs::path root = fs::path("/project/.cache");
@@ -121,6 +129,14 @@ BOOST_FIXTURE_TEST_CASE(TheEditorsWindowLayout_DefaultsToItsUserFolder_NotTheCur
 
 	BOOST_CHECK(layout->is_absolute());
 	BOOST_CHECK(layout->lexically_normal() == (user.path() / "settings" / "layout_settings.ini").lexically_normal());
+}
+
+BOOST_FIXTURE_TEST_CASE(ARelativeUserFolder_LeavesTheLayoutFileEmpty_SoNothingIsWrittenRelativeToTheCurrentFolder, layout_settings_fixture)
+{
+	cfg::set_variable("editor/user_data_path", "relative/user");
+	editor::apply_default_settings();
+
+	BOOST_CHECK(layout->empty());
 }
 
 BOOST_FIXTURE_TEST_CASE(AFileTheConfigNamedForTheLayout_IsKept, layout_settings_fixture)

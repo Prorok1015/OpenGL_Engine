@@ -65,6 +65,27 @@ BOOST_AUTO_TEST_CASE(AnEmptyPath_DropsTheFile_SoLaterLinesAreNotWrittenToIt)
 	BOOST_CHECK_MESSAGE(text.find("after the file is dropped 713-d") == std::string::npos, text);
 }
 
+BOOST_AUTO_TEST_CASE(TheSamePathChosenAgain_DoesNotRepeatTheLinesAlreadyInTheFile)
+{
+	engine::init_logger();
+	test_util::temp_dir dir("engine_log_file_again");
+	log_file_guard guard;
+	const auto previous_capacity = engine::log_journal_capacity();
+	engine::set_log_journal_capacity(1000);
+	const std::filesystem::path file = dir.path() / "engine.log";
+
+	egLOG_WARN("test", "once only 713-f");
+	engine::set_log_file(file.string());
+	engine::set_log_file(file.string());
+	engine::set_log_file("");
+
+	const std::string text = read_file(file);
+	const auto first = text.find("once only 713-f");
+	BOOST_CHECK_MESSAGE(first != std::string::npos, text);
+	BOOST_CHECK_MESSAGE(text.find("once only 713-f", first + 1) == std::string::npos, text);
+	engine::set_log_journal_capacity(previous_capacity);
+}
+
 BOOST_AUTO_TEST_CASE(TheLinesThatDoNotFit_AreCountedInOneLine)
 {
 	engine::init_logger();

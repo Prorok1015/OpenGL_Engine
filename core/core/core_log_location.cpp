@@ -1,6 +1,8 @@
 #include <snk/core/core_log_location.h>
+#include <cctype>
 #include <cstdlib>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -23,6 +25,16 @@ namespace {
 #endif
 	}
 
+	bool is_absolute_on(bool windows, std::string_view text)
+	{
+		if (windows) {
+			const bool drive = text.size() >= 3 && std::isalpha(static_cast<unsigned char>(text[0])) && text[1] == ':' && (text[2] == '/' || text[2] == '\\');
+			const bool unc = text.starts_with("\\\\");
+			return drive || unc;
+		}
+		return !text.empty() && text.front() == '/';
+	}
+
 	bool is_under(const fs::path& root, const fs::path& path)
 	{
 		const fs::path relative = path.lexically_relative(root);
@@ -36,12 +48,12 @@ namespace {
 fs::path core::user_log_root_for(bool windows, std::string_view local_app_data, std::string_view xdg_state_home, std::string_view home)
 {
 	if (windows) {
-		return local_app_data.empty() ? fs::path{} : fs::path{ local_app_data } / "Snake";
+		return is_absolute_on(true, local_app_data) ? fs::path{ local_app_data } / "Snake" : fs::path{};
 	}
-	if (const fs::path state{ xdg_state_home }; !xdg_state_home.empty() && state.is_absolute()) {
-		return state / "snake";
+	if (is_absolute_on(false, xdg_state_home)) {
+		return fs::path{ xdg_state_home } / "snake";
 	}
-	return home.empty() ? fs::path{} : fs::path{ home } / ".local" / "state" / "snake";
+	return is_absolute_on(false, home) ? fs::path{ home } / ".local" / "state" / "snake" : fs::path{};
 }
 
 fs::path core::user_log_root()
