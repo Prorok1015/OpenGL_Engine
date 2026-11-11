@@ -11,6 +11,7 @@
 #include <snk/editor/editor_module.h>
 #include <snk/game/gs_module_layout.h>
 #include <edt_decode_runner.h>
+#include <snk/platform/plt_process.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
 #include <string>
@@ -72,9 +73,16 @@ int main(int argc, char* argv[])
 		egLOG_ERROR("app", "--mcp-stdio: stdout could not be taken for the protocol");
 	}
 
-	if (!cfg::initialize_configs(argc, argv)) {
+	// The package's layout (bin/, config/editor.cfg): from the executable's folder, whatever the working directory (#160).
+	const std::filesystem::path default_config = platform::current_executable().parent_path() / ".." / "config" / "editor.cfg";
+	if (!cfg::initialize_configs(argc, argv, default_config)) {
 		return -1;
 	}
+	if (cfg::loaded_config_path().empty()) {
+		egLOG_ERROR("app", "{}", cfg::no_config_message(default_config));
+		return 2;
+	}
+	egLOG_INFO("app", "config: {}", cfg::loaded_config_path().generic_string());
 
 	ds::app_data_storage app_storage;
 	if (protocol_fd >= 0) {

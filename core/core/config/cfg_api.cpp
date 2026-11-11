@@ -170,7 +170,31 @@ std::filesystem::path cfg::loaded_config_path()
 	return loaded_config_file;
 }
 
+std::optional<std::filesystem::path> cfg::config_to_load(const std::optional<std::filesystem::path>& explicit_config,
+	const std::filesystem::path& default_config)
+{
+	if (explicit_config) {
+		return explicit_config;
+	}
+	std::error_code ec;
+	if (!default_config.empty() && std::filesystem::is_regular_file(default_config, ec)) {
+		return default_config;
+	}
+	return std::nullopt;
+}
+
+std::string cfg::no_config_message(const std::filesystem::path& default_config)
+{
+	return "no configuration: pass --config <file>, or keep the config next to the program (" +
+		default_config.lexically_normal().generic_string() + ")";
+}
+
 bool cfg::initialize_configs(int argc, char* argv[])
+{
+	return initialize_configs(argc, argv, {});
+}
+
+bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path& default_config)
 {
 	po::options_description desc("Allowed options");
 	desc.add_options()
@@ -211,9 +235,12 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		return false;
 	}
 
+	std::optional<std::filesystem::path> explicit_config;
 	if (vm.count("config")) {
-		std::string config_path = vm["config"].as<std::string>();
-		cfg::initialize_configs(config_path);
+		explicit_config = vm["config"].as<std::string>();
+	}
+	if (const auto file = config_to_load(explicit_config, default_config)) {
+		cfg::initialize_configs(*file);
 	}
 
 	// Before --set, so that `--set project/...` still wins like every other --set.

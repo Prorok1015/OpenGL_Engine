@@ -4,7 +4,10 @@ Requirements: Windows 10/11 x64, a GPU with OpenGL 4.5+ drivers. The Microsoft C
 is included (bin/), nothing else needs to be installed.
 
 Run from this folder:
-    bin\editor.exe --config config\editor.cfg --project projects\sandbox
+    bin\editor.exe --project projects\sandbox
+
+The editor reads config\editor.cfg next to bin\ by itself, from any working directory; pass
+--config <file> to use another configuration.
 
 Keep the folders side by side: the config refers to the engine's base resources as
 ../res_core/ and to the editor's own icons and templates as ../data/, relative to the

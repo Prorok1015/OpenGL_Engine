@@ -14,7 +14,8 @@
 #    runs a host), needing no snk_engine.dll nor any other DLL but Windows' own and the MSVC runtime.
 # 6. editor.exe runs from the unpacked folder: --headless (a null window and the null renderer, no GL context, #452)
 #    opens projects/sandbox, loads a level and exits with 0. That proves the DLLs resolve and the config, the engine
-#    resources (res_core/) and the project are found; it does not draw anything (hosted runners have no GPU).
+#    resources (res_core/) and the project are found; it does not draw anything (hosted runners have no GPU). A second
+#    run, without --config and from another working directory, takes config/editor.cfg next to bin/ (#160).
 # Run from the repository root in an MSVC developer shell (cl, ninja, dumpbin, 7z on PATH).
 set -euo pipefail
 
@@ -147,4 +148,18 @@ fi
 if grep -q "loads still pending after" "${log}.stderr"; then echo "::error::the startup level did not settle (#669)"; exit 1; fi
 if grep -E '\[(error|critical)\]' "${log}.stderr"; then echo "::error::errors in the packaged editor's log"; exit 1; fi
 if grep -F "are still referenced:" "${log}.stderr"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
+# #160: without --config, from another working directory, the editor takes config/editor.cfg next to bin/.
+rc=0
+(cd "$work" && timeout 180 "${root}/bin/editor.exe" --headless --project "${root}/projects/sandbox" \
+	--set editor/startup_level levels/smoke_level.desc editor/exit_after_level_loaded true \
+	app/exit_after_frames 20000 app/headless_target_fps 1000 > "${log}_no_config.stdout" 2> "${log}_no_config.stderr") || rc=$?
+tail -30 "${log}_no_config.stderr"
+if [[ $rc -ne 0 ]]; then echo "::error::editor.exe without --config exited with ${rc} (124 = timed out)"; exit 1; fi
+if ! grep -q "config: .*/config/editor.cfg" "${log}_no_config.stderr"; then
+	echo "::error::editor.exe without --config did not take config/editor.cfg"; exit 1
+fi
+if ! grep -q "level loaded: .*smoke_level.desc" "${log}_no_config.stderr"; then
+	echo "::error::the packaged editor without --config did not load the startup level"; exit 1
+fi
+if grep -E '\[(error|critical)\]' "${log}_no_config.stderr"; then echo "::error::errors in the log of editor.exe without --config"; exit 1; fi
 echo "the package is complete"

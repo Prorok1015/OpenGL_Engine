@@ -299,6 +299,26 @@ jobs:
           grep -q "module 'game' loaded" headless_out/template/editor.log
           grep -q "editor module 'game_editor' loaded" headless_out/template/editor.log
 
+      # #160: the editor as installed (components editor + snake_sdk) finds config/editor.cfg next to its bin/ folder,
+      # from another working directory, without --config. lib/ holds the shared engine: the installed editor has no rpath.
+      - name: The installed editor opens a project without --config
+        run: |
+          prefix="${RUNNER_TEMP}/editor_prefix"
+          rm -rf "$prefix"
+          cmake --install build/ci-linux-gcc-debug --prefix "$prefix" --component editor
+          cmake --install build/ci-linux-gcc-debug --prefix "$prefix" --component snake_sdk
+          log="${RUNNER_TEMP}/editor_no_config.log"
+          rc=0
+          (cd "$RUNNER_TEMP" && env -u DISPLAY -u WAYLAND_DISPLAY LD_LIBRARY_PATH="$prefix/lib" timeout 180 "$prefix/bin/editor" --headless \
+            --project "$prefix/projects/sandbox" --set editor/startup_level levels/smoke_level.desc \
+            editor/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 1000 \
+            > /dev/null 2> "$log") || rc=$?
+          tail -30 "$log"
+          if [ "$rc" -ne 0 ]; then echo "::error::the installed editor without --config exited with $rc (124 = timed out)"; exit 1; fi
+          grep -q "config: .*/config/editor.cfg" "$log"
+          grep -q "level loaded: .*smoke_level.desc" "$log"
+          if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the installed editor's log"; exit 1; fi
+
       - name: Upload the template run log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -727,6 +747,17 @@ jobs:
           tail -5 headless_out/headless/no_project.log
           if [ "$rc" -ne 2 ]; then echo "expected exit code 2 without --project, got $rc"; exit 1; fi
           grep -q -- "--headless needs --project" headless_out/headless/no_project.log
+
+      # #160: without --config the editor loads <exe>/../config/editor.cfg; the build tree has none, so it stops with a
+      # reason and exit code 2 instead of starting without the engine's base resources.
+      - name: The editor without a config file stops with a reason
+        run: |
+          rc=0
+          (cd "$RUNNER_TEMP" && env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$EDITOR_BIN" --headless --project "$GITHUB_WORKSPACE/projects/sandbox" \
+            > /dev/null 2> "$GITHUB_WORKSPACE/headless_out/headless/no_config.log") || rc=$?
+          cat headless_out/headless/no_config.log
+          if [ "$rc" -ne 2 ]; then echo "::error::expected exit code 2 without a config, got $rc"; exit 1; fi
+          grep -q "no configuration: pass --config" headless_out/headless/no_config.log
 
       # MCP over stdio (#452): an agent drives the headless editor through its stdin/stdout. Every stdout line must be
       # JSON-RPC, problems_list must answer, Play must start, step 2 frames and stop (#491), and closing stdin must end
