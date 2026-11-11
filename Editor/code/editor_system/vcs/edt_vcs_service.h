@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_repository_marker.h"
 #include "edt_toolchain.h"
 #include "edt_vcs_policy.h"
 #include <snk/common/ds/ds_task_system.hpp>
@@ -118,8 +119,10 @@ namespace edt
 		vcs_service(const vcs_service&) = delete;
 		vcs_service& operator=(const vcs_service&) = delete;
 
-		// The cached state; the repository is looked up again when the project root changed. Only a new project root
-		// probes again: a `git init` in the open project is seen after a project switch or a restart.
+		// The cached state; the repository is looked up again when the project root changed or its marker did (the first
+		// `.git` in the project folder or a parent, vcs::repository_marker: a stat per folder, no git; while the state is
+		// not_a_repository its write time and size count too), so a `git init` or a deleted `.git` in the open project is seen
+		// by the next call (#561). An unchanged marker runs no git.
 		const state& info();
 		// The cached state as it is, never probing (what info() returned last).
 		const state& cached_state() const { return m_state; }
@@ -127,6 +130,8 @@ namespace edt
 		std::uint64_t state_generation() const { return m_state_generation; }
 		// The project root the cached state was probed for.
 		const std::optional<std::filesystem::path>& probed_project() const { return m_probed_project; }
+		// The repository marker as the last probe saw it, taken before git ran (#561).
+		const vcs::repository_marker_state& probed_marker() const { return m_probed_marker; }
 		// The open project's root now (vcs_options::project_root), never probing: differs from probed_project() after a
 		// project switch nothing has probed yet.
 		std::optional<std::filesystem::path> current_project() const
@@ -342,6 +347,7 @@ namespace edt
 		// A hard rule of a guarded write: why the policy refuses it, nullopt when it does not.
 		using hard_rule = std::function<std::optional<std::string>(const vcs_policy&)>;
 
+		bool marker_moved(const std::filesystem::path& project) const;
 		void probe_repository(const std::optional<std::filesystem::path>& project);
 		void set_probe_timeout();
 		started unavailable() const;
@@ -359,6 +365,7 @@ namespace edt
 		std::vector<std::string> m_environment;
 		state m_state;
 		std::optional<std::filesystem::path> m_probed_project;
+		vcs::repository_marker_state m_probed_marker;
 		bool m_probed = false;
 		bool m_git_found = false;
 		vcs_write_permissions m_write_permissions;
