@@ -523,6 +523,10 @@ jobs:
           python3 tools/ci/check_engine_components.py --self-test
           python3 tools/ci/check_engine_components.py
 
+      # #219: what the SDK package refuses of an MSVC consumer (an older MSVC than the engine's, a static runtime).
+      - name: Check the SDK's MSVC rule
+        run: cmake -P tools/ci/test_sdk_msvc_check.cmake
+
       # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
       # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure
       # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.

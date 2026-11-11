@@ -3,6 +3,19 @@
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
 
+# MSVC (#219): the MSVC the engine was built with (_MSC_VER; empty without MSVC) is the oldest a consumer may use, and the
+# runtime is the DLL one.
+set(SNK_MSVC_VERSION "@SNK_MSVC_VERSION@")
+if(MSVC AND SNK_MSVC_VERSION)
+	include("${CMAKE_CURRENT_LIST_DIR}/SnkMsvcCheck.cmake")
+	snk_sdk_msvc_problem(_snk_sdk_msvc_problem "${MSVC_VERSION}" "${SNK_MSVC_VERSION}" "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+	if(_snk_sdk_msvc_problem)
+		set(snake_sdk_FOUND FALSE)
+		set(snake_sdk_NOT_FOUND_MESSAGE "${_snk_sdk_msvc_problem}")
+		return()
+	endif()
+endif()
+
 # One prefix holds the shared engine (snk::engine + snk::engine_api: the editor, game modules) and/or
 # the static one (snk::engine_static: Shipping), each installed from its own build (#223).
 include("${CMAKE_CURRENT_LIST_DIR}/snake_sdk_sharedTargets.cmake" OPTIONAL RESULT_VARIABLE _snk_sdk_shared_file)

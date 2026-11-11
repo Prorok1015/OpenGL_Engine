@@ -76,6 +76,12 @@ for f in bin/editor.exe bin/editor.pdb bin/snk_model_decoder.exe bin/snk_model_d
 	projects/sandbox/project.snkproj README.txt include/snk; do
 	if [[ ! -e "${root}/${f}" ]]; then echo "::error::the package has no ${f}"; status=1; fi
 done
+# #219: the oldest MSVC a game module may use is the engine's, recorded in the config and named in the README.
+if ! grep -Eq 'set\(SNK_MSVC_VERSION "19[0-9]{2}"\)' "${root}/lib/cmake/snake_sdk/snake_sdkConfig.cmake"; then
+	echo "::error::snake_sdkConfig.cmake records no MSVC version (SNK_MSVC_VERSION)"; status=1
+fi
+if [[ ! -f "${root}/lib/cmake/snake_sdk/SnkMsvcCheck.cmake" ]]; then echo "::error::the package has no SnkMsvcCheck.cmake"; status=1; fi
+if ! grep -q '14\.44' "${root}/README.txt"; then echo "::error::README.txt does not name the oldest MSVC (14.44)"; status=1; fi
 if ls "${root}/bin" | grep -Ei '^(vcruntime|msvcp|concrt|vccorlib)[0-9_]*d\.dll$'; then
 	echo "::error::the debug MSVC runtime is not redistributable"; status=1
 fi
