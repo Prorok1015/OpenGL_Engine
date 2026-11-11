@@ -28,6 +28,7 @@
 namespace scn
 {
 	class scene_layer;
+	namespace detail { struct level_switch_slot; }
 
 	// How the context_manager builds a set.
 	struct set_options
@@ -259,6 +260,10 @@ namespace scn
 		// Destroys every context; mode and seed stay.
 		void clear();
 
+		// What scn::request_level asked of this set (#564); context_manager::update carries it out.
+		detail::level_switch_slot& level_switch() { return *m_level_switch; }
+		const detail::level_switch_slot& level_switch() const { return *m_level_switch; }
+
 	private:
 		void rebuild_context_plan(uint32_t id, ecs::system_factory& sf);
 		// Takes the phase order from sf and re-resolves every context's phases against it.
@@ -306,5 +311,6 @@ namespace scn
 		// After every older field so the offsets of the inline accessors of a game module built earlier stay; a plain number, so it does not change the destruction order above.
 		uint32_t m_next_desc_index = 0;
 		event_subscriptions* m_subscriptions = nullptr;
+		std::unique_ptr<detail::level_switch_slot> m_level_switch;
 	};
 }

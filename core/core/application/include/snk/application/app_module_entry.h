@@ -50,7 +50,11 @@
 // that spawns prefabs needs an engine of 3.8 or newer.
 // 3.9 (#697): desc_system::get_field_desc, inline in module code, refuses a reference to user://, cache://, code://, edt:// through
 // the new export resource_system::refused_block; a module built for 3.9 needs an engine of 3.9. No layout changes.
-#define SNK_MODULE_API_VERSION 0x0003'0009u // major << 16 | minor
+// 3.10 (#564): scn::request_level and scn::level_switch, new functions a game module imports, and the enum and struct
+// they use (scn::level_switch_status, scn::level_switch_state). scn::context_set gains a member at its end; the request
+// itself is a private ctx type of the engine. Nothing a module reads moves. A module that switches levels needs an
+// engine of 3.10 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'000Au // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

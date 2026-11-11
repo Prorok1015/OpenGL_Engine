@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_context_manager.h>
+#include "scn_level_switch_slot.h"
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
@@ -86,9 +87,13 @@ void scn::context_manager::update(std::chrono::duration<float> dt)
 		bool& flag;
 		~updating_reset() { flag = false; }
 	} reset{ m_updating };
+	// Before any set runs: no system or subscriber of a set being replaced is on the stack.
+	apply_level_switches();
 	for (const auto& set : m_sets) {
 		if (set->active()) set->update(dt);
 	}
+	// What this frame's systems asked for starts loading now, so it can be ready by the next frame.
+	start_level_loads();
 
 	if (m_hot_reload_manager) {
 		m_hot_reload_manager->tick();
@@ -143,6 +148,7 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	replacement->set_time_scale(m_level_set->time_scale());
 	replacement->set_seed(m_level_set->seed());
 	replacement->set_active(m_level_set->active());
+	replacement->level_switch().closed = !m_level_set_switchable;
 	*it = std::move(replacement);
 	m_level_set = it->get();
 	m_game_layer = layer;
@@ -237,35 +243,139 @@ scn::world_context* scn::context_manager::find_preview(std::string_view tag) con
 
 bool scn::context_manager::load_level(const res::tag& level_tag)
 {
-	auto& level = get_set(level_set_name);
-	auto level_res = resources_of(level).require_sync<scn::level_desc>(level_tag);
-	if (level_res.is_ready()) {
-		auto& set = level;
-		auto* hot_reload = hot_reload_of(set);
-		if (hot_reload && set.tag().is_valid()) {
-			hot_reload->unwatch_resource(set.tag());
-		}
-		set.clear();
-		m_pending_level_reload = res::tag{};
-		set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
-		if (hot_reload) {
-			// CI reads it: the editor watches its level, the shipping host (scene/hot_reload off) must not.
-			egLOG_INFO("scene", "level '{}' watched for hot reload", level_tag.view());
-			hot_reload->watch_resource(level_tag, [this](const res::tag& changed_tag) {
-				if (!get_set(level_set_name).active()) {
-					// Play: the level is frozen and hidden; rebuilding it now would bring back its cameras.
-					egLOG("Level Manager", "level reload '{}' deferred: the level set is inactive", changed_tag.view());
-					m_pending_level_reload = changed_tag;
-					return;
-				}
-				reload_level(changed_tag);
-			});
-		}
-	} else {
+	auto& set = get_set(level_set_name);
+	auto level_res = resources_of(set).require_sync<scn::level_desc>(level_tag);
+	if (!level_res.is_ready()) {
 		egLOG("Level Manager", "Failed to load level '{}'", level_tag.view());
 		return false;
 	}
+	if (auto* hot_reload = hot_reload_of(set); hot_reload && set.tag().is_valid()) {
+		hot_reload->unwatch_resource(set.tag());
+	}
+	set.clear();
+	m_pending_level_reload = res::tag{};
+	// A request of the level loaded before is not for this one.
+	auto& slot = set.level_switch();
+	slot.status = level_switch_status::idle;
+	slot.level = res::tag{};
+	slot.loading = res::res_handle<scn::level_desc>{};
+	set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
+	watch_level(level_tag);
 	return true;
+}
+
+void scn::context_manager::watch_level(const res::tag& level_tag)
+{
+	auto* hot_reload = hot_reload_of(get_set(level_set_name));
+	if (!hot_reload) return;
+	// CI reads it: the editor watches its level, the shipping host (scene/hot_reload off) must not.
+	egLOG_INFO("scene", "level '{}' watched for hot reload", level_tag.view());
+	hot_reload->watch_resource(level_tag, [this](const res::tag& changed_tag) {
+		if (!get_set(level_set_name).active()) {
+			// Play: the level is frozen and hidden; rebuilding it now would bring back its cameras.
+			egLOG("Level Manager", "level reload '{}' deferred: the level set is inactive", changed_tag.view());
+			m_pending_level_reload = changed_tag;
+			return;
+		}
+		reload_level(changed_tag);
+	});
+}
+
+void scn::context_manager::set_level_set_switchable(bool switchable)
+{
+	m_level_set_switchable = switchable;
+	auto& slot = m_level_set->level_switch();
+	slot.closed = !switchable;
+	slot.closed_said = false;
+	if (!switchable && slot.status == level_switch_status::loading) {
+		slot.status = level_switch_status::idle;
+		slot.loading = res::res_handle<scn::level_desc>{};
+	}
+}
+
+bool scn::context_manager::level_switch_pending() const
+{
+	return std::ranges::any_of(m_sets, [](const auto& set) { return set->level_switch().status == level_switch_status::loading; });
+}
+
+void scn::context_manager::start_level_loads()
+{
+	for (const auto& set : m_sets) {
+		auto& slot = set->level_switch();
+		if (slot.status == level_switch_status::loading && !slot.loading.is_valid()) {
+			slot.loading = resources_of(*set).require<scn::level_desc>(slot.level);
+		}
+	}
+}
+
+void scn::context_manager::apply_level_switches()
+{
+	const auto fail = [](scn::context_set& set, detail::level_switch_slot& slot, std::string_view why) {
+		egLOG_WARN("scene", "request_level '{}' of set '{}': {}; the current level stays", slot.level.view(), set.name(), why);
+		slot.status = level_switch_status::failed;
+		slot.loading = res::res_handle<scn::level_desc>{};
+	};
+	// A callback may create or destroy sets: walk a copy.
+	std::vector<scn::context_set*> sets;
+	sets.reserve(m_sets.size());
+	for (const auto& set : m_sets) sets.push_back(set.get());
+	for (scn::context_set* set : sets) {
+		if (std::ranges::none_of(m_sets, [set](const auto& owned) { return owned.get() == set; })) continue;
+		auto& slot = set->level_switch();
+		if (slot.status != level_switch_status::loading) continue;
+		if (!slot.loading.is_valid()) slot.loading = resources_of(*set).require<scn::level_desc>(slot.level);
+		if (slot.loading.has_error()) {
+			fail(*set, slot, "the level desc did not load");
+			continue;
+		}
+		if (!slot.loading.is_ready()) continue;
+		bool worlds_ready = true;
+		bool worlds_failed = false;
+		for (const auto& world : slot.loading->get_worlds()) {
+			worlds_failed = worlds_failed || world.has_error();
+			worlds_ready = worlds_ready && world.is_ready();
+		}
+		if (worlds_failed) {
+			fail(*set, slot, "a world desc of the level did not load");
+			continue;
+		}
+		if (!worlds_ready) continue;
+		const res::res_handle<scn::level_desc> desc = std::exchange(slot.loading, res::res_handle<scn::level_desc>{});
+		slot.status = level_switch_status::idle;
+		// A copy: a spawner or observer of the new worlds may ask for yet another level, which rewrites the slot.
+		const res::tag level = slot.level;
+		switch_level(*set, level, *desc);
+		if (m_on_level_switched) m_on_level_switched(*set);
+	}
+}
+
+void scn::context_manager::switch_level(scn::context_set& set, const res::tag& level_tag, const scn::level_desc& desc)
+{
+	// The kind of the desc's worlds (Play's stay kind::play); a world made while running says nothing.
+	context_kind kind = context_kind::level;
+	bool found = false;
+	set.for_each([&](scn::world_context& context) {
+		if (found || context.kind() == context_kind::runtime) return;
+		kind = context.kind();
+		found = true;
+	});
+	if (&set == m_level_set) {
+		if (auto* hot_reload = hot_reload_of(set); hot_reload && set.tag().is_valid()) {
+			hot_reload->unwatch_resource(set.tag());
+		}
+		m_pending_level_reload = res::tag{};
+	}
+	// The old level's tasks may hold its registries: they stop before the worlds go, as when a set is destroyed.
+	const auto waited_from = std::chrono::steady_clock::now();
+	set.stop_tasks();
+	if (const auto waited = std::chrono::steady_clock::now() - waited_from; waited > std::chrono::milliseconds(100)) {
+		egLOG_WARN("scene", "set '{}': the tasks of the level left took {} ms to stop; a task that waits for the main thread "
+			"would hang the switch", set.name(), std::chrono::duration_cast<std::chrono::milliseconds>(waited).count());
+	}
+	set.clear();
+	set.load_from_desc(desc, systems_of(set), assembler_of(set), kind);
+	if (&set == m_level_set) watch_level(level_tag);
+	egLOG_INFO("scene", "set '{}' switched to the level '{}'", set.name(), level_tag.view());
 }
 
 void scn::context_manager::apply_pending_level_reload()

@@ -18,6 +18,7 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_spawn.h>
+#include <snk/scene/level/scn_scene_switch.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
@@ -49,6 +50,14 @@ constexpr const char* PLAY_LEVEL = R"json({"__type":"level_desc","name":"lv","wo
 	 "components":{"g":{"__type":"dll_desc","value":2}}}]})json";
 
 // #551: the module's snake, alone in the world.
+// #564: the module's rounds, one level each.
+constexpr const char* MENU_LEVEL = R"json({"__type":"level_desc","name":"menu","worlds":[
+	{"__type":"world_desc","name":"menu","systems":["dll::menu"]}]})json";
+constexpr const char* ROUND_LEVEL = R"json({"__type":"level_desc","name":"round","worlds":[
+	{"__type":"world_desc","name":"round","systems":["dll::round"]}]})json";
+constexpr const char* RESULT_LEVEL = R"json({"__type":"level_desc","name":"result","worlds":[
+	{"__type":"world_desc","name":"result","systems":["dll::result"]}]})json";
+
 constexpr const char* SNAKE_LEVEL = R"json({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":["dll::snake"]}]})json";
 constexpr const char* SEGMENT = R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"scale"}]})json";
@@ -216,6 +225,45 @@ BOOST_AUTO_TEST_CASE(play_keeps_its_world_across_a_reload_of_the_library_and_run
 
 // #551: the game spawns and removes a prefab with one call each; after a reload in Play the world spawns with the new
 // layer's assembler, not the unloaded library's.
+// #564 AC1 on the test module: menu -> round -> result -> a new round, each a level the game asks for with
+// scn::request_level; the rounds played outlive the worlds in the layer's storage; the edited level stays the menu.
+BOOST_AUTO_TEST_CASE(a_game_goes_menu_round_result_and_a_new_round_through_request_level_in_play)
+{
+	project.build(g_module_path);
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	put("dll_menu.desc", MENU_LEVEL);
+	put("dll_round.desc", ROUND_LEVEL);
+	put("dll_result.desc", RESULT_LEVEL);
+	contexts().set_level_set_switchable(false);
+	open_level(MENU_LEVEL);
+	const std::vector<std::string> document_worlds = state.world_names;
+	BOOST_REQUIRE(play.start());
+
+	std::vector<std::string> seen;
+	std::vector<int> rounds;
+	for (int frame = 0; frame < 60 && rounds.size() < 2u; ++frame) {
+		run_frame();
+		pump();
+		scn::context_set* set = contexts().find_set(edt::k_play_set);
+		BOOST_REQUIRE(set);
+		set->for_each([&](scn::world_context& world) {
+			const std::string name{ world.get_name() };
+			if (seen.empty() || seen.back() != name) {
+				seen.push_back(name);
+				if (name == "round") {
+					auto view = world.state().view<dll_game::dll_component>();
+					if (view.size() == 1u) rounds.push_back(view.get<dll_game::dll_component>(view.front()).value);
+				}
+			}
+		});
+	}
+	BOOST_TEST((seen == std::vector<std::string>{ "menu", "round", "result", "menu", "round" }));
+	BOOST_TEST((rounds == std::vector<int>{ 1, 2 }));
+	BOOST_TEST((state.world_names == document_worlds));
+	BOOST_TEST(contexts().level_set().has("menu"));
+	contexts().set_level_set_switchable(true);
+}
+
 BOOST_AUTO_TEST_CASE(a_snake_spawns_and_despawns_with_one_call_each_and_spawns_again_after_a_reload_in_play)
 {
 	project.build(g_module_path);
