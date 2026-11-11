@@ -6,7 +6,9 @@
 #include <snk/input/inp_input_system.h>
 #include "edt_editor_system.h"
 #include "edt_data_protocol.h"
+#include <snk/common/fs_paths.h>
 #include <snk/config/cfg_variables.h>
+#include <filesystem>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #endif
@@ -20,7 +22,21 @@
 CFG_VAR_EXT_PATH(cfg_res_path);
 CFG_VAR_DEF_PATH(cfg_edt_data_path, "editor/data_path", "../data/");
 CFG_VAR_DEF_PATH(cfg_edt_user_data_path, "editor/user_data_path", "");
+// The gui module's own variable (gui/layout_file), read here to see whether the config or --set already gave a value.
+CFG_VAR_DEF_PATH(cfg_gui_layout_file_seen, "gui/layout_file", "");
 cfg::variable<std::vector<std::string>> cfg_edt_write_patterns{ "editor/edt_write_patterns", edt::default_write_patterns() };
+
+void editor::apply_default_settings()
+{
+	if (!cfg_gui_layout_file_seen->empty()) {
+		return;
+	}
+	const std::filesystem::path user_data = cfg_edt_user_data_path->empty() ? edt::default_user_data_dir() : std::filesystem::path{ *cfg_edt_user_data_path };
+	if (!user_data.is_absolute()) {
+		return;
+	}
+	cfg::set_variable("gui/layout_file", fs_paths::utf8_of(user_data / "settings" / "layout_settings.ini"));
+}
 
 void editor::editor_module::register_services(ds::app_data_storage& data)
 {

@@ -896,8 +896,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		constexpr int never_after_minutes = 7 * 24 * 60;
 		options.session_idle_timeout = std::chrono::minutes{ (idle_minutes > never_after_minutes) ? 0 : std::max(idle_minutes, 0) };
 		const std::string project_dir = cfg_project_dir;
+		const auto agent_roots = m_res.mount_roots("edt");
 		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
-			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
+			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt,
+			agent_roots.empty() ? default_user_data_dir() : agent_roots.back());
 		const std::filesystem::path project_policy = options.project_dir / ".snk" / "agent_policy.json";
 		const auto user_roots = m_res.mount_roots("edt");
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();

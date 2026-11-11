@@ -16,9 +16,9 @@ namespace ds { class task_system; }
 namespace edt
 {
 	// The folder whose .snk/ receives mcp.json: `configured` (editor/project_dir) when set, else the open project's
-	// root, else the working directory.
+	// root, else `without_project` (the editor's user folder): nothing is written into the working directory.
 	std::filesystem::path agent_project_dir(const std::filesystem::path& configured,
-		const std::optional<std::filesystem::path>& project_root);
+		const std::optional<std::filesystem::path>& project_root, const std::filesystem::path& without_project);
 
 	// One MCP session of the HTTP transport as the agents window shows it. `client_name` is what the client called itself
 	// (untrusted text, already cut and cleaned by the endpoint).

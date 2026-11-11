@@ -43,6 +43,8 @@ namespace gui
     protected:
         rnd::driver::driver_interface& m_driver;
         bool is_first_init = true;
-        std::string settings_layout_file_name = "layout_settings.ini";
+        // Where the window layout is loaded from and saved to; empty: it is not kept on disk (#713: a relative default would
+        // put a file into the folder the process was started from).
+        std::string settings_layout_file_name;
     };
 }
