@@ -207,7 +207,8 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	const entt::entity holder = *static_cast<const entt::sparse_set&>(*pool).begin();
 	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), holder, saved));
 	BOOST_TEST(saved.at("hp").to_number<double>() == 7.0);
-	BOOST_TEST(saved.at("target").is_null()); // no value in the desc: no entity, not entity 0
+	// No value in the desc: no entity (left out or null), not entity 0.
+	BOOST_TEST((!saved.contains("target") || saved.at("target").is_null()));
 
 	loader.unload(dll_game::module_name, root);
 	BOOST_TEST(!resident(g_module_path));

@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -39,26 +40,37 @@ namespace
 		const entt::continuous_loader& m_loader;
 	};
 
-	// The sandbox pool of a component without a C++ type, into the world entities the loader made.
-	void move_schema_pool(entt::registry& state, const entt::continuous_loader& loader, const sandbox_blob_pool& pool, entt::id_type id,
-		const desc::schema_binding& schema)
+	struct schema_pool
+	{
+		const sandbox_blob_pool* pool = nullptr;
+		entt::id_type id = 0;
+		const desc::schema_binding* schema = nullptr;
+	};
+
+	// After every pool is in, so an entity field may name a sandbox entity whose world counterpart a later pool made:
+	// the loader makes the world entity of an owner only when it loads one of its pools.
+	void map_schema_pool(entt::registry& state, const entt::continuous_loader& loader, const schema_pool& moved)
 	{
 		const loader_remap entities{ loader };
-		for (const ecs::sandbox_entity owner : static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>&>(pool)) {
-			const auto target = static_cast<entt::entity>(entt::to_integral(owner));
-			if (!loader.contains(target)) {
+		auto& placed = state.storage<desc::dyn_blob>(moved.id);
+		for (const ecs::sandbox_entity owner : static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>&>(*moved.pool)) {
+			const auto remote = static_cast<entt::entity>(entt::to_integral(owner));
+			if (!loader.contains(remote)) {
 				continue;
 			}
-			desc::dyn_blob blob = pool.get(owner);
+			const entt::entity local = loader.map(remote);
+			if (!placed.contains(local)) {
+				continue;
+			}
+			desc::dyn_blob& blob = placed.get(local);
 			// Of another size it was made against another layout of the schema: reading it by this one's offsets overruns
 			// it. Known gap: a blob of another layout of the same size passes, and its bytes are read (and its "entities"
 			// mapped) where this layout places them; the data is wrong, the memory stays in bounds (DESC_SCHEMA.md).
 			desc::dyn_ref ref{ &blob, 0 };
-			if (blob.bytes.size() != schema.schema->layout.size || !desc::remap_entities(schema, &ref, entities)) {
-				egLOG_ERROR("ecs", "a '{}' component from the commands is dropped: its blob is not laid out by the registered schema", schema.schema->name);
-				continue;
+			if (blob.bytes.size() != moved.schema->schema->layout.size || !desc::remap_entities(*moved.schema, &ref, entities)) {
+				egLOG_ERROR("ecs", "a '{}' component from the commands is dropped: its blob is not laid out by the registered schema", moved.schema->schema->name);
+				placed.remove(local);
 			}
-			scn::emplace_schema_component(state, loader.map(target), id, std::move(blob));
 		}
 	}
 }
@@ -186,6 +198,7 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 			loader.get<entt::entity>(archive);
 		}
 
+		std::vector<schema_pool> schema_pools;
 		for (auto [id, storage] : sandbox->storage()) {
 			if (id == entt::type_hash<ecs::sandbox_entity>::value()) continue;
 			if (storage.empty()) continue;
@@ -198,7 +211,11 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 			}
 			if (catalog && storage.type() == entt::type_id<desc::dyn_blob>()) {
 				if (const scn::component_entry* entry = catalog->find(id); entry && scn::is_schema_component(*entry)) {
-					move_schema_pool(state, loader, static_cast<const sandbox_blob_pool&>(storage), id, *entry->schema);
+					// Through the loader, as a C++ component goes: it makes the world entities of the owners.
+					const auto& pool = static_cast<const sandbox_blob_pool&>(storage);
+					ecs::sandbox_loader_archive archive{ loader, pool };
+					loader.get<desc::dyn_blob>(archive, id);
+					schema_pools.push_back({ &pool, id, entry->schema.get() });
 					continue;
 				}
 			}
@@ -211,6 +228,9 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 			}
 		}
 
+		for (const schema_pool& moved : schema_pools) {
+			map_schema_pool(state, loader, moved);
+		}
 		sandbox->clear();
 	}
 }

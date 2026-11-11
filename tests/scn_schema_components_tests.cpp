@@ -63,6 +63,19 @@ constexpr const char* k_link_schema = R"json({
 })json";
 
 // Reads entity numbers as they are: the raw ids a test puts into a blob.
+// A field holding no entity may be left out of the JSON: both read as null.
+boost::json::value entity_at(const boost::json::object& object, std::string_view key)
+{
+	const boost::json::value* found = object.if_contains(key);
+	return found ? *found : boost::json::value(nullptr);
+}
+
+boost::json::value inner_target(const boost::json::object& object)
+{
+	const boost::json::value* inner = object.if_contains("inner");
+	return inner && inner->is_object() ? entity_at(inner->as_object(), "target") : boost::json::value(nullptr);
+}
+
 struct identity_remap final : desc::entity_remap {
 	std::optional<std::uint32_t> find(std::uint32_t saved) const override { return saved; }
 };
@@ -210,7 +223,7 @@ struct schema_fixture : test_util::scene_env {
 		const scn::component_entry& entry = *layer->catalog().find("mod.link");
 		boost::json::object out;
 		entry.write(*entry.schema, reg, entity, out);
-		return out.at("target");
+		return entity_at(out, "target");
 	}
 
 	static boost::json::value raw(entt::entity entity) { return boost::json::value(static_cast<std::uint64_t>(entt::to_integral(entity))); }
@@ -592,7 +605,7 @@ BOOST_AUTO_TEST_CASE(an_entity_field_without_a_value_names_no_entity)
 	desc::dyn_ref ref{ &blob, 0 };
 	boost::json::object out;
 	desc::serialize(binding, &ref, out);
-	BOOST_TEST(out.at("target").is_null()); // not entity 0, a live one in any world
+	BOOST_TEST(entity_at(out, "target").is_null()); // not entity 0, a live one in any world
 }
 
 BOOST_AUTO_TEST_CASE(a_snapshot_maps_the_entity_fields_to_the_restored_entities)
@@ -601,6 +614,8 @@ BOOST_AUTO_TEST_CASE(a_snapshot_maps_the_entity_fields_to_the_restored_entities)
 	BOOST_REQUIRE(static_cast<bool>(link));
 	scn::world_context source{ 1, "main" };
 	entt::registry& from = source.state();
+	// A recycled id (another version): the restored entities get other raw ids, so a field keeping one fails.
+	from.destroy(from.create());
 	const entt::entity pointee = from.create();
 	const entt::entity pointer = from.create();
 	scn::emplace_schema_component(from, pointee, link.id(), link_blob(2, std::nullopt));
@@ -610,7 +625,6 @@ BOOST_AUTO_TEST_CASE(a_snapshot_maps_the_entity_fields_to_the_restored_entities)
 	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
 	scn::world_context target{ 1, "copy" };
 	entt::registry& to = target.state();
-	static_cast<void>(to.create()); // shifts the ids: a field keeping the raw id would name another entity
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
 
@@ -691,6 +705,8 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_a_snapsh
 	BOOST_REQUIRE(static_cast<bool>(deep));
 	scn::world_context source{ 1, "main" };
 	entt::registry& from = source.state();
+	// A recycled id (another version): the restored entities get other raw ids, so a field keeping one fails.
+	from.destroy(from.create());
 	const entt::entity pointee = from.create();
 	const entt::entity pointer = from.create();
 	scn::emplace_schema_component(from, pointee, deep.id(), deep_blob(boost::json::object{ { "n", 2 } }));
@@ -702,7 +718,6 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_a_snapsh
 	scn::snapshot_report captured;
 	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
 	scn::world_context target{ 1, "copy" };
-	static_cast<void>(target.state().create());
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
 
@@ -710,7 +725,7 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_a_snapsh
 	const boost::json::object restored_pointee = deep_of(target.state(), 2);
 	BOOST_REQUIRE(!restored_pointer.empty());
 	BOOST_REQUIRE(!restored_pointee.empty());
-	BOOST_TEST((restored_pointer.at("inner").as_object().at("target") == restored_pointee.at("__entity")));
+	BOOST_TEST((inner_target(restored_pointer) == restored_pointee.at("__entity")));
 	const boost::json::array& many = restored_pointer.at("many").as_array();
 	BOOST_REQUIRE(many.size() == 2u);
 	BOOST_TEST((many[0] == restored_pointee.at("__entity")));
@@ -744,7 +759,7 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_the_sand
 	const boost::json::object moved_second = deep_of(world.state(), 2);
 	BOOST_REQUIRE(!moved_first.empty());
 	BOOST_REQUIRE(!moved_second.empty());
-	BOOST_TEST((moved_first.at("inner").as_object().at("target") == moved_second.at("__entity")));
+	BOOST_TEST((inner_target(moved_first) == moved_second.at("__entity")));
 	const boost::json::array& many = moved_first.at("many").as_array();
 	BOOST_REQUIRE(many.size() == 2u);
 	BOOST_TEST((many[0] == moved_second.at("__entity")));
@@ -788,7 +803,7 @@ BOOST_AUTO_TEST_CASE(an_entity_number_is_not_read_without_an_entity_map)
 	boost::json::object out;
 	desc::serialize(deep_binding(), &ref, out);
 	BOOST_TEST(out.at("n").to_number<std::int64_t>() == 1);
-	BOOST_TEST(out.at("inner").as_object().at("target").is_null());
+	BOOST_TEST(inner_target(out).is_null());
 	BOOST_TEST(!(out.contains("many") && out.at("many").is_array() && !out.at("many").as_array().empty()));
 }
 
