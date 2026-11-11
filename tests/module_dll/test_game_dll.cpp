@@ -12,6 +12,7 @@
 #include <snk/resource/res_tag.h>
 #include <snk/scene/scn_animation.h>
 #include <snk/scene/level/scn_prefab_spawn.h>
+#include <snk/scene/level/scn_scene_switch.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_model.h>
@@ -36,6 +37,30 @@ namespace dll_game {
 }
 
 namespace {
+
+// In the layer's storage: a level switch replaces the worlds, not this.
+struct dll_rounds {
+	int played = 0;
+};
+dll_rounds* g_rounds = nullptr;
+
+void request_once(entt::registry& reg, std::string_view level)
+{
+	if (scn::level_switch(reg).status == scn::level_switch_status::idle) scn::request_level(reg, res::tag{ std::string{ level } });
+}
+
+void dll_menu(entt::registry& reg) { request_once(reg, dll_game::round_tag); }
+
+void dll_round(entt::registry& reg)
+{
+	if (reg.view<dll_game::dll_component>().empty() && g_rounds) {
+		++g_rounds->played;
+		reg.emplace<dll_game::dll_component>(reg.create(), dll_game::dll_component{ g_rounds->played });
+	}
+	request_once(reg, dll_game::result_tag);
+}
+
+void dll_result(entt::registry& reg) { request_once(reg, dll_game::menu_tag); }
 
 struct dll_service {
 	int frames = 0;
@@ -156,6 +181,10 @@ protected:
 		if (data.has_value<dll_service>()) {
 			data.destruct<dll_service>();
 		}
+		if (data.has_value<dll_rounds>()) {
+			g_rounds = nullptr;
+			data.destruct<dll_rounds>();
+		}
 	}
 
 private:
@@ -169,6 +198,10 @@ private:
 		layer.systems().register_system<&dll_animate>(std::string{ dll_game::animate_system_name });
 		layer.systems().register_system<&dll_keeper::run, dll_keeper>(std::string{ dll_game::keeper_system_name }, {});
 		layer.systems().register_system<&dll_snake::run, dll_snake>(std::string{ dll_game::snake_system_name }, {});
+		layer.systems().register_system<&dll_menu>(std::string{ dll_game::menu_system_name });
+		layer.systems().register_system<&dll_round>(std::string{ dll_game::round_system_name });
+		layer.systems().register_system<&dll_result>(std::string{ dll_game::result_system_name });
+		g_rounds = &data.construct<dll_rounds>();
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
 		// Its functions and schema live in this library: the layer drops them before the library goes.
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },

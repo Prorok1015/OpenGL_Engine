@@ -34,5 +34,14 @@ namespace dll_game {
 	inline constexpr std::string_view segment_tag = "memory://t/dll_segment.prefab.desc";
 	inline constexpr std::string_view segment_name = "dll_segment";
 	inline constexpr std::size_t snake_length = 3;
+	// A game's rounds on the public API (#564): menu -> round -> result -> menu, each a level of one world that runs one
+	// of these systems and asks for the next level with scn::request_level. The number of rounds played is kept in the
+	// module layer's storage, which outlives the worlds, and written into the round's world as a dll_component.
+	inline constexpr std::string_view menu_system_name = "dll::menu";
+	inline constexpr std::string_view round_system_name = "dll::round";
+	inline constexpr std::string_view result_system_name = "dll::result";
+	inline constexpr std::string_view menu_tag = "memory://t/dll_menu.desc";
+	inline constexpr std::string_view round_tag = "memory://t/dll_round.desc";
+	inline constexpr std::string_view result_tag = "memory://t/dll_result.desc";
 
 }

@@ -8,6 +8,7 @@
 #include "edt_editor_camera.h"
 #include "edt_editor_mode.h"
 #include "edt_editor_mode_commands.h"
+#include "edt_game_view_logic.h"
 #include "edt_input_target.h"
 #include "edt_level_controller.h"
 #include "edt_module_swap_gate.h"
@@ -48,6 +49,9 @@
 #include <snk/scene/scn_time.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/level/scn_scene_switch.h>
+#include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/scn_camera_controller_component.hpp>
@@ -553,6 +557,82 @@ BOOST_AUTO_TEST_CASE(stop_brings_the_editor_back_as_it_was_before_play)
 	BOOST_TEST((seen == std::vector<state_change>{ { edt::play_state::playing, edt::play_reason::user },
 		{ edt::play_state::stopped, edt::play_reason::user } }));
 	BOOST_TEST(edt::view_set(services) == &level);
+}
+
+// #564: the game switches Play to another level; only Play's worlds are replaced, the edited level and the document
+// stay, and the Game view shows the camera of the new level.
+BOOST_AUTO_TEST_CASE(a_level_switch_in_play_replaces_only_plays_worlds_and_the_game_view_shows_the_new_level)
+{
+	// What editor_system wires.
+	contexts().set_level_set_switchable(false);
+	contexts().set_on_level_switched([this](scn::context_set& set) {
+		if (set.name() == edt::k_play_set) play.on_level_switched();
+	});
+	open_level();
+	const res::tag other = put("other.desc", R"({"__type":"level_desc","__version":2,"name":"other","worlds":[
+		{"__type":"world_desc","__version":4,"name":"far","systems":[],"children":[
+			{"__id":"00000000000000b1","name":"FarCam","components":{"camera":{"__type":"camera_desc","__version":2}}}]}]})");
+	const std::string before = level_json();
+	const bool dirty = state.is_dirty();
+	const std::uint64_t generation = state.generation();
+	const bool could_undo = state.next_undo_entry().has_value();
+	const auto cameras_of = [](entt::registry& reg) {
+		std::vector<edt::game_view::camera_entry> out;
+		// The game's cameras: the editor camera Play injects is not one.
+		for (auto [ent, cam] : reg.view<scn::camera_component>(entt::exclude<edt::editor_camera_tag>).each()) {
+			const auto* name = reg.try_get<scn::name_component>(ent);
+			const auto* node = reg.try_get<scn::node_id_component>(ent);
+			out.push_back({ ent, name ? name->name : std::string{}, node ? node->path : std::vector<std::uint64_t>{} });
+		}
+		return out;
+	};
+	const auto frame = [this] {
+		contexts().update(std::chrono::duration<float>(0.016f));
+		pump();
+	};
+
+	BOOST_REQUIRE(play.start());
+	edt::game_view::selection view;
+	entt::registry& twin = play_set()->get("w0").state();
+	view.refresh(&twin, cameras_of(twin));
+	BOOST_REQUIRE(view.selected() != entt::null);
+	const int forgotten_before = forgotten;
+	BOOST_REQUIRE(scn::request_level(twin, other));
+	frame();
+	frame();
+
+	std::vector<std::string> worlds;
+	play_set()->for_each([&](scn::world_context& world) {
+		worlds.emplace_back(world.get_name());
+		BOOST_TEST((world.kind() == scn::context_kind::play));
+	});
+	BOOST_TEST((worlds == std::vector<std::string>{ "far" }));
+	BOOST_TEST(forgotten == forgotten_before + 1);
+	// The editor's hook drops the pick; the next refresh with the world on screen takes the new level's camera.
+	view.forget();
+	entt::registry& far = play_set()->get("far").state();
+	view.refresh(&far, cameras_of(far));
+	BOOST_REQUIRE(view.selected() != entt::null);
+	BOOST_TEST(far.get<scn::name_component>(view.selected()).name == "FarCam");
+
+	// The edited level and the document are as they were.
+	scn::context_set& level = contexts().level_set();
+	BOOST_TEST(level.has("w0"));
+	BOOST_TEST(level.has("w1"));
+	BOOST_TEST((level.tag() == state.level_tag));
+	BOOST_TEST(level_json() == before);
+	BOOST_TEST(state.is_dirty() == dirty);
+	BOOST_TEST(state.generation() == generation);
+	BOOST_TEST(state.next_undo_entry().has_value() == could_undo);
+
+	play.stop();
+	BOOST_TEST(play_set() == nullptr);
+	BOOST_TEST(level.active());
+	BOOST_TEST(state.generation() == generation);
+	BOOST_TEST(level.has("w0"));
+	BOOST_TEST(level_json() == before);
+	contexts().set_on_level_switched(nullptr);
+	contexts().set_level_set_switchable(true);
 }
 
 BOOST_AUTO_TEST_CASE(a_level_change_during_play_waits_for_stop_and_a_vanished_selection_is_deselected)
