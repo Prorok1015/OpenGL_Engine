@@ -67,7 +67,11 @@
 // component through its module_context needs an engine of 3.12 or newer.
 // 3.13 (#563): the engine event type scn::animation_finished (the end of a clip without loop on the world bus). A module
 // that reads or subscribes to it needs an engine that registers it, 3.13 or newer. Nothing that exists changes layout.
-#define SNK_MODULE_API_VERSION 0x0003'000Du // major << 16 | minor
+// 3.15 (#560): scn::set_visible / scn::is_visible (inline, scn_model.h) hide a mesh by taking its scn::renderable, which the
+// render data extractor requires of meshes from 3.15 on; an older engine draws the mesh anyway, so a module that hides
+// meshes needs an engine of 3.15 or newer. mesh_node_desc gains `visible` at its end (engine-made, not in the layout key).
+// (3.14 is taken by #712.)
+#define SNK_MODULE_API_VERSION 0x0003'000Fu // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

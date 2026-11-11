@@ -2,14 +2,14 @@
 #include "test_scene_env.hpp"
 #include "edt_component_renderers.h"
 #include "edt_cr_internal.h"
-#include "edt_override_edit.h"
+#include "edt_inspector_panel.h"
 #include <snk/editor/edt_inspector_registry.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <boost/json.hpp>
 
 // #560: the Visible box of mesh_node_desc in the inspector. The inspector shows a node without its own data on a copy
-// of its parent's and keeps only what the renderer changed against the parent (override_edit::diff), so ticking the
+// of its parent's and keeps only what the renderer changed against the parent (edit_against_parent), so ticking the
 // box off on a mesh of an imported model gives the node {"visible": false} and nothing else.
 
 namespace {
@@ -38,30 +38,51 @@ BOOST_AUTO_TEST_CASE(TheMeshRenderer_IsRegisteredWithTheBuiltIns)
 	BOOST_TEST(registry.contains(std::string(scn::mesh_node_desc::__type)));
 }
 
-BOOST_AUTO_TEST_CASE(HidingAMeshOfItsParent_WritesOnlyVisibleFalse_AndShowingItAgainLeavesNoOverride)
+BOOST_AUTO_TEST_CASE(HidingAMeshOfItsParent_KeepsOnlyVisibleFalse_ThroughTheInspectorsDiff)
 {
-	auto scratch = mesh_component();
-	scratch.overrides = parent_fields();
-	BOOST_TEST(edt::mesh_node_visible(scratch));
-
-	edt::set_mesh_node_visible(scratch, false);
-	const boost::json::object overrides = edt::override_edit::diff(parent_fields(), scratch.overrides);
-	BOOST_TEST(overrides == (boost::json::object{ { "visible", false } }));
-
 	auto node = mesh_component();
-	node.overrides = overrides;
+	const bool changed = edt::edit_against_parent(node, &parent_fields(), [](scn::prefab_desc::prefab_comp_node& scratch) {
+		BOOST_TEST(edt::mesh_node_visible(scratch));
+		edt::set_mesh_node_visible(scratch, false);
+		return true;
+	});
+	BOOST_TEST(changed);
+	BOOST_TEST(node.overrides == (boost::json::object{ { "visible", false } }));
 	BOOST_TEST(!edt::mesh_node_visible(node));
+
+	// With data of its own the renderer edits the node itself.
 	edt::set_mesh_node_visible(node, true);
-	BOOST_TEST(node.overrides.empty());
 	BOOST_TEST(edt::mesh_node_visible(node));
+	BOOST_TEST(node.overrides == (boost::json::object{ { "visible", true } }));
 }
 
-BOOST_AUTO_TEST_CASE(TheBoxOfAnUntouchedMesh_ChangesNothing)
+// The base hides the mesh by an override of its own node: the parent's data the inspector passes says false while the
+// desc it refers to is visible. Showing it must leave a record, not drop the key.
+BOOST_AUTO_TEST_CASE(ShowingAMeshItsBaseHides_LeavesVisibleTrue_ThroughTheInspectorsDiff)
 {
-	auto scratch = mesh_component();
-	scratch.overrides = parent_fields();
-	edt::set_mesh_node_visible(scratch, true);
-	BOOST_TEST(edt::override_edit::diff(parent_fields(), scratch.overrides).empty());
+	boost::json::object base = parent_fields();
+	base["visible"] = false;
+	auto node = mesh_component();
+	const bool changed = edt::edit_against_parent(node, &base, [](scn::prefab_desc::prefab_comp_node& scratch) {
+		BOOST_TEST(!edt::mesh_node_visible(scratch));
+		edt::set_mesh_node_visible(scratch, true);
+		return true;
+	});
+	BOOST_TEST(changed);
+	BOOST_TEST(node.overrides == (boost::json::object{ { "visible", true } }));
+}
+
+BOOST_AUTO_TEST_CASE(AnUntouchedBox_ChangesNothing_AndAReadOnlyInspectorKeepsNothing)
+{
+	auto node = mesh_component();
+	BOOST_TEST(!edt::edit_against_parent(node, &parent_fields(), [](scn::prefab_desc::prefab_comp_node&) { return false; }));
+	BOOST_TEST(node.overrides.empty());
+
+	BOOST_TEST(!edt::edit_against_parent(node, &parent_fields(), [](scn::prefab_desc::prefab_comp_node& scratch) {
+		edt::set_mesh_node_visible(scratch, false);
+		return true;
+	}, false));
+	BOOST_TEST(node.overrides.empty());
 }
 
 BOOST_AUTO_TEST_CASE(AMeshWhoseParentIsHidden_IsShownByAnOverrideOfItsOwn)

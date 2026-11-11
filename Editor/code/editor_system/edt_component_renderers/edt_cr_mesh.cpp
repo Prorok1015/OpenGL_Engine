@@ -30,12 +30,9 @@ bool edt::mesh_node_visible(const scn::prefab_desc::prefab_comp_node& comp)
 
 void edt::set_mesh_node_visible(scn::prefab_desc::prefab_comp_node& comp, bool visible)
 {
-	// A mesh file says only "visible": false, so a visible mesh drops the key, unless its parent hides it.
-	if (visible && !parent_hides(comp)) {
-		comp.overrides.erase("visible");
-	} else {
-		comp.overrides["visible"] = visible;
-	}
+	// Written out even when true: the base may hide the mesh by an override of its own node, which the renderer
+	// cannot see, and override_edit::diff keeps no removed key.
+	comp.overrides["visible"] = visible;
 }
 
 void edt::edt_cr_mesh_register(edt::renderer_registrar& registry)

@@ -70,6 +70,8 @@ std::uint32_t api_3_9() { return 0x0003'0009u; }
 std::uint32_t api_3_11() { return 0x0003'000Bu; }
 // A module built before scn::animation_finished.
 std::uint32_t api_3_12() { return 0x0003'000Cu; }
+// A module built before scn::set_visible.
+std::uint32_t api_3_13() { return 0x0003'000Du; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -295,6 +297,16 @@ BOOST_AUTO_TEST_CASE(AnimationFinishedIsMinor3_13_AndAModuleBuiltFor3_12StillLoa
 	auto entry = generated_entry();
 	entry.api_version = &api_3_12;
 	entry.build_info = +[]() { return info_with(api_3_12(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_TEST(app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(MeshVisibilityIsMinor3_15_AndAModuleBuiltFor3_13StillLoads)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 15u);
+	auto entry = generated_entry();
+	entry.api_version = &api_3_13;
+	entry.build_info = +[]() { return info_with(api_3_13(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
 	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 
