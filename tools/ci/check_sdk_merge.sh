@@ -5,7 +5,8 @@
 #
 # The static and the shared engine (or the Debug and the Release build) are installed into one prefix,
 # one after the other. That is only sound if the second install overwrites nothing of the first but
-# files that are the same in both: the headers and the package config (snake_sdkConfig*.cmake). Any
+# files that are the same in both: the headers and the package config (snake_sdkConfig*.cmake and the
+# SnkMsvcCheck.cmake it includes). Any
 # other file both installs write (an archive, a targets file) would silently replace the first one.
 set -euo pipefail
 
@@ -26,7 +27,7 @@ shared_ok=0
 while IFS= read -r f; do
 	[[ -z "$f" ]] && continue
 	case "$f" in
-		include/*|lib/cmake/snake_sdk/snake_sdkConfig.cmake|lib/cmake/snake_sdk/snake_sdkConfigVersion.cmake)
+		include/*|lib/cmake/snake_sdk/snake_sdkConfig.cmake|lib/cmake/snake_sdk/snake_sdkConfigVersion.cmake|lib/cmake/snake_sdk/SnkMsvcCheck.cmake)
 			if ! cmp -s "$a/$f" "$b/$f"; then
 				echo "::error::$f differs between the two installs"
 				status=1
