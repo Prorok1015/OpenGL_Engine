@@ -62,6 +62,8 @@
 #include <snk/scene/scn_event_subscriptions.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/desc/desc_schema.h>
+#include <snk/scene/scn_schema_components.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -3027,6 +3029,42 @@ BOOST_AUTO_TEST_CASE(a_field_the_schema_does_not_know_is_an_error_at_its_pointer
 	BOOST_TEST(found[0].item.message.find("bogus") != std::string::npos);
 	BOOST_TEST(found[0].item.notes.at(0) == "/worlds/0/children/0/components/camera/bogus");
 	BOOST_TEST((found[0].target.path == std::vector<std::uint64_t>{ cam_id }));
+}
+
+// A component of #606 (#703): described only by a schema, registered in the game layer. The editor's services are the
+// layer's, so the checks of any component apply to it: the type is registered, its schema judges the fields, it spawns.
+BOOST_AUTO_TEST_CASE(a_component_described_only_by_a_schema_is_checked_by_its_schema)
+{
+	open_level();
+	scn::scene_layer* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer);
+	auto registration = scn::register_schema_component(contexts(), *layer, desc::parse_type_schema(json::parse(R"json({
+		"name": "mod.health", "kind": "component",
+		"fields": [ { "name": "hp", "kind": "f32", "default": 100 } ]
+	})json").as_object()));
+	BOOST_REQUIRE(static_cast<bool>(registration));
+	edt::play_preflight_services services = checks();
+	services.descs = &layer->descs();
+	services.assembler = &layer->assembler();
+
+	scn::prefab_desc::prefab_comp_node health;
+	health.type_name = "mod.health";
+	health.overrides["hp"] = 42;
+	crate().components["health"] = health;
+	BOOST_TEST(edt::run_play_preflight(state, services).empty());
+
+	crate().components["health"].overrides["hp"] = "lots";
+	auto found = edt::run_play_preflight(state, services);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].item.code == "schema");
+	BOOST_TEST(found[0].item.notes.at(0) == "/worlds/0/children/1/components/health/hp");
+
+	crate().components["health"].overrides.erase("hp");
+	crate().components["health"].overrides["mana"] = 3;
+	found = edt::run_play_preflight(state, services);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].item.code == "schema");
+	BOOST_TEST(found[0].item.message.find("no such field") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(a_type_nothing_spawns_is_only_a_warning)

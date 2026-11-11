@@ -46,7 +46,8 @@ namespace edt
 		const desc::desc_system* descs = nullptr;
 		const res::resource_system* resources = nullptr;
 		const scn::ecs_assembler* assembler = nullptr;
-		// More checks of one component (the schemas of #606 once they land); it appends what it finds. Null: none.
+		// More checks of one component; it appends what it finds. Null: none. A component of #606 (only a schema, #703) needs
+		// none: the layer's desc system and assembler know it like any other type.
 		std::function<void(const preflight_component&, std::vector<preflight_problem>&)> check_component{};
 	};
 
