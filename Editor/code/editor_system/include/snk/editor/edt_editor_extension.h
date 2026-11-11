@@ -22,10 +22,12 @@
 // 1.1: editor_module_context::add_asset_preview (the preview document of an asset suffix, asset_preview_desc).
 // 1.2: the module's callbacks are counted while they run (registration_scope::callbacks, #663): a reload asked from inside
 // one is refused. The inline editor_module_context::subscribe reads the new member of the scope, so a 1.2 module needs a 1.2 host.
-// 2.0 (#663): nothing the API offers registers past the module's scope. editor_module_context::services() is gone,
-// events() is const (a module subscribes through subscribe() only), and the asset kinds and previews of a module are
-// module_asset_kind_desc / module_asset_preview_desc: their callbacks get the editor_module_context, not the editor_context
-// or the editor_services. A 1.x module is refused by the host (check_editor_api_version): rebuild the project against the new SDK.
+// 2.0 (#663): nothing the API offers registers past the module's scope. Gone from editor_module_context: services(),
+// events() (a module subscribes with subscribe(&editor_events::x, handler) and cannot emit), resources(), render(), gui(),
+// task_system() (run() is bound to the module's tasks), the mutating side of documents() and selection(). The asset kinds and
+// previews of a module are module_asset_kind_desc / module_asset_preview_desc: their callbacks get the editor_module_context,
+// not the editor_context or the editor_services. A 1.x module is refused by the host (check_editor_api_version): rebuild the
+// project against the new SDK.
 #define SNK_EDITOR_API_VERSION 0x0002'0000u
 
 namespace edt
@@ -57,10 +59,12 @@ namespace edt
 	};
 
 	// What a game_editor module (#588) gets: the editor's registries, jobs and problems only through functions that keep
-	// what they register in the module's scope, and the state it works with (documents, selection) and reads (events). Not
-	// handed out (editor API 2.0, #663): the engine's services (editor_services: its registries take a desc or a spawner
-	// past the scope; a module reaches them through its game layer), dialog_service (its callbacks would outlive the module;
-	// a wrapper comes with the first module that needs a dialog) and the editor_context itself. Unloading the module undoes
+	// what they register in the module's scope, and read access to the documents and the selection (plus select/clear).
+	// Not handed out (editor API 2.0, #663): the engine's services (editor_services, resources(), render(), gui(): their registries
+	// take a desc, a mount, a pass or a layer past the scope; a module reaches the engine through its game layer), the events
+	// (they could be emitted), the task system, dialog_service (its callbacks would outlive the module; a wrapper comes with the
+	// first module that needs a dialog) and the editor_context itself. What a module needs beyond this is added as a narrow
+	// method on request, never as access to the host object. Unloading the module undoes
 	// all of it, so the editor is as it was before the load (and a reload registers again without clashing with the old
 	// entries). The wording of the guarantee: no function the API offers registers past the scope; a module that includes
 	// the private headers and reaches the editor by other means (the host's storage) is outside it, the language has no way to stop it.
@@ -85,14 +89,14 @@ namespace edt
 		// anything the module's shutdown_editor() released.
 		void add_asset_preview(module_asset_preview_desc desc);
 
-		// The only way to subscribe (events() is const): the connection goes into the scope. The signal comes from events().
+		// The only way to reach an event (the module gets no editor_events: it could neither subscribe by hand, whose connection
+		// would outlive it, nor emit the host's events): `subscribe(&editor_events::document_changed, handler)`. The connection
+		// goes into the scope.
 		template<class... Args, class F>
-		void subscribe(const signal<Args...>& event, F&& handler)
+		void subscribe(signal<Args...> editor_events::* event, F&& handler)
 		{
 			callback_gate& gate = m_scope.callbacks();
-			// const_cast: events() hands the module const signals so that it cannot subscribe by hand; the scope's connection
-			// is the one made here. The signal is the host's non-const object.
-			m_scope.keep(const_cast<signal<Args...>&>(event).subscribe(std::function<void(Args...)>(
+			m_scope.keep((m_editor.events().*event).subscribe(std::function<void(Args...)>(
 				[&gate, fn = std::forward<F>(handler)](Args... args) mutable {
 					const callback_gate::guard running(gate);
 					fn(args...);
@@ -100,9 +104,15 @@ namespace edt
 		}
 
 		// The owner of the jobs and task continuations the module starts: they are stopped when it unloads, and none
-		// runs after shutdown_editor.
+		// runs after shutdown_editor. The task system itself is not handed out (its run without an owner and post_main queue
+		// code that stop_tasks() does not stop): a task starts through run() below, bound to tasks().
 		const ds::lifetime& tasks() const { return m_scope.tasks(); }
-		ds::task_system& task_system() const { return m_editor.tasks(); }
+		// A task of the module, bound to tasks(). `.then_main(tasks(), ...)` on the result continues it on the main thread.
+		template<class F>
+		auto run(ds::lane where, ds::task_desc desc, F&& work)
+		{
+			return m_editor.tasks().run(where, std::move(desc), m_scope.tasks(), std::forward<F>(work));
+		}
 
 		// Jobs of the module: bound to tasks(), so unloading stops them. The job_service is read-only for a module
 		// (job.list, job_info), starting goes through here.
@@ -122,12 +132,14 @@ namespace edt
 		// The problems of `source`, cleared when the module unloads.
 		void set_problems(std::string source, std::vector<problem> items);
 
-		res::resource_system& resources() const { return m_editor.resources(); }
-		rnd::render_system& render() const { return m_editor.render(); }
-		gui::gui_system& gui() const { return m_editor.gui(); }
-		document_manager& documents() { return m_editor.documents(); }
-		const editor_events& events() const { return m_editor.events(); }
-		selection_service& selection() { return m_editor.selection(); }
+		// Read access to the state the module works with. Not handed out (2.0): resources(), render() and gui() (mounts, aliases,
+		// render passes, layers: they register past the scope; the engine is reached through the module's game layer),
+		// and the mutating side of documents() and selection() (set_registry_provider, set_preview_kinds, bind_events: host
+		// pointers into the module). What a module may do with the selection is select() and clear_selection().
+		const document_manager& documents() const { return m_editor.documents(); }
+		const selection_service& selection() const { return m_editor.selection(); }
+		void select(const edt::selection& value);
+		void clear_selection();
 		const job_service& jobs() const { return m_editor.jobs(); }
 		const problem_list& problems() const { return m_editor.problems(); }
 

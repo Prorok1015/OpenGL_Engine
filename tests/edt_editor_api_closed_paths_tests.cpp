@@ -25,14 +25,37 @@ template<class T>
 concept has_actions = requires(T& c) { c.actions(); };
 template<class T>
 concept has_inspectors = requires(T& c) { c.inspectors(); };
+template<class T>
+concept has_resources = requires(T& c) { c.resources(); };
+template<class T>
+concept has_render = requires(T& c) { c.render(); };
+template<class T>
+concept has_gui = requires(T& c) { c.gui(); };
+template<class T>
+concept has_task_system = requires(T& c) { c.task_system(); };
+template<class T>
+concept has_events = requires(T& c) { c.events(); };
 
+// The module's own tasks: bound to its scope (the owner is not a parameter).
+template<class T>
+concept runs_a_task = requires(T& c) { c.run(ds::lane::compute, ds::task_desc{ "t" }, [](ds::task_context&) {}); };
+
+// The module reaches an event only through subscribe(pointer to member, handler): the connection goes into the scope.
 using document_signal_handler = std::function<void(edt::document_id, std::uint64_t)>;
+template<class T>
+concept subscribes_through_the_context = requires(T& c, document_signal_handler handler) { c.subscribe(&edt::editor_events::document_changed, handler); };
 
-// The module's events() reads: a subscription by hand (the connection would be the module's to drop) does not compile.
+// What documents() and selection() let a module do: read. Each of these once let a module hand a host object a pointer into itself.
 template<class T>
-concept subscribes_by_hand = requires(T& c, document_signal_handler handler) { c.events().document_changed.subscribe(handler); };
+concept sets_a_registry_provider = requires(T& c) { c.selection().set_registry_provider({}); };
 template<class T>
-concept subscribes_through_the_context = requires(T& c, document_signal_handler handler) { c.subscribe(c.events().document_changed, handler); };
+concept sets_preview_kinds = requires(T& c, edt::asset_kind_registry& kinds, edt::editor_services& services) { c.documents().set_preview_kinds(kinds, services); };
+template<class T>
+concept binds_the_scene_to_events = requires(T& c, edt::editor_events* events) { c.documents().scene().bind_events(events); };
+template<class T>
+concept opens_a_preview = requires(T& c) { c.documents().open_preview(res::tag{ "res://a" }); };
+template<class T>
+concept selects_through_the_service = requires(T& c) { c.selection().clear(); };
 
 template<class T>
 concept registers_a_host_asset_kind = requires(T& c, edt::asset_kind_desc desc) { c.add_asset_kind(std::move(desc)); };
@@ -46,6 +69,9 @@ BOOST_AUTO_TEST_SUITE(EdtEditorApiClosedPathsTests)
 BOOST_AUTO_TEST_CASE(TheEnginesServices_AreNotHandedToAModule)
 {
 	static_assert(!has_services<context>, "editor_module_context::services() is gone (2.0): the registries of editor_services take descs and spawners past the scope");
+	static_assert(!has_resources<context>, "resources(): register_mount, register_alias, add_mount, subscribe_changes register past the scope");
+	static_assert(!has_render<context>, "render(): add_render_pass, set_material_compiler register past the scope");
+	static_assert(!has_gui<context>, "gui(): push_layer registers past the scope");
 	BOOST_CHECK(true);
 }
 
@@ -58,11 +84,30 @@ BOOST_AUTO_TEST_CASE(TheDialogServiceTheEditorContextAndTheRegistries_AreNotHand
 	BOOST_CHECK(true);
 }
 
-BOOST_AUTO_TEST_CASE(TheEventsOfTheEditor_AreReadOnly_AndASubscriptionGoesThroughTheContext)
+BOOST_AUTO_TEST_CASE(TheEventsOfTheEditor_AreNotHandedToAModule_ItReachesThemOnlyThroughSubscribe)
 {
-	static_assert(std::is_same_v<decltype(std::declval<context&>().events()), const edt::editor_events&>);
-	static_assert(!subscribes_by_hand<context>, "events().x.subscribe(...) must not compile: the connection would not be in the scope");
+	static_assert(!has_events<context>, "events(): a module could subscribe by hand (a connection that outlives it) and emit agent_action, play_state_changed, game_module_built");
 	static_assert(subscribes_through_the_context<context>);
+	BOOST_CHECK(true);
+}
+
+BOOST_AUTO_TEST_CASE(TheTaskSystem_IsNotHandedToAModule_ItsTasksAreBoundToItsScope)
+{
+	static_assert(!has_task_system<context>, "run without an owner and post_main queue code that stop_tasks() does not stop");
+	static_assert(runs_a_task<context>);
+	BOOST_CHECK(true);
+}
+
+BOOST_AUTO_TEST_CASE(TheDocumentsAndTheSelection_AreReadOnlyForAModule)
+{
+	static_assert(std::is_same_v<decltype(std::declval<context&>().documents()), const edt::document_manager&>);
+	static_assert(std::is_same_v<decltype(std::declval<context&>().selection()), const edt::selection_service&>);
+	static_assert(!sets_a_registry_provider<context>, "a std::function into the module's code, called after the unload");
+	static_assert(!sets_preview_kinds<context>, "host pointers into the module's memory");
+	static_assert(!binds_the_scene_to_events<context>);
+	static_assert(!opens_a_preview<context>);
+	static_assert(!selects_through_the_service<context>);
+	static_assert(requires(context& c, const edt::selection& value) { c.select(value); c.clear_selection(); });
 	BOOST_CHECK(true);
 }
 

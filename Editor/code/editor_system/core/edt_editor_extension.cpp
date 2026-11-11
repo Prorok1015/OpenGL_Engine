@@ -91,6 +91,16 @@ void edt::editor_module_context::set_problems(std::string source, std::vector<pr
 	m_scope.keep_cleanup([&list, source = std::move(source)] { list.clear(source); });
 }
 
+void edt::editor_module_context::select(const edt::selection& value)
+{
+	m_editor.selection().select(value);
+}
+
+void edt::editor_module_context::clear_selection()
+{
+	m_editor.selection().clear();
+}
+
 void edt::editor_module_context::add_panel(panel_desc desc)
 {
 	m_scope.keep(m_editor.panels().add(std::move(desc), m_scope.callbacks()));
