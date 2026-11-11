@@ -15,7 +15,7 @@ namespace scn
 
 	SNK_API void init_animation_system(ecs::system_factory& factory);
 
-	// Animation sampling helpers — exposed so unit tests exercise the real code
+	// Animation sampling helpers - exposed so unit tests exercise the real code
 	// (single source of truth) instead of a copy. Used by scn_animation_job.cpp.
 
 	// Returns the index i such that arr[i].time <= time < arr[i+1].time, clamped so that

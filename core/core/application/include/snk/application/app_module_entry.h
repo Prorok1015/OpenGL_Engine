@@ -7,7 +7,7 @@
 #include <string>
 #include <version>
 
-// C entry point of a loadable game module (EPIC-29 #62, docs/roadmap/design/EPIC-29_SERVICES_DLL.md §6).
+// C entry point of a loadable game module (EPIC-29 #62, docs/roadmap/design/EPIC-29_SERVICES_DLL.md sec. 6).
 //
 // A module binary exports four C-named functions; behind them is a C++ module_interface, so host
 // and module must share toolchain, standard library and CRT. The host checks that through

@@ -36,7 +36,7 @@ namespace engine
 	SNK_API void set_category_level(std::string_view category, log_level level);
 
 	// Set the global log file path. Replaces the default "logs/engine.log".
-	// Call before init_logger() or at any time — existing loggers are updated.
+	// Call before init_logger() or at any time - existing loggers are updated.
 	void set_log_file(std::string_view path);
 
 	// Add a dedicated file sink for a specific category.
@@ -107,7 +107,7 @@ namespace engine
 } // namespace engine
 namespace eg = engine;
 
-// ─── Level macros ────────────────────────────────────────────────────────────
+// --- Level macros ------------------------------------------------------------
 // Each macro: first arg = category string, then format + args.
 // Category becomes the spdlog logger name (e.g. "edt/import", "resource").
 

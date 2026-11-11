@@ -83,6 +83,9 @@ if ! grep -Fq 'set(SNK_MSVC_VERSION "1944")' "${root}/lib/cmake/snake_sdk/snake_
 fi
 if [[ ! -f "${root}/lib/cmake/snake_sdk/SnkMsvcCheck.cmake" ]]; then echo "::error::the package has no SnkMsvcCheck.cmake"; status=1; fi
 if ! grep -q '14\.44' "${root}/README.txt"; then echo "::error::README.txt does not name the oldest MSVC (14.44)"; status=1; fi
+# A game module compiles the installed headers without /utf-8, in the code page of the user's machine.
+python="$(command -v python3 || command -v python)" # Windows runners have only `python`
+"$python" tools/ci/check_ascii_headers.py --installed "${root}/include/snk" || status=1
 if ls "${root}/bin" | grep -Ei '^(vcruntime|msvcp|concrt|vccorlib)[0-9_]*d\.dll$'; then
 	echo "::error::the debug MSVC runtime is not redistributable"; status=1
 fi

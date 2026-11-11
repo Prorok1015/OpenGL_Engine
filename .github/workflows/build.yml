@@ -506,6 +506,12 @@ jobs:
       - name: Check the SDK's MSVC rule
         run: cmake -P tools/ci/test_sdk_msvc_check.cmake
 
+      # #219: a game module compiles the public headers without /utf-8, in the code page of the user's machine.
+      - name: Check the public headers are ASCII
+        run: |
+          python3 tools/ci/check_ascii_headers.py --self-test
+          python3 tools/ci/check_ascii_headers.py --repo .
+
       # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
       # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure
       # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.
