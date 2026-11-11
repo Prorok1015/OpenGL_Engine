@@ -2995,7 +2995,12 @@ BOOST_AUTO_TEST_CASE(a_tag_field_holds_a_reference_any_other_text_only_warns_abo
 	const auto* loose = with_note(found, "/worlds/0/children/1/components/stat/mesh", "missing_resource");
 	BOOST_REQUIRE(loose);
 	BOOST_TEST((loose->item.severity == edt::problem_severity::warning));
-	for (const char* quiet : { "/url", "/note", "/list/0" }) {
+	// An engine protocol the rule of #697 refuses: the loader would refuse it at run time, so it is said, as a warning.
+	const auto* refused_loose = with_note(found, "/worlds/0/children/1/components/stat/note", "reference");
+	BOOST_REQUIRE(refused_loose);
+	BOOST_TEST((refused_loose->item.severity == edt::problem_severity::warning));
+	BOOST_TEST(!edt::has_errors({ *loose, *refused_loose }));
+	for (const char* quiet : { "/url", "/list/0" }) {
 		BOOST_TEST(!with_note(found, std::string("/worlds/0/children/1/components/stat") + quiet), quiet);
 	}
 	BOOST_TEST(rs->live_resources() == live);
@@ -3196,6 +3201,21 @@ BOOST_AUTO_TEST_CASE(an_agent_is_refused_with_the_list_of_problems_and_play_does
 	BOOST_TEST(actions.invoke("play.start", json::object{}, cmd::origin::agent("agent-1")).code == cmd::codes::failed);
 	BOOST_TEST(!play.active());
 	BOOST_TEST(!play.problems_allowed());
+}
+
+BOOST_AUTO_TEST_CASE(a_start_let_past_the_check_that_fails_otherwise_says_so_not_the_check)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+	contexts().create_set(edt::k_play_set, nullptr, scn::set_options{ .hot_reload = false });
+
+	play.allow_problems_once();
+	const edt::action_result refused = person_actions.invoke("play.start", json::object{});
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(refused.error.find("check before Play") == std::string::npos);
+	BOOST_TEST(play.last_check().empty());
+	BOOST_TEST(!play.active());
+	contexts().destroy_set(edt::k_play_set);
 }
 
 BOOST_AUTO_TEST_CASE(an_answer_after_the_commands_are_gone_does_nothing)

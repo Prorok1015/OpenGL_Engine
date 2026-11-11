@@ -107,7 +107,8 @@ namespace edt
 		// an agent; see allow_problems_once).
 		bool start(play_reason reason = play_reason::user);
 		// What the check of the last start() found; empty when that start was not checked (refused before it, a restart
-		// after a module reload, no options.preflight). play.start and editor.mode answer a refusal with it.
+		// after a module reload, no options.preflight) or a person let its errors through. Errors in it: the check is what
+		// refused that start; play.start and editor.mode answer the refusal with it.
 		const std::vector<preflight_problem>& last_check() const { return m_last_check; }
 		// A person saw the problems and plays anyway: the next start() lets errors of the check through, once.
 		void allow_problems_once() { m_problems_allowed = true; }

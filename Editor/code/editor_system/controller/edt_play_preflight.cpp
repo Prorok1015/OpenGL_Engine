@@ -48,6 +48,13 @@ namespace {
 		return a.severity == b.severity && a.file == b.file && a.code == b.code && a.message == b.message && a.notes == b.notes;
 	}
 
+	// The engine's own protocols: a string naming one is meant as a reference even where no schema says so.
+	bool is_engine_protocol(std::string_view protocol)
+	{
+		static constexpr std::string_view k_protocols[] = { "res", "engine", "memory", "user", "edt", "code", "cache", "mod" };
+		return std::ranges::find(k_protocols, protocol) != std::end(k_protocols);
+	}
+
 	bool is_tag_kind(desc::field_kind kind)
 	{
 		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
@@ -107,15 +114,20 @@ namespace {
 			}
 		}
 
-		// A field of no known type may hold any text (a label, a web address): only a reference the level may make
-		// (res://, engine://, memory://, its own protocol) to a file that is not there is reported, and as a warning.
+		// A field of no known type may hold any text (a label, a web address): only a string naming one of the engine's
+		// protocols is taken for a reference, and what is wrong with it (the rule of #697, a file that is not there) is a
+		// warning; another scheme (https://) is left alone.
 		void check_loose(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
 		{
 			if (const auto* text = value.if_string()) {
 				const std::string_view view(text->data(), text->size());
 				if (view.find("://") == std::string_view::npos) return;
 				const res::tag reference{ std::string(view) };
-				if (reference.protocol().empty() || !res::reference_problem(reference, scene.level_tag.protocol()).empty()) return;
+				if (!is_engine_protocol(reference.protocol())) return;
+				if (std::string why = res::reference_problem(reference, scene.level_tag.protocol()); !why.empty()) {
+					add(edt::problem_severity::warning, "reference", why, path, json_path);
+					return;
+				}
 				if (services.resources && !services.resources->exists(reference)) {
 					add(edt::problem_severity::warning, "missing_resource", std::format("'{}' does not exist", view), path, json_path);
 				}

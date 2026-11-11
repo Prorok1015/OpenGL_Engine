@@ -83,10 +83,14 @@ bool edt::play_session::start(play_reason reason)
 		// Only a person allows it: an agent's start is never let through.
 		const bool allowed = std::exchange(m_problems_allowed, false) && reason == play_reason::user;
 		if (m_options.preflight) m_last_check = m_options.preflight();
-		if (has_errors(m_last_check) && !allowed) {
-			egLOG_WARN("play", "Play not started ({}): the check before Play found {} error(s), see Problems (source 'play')",
-				play_reason_name(reason), error_count(m_last_check));
-			return false;
+		if (has_errors(m_last_check)) {
+			if (!allowed) {
+				egLOG_WARN("play", "Play not started ({}): the check before Play found {} error(s), see Problems (source 'play')",
+					play_reason_name(reason), error_count(m_last_check));
+				return false;
+			}
+			// Let through: a refusal from here on is not the check's.
+			m_last_check.clear();
 		}
 	}
 	const auto contexts = m_services.ctx_manager.lock();
