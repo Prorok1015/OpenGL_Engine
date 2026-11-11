@@ -33,7 +33,12 @@ std::vector<::res::res_dep> scn::worldwrap_adapter::collect_dependencies(const::
     if (!type || !type->is_string() || !parent || json::value_to<std::string>(*type) != scn::world_desc::__type) {
         return {};
     }
-    auto dep = ::res::make_dep<::desc::desc_base>(json::value_to<::res::tag>(*parent));
+    const ::res::tag parent_tag = json::value_to<::res::tag>(*parent);
+    // Refused before it is a dependency, so it is never loaded (#697); deserialize then fails as with a missing parent.
+    if (!::res::reference_problem(parent_tag, tag.protocol()).empty()) {
+        return {};
+    }
+    auto dep = ::res::make_dep<::desc::desc_base>(parent_tag);
     dep.failure_kind = ::res::diagnostic_kind::missing_parent;
     dep.json_path = "/__parent";
     return { std::move(dep) };
@@ -69,6 +74,10 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
     if (type_id == scn::world_desc::__type) {
         if (json_body.contains("__parent")) {
             auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
+            if (std::string why = ::res::reference_problem(parent_tag, tag.protocol()); !why.empty()) {
+                throw ::res::load_error(::res::diagnostic_kind::reference, "/__parent",
+                    "world desc '" + std::string{ tag.view() } + "': " + why);
+            }
             const auto parent_desc = deps.get<::desc::desc_base>(parent_tag);
             if (!parent_desc) {
                 throw ::res::load_error(::res::diagnostic_kind::missing_parent, "/__parent",

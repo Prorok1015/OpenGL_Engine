@@ -8,6 +8,7 @@
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/render/texture/rnd_texture_id.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <string>
 #include <thread>
@@ -103,6 +104,7 @@ namespace rnd
 		std::vector<slot> m_slots; // m_slots[id.index - 1]
 		// In-flight descriptions only; watches retain dependency edges after GPU upload.
 		std::unordered_map<res::tag, res::res_handle<rnd::texture_desc>> m_descriptions;
+		std::unordered_set<res::tag> m_refused;
 		std::unordered_map<res::tag, std::vector<texture_id>> m_file_users;
 		desc::desc_system& desc_system;
 		res::resource_system& m_res_sys;

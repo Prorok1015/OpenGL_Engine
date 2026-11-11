@@ -26,7 +26,7 @@ constexpr std::string_view k_level = R"json({"__type":"level_desc","name":"lv","
 // A mesh node whose material is a desc of its own: building the level asks for it (desc_system::get_field_desc).
 constexpr std::string_view k_level_with_mesh = R"json({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":[],
-	 "children":{"mesh":{"components":{"mesh":{"__type":"mesh_node_desc","material":"gate://m.material.desc"}}}}}]})json";
+	 "children":{"mesh":{"components":{"mesh":{"__type":"mesh_node_desc","material":"engine://m.material.desc"}}}}}]})json";
 
 // Holds every request until release(): a load the level started that is still on its way.
 class gated_resolver : public test_util::ram_resolver
@@ -62,9 +62,9 @@ struct start_level_fixture : test_util::scene_env
 {
 	start_level_fixture() : mgr(*rs, *assembler, sf)
 	{
-		gate = &rs->registrate_resolver<gated_resolver>("gate");
-		gate->files[res::tag{ "gate://nested.txt" }] = test_util::to_bytes("nested");
-		gate->files[res::tag{ "gate://m.material.desc" }] = test_util::to_bytes(R"json({"__type":"material_desc"})json");
+		gate = &rs->registrate_resolver<gated_resolver>(res::tag::engine);
+		gate->files[res::tag{ "engine://nested.txt" }] = test_util::to_bytes("nested");
+		gate->files[res::tag{ "engine://m.material.desc" }] = test_util::to_bytes(R"json({"__type":"material_desc"})json");
 		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
 			std::lock_guard lock(log_mutex);
 			log.push_back({ level, std::string{ message } });
@@ -111,7 +111,7 @@ BOOST_AUTO_TEST_CASE(a_level_is_not_loaded_while_a_load_it_started_is_in_flight)
 	loader.begin(level);
 	pump();
 	// What a mesh node of the level asks for while the set is built: held by the gate.
-	const auto nested = rs->require<res::text_resource>(res::tag{ "gate://nested.txt" });
+	const auto nested = rs->require<res::text_resource>(res::tag{ "engine://nested.txt" });
 
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling));
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling));
@@ -153,7 +153,7 @@ BOOST_AUTO_TEST_CASE(a_level_whose_loads_never_end_is_reported_loaded_after_the_
 	auto loader = make_loader();
 	loader.begin(level);
 	pump();
-	const auto nested = rs->require<res::text_resource>(res::tag{ "gate://nested.txt" });
+	const auto nested = rs->require<res::text_resource>(res::tag{ "engine://nested.txt" });
 
 	BOOST_TEST((loader.poll() == scn::start_level_loader::state::settling));
 	now += std::chrono::seconds{ 1 };
@@ -182,7 +182,7 @@ BOOST_AUTO_TEST_CASE(a_level_settle_reports_once_its_loads_are_done_and_waits_ag
 	const res::tag first{ "res://first.desc" };
 	const res::tag second{ "res://second.desc" };
 	scn::level_settle settle{ mgr, *rs, tasks, [this] { return now; } };
-	const auto nested = rs->require<res::text_resource>(res::tag{ "gate://nested.txt" });
+	const auto nested = rs->require<res::text_resource>(res::tag{ "engine://nested.txt" });
 	settle.start(first);
 
 	BOOST_TEST(!settle.poll());

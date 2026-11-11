@@ -34,6 +34,10 @@ std::optional<::res::tag> read_parent(const ::res::tag& tag, const json::object&
 		throw ::res::load_error(::res::diagnostic_kind::cycle, "/__parent",
 			std::format("desc '{}': '__parent' cycle through '{}'", tag.view(), parent_tag.view()));
 	}
+	// Refused before it is a dependency, so it is never loaded (#697); the desc fails as with a missing parent.
+	if (std::string why = ::res::reference_problem(parent_tag, tag.protocol()); !why.empty()) {
+		throw ::res::load_error(::res::diagnostic_kind::reference, "/__parent", std::format("desc '{}': {}", tag.view(), why));
+	}
 	return parent_tag;
 }
 

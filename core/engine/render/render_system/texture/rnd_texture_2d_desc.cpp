@@ -7,8 +7,8 @@ void rnd::texture_2d_desc::deserialize(desc::desc_system& system, const json::ob
 
 	if (resource.contains("data") && resource.at("data").is_string()) {
 		picture_handle = system.get_field_desc<res::picture_resource>(*this, resource.at("data"));
-	} else if (picture_handle.is_valid()) {
-		// A cached parent may still hold the picture from before a file change.
+	} else if (picture_handle.is_valid() && !picture_handle.has_error() && picture_handle.get_tag().is_valid()) {
+		// A cached parent may still hold the picture from before a file change. A failed or refused one (#697: no tag) stays.
 		picture_handle = system.get_field_desc<res::picture_resource>(*this, json::value_from(picture_handle.get_tag()));
 	}
 }
@@ -19,6 +19,6 @@ void rnd::texture_2d_desc::serialize(json::object& resource) const
 
 	picture_handle.wait();
 	if (picture_handle.is_ready()) {
-		resource["data"] = json::value_from(picture_handle->get_tag());
+		resource["data"] = json::value_from(picture_handle.get_tag());
 	}
 }

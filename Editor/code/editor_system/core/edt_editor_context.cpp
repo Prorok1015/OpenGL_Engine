@@ -40,7 +40,7 @@ std::string edt::editor_context::module_unload_refusal() const
 {
 	for (const registration_scope* scope : m_module_scopes) {
 		if (scope->running_callbacks() > 0) {
-			return "called from inside one of a game_editor module's task continuations; unload from a main-queue item of the engine (task_system::post_main) instead";
+			return "called from inside one of a game_editor module's callbacks (a panel, action, inspector, asset kind, event handler or task continuation); unload from a main-queue item of the engine (task_system::post_main) instead";
 		}
 	}
 	return {};

@@ -491,6 +491,15 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
   return block;
 }
 
+std::shared_ptr<res::resource_system::resource_handle>
+res::resource_system::refused_block(const res::tag &tag, std::string reason) {
+  egLOG_WARN("resource/require", "{}", reason);
+  auto block = std::make_shared<resource_handle>();
+  block->diagnostics.set_resource(std::string{tag.view()});
+  block->set_error(std::move(reason));
+  return block;
+}
+
 void res::resource_system::start_loading(const res::tag &tag,
                                          const std::shared_ptr<resource_handle> &block,
                                          adapter ad) {

@@ -2,8 +2,10 @@
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/driver/rnd_render_mode.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
 #include <array>
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -46,12 +48,26 @@ namespace desc
 
 		static bool from_json(std::vector<res::tag>& tags, const json::value& in)
 		{
+			return from_json(tags, in, read_context{});
+		}
+
+		// An element the desc may not refer to (res::reference_problem, #697) reads as an empty tag: the slot stays positional.
+		static bool from_json(std::vector<res::tag>& tags, const json::value& in, const read_context& ctx)
+		{
 			if (!in.is_array())
 				return false;
+			const std::string_view owner_protocol = ctx.owner ? ctx.owner->get_tag().protocol() : std::string_view{};
 			std::vector<res::tag> parsed;
 			parsed.reserve(in.as_array().size());
-			for (const auto& item : in.as_array())
-				parsed.push_back(item.is_string() ? res::tag{ std::string_view{ item.as_string() } } : res::tag{});
+			for (const auto& item : in.as_array()) {
+				res::tag element = item.is_string() ? res::tag{ std::string_view{ item.as_string() } } : res::tag{};
+				if (std::string why = res::reference_problem(element, owner_protocol); !why.empty()) {
+					res::report_load_warning(res::diagnostic_kind::reference,
+						std::format("{}/{}", ctx.field_pointer, parsed.size()), std::move(why));
+					element = res::tag{};
+				}
+				parsed.push_back(std::move(element));
+			}
 			tags = std::move(parsed);
 			return true;
 		}
