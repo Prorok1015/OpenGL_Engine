@@ -36,8 +36,8 @@ CMake: `snk::engine snk::engine_api snk::editor_api` из SDK; библиоте�
 | Рендереры инспектора | `add_inspector(type, renderer)` | рисует поля компонента по `__type` desc | `type` |
 | Виды ассетов | `add_asset_kind(module_asset_kind_desc)` | действия «открыть» и «бросить в сцену» по суффиксу пути; их обратные вызовы получают `editor_module_context&` | `id`; побеждает самый длинный подходящий суффикс |
 | Превью ассетов (API 1.1) | `add_asset_preview(module_asset_preview_desc)` | документ предпросмотра по суффиксу; фабрика получает `editor_module_context&` | `id` |
-| События | `subscribe(signal, handler)` | подписка на сигнал из `events()` (он только для чтения: `const editor_events&`); соединение держит область модуля | — |
-| Задачи | `start_job(...)`, `tasks()` | фоновая работа, привязанная к жизни модуля | — |
+| События | `subscribe(&editor_events::имя_сигнала, handler)` | подписка на сигнал `editor_events`; соединение держит область модуля. Самих сигналов модуль не получает: ни подписаться руками, ни `emit` | — |
+| Задачи | `start_job(...)`, `run(lane, desc, work)`, `tasks()` | фоновая работа, привязанная к жизни модуля; `.then_main(tasks(), ...)` продолжает на главном потоке | — |
 | Проблемы | `set_problems(source, items)` | записи списка проблем | `source` |
 
 Правила, общие для всех реестров:
@@ -56,21 +56,30 @@ CMake: `snk::engine snk::engine_api snk::editor_api` из SDK; библиоте�
 3. Подписки, потом регистрации, потом очистки (`set_problems` и подобное), каждая группа в обратном порядке регистрации. После этого редактор такой же, как до загрузки, а повторная загрузка не конфликтует со старыми записями.
 
 Что требуется от модуля:
-- Регистрации и подписки делать только через `editor_module_context`: `events()` с 2.0 константный, подписаться на сигнал руками не получится.
+- Регистрации, подписки и задачи делать только через `editor_module_context`: сигналов, `task_system` и `resources()` модуль с 2.0 не получает, обойти область нечем.
 - Не обращаться к `edt::` из статических инициализаторов DLL.
 - Не вызывать выгрузку из своих же обратных вызовов: редактор отказывает в выгрузке, пока выполняется продолжение задачи модуля (`editor_context::module_unload_refusal`).
 
 ## Версия 2.0 (#663): ни одна функция API не регистрирует мимо области
 
-Гарантия сформулирована так: **ни одна функция, которую API предлагает модулю, не даёт регистрации мимо `registration_scope`**. Полный запрет на уровне языка невозможен: модуль может подключить закрытые заголовки редактора и достать хост другим путём (например, через хранилище приложения), и это вне гарантии. Что закрыто:
+Гарантия: **ни одна функция, которую API предлагает модулю, не даёт регистрации мимо `registration_scope`**. Полный запрет на уровне языка невозможен: модуль может подключить закрытые заголовки редактора и достать хост другим путём (например, через хранилище приложения), и это вне гарантии. Это ломающее изменение (1.x → 2.0), поэтому закрыто всё, что при ревью нашлось одного класса, чтобы не делать 3.0 ради того же.
 
-- `editor_module_context::services()` удалён. Реестры `editor_services` (`descs()`, `assembler()`, `sfactory()` и указатели `base_*`) принимают desc и спавнеры в обход области; движковые регистрации модуль делает через слой своего игрового модуля. Узкие методы чтения добавляются по запросу конкретного модуля, не заранее.
-- `events()` возвращает `const editor_events&`: `events().x.subscribe(...)` не компилируется, подписка — только `editor_module_context::subscribe`. Читать состояние (`subscriber_count`) можно; `emit` у сигнала константный и регистрацией не является.
-- `dialogs()` не выдаётся (проверено тестом); обёртка с владельцем появится вместе с первым модулем, которому нужен диалог.
+**Что модуль получает в 2.0** (`editor_module_context`): `add_panel`, `add_menu`, `add_action`, `add_inspector`, `add_asset_kind(module_asset_kind_desc)`, `add_asset_preview(module_asset_preview_desc)`, `subscribe(&editor_events::…, handler)`, `start_job*`, `run`, `tasks()`, `set_problems`, чтение `documents()` (`const document_manager&`), `selection()` (`const selection_service&`), `jobs()`, `problems()`, и `select(value)` / `clear_selection()`.
+
+**Что закрыто и почему:**
+- `services()` — реестры `editor_services` (`descs()`, `assembler()`, `sfactory()`, `base_*`) принимают desc и спавнеры мимо области.
+- `resources()`, `render()`, `gui()` — `register_mount`/`register_alias`/`add_mount`/`subscribe_changes`, `add_render_pass`/`set_material_compiler`, `push_layer` регистрируют мимо области. Движок модуль достаёт через слой своего игрового модуля.
+- `events()` — не выдаётся вовсе: с ручной подпиской соединение пережило бы модуль, а `emit` (константный у сигнала) позволял подделать `agent_action`, `play_state_changed`, `game_module_built`. Подписка — только `subscribe(&editor_events::имя, handler)`.
+- `task_system()` — `run` без владельца и `post_main` ставят в очередь код модуля, который `stop_tasks()` не останавливает. Вместо него `run()`, привязанный к `tasks()`.
+- Изменяющая сторона `documents()` и `selection()` — `selection().set_registry_provider(...)` (вызов в DLL после выгрузки), `documents().set_preview_kinds(...)` (указатели хоста в память модуля), `documents().scene().bind_events(...)`. Доступ только на чтение, плюс `select`/`clear_selection`; что-то ещё (`open_preview`, `set_active`) добавляется узким методом по запросу модуля.
+- `dialogs()` — не выдаётся; обёртка с владельцем появится вместе с первым модулем, которому нужен диалог.
 - Виды ассетов и превью модуля — `module_asset_kind_desc` и `module_asset_preview_desc`: их обратные вызовы получают `editor_module_context&`, а не `editor_context&` и не `editor_services&`. `add_asset_kind(asset_kind_desc)` и `add_asset_preview(asset_preview_desc)` принимать перестали; встроенные виды ассетов регистрируются в реестре напрямую и не менялись.
-- Каждый закрытый путь закреплён проверкой на этапе компиляции (`tests/edt_editor_api_closed_paths_tests.cpp`): вернуть путь нельзя, не сломав сборку.
 
-Миграция модуля 1.x: убрать вызовы `services()`; `add_asset_kind`/`add_asset_preview` переписать на `module_*_desc` (в обратном вызове вместо `editor_context&` — `editor_module_context&`); пересобрать проект под новый SDK.
+Каждый закрытый путь закреплён проверкой на этапе компиляции (`tests/edt_editor_api_closed_paths_tests.cpp`): вернуть путь нельзя, не сломав сборку.
+
+**Модуль 1.x** не загружается и не роняет редактор: `check_editor_api_version` отказывает с сообщением «built against editor api 1.x, this editor serves 2.x: rebuild the project against the current SDK» (как при загрузке, так и при перезагрузке одного `game_editor`), остальные модули и игра продолжают работать.
+
+**Миграция 1.x → 2.0:** убрать вызовы `services()`, `resources()`, `render()`, `gui()`, `task_system()`, `events()`; подписки — `subscribe(&edt::editor_events::document_changed, handler)`; задачи — `context.run(lane, desc, work)`; `add_asset_kind`/`add_asset_preview` — на `module_*_desc` (в обратном вызове вместо `editor_context&` — `editor_module_context&`); пересобрать проект под новый SDK.
 
 ## Чего пока нет
 
