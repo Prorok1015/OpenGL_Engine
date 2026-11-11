@@ -469,6 +469,75 @@ BOOST_AUTO_TEST_CASE(WatchingTheMarker_PollsNoMoreOftenThanEvery500Ms_AndArmingE
 	BOOST_TEST(nothing());
 }
 
+// #561: a probe may catch `.git` half-made (a `git init` still writing, a worktree's `gitdir:` fixed later); while the
+// project is no repository a write of the marker is reported too, not only its appearing.
+BOOST_AUTO_TEST_CASE(AHalfMadeGitFolderOrFile_IsReportedAgainWhenItIsWritten)
+{
+	const fs::path project{ "/plain/game" };
+	make_dir(project);
+	watcher = std::make_unique<watcher_t>(ports());
+	watcher->watch_marker(project);
+	make_dir(project / ".git");
+	BOOST_TEST(only_refs());
+	write(project / ".git" / "HEAD", 21);
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+
+	remove(project / ".git" / "HEAD");
+	remove(project / ".git");
+	BOOST_TEST(only_refs());
+	write(project / ".git", 20);
+	BOOST_TEST(only_refs());
+	write(project / ".git", 44);
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+}
+
+// #561: the baseline is the marker the probe saw, so a `git init` between the probe and the watcher's first look is
+// not taken as the starting point.
+BOOST_AUTO_TEST_CASE(WatchingFromTheProbedMarker_ReportsAGitInitMadeBeforeTheWatcherLooked)
+{
+	const fs::path project{ "/plain/game" };
+	make_dir(project);
+	const edt::vcs::repository_marker_state probed = edt::vcs::repository_marker(project, ports().stat_file);
+	BOOST_REQUIRE(!probed.path.has_value());
+	make_dir(project / ".git");
+	watcher = std::make_unique<watcher_t>(ports());
+	watcher->watch_marker(project, probed);
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+}
+
+// #561: a relative project root is looked up from the absolute one, up to the file system's root.
+BOOST_AUTO_TEST_CASE(TheMarker_IsLookedForFromTheAbsoluteRoot_UpToTheFileSystemRoot)
+{
+	std::vector<fs::path> asked;
+	const auto record = [&asked](const fs::path& path) -> std::optional<edt::vcs::file_stamp> {
+		asked.push_back(path);
+		return std::nullopt;
+	};
+	BOOST_TEST(!edt::vcs::repository_marker(fs::path{ "relative" } / "game", record).path.has_value());
+	BOOST_REQUIRE(asked.size() >= 3);
+	BOOST_TEST(asked.front() == fs::absolute(fs::path{ "relative" } / "game").lexically_normal() / ".git");
+	for (const fs::path& path : asked) BOOST_TEST(path.is_absolute(), path);
+	BOOST_TEST(asked.back() == asked.back().root_path() / ".git");
+}
+
+#ifdef _WIN32
+// #561: on a share the walk stops at `\\server\share`; `\\server\.git` is never asked for.
+BOOST_AUTO_TEST_CASE(TheMarker_OnANetworkShare_StopsAtTheShare)
+{
+	std::vector<fs::path> asked;
+	const auto record = [&asked](const fs::path& path) -> std::optional<edt::vcs::file_stamp> {
+		asked.push_back(path);
+		return std::nullopt;
+	};
+	static_cast<void>(edt::vcs::repository_marker(fs::path{ LR"(\\server\share\game)" }, record));
+	const std::vector<fs::path> expected{ fs::path{ LR"(\\server\share\game\.git)" }, fs::path{ LR"(\\server\share\.git)" } };
+	BOOST_TEST(asked == expected, boost::test_tools::per_element());
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(TheDefaultPorts_ReadARealFolder_WithoutThrowing)
 {
 	const fs::path missing = fs::temp_directory_path() / "snk_edt_repository_watcher_missing" / "nothing";

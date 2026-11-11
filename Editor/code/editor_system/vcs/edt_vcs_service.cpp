@@ -1,6 +1,5 @@
 #include "edt_vcs_service.h"
 #include "edt_path_text.h"
-#include "edt_repository_marker.h"
 #include "edt_vcs_parse.h"
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/logger/engine_log.h>
@@ -1811,7 +1810,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 {
 	m_probed = true;
 	m_probed_project = project;
-	m_probed_marker = project ? vcs::repository_marker(*project, vcs::entry_exists) : std::nullopt;
+	m_probed_marker = project ? vcs::repository_marker(*project, vcs::stat_entry) : vcs::repository_marker_state{};
 	++m_state_generation;
 	if (!m_git_found) return;
 	m_state.available = false;
@@ -1862,13 +1861,18 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 	egLOG_INFO("editor/vcs", "git {} on the repository '{}'", m_state.git_version, utf8_of(*m_state.root));
 }
 
+bool edt::vcs_service::marker_moved(const fs::path& project) const
+{
+	const vcs::repository_marker_state marker = vcs::repository_marker(project, vcs::stat_entry);
+	if (marker.path != m_probed_marker.path) return true;
+	// A working repository writes into `.git` all the time; only a broken one is worth probing again when written.
+	return !m_state.available && marker.stamp != m_probed_marker.stamp;
+}
+
 const edt::vcs_service::state& edt::vcs_service::info()
 {
 	auto project = m_options.project_root ? m_options.project_root() : std::nullopt;
-	if (!m_probed || project != m_probed_project ||
-		(project && vcs::repository_marker(*project, vcs::entry_exists) != m_probed_marker)) {
-		probe_repository(project);
-	}
+	if (!m_probed || project != m_probed_project || (project && marker_moved(*project))) probe_repository(project);
 	return m_state;
 }
 
