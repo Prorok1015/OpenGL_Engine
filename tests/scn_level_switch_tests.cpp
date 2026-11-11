@@ -195,8 +195,8 @@ BOOST_AUTO_TEST_CASE(ALevelThatDoesNotLoad_KeepsTheCurrentOne_AndSaysItFailed)
 BOOST_AUTO_TEST_CASE(TheResourcesOfTheLevelLeft_AreReleased)
 {
 	pump();
-	BOOST_REQUIRE(live("lv_a.desc"));
-	BOOST_REQUIRE(live("lv_a_mat.desc")); // held by the mesh's material component in the world
+	// The level desc is let go once its worlds are built; what the old level still holds is in its worlds.
+	BOOST_REQUIRE(live("lv_a_mat.desc")); // held by the mesh's material component
 	BOOST_REQUIRE(scn::request_level(first_world(), level_b));
 	// Past the grace frames of the render's material instance cache (8), which a headless test does not have.
 	for (int i = 0; i < 12; ++i) frame();
