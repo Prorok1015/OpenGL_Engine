@@ -337,17 +337,18 @@ void edt::live_build::on_reload_result(std::uint64_t round, const std::string& m
 	// A round dropped by set_enabled(false).
 	if (it == m_rounds.end()) return;
 	if (report.status != core::reload_status::reloaded) {
+		const char* const kind = m_deps.is_editor_module && m_deps.is_editor_module(module) ? "editor module" : "game module";
 		problem item;
 		item.severity = report.status == core::reload_status::refused ? problem_severity::warning : problem_severity::error;
 		switch (report.status) {
 		case core::reload_status::refused:
-			item.message = std::format("The game module '{}' was not reloaded: {}. The running version is kept.", module, report.message);
+			item.message = std::format("The {} '{}' was not reloaded: {}. The running version is kept.", kind, module, report.message);
 			break;
 		case core::reload_status::rolled_back:
-			item.message = std::format("The game module '{}' was rolled back to the previous build: {}", module, report.message);
+			item.message = std::format("The {} '{}' was rolled back to the previous build: {}", kind, module, report.message);
 			break;
 		default:
-			item.message = std::format("The game module '{}' is not loaded: {}", module, report.message);
+			item.message = std::format("The {} '{}' is not loaded: {}", kind, module, report.message);
 			break;
 		}
 		egLOG_WARN("editor/build", "live reload: {}", item.message);
