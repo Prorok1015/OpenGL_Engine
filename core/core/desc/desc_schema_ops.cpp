@@ -239,6 +239,30 @@ namespace desc
 			std::memcpy(address, &value, sizeof(T));
 		}
 
+		// entt::null of a 32-bit entity: what an entity field of a blob holds when it names none.
+		constexpr std::uint32_t null_entity = 0xFFFF'FFFFu;
+
+		// As the entity fields of C++ types read (desc_describe_ops.h): a null is no entity; a number names an entity
+		// of the snapshot being restored, so it is read only through ctx.entities (one it does not know reads as none).
+		bool read_entity(const json::value& in, const read_context& ctx, std::uint32_t& out)
+		{
+			if (in.is_null()) {
+				out = null_entity;
+				return true;
+			}
+			std::uint64_t raw = 0;
+			if (!read_uint64(in, raw) || raw > std::numeric_limits<std::uint32_t>::max()) {
+				return false;
+			}
+			if (!ctx.entities) {
+				egLOG_WARN("desc", "an entity reference is read only when a snapshot is restored, keeping the current one");
+				return false;
+			}
+			const auto restored = ctx.entities->find(static_cast<std::uint32_t>(raw));
+			out = restored ? *restored : null_entity;
+			return true;
+		}
+
 		json::value floats_to_json(const std::byte* address, std::size_t count)
 		{
 			json::array components;
@@ -256,8 +280,12 @@ namespace desc
 			case field_kind::boolean: out = json::value(load<std::uint8_t>(address) != 0); break;
 			case field_kind::i32: out = json::value(static_cast<std::int64_t>(load<std::int32_t>(address))); break;
 			case field_kind::i64: out = json::value(load<std::int64_t>(address)); break;
-			case field_kind::u32:
-			case field_kind::entity: out = json::value(static_cast<std::uint64_t>(load<std::uint32_t>(address))); break;
+			case field_kind::u32: out = json::value(static_cast<std::uint64_t>(load<std::uint32_t>(address))); break;
+			case field_kind::entity: {
+				const std::uint32_t raw = load<std::uint32_t>(address);
+				out = raw == null_entity ? json::value(nullptr) : json::value(static_cast<std::uint64_t>(raw));
+				break;
+			}
 			case field_kind::u64: out = json::value(load<std::uint64_t>(address)); break;
 			case field_kind::f32: out = json::value(static_cast<double>(load<float>(address))); break;
 			case field_kind::f64: out = json::value(load<double>(address)); break;
@@ -337,12 +365,19 @@ namespace desc
 				store<std::int64_t>(address, signed_value);
 				return true;
 			case field_kind::u32:
-			case field_kind::entity:
 				if (!read_integer_of_kind(ops.kind, in, signed_value, unsigned_value)) {
 					return false;
 				}
 				store<std::uint32_t>(address, static_cast<std::uint32_t>(unsigned_value));
 				return true;
+			case field_kind::entity: {
+				std::uint32_t raw = null_entity;
+				if (!read_entity(in, ctx, raw)) {
+					return false;
+				}
+				store<std::uint32_t>(address, raw);
+				return true;
+			}
 			case field_kind::u64:
 				if (!read_integer_of_kind(ops.kind, in, signed_value, unsigned_value)) {
 					return false;
@@ -410,12 +445,22 @@ namespace desc
 				if (!json_fits(ops.kind, ops.element, ops.enumeration.get(), in, ops.accepts_null)) {
 					return false;
 				}
+				json::value stored = in;
+				if (ops.kind == field_kind::array && ops.element == field_kind::entity && in.is_array()) {
+					for (json::value& item : stored.as_array()) {
+						std::uint32_t raw = null_entity;
+						if (!read_entity(item, ctx, raw)) {
+							return false;
+						}
+						item = raw == null_entity ? json::value(nullptr) : json::value(static_cast<std::uint64_t>(raw));
+					}
+				}
 				auto& handles = static_cast<const dyn_ref*>(obj)->blob->handles;
 				const std::uint32_t slot = load<std::uint32_t>(address);
 				if (slot != 0 && slot <= handles.size()) {
-					handles[slot - 1] = in;
+					handles[slot - 1] = std::move(stored);
 				} else {
-					handles.push_back(in);
+					handles.push_back(std::move(stored));
 					store<std::uint32_t>(address, static_cast<std::uint32_t>(handles.size()));
 				}
 				return true;
@@ -484,7 +529,10 @@ namespace desc
 			for (std::size_t i = 0; i < binding.ops.size(); ++i) {
 				const field_ops& ops = binding.ops[i];
 				const json::value& value = binding.schema->fields[i].default_value;
-				if (!value.is_null()) {
+				// An entity is no number of its own: zeroed bytes would name entity 0, a live one.
+				if (ops.kind == field_kind::entity) {
+					store<std::uint32_t>(blob_address(&ref, ops), null_entity);
+				} else if (!value.is_null()) {
 					ops.from_json(ops, &ref, value, read_context{});
 				} else if (ops.nested) {
 					apply_defaults(*ops.nested, dyn_ref{ ref.blob, ref.base + ops.offset });
@@ -710,8 +758,8 @@ namespace desc
 		case field_kind::i32:
 		case field_kind::i64:
 		case field_kind::u32:
-		case field_kind::u64:
-		case field_kind::entity: return read_integer_of_kind(kind, value, signed_value, unsigned_value);
+		case field_kind::u64: return read_integer_of_kind(kind, value, signed_value, unsigned_value);
+		case field_kind::entity: return value.is_null() || read_integer_of_kind(kind, value, signed_value, unsigned_value);
 		case field_kind::f32:
 		case field_kind::f64: return is_number(value);
 		case field_kind::vec2:
@@ -995,5 +1043,38 @@ namespace desc
 			}
 		}
 		return false;
+	}
+
+	void remap_entities(const schema_binding& binding, void* obj, const entity_remap& entities)
+	{
+		const auto remapped = [&entities](std::uint32_t raw) {
+			if (raw == null_entity) {
+				return null_entity;
+			}
+			const auto found = entities.find(raw);
+			return found ? *found : null_entity;
+		};
+		const auto* ref = static_cast<const dyn_ref*>(obj);
+		for (const field_ops& ops : binding.ops) {
+			if (ops.kind == field_kind::entity) {
+				std::byte* address = blob_address(obj, ops);
+				store<std::uint32_t>(address, remapped(load<std::uint32_t>(address)));
+			} else if (ops.kind == field_kind::structure && ops.nested) {
+				dyn_ref child{ ref->blob, ref->base + ops.offset };
+				remap_entities(*ops.nested, &child, entities);
+			} else if (ops.kind == field_kind::array && ops.element == field_kind::entity) {
+				const std::uint32_t slot = load<std::uint32_t>(blob_address(obj, ops));
+				if (slot == 0 || slot > ref->blob->handles.size() || !ref->blob->handles[slot - 1].is_array()) {
+					continue;
+				}
+				for (json::value& item : ref->blob->handles[slot - 1].as_array()) {
+					std::uint64_t raw = 0;
+					const std::uint32_t mapped = !item.is_null() && read_uint64(item, raw) && raw <= std::numeric_limits<std::uint32_t>::max()
+						? remapped(static_cast<std::uint32_t>(raw))
+						: null_entity;
+					item = mapped == null_entity ? json::value(nullptr) : json::value(static_cast<std::uint64_t>(mapped));
+				}
+			}
+		}
 	}
 }

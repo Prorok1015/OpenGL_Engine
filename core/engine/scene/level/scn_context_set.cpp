@@ -223,6 +223,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	w.set_desc_index(m_next_desc_index++);
 	if (m_layer) {
 		w.set_meta(&m_layer->meta());
+		w.set_catalog(&m_layer->catalog());
 	}
 	m_channel.attach(id, w.get_name(), w.state());
 	bind_events(w).set_mode(m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue);

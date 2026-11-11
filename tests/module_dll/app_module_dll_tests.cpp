@@ -14,6 +14,7 @@
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/scene/scn_schema_components.h>
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -178,6 +180,40 @@ BOOST_AUTO_TEST_CASE(module_code_switches_the_clips_of_a_model_with_play_animati
 	BOOST_TEST(controller.ticks_per_second == 12.0f);
 	BOOST_TEST(!controller.loop);
 	BOOST_TEST(controller.current_time == 0.0f);
+}
+
+// #606: a component the library describes by a schema alone lives in the worlds as a blob of the engine's code, and
+// goes with its pools when the library is unloaded.
+BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_goes_with_it)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	const scn::component_entry* entry = layer->catalog().find(dll_game::schema_component_name);
+	BOOST_REQUIRE(entry != nullptr);
+	BOOST_TEST(scn::is_schema_component(*entry));
+
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", R"json({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0",
+		 "components":{"h":{"__type":"dll.schema_health","hp":7}}}]})json")));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	const entt::id_type id = scn::schema_component_id(dll_game::schema_component_name);
+	const auto* pool = std::as_const(world->state()).storage<desc::dyn_blob>(id);
+	BOOST_REQUIRE(pool != nullptr);
+	BOOST_REQUIRE(pool->size() == 1u);
+	json::object saved;
+	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), *pool->begin(), saved));
+	BOOST_TEST(saved.at("hp").to_number<double>() == 7.0);
+	BOOST_TEST(saved.at("target").is_null()); // no value in the desc: no entity, not entity 0
+
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+	auto* after = contexts().game_layer();
+	BOOST_REQUIRE(after != nullptr);
+	BOOST_TEST(!after->catalog().find(dll_game::schema_component_name));
+	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
 }
 
 BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)

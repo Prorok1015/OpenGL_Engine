@@ -13,7 +13,9 @@
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <format>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +41,16 @@ constexpr const char* k_health_v2_schema = R"json({
 		{ "name": "hp", "kind": "f32", "default": 50 }
 	]
 })json";
+
+constexpr const char* k_link_schema = R"json({
+	"name": "mod.link", "kind": "component",
+	"fields": [ { "name": "n", "kind": "i32" }, { "name": "target", "kind": "entity" } ]
+})json";
+
+// Reads entity numbers as they are: the raw ids a test puts into a blob.
+struct identity_remap final : desc::entity_remap {
+	std::optional<std::uint32_t> find(std::uint32_t saved) const override { return saved; }
+};
 
 constexpr const char* k_level = R"json({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0",
@@ -137,6 +149,48 @@ struct schema_fixture : test_util::scene_env {
 		ctx.system = &layer->descs();
 		return ctx;
 	}
+
+	// A mod.link blob of `n` naming the raw entity `target` (null: none).
+	desc::dyn_blob link_blob(int n, std::optional<std::uint32_t> target) const
+	{
+		const desc::schema_binding& binding = *layer->catalog().find("mod.link")->schema;
+		desc::dyn_blob blob = desc::make_blob(binding);
+		desc::dyn_ref ref{ &blob, 0 };
+		boost::json::object in{ { "n", n } };
+		in["target"] = target ? boost::json::value(static_cast<std::uint64_t>(*target)) : boost::json::value(nullptr);
+		const identity_remap identity;
+		desc::read_context ctx;
+		ctx.entities = &identity;
+		desc::deserialize(binding, &ref, in, ctx);
+		return blob;
+	}
+
+	// The entity of `reg` whose mod.link has `n`.
+	entt::entity link_of(const entt::registry& reg, int n) const
+	{
+		const auto* pool = reg.storage<desc::dyn_blob>(scn::schema_component_id("mod.link"));
+		if (!pool) {
+			return entt::null;
+		}
+		const scn::component_entry& entry = *layer->catalog().find("mod.link");
+		for (const entt::entity entity : *pool) {
+			boost::json::object out;
+			if (entry.write(*entry.schema, reg, entity, out) && out.at("n").to_number<std::int64_t>() == n) {
+				return entity;
+			}
+		}
+		return entt::null;
+	}
+
+	boost::json::value target_of(const entt::registry& reg, entt::entity entity) const
+	{
+		const scn::component_entry& entry = *layer->catalog().find("mod.link");
+		boost::json::object out;
+		entry.write(*entry.schema, reg, entity, out);
+		return out.at("target");
+	}
+
+	static boost::json::value raw(entt::entity entity) { return boost::json::value(static_cast<std::uint64_t>(entt::to_integral(entity))); }
 
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
@@ -464,6 +518,132 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 	sandbox.storage<desc::dyn_blob>(id).emplace(sandbox.create());
 	world.apply_commands();
 	BOOST_TEST(log.count(id_text) == 1u); // once per id, not every frame
+}
+
+BOOST_AUTO_TEST_CASE(an_entity_field_without_a_value_names_no_entity)
+{
+	auto link = register_health(k_link_schema);
+	BOOST_REQUIRE(static_cast<bool>(link));
+	const desc::schema_binding& binding = *layer->catalog().find("mod.link")->schema;
+	desc::dyn_blob blob = desc::make_blob(binding);
+	desc::dyn_ref ref{ &blob, 0 };
+	boost::json::object out;
+	desc::serialize(binding, &ref, out);
+	BOOST_TEST(out.at("target").is_null()); // not entity 0, a live one in any world
+}
+
+BOOST_AUTO_TEST_CASE(a_snapshot_maps_the_entity_fields_to_the_restored_entities)
+{
+	auto link = register_health(k_link_schema);
+	BOOST_REQUIRE(static_cast<bool>(link));
+	scn::world_context source{ 1, "main" };
+	entt::registry& from = source.state();
+	const entt::entity pointee = from.create();
+	const entt::entity pointer = from.create();
+	scn::emplace_schema_component(from, pointee, link.id(), link_blob(2, std::nullopt));
+	scn::emplace_schema_component(from, pointer, link.id(), link_blob(1, entt::to_integral(pointee)));
+
+	scn::snapshot_report captured;
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	scn::world_context target{ 1, "copy" };
+	entt::registry& to = target.state();
+	to.create(); // shifts the ids: a field keeping the raw id would name another entity
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
+
+	const entt::entity restored_pointer = link_of(to, 1);
+	const entt::entity restored_pointee = link_of(to, 2);
+	BOOST_REQUIRE((restored_pointer != entt::null));
+	BOOST_REQUIRE((restored_pointee != entt::null));
+	BOOST_TEST((target_of(to, restored_pointer) == raw(restored_pointee)));
+	BOOST_TEST(target_of(to, restored_pointee).is_null());
+}
+
+BOOST_AUTO_TEST_CASE(sandbox_commands_move_the_component_and_map_its_entities)
+{
+	auto link = register_health(k_link_schema);
+	BOOST_REQUIRE(static_cast<bool>(link));
+	mgr.create_set("s", layer);
+	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
+	world.state().create(); // the world's ids differ from the sandbox's
+	world.state().create();
+	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
+	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
+	const auto first = sandbox.create();
+	const auto second = sandbox.create();
+	auto& pool = sandbox.storage<desc::dyn_blob>(link.id());
+	pool.emplace(first, link_blob(1, entt::to_integral(second)));
+	// A raw id the sandbox does not have: it may be another entity of the world, so it is dropped.
+	pool.emplace(second, link_blob(2, 4000u));
+	log_capture log;
+
+	world.apply_commands();
+	const entt::entity moved_first = link_of(world.state(), 1);
+	const entt::entity moved_second = link_of(world.state(), 2);
+	BOOST_REQUIRE((moved_first != entt::null));
+	BOOST_REQUIRE((moved_second != entt::null));
+	BOOST_TEST((target_of(world.state(), moved_first) == raw(moved_second)));
+	BOOST_TEST(target_of(world.state(), moved_second).is_null());
+	BOOST_TEST(log.count(std::to_string(link.id())) == 0u); // moved, not dropped
+	BOOST_TEST(sandbox.storage<desc::dyn_blob>(link.id()).empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_is_dropped)
+{
+	auto health = register_health();
+	BOOST_REQUIRE(static_cast<bool>(health));
+	mgr.create_set("s", layer);
+	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
+	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
+	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
+	sandbox.storage<desc::dyn_blob>(health.id()).emplace(sandbox.create(), desc::dyn_blob{});
+	world.apply_commands();
+	const auto* pool = std::as_const(world.state()).storage<desc::dyn_blob>(health.id());
+	BOOST_TEST((pool == nullptr || pool->empty()));
+}
+
+BOOST_AUTO_TEST_CASE(a_component_written_by_no_layout_is_reported_unsaved)
+{
+	auto health = register_health();
+	BOOST_REQUIRE(static_cast<bool>(health));
+	scn::world_context source{ 1, "main" };
+	scn::emplace_schema_component(source.state(), source.state().create(), health.id(), desc::dyn_blob{});
+	scn::snapshot_report captured;
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	BOOST_TEST(captured.unsaved.count("mod.health") == 1u);
+	BOOST_TEST(boost::json::serialize(snapshot).find("mod.health") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(a_hot_reload_to_another_layout_keeps_the_fields_both_have)
+{
+	scn::scene_layer& previous = *layer;
+	previous.keep(register_health());
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", k_level)));
+	pump();
+	scn::snapshot_report captured;
+	const boost::json::object snapshot = scn::capture_world(mgr.level_set().get("w0"), previous.catalog(), captured);
+
+	auto& next = mgr.create_layer();
+	auto v2 = scn::register_schema_component(mgr, next, schema_from(k_health_v2_schema));
+	BOOST_REQUIRE(static_cast<bool>(v2));
+	mgr.set_game_layer(&next);
+	mgr.destroy_layer(previous);
+	layer = &next;
+
+	mgr.create_set("restored", &next);
+	auto& target = mgr.create_context("restored", "w0", scn::context_kind::runtime);
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, next.catalog(), read_context(), restored));
+	const entt::entity holder = health_holder(target.state());
+	BOOST_REQUIRE((holder != entt::null));
+	const boost::json::object value = value_of(target.state(), holder);
+	BOOST_TEST(value.at("hp").to_number<double>() == 42.0);
+	BOOST_TEST((value.at("label").as_string() == "boss"));
+	BOOST_TEST(!value.contains("armor"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

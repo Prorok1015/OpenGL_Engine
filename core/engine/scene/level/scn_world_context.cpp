@@ -7,7 +7,60 @@
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/desc_schema_ops.h>
+#include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_schema_components.h>
+#include <entt/entity/snapshot.hpp>
+#include <cstdint>
+#include <optional>
 #include <unordered_set>
+
+namespace
+{
+	using sandbox_blob_pool = entt::storage_for_t<desc::dyn_blob, ecs::sandbox_entity>;
+
+	// The world entities the loader made for the sandbox ones. A raw id the sandbox does not have may name another
+	// entity of the world: it reads as none, as an entity member of a C++ component does.
+	class loader_remap final : public desc::entity_remap
+	{
+	public:
+		explicit loader_remap(const entt::continuous_loader& loader) : m_loader(loader) {}
+
+		std::optional<std::uint32_t> find(std::uint32_t saved) const override
+		{
+			const auto entity = static_cast<entt::entity>(saved);
+			if (!m_loader.contains(entity)) {
+				return std::nullopt;
+			}
+			return entt::to_integral(m_loader.map(entity));
+		}
+
+	private:
+		const entt::continuous_loader& m_loader;
+	};
+
+	// The sandbox pool of a component without a C++ type, into the world entities the loader made.
+	void move_schema_pool(entt::registry& state, const entt::continuous_loader& loader, const sandbox_blob_pool& pool, entt::id_type id,
+		const desc::schema_binding& schema)
+	{
+		const loader_remap entities{ loader };
+		for (const ecs::sandbox_entity owner : static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>&>(pool)) {
+			const auto target = static_cast<entt::entity>(entt::to_integral(owner));
+			if (!loader.contains(target)) {
+				continue;
+			}
+			desc::dyn_blob blob = pool.get(owner);
+			// Made by module code against another layout of the schema: reading it by this one's offsets overruns it.
+			if (blob.bytes.size() != schema.schema->layout.size) {
+				egLOG_ERROR("ecs", "a '{}' component from the commands is dropped: its blob is not laid out by the registered schema", schema.schema->name);
+				continue;
+			}
+			desc::dyn_ref ref{ &blob, 0 };
+			desc::remap_entities(schema, &ref, entities);
+			scn::emplace_schema_component(state, loader.map(target), id, std::move(blob));
+		}
+	}
+}
 
 scn::world_context::world_context(uint32_t id, std::string_view name)
 	: m_id(id), m_name(name)
@@ -113,6 +166,11 @@ void scn::world_context::run_phase(size_t order_index, ecs::run_mode mode, const
 
 void scn::world_context::apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta)
 {
+	apply_commands(state, layer_meta, nullptr);
+}
+
+void scn::world_context::apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta, const component_catalog* catalog)
+{
 	if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
 		changer->apply(state);
 	}
@@ -137,8 +195,14 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 					continue;
 				}
 			}
-			// Not silent (#606): a component without meta (one without a C++ type among them, until it is moved here)
-			// loses what the commands gave it. Once per storage id, the drop repeats every frame. Unsynchronized:
+			if (catalog && storage.type() == entt::type_id<desc::dyn_blob>()) {
+				if (const scn::component_entry* entry = catalog->find(id); entry && scn::is_schema_component(*entry)) {
+					move_schema_pool(state, loader, static_cast<const sandbox_blob_pool&>(storage), id, *entry->schema);
+					continue;
+				}
+			}
+			// Not silent (#606): a component without meta, or one without a C++ type the catalog does not know, loses
+			// what the commands gave it. Once per storage id, the drop repeats every frame. Unsynchronized:
 			// apply_commands runs on the main thread only.
 			static std::unordered_set<entt::id_type> warned;
 			if (warned.insert(id).second) {

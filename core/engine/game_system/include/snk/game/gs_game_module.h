@@ -75,7 +75,7 @@ namespace gs
 		// With an input router, the layer keeps a cleanup that takes every input stack layer of the module away when the layer goes
 		// (unload, code reload): a module's layers never outlive it in a set that survives it.
 		module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks,
-			inp::input_router* input = nullptr, const scn::context_manager* contexts = nullptr);
+			inp::input_router* input = nullptr, scn::context_manager* contexts = nullptr);
 
 		// A command in the process-wide registry; false when there is none or it refused the command (logged).
 		bool add_command(cmd::command_desc desc);
@@ -113,6 +113,12 @@ namespace gs
 			return m_layer.keep(m_layer.subscriptions().observe<T>(std::move(filter), what, std::move(fn)));
 		}
 
+		// A component without a C++ type, described by `schema` alone (#606): its desc type, spawner, name and catalog
+		// entry go into the layer, which keeps the registration until it goes (the component's pools in the layer's
+		// worlds are cleared then). False when it is refused (logged): no component schema, a taken name or id, a
+		// schema that cannot be bound.
+		bool register_component(desc::type_schema schema);
+
 		// The input stack of `set` (module API 3.7). A set that does not exist (`"play"` while Play does not run) gives an empty
 		// handle and an error in the log: the stack lives and dies with its set, the file of the level holds the defaults.
 		input_stack_handle input_stack(std::string_view set) const;
@@ -123,7 +129,7 @@ namespace gs
 		ds::task_system* m_tasks = nullptr;
 		cfg::config_view m_config;
 		inp::input_router* m_input = nullptr;
-		const scn::context_manager* m_contexts = nullptr;
+		scn::context_manager* m_contexts = nullptr;
 	};
 
 	// The engine's module_layer_factory: while a game module is loaded its layer is the game layer, and a fresh empty

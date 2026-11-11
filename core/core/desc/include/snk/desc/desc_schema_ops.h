@@ -104,8 +104,12 @@ namespace desc
 	// field's schema is missing. The schema needs its layout (parse_type_schema / compute_layout).
 	SNK_API std::shared_ptr<const schema_binding> bind_runtime(type_schema schema, const schema_registry& resolve);
 
-	// A zeroed blob of schema.layout.size bytes with every field set to its default.
+	// A zeroed blob of schema.layout.size bytes with every field set to its default (an entity field: no entity).
 	SNK_API dyn_blob make_blob(const schema_binding& binding);
+	// Rewrites every entity `obj` (a dyn_ref into a runtime blob) names through `entities`, in nested structures and
+	// entity arrays too: one it does not know becomes no entity, as entities restored from a snapshot do. For a blob
+	// moved into another registry (#606).
+	SNK_API void remap_entities(const schema_binding& binding, void* obj, const entity_remap& entities);
 
 	// Writes every field under its key in `out`, in schema order, honoring the field's write policy (write_policy::never
 	// skips the field, null_if_empty writes an explicit null for an empty value). Keys already in `out` stay.
