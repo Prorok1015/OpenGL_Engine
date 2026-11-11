@@ -12,6 +12,7 @@
 #include <snk/scene/level/scn_world_snapshot.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_schema_components.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/scene/scn_time.h>
 #include <boost/json.hpp>
@@ -362,7 +363,7 @@ namespace {
 		for (const entt::entity entity : live) {
 			if (under && !subtree.contains(index_of(entity))) continue;
 			if (!names.empty() && !names.matches(name_of(reg, entity))) continue;
-			if (!std::ranges::all_of(required, [&](const scn::component_entry* entry) { return entry->contains(reg, entity); })) continue;
+			if (!std::ranges::all_of(required, [&](const scn::component_entry* entry) { return scn::holds(*entry, reg, entity); })) continue;
 			if (static_cast<std::int64_t>(items.size()) >= page_size || bytes >= edt::runtime_page_max_bytes) {
 				more = true;
 				break;

@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_editor_camera.h"
+#include "edt_play_preflight.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/ecs/ecs_system_registry.hpp>
@@ -69,6 +70,10 @@ namespace edt
 		// ::revert, never from inside the swap), whose swap brings Play back in the previous build; end_revert after the
 		// call. Gets the module of that reload. Null: Play stops instead (HOT_RELOAD_PLAY.md 3.5).
 		std::function<void(const std::string& module)> revert_module{};
+		// The check before Play (#597, run_play_preflight; the editor also shows it in Problems). A start by a person or an
+		// agent with an error in it is refused unless a person allowed it (allow_problems_once); the restarts after a
+		// module reload are not checked. Null: no check.
+		std::function<std::vector<preflight_problem>()> preflight{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
@@ -98,8 +103,17 @@ namespace edt
 		// Why start() would be refused now; nullopt: it would start.
 		std::optional<std::string> start_refusal() const;
 		// False (logged to "play") when refused: already active or stopping, no level with a world, a level or asset
-		// load in flight (start_blocker), a leftover set "play".
+		// load in flight (start_blocker), a leftover set "play", an error of the check before Play (a start by a person or
+		// an agent; see allow_problems_once).
 		bool start(play_reason reason = play_reason::user);
+		// What the check of the last start() found; empty when that start was not checked (refused before it, a restart
+		// after a module reload, no options.preflight) or a person let its errors through. Errors in it: the check is what
+		// refused that start; play.start and editor.mode answer the refusal with it.
+		const std::vector<preflight_problem>& last_check() const { return m_last_check; }
+		// A person saw the problems and plays anyway: the next start() lets errors of the check through, once.
+		void allow_problems_once() { m_problems_allowed = true; }
+		bool problems_allowed() const { return m_problems_allowed; }
+		void drop_problems_allowance() { m_problems_allowed = false; }
 		// Nothing when stopped or already stopping (a handler of an event raised during Stop may call it).
 		void stop(play_reason reason = play_reason::user);
 		// The set's mode Pause / Play. False when not active (or nothing to change).
@@ -273,5 +287,7 @@ namespace edt
 		editor_camera_state m_play_camera;
 		std::string m_camera_world;
 		connection m_world_changed;
+		bool m_problems_allowed = false;
+		std::vector<preflight_problem> m_last_check;
 	};
 }

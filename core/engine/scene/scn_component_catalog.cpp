@@ -1,6 +1,7 @@
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <format>
 
 const scn::component_entry* scn::component_catalog::add_entry(component_entry entry)
 {
@@ -82,7 +83,12 @@ std::vector<scn::unregistered_storage> scn::unregistered_storages(const entt::re
 		if (storage.empty() || catalog.find(id)) {
 			continue;
 		}
-		result.push_back({ id, std::string{ storage.type().name() } });
+		// Every pool of a component without a C++ type has the same element type: its id is what tells them apart.
+		if (storage.type() == entt::type_id<desc::dyn_blob>()) {
+			result.push_back({ id, std::format("component without a C++ type (id {})", id) });
+		} else {
+			result.push_back({ id, std::string{ storage.type().name() } });
+		}
 	}
 	return result;
 }

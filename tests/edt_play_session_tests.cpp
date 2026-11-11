@@ -13,6 +13,7 @@
 #include "edt_level_controller.h"
 #include "edt_module_swap_gate.h"
 #include "edt_play_commands.h"
+#include "edt_play_preflight.h"
 #include "edt_play_session.h"
 #include "edt_runtime_commands.h"
 #include "edt_agent_access.h"
@@ -36,6 +37,7 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
+#include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/input/inp_ecs_input_manager.h>
@@ -60,6 +62,8 @@
 #include <snk/scene/scn_event_subscriptions.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/desc/desc_schema.h>
+#include <snk/scene/scn_schema_components.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -351,11 +355,15 @@ struct play_fixture : test_util::module_env
 	// The project a module reload writes its report into, and what it told the person.
 	test_util::temp_dir report_root{ "edt_play_reload_report" };
 	std::vector<std::string> notices;
+	// What the check before Play finds (#597), and how often it ran.
+	std::vector<edt::preflight_problem> preflight_found;
+	int preflight_runs = 0;
 	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router,
 		.start_blocker = [this] { return start_blocked; }, .forget_runtime_entities = [this] { ++forgotten; },
 		.each_frame = [this](const std::string& id, std::function<bool()> poll) { reload_polls.emplace_back(id, std::move(poll)); },
 		.now = [this] { return clock; }, .pending_resources = [this] { return pending_resources; },
-		.project_root = report_root.path(), .notify = [this](const std::string& message) { notices.push_back(message); } } };
+		.project_root = report_root.path(), .notify = [this](const std::string& message) { notices.push_back(message); },
+		.preflight = [this] { ++preflight_runs; return preflight_found; } } };
 	// What a restore waits for (the game layer's loads in flight in the editor): the tests decide when it is there.
 	std::size_t pending_resources = 0;
 	int forgotten = 0;
@@ -2905,6 +2913,512 @@ BOOST_AUTO_TEST_CASE(a_toggle_allowed_by_its_own_entry_does_not_open_a_play_comm
 	BOOST_TEST(start.error.find("play.start needs a person's approval") != std::string::npos);
 	BOOST_TEST(!play.active());
 	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+}
+
+BOOST_AUTO_TEST_CASE(an_agents_switch_to_the_game_is_refused_by_the_check_before_play_with_its_list)
+{
+	open_level();
+	edt::preflight_problem broken;
+	broken.item.severity = edt::problem_severity::error;
+	broken.item.code = "unknown_component";
+	broken.item.message = "world 'w0': broken";
+	broken.target.world = "w0";
+	preflight_found = { broken };
+
+	const cmd::result refused = agent_toggle(R"({"mode":"game"})");
+	BOOST_TEST(!refused.ok);
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(refused.error.find("check before Play") != std::string::npos);
+	const json::array& problems = refused.value.as_object().at("problems").as_array();
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST(problems[0].as_object().at("code").as_string() == "unknown_component");
+	BOOST_TEST(!play.active());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The check before Play (#597): what it finds in the document, without loading or writing anything.
+namespace {
+
+edt::preflight_problem a_preflight(edt::problem_severity severity, std::string code = "unknown_component")
+{
+	edt::preflight_problem p;
+	p.item.severity = severity;
+	p.item.code = std::move(code);
+	p.item.message = "world 'w0': component 'stat': broken";
+	p.item.notes = { "/worlds/0/children/1/components/stat" };
+	p.target.world = "w0";
+	p.target.path = { crate_id };
+	return p;
+}
+
+struct preflight_fixture : play_fixture
+{
+	edt::play_preflight_services checks()
+	{
+		edt::play_preflight_services out;
+		out.systems = &sf.registry();
+		out.descs = descs.get();
+		out.resources = rs.get();
+		out.assembler = assembler.get();
+		return out;
+	}
+
+	scn::prefab_desc::prefab_node& crate() { return state.world_descs[0].get_root().children.at(1); }
+	scn::prefab_desc::prefab_node& cam() { return state.world_descs[0].get_root().children.at(0); }
+
+	// The row at `note` (a JSON pointer); with `code`, only one of that code.
+	static const edt::preflight_problem* with_note(const std::vector<edt::preflight_problem>& found, std::string_view note,
+		std::string_view code = {})
+	{
+		const auto it = std::ranges::find_if(found, [note, code](const edt::preflight_problem& p) {
+			return !p.item.notes.empty() && p.item.notes.front() == note && (code.empty() || p.item.code == code);
+		});
+		return it == found.end() ? nullptr : &*it;
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_play_preflight_tests, preflight_fixture)
+
+BOOST_AUTO_TEST_CASE(a_clean_level_has_nothing_to_report_and_the_check_changes_nothing)
+{
+	open_level();
+	const std::uint64_t generation = state.generation();
+	const std::string before = level_json();
+
+	BOOST_TEST(edt::run_play_preflight(state, checks()).empty());
+	BOOST_TEST(state.generation() == generation);
+	BOOST_TEST(!state.is_dirty());
+	BOOST_TEST(level_json() == before);
+}
+
+BOOST_AUTO_TEST_CASE(a_component_type_nobody_registered_is_an_error_that_leads_to_its_node)
+{
+	open_level();
+	scn::prefab_desc::prefab_comp_node ghost;
+	ghost.type_name = "ghost_desc";
+	crate().components["ghost"] = std::move(ghost);
+
+	const auto found = edt::run_play_preflight(state, checks());
+	BOOST_REQUIRE(found.size() == 1u);
+	const edt::preflight_problem& row = found.front();
+	BOOST_TEST((row.item.severity == edt::problem_severity::error));
+	BOOST_TEST(row.item.code == "unknown_component");
+	BOOST_TEST(row.item.message.find("ghost_desc") != std::string::npos);
+	BOOST_TEST(row.item.message.starts_with("world 'w0': "));
+	BOOST_TEST(row.item.file == "t/lv.desc");
+	BOOST_REQUIRE(row.item.notes.size() == 1u);
+	BOOST_TEST(row.item.notes[0] == "/worlds/0/children/1/components/ghost");
+	BOOST_TEST(row.target.world == "w0");
+	BOOST_TEST((row.target.path == std::vector<std::uint64_t>{ crate_id }));
+	BOOST_TEST(edt::has_errors(found));
+}
+
+BOOST_AUTO_TEST_CASE(a_field_the_schema_does_not_know_is_an_error_at_its_pointer)
+{
+	open_level();
+	cam().components.at("camera").overrides["bogus"] = 1;
+
+	const auto found = edt::run_play_preflight(state, checks());
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].item.code == "schema");
+	BOOST_TEST((found[0].item.severity == edt::problem_severity::error));
+	BOOST_TEST(found[0].item.message.find("bogus") != std::string::npos);
+	BOOST_TEST(found[0].item.notes.at(0) == "/worlds/0/children/0/components/camera/bogus");
+	BOOST_TEST((found[0].target.path == std::vector<std::uint64_t>{ cam_id }));
+}
+
+// A component of #606 (#703): described only by a schema, registered in the game layer. The editor's services are the
+// layer's, so the checks of any component apply to it: the type is registered, its schema judges the fields, it spawns.
+BOOST_AUTO_TEST_CASE(a_component_described_only_by_a_schema_is_checked_by_its_schema)
+{
+	open_level();
+	scn::scene_layer* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer);
+	auto registration = scn::register_schema_component(contexts(), *layer, desc::parse_type_schema(json::parse(R"json({
+		"name": "mod.health", "kind": "component",
+		"fields": [ { "name": "hp", "kind": "f32", "default": 100 } ]
+	})json").as_object()));
+	BOOST_REQUIRE(static_cast<bool>(registration));
+	edt::play_preflight_services services = checks();
+	services.descs = &layer->descs();
+	services.assembler = &layer->assembler();
+
+	scn::prefab_desc::prefab_comp_node health;
+	health.type_name = "mod.health";
+	health.overrides["hp"] = 42;
+	crate().components["health"] = health;
+	BOOST_TEST(edt::run_play_preflight(state, services).empty());
+
+	crate().components["health"].overrides["hp"] = "lots";
+	auto found = edt::run_play_preflight(state, services);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].item.code == "schema");
+	BOOST_TEST(found[0].item.notes.at(0) == "/worlds/0/children/1/components/health/hp");
+
+	crate().components["health"].overrides.erase("hp");
+	crate().components["health"].overrides["mana"] = 3;
+	found = edt::run_play_preflight(state, services);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].item.code == "schema");
+	BOOST_TEST(found[0].item.message.find("no such field") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(a_type_nothing_spawns_is_only_a_warning)
+{
+	open_level();
+	descs->register_component_desc<play_game_desc>("lonely_desc");
+	scn::prefab_desc::prefab_comp_node lonely;
+	lonely.type_name = "lonely_desc";
+	crate().components["lonely"] = std::move(lonely);
+
+	const auto found = edt::run_play_preflight(state, checks());
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].item.code == "no_spawner");
+	BOOST_TEST((found[0].item.severity == edt::problem_severity::warning));
+	BOOST_TEST(!edt::has_errors(found));
+}
+
+BOOST_AUTO_TEST_CASE(a_tag_field_holds_a_reference_any_other_text_only_warns_about_a_missing_file)
+{
+	open_level();
+	const res::tag there = put("there.desc", "{}");
+	scn::prefab_desc::prefab_comp_node refused_sky;
+	refused_sky.type_name = "skybox_desc";
+	refused_sky.overrides["material"] = "user://saves/m.desc";
+	crate().components["sky"] = std::move(refused_sky);
+	scn::prefab_desc::prefab_comp_node missing_sky;
+	missing_sky.type_name = "skybox_desc";
+	missing_sky.overrides["material"] = tag_of("gone_mat.desc").string();
+	cam().components["sky"] = std::move(missing_sky);
+	// stat_desc has no schema: nothing says which of its fields hold a tag.
+	json::object& fields = crate().components.at("stat").overrides;
+	fields["url"] = "https://example.com/page";
+	fields["note"] = "user://saves/a.png";
+	fields["mesh"] = tag_of("gone.desc").string();
+	fields["list"] = json::array{ there.string() };
+	const std::size_t live = rs->live_resources();
+	const std::size_t pending = rs->pending_loads();
+
+	const auto found = edt::run_play_preflight(state, checks());
+	const auto* refused = with_note(found, "/worlds/0/children/1/components/sky/material", "reference");
+	BOOST_REQUIRE(refused);
+	BOOST_TEST((refused->item.severity == edt::problem_severity::error));
+	const auto* missing = with_note(found, "/worlds/0/children/0/components/sky/material", "missing_resource");
+	BOOST_REQUIRE(missing);
+	BOOST_TEST((missing->item.severity == edt::problem_severity::error));
+	const auto* loose = with_note(found, "/worlds/0/children/1/components/stat/mesh", "missing_resource");
+	BOOST_REQUIRE(loose);
+	BOOST_TEST((loose->item.severity == edt::problem_severity::warning));
+	// An engine protocol the rule of #697 refuses: the loader would refuse it at run time, so it is said, as a warning.
+	const auto* refused_loose = with_note(found, "/worlds/0/children/1/components/stat/note", "reference");
+	BOOST_REQUIRE(refused_loose);
+	BOOST_TEST((refused_loose->item.severity == edt::problem_severity::warning));
+	BOOST_TEST(!edt::has_errors({ *loose, *refused_loose }));
+	for (const char* quiet : { "/url", "/list/0" }) {
+		BOOST_TEST(!with_note(found, std::string("/worlds/0/children/1/components/stat") + quiet), quiet);
+	}
+	BOOST_TEST(rs->live_resources() == live);
+	BOOST_TEST(rs->pending_loads() == pending);
+}
+
+BOOST_AUTO_TEST_CASE(a_web_address_in_a_text_field_does_not_stop_an_agent)
+{
+	open_level();
+	crate().components.at("stat").overrides["label"] = "https://example.com";
+	const auto found = edt::run_play_preflight(state, checks());
+	BOOST_TEST(found.empty());
+	BOOST_TEST(!edt::has_errors(found));
+}
+
+BOOST_AUTO_TEST_CASE(a_component_given_as_a_tag_has_the_type_of_the_desc_it_refers_to)
+{
+	open_level();
+	const res::tag stat = put("stat_ref.desc", R"({"__type":"stat_desc","hp":2})");
+	scn::prefab_desc::prefab_comp_node given;
+	given.parent_desc = rs->require_sync<desc::desc_base>(stat);
+	BOOST_REQUIRE(given.parent_desc.is_ready());
+	// The key is a name, not a type (`"skybox": "res://skybox/skybox.desc"` of the sandbox's level).
+	crate().components["skybox"] = std::move(given);
+
+	BOOST_TEST(edt::run_play_preflight(state, checks()).empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_parent_that_did_not_load_is_an_error)
+{
+	open_level();
+	scn::prefab_desc::prefab_comp_node child;
+	child.type_name = "stat_desc";
+	child.parent_desc = rs->require<desc::desc_base>(tag_of("gone_parent.desc"));
+	pump();
+	BOOST_REQUIRE(child.parent_desc.has_error());
+	crate().components["child"] = std::move(child);
+
+	const auto found = edt::run_play_preflight(state, checks());
+	const auto* row = with_note(found, "/worlds/0/children/1/components/child/__parent");
+	BOOST_REQUIRE(row);
+	BOOST_TEST(row->item.code == "missing_resource");
+	BOOST_TEST((row->item.severity == edt::problem_severity::error));
+}
+
+BOOST_AUTO_TEST_CASE(a_system_nobody_registered_is_reported_for_its_world)
+{
+	open_level();
+	state.worlds_systems_list.at(1) = { "nope::system" };
+
+	const auto found = edt::run_play_preflight(state, checks());
+	const auto* row = with_note(found, "/worlds/1/systems");
+	BOOST_REQUIRE(row);
+	BOOST_TEST(row->item.code == "unknown_system");
+	BOOST_TEST(row->target.world == "w1");
+	BOOST_TEST(row->target.path.empty());
+}
+
+BOOST_AUTO_TEST_CASE(the_source_play_shows_the_last_check_and_leads_to_its_nodes)
+{
+	edt::editor_events problem_events;
+	edt::problem_list problems{ &problem_events };
+	edt::play_preflight_publisher publisher;
+
+	publisher.publish(problems, { a_preflight(edt::problem_severity::error) });
+	const auto rows = problems.list();
+	BOOST_REQUIRE(rows.size() == 1u);
+	BOOST_TEST(rows[0].source == "play");
+	const auto target = publisher.target_of(rows[0].item);
+	BOOST_REQUIRE(target.has_value());
+	BOOST_TEST((target->path == std::vector<std::uint64_t>{ crate_id }));
+
+	const std::uint64_t generation = problems.generation();
+	publisher.publish(problems, { a_preflight(edt::problem_severity::error) });
+	BOOST_TEST(problems.generation() == generation); // the same rows again: nothing to redraw
+
+	publisher.publish(problems, {});
+	BOOST_TEST(problems.size() == 0u);
+	BOOST_TEST(!publisher.target_of(rows[0].item).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(edt_play_preflight_gate_tests, play_fixture)
+
+BOOST_AUTO_TEST_CASE(an_error_stops_a_person_and_an_agent_until_a_person_allows_it_once)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+
+	BOOST_TEST(!play.start(edt::play_reason::user));
+	BOOST_TEST(!play.start(edt::play_reason::agent));
+	BOOST_TEST(play.last_check().size() == 1u);
+	BOOST_TEST(play_set() == nullptr);
+	BOOST_TEST(!state.edits_locked());
+
+	play.allow_problems_once();
+	BOOST_TEST(!play.start(edt::play_reason::agent)); // never an agent's way around it
+	BOOST_TEST(!play.problems_allowed());
+
+	play.allow_problems_once();
+	BOOST_TEST(play.start(edt::play_reason::user));
+	BOOST_TEST(!play.problems_allowed());
+	play.stop();
+
+	BOOST_TEST(!play.start(edt::play_reason::user)); // once: the next start is checked again
+}
+
+BOOST_AUTO_TEST_CASE(warnings_do_not_stop_play)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::warning, "no_spawner") };
+	BOOST_TEST(play.start(edt::play_reason::agent));
+	BOOST_TEST(preflight_runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(the_restart_after_a_module_reload_is_not_checked)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+	BOOST_TEST(play.start(edt::play_reason::module_reloaded));
+	BOOST_TEST(preflight_runs == 0);
+	BOOST_TEST(play.last_check().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+struct preflight_commands_fixture : play_commands_fixture
+{
+	preflight_commands_fixture()
+	{
+		dialogs.set_registrar([this](std::string_view, std::function<bool()> draw) { dialog_frames.push_back(std::move(draw)); });
+	}
+
+	~preflight_commands_fixture() { person_commands.clear(); }
+
+	void run_dialog_frames()
+	{
+		for (int i = 0; i < 4 && !dialog_frames.empty(); ++i) {
+			auto frames = std::move(dialog_frames);
+			dialog_frames.clear();
+			for (auto& frame : frames) {
+				if (frame()) dialog_frames.push_back(std::move(frame));
+			}
+		}
+	}
+
+	edt::dialog_service::dialog_id the_question() const
+	{
+		const auto waiting = dialogs.list();
+		BOOST_REQUIRE(waiting.size() == 1u);
+		BOOST_REQUIRE(waiting[0].kind == "choice");
+		return waiting[0].id;
+	}
+
+	edt::dialog_service dialogs;
+	std::vector<std::function<bool()>> dialog_frames;
+	int problems_shown = 0;
+	// The menu of a person: what editor_system registers, with the question.
+	edt::action_registry person_actions;
+	std::vector<edt::registration> person_commands = edt::register_play_commands(person_actions,
+		{ .play = [this] { return &play; }, .person_is_editing = [this] { return editing; }, .dialogs = &dialogs,
+			.show_problems = [this] { ++problems_shown; } });
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_play_preflight_commands_tests, preflight_commands_fixture)
+
+BOOST_AUTO_TEST_CASE(an_agent_is_refused_with_the_list_of_problems_and_play_does_not_start)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error), a_preflight(edt::problem_severity::warning, "no_spawner") };
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "play") warnings.emplace_back(message);
+	});
+
+	const edt::action_result refused = actions.invoke("play.start", json::object{}, cmd::origin::agent("agent-1"));
+	BOOST_TEST(!refused.ok);
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	const json::array& problems = refused.value.as_object().at("problems").as_array();
+	BOOST_REQUIRE(problems.size() == 2u);
+	BOOST_TEST(json::serialize(problems[0]) == R"json({"severity":"error","code":"unknown_component","message":"world 'w0': component 'stat': broken","world":"w0","path":["00000000000000a2"],"json_path":"/worlds/0/children/1/components/stat"})json");
+	BOOST_TEST(problems[1].as_object().at("severity").as_string() == "warning");
+	BOOST_TEST(!play.active());
+	BOOST_TEST(preflight_runs == 1); // one check per start
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0].find("(agent)") != std::string::npos);
+	BOOST_TEST(warnings[0].find("1 error(s)") != std::string::npos);
+
+	BOOST_TEST(call_tool("play_start").is_error);
+	BOOST_TEST(!play.active());
+
+	play.allow_problems_once();
+	BOOST_TEST(actions.invoke("play.start", json::object{}, cmd::origin::agent("agent-1")).code == cmd::codes::failed);
+	BOOST_TEST(!play.active());
+	BOOST_TEST(!play.problems_allowed());
+}
+
+BOOST_AUTO_TEST_CASE(a_start_let_past_the_check_that_fails_otherwise_says_so_not_the_check)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+	contexts().create_set(edt::k_play_set, nullptr, scn::set_options{ .hot_reload = false });
+
+	play.allow_problems_once();
+	const edt::action_result refused = person_actions.invoke("play.start", json::object{});
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(refused.error.find("check before Play") == std::string::npos);
+	BOOST_TEST(play.last_check().empty());
+	BOOST_TEST(!play.active());
+	contexts().destroy_set(edt::k_play_set);
+}
+
+BOOST_AUTO_TEST_CASE(an_answer_after_the_commands_are_gone_does_nothing)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+
+	BOOST_REQUIRE(person_actions.activate("play.start"));
+	const auto question = the_question();
+	person_commands.clear();
+
+	BOOST_TEST(dialogs.answer(question, json::parse(R"({"index":1})")).ok);
+	BOOST_TEST(problems_shown == 0);
+	BOOST_TEST(!play.active());
+	BOOST_TEST(!play.problems_allowed());
+}
+
+BOOST_AUTO_TEST_CASE(a_persons_call_needs_an_answer_and_play_anyway_starts_it_once)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+
+	BOOST_TEST(person_actions.invoke("play.start", json::object{}).code == cmd::codes::needs_input);
+	BOOST_REQUIRE(person_actions.activate("play.start"));
+	BOOST_TEST(!play.active());
+	const auto question = the_question();
+	BOOST_TEST(dialogs.list()[0].text.find("world 'w0': component 'stat': broken") != std::string::npos);
+
+	BOOST_TEST(dialogs.answer(question, json::parse(R"({"index":0})")).ok);
+	BOOST_TEST(play.active());
+	BOOST_TEST(!play.problems_allowed());
+	BOOST_TEST(problems_shown == 0);
+}
+
+BOOST_AUTO_TEST_CASE(cancel_keeps_play_off_and_show_problems_opens_them)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+
+	BOOST_REQUIRE(person_actions.activate("play.start"));
+	BOOST_TEST(dialogs.answer(the_question(), json::parse(R"({"index":1})")).ok);
+	BOOST_TEST(problems_shown == 1);
+	BOOST_TEST(!play.active());
+
+	BOOST_REQUIRE(person_actions.activate("play.start"));
+	BOOST_TEST(dialogs.answer(the_question(), json::parse(R"({"index":2})")).ok);
+	BOOST_TEST(!play.active());
+	BOOST_TEST(!play.problems_allowed());
+}
+
+BOOST_AUTO_TEST_CASE(headless_nobody_answers_play_stays_off_and_the_log_says_why)
+{
+	open_level();
+	preflight_found = { a_preflight(edt::problem_severity::error) };
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "play") warnings.emplace_back(message);
+	});
+	edt::dialog_auto_answer nobody;
+	nobody.cancel_all = true;
+	nobody.warn_headless = true;
+	dialogs.set_auto_answer(nobody);
+
+	BOOST_REQUIRE(person_actions.activate("play.start"));
+	run_dialog_frames();
+
+	BOOST_TEST(dialogs.pending() == 0u);
+	BOOST_TEST(!play.active());
+	// The refusal of start() and the cancelled question.
+	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("nobody allowed it") != std::string::npos; }) == 1);
+}
+
+BOOST_AUTO_TEST_CASE(a_refusal_of_another_kind_is_said_not_greyed)
+{
+	open_level();
+	start_blocked = "a level is loading";
+
+	BOOST_TEST(person_actions.items("Play").at(0).enabled);
+	BOOST_REQUIRE(person_actions.activate("play.start"));
+	const auto waiting = dialogs.list();
+	BOOST_REQUIRE(waiting.size() == 1u);
+	BOOST_TEST(waiting[0].kind == "message");
+	BOOST_TEST(waiting[0].text.find("a level is loading") != std::string::npos);
+	BOOST_TEST(!play.active());
+	BOOST_TEST(preflight_runs == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

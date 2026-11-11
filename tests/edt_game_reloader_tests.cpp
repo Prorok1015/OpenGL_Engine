@@ -4,6 +4,7 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/project/prj_project.h>
 #include <boost/json/object.hpp>
 #include <cstddef>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -502,6 +504,180 @@ BOOST_AUTO_TEST_CASE(before_reload_runs_right_before_the_swap_and_only_then)
 	BOOST_TEST((reloader->reload_quiet("game").status == core::reload_status::reloaded));
 	BOOST_TEST(order == (std::vector<std::string>{ "before game", "swap game" }));
 	BOOST_TEST(logs.count("an engine component has no schema. Play restarts") == 1u);
+}
+
+// Editor modules (#664): named in `modules` after the runtime ones, reloaded on their own, never with a Play snapshot.
+BOOST_AUTO_TEST_CASE(the_modules_of_a_project_come_runtime_first_then_editor_in_manifest_order)
+{
+	prj::project_context project;
+	const auto module = [](std::string name, prj::module_kind kind) {
+		prj::module_ref ref;
+		ref.name = std::move(name);
+		ref.kind = kind;
+		return ref;
+	};
+	project.data.modules = { module("e1", prj::module_kind::editor), module("g1", prj::module_kind::runtime),
+		module("e2", prj::module_kind::editor), module("g2", prj::module_kind::runtime) };
+	BOOST_TEST((edt::project_module_names(project) == std::vector<std::string>{ "g1", "g2", "e1", "e2" }));
+}
+
+struct editor_reloader_fixture : reloader_fixture
+{
+	editor_reloader_fixture()
+	{
+		modules = { "game", "game_editor", "other_editor" };
+	}
+
+	edt::game_reloader_options editor_options()
+	{
+		auto opts = options();
+		opts.is_editor_module = [](const std::string& module) { return module != "game"; };
+		opts.is_current = [this](const std::string& module) { return current.contains(module); };
+		opts.before_reload = [this](const std::string& module) {
+			before.push_back(module);
+			return std::string{};
+		};
+		opts.unloads_editor_modules = [this](const std::string&) { return unloads_editors; };
+		return opts;
+	}
+
+	std::set<std::string> current;
+	std::vector<std::string> before;
+	bool unloads_editors = false;
+};
+
+BOOST_FIXTURE_TEST_CASE(a_module_named_is_reloaded_whether_or_not_it_is_the_build_in_use, editor_reloader_fixture)
+{
+	current = { "game_editor" };
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, editor_options());
+
+	const auto outcome = invoke({ { "module", "game_editor" } });
+	BOOST_REQUIRE_MESSAGE(outcome.ok, outcome.error);
+	BOOST_TEST(outcome.value.as_object().at("status").as_string() == "reloaded");
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game_editor" });
+	BOOST_TEST(before.empty()); // no Play snapshot for an editor module
+
+	// The reload after a build and live mode skip it: the reload of the game module put this build in place.
+	reloaded.clear();
+	const auto skipped = reloader->reload_quiet("game_editor");
+	BOOST_TEST((skipped.status == core::reload_status::reloaded));
+	BOOST_TEST(skipped.message == "already up to date");
+	BOOST_TEST(reloaded.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(without_a_name_the_runtime_module_is_taken_and_the_editor_modules_go_with_it, editor_reloader_fixture)
+{
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, editor_options());
+
+	BOOST_TEST(invoke().ok);
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+	BOOST_TEST((before == std::vector<std::string>{ "game" }));
+}
+
+BOOST_FIXTURE_TEST_CASE(without_a_name_and_without_a_runtime_build_every_built_editor_module_is_reloaded, editor_reloader_fixture)
+{
+	auto opts = editor_options();
+	opts.build_output = [](const std::string& module) -> std::optional<std::filesystem::path> {
+		if (module == "game") return std::nullopt;
+		return std::filesystem::path{ "build/bin" } / (module + ".dll");
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+	current = { "other_editor" }; // the action is a person's: it reloads what it names, current or not
+
+	BOOST_TEST(reloader->disabled_reason().empty());
+	BOOST_TEST(invoke().ok);
+	BOOST_TEST((reloaded == std::vector<std::string>{ "game_editor", "other_editor" }));
+	BOOST_TEST(before.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(a_problem_with_one_editor_module_is_the_result_and_the_next_one_is_still_reloaded, editor_reloader_fixture)
+{
+	auto opts = editor_options();
+	opts.build_output = [](const std::string& module) -> std::optional<std::filesystem::path> {
+		if (module == "game") return std::nullopt;
+		return std::filesystem::path{ "build/bin" } / (module + ".dll");
+	};
+	opts.reload = [this](const std::string& module) {
+		reloaded.push_back(module);
+		return module == "game_editor" ? core::reload_report{ core::reload_status::rolled_back, "it failed to register" } : core::reload_report{ core::reload_status::reloaded, {} };
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+
+	const auto outcome = invoke();
+	BOOST_REQUIRE(outcome.ok);
+	BOOST_TEST(outcome.value.as_object().at("status").as_string() == "rolled_back");
+	BOOST_TEST((reloaded == std::vector<std::string>{ "game_editor", "other_editor" }));
+	const auto shown = messages();
+	BOOST_REQUIRE_EQUAL(shown.size(), 1u);
+	BOOST_TEST(shown[0].find("The editor module 'game_editor'") != std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(a_reload_that_unloads_editor_modules_is_never_run_inside_the_action_but_on_the_next_frame, editor_reloader_fixture)
+{
+	unloads_editors = true;
+	auto opts = editor_options();
+	opts.defer = [this] { return wait_reason; };
+	opts.each_frame = [this](const std::string& id, std::function<bool()> poll) {
+		for (const auto& queued : waiting) {
+			if (queued.first == id) return;
+		}
+		waiting.emplace_back(id, std::move(poll));
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+
+	// What a panel button of an editor module would do: the code that asked is still on the stack.
+	const auto outcome = invoke({ { "module", "game_editor" } });
+	BOOST_REQUIRE_MESSAGE(outcome.ok, outcome.error);
+	BOOST_TEST(outcome.value.as_object().at("status").as_string() == "queued");
+	BOOST_TEST(reloaded.empty());
+
+	run_waits();
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game_editor" });
+
+	// The game module's reload unloads the editor modules too.
+	reloaded.clear();
+	const auto game = invoke();
+	BOOST_REQUIRE(game.ok);
+	BOOST_TEST(game.value.as_object().at("status").as_string() == "queued");
+	BOOST_TEST(reloaded.empty());
+	run_waits();
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+}
+
+BOOST_FIXTURE_TEST_CASE(a_build_of_an_editor_module_is_reloaded_unless_it_is_the_build_in_use, editor_reloader_fixture)
+{
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, editor_options());
+	auto result = built(true);
+	result.module = "game_editor";
+	result.path = "build/bin/game_editor.dll";
+
+	events.game_module_built.emit(result);
+	BOOST_REQUIRE_EQUAL(scheduled.size(), 1u);
+	BOOST_TEST(scheduled[0].first == std::string(edt::game_reloader::k_reload_frame_id) + "game_editor");
+	scheduled[0].second();
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game_editor" });
+
+	// A reload of the game module just reloaded the editor modules: the build is the one in use.
+	reloaded.clear();
+	scheduled.clear();
+	current = { "game_editor" };
+	events.game_module_built.emit(result);
+	BOOST_REQUIRE_EQUAL(scheduled.size(), 1u);
+	scheduled[0].second();
+	BOOST_TEST(reloaded.empty());
+	BOOST_TEST(messages().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(an_editor_module_that_was_not_taken_is_called_an_editor_module_in_the_message, editor_reloader_fixture)
+{
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, editor_options());
+	next = { core::reload_status::rolled_back, "it failed to register" };
+
+	BOOST_TEST((reloader->reload("game_editor").status == core::reload_status::rolled_back));
+	const auto shown = messages();
+	BOOST_REQUIRE_EQUAL(shown.size(), 1u);
+	BOOST_TEST(shown[0].find("The editor module 'game_editor'") != std::string::npos);
+	BOOST_TEST(shown[0].find("it failed to register") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

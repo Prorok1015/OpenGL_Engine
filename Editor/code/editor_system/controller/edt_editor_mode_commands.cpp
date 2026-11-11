@@ -31,7 +31,8 @@ std::vector<edt::registration> edt::register_editor_mode_commands(action_registr
 	toggle.id = "editor.mode.toggle";
 	toggle.summary = "Switch the editor between game mode (the Game view fills the window, Play runs) and editor mode "
 		"(the panels; a running Play is paused). mode: the one to switch to, default the other. Going to the game starts a "
-		"stopped Play and resumes only a pause this switch made. Returns {mode, play_state}";
+		"stopped Play and resumes only a pause this switch made. Returns {mode, play_state}; refused by the check before Play: "
+		"failed with {problems} (as play.start)";
 	toggle.category = cmd::agent_category::play;
 	toggle.mutates = true;
 	toggle.needs_display = true;
@@ -78,6 +79,12 @@ std::vector<edt::registration> edt::register_editor_mode_commands(action_registr
 			return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
 		}
 		if (auto refused = controller->set_mode(target, agent ? play_reason::agent : play_reason::user)) {
+			// A start_refusal still holding means Play was refused before start() ran, so its check is not this call's.
+			if (!play->start_refusal() && has_errors(play->last_check())) {
+				return cmd::result{ false, cmd::codes::failed, problems_json(play->last_check()),
+					std::format("game mode not entered: the check before Play found {} error(s); see `problems` (Problems, source 'play')",
+						error_count(play->last_check())) };
+			}
 			return cmd::result::failure(cmd::codes::failed, *refused);
 		}
 		json::object result;

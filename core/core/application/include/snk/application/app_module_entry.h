@@ -54,9 +54,19 @@
 // they use (scn::level_switch_status, scn::level_switch_state). scn::context_set gains a member at its end; the request
 // itself is a private ctx type of the engine. Nothing a module reads moves. A module that switches levels needs an
 // engine of 3.10 or newer.
+// 3.11 (#606): components without a C++ type. scn::register_schema_component, scn::schema_component_registration,
+// component_catalog::add_schema_component, scn::holds and the blob accessors are new exports; context_manager gains
+// members at its end (engine-made, not in the layout key). A module that registers one needs an engine of 3.11 or newer.
+// A module built before 3.11 that walks the catalog must not call entry.contains on such an entry (it asserts in debug
+// and answers false in release): it learns of them only by being rebuilt, and then asks through scn::holds.
+// 3.12 (#606 PR-2): gs::module_context::register_component and desc::remap_entities are new exports (desc::dyn_blob, which
+// module code allocates, is unchanged); the module_context
+// constructor (engine-made) takes a mutable context_manager; world_context gains an apply_commands overload and a member
+// at its end (engine-made, not in the layout key). An entity field of a runtime blob reads and writes as one of a C++ type:
+// no entity is null (not 0), a number is read only through a snapshot's entity map. A module that registers a
+// component through its module_context needs an engine of 3.12 or newer.
 // 3.13 (#563): the engine event type scn::animation_finished (the end of a clip without loop on the world bus). A module
 // that reads or subscribes to it needs an engine that registers it, 3.13 or newer. Nothing that exists changes layout.
-// (3.11 and 3.12 are taken by #703 and #706.)
 #define SNK_MODULE_API_VERSION 0x0003'000Du // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

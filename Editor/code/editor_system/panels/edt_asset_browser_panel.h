@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include "edt_asset_layers.h"
+#include "edt_ui_probe.h"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -22,6 +23,9 @@ namespace edt
 		// The Code tree under the res:// tree; none when the project has no code/ folder (nothing is drawn then).
 		void set_code_section(std::shared_ptr<code_section> section);
 
+		// Reports the screen rectangle of every entry (headless smoke, editor/ui_probe); null: nothing.
+		void set_ui_probe(std::shared_ptr<ui_probe> probe) { m_ui_probe = std::move(probe); }
+
 		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
@@ -29,6 +33,8 @@ namespace edt
 
 	protected:
 		void on_render() override;
+		// Closed, collapsed or in a hidden tab: nothing is drawn, so the probe's items are not on the screen.
+		void on_hidden() override;
 
 	private:
 		// Non-recursive merged scan of m_current_rel into m_entries.
@@ -42,6 +48,7 @@ namespace edt
 
 		std::vector<std::filesystem::path> m_layers;
 		std::shared_ptr<code_section> m_code_section;
+		std::shared_ptr<ui_probe> m_ui_probe;
 		std::filesystem::path m_current_rel;
 		char m_search[128] = {};
 

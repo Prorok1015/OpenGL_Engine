@@ -55,6 +55,7 @@ struct live_fixture
 		};
 		out.is_loaded_current = [this](const std::string& module) { return current.contains(module); };
 		out.modules = [this] { return project_modules; };
+		out.is_editor_module = [](const std::string& module) { return module.ends_with("_editor"); };
 		out.reload_pending = [this] { return reload_queued; };
 		return out;
 	}
@@ -96,7 +97,9 @@ struct live_fixture
 		outcome.job = 40 + index;
 		outcome.errors = errors;
 		if (kind == edt::build_outcome::succeeded) {
-			outcome.modules.push_back(edt::game_module_build_result{ "game", "build/bin/game.dll", "debuggame", outcome.job, false });
+			for (const std::string& module : built_modules) {
+				outcome.modules.push_back(edt::game_module_build_result{ module, "build/bin/" + module + ".dll", "debuggame", outcome.job, false });
+			}
 		}
 		if (kind != edt::build_outcome::restarted) building = false;
 		BOOST_REQUIRE(starts[index].on_finished);
@@ -160,6 +163,8 @@ struct live_fixture
 	std::vector<waiting_reload> waiting;
 	std::set<std::string> current;
 	std::vector<std::string> project_modules;
+	// What a successful build produces (finish).
+	std::vector<std::string> built_modules{ "game" };
 	// An implicit reload (#435's or live mode's) waits for the UI stage.
 	bool reload_queued = false;
 	core::reload_report next_reload{ core::reload_status::reloaded, {} };
@@ -315,6 +320,20 @@ BOOST_AUTO_TEST_CASE(compile_errors_give_errors_and_no_reload)
 	advance(10s);
 	BOOST_CHECK(reloads.empty());
 	BOOST_CHECK_EQUAL(starts.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(a_failed_reload_of_an_editor_module_is_called_one_in_the_problems)
+{
+	make();
+	built_modules = { "game_editor" };
+	next_reload = { core::reload_status::rolled_back, "it failed to register" };
+	build_and_settle();
+
+	BOOST_CHECK(is(state(), edt::live_state::reload_failed));
+	const auto items = reload_problems();
+	BOOST_REQUIRE_EQUAL(items.size(), 1u);
+	BOOST_CHECK(items[0].message.find("The editor module 'game_editor' was rolled back") != std::string::npos);
+	BOOST_CHECK(items[0].message.find("it failed to register") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(a_failed_reload_goes_to_the_problems_and_a_later_success_clears_it)

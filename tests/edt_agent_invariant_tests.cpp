@@ -9,6 +9,7 @@
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
 #include "edt_mcp_bridge_host.h"
+#include "edt_play_session.h"
 #include "edt_scene_document.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_frame_commands.h>
@@ -1116,7 +1117,12 @@ BOOST_FIXTURE_TEST_CASE(DuringPlay_GoingToARowSelectsNothing, desc_problems_fixt
 	const auto unknown = std::ranges::find(rows, std::string{ "unknown_component" }, &edt::problem::code);
 	BOOST_REQUIRE(unknown != rows.end());
 	const edt::problem row = *unknown;
-	const auto started = invoke_as_agent("play.start", boost::json::object{});
+	// The level's unknown component is an error of the check before Play (#597): only a person plays past it.
+	BOOST_TEST(invoke_as_agent("play.start", boost::json::object{}).code == cmd::codes::failed);
+	BOOST_REQUIRE(editor().play());
+	editor().play()->allow_problems_once();
+	cmd::result started;
+	gui().run_without_drawing([&] { started = registry().invoke("play.start", boost::json::object{}, cmd::origin::ui()); });
 	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
 	auto& selection = editor().context()->selection();
 	selection.clear();

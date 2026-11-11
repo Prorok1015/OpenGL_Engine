@@ -99,6 +99,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/config/cfg_variables.h>
 #include <imgui.h>
+#include <snk/ecs/ecs_system.h>
 #include <entt/entt.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -146,6 +147,7 @@ namespace {
 }
 
 namespace {
+
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
 	{
@@ -197,6 +199,8 @@ namespace {
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
 	// The run ends with 0 once the first loaded level settled (#669; CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
+	// Logs the screen rectangle of the Asset Browser entries (Editor/UiProbe), so a headless smoke script finds an item by name.
+	CFG_VAR_DEF_BOOL(cfg_ui_probe, "editor/ui_probe", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	// "" (not set), true or false: an explicit false wins over the person's own switch (parse_cfg_switch).
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
@@ -645,10 +649,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	game_builder_options build_options;
 	if (data.has_value<prj::project_context>()) {
 		const auto& project = data.require<prj::project_context>();
-		game_project game{ project.root, {} };
-		for (const auto& module : project.data.modules) {
-			if (module.kind == prj::module_kind::runtime) game.modules.push_back(module.name);
-		}
+		game_project game{ project.root, project_module_names(project) };
 		build_options.project = [game] { return std::optional<game_project>{ game }; };
 		build_options.settings = [snk_dir = project.snk_dir()] { return load_build_settings(snk_dir); };
 		build_options.preset_for = [code_dir = project.root / "code"](std::string_view configuration) {
@@ -676,19 +677,29 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// The host appears in the storage after init (main loads the project's modules then): it is looked up when used.
 	game_reloader_options reload_options;
 	reload_options.modules = [&data] {
-		std::vector<std::string> modules;
-		if (data.has_value<prj::project_context>()) {
-			for (const auto& module : data.require<prj::project_context>().data.modules) {
-				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
-			}
-		}
-		return modules;
+		return data.has_value<prj::project_context>() ? project_module_names(data.require<prj::project_context>()) : std::vector<std::string>{};
+	};
+	reload_options.is_editor_module = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_editor_module(module);
+	};
+	reload_options.is_current = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
+	};
+	// The action may be asked for from a panel of an editor module: whatever unloads editor modules waits for the next UI frame.
+	reload_options.unloads_editor_modules = [&data](const std::string& module) {
+		if (!data.has_value<core::project_module_host>()) return false;
+		const auto& host = data.require<core::project_module_host>();
+		return host.is_editor_module(module) || host.has_editor_modules();
 	};
 	reload_options.build_output = [&data](const std::string& module) -> std::optional<std::filesystem::path> {
 		if (!data.has_value<core::project_module_host>()) return std::nullopt;
 		return data.require<core::project_module_host>().build_output(module);
 	};
 	const auto reload_module = [this, &data](const std::string& module, bool retry_taken_back) {
+		if (data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_editor_module(module)) {
+			// An editor module changes neither the game layer nor Play: no swap gate, no snapshot, nothing to revert.
+			return data.require<core::project_module_host>().reload_editor_module(module);
+		}
 		core::reload_report report = data.has_value<core::project_module_host>()
 			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks(), retry_taken_back)
 			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
@@ -1015,13 +1026,10 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
 	};
 	live.build.modules = [&data] {
-		std::vector<std::string> modules;
-		if (data.has_value<prj::project_context>()) {
-			for (const auto& module : data.require<prj::project_context>().data.modules) {
-				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
-			}
-		}
-		return modules;
+		return data.has_value<prj::project_context>() ? project_module_names(data.require<prj::project_context>()) : std::vector<std::string>{};
+	};
+	live.build.is_editor_module = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_editor_module(module);
 	};
 	live.build.reload_pending = [this] {
 		return editor_layer->has_implicit_prefix(game_reloader::k_reload_frame_id) || editor_layer->has_implicit_prefix(live_mode::k_reload_frame_id);
@@ -1136,6 +1144,17 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };
 	options.each_frame = [this](const std::string& id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
+	options.preflight = [this] {
+		play_preflight_services services;
+		const ecs::system_factory* factory = m_services.sfactory();
+		services.systems = factory ? &factory->registry() : nullptr;
+		services.descs = m_services.descs();
+		services.resources = m_services.resources();
+		services.assembler = m_services.assembler();
+		auto found = run_play_preflight(m_state, services);
+		m_play_preflight.publish(m_context->problems(), found);
+		return found;
+	};
 	options.forget_runtime_entities = [this] {
 		if (m_game_view_panel) m_game_view_panel->forget_runtime_entities();
 		if (m_viewport_panel) m_viewport_panel->forget_runtime_entities();
@@ -1159,7 +1178,11 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// The Play menu and the agent's play.* (US-63-C, #491). The lambdas check m_play: ~editor_system lets go of it
 	// before m_registrations goes.
 	for (auto& command : register_play_commands(m_context->actions(),
-			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); } })) {
+			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); },
+				.dialogs = &m_context->dialogs(), .show_problems = [this] {
+					m_context->panels().set_open(m_problems_panel->get_id(), true);
+					ImGui::SetWindowFocus(m_problems_panel->get_title().c_str());
+				} })) {
 		m_registrations.push_back(std::move(command));
 	}
 	// runtime.query / runtime.get (#552): the live entities of Play, read-only.
@@ -1340,6 +1363,8 @@ void edt::editor_system::create_panels(bool capture_log)
 	m_console_panel = std::make_shared<console_panel>();
 	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
 	m_asset_browser_panel->set_layers(m_res.get_resource_layers());
+	if (cfg_ui_probe)
+		m_asset_browser_panel->set_ui_probe(std::make_shared<ui_probe>());
 	if (const auto code_roots = m_res.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_res, code_tree_model{ code_roots.back() },
 			[](const std::filesystem::path& file) { return platform::open_in_shell(file); } };
@@ -1778,6 +1803,10 @@ void edt::editor_system::go_to_problem(const std::string& source, const problem&
 {
 	if (source == desc_problem_publisher::source) {
 		if (const auto target = m_desc_problems.target_of(item)) go_to(*target);
+		return;
+	}
+	if (source == play_preflight_publisher::source) {
+		if (const auto target = m_play_preflight.target_of(item)) go_to(*target);
 		return;
 	}
 	if (source == world_problem_publisher::source) {

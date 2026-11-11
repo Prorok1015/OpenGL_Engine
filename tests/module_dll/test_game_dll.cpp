@@ -2,6 +2,7 @@
 #include <snk/application/app_module_entry.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_component.h>
@@ -217,6 +218,8 @@ private:
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },
 			desc::bind_described<dll_game::dll_component>(dll_game::component_name, 1, desc::schema_kind::component));
 		ecs::register_component<dll_game::dll_component>(layer.meta());
+		data.require<gs::module_context>().register_component(
+			desc::parse_type_schema(boost::json::parse(dll_game::schema_component_json).as_object()));
 		auto& service = data.construct<dll_service>();
 
 		// Only when the host stored them: it checks that the callbacks are registered (held_count).
