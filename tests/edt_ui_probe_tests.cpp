@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_ui_probe.h"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -84,6 +85,23 @@ BOOST_AUTO_TEST_CASE(AnItemNotDrawnInAPass_BecomesHidden_ButOnlyInTheAreaOfThePa
 	probe.report("asset_browser", "kept.desc", 10.f, 37.f, 110.f, 54.f);
 	probe.end_pass("asset_browser");
 	BOOST_CHECK_EQUAL(lines.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(APassWithNoItem_HidesEverythingTheAreaReported_AsWhenItsPanelIsClosed)
+{
+	probe.report("asset_browser", "a.desc", 10.f, 20.f, 110.f, 37.f);
+	probe.report("asset_browser", "b.desc", 10.f, 37.f, 110.f, 54.f);
+	probe.report("hierarchy", "a.desc", 10.f, 20.f, 110.f, 37.f);
+	lines.clear();
+
+	for (int frame = 0; frame < 3; ++frame) {
+		probe.begin_pass("asset_browser");
+		probe.end_pass("asset_browser");
+	}
+	std::ranges::sort(lines);
+	BOOST_REQUIRE_EQUAL(lines.size(), 2u);
+	BOOST_CHECK_EQUAL(lines[0], "item asset_browser 'a.desc' hidden");
+	BOOST_CHECK_EQUAL(lines[1], "item asset_browser 'b.desc' hidden");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

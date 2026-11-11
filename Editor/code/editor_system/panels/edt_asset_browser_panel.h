@@ -33,6 +33,8 @@ namespace edt
 
 	protected:
 		void on_render() override;
+		// Closed, collapsed or in a hidden tab: nothing is drawn, so the probe's items are not on the screen.
+		void on_hidden() override;
 
 	private:
 		// Non-recursive merged scan of m_current_rel into m_entries.

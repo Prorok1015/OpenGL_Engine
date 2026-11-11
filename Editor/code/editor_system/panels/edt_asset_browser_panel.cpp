@@ -34,6 +34,14 @@ namespace edt
 	{
 	}
 
+	void asset_browser_panel::on_hidden()
+	{
+		if (m_ui_probe) {
+			m_ui_probe->begin_pass("asset_browser");
+			m_ui_probe->end_pass("asset_browser");
+		}
+	}
+
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
 	{
 		m_layers = std::move(layers);
