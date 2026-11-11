@@ -49,12 +49,28 @@ scn::context_manager::context_manager(res::resource_system& resource,
 
 scn::context_manager::~context_manager()
 {
+	// What a layer keeps (a schema component registration) must not walk sets that are going.
+	m_alive.reset();
 	// The layers' tasks first (they may touch the worlds), then the sets: the worlds of a layer are built from its
 	// services.
 	for (const auto& layer : m_layers) {
 		layer->stop_tasks();
 	}
 	m_sets.clear();
+}
+
+void scn::context_manager::clear_component_pools(entt::id_type id, const scn::scene_layer& layer)
+{
+	for_each_set([id, &layer](scn::context_set& set) {
+		if (set.layer() != &layer) {
+			return;
+		}
+		set.for_each([id](scn::world_context& world) {
+			if (auto* pool = world.state().storage(id)) {
+				pool->clear();
+			}
+		});
+	});
 }
 
 void scn::context_manager::stop_layer_loads()
