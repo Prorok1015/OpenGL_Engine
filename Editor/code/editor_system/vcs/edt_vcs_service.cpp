@@ -1810,6 +1810,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 {
 	m_probed = true;
 	m_probed_project = project;
+	m_probed_marker = project ? vcs::repository_marker(*project, vcs::stat_entry) : vcs::repository_marker_state{};
 	++m_state_generation;
 	if (!m_git_found) return;
 	m_state.available = false;
@@ -1860,10 +1861,19 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 	egLOG_INFO("editor/vcs", "git {} on the repository '{}'", m_state.git_version, utf8_of(*m_state.root));
 }
 
+bool edt::vcs_service::marker_moved(const fs::path& project) const
+{
+	const vcs::repository_marker_state marker = vcs::repository_marker(project, vcs::stat_entry);
+	if (marker.path != m_probed_marker.path) return true;
+	// Only a `.git` git did not take is worth probing again when written: a working repository writes into it all the
+	// time, and after a probe timeout each write would block the main thread for the whole timeout again.
+	return m_state.code == "not_a_repository" && marker.stamp != m_probed_marker.stamp;
+}
+
 const edt::vcs_service::state& edt::vcs_service::info()
 {
 	auto project = m_options.project_root ? m_options.project_root() : std::nullopt;
-	if (!m_probed || project != m_probed_project) probe_repository(project);
+	if (!m_probed || project != m_probed_project || (project && marker_moved(*project))) probe_repository(project);
 	return m_state;
 }
 

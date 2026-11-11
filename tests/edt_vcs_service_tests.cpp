@@ -1034,6 +1034,134 @@ BOOST_AUTO_TEST_CASE(RealRepository_CancelledJob_EndsCancelledWithoutAResult)
 	BOOST_TEST(!info->result.has_value());
 }
 
+// #561: a `git init` or a deleted `.git` in the open project is seen by the next vcs.info, without a restart.
+BOOST_AUTO_TEST_CASE(RealRepository_AGitInitOutsideTheEditor_IsSeenWithoutARestart_AndADeletedGitFolderToo)
+{
+	const fs::path project = base / "later";
+	fs::create_directories(project);
+	make_service(real_options(project));
+	BOOST_REQUIRE(!service->info().available);
+	BOOST_TEST(service->info().code == "not_a_repository");
+	const std::uint64_t before = service->state_generation();
+
+	git(project, { "init", "-q" });
+	const auto& found = service->info();
+	BOOST_REQUIRE_MESSAGE(found.available, found.reason);
+	BOOST_TEST(service->state_generation() > before);
+	BOOST_REQUIRE(found.root.has_value());
+	std::error_code ec;
+	BOOST_TEST(fs::equivalent(*found.root, project, ec));
+	BOOST_REQUIRE(found.git_dir.has_value());
+	BOOST_TEST(fs::equivalent(*found.git_dir, project / ".git", ec));
+
+	fs::remove_all(project / ".git");
+	BOOST_TEST(!service->info().available);
+	BOOST_TEST(service->info().code == "not_a_repository");
+}
+
+// #561: a probe that caught `.git` half-made (an empty folder: git looks past it) is probed again once the folder is
+// written; while the repository works, writes into `.git` probe nothing.
+BOOST_AUTO_TEST_CASE(RealRepository_AGitFolderCaughtHalfMade_IsProbedAgainWhenItIsFinished)
+{
+	const fs::path project = base / "half_made";
+	fs::create_directories(project / ".git");
+	make_service(real_options(project));
+	BOOST_REQUIRE(!service->info().available);
+	BOOST_REQUIRE(service->probed_marker().path.has_value());
+
+	git(project, { "init", "-q" });
+	const auto& found = service->info();
+	BOOST_REQUIRE_MESSAGE(found.available, found.reason);
+	std::error_code ec;
+	BOOST_TEST(fs::equivalent(*found.root, project, ec));
+
+	const std::uint64_t generation = service->state_generation();
+	write(project / ".git" / "COMMIT_EDITMSG", "written by a git command\n");
+	static_cast<void>(service->info());
+	BOOST_TEST(service->state_generation() == generation);
+}
+
+// #561: the watcher starts from the marker the probe saw, so a `git init` between the probe and the watcher's first
+// follow is reported, not taken as the starting point.
+BOOST_AUTO_TEST_CASE(RealRepository_AGitInitBetweenTheProbeAndTheWatcher_IsReported)
+{
+	const fs::path project = base / "init_before_follow";
+	fs::create_directories(project);
+	make_service(real_options(project));
+	BOOST_REQUIRE(service->info().code == "not_a_repository");
+
+	git(project, { "init", "-q" });
+	auto now = edt::vcs::repository_watcher::clock::now();
+	edt::vcs::repository_watcher::ports watcher_ports;
+	watcher_ports.now = [&now] { return now; };
+	edt::vcs::repository_watcher watcher(std::move(watcher_ports));
+	watcher.follow(*service);
+	BOOST_REQUIRE(watcher.watching_marker());
+	now += edt::vcs::repository_watcher::k_poll_interval;
+	BOOST_TEST(watcher.tick().refs);
+}
+
+// #561: a linked worktree's `.git` is a file (`gitdir: ...`); it is a marker like a folder.
+BOOST_AUTO_TEST_CASE(RealRepository_ALinkedWorktreeMadeInTheOpenProject_IsSeenByItsGitFile)
+{
+	const fs::path repo = make_plain_repository("marker_main");
+	const fs::path project = base / "marker_tree";
+	fs::create_directories(project);
+	make_service(real_options(project));
+	BOOST_REQUIRE(!service->info().available);
+
+	git(repo, { "worktree", "add", "-q", "-b", "marker_branch", edt::utf8_of(project) });
+	BOOST_REQUIRE(fs::is_regular_file(project / ".git"));
+	const auto& found = service->info();
+	BOOST_REQUIRE_MESSAGE(found.available, found.reason);
+	BOOST_REQUIRE(found.git_dir.has_value());
+	BOOST_REQUIRE(found.common_dir.has_value());
+	std::error_code ec;
+	BOOST_TEST(fs::equivalent(*found.common_dir, repo / ".git", ec));
+}
+
+// #561, end to end: without a repository the watcher looks for the marker, `git init` in a terminal raises
+// repository_changed, the Git panel refreshes through vcs.info, which probes again, and the watcher arms on the new state.
+BOOST_AUTO_TEST_CASE(RealRepository_AGitInitOutsideTheEditor_ReachesTheWatcherAndTheGitPanel)
+{
+	const fs::path project = base / "later_panel";
+	fs::create_directories(project);
+	make_service(real_options(project));
+	registrations = edt::register_vcs_commands(commands, *service);
+	for (auto& registration : edt::register_job_commands(commands, *jobs)) registrations.push_back(std::move(registration));
+
+	auto now = edt::git_panel_model::clock::now();
+	edt::git_panel_model::ports panel_ports;
+	panel_ports.invoke = [this](std::string_view id, json::value args) { return commands.invoke(id, std::move(args), cmd::origin::ui()); };
+	panel_ports.cancel = [this](std::uint64_t job) { return jobs->cancel(job); };
+	panel_ports.now = [&now] { return now; };
+	edt::git_panel_model panel(events, std::move(panel_ports));
+	panel.set_visible(true);
+	run_to_end();
+	BOOST_REQUIRE(!panel.available());
+
+	edt::vcs::repository_watcher::ports watcher_ports;
+	watcher_ports.now = [&now] { return now; };
+	edt::vcs::repository_watcher watcher(std::move(watcher_ports));
+	watcher.follow(*service);
+	BOOST_REQUIRE(watcher.watching_marker());
+	BOOST_TEST(!watcher.tick().any());
+
+	git(project, { "init", "-q" });
+	now += edt::vcs::repository_watcher::k_poll_interval;
+	const auto changes = watcher.tick();
+	BOOST_REQUIRE(changes.refs);
+	events.repository_changed.emit(edt::repository_change::refs);
+	now += edt::git_panel_model::k_repo_delay;
+	panel.tick();
+	run_to_end();
+	BOOST_TEST(panel.available(), panel.unavailable_reason());
+
+	watcher.follow(*service);
+	BOOST_TEST(watcher.armed());
+	BOOST_TEST(!watcher.watching_marker());
+}
+
 // vcs.info says so at once; the other commands still answer {job}, and git's own error is the job's result, seen
 // through job.get and job_finished.
 BOOST_AUTO_TEST_CASE(NotARepository_IsReportedAndTheJobResultCarriesTheError)
@@ -3059,6 +3187,34 @@ BOOST_AUTO_TEST_CASE(ARevParseThatHangs_TimesOutAndTurnsVersionControlOff)
 	BOOST_TEST(service->start_branches(cmd::origin_kind::ui).code == "vcs_unavailable");
 }
 
+// #561: after a probe timeout a write into `.git` (an IDE, another git's index.lock) probes nothing: only a project
+// that is no repository is probed again when its marker is written.
+BOOST_AUTO_TEST_CASE(AfterAProbeTimeout_AWriteIntoTheGitFolder_ProbesNothing)
+{
+	fs::create_directories(base / ".git");
+	auto options = fake_options();
+	options.probe_timeout = std::chrono::milliseconds(100);
+	options.run = [this](const fs::path&, const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		calls.push_back(args);
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.45.1\n");
+			return exited(0);
+		}
+		return hang_until_stopped(stop);
+	};
+	make_service(std::move(options));
+	const auto probes = [this] {
+		return std::count_if(calls.begin(), calls.end(), [](const auto& args) { return has_arg(args, "--absolute-git-dir"); });
+	};
+	BOOST_REQUIRE(service->info().code == "vcs_unavailable");
+	BOOST_REQUIRE(probes() == 1);
+
+	write(base / ".git" / "index.lock", "another tool");
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 1);
+}
+
 BOOST_AUTO_TEST_CASE(AGitThatCannotStart_IsVcsUnavailable)
 {
 	command = [](const std::vector<std::string>&, const platform::process_options&,
@@ -4439,6 +4595,62 @@ BOOST_AUTO_TEST_CASE(TheWatcher_FollowsTheCachedStateWithoutProbing_AndReArmsAft
 	watcher.follow(*service);
 	BOOST_TEST(watcher.armed());
 	BOOST_TEST(probes == 2);
+}
+
+// #561: vcs.info runs no git while the repository marker is unchanged, and probes once when it changes (a folder, a
+// `.git` file of a linked worktree or submodule, or none). The fake repository works, so a write into `.git` is no
+// change.
+BOOST_AUTO_TEST_CASE(AnUnchangedMarker_RunsNoGit_AChangedOneProbesOnce)
+{
+	make_service(fake_options());
+	const auto probes = [this] {
+		return std::count_if(calls.begin(), calls.end(), [](const auto& args) { return has_arg(args, "--absolute-git-dir"); });
+	};
+	BOOST_REQUIRE(probes() == 1);
+	for (int i = 0; i < 5; ++i) static_cast<void>(service->info());
+	BOOST_TEST(probes() == 1);
+
+	fs::create_directories(base / ".git");
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 2);
+	BOOST_REQUIRE(service->info().available);
+	write(base / ".git" / "index", "written by a git command");
+	for (int i = 0; i < 5; ++i) static_cast<void>(service->info());
+	BOOST_TEST(probes() == 2);
+
+	fs::remove_all(base / ".git");
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 3);
+	write(base / ".git", "gitdir: /elsewhere/.git/worktrees/x\n");
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 4);
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 4);
+}
+
+// #561: git follows a `.git` link, so a dangling one is no marker; the service and the watcher read it the same way.
+BOOST_AUTO_TEST_CASE(ADanglingGitLink_IsNoMarker_UntilItsTargetAppears)
+{
+	std::error_code ec;
+	fs::create_directory_symlink(base / "target", base / ".git", ec);
+	if (ec) {
+		BOOST_WARN_MESSAGE(false, "skipped: no symbolic links here: " << ec.message());
+		return;
+	}
+	make_service(fake_options());
+	const auto probes = [this] {
+		return std::count_if(calls.begin(), calls.end(), [](const auto& args) { return has_arg(args, "--absolute-git-dir"); });
+	};
+	BOOST_TEST(!service->probed_marker().path.has_value());
+	BOOST_TEST(!edt::vcs::repository_watcher::default_stat(base / ".git").has_value());
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 1);
+
+	fs::create_directories(base / "target");
+	static_cast<void>(service->info());
+	BOOST_TEST(probes() == 2);
+	BOOST_REQUIRE(service->probed_marker().path.has_value());
+	BOOST_TEST(*service->probed_marker().path == base / ".git");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
