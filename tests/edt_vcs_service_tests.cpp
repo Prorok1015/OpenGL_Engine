@@ -7,6 +7,7 @@
 #include <snk/editor/edt_job_service.h>
 #include "edt_service_commands.h"
 #include <snk/platform/plt_process.h>
+#include <snk/project/prj_create.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -431,6 +432,34 @@ struct fake_git_fixture : vcs_fixture
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtVcsServiceTests, vcs_fixture)
+
+// #556: a project made from the template, committed, then everything the editor writes into it: git sees only the team's
+// agent policy. Real git with no global or system config, HOME and XDG_CONFIG_HOME in the test folder.
+BOOST_AUTO_TEST_CASE(RealRepository_TheProjectTemplate_KeepsWhatTheEditorWritesOutOfGit)
+{
+	isolate_config();
+	edt::set_variable(environment, "HOME", edt::utf8_of(base / "home"));
+	edt::set_variable(environment, "XDG_CONFIG_HOME", edt::utf8_of(base / "home" / ".config"));
+	const fs::path project = base / "game";
+	const auto created = prj::create_project(fs::path{ SNK_EDITOR_DATA_DIR } / "templates" / "projects" / "empty", project, "Game");
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+	git(project, { "init", "-q" });
+	git(project, { "config", "user.name", "Test User" });
+	git(project, { "config", "user.email", "test@example.com" });
+	git(project, { "config", "commit.gpgsign", "false" });
+	git(project, { "config", "core.autocrlf", "false" });
+	git(project, { "add", "-A" });
+	git(project, { "commit", "-q", "-m", "new project" });
+
+	for (const char* file : { "logs/engine.log", "logs/edt_import.log", "layout_settings.ini", ".cache/memory/levels/a.desc",
+			 ".cache/user_profile/save.json", ".cache/hot_reload/last_play_snapshot.json", ".snk/mcp.json", ".snk/build.json",
+			 "code/CMakeUserPresets.json", "build/bin/game.so" }) {
+		write(project / file, "x\n");
+	}
+	write(project / ".snk" / "agent_policy.json", "{}\n");
+
+	BOOST_TEST(git_text(project, { "status", "--porcelain", "--untracked-files=all" }) == "?? .snk/agent_policy.json\n");
+}
 
 BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 {

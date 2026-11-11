@@ -83,9 +83,25 @@ std::optional<std::string> edt::play_session::start_refusal() const
 
 bool edt::play_session::start(play_reason reason)
 {
+	m_last_check.clear();
 	if (auto refused = start_refusal()) {
 		egLOG_WARN("play", "Play not started: {}", *refused);
 		return false;
+	}
+	// A restart after a module reload brings back a Play that was already checked.
+	if (reason == play_reason::user || reason == play_reason::agent) {
+		// Only a person allows it: an agent's start is never let through.
+		const bool allowed = std::exchange(m_problems_allowed, false) && reason == play_reason::user;
+		if (m_options.preflight) m_last_check = m_options.preflight();
+		if (has_errors(m_last_check)) {
+			if (!allowed) {
+				egLOG_WARN("play", "Play not started ({}): the check before Play found {} error(s), see Problems (source 'play')",
+					play_reason_name(reason), error_count(m_last_check));
+				return false;
+			}
+			// Let through: a refusal from here on is not the check's.
+			m_last_check.clear();
+		}
 	}
 	const auto contexts = m_services.ctx_manager.lock();
 	if (!ENGINE_VERIFY(contexts->find_set(k_play_set) == nullptr, "Play not started: the set '{}' is left from before", k_play_set)) {

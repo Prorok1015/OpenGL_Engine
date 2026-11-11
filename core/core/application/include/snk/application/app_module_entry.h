@@ -59,6 +59,14 @@
 // members at its end (engine-made, not in the layout key). A module that registers one needs an engine of 3.11 or newer.
 // A module built before 3.11 that walks the catalog must not call entry.contains on such an entry (it asserts in debug
 // and answers false in release): it learns of them only by being rebuilt, and then asks through scn::holds.
+// 3.12 (#606 PR-2): gs::module_context::register_component and desc::remap_entities are new exports (desc::dyn_blob, which
+// module code allocates, is unchanged); the module_context
+// constructor (engine-made) takes a mutable context_manager; world_context gains an apply_commands overload and a member
+// at its end (engine-made, not in the layout key). An entity field of a runtime blob reads and writes as one of a C++ type:
+// no entity is null (not 0), a number is read only through a snapshot's entity map. A module that registers a
+// component through its module_context needs an engine of 3.12 or newer.
+// 3.13 (#563): the engine event type scn::animation_finished (the end of a clip without loop on the world bus). A module
+// that reads or subscribes to it needs an engine that registers it, 3.13 or newer. Nothing that exists changes layout.
 // 3.14 (#605): the bus journal (ecs::bus_journal, world_bus::enable_journal/journal, ecs::detail::bus_journal_source)
 // and bus_registry::add<T>(schema, payload_writer) are new; bus_type_impl<T> gains a base, which only modules built for
 // 3.14 have: the journal of a type of an older module holds the place of its events, not their sender or payload.

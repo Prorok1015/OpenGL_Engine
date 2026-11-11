@@ -2,7 +2,9 @@
 #include <snk/scene/scn_mesh_nodes.hpp>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_event.hpp>
+#include <snk/scene/scn_animation.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 
@@ -33,7 +35,8 @@ void update_bone_offsets_system(
 
 void update_animation_controllers_system(
     const scn::delta_time& dt,
-    entt::view<entt::get_t<scn::animation_controller_component>> controllers)
+    entt::view<entt::get_t<scn::animation_controller_component>> controllers,
+    ecs::event_writer<scn::animation_finished>& finished)
 {
     for (auto [ent, ctrl] : controllers.each()) {
         if (!ctrl.playing) continue;
@@ -46,6 +49,8 @@ void update_animation_controllers_system(
             } else {
                 ctrl.current_time = ctrl.duration / tps;
                 ctrl.playing = false;
+                // A set whose bus does not carry the type (a standalone test set) has nobody to tell.
+                if (finished.bound()) finished.emit({ ent, ctrl.current_animation });
             }
         }
     }

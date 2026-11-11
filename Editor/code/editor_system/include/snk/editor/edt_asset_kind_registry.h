@@ -33,8 +33,9 @@ namespace edt
 	};
 
 	// What previews the assets of a suffix (editor API 1.1, #589): the document the document_manager opens for them, e.g.
-	// the prefab editor's. Registered apart from the asset kinds: asset_kind_desc crosses the module boundary by value
-	// (editor_module_context::add_asset_kind), so a field added to it would change the layout a 1.0 module was built with.
+	// the prefab editor's. Registered apart from the asset kinds (1.1 added it without growing asset_kind_desc, which a 1.0
+	// module passed by value). A module registers the previews of module_asset_preview_desc (edt_editor_extension.h): its factory
+	// gets the module's context, not editor_services (editor API 2.0).
 	struct asset_preview_desc
 	{
 		std::string id{};     // "prefab"; unique among the previews

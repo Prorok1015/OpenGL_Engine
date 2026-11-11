@@ -25,6 +25,10 @@
 #   click X Y [BUTTON]       move to X,Y and click (BUTTON 1=left default, 3=right)
 #   dclick X Y               double click
 #   drag X1 Y1 X2 Y2         press at X1,Y1, move to X2,Y2, release
+#   drag_item AREA NAME X2 Y2  the same from the centre of the item NAME of AREA (e.g. asset_browser base_material.desc),
+#                            wherever the editor drew it: it logs the item rectangles with --set editor/ui_probe true
+#                            (Editor/UiProbe lines). No line, or a last line saying the item is hidden (scrolled or
+#                            clipped out of its panel), within 20 s fails the run with that said. NAME has no spaces
 #   move X Y                 move the mouse
 #   key KEYS                 xdotool key syntax, e.g. ctrl+s, Delete, Escape
 #   type TEXT                type text
@@ -122,6 +126,30 @@ EDITOR_PID=$!
 
 alive() { kill -0 "$EDITOR_PID" 2>/dev/null; }
 
+# "X Y" of the centre of an item, from the last line the editor logged for it (editor/ui_probe):
+#   item AREA 'NAME' center X Y size W H   drawn inside its window
+#   item AREA 'NAME' hidden                clipped away or not drawn any more (a long list, another folder)
+# Waits up to 20 s for a line with a centre; the error says what the last line was.
+item_center() {
+	local line="" center=""
+	for _ in $(seq 1 40); do
+		line=$(grep -F "item $1 '$2' " "$LOG" | tail -1 || true)
+		center=$(sed -nE 's/^.* center (-?[0-9]+) (-?[0-9]+) size [0-9]+ [0-9]+$/\1 \2/p' <<<"$line")
+		[[ -n "$center" ]] && break
+		alive || break
+		sleep 0.5
+	done
+	if [[ -z "$center" ]]; then
+		if [[ -z "$line" ]]; then
+			echo "error: the editor logged no item '$2' of $1 in $LOG (is it run with --set editor/ui_probe true, and does the item exist?)" >&2
+		else
+			echo "error: item '$2' of $1 has no place on the screen, its last line: $line" >&2
+		fi
+		return 1
+	fi
+	echo "$center"
+}
+
 # Wait for the editor window so actions do not race window creation.
 for _ in $(seq 1 60); do
 	alive || break
@@ -175,6 +203,10 @@ if [[ -n "$ACTIONS" ]]; then
 			click) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click "${c:-1}" ;; # hover first: ImGui needs a frame at the new position
 			dclick) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click --repeat 2 --delay 80 1 ;;
 			drag) xdotool mousemove "$a" "$b" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
+			drag_item)
+				from=$(item_center "$a" "$b") || exit 1
+				read -r fx fy <<<"$from"
+				xdotool mousemove "$fx" "$fy" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
 			move) xdotool mousemove "$a" "$b" ;;
 			key) xdotool key --delay 50 "$a" ;;
 			type) xdotool type --delay 30 "${line#*type }" ;;

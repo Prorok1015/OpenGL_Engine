@@ -12,9 +12,12 @@
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/scene/scn_schema_components.h>
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
@@ -24,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -179,6 +183,76 @@ BOOST_AUTO_TEST_CASE(module_code_switches_the_clips_of_a_model_with_play_animati
 	BOOST_TEST(controller.ticks_per_second == 12.0f);
 	BOOST_TEST(!controller.loop);
 	BOOST_TEST(controller.current_time == 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(module_code_hears_the_end_of_a_clip_and_plays_idle_again)
+{
+	scn::init_animation_system(sf);
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(contexts().load_level(put("anim_end_lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":["scn::animation_controller_update","dll::back_to_idle"]}]})")));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	contexts().level_set().set_mode(ecs::run_mode::play);
+	auto& reg = world->state();
+
+	const entt::entity model = reg.create();
+	scn::animation_collection_component collection;
+	collection.clips = load<scn::animation_collection_desc>(put("dll_end_clips.desc", R"({"__type":"animation_collection_desc","clips":[
+		{"__type":"animation_clip_desc","name":"idle","duration":20.0,"ticks_per_second":10.0},
+		{"__type":"animation_clip_desc","name":"jump","duration":6.0,"ticks_per_second":12.0}]})"))->clips;
+	reg.emplace<scn::animation_collection_component>(model, std::move(collection));
+	reg.emplace<scn::animation_controller_component>(model);
+	BOOST_REQUIRE(scn::play_animation(reg, model, "jump", false)); // 0.5 s
+
+	// Under max_frame_dt (0.25 s): 0.2 + 0.2 stays inside the clip.
+	contexts().update(std::chrono::duration<float>(0.2f));
+	contexts().update(std::chrono::duration<float>(0.2f));
+	BOOST_TEST(reg.get<scn::animation_controller_component>(model).current_animation == "jump");
+	// The clip ends in this frame; the module's system after the delivery point hears it in the same frame.
+	contexts().update(std::chrono::duration<float>(0.2f));
+	const auto& controller = reg.get<scn::animation_controller_component>(model);
+	BOOST_TEST(controller.current_animation == "idle");
+	BOOST_TEST(controller.playing);
+	BOOST_TEST(controller.loop);
+	BOOST_TEST(controller.current_time == 0.0f);
+}
+
+// #606: a component the library describes by a schema alone lives in the worlds as a blob of the engine's code, and
+// goes with its pools when the library is unloaded.
+BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_goes_with_it)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	const scn::component_entry* entry = layer->catalog().find(dll_game::schema_component_name);
+	BOOST_REQUIRE(entry != nullptr);
+	BOOST_TEST(scn::is_schema_component(*entry));
+
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", R"json({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0",
+		 "components":{"h":{"__type":"dll.schema_health","hp":7}}}]})json")));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	const entt::id_type id = scn::schema_component_id(dll_game::schema_component_name);
+	const auto* pool = std::as_const(world->state()).storage<desc::dyn_blob>(id);
+	BOOST_REQUIRE(pool != nullptr);
+	BOOST_REQUIRE(pool->size() == 1u);
+	json::object saved;
+	const entt::entity holder = *static_cast<const entt::sparse_set&>(*pool).begin();
+	BOOST_REQUIRE(entry->write(*entry->schema, world->state(), holder, saved));
+	BOOST_TEST(saved.at("hp").to_number<double>() == 7.0);
+	// No value in the desc: no entity (left out or null), not entity 0.
+	BOOST_TEST((!saved.contains("target") || saved.at("target").is_null()));
+
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+	auto* after = contexts().game_layer();
+	BOOST_REQUIRE(after != nullptr);
+	BOOST_TEST(!after->catalog().find(dll_game::schema_component_name));
+	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
 }
 
 // #605: the journal finds the module's bus_journal_source with dynamic_cast across the library boundary and calls the
