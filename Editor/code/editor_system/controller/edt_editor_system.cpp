@@ -146,6 +146,19 @@ namespace {
 }
 
 namespace {
+
+	// The modules a build reports and a reload may take (#664): the runtime ones first, so a reload without a name keeps taking the game
+	// module, then the editor ones.
+	std::vector<std::string> project_module_names(const prj::project_context& project)
+	{
+		std::vector<std::string> names;
+		for (const auto kind : { prj::module_kind::runtime, prj::module_kind::editor }) {
+			for (const auto& module : project.data.modules) {
+				if (module.kind == kind) names.push_back(module.name);
+			}
+		}
+		return names;
+	}
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
 	{
@@ -644,10 +657,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	game_builder_options build_options;
 	if (data.has_value<prj::project_context>()) {
 		const auto& project = data.require<prj::project_context>();
-		game_project game{ project.root, {} };
-		for (const auto& module : project.data.modules) {
-			if (module.kind == prj::module_kind::runtime) game.modules.push_back(module.name);
-		}
+		game_project game{ project.root, project_module_names(project) };
 		build_options.project = [game] { return std::optional<game_project>{ game }; };
 		build_options.settings = [snk_dir = project.snk_dir()] { return load_build_settings(snk_dir); };
 		build_options.preset_for = [code_dir = project.root / "code"](std::string_view configuration) {
@@ -675,19 +685,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// The host appears in the storage after init (main loads the project's modules then): it is looked up when used.
 	game_reloader_options reload_options;
 	reload_options.modules = [&data] {
-		std::vector<std::string> modules;
-		if (data.has_value<prj::project_context>()) {
-			for (const auto& module : data.require<prj::project_context>().data.modules) {
-				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
-			}
-		}
-		return modules;
+		return data.has_value<prj::project_context>() ? project_module_names(data.require<prj::project_context>()) : std::vector<std::string>{};
+	};
+	reload_options.is_editor_module = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_editor_module(module);
+	};
+	reload_options.is_current = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
 	};
 	reload_options.build_output = [&data](const std::string& module) -> std::optional<std::filesystem::path> {
 		if (!data.has_value<core::project_module_host>()) return std::nullopt;
 		return data.require<core::project_module_host>().build_output(module);
 	};
 	const auto reload_module = [this, &data](const std::string& module, bool retry_taken_back) {
+		if (data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_editor_module(module)) {
+			// An editor module changes neither the game layer nor Play: no swap gate, no snapshot, nothing to revert.
+			return data.require<core::project_module_host>().reload_editor_module(module);
+		}
 		core::reload_report report = data.has_value<core::project_module_host>()
 			? data.require<core::project_module_host>().reload(module, m_swap_gate.hooks(), retry_taken_back)
 			: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
@@ -1011,13 +1025,7 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
 	};
 	live.build.modules = [&data] {
-		std::vector<std::string> modules;
-		if (data.has_value<prj::project_context>()) {
-			for (const auto& module : data.require<prj::project_context>().data.modules) {
-				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
-			}
-		}
-		return modules;
+		return data.has_value<prj::project_context>() ? project_module_names(data.require<prj::project_context>()) : std::vector<std::string>{};
 	};
 	live.build.reload_pending = [this] {
 		return editor_layer->has_implicit_prefix(game_reloader::k_reload_frame_id) || editor_layer->has_implicit_prefix(live_mode::k_reload_frame_id);

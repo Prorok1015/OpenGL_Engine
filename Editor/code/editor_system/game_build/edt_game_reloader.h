@@ -20,8 +20,15 @@ namespace edt
 
 	struct game_reloader_options
 	{
-		// The runtime modules of the open project's manifest; empty without a project.
+		// The modules of the open project's manifest: the runtime ones first, then the editor ones (#664); empty without a
+		// project. A reload without a module name takes the first of them that has a build.
 		std::function<std::vector<std::string>()> modules;
+		// `module` is an editor module (kind "editor"): it reloads on its own, with no Play snapshot and no swap gate, and is
+		// not reloaded when it is the build already in use. Null: none is.
+		std::function<bool(const std::string& module)> is_editor_module;
+		// The running copy of `module` was made from the build output as it is now (project_module_host::is_current). Used for
+		// editor modules only: the reload of the game module reloaded them already. Null: never.
+		std::function<bool(const std::string& module)> is_current;
 		// The build of a module in the project's build output, if there is one.
 		std::function<std::optional<std::filesystem::path>(const std::string& module)> build_output;
 		// Swaps the running module for its new build (core::project_module_host::reload with the editor's hooks).
@@ -68,7 +75,7 @@ namespace edt
 
 		// Why build.reload_game_module is disabled; empty when it is enabled. Looks at the disk at most once a second.
 		[[nodiscard]] std::string disabled_reason() const;
-		// Empty `module`: the first runtime module that has a build.
+		// Empty `module`: the first module of `modules` that has a build (a runtime module when it has one).
 		core::reload_report reload(const std::string& module);
 		// reload without the message for a build not taken: the caller reports it (live mode, #445).
 		core::reload_report reload_quiet(const std::string& module);

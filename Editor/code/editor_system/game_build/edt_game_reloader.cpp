@@ -222,7 +222,12 @@ core::reload_report edt::game_reloader::attempt(const std::string& module, std::
 		return { core::reload_status::refused, "it has not been built" };
 	}
 	who = *name;
-	if (m_options.before_reload) {
+	const bool editor_module = m_options.is_editor_module && m_options.is_editor_module(*name);
+	if (editor_module && m_options.is_current && m_options.is_current(*name)) {
+		// The reload of the game module (or an earlier one) put this build in place: nothing to swap.
+		return { core::reload_status::reloaded, {} };
+	}
+	if (!editor_module && m_options.before_reload) {
 		if (const std::string restart = m_options.before_reload(*name); !restart.empty()) {
 			egLOG_WARN("editor", "The Play state is not kept across the reload of '{}': {}. Play restarts.", *name, restart);
 		}
@@ -232,7 +237,8 @@ core::reload_report edt::game_reloader::attempt(const std::string& module, std::
 
 core::reload_report edt::game_reloader::tell(const std::string& module, core::reload_report report)
 {
-	const std::string who = module.empty() ? std::string{ "The game module" } : std::format("The game module '{}'", module);
+	const char* const kind = !module.empty() && m_options.is_editor_module && m_options.is_editor_module(module) ? "editor module" : "game module";
+	const std::string who = module.empty() ? std::string{ "The game module" } : std::format("The {} '{}'", kind, module);
 	switch (report.status) {
 	case core::reload_status::reloaded:
 		break;
