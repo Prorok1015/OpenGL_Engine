@@ -99,6 +99,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/config/cfg_variables.h>
 #include <imgui.h>
+#include <snk/ecs/ecs_system.h>
 #include <entt/entt.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -1141,6 +1142,17 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
 	options.start_blocker = [this] { return load_in_progress(); };
 	options.each_frame = [this](const std::string& id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
+	options.preflight = [this] {
+		play_preflight_services services;
+		const ecs::system_factory* factory = m_services.sfactory();
+		services.systems = factory ? &factory->registry() : nullptr;
+		services.descs = m_services.descs();
+		services.resources = m_services.resources();
+		services.assembler = m_services.assembler();
+		auto found = run_play_preflight(m_state, services);
+		m_play_preflight.publish(m_context->problems(), found);
+		return found;
+	};
 	options.forget_runtime_entities = [this] {
 		if (m_game_view_panel) m_game_view_panel->forget_runtime_entities();
 		if (m_viewport_panel) m_viewport_panel->forget_runtime_entities();
@@ -1164,7 +1176,11 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// The Play menu and the agent's play.* (US-63-C, #491). The lambdas check m_play: ~editor_system lets go of it
 	// before m_registrations goes.
 	for (auto& command : register_play_commands(m_context->actions(),
-			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); } })) {
+			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); },
+				.dialogs = &m_context->dialogs(), .show_problems = [this] {
+					m_context->panels().set_open(m_problems_panel->get_id(), true);
+					ImGui::SetWindowFocus(m_problems_panel->get_title().c_str());
+				} })) {
 		m_registrations.push_back(std::move(command));
 	}
 	// runtime.query / runtime.get (#552): the live entities of Play, read-only.
@@ -1783,6 +1799,10 @@ void edt::editor_system::go_to_problem(const std::string& source, const problem&
 {
 	if (source == desc_problem_publisher::source) {
 		if (const auto target = m_desc_problems.target_of(item)) go_to(*target);
+		return;
+	}
+	if (source == play_preflight_publisher::source) {
+		if (const auto target = m_play_preflight.target_of(item)) go_to(*target);
 		return;
 	}
 	if (source == world_problem_publisher::source) {
