@@ -263,6 +263,12 @@ namespace desc
 			return true;
 		}
 
+		// A copy inside one registry keeps the entities as they are.
+		struct same_entities final : entity_remap
+		{
+			std::optional<std::uint32_t> find(std::uint32_t saved) const override { return saved; }
+		};
+
 		json::value floats_to_json(const std::byte* address, std::size_t count)
 		{
 			json::array components;
@@ -493,7 +499,10 @@ namespace desc
 				json::value value;
 				rt_to_json(ops, src, value);
 				if (!value.is_null()) {
-					rt_from_json(ops, dst, value, read_context{});
+					const same_entities same;
+					read_context ctx;
+					ctx.entities = &same;
+					rt_from_json(ops, dst, value, ctx);
 				}
 				return;
 			}
