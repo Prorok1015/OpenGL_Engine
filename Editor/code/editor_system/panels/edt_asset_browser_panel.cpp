@@ -186,6 +186,11 @@ namespace edt
 			if (from_lower_layer)
 				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			ImGui::Selectable(e.label.c_str());
+			if (m_ui_probe) {
+				const ImVec2 item_min = ImGui::GetItemRectMin();
+				const ImVec2 item_max = ImGui::GetItemRectMax();
+				m_ui_probe->report("asset_browser", e.src.name, item_min.x, item_min.y, item_max.x, item_max.y);
+			}
 			if (from_lower_layer)
 				ImGui::PopStyleColor();
 			if (ImGui::IsItemHovered() && m_layers.size() > 1)

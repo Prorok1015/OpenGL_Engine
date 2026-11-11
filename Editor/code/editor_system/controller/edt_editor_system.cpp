@@ -197,6 +197,8 @@ namespace {
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
 	// The run ends with 0 once the first loaded level settled (#669; CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
+	// Logs the screen rectangle of the Asset Browser entries (Editor/UiProbe), so a headless smoke script finds an item by name.
+	CFG_VAR_DEF_BOOL(cfg_ui_probe, "editor/ui_probe", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	// "" (not set), true or false: an explicit false wins over the person's own switch (parse_cfg_switch).
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
@@ -1340,6 +1342,7 @@ void edt::editor_system::create_panels(bool capture_log)
 	m_console_panel = std::make_shared<console_panel>();
 	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
 	m_asset_browser_panel->set_layers(m_res.get_resource_layers());
+	m_asset_browser_panel->set_ui_probe(std::make_shared<ui_probe>(cfg_ui_probe));
 	if (const auto code_roots = m_res.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_res, code_tree_model{ code_roots.back() },
 			[](const std::filesystem::path& file) { return platform::open_in_shell(file); } };

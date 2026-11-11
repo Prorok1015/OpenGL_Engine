@@ -25,6 +25,9 @@
 #   click X Y [BUTTON]       move to X,Y and click (BUTTON 1=left default, 3=right)
 #   dclick X Y               double click
 #   drag X1 Y1 X2 Y2         press at X1,Y1, move to X2,Y2, release
+#   drag_item AREA NAME X2 Y2  the same from the centre of the item NAME of AREA (e.g. asset_browser base_material.desc),
+#                            wherever the editor drew it: it logs the item rectangles with --set editor/ui_probe true
+#                            (Editor/UiProbe lines); no such line within 20 s fails the run. NAME has no spaces
 #   move X Y                 move the mouse
 #   key KEYS                 xdotool key syntax, e.g. ctrl+s, Delete, Escape
 #   type TEXT                type text
@@ -122,6 +125,19 @@ EDITOR_PID=$!
 
 alive() { kill -0 "$EDITOR_PID" 2>/dev/null; }
 
+# "X Y" of the centre of the item the editor logged last: "item AREA 'NAME' center X Y size W H" (editor/ui_probe).
+item_center() {
+	local line=""
+	for _ in $(seq 1 40); do
+		line=$(grep -F "item $1 '$2' center " "$LOG" | tail -1 || true)
+		[[ -n "$line" ]] && break
+		alive || break
+		sleep 0.5
+	done
+	[[ -n "$line" ]] || return 1
+	sed -E 's/.*center (-?[0-9]+) (-?[0-9]+) size.*/\1 \2/' <<<"$line"
+}
+
 # Wait for the editor window so actions do not race window creation.
 for _ in $(seq 1 60); do
 	alive || break
@@ -175,6 +191,13 @@ if [[ -n "$ACTIONS" ]]; then
 			click) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click "${c:-1}" ;; # hover first: ImGui needs a frame at the new position
 			dclick) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click --repeat 2 --delay 80 1 ;;
 			drag) xdotool mousemove "$a" "$b" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
+			drag_item)
+				if ! from=$(item_center "$a" "$b"); then
+					echo "error: no 'item $a '$b'' line in $LOG (is the editor run with --set editor/ui_probe true?)" >&2
+					exit 1
+				fi
+				read -r fx fy <<<"$from"
+				xdotool mousemove "$fx" "$fy" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
 			move) xdotool mousemove "$a" "$b" ;;
 			key) xdotool key --delay 50 "$a" ;;
 			type) xdotool type --delay 30 "${line#*type }" ;;
