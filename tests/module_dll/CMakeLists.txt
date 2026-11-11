@@ -27,9 +27,18 @@ foreach(_variant IN ITEMS "" v2 failing bad_api bad_restore bad_layout)
 	add_dependencies(unit_tests ${_target})
 endforeach()
 
+# #558: a module that copies a prefab_node, linked as the project template links `game` (Boost.JSON of its own on MSVC).
+# app_module_dll_tests reads and frees the copy after the module is unloaded.
+add_library(test_copy_prefab_dll SHARED test_copy_prefab_dll.cpp)
+target_link_libraries(test_copy_prefab_dll PRIVATE snk::engine snk::engine_api snk::sanitizers)
+if(MSVC)
+	target_link_libraries(test_copy_prefab_dll PRIVATE Boost::json)
+endif()
+add_dependencies(unit_tests test_copy_prefab_dll)
+
 # edt_play_reload_dll_tests: Play kept across a reload of these builds (#600, HOT_RELOAD_PLAY.md 11).
 set(_dll_tests "${CMAKE_CURRENT_SOURCE_DIR}/app_module_dll_tests.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/edt_play_reload_dll_tests.cpp")
 target_sources(unit_tests PRIVATE ${_dll_tests})
 set_source_files_properties(${_dll_tests} TARGET_DIRECTORY unit_tests
-	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_GAME_DLL_PATH=\"$<TARGET_FILE:test_game_dll>\";SNK_TEST_GAME_DLL_V2_PATH=\"$<TARGET_FILE:test_game_dll_v2>\";SNK_TEST_GAME_DLL_FAILING_PATH=\"$<TARGET_FILE:test_game_dll_failing>\";SNK_TEST_GAME_DLL_BAD_API_PATH=\"$<TARGET_FILE:test_game_dll_bad_api>\";SNK_TEST_GAME_DLL_BAD_RESTORE_PATH=\"$<TARGET_FILE:test_game_dll_bad_restore>\";SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH=\"$<TARGET_FILE:test_game_dll_bad_layout>\";SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\"" SKIP_PRECOMPILE_HEADERS ON)
+	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_GAME_DLL_PATH=\"$<TARGET_FILE:test_game_dll>\";SNK_TEST_GAME_DLL_V2_PATH=\"$<TARGET_FILE:test_game_dll_v2>\";SNK_TEST_GAME_DLL_FAILING_PATH=\"$<TARGET_FILE:test_game_dll_failing>\";SNK_TEST_GAME_DLL_BAD_API_PATH=\"$<TARGET_FILE:test_game_dll_bad_api>\";SNK_TEST_GAME_DLL_BAD_RESTORE_PATH=\"$<TARGET_FILE:test_game_dll_bad_restore>\";SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH=\"$<TARGET_FILE:test_game_dll_bad_layout>\";SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\";SNK_TEST_COPY_PREFAB_DLL_PATH=\"$<TARGET_FILE:test_copy_prefab_dll>\"" SKIP_PRECOMPILE_HEADERS ON)
 target_link_libraries(unit_tests PRIVATE ${CMAKE_DL_LIBS})

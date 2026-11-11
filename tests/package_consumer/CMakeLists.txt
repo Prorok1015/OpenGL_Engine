@@ -37,6 +37,16 @@ endforeach()
 add_executable(package_consumer main.cpp)
 target_link_libraries(package_consumer PRIVATE ${_engine})
 
+if(SNK_CONSUMER_ENGINE STREQUAL "shared")
+	# #558: a game module linked as the project template links `game`, with desc code that copies a prefab_node. On MSVC
+	# snk_engine.dll exports only SNK_API, so this links only with the SDK's own Boost.JSON.
+	add_library(package_consumer_module SHARED module.cpp)
+	target_link_libraries(package_consumer_module PRIVATE snk::engine snk::engine_api)
+	if(MSVC AND TARGET snk::thirdparty_boost_json)
+		target_link_libraries(package_consumer_module PRIVATE snk::thirdparty_boost_json)
+	endif()
+endif()
+
 # Header self-containment (#109): one translation unit per installed header of the components that
 # live under include/snk/<name>/, compiled against the installed SDK. Off by default; the SDK CI
 # jobs turn it on. Add a component to SNK_CONSUMER_HEADER_COMPONENTS when it gains public headers.

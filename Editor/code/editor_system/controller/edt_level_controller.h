@@ -104,6 +104,9 @@ namespace edt
 
 		// True when the level is in the context manager and its worlds are known.
 		bool finish_level_load(res::res_handle<scn::level_desc>& handle);
+		// The document takes `level_tag` (read from its working copy `editor_tag`) only when finish_level_load takes it;
+		// a refusal leaves the document's tags as they were and watches its level again (#613).
+		bool take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag, const res::tag& editor_tag);
 
 		boost::json::object load_desc_template(const std::string& filename);
 		boost::json::object build_level_json() const;
@@ -118,6 +121,9 @@ namespace edt
 		// unwatched there even after the game layer changed.
 		void watch_level();
 		void unwatch_level();
+		// A level load unwatches the open level when it starts; one that ends without a new level watches it again.
+		void resume_watch();
+		const res::tag& watched_tag() const { return m_watched_tag; }
 
 		// The game layer is about to be replaced (a game module loads or unloads): keeps the edited level as JSON,
 		// built with the old layer's descs, and lets go of everything that refers to that layer (the watch, the world

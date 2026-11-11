@@ -3527,3 +3527,69 @@ BOOST_AUTO_TEST_CASE(a_refusal_of_another_kind_is_said_not_greyed)
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// #613: a level the load refuses late (its desc does not load) leaves the editor on the level before it: the worlds, the
+// document, its guid.
+BOOST_FIXTURE_TEST_SUITE(edt_level_load_refusal_tests, play_fixture)
+
+BOOST_AUTO_TEST_CASE(a_level_refused_at_the_end_of_its_load_leaves_the_editor_on_the_old_one)
+{
+	open_level();
+	state.level_guid = "guid-of-the-old-level";
+	const std::string document_before = level_json();
+	const std::vector<std::string> worlds_before = state.world_names;
+
+	const res::tag broken = put("broken_lv.desc", "{ this is no json");
+	auto handle = services.resources()->require<scn::level_desc>(broken);
+	pump();
+	const res::tag editor_before = state.editor_tag;
+	state.editor_tag = broken;
+	BOOST_TEST(!level_ctrl.finish_level_load(handle));
+	state.editor_tag = editor_before;
+
+	BOOST_TEST(state.level_guid == "guid-of-the-old-level");
+	BOOST_TEST(state.world_names == worlds_before, boost::test_tools::per_element());
+	BOOST_TEST(level_json() == document_before);
+	BOOST_TEST(contexts().level_set().find("w0") != nullptr);
+	BOOST_TEST(contexts().level_set().find("w1") != nullptr);
+}
+
+// The editor reads the new level, the level set cannot (the file is broken; only the editor's resource system has the
+// level pinned under its tag): load_level refuses after the editor's read succeeded, the way poll_level_load meets it.
+BOOST_AUTO_TEST_CASE(a_level_the_level_set_refuses_after_the_editor_read_it_leaves_the_document_and_its_watch)
+{
+	contexts().set_game_layer(nullptr);
+	const res::tag old_level = open_level();
+	state.level_guid = "guid-of-the-old-level";
+	const std::string document_before = level_json();
+	const std::vector<std::string> worlds_before = state.world_names;
+	BOOST_REQUIRE(level_ctrl.watched_tag() == old_level);
+
+	const res::tag readable = put("other_lv.desc", LEVEL);
+	const res::tag copy = put("other_lv_copy.desc", "{ this is no json");
+	auto& editor_side = contexts().create_layer(&tasks);
+	const auto good = editor_side.resources().require_sync<scn::level_desc>(readable);
+	BOOST_REQUIRE(good.is_ready());
+	editor_side.resources().pin_resource(copy, scn::level_desc(*good));
+	const std::shared_ptr<void> restore_base_resources(nullptr, [this](void*) {
+		services.base_resources = rs.get();
+		level_ctrl.watch_level();
+	});
+	services.base_resources = &editor_side.resources();
+	auto handle = services.resources()->require_sync<scn::level_desc>(copy);
+	BOOST_REQUIRE(handle.is_ready());
+
+	level_ctrl.unwatch_level();
+	BOOST_TEST(!level_ctrl.take_loaded_level(handle, readable, copy));
+
+	BOOST_TEST(state.level_tag == old_level);
+	BOOST_TEST(state.editor_tag == old_level);
+	BOOST_TEST(level_ctrl.watched_tag() == old_level);
+	BOOST_TEST(state.level_guid == "guid-of-the-old-level");
+	BOOST_TEST(state.world_names == worlds_before, boost::test_tools::per_element());
+	BOOST_TEST(level_json() == document_before);
+	BOOST_TEST(contexts().level_set().find("w0") != nullptr);
+	BOOST_TEST(contexts().level_set().find("w1") != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

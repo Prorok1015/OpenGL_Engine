@@ -63,6 +63,8 @@ namespace {
 		for (const char character : stem) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
 		while (!upper.empty() && upper.back() == ' ') upper.pop_back();
 		if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") return true;
+		// The console's input and output buffers (#613).
+		if (upper == "CONIN$" || upper == "CONOUT$") return true;
 		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0' && upper[3] <= '9';
 	}
 
