@@ -108,6 +108,18 @@ BOOST_AUTO_TEST_CASE(ASharedBinding_IsFoundAndNamedOnce_AndAMapWithoutOneHasNone
 	BOOST_TEST((found[0].binding == inp::action_binding{ KB::A }));
 }
 
+BOOST_AUTO_TEST_CASE(AGamepadButtonAndAnAxisCanBeBound_AndConflictLikeKeys)
+{
+	inp::action_map project = project_map();
+	project.add("Jump", { inp::GAMEPAD_BUTTONS::A });
+	inp::user_bindings user;
+	BOOST_TEST(user.rebind(project, "Fire", 1, inp::GAMEPAD_AXES::RIGHT_TRIGGER).ok());
+	const auto taken = user.rebind(project, "MoveLeft", 0, inp::GAMEPAD_BUTTONS::A);
+	BOOST_TEST((taken.status == inp::rebind_status::conflict));
+	BOOST_TEST(taken.conflict_with == "Jump");
+	BOOST_TEST((user.apply(project).find(project.id("Fire"))->bindings == std::vector<inp::action_binding>{ MB::LEFT, inp::GAMEPAD_AXES::RIGHT_TRIGGER }));
+}
+
 BOOST_AUTO_TEST_CASE(AnUnknownAction_IsRefused)
 {
 	const inp::action_map project = project_map();

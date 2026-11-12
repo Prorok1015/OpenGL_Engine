@@ -129,4 +129,69 @@ BOOST_AUTO_TEST_CASE(AFileWithoutActionsHasNone)
 	BOOST_TEST(warnings.empty());
 }
 
+BOOST_AUTO_TEST_CASE(GamepadButtonsAndAxesAreBindings_AndTheirMistakesAreWarnedWithThePath)
+{
+	const auto map = scn::build_action_map(read(R"({ "actions": [
+		{ "name": "Jump", "bindings": [ { "key": "SPACE" }, { "gamepad": "A" }, { "axis": "LeftX-" }, { "gamepad": "TURBO" }, { "axis": "LeftZ" },
+			{ "gamepad": "B", "axis": "LeftX+" }, { "gamepad": 3 }, { "axis": true } ] } ] })"), "res://input/actions.desc");
+
+	BOOST_REQUIRE(map.size() == 1u);
+	const auto& bindings = map.actions()[0].bindings;
+	BOOST_REQUIRE(bindings.size() == 3u);
+	BOOST_TEST((std::get<inp::GAMEPAD_BUTTONS>(bindings[1]) == inp::GAMEPAD_BUTTONS::A));
+	BOOST_TEST((std::get<inp::GAMEPAD_AXES>(bindings[2]) == inp::GAMEPAD_AXES::LEFT_X_NEG));
+	BOOST_TEST(warned("/actions/0/bindings/3/gamepad: unknown gamepad button 'TURBO'"));
+	BOOST_TEST(warned("/actions/0/bindings/4/axis: unknown gamepad axis 'LeftZ'"));
+	BOOST_TEST(warned("/actions/0/bindings/5: a binding names exactly one"));
+	BOOST_TEST(warned("/actions/0/bindings/6/gamepad: not a string"));
+	BOOST_TEST(warned("/actions/0/bindings/7/axis: not a string"));
+}
+
+BOOST_AUTO_TEST_CASE(AFileWithGamepadBindingsIsSavedAsItWas)
+{
+	constexpr const char* text = R"({ "__type": "input_actions_desc", "__version": 1, "actions": [
+		{ "name": "Move", "bindings": [ { "axis": "LeftY+" }, { "gamepad": "DPAD_DOWN" } ] } ],
+		"gamepad": { "deadzone": 0.3 } })";
+	const auto desc = read(text);
+	boost::json::object saved;
+	desc.serialize(saved);
+	BOOST_TEST((saved.at("actions") == boost::json::parse(text).as_object().at("actions")));
+	BOOST_TEST((saved.at("gamepad") == boost::json::parse(text).as_object().at("gamepad")));
+}
+
+BOOST_AUTO_TEST_CASE(TheGamepadSetting_IsReadWithDefaultsForWhatIsMissing_AndBadNumbersAreWarned)
+{
+	const auto defaults = scn::build_gamepad_config(read(GOOD));
+	BOOST_TEST((defaults == inp::gamepad_config{}));
+	BOOST_TEST(warnings.empty());
+
+	const auto some = scn::build_gamepad_config(read(R"({ "gamepad": { "deadzone": 0.4 } })"));
+	BOOST_TEST(some.deadzone == 0.4f);
+	BOOST_TEST(some.press_threshold == inp::gamepad_config{}.press_threshold);
+
+	const auto bad = scn::build_gamepad_config(read(R"({ "gamepad": { "deadzone": 2, "press_threshold": "high" } })"), "res://input/actions.desc");
+	BOOST_TEST((bad == inp::gamepad_config{}));
+	BOOST_TEST(warned("res://input/actions.desc: /gamepad/deadzone: 2 is out of 0..1"));
+	BOOST_TEST(warned("/gamepad/press_threshold: not a number"));
+}
+
+BOOST_AUTO_TEST_CASE(AFileWithoutTheGamepadKey_IsSavedWithoutIt)
+{
+	const auto desc = read(GOOD);
+	boost::json::object saved;
+	desc.serialize(saved);
+	BOOST_TEST(!saved.contains("gamepad"));
+}
+
+BOOST_AUTO_TEST_CASE(AGamepadSettingThatIsNoObjectOrAHugeNumber_IsWarnedAboutWithTheFile)
+{
+	const auto notobject = scn::build_gamepad_config(read(R"({ "gamepad": 5 })"), "res://input/actions.desc");
+	BOOST_TEST((notobject == inp::gamepad_config{}));
+	BOOST_TEST(warned("res://input/actions.desc: /gamepad: expected an object"));
+
+	const auto huge = scn::build_gamepad_config(read(R"({ "gamepad": { "deadzone": 1e300 } })"), "res://input/actions.desc");
+	BOOST_TEST((huge == inp::gamepad_config{}));
+	BOOST_TEST(warned("/gamepad/deadzone:"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

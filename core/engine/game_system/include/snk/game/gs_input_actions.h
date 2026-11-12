@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/common/snk_api.h>
 #include <filesystem>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -45,6 +46,14 @@ namespace gs
 		std::shared_ptr<const inp::action_map> map() const { return m_map; }
 		// The project's map as written, for a UI that offers "reset". Null when map() is.
 		std::shared_ptr<const inp::action_map> project_map() const { return m_project; }
+		// True when map() has a gamepad button or axis binding.
+		bool has_gamepad_bindings() const { return m_has_gamepad_bindings; }
+		// After update(), each frame: a module built for an API minor before 3.16 reads bindings as keyboard or mouse only, and
+		// a visit over them of its own fails on a gamepad one. Warns once per map and set of such modules (the map is not
+		// filtered), naming them. Needs the versions the host keeps (app::modules::loaded_module_apis).
+		void warn_about_old_modules(const ds::app_data_storage& data);
+		// The "gamepad" setting of the desc (the defaults without one), shared by the bindings of a device.
+		inp::gamepad_config gamepad_config() const { return m_gamepad; }
 
 		// The player's bindings live in `folder`, one file per project named by the hash of the project name (#736); an empty folder keeps them in memory only. They
 		// are read when the project opens and written after each change.
@@ -68,11 +77,15 @@ namespace gs
 		res::res_handle<scn::input_actions_desc> m_handle{};
 		std::shared_ptr<const inp::action_map> m_map{};
 		std::shared_ptr<const inp::action_map> m_project{};
+		inp::gamepad_config m_gamepad{};
 		inp::user_bindings m_user{};
 		std::filesystem::path m_user_folder{};
 		std::filesystem::path m_user_file{};
 		std::string m_project_name{};
 		bool m_saved = true;
+		bool m_has_gamepad_bindings = false;
+		const inp::action_map* m_warned_map = nullptr;
+		std::uint64_t m_warned_revision = ~std::uint64_t{ 0 };
 		bool m_changed = false;
 		bool m_built = false;
 		bool m_reported = false;

@@ -76,7 +76,14 @@
 // 3.15 (#560): scn::set_visible / scn::is_visible (inline, scn_model.h) hide a mesh by taking its scn::renderable, which the
 // render data extractor requires of meshes from 3.15 on; an older engine draws the mesh anyway, so a module that hides
 // meshes needs an engine of 3.15 or newer. mesh_node_desc gains `visible` at its end (engine-made, not in the layout key).
-#define SNK_MODULE_API_VERSION 0x0003'000Fu // major << 16 | minor
+// 3.16 (#744): inp::action_binding gains the alternatives GAMEPAD_BUTTONS (index 2) and GAMEPAD_AXES (index 3), appended after
+// the keyboard (0) and the mouse (1): it is still one variant of two bytes, which static_asserts in inp_actions.h hold, so a
+// module of 3.15 that reads the bindings of an action by its stride and indices still reads right. inp::action_binding_v1
+// is the old type; action_map::add keeps its old overload (the symbol modules of 3.15 import) and converts. A module that
+// visits the bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
+// scn::input_actions_desc gains `gamepad` at its end (engine-made, not in the layout key). New: inp::gamepad_config, the
+// gamepad names in inp_actions.h, wnd::gamepad_source, gs::input_actions::rebind and the player's bindings (#736).
+#define SNK_MODULE_API_VERSION 0x0003'0010u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

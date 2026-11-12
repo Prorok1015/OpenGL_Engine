@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/core_input/inp_keyboard_event.hpp>
+#include <snk/core_input/inp_gamepad.hpp>
 #include <glm/glm.hpp>
 #include <array>
 #include <type_traits>
@@ -9,6 +10,11 @@ namespace inp
 {
 	using KEYBOARD_BUTTONS = core::inp::KEYBOARD_BUTTONS;
 	using MOUSE_BUTTONS = core::inp::MOUSE_BUTTONS;
+	using GAMEPAD_BUTTONS = core::inp::GAMEPAD_BUTTONS;
+	using GAMEPAD_AXES = core::inp::GAMEPAD_AXES;
+	using GAMEPAD_AXIS_IDS = core::inp::GAMEPAD_AXIS_IDS;
+	using gamepad_state = core::inp::gamepad_state;
+	using gamepad_config = core::inp::gamepad_config;
 	using KEY_ACTION = core::inp::KEY_ACTION;
 
 	struct input_state {

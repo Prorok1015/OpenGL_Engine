@@ -3,6 +3,10 @@
 #include <snk/game/gs_game_module.h>
 #include <snk/game/gs_input_actions.h>
 #include <snk/game/gs_input_routing.h>
+#include <snk/application/app_loaded_module_apis.h>
+#include <snk/application/app_module_entry.h>
+#include <snk/common/ds/ds_store.hpp>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_events.hpp>
@@ -757,6 +761,37 @@ BOOST_AUTO_TEST_CASE(AChangeTheFileCannotTake_IsAppliedAndSaysItWasNotSaved)
 	BOOST_TEST(!actions.user_file_saved());
 	BOOST_TEST((actions.map()->find(actions.map()->id("Jump"))->bindings == std::vector<inp::action_binding>{ KB::K }));
 	std::filesystem::remove_all(base);
+}
+
+BOOST_AUTO_TEST_CASE(AMapWithGamepadBindings_WarnsOncePerMapAboutModulesOfAnOlderApi)
+{
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn) warnings.emplace_back(message);
+	});
+	ds::app_data_storage storage;
+	storage.construct<app::modules::loaded_module_apis>().api = { { "old_game", 0x0003'000Fu }, { "new_game", SNK_MODULE_API_VERSION } };
+
+	gs::input_actions actions(*rs);
+	const auto tag = put("actions.desc", R"json({"__type":"input_actions_desc","__version":1,"actions":[
+		{"name":"Jump","bindings":[{"key":"SPACE"},{"gamepad":"A"}]}]})json");
+	load(actions, tag);
+	BOOST_REQUIRE(actions.map());
+	BOOST_TEST(actions.has_gamepad_bindings());
+
+	actions.warn_about_old_modules(storage);
+	actions.warn_about_old_modules(storage);
+	std::size_t about_old = 0;
+	for (const auto& w : warnings) {
+		if (w.find("old_game (api 3.15)") != std::string::npos) ++about_old;
+		BOOST_TEST(w.find("new_game") == std::string::npos);
+	}
+	BOOST_TEST(about_old == 1u);
+
+	const auto without = put("keys.desc", ACTIONS_SPACE);
+	gs::input_actions keys_only(*rs);
+	load(keys_only, without);
+	BOOST_TEST(!keys_only.has_gamepad_bindings());
 }
 
 BOOST_AUTO_TEST_CASE(NoTag_NoMap)

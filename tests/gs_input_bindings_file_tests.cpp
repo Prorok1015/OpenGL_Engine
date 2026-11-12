@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_SUITE(GsInputBindingsFileTests)
 BOOST_AUTO_TEST_CASE(WhatIsWritten_ReadsBackTheSame)
 {
 	inp::user_bindings user;
-	user.set("MoveLeft", { KB::Q, MB::RIGHT });
+	user.set("MoveLeft", { KB::Q, MB::RIGHT, inp::GAMEPAD_BUTTONS::DPAD_LEFT, inp::GAMEPAD_AXES::LEFT_X_NEG });
 	user.set("Jump", {});
 	const inp::user_bindings back = gs::parse_user_bindings(gs::write_user_bindings(user));
 	BOOST_TEST((back.overrides() == user.overrides()));
@@ -46,12 +46,12 @@ BOOST_AUTO_TEST_CASE(WhatIsWritten_ReadsBackTheSame)
 BOOST_AUTO_TEST_CASE(ABindingThatIsWrong_IsSkippedAndTheRestLoads)
 {
 	const inp::user_bindings user = gs::parse_user_bindings(R"json({"__type":"user_input_bindings","__version":1,"actions":[
-		{"name":"MoveLeft","bindings":[{"key":"NOPE"},{"key":"Q"},{"key":"Q","mouse":"LEFT"},{"mouse":7},{}]},
+		{"name":"MoveLeft","bindings":[{"key":"NOPE"},{"key":"Q"},{"key":"Q","mouse":"LEFT"},{"mouse":7},{},{"gamepad":"TURBO"},{"axis":"LeftX+"},{"gamepad":"A"}]},
 		{"name":"","bindings":[]},
 		{"bindings":[]},
 		{"name":"Fire","bindings":[{"mouse":"RIGHT"}]}]})json");
 	BOOST_REQUIRE_EQUAL(user.overrides().size(), 2u);
-	BOOST_TEST((user.overrides().at("MoveLeft") == std::vector<inp::action_binding>{ KB::Q }));
+	BOOST_TEST((user.overrides().at("MoveLeft") == std::vector<inp::action_binding>{ KB::Q, inp::GAMEPAD_AXES::LEFT_X_POS, inp::GAMEPAD_BUTTONS::A }));
 	BOOST_TEST((user.overrides().at("Fire") == std::vector<inp::action_binding>{ MB::RIGHT }));
 }
 

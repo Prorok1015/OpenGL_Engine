@@ -99,6 +99,32 @@ BOOST_AUTO_TEST_CASE(APressAndARelease_GiveOneEdgeEach)
 	BOOST_TEST(edge_free(JUMP));
 }
 
+BOOST_AUTO_TEST_CASE(AGamepadBinding_IsNotHeldByAMouseButtonOfTheSameValue)
+{
+	// GAMEPAD_BUTTONS::A and GAMEPAD_AXES::LEFT_X_NEG are 0 and B and LEFT_X_POS are 1, as MB::LEFT and MB::RIGHT are.
+	auto map = std::make_shared<inp::action_map>();
+	map->add("PadA", { inp::GAMEPAD_BUTTONS::A });
+	map->add("PadB", { inp::GAMEPAD_BUTTONS::B });
+	map->add("PadLeft", { inp::GAMEPAD_AXES::LEFT_X_NEG });
+	map->add("PadRight", { inp::GAMEPAD_AXES::LEFT_X_POS });
+	ref = inp::action_map_ref{ map };
+	use_reach = true;
+	reach.reach.resize(4);
+	for (inp::action_id id = 0; id < 4; ++id) {
+		reach.reach[id].buttons = true;
+		reach.reach[id].armed_buttons.set();
+	}
+	set(MB::LEFT, true);
+	set(MB::RIGHT, true);
+	frame();
+	frame();
+	for (inp::action_id id = 0; id < 4; ++id) {
+		BOOST_TEST_INFO("action " << id);
+		BOOST_TEST(!state.held(id));
+		BOOST_TEST(edge_free(id));
+	}
+}
+
 BOOST_AUTO_TEST_CASE(AnyBindingHoldsTheAction)
 {
 	frame();

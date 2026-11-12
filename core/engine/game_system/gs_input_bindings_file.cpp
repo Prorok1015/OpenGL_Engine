@@ -7,6 +7,7 @@
 #include <format>
 #include <algorithm>
 #include <system_error>
+#include <type_traits>
 #include <variant>
 
 namespace json = boost::json;
@@ -18,17 +19,6 @@ namespace
 	constexpr std::uint64_t k_max_file_bytes = 256u * 1024u;
 	constexpr std::size_t k_max_actions = 256;
 	constexpr std::size_t k_max_bindings_per_action = 16;
-
-	std::string string_field(const json::object& object, std::string_view key, bool& not_text)
-	{
-		const auto* value = object.if_contains(key);
-		if (!value) return {};
-		if (!value->is_string()) {
-			not_text = true;
-			return {};
-		}
-		return std::string{ value->as_string() };
-	}
 
 	std::string_view display(std::string_view source)
 	{
@@ -42,20 +32,36 @@ namespace
 			egLOG_WARN("input", "{}: not an object, skipped", where);
 			return;
 		}
-		bool not_text = false;
-		const std::string key = string_field(*object, "key", not_text);
-		const std::string mouse = string_field(*object, "mouse", not_text);
-		if (not_text || key.empty() == mouse.empty()) {
-			egLOG_WARN("input", "{}: a binding names exactly one of \"key\" and \"mouse\" as a string, skipped", where);
+		constexpr std::string_view kinds[] = { "key", "mouse", "gamepad", "axis" };
+		std::string_view kind;
+		std::string name;
+		for (const std::string_view candidate : kinds) {
+			const auto* value = object->if_contains(candidate);
+			if (!value) continue;
+			if (!value->is_string() || !kind.empty()) {
+				egLOG_WARN("input", "{}: a binding names exactly one of \"key\", \"mouse\", \"gamepad\" and \"axis\" as a string, skipped", where);
+				return;
+			}
+			kind = candidate;
+			name = std::string{ value->as_string() };
+		}
+		if (kind.empty() || name.empty()) {
+			egLOG_WARN("input", "{}: a binding names exactly one of \"key\", \"mouse\", \"gamepad\" and \"axis\" as a string, skipped", where);
 			return;
 		}
-		if (!key.empty()) {
-			if (const auto parsed = inp::key_from_name(key)) out.emplace_back(*parsed);
-			else egLOG_WARN("input", "{}: unknown key '{}', skipped", where, key);
-		} else if (const auto parsed = inp::mouse_button_from_name(mouse)) {
+		if (kind == "key") {
+			if (const auto parsed = inp::key_from_name(name)) out.emplace_back(*parsed);
+			else egLOG_WARN("input", "{}: unknown key '{}', skipped", where, name);
+		} else if (kind == "mouse") {
+			if (const auto parsed = inp::mouse_button_from_name(name)) out.emplace_back(*parsed);
+			else egLOG_WARN("input", "{}: unknown mouse button '{}', skipped", where, name);
+		} else if (kind == "gamepad") {
+			if (const auto parsed = inp::gamepad_button_from_name(name)) out.emplace_back(*parsed);
+			else egLOG_WARN("input", "{}: unknown gamepad button '{}', skipped", where, name);
+		} else if (const auto parsed = inp::gamepad_axis_from_name(name)) {
 			out.emplace_back(*parsed);
 		} else {
-			egLOG_WARN("input", "{}: unknown mouse button '{}', skipped", where, mouse);
+			egLOG_WARN("input", "{}: unknown gamepad axis '{}', skipped", where, name);
 		}
 	}
 }
@@ -102,8 +108,13 @@ std::string gs::write_user_bindings(const inp::user_bindings& bindings)
 		json::array out;
 		for (const inp::action_binding& binding : list) {
 			json::object b;
-			if (const auto* key = std::get_if<inp::KEYBOARD_BUTTONS>(&binding)) b["key"] = json::string(inp::key_code_name(*key));
-			else b["mouse"] = json::string(inp::mouse_button_name(std::get<inp::MOUSE_BUTTONS>(binding)));
+			std::visit([&b](const auto value) {
+				using value_type = std::decay_t<decltype(value)>;
+				if constexpr (std::is_same_v<value_type, inp::KEYBOARD_BUTTONS>) b["key"] = json::string(inp::key_code_name(value));
+				else if constexpr (std::is_same_v<value_type, inp::MOUSE_BUTTONS>) b["mouse"] = json::string(inp::mouse_button_name(value));
+				else if constexpr (std::is_same_v<value_type, inp::GAMEPAD_BUTTONS>) b["gamepad"] = json::string(inp::gamepad_button_name(value));
+				else b["axis"] = json::string(inp::gamepad_axis_name(value));
+			}, binding);
 			out.push_back(std::move(b));
 		}
 		json::object a;
