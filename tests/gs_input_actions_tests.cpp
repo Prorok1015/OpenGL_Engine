@@ -794,6 +794,69 @@ BOOST_AUTO_TEST_CASE(AMapWithGamepadBindings_WarnsOncePerMapAboutModulesOfAnOlde
 	BOOST_TEST(!keys_only.has_gamepad_bindings());
 }
 
+BOOST_AUTO_TEST_CASE(AReboundKey_PlaysTheActionInTheWorld_TheOldOneNoLonger_AndResetGivesTheProjectBack)
+{
+	auto& a = world("a", 0);
+	gs::input_actions actions(*rs);
+	const auto tag = put("actions.desc", ACTIONS_SPACE);
+	load(actions, tag);
+	BOOST_REQUIRE(actions.map());
+	frame(actions.map());
+
+	BOOST_REQUIRE(actions.rebind("Jump", 0, KB::K).ok());
+	frame(actions.map());
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(actions.map());
+	BOOST_TEST(!held(a, "Jump"));
+	key(KB::SPACE, KEY_ACTION::UP);
+	frame(actions.map());
+
+	key(KB::K, KEY_ACTION::DOWN);
+	frame(actions.map());
+	BOOST_TEST(held(a, "Jump"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 1u);
+	key(KB::K, KEY_ACTION::UP);
+	frame(actions.map());
+	BOOST_TEST(!held(a, "Jump"));
+
+	BOOST_REQUIRE(actions.reset_binding("Jump"));
+	frame(actions.map());
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(actions.map());
+	BOOST_TEST(held(a, "Jump"));
+	BOOST_TEST(count(inp::action_edge::pressed) == 2u);
+	key(KB::SPACE, KEY_ACTION::UP);
+	frame(actions.map());
+	key(KB::K, KEY_ACTION::DOWN);
+	frame(actions.map());
+	BOOST_TEST(!held(a, "Jump"));
+}
+
+BOOST_AUTO_TEST_CASE(ABindingTwoActionsShare_IsKeptWhenAllowed_AndNamedByTheConflicts)
+{
+	gs::input_actions actions(*rs);
+	const auto tag = put("actions.desc", R"json({"__type":"input_actions_desc","__version":1,"actions":[
+		{"name":"Jump","bindings":[{"key":"SPACE"}]},{"name":"Fire","bindings":[{"key":"F"}]}]})json");
+	load(actions, tag);
+	BOOST_REQUIRE(actions.map());
+	const auto before = actions.revision();
+
+	BOOST_TEST((actions.rebind("Fire", 0, KB::SPACE).result.status == inp::rebind_status::conflict));
+	BOOST_TEST(actions.conflicts().empty());
+
+	const auto outcome = actions.rebind("Fire", 0, KB::SPACE, true);
+	BOOST_TEST(outcome.ok());
+	BOOST_TEST(outcome.result.conflict_with == "Jump");
+	BOOST_REQUIRE_EQUAL(actions.conflicts().size(), 1u);
+	BOOST_TEST(actions.conflicts()[0].first == "Jump");
+	BOOST_TEST(actions.conflicts()[0].second == "Fire");
+	BOOST_TEST(actions.revision() > before);
+
+	BOOST_REQUIRE(actions.remove_binding("Fire", 0).ok());
+	BOOST_TEST(actions.conflicts().empty());
+	BOOST_TEST(actions.map()->find(actions.map()->id("Fire"))->bindings.empty());
+}
+
 BOOST_AUTO_TEST_CASE(NoTag_NoMap)
 {
 	gs::input_actions actions(*rs);

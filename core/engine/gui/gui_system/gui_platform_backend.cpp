@@ -341,3 +341,22 @@ void gui::platform_backend::on_window_focus_lost(wnd::handle win)
 		ImGui::GetIO().AddFocusEvent(false);
 	}
 }
+
+std::optional<core::inp::KEYBOARD_BUTTONS> gui::pressed_key()
+{
+	if (ImGui::GetCurrentContext() == nullptr) return std::nullopt;
+	for (std::size_t i = 0; i < static_cast<std::size_t>(KEYBOARD_BUTTONS::COUNT); ++i) {
+		const ImGuiKey key = to_imgui_key(static_cast<KEYBOARD_BUTTONS>(i));
+		if (key != ImGuiKey_None && ImGui::IsKeyPressed(key, false)) return static_cast<KEYBOARD_BUTTONS>(i);
+	}
+	return std::nullopt;
+}
+
+std::optional<core::inp::MOUSE_BUTTONS> gui::clicked_mouse_button()
+{
+	if (ImGui::GetCurrentContext() == nullptr) return std::nullopt;
+	for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
+		if (ImGui::IsMouseClicked(button, false)) return static_cast<core::inp::MOUSE_BUTTONS>(button);
+	}
+	return std::nullopt;
+}

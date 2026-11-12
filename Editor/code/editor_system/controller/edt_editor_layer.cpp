@@ -63,6 +63,7 @@ void edt::draw_loading_screen(std::string_view text)
 
 void edt::editor_layer::on_update(std::chrono::duration<float> dt)
 {
+	if (m_frame_hook) m_frame_hook();
 	bool game_drawn = false;
 	if (m_context) {
 		game_drawn = draw_layouts(m_dockspace, m_context->panels(), m_context->actions(), m_layouts) == drawn_layout::game;

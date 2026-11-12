@@ -84,6 +84,8 @@ namespace edt {
 			m_layouts.loading_active = std::move(active);
 			m_layouts.draw_loading = std::move(draw);
 		}
+		// Called at the start of every frame of the layer, before anything is drawn.
+		void set_frame_hook(std::function<void()> hook) { m_frame_hook = std::move(hook); }
 		// #470: see editor_layouts::modal_active.
 		void set_modal_probe(std::function<bool()> active) { m_layouts.modal_active = std::move(active); }
 
@@ -93,5 +95,6 @@ namespace edt {
 		editor_context* m_context = nullptr;
 		editor_layouts m_layouts;
 		std::function<void()> m_game_after_implicit;
+		std::function<void()> m_frame_hook;
 	};
 }

@@ -67,6 +67,7 @@ namespace edt {
 	class console_panel;
 	class problems_panel;
 	class blackboard_panel;
+	class input_actions_panel;
 	class build_settings_panel;
 	class git_panel;
 	class world_systems_panel;
@@ -214,6 +215,9 @@ namespace edt {
 		std::shared_ptr<console_panel>         m_console_panel;
 		std::shared_ptr<problems_panel>        m_problems_panel;
 		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
+		std::shared_ptr<input_actions_panel>   m_input_actions_panel;
+		// gs::input_actions::revision() the Problems of the source "input" were last made for.
+		std::uint64_t                          m_input_problems_revision = ~std::uint64_t{ 0 };
 		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
 		std::shared_ptr<git_panel>             m_git_panel;
 		std::shared_ptr<world_systems_panel>   m_world_systems_panel;

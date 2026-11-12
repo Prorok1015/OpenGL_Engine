@@ -2,8 +2,10 @@
 #include <snk/window/wnd_window.h>
 #include <snk/window/wnd_window_event_listener_interface.h>
 #include <snk/common/snk_api.h>
+#include <snk/core_input/inp_keyboard_event.hpp>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 struct ImGuiContext;
@@ -66,4 +68,10 @@ namespace gui
 		std::string m_clipboard;
 		bool m_initialized = false;
 	};
+
+	// The key that went down this ImGui frame (the first one by KEYBOARD_BUTTONS order), for a UI that asks the player to press
+	// one (US-542-C): ImGui keeps the keys as the platform backend fed them. Nothing when none did, or when no frame runs.
+	SNK_API std::optional<core::inp::KEYBOARD_BUTTONS> pressed_key();
+	// The same for the mouse buttons ImGui knows (the first five).
+	SNK_API std::optional<core::inp::MOUSE_BUTTONS> clicked_mouse_button();
 }
