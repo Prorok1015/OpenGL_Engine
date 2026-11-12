@@ -488,6 +488,7 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 		return opened;
 	}
 	std::vector<std::byte> buffer(64 * 1024);
+	std::uint64_t total = 0;
 	for (;;) {
 		const ssize_t got = ::read(file.get(), buffer.data(), buffer.size());
 		if (got < 0) {
@@ -498,6 +499,10 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 		}
 		if (got == 0) {
 			break;
+		}
+		total += static_cast<std::uint64_t>(got);
+		if (total > request.max_bytes) {
+			return { read_status::too_large, {} };
 		}
 		if (!sink(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)))) {
 			break;
@@ -1075,6 +1080,7 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 		return opened;
 	}
 	std::vector<std::byte> buffer(64 * 1024);
+	std::uint64_t total = 0;
 	for (;;) {
 		DWORD got = 0;
 		if (!::ReadFile(file.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &got, nullptr)) {
@@ -1082,6 +1088,10 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 		}
 		if (got == 0) {
 			break;
+		}
+		total += static_cast<std::uint64_t>(got);
+		if (total > request.max_bytes) {
+			return { read_status::too_large, {} };
 		}
 		if (!sink(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)))) {
 			break;

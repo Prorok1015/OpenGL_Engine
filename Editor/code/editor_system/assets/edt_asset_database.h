@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_tag.h>
 #include <cstddef>
@@ -22,6 +23,9 @@ namespace edt
 		res::tag path;
 		// Index into the layers (lowest first) of the layer whose file wins for the path.
 		std::size_t layer = 0;
+		// Lower layers that hold an entry of the same name, shadowed by this one (Problems warns about an engine asset
+		// a project file covers, R28).
+		std::vector<std::size_t> shadowed_layers;
 		// From the file's .resource; none: the file has no ID yet ("no ID", S57-4).
 		std::optional<res::asset_id> id;
 		std::int64_t size = 0;
@@ -59,6 +63,10 @@ namespace edt
 	{
 		bool ok = false;
 		std::string error;
+		// The file's size and time before and after the read: equal when nothing wrote it meanwhile.
+		std::int64_t size = 0;
+		std::int64_t mtime = 0;
+		bool unchanged = false;
 		std::string content_hash;
 		std::optional<std::string> desc_type;
 	};
@@ -69,7 +77,9 @@ namespace edt
 	std::string asset_type_of(std::string_view path);
 
 	// Walks `layers` (lowest first, as resource_system::get_resource_layers gives them) merged as the asset browser merges
-	// them, and reads every file's .resource. Links are not followed. `stopped` (may be empty) ends the walk early.
+	// them (an upper layer shadows a name below, case folded on Windows), and reads every file's .resource. In every
+	// layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are skipped.
+	// `stopped` (may be empty) ends the walk early.
 	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {});
 
 	// Hashes the file at `relative` below `layer_root` through a read that follows no link (platform::beneath), in chunks;
@@ -85,13 +95,16 @@ namespace edt
 	public:
 		static constexpr std::uint64_t max_desc_bytes = 4u * 1024u * 1024u;
 		static constexpr std::size_t hash_batch = 64;
+		static constexpr int max_depth = 64;
 
-		asset_database(job_service& jobs, std::vector<std::filesystem::path> layers);
+		// `events` (may be null) tells the database about a job someone cancelled (job.cancel): its work is queued again
+		// and goes on at the next rebuild. Without it a cancelled hashing job is only noticed by rebuild().
+		asset_database(job_service& jobs, editor_events* events, std::vector<std::filesystem::path> layers);
 		~asset_database();
 		asset_database(const asset_database&) = delete;
 		asset_database& operator=(const asset_database&) = delete;
 
-		// Walks the layers again; what is known stays until the walk's result arrives. A walk already running is dropped.
+		// Walks the layers again; what is known stays until the walk's result arrives. A walk already running is cancelled.
 		void rebuild();
 		// A walk is running.
 		bool scanning() const { return m_scanning; }
@@ -111,6 +124,9 @@ namespace edt
 		void apply_scan(asset_scan scan);
 		void hash_next();
 		void index_id(const asset_record& record);
+		void on_job_finished(std::uint64_t id, job_status status);
+		// The keys of the hashing job that ended without an answer for them go back into the queue.
+		void requeue_in_flight();
 
 		job_service& m_jobs;
 		std::vector<std::filesystem::path> m_layers;
@@ -118,10 +134,13 @@ namespace edt
 		std::multimap<res::asset_id, std::string> m_by_id;
 		std::vector<asset_orphan> m_orphans;
 		std::vector<std::string> m_unhashed;
-		std::size_t m_hashing = 0;
+		std::vector<std::string> m_in_flight;
+		std::uint64_t m_hash_job = 0;
+		std::uint64_t m_scan_job = 0;
 		bool m_scanning = false;
 		std::uint64_t m_scan_number = 0;
 		std::uint64_t m_revision = 0;
+		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};
 }

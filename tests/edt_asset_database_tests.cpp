@@ -2,6 +2,7 @@
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_asset_database.h"
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_asset_meta.h>
 #include <chrono>
@@ -34,7 +35,7 @@ struct asset_db_fixture
 
 	edt::asset_database& open()
 	{
-		db = std::make_unique<edt::asset_database>(jobs, std::vector<fs::path>{ lower.path(), upper.path() });
+		db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() });
 		db->rebuild();
 		test_util::pump(tasks);
 		return *db;
@@ -49,8 +50,25 @@ struct asset_db_fixture
 
 	test_util::temp_dir lower;
 	test_util::temp_dir upper;
+	// Runs queued work until the walk's result was applied, before any hashing ran.
+	void run_walk()
+	{
+		while (db->scanning()) {
+			BOOST_REQUIRE(tasks.run_one(ds::lane::io) || tasks.drain_main(std::chrono::hours(1)) > 0);
+		}
+	}
+
+	std::optional<edt::job_service::job_id> job_named(std::string_view label) const
+	{
+		for (const auto& job : jobs.list()) {
+			if (job.label == label) return job.id;
+		}
+		return std::nullopt;
+	}
+
 	ds::task_system tasks{ test_util::manual_tasks() };
-	edt::job_service jobs{ tasks };
+	edt::editor_events events;
+	edt::job_service jobs{ tasks, &events };
 	std::unique_ptr<edt::asset_database> db;
 };
 
@@ -79,6 +97,7 @@ BOOST_AUTO_TEST_CASE(the_walk_merges_the_layers_and_reads_the_sidecars)
 	BOOST_TEST(stone.has_meta);
 	BOOST_TEST((stone.flags == std::vector<std::string>{ "editor_only" }));
 	BOOST_TEST(stone.size == 11);
+	BOOST_TEST((stone.shadowed_layers == std::vector<std::size_t>{ 0u }));
 
 	const auto& below = record("only_below.txt");
 	BOOST_TEST(below.layer == 0u);
@@ -169,15 +188,15 @@ BOOST_AUTO_TEST_CASE(a_file_unchanged_since_the_last_walk_keeps_its_hash)
 
 	assets.rebuild();
 	// The walk's result is applied before any hashing: the kept file already has its hash.
-	while (assets.scanning()) {
-		BOOST_REQUIRE(tasks.run_one(ds::lane::io) || tasks.drain_main(std::chrono::hours(1)) > 0);
-	}
+	run_walk();
 	BOOST_TEST(assets.revision() > revision);
 	BOOST_TEST(record("kept.txt").content_hash == hash);
 	BOOST_TEST(assets.pending_hashes() == 0u);
 }
 
 #if !defined(_WIN32)
+// Windows junctions take the same path (a reparse point that redirects); CI cannot make one without rights, so only
+// links are tested, on POSIX.
 BOOST_AUTO_TEST_CASE(links_are_not_followed)
 {
 	const fs::path outside = upper.path().parent_path() / "asset_db_outside.txt";
@@ -189,13 +208,91 @@ BOOST_AUTO_TEST_CASE(links_are_not_followed)
 	fs::create_symlink(outside, upper.path() / "link.txt", ec);
 	BOOST_REQUIRE(!ec);
 	upper.write("real.txt", "real");
+	// A lower layer whose folder is a link out of the tree, under the name of a real folder of the upper layer.
+	const fs::path outside_dir = upper.path().parent_path() / "asset_db_outside_dir";
+	fs::create_directories(outside_dir);
+	{
+		std::ofstream out(outside_dir / "foreign.png");
+		out << "foreign";
+	}
+	fs::create_directory_symlink(outside_dir, lower.path() / "textures", ec);
+	BOOST_REQUIRE(!ec);
+	upper.write("textures/own.png", "own");
 
 	auto& assets = open();
 	BOOST_TEST(assets.find(res::tag::make("link.txt")) == nullptr);
 	BOOST_TEST(assets.find(res::tag::make("real.txt")) != nullptr);
+	BOOST_TEST(assets.find(res::tag::make("textures/own.png")) != nullptr);
+	BOOST_TEST(assets.find(res::tag::make("textures/foreign.png")) == nullptr);
 	fs::remove(outside, ec);
+	fs::remove_all(outside_dir, ec);
 }
 #endif
+
+// Review #816: a hashing job cancelled from outside (job.cancel) does not stop hashing for good.
+BOOST_AUTO_TEST_CASE(a_cancelled_hashing_job_goes_on_at_the_next_rebuild)
+{
+	upper.write("a.txt", "a");
+	upper.write("b.txt", "b");
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() });
+	db->rebuild();
+	run_walk();
+	const auto hashing = job_named("Hash assets");
+	BOOST_REQUIRE(hashing.has_value());
+	BOOST_REQUIRE(jobs.cancel(*hashing));
+	test_util::pump(tasks);
+	BOOST_TEST(db->pending_hashes() == 2u);
+	BOOST_TEST(record("a.txt").content_hash.empty());
+
+	db->rebuild();
+	test_util::pump(tasks);
+	BOOST_TEST(db->pending_hashes() == 0u);
+	BOOST_TEST(!record("a.txt").content_hash.empty());
+	BOOST_TEST(!record("b.txt").content_hash.empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_cancelled_walk_is_not_scanning_any_more)
+{
+	upper.write("a.txt", "a");
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() });
+	db->rebuild();
+	const auto walking = job_named("Scan assets");
+	BOOST_REQUIRE(walking.has_value());
+	BOOST_REQUIRE(jobs.cancel(*walking));
+	test_util::pump(tasks);
+	BOOST_TEST(!db->scanning());
+	db->rebuild();
+	test_util::pump(tasks);
+	BOOST_TEST(db->find(res::tag::make("a.txt")) != nullptr);
+}
+
+// A file written after the walk saw it is not given the hash of its new bytes under its old size and time.
+BOOST_AUTO_TEST_CASE(a_file_written_after_the_walk_is_not_hashed_under_its_old_stamp)
+{
+	upper.write("moving.txt", "first");
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() });
+	db->rebuild();
+	run_walk();
+	upper.write("moving.txt", "second, longer");
+	test_util::pump(tasks);
+	BOOST_TEST(record("moving.txt").content_hash.empty());
+	BOOST_TEST(record("moving.txt").size == 5);
+
+	db->rebuild();
+	test_util::pump(tasks);
+	BOOST_TEST(record("moving.txt").size == 14);
+	BOOST_TEST(!record("moving.txt").content_hash.empty());
+}
+
+BOOST_AUTO_TEST_CASE(hidden_folders_are_not_walked)
+{
+	upper.write(".git/config", "x");
+	upper.write(".hidden/a.txt", "x");
+	upper.write("shown/a.txt", "x");
+	auto& assets = open();
+	BOOST_TEST(assets.records().size() == 1u);
+	BOOST_TEST(assets.find(res::tag::make("shown/a.txt")) != nullptr);
+}
 
 BOOST_AUTO_TEST_CASE(the_kind_of_asset_comes_from_the_suffix)
 {

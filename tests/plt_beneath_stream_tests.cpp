@@ -6,6 +6,9 @@
 #include <span>
 #include <string>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -66,5 +69,37 @@ BOOST_AUTO_TEST_CASE(the_sink_stops_the_read_and_a_missing_file_is_missing)
 		[](std::span<const std::byte>) { return true; });
 	BOOST_TEST((missing.status == platform::beneath::read_status::missing));
 }
+
+BOOST_AUTO_TEST_CASE(a_file_over_the_limit_is_too_large)
+{
+	test_util::temp_dir dir("beneath_stream_limit");
+	dir.write("big.txt", std::string(1000, 'x'));
+	auto request = request_for(dir.path(), "big.txt");
+	request.max_bytes = 100;
+	bool called = false;
+	const auto result = platform::beneath::read_beneath_stream(request, [&](std::span<const std::byte>) { called = true; return true; });
+	BOOST_TEST((result.status == platform::beneath::read_status::too_large));
+	BOOST_TEST(!called);
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(a_link_and_a_fifo_are_not_read)
+{
+	test_util::temp_dir dir("beneath_stream_kinds");
+	dir.write("real.txt", "real");
+	std::error_code ec;
+	fs::create_symlink(dir.path() / "real.txt", dir.path() / "link.txt", ec);
+	BOOST_REQUIRE(!ec);
+	BOOST_REQUIRE(::mkfifo((dir.path() / "pipe").c_str(), 0600) == 0);
+
+	bool called = false;
+	const auto sink = [&](std::span<const std::byte>) { called = true; return true; };
+	BOOST_TEST((platform::beneath::read_beneath_stream(request_for(dir.path(), "link.txt"), sink).status
+		== platform::beneath::read_status::not_regular));
+	BOOST_TEST((platform::beneath::read_beneath_stream(request_for(dir.path(), "pipe"), sink).status
+		== platform::beneath::read_status::not_regular));
+	BOOST_TEST(!called);
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
