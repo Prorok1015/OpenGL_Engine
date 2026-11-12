@@ -188,7 +188,7 @@ BOOST_AUTO_TEST_CASE(a_bad_sidecar_leaves_the_file_without_id_and_says_why)
 	upper.write("broken.png", "x");
 	upper.write("broken.png.resource", R"({ "__type": "resource_meta", "__version": 1 })");
 
-	auto& assets = open();
+	open();
 	const auto& broken = record("broken.png");
 	BOOST_TEST(broken.has_meta);
 	BOOST_TEST(!broken.id.has_value());
