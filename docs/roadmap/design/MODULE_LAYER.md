@@ -86,6 +86,9 @@ EnTT не знает «родительского» контекста. Расс
   - Меняется mangling экспортов с `action_binding` в сигнатуре, поэтому у `action_map::add` остаётся перегрузка со старым типом `action_binding_v1` (символ, который импортирует модуль 3.15; конвертирует в новый тип). Новых экспортов с `action_binding` в сигнатуре, которые вышли бы в 3.15, нет: `gs::input_actions::rebind` и `inp::user_bindings` появились в #736 после него.
   - Мёртвая зона и порог оси не помещаются в привязку: `inp::gamepad_config` общая для устройства, поле `gamepad` в конце `scn::input_actions_desc` (desc создаёт движок; в ключ раскладки не входит).
   - Модуль, который обходит привязки через `std::visit`, должен знать новые альтернативы; встретит он их, только если `actions.desc` проекта описывает геймпад.
+- **ID ассета и `.resource`** (#755, `snk/resource/res_asset_id.h`, `res_asset_meta.h`, API модуля 3.17):
+  - Новые экспорты: `res::asset_id_from_text`, `res::to_text`, `res::generate_asset_id`, `res::read_asset_meta`, `res::write_asset_meta`. Существующие типы не меняются.
+  - Тело `write_pretty_json` переехало в resource (`res::write_pretty_json`, inline). `desc::write_pretty_json` и `desc::pretty_json_bytes` остаются отдельными inline-обёртками, а не `using`, чтобы имена в модуле 3.16 не менялись; убрать их можно в окне 4.0.
 - Документы редактора хранят desc и пути `node_id`, а не сущности, поэтому пересоздание слоя для них прозрачно. Сырые указатели на registry и компоненты при пересборке не хранятся — это уже правило (`Editor/CLAUDE.md`).
 
 ## 5. Данные базы со ссылками на код модуля

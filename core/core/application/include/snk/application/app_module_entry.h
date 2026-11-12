@@ -83,7 +83,11 @@
 // visits the bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
 // scn::input_actions_desc gains `gamepad` at its end (engine-made, not in the layout key). New: inp::gamepad_config, the
 // gamepad names in inp_actions.h, wnd::gamepad_source, gs::input_actions::rebind and the player's bindings (#736).
-#define SNK_MODULE_API_VERSION 0x0003'0010u // major << 16 | minor
+// 3.17 (#755): res::asset_id with asset_id_from_text / to_text / generate_asset_id and the .resource sidecar
+// (res::read_asset_meta / write_asset_meta) are new exports; res::write_pretty_json is the project's JSON style, and
+// desc::write_pretty_json / pretty_json_bytes stay as inline wrappers of it. Nothing that exists changes layout. A module
+// that calls the new exports needs an engine of 3.17 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0011u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.
