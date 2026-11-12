@@ -87,6 +87,9 @@ EnTT не знает «родительского» контекста. Расс
   - Мёртвая зона и порог оси не помещаются в привязку: `inp::gamepad_config` общая для устройства, поле `gamepad` в конце `scn::input_actions_desc` (desc создаёт движок; в ключ раскладки не входит).
   - Модуль, который обходит привязки через `std::visit`, должен знать новые альтернативы; встретит он их, только если `actions.desc` проекта описывает геймпад.
 - **Документ данных из модуля** (#789, EPIC-56, API модуля 3.17): `layer.descs().register_document<T>(name)` (или `register_desc<T>` и затем `gs::module_context::mark_document(name)`) ставит `type_schema::is_document`. Это новые нешаблонные экспорты (`desc_system::mark_document`, `document_types`, `schema_registry::set_document`, `module_context::mark_document`), раскладка ничего не меняет. Документом бывает только простой desc, целиком описанный схемой: поле `custom` без `json_codec` (и `custom` во вложенной структуре или списке) отказывает с ошибкой в логе, тип остаётся обычным desc. Модуль 3.16 и старше новые экспорты не зовёт.
+- **ID ассета и `.resource`** (#755, `snk/resource/res_asset_id.h`, `res_asset_meta.h`, API модуля 3.19):
+  - Новые экспорты: `res::asset_id_from_text`, `res::to_text`, `res::generate_asset_id`, `res::read_asset_meta`, `res::write_asset_meta`. Существующие типы не меняются.
+  - Тело `write_pretty_json` переехало в resource (`res::write_pretty_json`, inline). `desc::write_pretty_json` и `desc::pretty_json_bytes` остаются отдельными inline-обёртками, а не `using`, чтобы имена в модуле 3.16 не менялись; убрать их можно в окне 4.0.
 - Документы редактора хранят desc и пути `node_id`, а не сущности, поэтому пересоздание слоя для них прозрачно. Сырые указатели на registry и компоненты при пересборке не хранятся — это уже правило (`Editor/CLAUDE.md`).
 
 ## 5. Данные базы со ссылками на код модуля
