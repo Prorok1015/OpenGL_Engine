@@ -209,6 +209,7 @@ if(TARGET snk_model_decoder)
 		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
 endif()
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/projects/sandbox")
+target_compile_definitions(unit_tests PRIVATE SNK_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/projects")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
 # prj::current_engine_version() must report exactly this (tests/prj_version_tests.cpp).

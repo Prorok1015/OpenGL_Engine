@@ -23,6 +23,14 @@ namespace dll_game {
 		"name": "dll.schema_health", "kind": "component",
 		"fields": [ { "name": "hp", "kind": "f32", "default": 10 }, { "name": "target", "kind": "entity" } ]
 	})json";
+	// Data documents (#789): a described type the module marks with desc_system::register_document<T> (inline, compiled in
+	// the module), and a type of a schema alone it marks through gs::module_context::mark_document (an export of 3.17).
+	inline constexpr std::string_view document_type = "dll.config";
+	inline constexpr std::string_view schema_document_type = "dll.settings";
+	inline constexpr const char* schema_document_json = R"json({
+		"name": "dll.settings", "kind": "desc",
+		"fields": [ { "name": "speed", "kind": "f32", "default": 2 }, { "name": "goals", "kind": "array", "element": "i32" } ]
+	})json";
 	// An event type of the module with a payload writer of the module's code (#605): the bus journal reaches the writer
 	// through ecs::detail::bus_journal_source, which only a type made by a module built for 3.14 has.
 	struct dll_event

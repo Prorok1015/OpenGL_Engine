@@ -595,6 +595,7 @@ namespace {
 		out["version"] = schema->version;
 		out["kind"] = json::string(desc::to_string(schema->kind));
 		out["is_component"] = schema->is_component;
+		out["is_document"] = schema->is_document;
 		out["schema"] = desc::to_json_schema(*schema, descs.schemas());
 		return cmd::result::success(std::move(out));
 	}
@@ -1013,6 +1014,7 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 			"version": { "type": "integer" },
 			"kind": { "type": "string" },
 			"is_component": { "type": "boolean" },
+			"is_document": { "type": "boolean" },
 			"schema": { "type": "object" }
 		},
 		"required": ["type", "version", "kind", "is_component", "schema"]

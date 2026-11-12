@@ -1,0 +1,18 @@
+{
+	"__type": "level_desc",
+	"name": "old",
+	"worlds": [
+		{
+			"__type": "world_desc",
+			"name": "main",
+			"systems": [],
+			"children": {
+				"cam": {
+					"components": {
+						"camera": { "__type": "camera_desc", "fov": 60, "transform": { "position": [0, 1, 5], "rotation": [0, 0, 0] } }
+					}
+				}
+			}
+		}
+	]
+}

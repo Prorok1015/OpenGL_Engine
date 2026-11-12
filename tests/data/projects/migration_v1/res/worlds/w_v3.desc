@@ -1,0 +1,21 @@
+{
+	"__type": "world_desc",
+	"__version": 3,
+	"name": "w_v3",
+	"systems": [],
+	"children": [
+		{
+			"__id": "00000000000000c1",
+			"name": "cam",
+			"components": { "camera": { "__type": "camera_desc", "__version": 1, "fov": 45, "transform": { "position": [1, 2, 3], "rotation": [0, 90, 0] } } }
+		},
+		{
+			"__id": "00000000000000a1",
+			"name": "inst",
+			"components": { "prefab_desc": { "__type": "prefab_desc", "__version": 4, "__parent": "res://prefabs/p_v3.prefab.desc" } },
+			"overrides": [
+				{ "target": ["00000000000000b1"], "component": "camera", "value": { "transform": { "position": [4, 5, 6] } } }
+			]
+		}
+	]
+}

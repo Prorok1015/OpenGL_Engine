@@ -3,6 +3,7 @@
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_schema_ops.h>
 #include <algorithm>
 #include <cstdint>
 #include <format>
@@ -245,6 +246,20 @@ namespace desc
 				schema.fields.push_back(std::move(field));
 			});
 			return schema;
+		}
+
+		// The members that have a json_codec: the custom fields among them are described by their codec (desc_system::mark_document).
+		static std::vector<std::string_view> codec_fields()
+		{
+			std::vector<std::string_view> result;
+			const T defaults{};
+			for_each_data_member<T>([&](std::string_view member, auto pointer) {
+				using member_type = std::remove_cvref_t<decltype(defaults.*pointer)>;
+				if constexpr (has_json_codec<member_type>) {
+					result.push_back(member);
+				}
+			});
+			return result;
 		}
 
 		// Schemas of the enum members that have a name (field_attr::ref or enum_names<E>::name).

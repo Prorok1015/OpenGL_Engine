@@ -1,0 +1,8 @@
+{
+	"__type": "prefab_desc",
+	"__version": 2,
+	"children": [
+		{ "__id": "00000000000000b1", "name": "body" },
+		{ "__id": "00000000000000b2", "name": "head" }
+	]
+}

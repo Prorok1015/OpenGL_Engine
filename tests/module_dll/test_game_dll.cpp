@@ -2,6 +2,8 @@
 #include <snk/application/app_module_entry.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_describe_ops.h>
+#include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_bus.hpp>
@@ -81,6 +83,17 @@ public:
 	}
 
 	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
+};
+
+class dll_config final : public desc::schema_desc<dll_config>
+{
+public:
+	static constexpr std::string_view __type = "dll.config";
+
+	float speed = 3.0f;
+	int goal = 10;
+
+	BOOST_DESCRIBE_CLASS(dll_config, (), (speed, goal), (), ())
 };
 
 // The builds a reload swaps between (#435, CMakeLists.txt): TEST_DLL_V2 moves by 2, TEST_DLL_FAILING fails to register,
@@ -208,6 +221,9 @@ private:
 		layer.assembler().register_desc_spawner(dll_game::desc_type, [](entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view) {
 			reg.emplace_or_replace<dll_game::dll_component>(e, dll_game::dll_component{ static_cast<const dll_desc&>(base).value });
 		});
+		layer.descs().register_document<dll_config>(dll_game::document_type);
+		layer.descs().register_schema(desc::parse_type_schema(boost::json::parse(dll_game::schema_document_json).as_object()));
+		data.require<gs::module_context>().mark_document(dll_game::schema_document_type);
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
 		layer.systems().register_system<&dll_animate>(std::string{ dll_game::animate_system_name });
 		layer.systems().register_system<&dll_back_to_idle>(std::string{ dll_game::back_to_idle_system_name },

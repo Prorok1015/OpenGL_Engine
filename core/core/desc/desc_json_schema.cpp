@@ -216,6 +216,9 @@ boost::json::object desc::to_json_schema(const type_schema& schema, const schema
 	out["title"] = boost::json::string(schema.name);
 	out["x-version"] = schema.version;
 	out["x-kind"] = boost::json::string(to_string(schema.kind));
+	if (schema.is_document) {
+		out["x-document"] = true;
+	}
 	boost::json::object type_marker;
 	type_marker["const"] = boost::json::string(schema.name);
 	out["properties"].as_object().insert_or_assign("__type", std::move(type_marker));

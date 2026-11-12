@@ -20,6 +20,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/scene/scn_schema_components.h>
 #include <entt/entt.hpp>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -296,6 +297,30 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_REQUIRE(after != nullptr);
 	BOOST_TEST(!after->catalog().find(dll_game::schema_component_name));
 	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
+}
+
+// #789: the types a module marks as data documents, from its own code (register_document<T>) and through the export of
+// module_context (mark_document), are documents of the module's layer for the host and go with the module.
+BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with_it)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	const desc::type_schema* config = layer->descs().find_schema(dll_game::document_type);
+	BOOST_REQUIRE(config != nullptr);
+	BOOST_TEST(config->is_document);
+	const desc::type_schema* settings = layer->descs().find_schema(dll_game::schema_document_type);
+	BOOST_REQUIRE(settings != nullptr);
+	BOOST_TEST(settings->is_document);
+	const std::vector<std::string> documents = layer->descs().document_types();
+	BOOST_TEST(std::ranges::count(documents, std::string{ dll_game::document_type }) == 1);
+	BOOST_TEST(std::ranges::count(documents, std::string{ dll_game::schema_document_type }) == 1);
+
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+	auto* after = contexts().game_layer();
+	BOOST_REQUIRE(after != nullptr);
+	BOOST_TEST(after->descs().document_types().empty());
 }
 
 // #605: the journal finds the module's bus_journal_source with dynamic_cast across the library boundary and calls the
