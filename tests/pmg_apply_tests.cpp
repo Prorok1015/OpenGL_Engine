@@ -245,11 +245,17 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsParentAndOnlyItsOwnFields)
 	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::partial));
 
-	// The answer of #753 to "which types flatten": neither prefab_desc nor camera_desc, both are saved by the engine.
-	std::map<std::string, std::string> written_as;
-	for (const auto& file : outcome.report.files) written_as[file.path] = file.written_as;
-	BOOST_TEST(written_as["res/derive/variant.prefab.desc"] == "engine");
-	BOOST_TEST(written_as["res/derive/cam.desc"] == "engine");
+	// The answer of #753 to "which types flatten": the engine form of both drops the root __parent (#812), so both are
+	// written as the migrated JSON.
+	std::map<std::string, const pmg::applied_file*> written;
+	for (const auto& file : outcome.report.files) written[file.path] = &file;
+	for (const std::string path : { "res/derive/variant.prefab.desc", "res/derive/cam.desc" }) {
+		BOOST_TEST_INFO(path);
+		BOOST_REQUIRE((written[path] != nullptr));
+		BOOST_TEST(written[path]->written_as == "json");
+		BOOST_REQUIRE(written[path]->notes.size() == 1u);
+		BOOST_TEST(written[path]->notes[0].find("__parent") != std::string::npos);
+	}
 	const json::value variant = json::parse(read_text(copy.res() / "derive/variant.prefab.desc"));
 	BOOST_TEST(variant.at("__parent").as_string() == "res://derive/base.prefab.desc");
 	BOOST_TEST(json::serialize(variant).find("\"body\"") == std::string::npos);

@@ -187,14 +187,14 @@ BOOST_AUTO_TEST_CASE(ABigFileALinkAndASidecar)
 	project.write("res/big.desc", std::string(R"({"__type":"camera_desc","__version":2,"pad":")") + std::string(256, 'x') + "\"}");
 	project.write("res/tex.png", "png");
 	project.write("res/tex.png.resource", res::write_asset_meta(res::asset_meta{ res::generate_asset_id(), "copy", {}, {} }));
-	project.write("res/newer.png.resource", R"({"__type": "resource", "__version": 2, "__guid": "x", "future": 1})");
+	project.write("res/newer.png.resource", R"({"__type": "resource_meta", "__version": 2, "__guid": "x", "future": 1})");
 	project.write("res/broken.png.resource", "{}");
 	project.write("res/.hidden/skip.desc", "not json");
 	std::error_code link_error;
 	fs::create_symlink(project.root / "res/small.desc", project.root / "res/link.desc", link_error);
 
 	pmg::scan_options options;
-	options.max_file_bytes = 128;
+	options.max_file_bytes = 240; // above a written .resource, below big.desc
 	const pmg::scan_result scan = pmg::scan_project(project.root, *descs, options);
 	BOOST_TEST((kind_of(scan, "res/small.desc") == pmg::file_class::current));
 	BOOST_TEST((kind_of(scan, "res/big.desc") == pmg::file_class::invalid));
