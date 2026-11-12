@@ -6,6 +6,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace res {
 	class resource_system;
@@ -54,6 +55,8 @@ namespace edt {
 		bool m_exporting = false;
 		// Set by the job's on_done (main thread); render_export_progress closes the popup on it.
 		bool m_export_done = false;
+		// Why the last export failed: the form stays open and shows it.
+		std::string m_export_error;
 		// Last: destroyed first, so a job callback cannot run on a half-destroyed dialog.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};

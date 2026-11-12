@@ -67,14 +67,87 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 	return remap;
 }
 
+std::string edt::asset_exporter::folder_problem(std::string_view target_folder)
+{
+	if (target_folder.empty()) {
+		return "choose a target folder";
+	}
+	if (target_folder.front() == '/') {
+		return std::format("'{}' is an absolute path: the folder must be inside the project's resources (res://)", target_folder);
+	}
+	for (const char c : target_folder) {
+		const auto byte = static_cast<unsigned char>(c);
+		if (byte < 0x20 || byte == 0x7f) {
+			return "the folder holds a control character";
+		}
+		if (c == '\\') {
+			return std::format("'{}' holds '\\': separate folders with '/'", target_folder);
+		}
+		if (c == ':') {
+			return std::format("'{}' holds ':': a drive or a protocol is not a folder inside res://", target_folder);
+		}
+	}
+	std::string_view rest = target_folder;
+	while (true) {
+		const std::size_t slash = rest.find('/');
+		const std::string_view part = rest.substr(0, slash);
+		if (part.empty()) {
+			return std::format("'{}' has an empty folder name", target_folder);
+		}
+		if (part == "." || part == "..") {
+			return std::format("'{}' holds '{}': the folder must be a plain path inside res://", target_folder, part);
+		}
+		if (slash == std::string_view::npos) break;
+		rest.remove_prefix(slash + 1);
+	}
+	return {};
+}
+
+std::string edt::asset_exporter::asset_name_problem(std::string_view asset_name)
+{
+	if (asset_name.empty()) {
+		return "enter an asset name";
+	}
+	if (asset_name == "." || asset_name == "..") {
+		return std::format("'{}' is not a file name", asset_name);
+	}
+	for (const char c : asset_name) {
+		const auto byte = static_cast<unsigned char>(c);
+		if (byte < 0x20 || byte == 0x7f) {
+			return "the asset name holds a control character";
+		}
+		if (c == '/' || c == '\\' || c == ':') {
+			return std::format("the asset name '{}' holds '{}': it names one file, the folder is chosen below", asset_name, c);
+		}
+	}
+	return {};
+}
+
+std::string edt::asset_exporter::destination_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder)
+{
+	if (std::string name = asset_name_problem(asset_name); !name.empty()) {
+		return name;
+	}
+	if (std::string folder = folder_problem(target_folder); !folder.empty()) {
+		return folder;
+	}
+	const std::string folder_prefix = std::string(target_folder) + "/";
+	for (const auto& [from, to] : remap) {
+		if (to.protocol() != res::tag::default_protocol() || !to.relative().starts_with(folder_prefix)) {
+			return std::format("'{}' would be written outside the folder of the import", to.view());
+		}
+	}
+	return {};
+}
+
 std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder)
 {
+	if (std::string destination = destination_problem(remap, asset_name, target_folder); !destination.empty()) {
+		return destination;
+	}
 	const std::string folder_prefix = std::string(target_folder) + "/";
 	for (const auto& [from, to] : remap) {
 		const std::string_view final_path = to.relative();
-		if (!final_path.starts_with(folder_prefix)) {
-			return std::format("'{}' would be written outside the folder of the import", to.view());
-		}
 		const std::string_view relative = final_path.substr(folder_prefix.size());
 		// What lands in the project is what an import makes, under the names the importer would give it, and the remap changed
 		// no extension: the adapter reads a file by its extension.
@@ -198,6 +271,10 @@ bool edt::asset_exporter::export_to_project(
 			if (wait_for_writes) {
 				if (!m_res.store_sync(res_tag, output_bytes)) {
 					egLOG_ERROR("edt/export", "'{}' could not be written", res_tag.view());
+					if (progress) {
+						progress->error = std::format("'{}' could not be written (see the log)", res_tag.view());
+						progress->finished.store(true);
+					}
 					return false;
 				}
 			} else {

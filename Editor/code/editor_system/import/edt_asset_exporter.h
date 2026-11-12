@@ -20,6 +20,8 @@ namespace edt {
 		std::atomic<bool> finished{ false };
 		std::atomic<bool> success{ false };
 		res::tag exported_tag;
+		// Why the export stopped (which file, what was refused); written before `finished` is set.
+		std::string error;
 	};
 
 	class asset_exporter {
@@ -52,6 +54,17 @@ namespace edt {
 		// Empty when everything the remap would write is something an import of `asset_name` makes, below `target_folder`, with the
 		// extension it had (an agent's import: nothing it chose may turn a resource into a model file). Else why not.
 		static std::string remap_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder);
+
+		// Empty when `target_folder` is a folder path relative to res:// ("assets/tree"): no drive, root, '.' or '..' component,
+		// empty component, backslash, ':' or control character. Else why not, for the person or the agent who chose it.
+		static std::string folder_problem(std::string_view target_folder);
+
+		// Empty when `asset_name` is one file name (no '/', '\\', ':', control character, not "." or ".."). Else why not.
+		static std::string asset_name_problem(std::string_view asset_name);
+
+		// What a person's export is held to: the folder and the name are plain, and everything the remap writes lands below
+		// `target_folder`. Empty when so, else why not. remap_problem adds the agent's rules on names and extensions.
+		static std::string destination_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder);
 
 	private:
 		res::resource_system& m_res;

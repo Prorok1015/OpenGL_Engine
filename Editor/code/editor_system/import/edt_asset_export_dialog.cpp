@@ -1,6 +1,7 @@
 #include "edt_asset_export_dialog.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_system.h>
+#include <snk/common/fs_paths.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cstddef>
@@ -34,6 +35,7 @@ void edt::asset_export_dialog::open(import_result result)
 	m_is_open = true;
 	m_exported_tag = res::tag::null;
 	m_exporting = false;
+	m_export_error.clear();
 
 	std::string name = m_import.source_path.stem().string();
 	copy_to_buffer(m_asset_name, name);
@@ -65,7 +67,8 @@ bool edt::asset_export_dialog::render()
 			auto selected = m_folder_dialog.get_selected_path();
 			auto base = m_resources.get_resources_path();
 			auto rel = selected.lexically_relative(base);
-			copy_to_buffer(m_target_folder, rel.string());
+			// A folder outside res:// keeps its own path, so the form names the problem instead of exporting somewhere else.
+			copy_to_buffer(m_target_folder, fs_paths::generic_utf8_of(rel.empty() ? selected : rel));
 			m_browse_folder = false;
 			m_needs_open = true; // re-open the export popup (ImGui closed it while folder dialog was active)
 		}
@@ -115,32 +118,49 @@ void edt::asset_export_dialog::render_export_form()
 		m_browse_folder = true;
 	}
 
+	const std::string asset_name(m_asset_name);
+	const std::string target_folder(m_target_folder);
+	const ImVec4 error_color(1.0f, 0.4f, 0.4f, 1.0f);
+
+	// build_remap asserts on a path holding "://", so the name and the folder are checked before it runs.
+	std::string problem = asset_exporter::asset_name_problem(asset_name);
+	if (problem.empty()) problem = asset_exporter::folder_problem(target_folder);
+	std::unordered_map<res::tag, res::tag> remap;
+	if (problem.empty()) {
+		remap = m_exporter.build_remap(m_import, asset_name, target_folder);
+		problem = asset_exporter::destination_problem(remap, asset_name, target_folder);
+	}
+	if (!problem.empty()) {
+		ImGui::PushStyleColor(ImGuiCol_Text, error_color);
+		ImGui::TextWrapped("%s", problem.c_str());
+		ImGui::PopStyleColor();
+	}
+
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
 
-	// Preview files
-	std::string asset_name(m_asset_name);
-	std::string target_folder(m_target_folder);
-
-	if (!asset_name.empty() && !target_folder.empty()) {
-		auto remap = m_exporter.build_remap(m_import, asset_name, target_folder);
-
+	if (problem.empty()) {
 		ImGui::Text("Files to be created:");
 		float buttons_height = ImGui::GetFrameHeightWithSpacing() * 2.f + ImGui::GetStyle().ItemSpacing.y * 3.f;
+		if (!m_export_error.empty()) buttons_height += ImGui::GetTextLineHeightWithSpacing() * 2.f;
 		float available = ImGui::GetContentRegionAvail().y - buttons_height;
 		ImGui::BeginChild("##file_list", ImVec2(0.f, std::max(available, 80.f)),
 			ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
 		for (const auto& [mem_tag, res_tag] : remap) {
-			std::string rel(res_tag.relative());
-			bool exists = std::filesystem::exists(
-				m_resources.get_resources_path() / rel);
-			if (exists)
+			const std::string rel(res_tag.relative());
+			if (m_resources.exists(res_tag))
 				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%s [overwrite]", rel.c_str());
 			else
 				ImGui::Text("%s", rel.c_str());
 		}
 		ImGui::EndChild();
+	}
+
+	if (!m_export_error.empty()) {
+		ImGui::PushStyleColor(ImGuiCol_Text, error_color);
+		ImGui::TextWrapped("Export failed: %s", m_export_error.c_str());
+		ImGui::PopStyleColor();
 	}
 
 	ImGui::Spacing();
@@ -151,17 +171,14 @@ void edt::asset_export_dialog::render_export_form()
 	const float avail = ImGui::GetContentRegionAvail().x;
 	ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 
-	std::string asset_name_s(m_asset_name);
-	std::string target_folder_s(m_target_folder);
-	bool can_export = !asset_name_s.empty() && !target_folder_s.empty();
+	const bool can_export = problem.empty();
 
 	if (!can_export) ImGui::BeginDisabled();
 	if (ImGui::Button("Export", { bw, 0.f })) {
-		auto remap = m_exporter.build_remap(m_import, asset_name_s, target_folder_s);
-
 		m_export_progress = std::make_shared<export_progress>();
 		m_exporting = true;
 		m_export_done = false;
+		m_export_error.clear();
 
 		// Capture by value for the background thread
 		auto import_copy = m_import;
@@ -169,19 +186,26 @@ void edt::asset_export_dialog::render_export_form()
 		auto* exporter_ptr = &m_exporter;
 
 		// io lane: the work is writing files to the project; the exporter reports through export_progress.
-		m_export_job = m_jobs.start(ds::lane::io, { "Export " + asset_name_s, "export" }, m_lifetime,
+		// wait_for_writes: a write the resource system refuses ends the export with its reason instead of a "successful" one.
+		m_export_job = m_jobs.start(ds::lane::io, { "Export " + asset_name, "export" }, m_lifetime,
 			[exporter_ptr, import_copy = std::move(import_copy),
 			 remap = std::move(remap), progress_ptr](ds::task_context& ctx) {
 				ctx.throw_if_stopped();
-				return exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get(), &ctx);
+				return exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get(), &ctx, nullptr, true);
 			},
 			[this](ds::task_result<bool>& result) {
-				if (!result.ok()) {
-					egLOG_ERROR("edt/export", "Export failed: {}", result.error);
-				} else if (m_export_progress && m_export_progress->success.load()) {
+				if (result.status == ds::task_status::cancelled) {
+					egLOG("edt/export", "Export cancelled");
+				} else if (!result.ok()) {
+					m_export_error = result.error.empty() ? std::string("the export stopped (see the log)") : result.error;
+				} else if (!*result.value || !m_export_progress || !m_export_progress->success.load()) {
+					m_export_error = m_export_progress && !m_export_progress->error.empty()
+						? m_export_progress->error : std::string("a file could not be written (see the log)");
+				} else {
 					m_exported_tag = m_export_progress->exported_tag;
 					egLOG("edt/export", "Export successful: {}", m_exported_tag.view());
 				}
+				if (!m_export_error.empty()) egLOG_ERROR("edt/export", "Export failed: {}", m_export_error);
 				m_export_done = true;
 			});
 	}
@@ -225,7 +249,10 @@ void edt::asset_export_dialog::render_export_progress()
 	if (m_export_done) {
 		m_exporting = false;
 		m_export_progress.reset();
-		m_is_open = false;
-		ImGui::CloseCurrentPopup();
+		// A failed export goes back to the form with the reason; the files it wrote before stay (see export_to_project).
+		if (m_export_error.empty()) {
+			m_is_open = false;
+			ImGui::CloseCurrentPopup();
+		}
 	}
 }
