@@ -1,5 +1,6 @@
 #include "edt_asset_exporter.h"
 #include "edt_process_decoder.h"
+#include "edt_file_menu.h"
 #include <snk/desc/desc_pretty_json.h>
 #include <boost/json.hpp>
 #include <cstring>
@@ -13,6 +14,12 @@ namespace {
 	bool is_geometry_desc(std::string_view path)
 	{
 		return path.ends_with(".geom.desc");
+	}
+
+	// An empty folder is the root of res://.
+	std::string folder_prefix(std::string_view target_folder)
+	{
+		return target_folder.empty() ? std::string{} : std::string(target_folder) + "/";
 	}
 
 	std::vector<std::byte> bytes_of(const std::string& text)
@@ -59,7 +66,7 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 		if (asset_name != model_name)
 			replace_stem(rel, model_name, asset_name);
 
-		std::string res_path = target_folder + "/" + rel;
+		std::string res_path = folder_prefix(target_folder) + rel;
 		res::tag res_tag = res::tag::make(res_path);
 		remap[mem_tag] = res_tag;
 	}
@@ -69,56 +76,21 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 
 std::string edt::asset_exporter::folder_problem(std::string_view target_folder)
 {
-	if (target_folder.empty()) {
-		return "choose a target folder";
+	if (target_folder.empty()) return {};
+	if (target_folder.find("://") != std::string_view::npos) {
+		return std::format("'{}': write the folder as a path inside res:// (\"assets/tree\"), without a protocol", target_folder);
 	}
-	if (target_folder.front() == '/') {
-		return std::format("'{}' is an absolute path: the folder must be inside the project's resources (res://)", target_folder);
-	}
-	for (const char c : target_folder) {
-		const auto byte = static_cast<unsigned char>(c);
-		if (byte < 0x20 || byte == 0x7f) {
-			return "the folder holds a control character";
-		}
-		if (c == '\\') {
-			return std::format("'{}' holds '\\': separate folders with '/'", target_folder);
-		}
-		if (c == ':') {
-			return std::format("'{}' holds ':': a drive or a protocol is not a folder inside res://", target_folder);
-		}
-	}
-	std::string_view rest = target_folder;
-	while (true) {
-		const std::size_t slash = rest.find('/');
-		const std::string_view part = rest.substr(0, slash);
-		if (part.empty()) {
-			return std::format("'{}' has an empty folder name", target_folder);
-		}
-		if (part == "." || part == "..") {
-			return std::format("'{}' holds '{}': the folder must be a plain path inside res://", target_folder, part);
-		}
-		if (slash == std::string_view::npos) break;
-		rest.remove_prefix(slash + 1);
+	if (agent_level_path checked = check_agent_folder(target_folder); !checked.ok()) {
+		return std::format("target folder: {}", checked.error);
 	}
 	return {};
 }
 
 std::string edt::asset_exporter::asset_name_problem(std::string_view asset_name)
 {
-	if (asset_name.empty()) {
-		return "enter an asset name";
-	}
-	if (asset_name == "." || asset_name == "..") {
-		return std::format("'{}' is not a file name", asset_name);
-	}
-	for (const char c : asset_name) {
-		const auto byte = static_cast<unsigned char>(c);
-		if (byte < 0x20 || byte == 0x7f) {
-			return "the asset name holds a control character";
-		}
-		if (c == '/' || c == '\\' || c == ':') {
-			return std::format("the asset name '{}' holds '{}': it names one file, the folder is chosen below", asset_name, c);
-		}
+	if (asset_name.empty()) return "enter an asset name";
+	if (agent_level_path checked = check_agent_name(asset_name); !checked.ok()) {
+		return std::format("asset name: {}", checked.error);
 	}
 	return {};
 }
@@ -131,10 +103,14 @@ std::string edt::asset_exporter::destination_problem(const std::unordered_map<re
 	if (std::string folder = folder_problem(target_folder); !folder.empty()) {
 		return folder;
 	}
-	const std::string folder_prefix = std::string(target_folder) + "/";
+	const std::string prefix = folder_prefix(target_folder);
 	for (const auto& [from, to] : remap) {
-		if (to.protocol() != res::tag::default_protocol() || !to.relative().starts_with(folder_prefix)) {
+		if (to.protocol() != res::tag::default_protocol() || !to.relative().starts_with(prefix)) {
 			return std::format("'{}' would be written outside the folder of the import", to.view());
+		}
+		// The names inside the folder come from the model file: they are held to the same rules as the folder.
+		if (agent_level_path checked = check_agent_folder(to.relative()); !checked.ok()) {
+			return std::format("'{}': {}", to.view(), checked.error);
 		}
 	}
 	return {};
@@ -145,10 +121,10 @@ std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag
 	if (std::string destination = destination_problem(remap, asset_name, target_folder); !destination.empty()) {
 		return destination;
 	}
-	const std::string folder_prefix = std::string(target_folder) + "/";
+	const std::string prefix = folder_prefix(target_folder);
 	for (const auto& [from, to] : remap) {
 		const std::string_view final_path = to.relative();
-		const std::string_view relative = final_path.substr(folder_prefix.size());
+		const std::string_view relative = final_path.substr(prefix.size());
 		// What lands in the project is what an import makes, under the names the importer would give it, and the remap changed
 		// no extension: the adapter reads a file by its extension.
 		if (!is_import_resource_name(relative, asset_name)) {
@@ -221,28 +197,44 @@ bool edt::asset_exporter::export_to_project(
 		progress->done.store(0);
 	}
 
+	// A file left out would leave a reference to it in the prefab: the export stops there instead of reporting success.
+	const auto fail = [progress](std::string why) {
+		egLOG_ERROR("edt/export", "{}", why);
+		if (progress) {
+			progress->error = std::move(why);
+			progress->finished.store(true);
+		}
+		return false;
+	};
+
 	int files_done = 0;
 	int files_written = 0;
 	for (const auto& mem_tag : ordered_tags) {
 		if (ctx) ctx->throw_if_stopped();
 		auto remap_it = remap.find(mem_tag);
 		if (remap_it == remap.end()) {
-			egLOG_WARN("edt/export", "No remap for tag '{}'", mem_tag.view());
-			if (progress) progress->done.fetch_add(1);
-			continue;
+			return fail(std::format("'{}' has no place in the project", mem_tag.view()));
 		}
 
 		const res::tag& res_tag = remap_it->second;
 
-		// Fetch bytes from memory://
-		auto data_block = m_res.fetch_data(mem_tag);
-		if (!data_block) {
-			egLOG_WARN("edt/export", "Failed to fetch data for '{}'", mem_tag.view());
-			if (progress) progress->done.fetch_add(1);
+		if (mem_tag != result.root_tag && !m_res.exists(mem_tag)) {
+			egLOG_WARN("edt/export", "'{}' is not in the import (the importer did not find it): left out", mem_tag.view());
+			if (progress) {
+				progress->skipped.push_back(res_tag);
+				progress->done.fetch_add(1);
+			}
 			continue;
 		}
 
+		auto data_block = m_res.fetch_data(mem_tag);
+		if (!data_block) {
+			return fail(std::format("'{}' could not be read", mem_tag.view()));
+		}
 		auto& bytes = data_block->get();
+		if (data_block->has_error()) {
+			return fail(std::format("'{}' could not be read", mem_tag.view()));
+		}
 
 		std::vector<std::byte> output_bytes;
 		std::string rel(mem_tag.relative());
@@ -257,8 +249,8 @@ bool edt::asset_exporter::export_to_project(
 				remap_json_strings(val, remap);
 				output_bytes = is_geometry_desc(rel) ? bytes_of(json::serialize(val)) : desc::pretty_json_bytes(val);
 			} catch (const std::exception& e) {
-				egLOG_ERROR("edt/export", "Failed to parse JSON for '{}': {}", mem_tag.view(), e.what());
-				output_bytes = bytes;
+				// Written as they are, its memory:// references would point at nothing once the editor closes.
+				return fail(std::format("'{}' is not valid JSON: {}", mem_tag.view(), e.what()));
 			}
 		} else {
 			output_bytes = bytes;
@@ -270,12 +262,7 @@ bool edt::asset_exporter::export_to_project(
 			// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
 			if (wait_for_writes) {
 				if (!m_res.store_sync(res_tag, output_bytes)) {
-					egLOG_ERROR("edt/export", "'{}' could not be written", res_tag.view());
-					if (progress) {
-						progress->error = std::format("'{}' could not be written (see the log)", res_tag.view());
-						progress->finished.store(true);
-					}
-					return false;
+					return fail(std::format("'{}' could not be written (see the log)", res_tag.view()));
 				}
 			} else {
 				m_res.store(res_tag, output_bytes);

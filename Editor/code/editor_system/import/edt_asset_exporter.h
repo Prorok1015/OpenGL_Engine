@@ -22,6 +22,9 @@ namespace edt {
 		res::tag exported_tag;
 		// Why the export stopped (which file, what was refused); written before `finished` is set.
 		std::string error;
+		// Resources the import lists but never stored (an external texture it did not find): not written, the export goes on.
+		// Written before `finished` is set.
+		std::vector<res::tag> skipped;
 	};
 
 	class asset_exporter {
@@ -42,6 +45,9 @@ namespace edt {
 		// `written` (null: not told) gets each res:// tag as its file is stored. `wait_for_writes` stores each file with
 		// store_sync (the file is on disk when the call returns; false when a write is refused), the way a caller that may
 		// have to take the files back needs it. `on_file` (empty: none) is called after each file with (done, total).
+		// A resource with no remap, one that cannot be read, a missing root and a desc that is not JSON stop the export too
+		// (false, `progress->error` says which). A leaf the import lists but never stored is left out and named in
+		// `progress->skipped`.
 		bool export_to_project(
 			const import_result& result,
 			const std::unordered_map<res::tag, res::tag>& remap,
@@ -55,15 +61,17 @@ namespace edt {
 		// extension it had (an agent's import: nothing it chose may turn a resource into a model file). Else why not.
 		static std::string remap_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder);
 
-		// Empty when `target_folder` is a folder path relative to res:// ("assets/tree"): no drive, root, '.' or '..' component,
-		// empty component, backslash, ':' or control character. Else why not, for the person or the agent who chose it.
+		// Empty when `target_folder` is a folder path inside res:// ("assets/tree"; empty is the root) by the rules of
+		// check_agent_folder (no drive, protocol, '.'/'..'/empty segment, name Windows reserves, trailing '.' or ' ', <>"|?*).
+		// Else why not.
 		static std::string folder_problem(std::string_view target_folder);
 
-		// Empty when `asset_name` is one file name (no '/', '\\', ':', control character, not "." or ".."). Else why not.
+		// Empty when `asset_name` is one name by the rules of check_agent_name. Else why not.
 		static std::string asset_name_problem(std::string_view asset_name);
 
 		// What a person's export is held to: the folder and the name are plain, and everything the remap writes lands below
-		// `target_folder`. Empty when so, else why not. remap_problem adds the agent's rules on names and extensions.
+		// `target_folder` under a path check_agent_folder accepts. Empty when so, else why not. remap_problem adds the agent's
+		// rules on names and extensions.
 		static std::string destination_problem(const std::unordered_map<res::tag, res::tag>& remap, std::string_view asset_name, std::string_view target_folder);
 
 	private:

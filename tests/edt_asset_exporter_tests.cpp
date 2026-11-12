@@ -112,24 +112,29 @@ BOOST_AUTO_TEST_CASE(RemapProblem_RefusesANameAnImportDoesNotGive_AndAChangedExt
 }
 
 // What the export dialog lets a person type or browse to (#741): a plain path below res://, never a way out of it.
+// The rules are check_agent_folder's (#741 review): one set for a person and an agent.
 BOOST_AUTO_TEST_CASE(FolderProblem_RefusesEverythingButAPlainRelativeFolder)
 {
 	BOOST_TEST(edt::asset_exporter::folder_problem("assets/x").empty());
 	BOOST_TEST(edt::asset_exporter::folder_problem("x").empty());
-	for (const std::string_view folder : { "", "..", ".", "../x", "a/../b", "a/./b", "a/..", "/abs/x", "C:/x", "C:x", "a\\b",
-			"res://a", "a//b", "a/", "//server/share" }) {
+	BOOST_TEST(edt::asset_exporter::folder_problem("").empty());
+	for (const std::string_view folder : { "..", ".", "../x", "a/../b", "a/./b", "a/..", "/abs/x", "C:/x", "C:x", "a\\b",
+			"res://a", "a://b", "a//b", "a/", "//server/share", "NUL", "a/CON", "assets/com1.txt", "tree.", "a /b", "a<b", "a?b",
+			"a|b", "a*b" }) {
 		BOOST_TEST_INFO("folder: " << folder);
 		BOOST_TEST(!edt::asset_exporter::folder_problem(folder).empty());
 	}
 	BOOST_TEST(!edt::asset_exporter::folder_problem(std::string_view{ "a\0b", 3 }).empty());
 	BOOST_TEST(!edt::asset_exporter::folder_problem("a\nb").empty());
+	BOOST_TEST(!edt::asset_exporter::folder_problem(std::string(600, 'a')).empty());
 }
 
 BOOST_AUTO_TEST_CASE(AssetNameProblem_RefusesAPathInTheName)
 {
 	BOOST_TEST(edt::asset_exporter::asset_name_problem("tree").empty());
 	BOOST_TEST(edt::asset_exporter::asset_name_problem("tree v2").empty());
-	for (const std::string_view name : { "", ".", "..", "../x", "a/b", "a\\b", "C:x", "a\tb" }) {
+	for (const std::string_view name : { "", ".", "..", "../x", "a/b", "a\\b", "C:x", "a\tb", "a://b", "res://x", "NUL", "con.txt",
+			"tree.", "tree ", "a?b" }) {
 		BOOST_TEST_INFO("name: " << name);
 		BOOST_TEST(!edt::asset_exporter::asset_name_problem(name).empty());
 	}
@@ -161,6 +166,24 @@ BOOST_AUTO_TEST_CASE(DestinationProblem_HoldsTheFolder_RemapProblemAlsoTheNames)
 	std::unordered_map<res::tag, res::tag> other_protocol;
 	other_protocol[imported.root_tag] = res::tag{ res::tag::memory, "assets/tree/tree.prefab.desc" };
 	BOOST_TEST(!edt::asset_exporter::destination_problem(other_protocol, "tree", "assets/tree").empty());
+
+	std::unordered_map<res::tag, res::tag> dot_dot;
+	dot_dot[imported.root_tag] = res::tag::make("assets/tree/../tree.prefab.desc");
+	BOOST_TEST(!edt::asset_exporter::destination_problem(dot_dot, "tree", "assets/tree").empty());
+
+	std::unordered_map<res::tag, res::tag> reserved;
+	reserved[dds] = res::tag::make("assets/tree/textures/nul.dds");
+	BOOST_TEST(!edt::asset_exporter::destination_problem(reserved, "tree", "assets/tree").empty());
+}
+
+// An empty folder is the root of res://, as a Browse to the resources folder gives it.
+BOOST_AUTO_TEST_CASE(TheRootOfRes_IsAFolderToo)
+{
+	edt::asset_exporter exporter(*rs);
+	const auto imported = make_import("models/tri.obj");
+	const auto remap = exporter.build_remap(imported, "box", "");
+	BOOST_TEST(remap.at(imported.root_tag).string() == "res://box.prefab.desc");
+	BOOST_TEST(edt::asset_exporter::destination_problem(remap, "box", "").empty());
 }
 
 // A write the resource system refuses ends the export with false and says which file; nothing lands outside res://.
@@ -185,6 +208,68 @@ BOOST_AUTO_TEST_CASE(ExportToProject_ARefusedWrite_ReturnsFalse_AndNamesTheFile)
 	BOOST_TEST(progress.error.find("tri.prefab.desc") != std::string::npos);
 	BOOST_TEST(written.empty());
 	BOOST_TEST(!std::filesystem::exists(outside));
+}
+
+// A resource that cannot be read or a desc that is not JSON is no longer skipped or written raw: the export says so.
+BOOST_AUTO_TEST_CASE(ExportToProject_AnUnreadableOrBrokenResource_StopsTheExport)
+{
+	const std::string folder = std::format("tests/export_741_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+	edt::asset_exporter exporter(*rs);
+
+	edt::import_result missing;
+	missing.source_path = "models/gone.obj";
+	missing.root_tag = res::tag{ res::tag::memory, "gone/gone.prefab.desc" };
+	missing.all_tags.push_back(missing.root_tag);
+	edt::export_progress missing_progress;
+	std::vector<res::tag> missing_written;
+	BOOST_TEST(!exporter.export_to_project(missing, exporter.build_remap(missing, "gone", folder), &missing_progress, nullptr,
+		&missing_written, true));
+	BOOST_TEST(missing_progress.error.find("gone.prefab.desc") != std::string::npos);
+	BOOST_TEST(missing_written.empty());
+
+	edt::import_result broken;
+	broken.source_path = "models/bad.obj";
+	broken.root_tag = res::tag{ res::tag::memory, "bad/bad.prefab.desc" };
+	const res::tag texture{ res::tag::memory, "bad/textures/a.png" };
+	BOOST_REQUIRE(rs->store_sync(texture, test_util::to_bytes("png")));
+	BOOST_REQUIRE(rs->store_sync(broken.root_tag, test_util::to_bytes("{ not json")));
+	broken.all_tags = { texture, broken.root_tag };
+	edt::export_progress broken_progress;
+	std::vector<res::tag> broken_written;
+	BOOST_TEST(!exporter.export_to_project(broken, exporter.build_remap(broken, "bad", folder), &broken_progress, nullptr,
+		&broken_written, true));
+	BOOST_TEST(broken_progress.error.find("bad.prefab.desc") != std::string::npos);
+	BOOST_TEST(!broken_progress.success.load());
+	BOOST_TEST(broken_written.size() == 1u);
+	BOOST_TEST(!std::filesystem::exists(std::filesystem::path{ "res" } / folder / "bad.prefab.desc"));
+
+	std::error_code ignored;
+	std::filesystem::remove_all(std::filesystem::path{ "res" } / folder, ignored);
+}
+
+// The importer lists an external texture it did not find: the rest is exported and the missing one named.
+BOOST_AUTO_TEST_CASE(ExportToProject_ALeafTheImportNeverStored_IsLeftOutAndNamed)
+{
+	const std::string folder = std::format("tests/export_741_skip_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+	edt::asset_exporter exporter(*rs);
+	edt::import_result imported;
+	imported.source_path = "models/leaf.obj";
+	imported.root_tag = res::tag{ res::tag::memory, "leaf/leaf.prefab.desc" };
+	const res::tag absent{ res::tag::memory, "leaf/textures/absent.png" };
+	BOOST_REQUIRE(rs->store_sync(imported.root_tag, test_util::to_bytes("{}")));
+	imported.all_tags = { absent, imported.root_tag };
+	const auto remap = exporter.build_remap(imported, "leaf", folder);
+
+	edt::export_progress progress;
+	std::vector<res::tag> written;
+	BOOST_TEST(exporter.export_to_project(imported, remap, &progress, nullptr, &written, true));
+	BOOST_TEST(progress.success.load());
+	BOOST_REQUIRE(progress.skipped.size() == 1u);
+	BOOST_TEST(progress.skipped.front().string() == remap.at(absent).string());
+	BOOST_TEST(written.size() == 1u);
+
+	std::error_code ignored;
+	std::filesystem::remove_all(std::filesystem::path{ "res" } / folder, ignored);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
