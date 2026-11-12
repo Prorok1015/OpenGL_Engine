@@ -2,6 +2,7 @@
 #include <snk/scene/scn_model.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/ecs/ecs_entity.h>
+#include "edt_gizmo_state.h"
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -155,10 +156,10 @@ namespace edt
 		const glm::mat4& proj,
 		float vp_x, float vp_y, float vp_w, float vp_h,
 		int mode, // TODO: use enum class
-		entt::entity& inout_rotate_ent,
-		int& inout_active_ring,
+		rotate_gizmo_state& rotate,
 		bool* committed = nullptr)
 	{
+		int& inout_active_ring = rotate.ring;
 		if (!reg.all_of<scn::local_transform>(ent))
 			return false;
 
@@ -284,10 +285,7 @@ namespace edt
 			
 			
 
-			if (inout_rotate_ent != ent) {
-				inout_rotate_ent  = ent;
-				inout_active_ring = -1;
-			}
+			rotate.sync(ent, registry_token(reg));
 
 			float btn_r = GIZMO_RING_PX + 2 * GIZMO_RING_STEP + GIZMO_RING_HIT;
 			ImGui::SetCursorScreenPos({screen_origin.x - btn_r, screen_origin.y - btn_r});
