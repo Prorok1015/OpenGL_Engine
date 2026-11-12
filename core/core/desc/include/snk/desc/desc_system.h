@@ -208,7 +208,7 @@ namespace desc
 		// a malformed or newer-than-supported __version, or when a migration step is missing.
 		void migrate_tree(json::object& root, std::string_view context) const
 		{
-			migrate_object(root, context, [](const migration_step_fn& step, json::object& obj, const std::string&, int) { step(obj); });
+			migrate_object(root, context);
 		}
 
 		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
@@ -382,6 +382,28 @@ namespace desc
 			}
 			return true;
 		}
+
+		// The members of 3.16: MSVC exports the inline members of an exported class, and a module of 3.16 built without
+		// inlining imports these symbols from the engine. Keep them, with these signatures, until 4.0 (#786).
+		void migrate_object(json::object& obj, std::string_view context) const
+		{
+			migrate_object(obj, context, plain_step{});
+		}
+
+		void migrate_value(json::value& value, std::string_view context) const
+		{
+			migrate_value(value, context, plain_step{});
+		}
+
+		void migrate_typed(json::object& obj, const std::string& type, std::string_view context) const
+		{
+			migrate_typed(obj, type, context, plain_step{});
+		}
+
+		struct plain_step
+		{
+			void operator()(const migration_step_fn& step, json::object& obj, const std::string&, int) const { step(obj); }
+		};
 
 		// Migrates the object itself first, then its members, so children a migration creates are visited too.
 		// `run(step, obj, type, from)` applies one step.

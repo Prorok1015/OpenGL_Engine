@@ -2,7 +2,6 @@
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/scene/scn_camera_component.hpp>
-#include <snk/desc/desc_system.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/resource/res_tag.h>
@@ -12,6 +11,8 @@
 #include <snk/common/snk_api.h>
 #include <functional>
 #include <string>
+
+namespace desc { class migration_context; }
 
 namespace scn {
 	BOOST_DESCRIBE_ENUM(camera_clear, all, depth, none)
