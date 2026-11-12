@@ -27,6 +27,15 @@ std::string meta_text(std::string_view guid)
 	return res::write_asset_meta(meta);
 }
 
+res::file_change change(std::string_view path, res::change_kind kind, std::string_view old_path = {})
+{
+	res::file_change out;
+	out.tag = res::tag::make(path);
+	if (!old_path.empty()) out.old_tag = res::tag::make(old_path);
+	out.kind = kind;
+	return out;
+}
+
 constexpr std::string_view k_guid_a = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 constexpr std::string_view k_guid_b = "00000000-0000-4000-8000-000000000002";
 
@@ -377,6 +386,96 @@ BOOST_AUTO_TEST_CASE(a_cache_of_other_layers_is_not_used)
 	cached().reset();
 	auto other = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ upper.path() }, cache.path() / "asset_db");
 	BOOST_TEST(!other->loaded_from_cache());
+}
+
+// AC #760: create, change and delete of a file and of its .resource are each seen in one batch.
+BOOST_AUTO_TEST_CASE(a_batch_adds_changes_and_removes_files_and_sidecars)
+{
+	upper.write("kept.txt", "kept");
+	auto& assets = open();
+
+	upper.write("new.png", "new");
+	upper.write("new.png.resource", meta_text(k_guid_a));
+	upper.write("kept.txt", "kept, longer");
+	const std::vector<res::file_change> first{ change("new.png", res::change_kind::created),
+		change("new.png.resource", res::change_kind::created), change("kept.txt", res::change_kind::modified) };
+	const edt::asset_batch added = assets.apply_changes(first);
+	BOOST_REQUIRE(added.added.size() == 1u);
+	BOOST_TEST(added.added.front().string() == "res://new.png");
+	BOOST_REQUIRE(added.changed.size() == 1u);
+	BOOST_TEST(added.changed.front().string() == "res://kept.txt");
+	BOOST_REQUIRE(record("new.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("new.png").id) == k_guid_a);
+	test_util::pump(tasks);
+	BOOST_TEST(!record("new.png").content_hash.empty());
+	BOOST_TEST(record("kept.txt").size == 12);
+
+	fs::remove(upper.path() / "new.png");
+	fs::remove(upper.path() / "new.png.resource");
+	const std::vector<res::file_change> second{ change("new.png", res::change_kind::deleted),
+		change("new.png.resource", res::change_kind::deleted) };
+	const edt::asset_batch removed = assets.apply_changes(second);
+	BOOST_REQUIRE(removed.removed.size() == 1u);
+	BOOST_TEST(assets.find(res::tag::make("new.png")) == nullptr);
+	BOOST_TEST(assets.find(*res::asset_id_from_text(k_guid_a)).empty());
+	BOOST_TEST(assets.orphans().empty());
+}
+
+// AC #760: a file moved with its .resource, seen as deleted + created, is a move found by the guid.
+BOOST_AUTO_TEST_CASE(a_move_is_matched_by_the_guid_of_the_sidecar)
+{
+	upper.write("old/rock.png", "rock");
+	upper.write("old/rock.png.resource", meta_text(k_guid_a));
+	auto& assets = open();
+	const std::string hash = record("old/rock.png").content_hash;
+	BOOST_REQUIRE(!hash.empty());
+
+	fs::create_directories(upper.path() / "new");
+	fs::rename(upper.path() / "old/rock.png", upper.path() / "new/stone.png");
+	fs::rename(upper.path() / "old/rock.png.resource", upper.path() / "new/stone.png.resource");
+	const std::vector<res::file_change> moved{ change("old/rock.png", res::change_kind::deleted),
+		change("old/rock.png.resource", res::change_kind::deleted), change("new/stone.png", res::change_kind::created),
+		change("new/stone.png.resource", res::change_kind::created) };
+	const edt::asset_batch batch = assets.apply_changes(moved);
+	BOOST_REQUIRE(batch.moved.size() == 1u);
+	BOOST_TEST(batch.moved.front().first.string() == "res://old/rock.png");
+	BOOST_TEST(batch.moved.front().second.string() == "res://new/stone.png");
+	BOOST_TEST(batch.added.empty());
+	BOOST_TEST(batch.removed.empty());
+	BOOST_TEST(res::to_text(*record("new/stone.png").id) == k_guid_a);
+	BOOST_TEST(record("new/stone.png").content_hash == hash);
+	BOOST_TEST(assets.pending_hashes() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_rename_the_watcher_reported_is_a_move_too)
+{
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	auto& assets = open();
+	fs::rename(upper.path() / "a.png", upper.path() / "b.png");
+	fs::rename(upper.path() / "a.png.resource", upper.path() / "b.png.resource");
+	const std::vector<res::file_change> renamed{ change("b.png", res::change_kind::renamed, "a.png"),
+		change("b.png.resource", res::change_kind::renamed, "a.png.resource") };
+	const edt::asset_batch batch = assets.apply_changes(renamed);
+	BOOST_REQUIRE(batch.moved.size() == 1u);
+	BOOST_TEST(batch.moved.front().second.string() == "res://b.png");
+}
+
+// A file that moved without its .resource: an orphan where it was, a file without ID where it is.
+BOOST_AUTO_TEST_CASE(a_file_moved_without_its_sidecar_leaves_an_orphan)
+{
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	auto& assets = open();
+	fs::rename(upper.path() / "a.png", upper.path() / "b.png");
+	const std::vector<res::file_change> moved{ change("a.png", res::change_kind::deleted), change("b.png", res::change_kind::created) };
+	const edt::asset_batch batch = assets.apply_changes(moved);
+	BOOST_TEST(batch.moved.empty());
+	BOOST_REQUIRE(batch.added.size() == 1u);
+	BOOST_TEST(!record("b.png").id.has_value());
+	BOOST_REQUIRE(assets.orphans().size() == 1u);
+	BOOST_TEST(assets.orphans().front().meta_path.string() == "res://a.png.resource");
+	BOOST_TEST(res::to_text(*assets.orphans().front().id) == k_guid_a);
 }
 
 BOOST_AUTO_TEST_CASE(the_kind_of_asset_comes_from_the_suffix)

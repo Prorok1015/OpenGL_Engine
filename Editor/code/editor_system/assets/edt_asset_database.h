@@ -2,6 +2,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_file_change.h>
 #include <snk/resource/res_tag.h>
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +10,16 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <snk/platform/plt_file_lock.h>
+
+namespace res
+{
+	class resource_system;
+}
 
 namespace edt
 {
@@ -74,6 +81,16 @@ namespace edt
 		std::optional<std::string> desc_type;
 	};
 
+	// What one batch of file changes did to the database.
+	struct asset_batch
+	{
+		// (from, to): a file that went away and one that came with the guid of its .resource.
+		std::vector<std::pair<res::tag, res::tag>> moved;
+		std::vector<res::tag> added;
+		std::vector<res::tag> removed;
+		std::vector<res::tag> changed;
+	};
+
 	inline constexpr std::string_view k_asset_meta_suffix = ".resource";
 
 	// The kind of asset of a path by its suffix (lowercase compare).
@@ -129,6 +146,15 @@ namespace edt
 		// Writes the cache now when something changed since it was last written (and the lock is held).
 		void save();
 
+		// Follows the changes below res:// of `resources` (resource_system::subscribe_changes) until the database goes.
+		void attach(res::resource_system& resources);
+		// Applies one batch of changes below res:// (main thread, as resource_system delivers them): every file or
+		// .resource named is looked up again in the layers. A file that went away and one that came carrying the same guid
+		// in their .resource are a move, whatever the watcher called them; a folder that came or went walks the tree again.
+		asset_batch apply_changes(std::span<const res::file_change> changes);
+		// Called after each batch with what it did (S57-7 puts the resource_system's own handling after it).
+		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
+
 		const asset_record* find(const res::tag& path) const;
 		std::vector<const asset_record*> find(const res::asset_id& id) const;
 		const std::map<std::string, asset_record>& records() const { return m_records; }
@@ -144,6 +170,9 @@ namespace edt
 		void index_id(const asset_record& record);
 		void on_job_finished(std::uint64_t id, job_status status);
 		void load_cache();
+		// The record `relative` (res:// path text without the protocol) has now; none when no layer has the file.
+		std::optional<asset_record> look_up(const std::string& relative, const asset_record* before);
+		void reindex();
 		void save_when_idle();
 		// The keys of the hashing job that ended without an answer for them go back into the queue.
 		void requeue_in_flight();
@@ -165,6 +194,8 @@ namespace edt
 		bool m_loaded_from_cache = false;
 		bool m_dirty = false;
 		std::size_t m_files_read = 0;
+		res::resource_system* m_resources = nullptr;
+		std::function<void(const asset_batch&)> m_on_batch;
 		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};

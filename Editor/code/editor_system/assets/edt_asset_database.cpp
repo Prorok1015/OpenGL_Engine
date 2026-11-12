@@ -6,6 +6,7 @@
 #include <snk/platform/plt_beneath.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
@@ -17,6 +18,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <set>
 #include <span>
 #include <system_error>
 #include <unordered_map>
@@ -433,6 +435,9 @@ edt::asset_database::asset_database(job_service& jobs, editor_events* events, st
 
 edt::asset_database::~asset_database()
 {
+	if (m_resources) {
+		m_resources->unsubscribe_changes(this);
+	}
 	save();
 }
 
@@ -840,4 +845,248 @@ void edt::asset_database::save()
 		return;
 	}
 	m_dirty = false;
+}
+
+namespace
+{
+	// The res:// path text of a tag without its protocol; none for a tag of another protocol.
+	std::optional<std::string> relative_of(const res::tag& tag)
+	{
+		if (tag.protocol() != res::tag::default_protocol()) {
+			return std::nullopt;
+		}
+		std::string_view text = tag.view();
+		text.remove_prefix(text.find("://") + 3);
+		return std::string{ text };
+	}
+
+	enum class presence { missing, file, other };
+
+	// What `relative` is in one layer, every folder on the way checked as the walk checks entries: a link, a redirecting
+	// reparse point or a hidden folder on the way means the layer does not have it.
+	presence presence_in(const fs::path& layer, const std::string& relative)
+	{
+		fs::path at = layer;
+		const fs::path rel = fs_paths::path_from_utf8(relative);
+		std::size_t left = static_cast<std::size_t>(std::distance(rel.begin(), rel.end()));
+		for (const fs::path& part : rel) {
+			at /= part;
+			--left;
+			std::error_code ec;
+			const fs::directory_entry entry(at, ec);
+			if (ec || !entry.exists(ec)) {
+				return presence::missing;
+			}
+			if (redirects(entry)) {
+				return presence::other;
+			}
+			const bool is_dir = entry.is_directory(ec);
+			if (left > 0) {
+				if (!is_dir || fs_paths::utf8_of(part).starts_with('.')) {
+					return presence::other;
+				}
+				continue;
+			}
+			return entry.is_regular_file(ec) && !ec ? presence::file : presence::other;
+		}
+		return presence::missing;
+	}
+}
+
+void edt::asset_database::attach(res::resource_system& resources)
+{
+	if (m_resources) {
+		m_resources->unsubscribe_changes(this);
+	}
+	m_resources = &resources;
+	resources.subscribe_changes(res::tag::default_protocol(), this, [this](std::span<const res::file_change> changes) {
+		apply_changes(changes);
+	});
+}
+
+std::optional<edt::asset_record> edt::asset_database::look_up(const std::string& relative, const asset_record* before)
+{
+	std::optional<std::size_t> winner;
+	std::vector<std::size_t> shadowed;
+	for (std::size_t layer = m_layers.size(); layer-- > 0;) {
+		const presence here = presence_in(m_layers[layer], relative);
+		if (here == presence::missing) {
+			continue;
+		}
+		if (!winner) {
+			if (here != presence::file) {
+				return std::nullopt;
+			}
+			winner = layer;
+		} else {
+			shadowed.push_back(layer);
+		}
+	}
+	if (!winner) {
+		return std::nullopt;
+	}
+	std::ranges::reverse(shadowed);
+	const fs::path physical = m_layers[*winner] / fs_paths::path_from_utf8(relative);
+	const file_stat stat = stat_of(physical);
+	if (!stat.ok) {
+		return std::nullopt;
+	}
+	asset_record record;
+	record.path = res::tag::make(relative);
+	record.layer = *winner;
+	record.shadowed_layers = std::move(shadowed);
+	record.size = stat.size;
+	record.mtime = stat.mtime;
+	record.type = asset_type_of(relative);
+	if (before && before->size == stat.size && before->mtime == stat.mtime) {
+		record.content_hash = before->content_hash;
+		record.desc_type = before->desc_type;
+	}
+
+	const std::string meta_relative = relative + std::string{ k_asset_meta_suffix };
+	for (std::size_t layer = m_layers.size(); layer-- > 0;) {
+		const presence here = presence_in(m_layers[layer], meta_relative);
+		if (here == presence::missing) {
+			continue;
+		}
+		if (here == presence::file) {
+			const file_stat meta_stat = stat_of(m_layers[layer] / fs_paths::path_from_utf8(meta_relative));
+			record.meta_size = meta_stat.size;
+			record.meta_mtime = meta_stat.mtime;
+			if (before && before->has_meta && before->meta_size == meta_stat.size && before->meta_mtime == meta_stat.mtime) {
+				record.has_meta = true;
+				record.id = before->id;
+				record.flags = before->flags;
+				record.meta_error = before->meta_error;
+			} else {
+				++m_files_read;
+				const meta_read read = read_meta(m_layers[layer], fs_paths::path_from_utf8(meta_relative));
+				record.has_meta = read.present;
+				if (read.meta) {
+					record.id = read.meta->guid;
+					record.flags = read.meta->flags;
+				} else {
+					record.meta_error = read.error;
+				}
+			}
+		}
+		break;
+	}
+	return record;
+}
+
+void edt::asset_database::reindex()
+{
+	m_by_id.clear();
+	for (const auto& [key, record] : m_records) {
+		index_id(record);
+	}
+}
+
+edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_change> changes)
+{
+	asset_batch batch;
+	bool walk_again = false;
+	std::set<std::string> files;
+	const auto touch = [&files](const res::tag& tag) {
+		std::optional<std::string> relative = relative_of(tag);
+		if (!relative || relative->empty()) {
+			return;
+		}
+		if (ends_with_meta_suffix(*relative)) {
+			relative->resize(relative->size() - k_asset_meta_suffix.size());
+		}
+		files.insert(std::move(*relative));
+	};
+	for (const res::file_change& change : changes) {
+		if (change.is_directory) {
+			walk_again = true;
+			continue;
+		}
+		touch(change.tag);
+		if (change.kind == res::change_kind::renamed) {
+			touch(change.old_tag);
+		}
+	}
+
+	std::vector<asset_record> gone;
+	std::vector<std::string> came;
+	for (const std::string& relative : files) {
+		const std::string key = res::tag::make(relative).string();
+		const auto known = m_records.find(key);
+		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
+		std::optional<asset_record> now = look_up(relative, before);
+		const std::string meta_key = res::tag::make(relative + std::string{ k_asset_meta_suffix }).string();
+		std::erase_if(m_orphans, [&meta_key](const asset_orphan& orphan) { return orphan.meta_path.string() == meta_key; });
+		if (!now) {
+			// The file is gone; a .resource left behind is an orphan.
+			for (std::size_t layer = m_layers.size(); layer-- > 0;) {
+				const std::string meta_relative = relative + std::string{ k_asset_meta_suffix };
+				if (presence_in(m_layers[layer], meta_relative) == presence::file) {
+					asset_orphan orphan;
+					orphan.meta_path = res::tag::make(meta_relative);
+					++m_files_read;
+					const meta_read read = read_meta(m_layers[layer], fs_paths::path_from_utf8(meta_relative));
+					if (read.meta) {
+						orphan.id = read.meta->guid;
+					}
+					m_orphans.push_back(std::move(orphan));
+					break;
+				}
+			}
+			if (before) {
+				gone.push_back(std::move(known->second));
+				m_records.erase(known);
+			}
+			continue;
+		}
+		const bool is_new = before == nullptr;
+		const bool same = before && before->layer == now->layer && before->size == now->size && before->mtime == now->mtime
+			&& before->meta_size == now->meta_size && before->meta_mtime == now->meta_mtime;
+		if (is_new) {
+			came.push_back(key);
+		} else if (!same) {
+			batch.changed.push_back(now->path);
+		}
+		if (now->content_hash.empty() && std::ranges::find(m_in_flight, key) == m_in_flight.end()
+			&& std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
+			m_unhashed.push_back(key);
+		}
+		m_records.insert_or_assign(key, std::move(*now));
+	}
+
+	// A move: what went away and what came with the same guid. The bytes moved too when the size and time did.
+	for (const std::string& key : came) {
+		asset_record& arrived = m_records.at(key);
+		const auto match = arrived.id
+			? std::ranges::find_if(gone, [&arrived](const asset_record& left) { return left.id == arrived.id; })
+			: gone.end();
+		if (match == gone.end()) {
+			batch.added.push_back(arrived.path);
+			continue;
+		}
+		if (arrived.content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
+			arrived.content_hash = match->content_hash;
+			arrived.desc_type = match->desc_type;
+			std::erase(m_unhashed, key);
+		}
+		batch.moved.emplace_back(match->path, arrived.path);
+		gone.erase(match);
+	}
+	for (const asset_record& left : gone) {
+		batch.removed.push_back(left.path);
+	}
+	std::ranges::sort(m_orphans, {}, [](const asset_orphan& orphan) { return orphan.meta_path.string(); });
+	reindex();
+	m_dirty = true;
+	++m_revision;
+	if (walk_again) {
+		rebuild();
+	}
+	hash_next();
+	save_when_idle();
+	if (m_on_batch) {
+		m_on_batch(batch);
+	}
+	return batch;
 }

@@ -1,4 +1,5 @@
 #include "edt_editor_system.h"
+#include "edt_asset_database.h"
 #include "edt_begin_then_poll.h"
 #include <algorithm>
 #include <chrono>
@@ -803,6 +804,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_vcs->set_write_observer([this] {
 		if (m_repo_watcher) m_repo_watcher->begin_own_write();
 	});
+	if (data.has_value<prj::project_context>()) {
+		m_assets = std::make_unique<asset_database>(m_context->jobs(), &m_context->events(), m_res.get_resource_layers(),
+			data.require<prj::project_context>().cache_dir() / "asset_db");
+		m_assets->attach(m_res);
+		m_assets->rebuild();
+	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
