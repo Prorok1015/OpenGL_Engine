@@ -324,6 +324,38 @@ BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with
 	BOOST_TEST(after->descs().document_types().empty());
 }
 
+// #758: the module's inline readers (desc_ref and res_tag fields, compiled in the module) read a reference written as
+// {guid, path} as they read its path, through the engine's export res::reference_from_json.
+BOOST_AUTO_TEST_CASE(a_module_reads_a_reference_object_like_its_path)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	auto& descs = layer->descs();
+	const res::tag owner{ "res://dll/owner.desc" };
+	auto from_string = descs.create_instance(dll_game::linked_type, owner);
+	auto from_object = descs.create_instance(dll_game::linked_type, owner);
+	BOOST_REQUIRE(from_string);
+	BOOST_REQUIRE(from_object);
+
+	from_string->deserialize(descs, boost::json::parse(R"({ "link": "res://dll/config.desc", "icon": "res://dll/icon.png" })").as_object());
+	from_object->deserialize(descs, boost::json::parse(R"({
+		"link": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://dll/config.desc" },
+		"icon": { "path": "res://dll/icon.png" } })").as_object());
+	boost::json::object by_string;
+	boost::json::object by_object;
+	from_string->serialize(by_string);
+	from_object->serialize(by_object);
+	BOOST_TEST(by_string.at("link").as_string() == "res://dll/config.desc");
+	BOOST_TEST(by_string.at("icon").as_string() == "res://dll/icon.png");
+	BOOST_TEST(boost::json::value(by_string) == boost::json::value(by_object));
+
+	from_string.reset();
+	from_object.reset();
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+}
+
 // #605: the journal finds the module's bus_journal_source with dynamic_cast across the library boundary and calls the
 // payload writer of the module's code.
 BOOST_AUTO_TEST_CASE(the_bus_journal_shows_the_payload_a_module_writes)

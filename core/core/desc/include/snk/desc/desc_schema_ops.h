@@ -207,8 +207,8 @@ namespace desc
 		&& requires(T& value, const json::value& in, const read_context& ctx) { json_codec<T>::from_json(value, in, ctx); };
 
 	// Binds a C++ member type to field_kind::desc_ref (field_attr::kind). desc_describe_ops.h specializes it for
-	// res::res_handle<T>: a string tag or an inline object with "__type" (desc_system::get_field_desc), written as the
-	// tag. A specialization provides:
+	// res::res_handle<T>: a string tag, a {guid, path} reference (res::reference_from_json) or an inline object with
+	// "__type" (desc_system::get_field_desc), written as the tag. A specialization provides:
 	//       static bool from_json(M&, const json::value&, const read_context&);
 	//       static json::value to_json(const M&); // the tag; an empty string for an unset reference
 	template<typename M>

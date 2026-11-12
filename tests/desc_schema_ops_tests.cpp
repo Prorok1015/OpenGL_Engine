@@ -670,6 +670,55 @@ BOOST_FIXTURE_TEST_CASE(DescRefReadsATagAndWritesIt, ref_fixture)
 	BOOST_TEST(std::string_view{ written.at("link").as_string() } == child.view());
 }
 
+// #758: the object form of a reference reads like its path, in a desc_ref field and in a res_tag field; the file keeps
+// writing the path string until the references are written with their guid (EPIC-57).
+BOOST_FIXTURE_TEST_CASE(AReferenceObjectReadsLikeItsPath, ref_fixture)
+{
+	const res::tag child = put("child.desc", R"({ "__type": "ops.target", "hp": 4 })");
+	const std::string path = child.string();
+	for (const std::string& form : { "{ \"path\": \"" + path + "\" }",
+			"{ \"guid\": \"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f\", \"path\": \"" + path + "\" }" }) {
+		auto owner = spawn_holder();
+		BOOST_REQUIRE(owner);
+		owner->deserialize(ds, parse(("{ \"link\": " + form + " }").c_str()));
+		BOOST_REQUIRE_MESSAGE(owner->link.is_valid(), form);
+		BOOST_TEST((owner->link.get_tag() == child));
+		BOOST_TEST(std::string_view{ serialized(*owner).at("link").as_string() } == child.view());
+	}
+
+	register_health(ds);
+	auto health = spawn("mymod.health");
+	BOOST_REQUIRE(health);
+	health->deserialize(ds, parse(R"({ "owner": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://who.desc" } })"));
+	BOOST_TEST(serialized(*health).at("owner").as_string() == "res://who.desc");
+}
+
+BOOST_FIXTURE_TEST_CASE(AReferenceObjectThatIsNotOneKeepsTheHandle, ref_fixture)
+{
+	const res::tag child = put("child.desc", R"({ "__type": "ops.target", "hp": 3 })");
+	auto owner = spawn_holder();
+	BOOST_REQUIRE(owner);
+	owner->deserialize(ds, parse(("{ \"link\": \"" + child.string() + "\" }").c_str()));
+	BOOST_REQUIRE(owner->link.is_valid());
+
+	owner->deserialize(ds, parse(R"({ "link": { "guid": "not-a-guid", "path": "memory://t/x.desc" } })"));
+	BOOST_TEST((owner->link.get_tag() == child));
+	owner->deserialize(ds, parse(R"({ "link": { "path": "memory://t/x.desc", "extra": 1 } })"));
+	BOOST_TEST((owner->link.get_tag() == child));
+	owner->deserialize(ds, parse(R"({ "link": {} })"));
+	BOOST_TEST((owner->link.get_tag() == child));
+}
+
+// get_field_desc used to assert on such data; now the field gets a refused handle and the problem is reported.
+BOOST_FIXTURE_TEST_CASE(GetFieldDescRefusesWhatIsNotAReference, ref_fixture)
+{
+	auto owner = spawn_holder();
+	BOOST_REQUIRE(owner);
+	const auto handle = ds.get_field_desc<ops_test::target>(*owner, json::value(5), "/link");
+	BOOST_TEST(!handle.get_tag().is_valid());
+	BOOST_TEST(!handle.is_ready());
+}
+
 BOOST_FIXTURE_TEST_CASE(DescRefReadsAnInlineObjectUnderADeterministicMemoryTag, ref_fixture)
 {
 	auto owner = spawn_holder();

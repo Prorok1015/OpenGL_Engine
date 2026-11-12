@@ -3,6 +3,7 @@
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/driver/rnd_render_mode.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/res_tag.h>
 #include <array>
 #include <format>
@@ -60,7 +61,9 @@ namespace desc
 			std::vector<res::tag> parsed;
 			parsed.reserve(in.as_array().size());
 			for (const auto& item : in.as_array()) {
-				res::tag element = item.is_string() ? res::tag{ std::string_view{ item.as_string() } } : res::tag{};
+				// No resource_system here: the path is the tag; a guid is looked up once the asset index exists (S57-7).
+				const auto reference = res::reference_from_json(item);
+				res::tag element = reference ? reference->path : res::tag{};
 				if (std::string why = res::reference_problem(element, owner_protocol); !why.empty()) {
 					res::report_load_warning(res::diagnostic_kind::reference,
 						std::format("{}/{}", ctx.field_pointer, parsed.size()), std::move(why));

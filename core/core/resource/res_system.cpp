@@ -1586,3 +1586,327 @@ bool res::resource_system::needed_by_layers(const res::tag &tag) const {
   std::lock_guard lock(m_layer_needs_mutex);
   return m_layer_needs.contains(tag);
 }
+
+bool res::resource_system::exists(const tag& tag) const
+{
+	const auto& resolvers = root().m_resolvers;
+	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+		egLOG_WARN("resource/exists", "{}", not_mounted_error(tag));
+		return false;
+	}
+	return resolvers.at(tag.protocol())->exists(tag);
+}
+
+bool res::resource_system::store(const tag& tag, const std::vector<std::byte>& data)
+{
+	check_writable(tag);
+	const auto& resolvers = root().m_resolvers;
+	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+		egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
+		return false;
+	}
+
+	return resolvers.at(tag.protocol())->store(tag, data);
+}
+
+bool res::resource_system::store_sync(const tag& tag, const std::vector<std::byte>& data)
+{
+	check_writable(tag);
+	const auto& resolvers = root().m_resolvers;
+	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+		egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
+		return false;
+	}
+	return resolvers.at(tag.protocol())->store_sync(tag, data);
+}
+
+res::file_operation res::resource_system::create_sync(const tag& tag, const std::vector<std::byte>& data)
+{
+	check_writable(tag);
+	const auto& resolvers = root().m_resolvers;
+	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+		std::string error = not_mounted_error(tag);
+		egLOG_WARN("resource/store", "{}", error);
+		return file_operation::failure(std::move(error));
+	}
+	auto result = resolvers.at(tag.protocol())->create_sync(tag, data);
+	// Whatever was loaded under the tag meanwhile is dropped, created or refused.
+	signal_changed(tag);
+	return result;
+}
+
+void res::resource_system::watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies)
+{
+	std::lock_guard lock(m_cache_mutex);
+	m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch, keep_dependencies };
+}
+
+void res::resource_system::unwatch(const res::tag& tag, void* owner)
+{
+	std::lock_guard lock(m_cache_mutex);
+	const auto it = m_watchers.find(tag);
+	if (it == m_watchers.end()) return;
+	it->second.erase(owner);
+	if (it->second.empty()) {
+		m_watchers.erase(it);
+	}
+}
+
+std::size_t res::resource_system::watched_tag_count() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	return m_watchers.size();
+}
+
+std::size_t res::resource_system::pending_loads() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	std::size_t count = 0;
+	m_cache.for_each([&count](const cache_entry& entry) {
+		if (const auto block = entry.lock()) {
+			const auto status = block->status.load();
+			if (status != core::res::res_status::ready && status != core::res::res_status::error) {
+				++count;
+			}
+		}
+	});
+	return count;
+}
+
+std::size_t res::resource_system::live_resources() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	std::size_t count = 0;
+	m_cache.for_each([&count](const cache_entry& entry) {
+		if (!entry.expired()) {
+			++count;
+		}
+	});
+	return count;
+}
+
+std::size_t res::resource_system::layer_needs_count() const
+{
+	std::lock_guard lock(m_layer_needs_mutex);
+	return m_layer_needs.size();
+}
+
+std::size_t res::resource_system::pinned_count() const
+{
+	std::shared_lock lock(m_pinning_mutex);
+	std::size_t count = 0;
+	m_pinned_resources.for_each([&count](const std::shared_ptr<resource_handle>& entry) {
+		if (entry) {
+			++count;
+		}
+	});
+	return count;
+}
+
+const res::resource_system* res::resource_system::parent() const
+{
+	return m_parent;
+}
+
+const std::string& res::resource_system::write_prefix() const
+{
+	return m_write_prefix;
+}
+
+std::size_t res::resource_system::dependency_edge_count() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	std::size_t count = 0;
+	for (const auto& [tag, targets] : m_depends_on) {
+		count += targets.size();
+	}
+	return count;
+}
+
+std::size_t res::resource_system::alias_edge_count() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	return m_alias_edges.size();
+}
+
+std::size_t res::resource_system::edge_sweep_count() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	return m_edge_sweeps;
+}
+
+void res::resource_system::unregistrate_resolver(protocol prt)
+{
+	m_resolvers.erase(prt);
+}
+
+std::vector<std::string> res::resource_system::registered_extensions(const extension& extension) const
+{
+	std::vector<std::string> out;
+	for (const auto& ext : extension.extensions) {
+		for (const resource_system* system = this; system; system = system->m_parent) {
+			const auto it = system->m_adapters.find(std::pair{ extension.resource_type, ext });
+			const auto info = it == system->m_adapters.end() ? system->m_adapter_infos.end() : system->m_adapter_infos.find(it->second);
+			if (info != system->m_adapter_infos.end() && info->second == extension) {
+				out.push_back(ext);
+				break;
+			}
+		}
+	}
+	return out;
+}
+
+void res::resource_system::unregistrate_adapter(extension extension)
+{
+	for(auto& ext : extension.extensions) {
+		auto it = m_adapters.find(std::pair{ extension.resource_type, ext });
+		if (it != m_adapters.end())
+		{
+			m_adapter_infos.erase(it->second);
+			m_adapters.erase(it);
+		}
+		if (extension.magic_number != 0)
+			m_extensions_with_magic.erase(std::pair{ extension.resource_type, ext });
+	}
+
+	if (extension.extensions.empty()) {
+		auto it = m_adapters.find(std::pair{ extension.resource_type, std::string{ "*" } });
+		if (it != m_adapters.end()) {
+			m_adapter_infos.erase(it->second);
+			m_adapters.erase(it);
+		}
+
+		if (extension.magic_number != 0)
+			m_extensions_with_magic.erase(std::pair{ extension.resource_type, std::string{ "*" } });
+	}
+}
+
+res::resource_system::data res::resource_system::fetch_data(const tag& tag) const
+{
+	const auto& resolvers = root().m_resolvers;
+	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+		egLOG_WARN("resource/require", "{}", not_mounted_error(tag));
+		return data{};
+	}
+
+	return resolvers.at(tag.protocol())->resolve(tag);
+}
+
+void res::resource_system::unpin_resource(const res::tag& tag)
+{
+	std::unique_lock lock(m_pinning_mutex);
+	m_pinned_resources.erase_tag(tag);
+}
+
+res::tag res::resource_system::resolve_alias(const res::tag& tag) const
+{
+	{
+		std::shared_lock lock(m_alias_mutex);
+		auto it = m_aliases.find(tag);
+		if (it != m_aliases.end()) {
+			return it->second;
+		}
+	}
+	return m_parent ? m_parent->resolve_alias(tag) : tag;
+}
+
+const res::resource_system& res::resource_system::root() const
+{
+	return m_parent ? m_parent->root() : *this;
+}
+
+res::resource_system& res::resource_system::root()
+{
+	return m_parent ? m_parent->root() : *this;
+}
+
+std::shared_ptr<res::resource_system::resource_handle> res::resource_system::find_cached(const cache_key& key)
+{
+	std::shared_lock lock(m_cache_mutex);
+	const cache_entry* slot = m_cache.find(key);
+	return slot ? slot->lock() : nullptr;
+}
+
+void res::resource_system::push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource)
+{
+	std::unique_lock lock(m_cache_mutex);
+	m_cache[key] = resource;
+}
+
+void res::resource_system::push_resource_to_strong_cache(const cache_key& key, std::shared_ptr<resource_handle> resource)
+{
+	std::unique_lock lock(m_pinning_mutex);
+	m_pinned_resources[key] = resource;
+}
+
+void res::resource_system::add_resolver(protocol prt, resolver added)
+{
+	ASSERT_MSG(!m_parent, "A resource layer uses the resolvers of its root");
+	ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
+	m_resolvers[prt] = std::move(added);
+}
+
+void res::resource_system::add_adapter(extension extension, adapter added)
+{
+	m_adapter_infos[added] = extension;
+
+	if (extension.extensions.empty()) {
+		m_adapters[std::pair{ extension.resource_type, std::string{ "*" }}] = added;
+
+		if (extension.magic_number != 0) {
+			m_extensions_with_magic.insert(std::pair{ extension.resource_type, std::string{ "*" }});
+		}
+	}
+
+	for (auto& ext : extension.extensions) {
+		m_adapters[std::pair{ extension.resource_type, ext }] = added;
+
+		if (extension.magic_number != 0) {
+			m_extensions_with_magic.insert(std::pair{ extension.resource_type, ext });
+		}
+	}
+}
+
+res::cache_key res::resource_system::key_for(const res::tag& tag, std::span<const ds::type_id> chain) const
+{
+	ds::type_id type = chain.front();
+	find_adapter_in_chain(tag, chain, &type);
+	return cache_key{ tag, type };
+}
+
+void res::resource_system::pin_block(const res::tag& tag, std::shared_ptr<resource_entry> resource, std::span<const ds::type_id> chain)
+{
+	const bool stored = exists(tag);
+	if (!stored) {
+		check_writable(tag); // a pin that is not stored yet is written out: refused before anything is pinned
+	}
+	auto block = std::make_shared<resource_handle>();
+	block->set_ready(std::move(resource));
+	const cache_key key = key_for(tag, chain);
+	push_resource_to_strong_cache(key, block);
+	push_resource_to_cache(key, block);
+
+	if (!stored) {
+		serialize_pinned(tag, block, find_adapter_in_chain(tag, chain));
+	}
+}
+
+ds::task_system* res::resource_system::handle_tasks()
+{
+	return &m_tasks;
+}
+
+void res::resource_system::check_sync_require(const res::tag& tag) const
+{
+	ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
+		"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
+}
+
+res::tag res::resource_system::resolve_reference(const reference& ref) const
+{
+	if (ref.path.view().empty() && !ref.guid.is_nil()) {
+		egLOG_WARN("resource/reference", "{}: a reference by guid alone cannot be resolved yet (no asset index), it loads nothing",
+			res::to_text(ref.guid));
+	}
+	return ref.path;
+}

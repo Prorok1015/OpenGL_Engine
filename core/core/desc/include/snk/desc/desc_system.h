@@ -4,7 +4,8 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
-#include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
+#include <snk/resource/res_reference.h>
+#include <snk/resource/res_tag_json.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_dynamic.h>
@@ -315,8 +316,15 @@ namespace desc
 		template<typename T>
 		auto get_field_desc(const desc::desc_base& owner, const json::value& data, std::string_view json_path = {}) const
 		{
-			if (data.is_string()) {
-				const res::tag reference = json::value_to<res::tag>(data);
+			const bool inline_desc = data.is_object() && data.as_object().contains("__type");
+			if (!inline_desc) {
+				const auto read = res::reference_from_json(data);
+				if (!read) {
+					std::string why = "a desc field is a path, a {guid, path} reference or an inline desc with \"__type\"";
+					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
+					return m_res_system.refused<T>(res::tag{}, std::move(why));
+				}
+				const res::tag reference = m_res_system.resolve_reference(*read);
 				// The owner's protocol is unknown for the assembler's untagged copy: the stricter rule applies (#697).
 				if (std::string why = res::reference_problem(reference, owner.get_tag().protocol()); !why.empty()) {
 					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
@@ -326,8 +334,6 @@ namespace desc
 				res::note_field_load(handle.get_control_block(), json_path, false, &core::res::holds<T>, core::res::handle_type_name<T>());
 				return handle;
 			}
-
-            ASSERT_MSG(data.is_object() && data.as_object().contains("__type"), "Invalid desc field data: expected either string tag or object with '__type' field");
 
 			res::tag mem_tag = make_mem_tag_deterministic(owner, json::value_to<std::string>(data.at("__type")), data);
 

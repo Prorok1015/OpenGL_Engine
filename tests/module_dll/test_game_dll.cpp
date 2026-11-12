@@ -96,6 +96,26 @@ public:
 	BOOST_DESCRIBE_CLASS(dll_config, (), (speed, goal), (), ())
 };
 
+class dll_linked final : public desc::schema_desc<dll_linked>
+{
+public:
+	static constexpr std::string_view __type = "dll.linked";
+
+	res::res_handle<dll_config> link;
+	res::tag icon;
+
+	BOOST_DESCRIBE_CLASS(dll_linked, (), (link, icon), (), ())
+};
+
+}
+
+namespace desc {
+	template<>
+	inline constexpr auto field_attrs<dll_linked> = attrs(f("link").kind(field_kind::desc_ref).ref("dll.config").write_if_valid());
+}
+
+namespace {
+
 // The builds a reload swaps between (#435, CMakeLists.txt): TEST_DLL_V2 moves by 2, TEST_DLL_FAILING fails to register,
 // TEST_DLL_BAD_API reports the next major API version, TEST_DLL_OLD_API the last one of 3.x.
 #if defined(TEST_DLL_V2)
@@ -222,6 +242,7 @@ private:
 			reg.emplace_or_replace<dll_game::dll_component>(e, dll_game::dll_component{ static_cast<const dll_desc&>(base).value });
 		});
 		layer.descs().register_document<dll_config>(dll_game::document_type);
+		layer.descs().register_desc<dll_linked>(dll_game::linked_type);
 		layer.descs().register_schema(desc::parse_type_schema(boost::json::parse(dll_game::schema_document_json).as_object()));
 		data.require<gs::module_context>().mark_document(dll_game::schema_document_type);
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
