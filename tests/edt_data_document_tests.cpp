@@ -535,4 +535,67 @@ BOOST_AUTO_TEST_CASE(ADestroyedDocument_LeavesNoWatcher)
 	BOOST_TEST(rs->watched_tag_count() == before);
 }
 
+BOOST_AUTO_TEST_CASE(AParentAndTheChildSignalledTogether_BothReachTheDocument)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("parent.desc", R"({"__type":"test.config","speed":6.0,"limits":{"min":9.0}})");
+	put("child.desc", R"({"__type":"test.config","__guid":"guid-1","__parent":"res://parent.desc","speed":7.0})");
+	rs->signal_changed(parent);
+	rs->signal_changed(child);
+	pump();
+
+	BOOST_TEST(!document.changed_on_disk());
+	const json::value shown = document.shown();
+	BOOST_TEST(shown.at("speed").to_number<double>() == 7.0);
+	BOOST_TEST(shown.at("limits").at("min").to_number<double>() == 9.0);
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 6.0);
+}
+
+BOOST_AUTO_TEST_CASE(AParentThatPointsAtAFileNotThereYet_IsWatchedUntilItAppears)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", R"({"__type":"test.config","__parent":"res://parent.desc"})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("parent.desc", R"({"__type":"test.config","__parent":"res://later.desc"})");
+	rs->signal_changed(parent);
+	pump();
+	BOOST_TEST(!document.chain_problem().empty());
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 2.0);
+
+	const res::tag later = put("later.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(later);
+	pump();
+	BOOST_TEST(document.chain_problem().empty());
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 4.0);
+}
+
+BOOST_AUTO_TEST_CASE(AFlaggedChangeOnDisk_BlocksTheSaveEvenIfTheFileIsBackAsItWas)
+{
+	const std::string original = R"({"__type":"test.config","speed":2.0})";
+	const res::tag file = put("config.desc", original);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+
+	put("config.desc", original);
+	const edt::save_result saved = document.save();
+	BOOST_TEST(!saved.saved);
+	BOOST_TEST(saved.error.find("changed on disk") != std::string::npos);
+	BOOST_TEST(text_of("config.desc") == original);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

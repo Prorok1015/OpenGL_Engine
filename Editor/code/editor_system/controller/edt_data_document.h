@@ -96,6 +96,7 @@ namespace edt
 			boost::json::object& inherited, std::vector<res::tag>& parents) const;
 		void apply(const res::tag& file, loaded&& state);
 		void watch_files();
+		void sync_watches(const std::vector<res::tag>& wanted);
 		void unwatch_files();
 		void on_changed(const res::tag& tag);
 		void announce() const;

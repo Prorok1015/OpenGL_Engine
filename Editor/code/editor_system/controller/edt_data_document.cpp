@@ -153,6 +153,7 @@ edt::open_result edt::data_document::resolve_chain(const res::tag& file, const j
 		if (chain.size() >= k_max_chain) {
 			return open_result::failure(std::format("{} /__parent: the chain has more than {} parents", where(file), k_max_chain));
 		}
+		parents.push_back(*parent);
 		json::object loaded_parent;
 		std::string ignored;
 		if (open_result read = read_file(*parent, loaded_parent, ignored); !read.opened) {
@@ -164,7 +165,6 @@ edt::open_result edt::data_document::resolve_chain(const res::tag& file, const j
 		}
 		current_tag = *parent;
 		current = loaded_parent;
-		parents.push_back(*parent);
 		chain.push_back(std::move(loaded_parent));
 	}
 
@@ -217,15 +217,36 @@ edt::data_document::~data_document()
 
 void edt::data_document::watch_files()
 {
-	unwatch_files();
-	m_watching = m_services.writable_resources();
+	std::vector<res::tag> wanted{ m_source };
+	wanted.insert(wanted.end(), m_parents.begin(), m_parents.end());
+	sync_watches(wanted);
+}
+
+void edt::data_document::sync_watches(const std::vector<res::tag>& wanted)
+{
+	res::resource_system* resources = m_services.writable_resources();
+	if (m_watching != resources) {
+		unwatch_files();
+		m_watching = resources;
+	}
 	if (!m_watching) {
 		return;
 	}
-	m_watched.push_back(m_source);
-	m_watched.insert(m_watched.end(), m_parents.begin(), m_parents.end());
-	for (const res::tag& tag : m_watched) {
-		m_watching->watch(tag, this, [this](const res::tag& changed) { on_changed(changed); });
+	// A watcher registered again would get a newer epoch than a signal that is still waiting for the main thread, and
+	// that signal would skip it: only what changed is (un)watched.
+	for (auto it = m_watched.begin(); it != m_watched.end();) {
+		if (std::ranges::find(wanted, *it) == wanted.end()) {
+			m_watching->unwatch(*it, this);
+			it = m_watched.erase(it);
+		} else {
+			++it;
+		}
+	}
+	for (const res::tag& tag : wanted) {
+		if (std::ranges::find(m_watched, tag) == m_watched.end()) {
+			m_watching->watch(tag, this, [this](const res::tag& changed) { on_changed(changed); });
+			m_watched.push_back(tag);
+		}
 	}
 }
 
@@ -257,6 +278,7 @@ void edt::data_document::on_changed(const res::tag& tag)
 		std::string version;
 		const open_result read = read_file(m_source, on_disk, version);
 		if (read.opened && version == m_version) {
+			m_changed_on_disk = false;
 			return;
 		}
 		if (!is_dirty()) {
@@ -275,6 +297,9 @@ void edt::data_document::on_changed(const res::tag& tag)
 	json::object inherited;
 	std::vector<res::tag> parents;
 	if (open_result chain = resolve_chain(m_source, m_own, m_type, inherited, parents); !chain.opened) {
+		std::vector<res::tag> wanted{ m_source };
+		wanted.insert(wanted.end(), parents.begin(), parents.end());
+		sync_watches(wanted);
 		if (m_chain_problem != chain.error) {
 			m_chain_problem = std::move(chain.error);
 			egLOG_WARN("editor", "{} keeps its previous parents: {}", m_source.view(), m_chain_problem);
@@ -351,6 +376,9 @@ edt::save_result edt::data_document::save()
 	}
 	if (!is_dirty()) {
 		return save_result::ok();
+	}
+	if (m_changed_on_disk) {
+		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 	desc::desc_system* descs = m_services.descs();
 	res::resource_system* reader = m_services.resources();
