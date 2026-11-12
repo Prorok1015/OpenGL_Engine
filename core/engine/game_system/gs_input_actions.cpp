@@ -50,6 +50,8 @@ void gs::input_actions::drop()
 	m_project.reset();
 	m_gamepad = {};
 	m_has_gamepad_bindings = false;
+	m_conflicts.clear();
+	++m_revision;
 	m_user = {};
 	m_user_file.clear();
 	m_project_name.clear();
@@ -97,14 +99,17 @@ void gs::input_actions::rebuild_effective()
 			if (std::holds_alternative<inp::GAMEPAD_BUTTONS>(binding) || std::holds_alternative<inp::GAMEPAD_AXES>(binding)) m_has_gamepad_bindings = true;
 		}
 	}
-	// A file or an edit of the desc can leave one binding on two actions; rebind never does. Said once per rebuild, and
+	// A file, an edit of the desc or a rebind that allowed it can leave one binding on two actions. Said once per rebuild, and
 	// only for what the project's own map does not already have.
 	const auto already = inp::find_binding_conflicts(*m_project);
+	m_conflicts.clear();
 	for (const auto& conflict : inp::find_binding_conflicts(*m_map)) {
 		if (std::ranges::find(already, conflict) == already.end()) {
+			m_conflicts.push_back(conflict);
 			egLOG_WARN("input", "actions '{}' and '{}' share a binding", conflict.first, conflict.second);
 		}
 	}
+	++m_revision;
 }
 
 void gs::input_actions::save_user()
@@ -112,10 +117,25 @@ void gs::input_actions::save_user()
 	m_saved = m_user_file.empty() || save_user_bindings(m_user_file, m_user);
 }
 
-gs::rebind_outcome gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding)
+gs::rebind_outcome gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding, bool allow_conflict)
 {
 	if (!m_project) return { { inp::rebind_status::unknown_action, {} }, true };
-	const inp::rebind_result result = m_user.rebind(*m_project, action, slot, binding);
+	const inp::rebind_result result = m_user.rebind(*m_project, action, slot, binding, allow_conflict);
+	if (!result.ok()) return { result, true };
+	rebuild_effective();
+	save_user();
+	return { result, m_saved };
+}
+
+gs::rebind_outcome gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding)
+{
+	return rebind(action, slot, binding, false);
+}
+
+gs::rebind_outcome gs::input_actions::remove_binding(std::string_view action, std::size_t slot)
+{
+	if (!m_project) return { { inp::rebind_status::unknown_action, {} }, true };
+	const inp::rebind_result result = m_user.remove(*m_project, action, slot);
 	if (!result.ok()) return { result, true };
 	rebuild_effective();
 	save_user();

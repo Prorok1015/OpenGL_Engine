@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ds { class app_data_storage; }
 namespace inp { class action_map; }
@@ -59,7 +60,16 @@ namespace gs
 		// are read when the project opens and written after each change.
 		void set_user_folder(std::filesystem::path folder);
 		const inp::user_bindings& user_bindings() const { return m_user; }
+		// `allow_conflict`: a binding another action has is put all the same (both keep it, conflicts() names the pair).
+		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding, bool allow_conflict);
+		// The export of 3.16 (a module built for it imports this symbol): a conflict is refused.
 		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding);
+		rebind_outcome remove_binding(std::string_view action, std::size_t slot);
+		// The bindings two actions of map() share that the project's own map does not (what the player's changes or an edit of
+		// the desc made); rebuilt with the map.
+		const std::vector<inp::binding_conflict>& conflicts() const { return m_conflicts; }
+		// Changes with every map built (a desc edit, a change of the player's bindings): lets a view rebuild only when needed.
+		std::uint64_t revision() const { return m_revision; }
 		// False when the action had no change; the file of the others is written again.
 		bool reset_binding(std::string_view action);
 		void reset_all_bindings();
@@ -89,5 +99,8 @@ namespace gs
 		bool m_changed = false;
 		bool m_built = false;
 		bool m_reported = false;
+		// Added after the first 3.16 build: at the end, so nothing a module read before moves.
+		std::vector<inp::binding_conflict> m_conflicts{};
+		std::uint64_t m_revision = 0;
 	};
 }

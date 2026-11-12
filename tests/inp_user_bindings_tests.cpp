@@ -120,6 +120,27 @@ BOOST_AUTO_TEST_CASE(AGamepadButtonAndAnAxisCanBeBound_AndConflictLikeKeys)
 	BOOST_TEST((user.apply(project).find(project.id("Fire"))->bindings == std::vector<inp::action_binding>{ MB::LEFT, inp::GAMEPAD_AXES::RIGHT_TRIGGER }));
 }
 
+BOOST_AUTO_TEST_CASE(AConflictAllowed_IsAppliedAndNamed_AndASlotCanBeTakenOut)
+{
+	const inp::action_map project = project_map();
+	inp::user_bindings user;
+	const auto result = user.rebind(project, "MoveRight", 0, KB::LEFT, true);
+	BOOST_TEST(result.ok());
+	BOOST_TEST(result.conflicted());
+	BOOST_TEST(result.conflict_with == "MoveLeft");
+	const inp::action_map effective = user.apply(project);
+	const auto shared = inp::find_binding_conflicts(effective);
+	BOOST_REQUIRE_EQUAL(shared.size(), 1u);
+
+	// A duplicate in the same action is refused even when conflicts are allowed.
+	BOOST_TEST((user.rebind(project, "MoveLeft", 0, KB::LEFT, true).status == inp::rebind_status::duplicate));
+
+	BOOST_TEST(user.remove(project, "MoveRight", 0).ok());
+	BOOST_TEST(user.apply(project).find(project.id("MoveRight"))->bindings.empty());
+	BOOST_TEST((user.remove(project, "MoveRight", 0).status == inp::rebind_status::bad_slot));
+	BOOST_TEST((user.remove(project, "Dance", 0).status == inp::rebind_status::unknown_action));
+}
+
 BOOST_AUTO_TEST_CASE(AnUnknownAction_IsRefused)
 {
 	const inp::action_map project = project_map();

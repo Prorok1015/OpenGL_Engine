@@ -18,6 +18,7 @@
 #include "edt_console_panel.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
+#include "edt_input_actions_panel.h"
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include <snk/platform/plt_shell_open.h>
@@ -312,6 +313,7 @@ edt::editor_system::~editor_system()
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
 		editor_layer->set_loading_screen(nullptr, nullptr);
 		editor_layer->set_modal_probe(nullptr);
+		editor_layer->set_frame_hook(nullptr);
 	}
 	m_mode_changed.disconnect();
 	m_modes.reset();
@@ -520,6 +522,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
 	add_panel(m_blackboard_panel, dock_slot::bottom_right, false);
+	m_input_actions_panel = std::make_shared<input_actions_panel>();
+	m_input_actions_panel->set_actions_getter([&data]() -> gs::input_actions* {
+		return data.has_value<gs::input_actions>() ? &data.require<gs::input_actions>() : nullptr;
+	});
+	add_panel(m_input_actions_panel, dock_slot::bottom_right, false);
 	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
 	add_panel(m_prefab_panel, dock_slot::floating, false);
 	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
@@ -1259,7 +1266,20 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	editor_layer->set_loading_screen(
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
 		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label())); });
-	editor_layer->set_modal_probe([this] { return m_context->dialogs().pending() > 0; });
+	// The Input Actions panel waiting for a key is a modal too: Ctrl+S and the rest must not fire under the player's key (#470).
+	editor_layer->set_modal_probe([this] {
+		return m_context->dialogs().pending() > 0 || (m_input_actions_panel && m_input_actions_panel->capturing());
+	});
+	// Bindings two actions share are Problems (source "input"), whether or not the panel is open.
+	editor_layer->set_frame_hook([this, &data] {
+		if (!m_context || !data.has_value<gs::input_actions>()) return;
+		const auto& actions = data.require<gs::input_actions>();
+		if (actions.revision() == m_input_problems_revision) return;
+		m_input_problems_revision = actions.revision();
+		auto problems = input_actions_view::conflict_problems(actions.conflicts());
+		if (problems.empty()) m_context->problems().clear("input");
+		else m_context->problems().set("input", std::move(problems));
+	});
 	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});

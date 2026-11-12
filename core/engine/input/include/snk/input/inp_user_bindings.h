@@ -20,6 +20,8 @@ namespace inp
 		// With `conflict`: the action that already has the binding. `duplicate`: the action has it in another slot.
 		std::string conflict_with{};
 		bool ok() const { return status == rebind_status::applied; }
+		// With `allow_conflict`: applied, and this is the action that has the binding too (empty: no conflict).
+		bool conflicted() const { return ok() && !conflict_with.empty(); }
 	};
 
 	// A binding two actions of a map share (the player's file or an edit of the desc can make one; rebind cannot).
@@ -39,7 +41,14 @@ namespace inp
 
 		// Puts `binding` at `slot` of the action's current bindings (slot == their count adds one). A binding another action
 		// of the effective map already has is a conflict, one the action has in another slot a duplicate; nothing changes.
+		// With `allow_conflict` the conflict is only reported (`status` conflict is returned as applied with `conflict_with` set):
+		// the binding is put and both actions keep it; a duplicate is refused always.
+		rebind_result rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding,
+			bool allow_conflict);
+		// The export of 3.16 (a module built for it imports this symbol): a conflict is refused.
 		rebind_result rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding);
+		// Takes the binding at `slot` out of the action's current bindings; `bad_slot` for a slot that is not there.
+		rebind_result remove(const action_map& project, std::string_view action, std::size_t slot);
 		// Drops the change of one action; false when it had none.
 		bool reset(std::string_view action);
 		void reset_all() { m_overrides.clear(); }

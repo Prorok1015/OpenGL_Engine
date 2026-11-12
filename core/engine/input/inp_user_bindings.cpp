@@ -10,7 +10,8 @@ namespace
 	}
 }
 
-inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding)
+inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding,
+	bool allow_conflict)
 {
 	const auto actions = project.actions();
 	const auto target = std::ranges::find_if(actions, [&](const inp::action& a) { return a.name == action; });
@@ -22,10 +23,14 @@ inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::st
 		if (i != slot && bindings[i] == binding) return { rebind_status::duplicate, {} };
 	}
 
+	std::string shared_with;
 	for (const inp::action& other : actions) {
 		if (other.name == action) continue;
 		const auto& theirs = current_bindings(*this, other);
-		if (std::ranges::find(theirs, binding) != theirs.end()) return { rebind_status::conflict, other.name };
+		if (std::ranges::find(theirs, binding) != theirs.end()) {
+			if (!allow_conflict) return { rebind_status::conflict, other.name };
+			if (shared_with.empty()) shared_with = other.name;
+		}
 	}
 
 	if (slot == bindings.size()) {
@@ -33,6 +38,24 @@ inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::st
 	} else {
 		bindings[slot] = binding;
 	}
+	m_overrides.insert_or_assign(target->name, std::move(bindings));
+	return { rebind_status::applied, std::move(shared_with) };
+}
+
+inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding)
+{
+	return rebind(project, action, slot, binding, false);
+}
+
+inp::rebind_result inp::user_bindings::remove(const action_map& project, std::string_view action, std::size_t slot)
+{
+	const auto actions = project.actions();
+	const auto target = std::ranges::find_if(actions, [&](const inp::action& a) { return a.name == action; });
+	if (target == actions.end()) return { rebind_status::unknown_action, {} };
+
+	std::vector<action_binding> bindings = current_bindings(*this, *target);
+	if (slot >= bindings.size()) return { rebind_status::bad_slot, {} };
+	bindings.erase(bindings.begin() + static_cast<std::ptrdiff_t>(slot));
 	m_overrides.insert_or_assign(target->name, std::move(bindings));
 	return {};
 }
