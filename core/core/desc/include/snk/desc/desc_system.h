@@ -4,7 +4,8 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
-#include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
+#include <snk/resource/res_reference.h>
+#include <snk/resource/res_tag_json.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_dynamic.h>
@@ -310,13 +311,24 @@ namespace desc
 			return instance;
 		}
 
+		// resource_system::resolve_reference of the system this one loads through.
+		res::tag resolve_reference(const res::reference& ref) const;
+
 		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
 		// its memory:// copy's diagnostics go to the owner's file at that path (#595).
 		template<typename T>
 		auto get_field_desc(const desc::desc_base& owner, const json::value& data, std::string_view json_path = {}) const
 		{
-			if (data.is_string()) {
-				const res::tag reference = json::value_to<res::tag>(data);
+			const json::value* inline_type = data.is_object() ? data.as_object().if_contains("__type") : nullptr;
+			const bool inline_desc = inline_type && inline_type->is_string();
+			if (!inline_desc) {
+				const auto read = res::reference_from_json(data);
+				if (!read) {
+					std::string why = "a desc field is a path, a {guid, path} reference or an inline desc with \"__type\"";
+					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
+					return m_res_system.refused<T>(res::tag{}, std::move(why));
+				}
+				const res::tag reference = resolve_reference(*read);
 				// The owner's protocol is unknown for the assembler's untagged copy: the stricter rule applies (#697).
 				if (std::string why = res::reference_problem(reference, owner.get_tag().protocol()); !why.empty()) {
 					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
@@ -327,9 +339,7 @@ namespace desc
 				return handle;
 			}
 
-            ASSERT_MSG(data.is_object() && data.as_object().contains("__type"), "Invalid desc field data: expected either string tag or object with '__type' field");
-
-			res::tag mem_tag = make_mem_tag_deterministic(owner, json::value_to<std::string>(data.at("__type")), data);
+			res::tag mem_tag = make_mem_tag_deterministic(owner, std::string{ inline_type->get_string() }, data);
 
 			// Only store if not already in cache - avoids re-creating the same resource on every assembly.
 			if (!m_res_system.exists(mem_tag)) {

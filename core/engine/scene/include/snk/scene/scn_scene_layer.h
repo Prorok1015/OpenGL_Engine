@@ -45,7 +45,7 @@ namespace scn
 		scene_layer& operator=(scene_layer&&) = delete;
 
 		res::resource_system& resources() { return *m_resources; }
-		desc::desc_system& descs() { return m_descs; }
+		desc::desc_system& descs() { return *m_descs; }
 		ecs_assembler& assembler() { return m_assembler; }
 		ecs::system_factory& systems() { return m_systems; }
 		ecs::component_registry& components() { return m_components; }
@@ -95,7 +95,8 @@ namespace scn
 	private:
 		entt::meta_ctx m_meta;
 		std::unique_ptr<res::resource_system> m_resources;
-		desc::desc_system m_descs;
+		// By pointer (#758): the size of desc_system does not move the members a module reads after it.
+		std::unique_ptr<desc::desc_system> m_descs;
 		ecs_assembler m_assembler;
 		ecs::system_factory m_systems;
 		ecs::component_registry m_components;
@@ -107,7 +108,6 @@ namespace scn
 		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
 		std::shared_ptr<ecs::bus_registry> m_events;
 		event_subscriptions m_subscriptions;
-		// Last, so the members above keep their place (module API 3.4).
 		blackboard_catalog m_blackboard_types;
 	};
 }

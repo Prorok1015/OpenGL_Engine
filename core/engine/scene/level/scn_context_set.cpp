@@ -97,6 +97,16 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 	sync_context_mode();
 }
 
+size_t scn::context_set::pending_mail() const
+{
+	std::vector<ecs::channel_participant> participants;
+	participants.reserve(m_contexts.size());
+	for (const auto& [id, context] : m_contexts) {
+		participants.push_back(ecs::channel_participant{ id, context->get_name(), &context->state() });
+	}
+	return m_channel.pending_messages(participants);
+}
+
 void scn::context_set::begin_frame_channel(ecs::run_mode mode)
 {
 	m_participants.clear();

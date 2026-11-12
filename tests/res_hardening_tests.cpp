@@ -293,4 +293,46 @@ BOOST_AUTO_TEST_CASE(Desc_OfAnotherType_IsAFailedHandleWithoutAsserting)
 	BOOST_CHECK(std::dynamic_pointer_cast<other_test_desc>(any.get_sync()) != nullptr);
 }
 
+// #632: the handle remembers its type check; its copies and the handles it is assigned to answer as the first check did.
+BOOST_AUTO_TEST_CASE(A_HandlesTypeCheck_IsRememberedAndTravelsWithItsBlock)
+{
+	desc_fixture f;
+	auto other_tag = f.put("cached_other", R"({"__type":"other_test_desc"})");
+	auto good_tag = f.put("cached_good", R"({"__type":"hardening_test_desc","value":5})");
+
+	auto mismatch = f.res_sys->require_sync<hardening_test_desc>(other_tag);
+	BOOST_REQUIRE(mismatch.has_error());
+	auto good = f.res_sys->require_sync<hardening_test_desc>(good_tag);
+	BOOST_REQUIRE(good.is_ready());
+	for (int i = 0; i < 3; ++i) {
+		BOOST_CHECK(!mismatch.is_ready());
+		BOOST_CHECK(mismatch.has_error());
+		BOOST_CHECK(good.is_ready());
+		BOOST_CHECK(!good.has_error());
+	}
+	BOOST_REQUIRE(good.get());
+	BOOST_CHECK(good.get()->value == 5);
+	BOOST_CHECK(good.get().get() == good.get_sync().get());
+
+	const auto copy_of_mismatch = mismatch;
+	BOOST_CHECK(copy_of_mismatch.has_error());
+	BOOST_CHECK(copy_of_mismatch == mismatch);
+
+	auto reassigned = mismatch;
+	reassigned = good;
+	BOOST_CHECK(reassigned.is_ready());
+	BOOST_REQUIRE(reassigned.get());
+	BOOST_CHECK(reassigned.get()->value == 5);
+	BOOST_CHECK(reassigned == good);
+
+	reassigned = std::move(mismatch);
+	BOOST_CHECK(reassigned.has_error());
+	BOOST_CHECK(reassigned.get() == nullptr);
+
+	// A base handle on the same block fits; the data stays shared with the block.
+	auto base = f.res_sys->require_sync<desc::desc_base>(good_tag);
+	BOOST_CHECK(base.is_ready());
+	BOOST_CHECK(base.get().get() == static_cast<desc::desc_base*>(good.get().get()));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

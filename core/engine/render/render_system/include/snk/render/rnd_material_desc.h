@@ -60,7 +60,7 @@ namespace desc
 			std::vector<res::tag> parsed;
 			parsed.reserve(in.as_array().size());
 			for (const auto& item : in.as_array()) {
-				res::tag element = item.is_string() ? res::tag{ std::string_view{ item.as_string() } } : res::tag{};
+				res::tag element = desc::reference_tag(item, ctx).value_or(res::tag{});
 				if (std::string why = res::reference_problem(element, owner_protocol); !why.empty()) {
 					res::report_load_warning(res::diagnostic_kind::reference,
 						std::format("{}/{}", ctx.field_pointer, parsed.size()), std::move(why));

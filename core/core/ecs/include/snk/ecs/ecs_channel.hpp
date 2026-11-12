@@ -212,6 +212,8 @@ public:
 	// No exchange this frame: the inboxes are consumed, nothing is delivered.
 	virtual void consume(std::span<const channel_participant> contexts) = 0;
 	virtual void clear() = 0;
+	// Messages not delivered yet: the external posts and the outboxes of `contexts` (#668).
+	virtual size_t pending(std::span<const channel_participant> contexts) const = 0;
 };
 
 class channel_type
@@ -307,6 +309,15 @@ public:
 	{
 		m_external.clear();
 		m_next_seq = 0;
+	}
+
+	size_t pending(std::span<const channel_participant> contexts) const override
+	{
+		size_t count = m_external.size();
+		for (const auto& c : contexts) {
+			if (const auto* out = c.registry->ctx().template find<outbox<T>>()) count += out->m_pending.size();
+		}
+		return count;
 	}
 
 private:
