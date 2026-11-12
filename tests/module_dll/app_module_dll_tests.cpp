@@ -54,6 +54,7 @@ const std::filesystem::path g_module_path{ SNK_TEST_GAME_DLL_PATH };
 const std::filesystem::path g_v2_path{ SNK_TEST_GAME_DLL_V2_PATH };
 const std::filesystem::path g_failing_path{ SNK_TEST_GAME_DLL_FAILING_PATH };
 const std::filesystem::path g_bad_api_path{ SNK_TEST_GAME_DLL_BAD_API_PATH };
+const std::filesystem::path g_old_api_path{ SNK_TEST_GAME_DLL_OLD_API_PATH };
 const std::filesystem::path g_bad_layout_path{ SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH };
 
 // The editor's options (#614): the engine's layout key is checked.
@@ -729,6 +730,25 @@ BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_reported_for_its_api_even_with_an
 	BOOST_TEST((report.status == core::reload_status::refused));
 	BOOST_CHECK_MESSAGE(report.message.find("api major") != std::string::npos, report.message);
 	BOOST_CHECK_MESSAGE(report.message.find("another layout") == std::string::npos, report.message);
+	BOOST_TEST(resident(project.copy(0)));
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// A game built for 3.x (#758): refused before anything of it runs, with what to do about it.
+BOOST_AUTO_TEST_CASE(a_build_of_module_api_3_is_refused_and_told_to_rebuild)
+{
+	dll_project project("dll_old_api", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, checked_layouts());
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	project.rebuild(g_old_api_path);
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("api major version 3") != std::string::npos, report.message);
+	BOOST_CHECK_MESSAGE(report.message.find("rebuild the project") != std::string::npos, report.message);
 	BOOST_TEST(resident(project.copy(0)));
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();

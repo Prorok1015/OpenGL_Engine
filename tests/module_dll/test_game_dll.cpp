@@ -97,7 +97,7 @@ public:
 };
 
 // The builds a reload swaps between (#435, CMakeLists.txt): TEST_DLL_V2 moves by 2, TEST_DLL_FAILING fails to register,
-// TEST_DLL_BAD_API reports the next major API version.
+// TEST_DLL_BAD_API reports the next major API version, TEST_DLL_OLD_API the last one of 3.x.
 #if defined(TEST_DLL_V2)
 constexpr int k_step = 2;
 #else
@@ -271,14 +271,22 @@ private:
 #define SNK_DETAIL_MODULE_LAYOUT_KEY (::gs::module_layout_key() ^ 1u)
 #endif
 
-#if defined(TEST_DLL_BAD_API)
+#if defined(TEST_DLL_BAD_API) || defined(TEST_DLL_OLD_API)
+namespace {
+#if defined(TEST_DLL_OLD_API)
+// The last API before 4.0: a game built before #758 (the code is today's; only the version says otherwise).
+constexpr std::uint32_t k_reported_api = 0x0003'0013u;
+#else
+constexpr std::uint32_t k_reported_api = SNK_MODULE_API_VERSION + 0x0001'0000u;
+#endif
+}
 extern "C" {
-SNK_MODULE_EXPORT std::uint32_t snk_module_api_version() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
+SNK_MODULE_EXPORT std::uint32_t snk_module_api_version() { return k_reported_api; }
 SNK_MODULE_EXPORT const struct snk_module_build_info* snk_module_build_info()
 {
 	static const struct snk_module_build_info info = [] {
 		auto built = ::app::modules::make_build_info();
-		built.api = SNK_MODULE_API_VERSION + 0x0001'0000u;
+		built.api = k_reported_api;
 		return built;
 	}();
 	return &info;

@@ -97,7 +97,13 @@
 // (res::read_asset_meta / write_asset_meta) are new exports; res::write_pretty_json is the project's JSON style, and
 // desc::write_pretty_json / pretty_json_bytes stay as inline wrappers of it. Nothing that exists changes layout. A module
 // that calls the new exports needs an engine of 3.19 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'0013u // major << 16 | minor
+// 4.0 (#758): opens the window of 4.0 (until the end of stage 3 other breaking changes land in their own PRs under 4.0, the
+// layout key changing with each). A reference field reads a string or a {guid, path} object through the exports
+// res::reference_from_json and resource_system::resolve_reference; the cache of resource_system (key_for, warmup,
+// pin_resource, push_resource_to_*cache, find_cached, resolve_alias) is behind exports, so its layout is the engine's;
+// res_handle caches its type check (#632); ecs::detail::channel_slot gains pending() and context_set::pending_mail counts
+// the mail in flight (#668); scene_layer holds desc_system by pointer. A module of 3.x is refused: rebuild it.
+#define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.
@@ -259,8 +265,12 @@ namespace app::modules {
 		const std::uint32_t version = entry.api_version();
 		const std::uint32_t host_version = SNK_MODULE_API_VERSION;
 		if (api_major(version) != api_major(host_version)) {
-			return "api major version " + std::to_string(api_major(version)) + " does not match host major "
+			std::string problem = "api major version " + std::to_string(api_major(version)) + " does not match host major "
 				+ std::to_string(api_major(host_version));
+			if (api_major(version) < api_major(host_version)) {
+				problem += ": the module was built against an older engine, rebuild the project (Build > Build Game)";
+			}
+			return problem;
 		}
 		if (api_minor(version) > api_minor(host_version)) {
 			return "module needs api minor " + std::to_string(api_minor(version)) + ", host provides "

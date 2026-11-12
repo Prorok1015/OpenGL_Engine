@@ -48,32 +48,8 @@ std::uint32_t wrong_major_version() { return SNK_MODULE_API_VERSION + 0x0001'000
 // What a module built before the resource control block layout of #595 reports.
 std::uint32_t api_1_0() { return 0x0001'0000u; }
 std::uint32_t newer_minor_version() { return SNK_MODULE_API_VERSION + 1u; }
-// A module built before the game actions of #604.
-std::uint32_t api_3_1() { return 0x0003'0001u; }
-// A module built before inp::fixed_action_state.
-std::uint32_t api_3_2() { return 0x0003'0002u; }
-// A module built before gs::module_context::observe.
-std::uint32_t api_3_3() { return 0x0003'0003u; }
-// A module built before inp::action_input.
-std::uint32_t api_3_4() { return 0x0003'0004u; }
-// A module built before snk_module_layout_key (#614).
-std::uint32_t api_3_5() { return 0x0003'0005u; }
-// A module built before gs::module_context::input_stack (#625).
-std::uint32_t api_3_6() { return 0x0003'0006u; }
-// A module built before scn::spawn_prefab.
-std::uint32_t api_3_7() { return 0x0003'0007u; }
-// A module built before resource_system::refused_block (#697).
-std::uint32_t api_3_8() { return 0x0003'0008u; }
-// A module built before scn::request_level.
-std::uint32_t api_3_9() { return 0x0003'0009u; }
-// A module built before gs::module_context::register_component (#606).
-std::uint32_t api_3_11() { return 0x0003'000Bu; }
-// A module built before scn::animation_finished.
-std::uint32_t api_3_12() { return 0x0003'000Cu; }
-// A module built before the bus journal (#605).
-std::uint32_t api_3_13() { return 0x0003'000Du; }
-// A module built before scn::set_visible.
-std::uint32_t api_3_14() { return 0x0003'000Eu; }
+// The last module API before 4.0 (#758).
+std::uint32_t api_3_19() { return 0x0003'0013u; }
 
 const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
 {
@@ -142,10 +118,28 @@ BOOST_AUTO_TEST_CASE(GeneratedFunctionsReportApiVersionAndBuildInfoOfThisBinary)
 
 BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstApi1IsRefused)
 {
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 4u);
 	auto entry = generated_entry();
 	entry.api_version = &api_1_0;
 	BOOST_TEST(app::modules::check_module_entry(entry).find("api major version 1") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleOf3_xIsRefusedAndToldToRebuild)
+{
+	auto entry = generated_entry();
+	entry.api_version = &api_3_19;
+	entry.build_info = +[]() { return info_with(api_3_19(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	const std::string problem = app::modules::check_module_entry(entry);
+	BOOST_TEST(problem.find("api major version 3") != std::string::npos);
+	BOOST_TEST(problem.find("rebuild the project") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleOfANewerMajorIsNotToldToRebuild)
+{
+	auto entry = generated_entry();
+	entry.api_version = &wrong_major_version;
+	entry.build_info = &wrong_major_info;
+	BOOST_TEST(app::modules::check_module_entry(entry).find("rebuild") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(LoadThroughEntryCreatesRunsAndUnloads)
@@ -192,58 +186,6 @@ BOOST_AUTO_TEST_CASE(WrongApiMajorIsRefusedBeforeAnythingIsCreated)
 	BOOST_TEST(!loader.state("sample").has_value());
 }
 
-BOOST_AUTO_TEST_CASE(TheGameActionsAreMinor_AndAModuleBuiltFor3_1StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 2u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_1;
-	entry.build_info = +[]() { return info_with(api_3_1(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(TheFixedActionsAreMinor3_3_AndAModuleBuiltFor3_2StillLoads)
-{
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 3u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_2;
-	entry.build_info = +[]() { return info_with(api_3_2(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(ComponentObserversAreMinor3_4_AndAModuleBuiltFor3_3StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 4u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_3;
-	entry.build_info = +[]() { return info_with(api_3_3(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(ActionReachIsMinor3_5_AndAModuleBuiltFor3_4StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 5u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_4;
-	entry.build_info = +[]() { return info_with(api_3_4(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-// #614: the layout key is an optional export; a module built for 3.5 has none and loads, checked by version only.
-BOOST_AUTO_TEST_CASE(TheLayoutKeyIsMinor3_6_AndAModuleBuiltFor3_5WithoutItStillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 6u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_5;
-	entry.build_info = +[]() { return info_with(api_3_5(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	entry.layout_key = nullptr;
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-	BOOST_TEST(app::modules::check_module_layout(entry, 0x1234u).empty());
-}
-
 // Without snk/game/gs_module_layout.h the generated export reports 0, which no host checks. This TU does not include it,
 // and neither does the shared PCH (cmake/pch/snk_pch.h: standard and third-party headers only); if either did, the
 // export would report the engine's key and this test would fail.
@@ -253,86 +195,6 @@ BOOST_AUTO_TEST_CASE(AModuleThatDoesNotKnowTheLayoutsReportsZeroAndIsNotChecked)
 	BOOST_REQUIRE(entry.layout_key != nullptr);
 	BOOST_TEST(entry.layout_key() == 0u);
 	BOOST_TEST(app::modules::check_module_layout(entry, 0x1234u).empty());
-}
-
-BOOST_AUTO_TEST_CASE(TheInputStackFromCodeIsMinor3_7_AndAModuleBuiltFor3_6StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 7u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_6;
-	entry.build_info = +[]() { return info_with(api_3_6(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(PrefabSpawnIsMinor3_8_AndAModuleBuiltFor3_7StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 8u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_7;
-	entry.build_info = +[]() { return info_with(api_3_7(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(RefusedReferencesAreMinor3_9_AndAModuleBuiltFor3_8StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 9u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_8;
-	entry.build_info = +[]() { return info_with(api_3_8(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(LevelSwitchIsMinor3_10_AndAModuleBuiltFor3_9StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 10u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_9;
-	entry.build_info = +[]() { return info_with(api_3_9(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(SchemaComponentsOfAModuleAreMinor3_12_AndAModuleBuiltFor3_11StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 12u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_11;
-	entry.build_info = +[]() { return info_with(api_3_11(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(AnimationFinishedIsMinor3_13_AndAModuleBuiltFor3_12StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 13u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_12;
-	entry.build_info = +[]() { return info_with(api_3_12(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(MeshVisibilityIsMinor3_15_AndAModuleBuiltFor3_14StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 15u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_14;
-	entry.build_info = +[]() { return info_with(api_3_14(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
-}
-
-BOOST_AUTO_TEST_CASE(TheBusJournalIsMinor3_14_AndAModuleBuiltFor3_13StillLoads)
-{
-	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 3u);
-	BOOST_TEST(app::modules::api_minor(SNK_MODULE_API_VERSION) >= 14u);
-	auto entry = generated_entry();
-	entry.api_version = &api_3_13;
-	entry.build_info = +[]() { return info_with(api_3_13(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
-	BOOST_TEST(app::modules::check_module_entry(entry).empty());
 }
 
 BOOST_AUTO_TEST_CASE(ModuleNeedingNewerMinorIsRefused)
