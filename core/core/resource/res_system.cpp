@@ -1896,7 +1896,7 @@ ds::task_system* res::resource_system::handle_tasks()
 	return &m_tasks;
 }
 
-void res::resource_system::check_sync_require(const res::tag& tag) const
+void res::resource_system::check_sync_require([[maybe_unused]] const res::tag& tag) const
 {
 	ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
 		"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());

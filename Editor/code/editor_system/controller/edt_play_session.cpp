@@ -366,6 +366,7 @@ std::string edt::play_session::capture_for_reload()
 		merge_into(snapshot.report, report);
 		snapshot.worlds.push_back(std::move(saved));
 	});
+	snapshot.mail_in_flight = play->pending_mail();
 	const ecs::blackboard_data& board = play->channel().blackboard();
 	scn::snapshot_report board_report;
 	snapshot.blackboard = scn::capture_blackboard(board, layer->blackboard_types(), board_report);
@@ -501,8 +502,8 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 	follow_active_world();
 	++m_reload_number;
 
-	egLOG_INFO("play", "Play kept its world across the module reload: {} world(s), {} entities, {} bus event(s) and the mail "
-		"in flight dropped (count unknown, #668)", saved.worlds.size(), report.entities, saved.bus_events);
+	egLOG_INFO("play", "Play kept its world across the module reload: {} world(s), {} entities, {} bus event(s) and {} message(s) "
+		"of mail in flight dropped", saved.worlds.size(), report.entities, saved.bus_events, saved.mail_in_flight);
 	return true;
 }
 
@@ -771,7 +772,7 @@ void edt::play_session::report_reload(const core::reload_report& outcome, const 
 	out["systems_restarted"] = strings_json(restarted);
 	if (m_reload) {
 		out["bus_events_dropped"] = m_reload->bus_events;
-		out["mail_dropped"] = "unknown (#668)";
+		out["mail_dropped"] = m_reload->mail_in_flight;
 		out["input_layers_restored"] = m_reload->input_stack_restored.restored;
 		out["input_layers_skipped"] = m_reload->input_stack_restored.skipped;
 		out["input_off_worlds_skipped"] = m_reload->input_stack_restored.off_worlds_skipped;
