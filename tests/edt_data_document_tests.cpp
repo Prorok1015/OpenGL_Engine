@@ -12,6 +12,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // data_document (#791): `own` and what the __parent chain gives are kept apart, and a save writes `own` only.
@@ -288,8 +289,9 @@ BOOST_AUTO_TEST_CASE(AFileOfAnOlderVersion_IsMigratedInMemoryAndWrittenInTheCurr
 {
 	descs->register_migration("test.config", 1, [](json::object& object) {
 		if (auto velocity = object.find("velocity"); velocity != object.end()) {
-			object["speed"] = velocity->value();
-			object.erase("velocity");
+			json::value moved = std::move(velocity->value());
+			object.erase(velocity);
+			object["speed"] = std::move(moved);
 		}
 	});
 	const std::string old_text = R"({"__type":"test.config","velocity":4.0})";
