@@ -68,7 +68,7 @@ BOOST_AUTO_TEST_CASE(TheCopy_IsAFreshFolderWithEveryFile)
 BOOST_AUTO_TEST_CASE(TheManifest_IsOfAnOlderEngine)
 {
 	const prj::manifest_result loaded = prj::load_manifest(copy.root());
-	BOOST_REQUIRE_MESSAGE(loaded.data.has_value(), loaded.error ? prj::to_string(*loaded.error) : std::string{});
+	BOOST_REQUIRE_MESSAGE(loaded.data.has_value(), (loaded.error ? prj::to_string(*loaded.error) : std::string{}));
 	BOOST_TEST(loaded.data->format_version == 1);
 	BOOST_TEST((prj::compare_engine_versions(loaded.data->engine, prj::current_engine_version()) == prj::version_match::project_older));
 }
