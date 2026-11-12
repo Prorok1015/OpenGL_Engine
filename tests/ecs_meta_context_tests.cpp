@@ -4,6 +4,7 @@
 #include <snk/ecs/ecs_meta_context.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <entt/entt.hpp>
+#include <cstdint>
 #include <type_traits>
 
 // The engine's meta context (#220 PR-1, spike #218): components registered there are what
@@ -18,6 +19,23 @@ namespace {
 	struct unregistered_component {
 		int value = 0;
 	};
+
+	struct pointer_component {
+		entt::entity target = entt::null;
+	};
+
+	struct tag_component {};
+
+	entt::entity sandbox_id(ecs::sandbox_entity entity)
+	{
+		return static_cast<entt::entity>(static_cast<std::uint32_t>(entity));
+	}
+
+	std::size_t live_entities(const entt::registry& reg)
+	{
+		const auto* entities = reg.storage<entt::entity>(); // a const registry gives the storage by pointer
+		return entities ? entities->free_list() : 0u;
+	}
 
 	constexpr entt::id_type registered_hash = entt::type_hash<registered_component>::value();
 	constexpr entt::id_type unregistered_hash = entt::type_hash<unregistered_component>::value();
@@ -91,6 +109,73 @@ BOOST_FIXTURE_TEST_CASE(apply_commands_moves_only_registered_components, meta_fi
 		BOOST_TEST(component.value == 7);
 	}
 	BOOST_TEST(!reg.storage(unregistered_hash));
+}
+
+// #708: the entity pass moved only the first sandbox entity; one without components never reached the world and a
+// reference to it became null.
+BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_reference_to_it_is_mapped)
+{
+	using namespace entt::literals;
+	entt::meta_ctx layer;
+	ecs::register_component<pointer_component>(layer);
+	// remap_fields resolves the component's fields in the default context.
+	entt::meta_factory<pointer_component>{}.data<&pointer_component::target>("target"_hs);
+
+	entt::registry reg;
+	// The world's ids differ from the sandbox's: an unmapped raw id would name one of these.
+	const entt::entity w0 = reg.create();
+	const entt::entity w1 = reg.create();
+	auto& sandbox = reg.ctx().emplace<ecs::entity_spawner>();
+	// The bare entity first: the old entity pass mapped only the last packed one, which the pool maps anyway.
+	const auto bare = sandbox.create();
+	const auto pointer = sandbox.create();
+	sandbox.emplace<pointer_component>(pointer, pointer_component{ sandbox_id(bare) });
+
+	scn::world_context::apply_commands(reg, &layer);
+	entt::meta_reset<pointer_component>();
+
+	BOOST_TEST(live_entities(reg) == 4u);
+	const auto view = reg.view<const pointer_component>();
+	BOOST_REQUIRE(view.size() == 1u);
+	const entt::entity moved_pointer = view.front();
+	const entt::entity target = view.get<const pointer_component>(moved_pointer).target;
+	BOOST_TEST((target != entt::null));
+	BOOST_TEST(reg.valid(target));
+	BOOST_TEST((target != w0 && target != w1));
+	BOOST_TEST((target != moved_pointer));
+	BOOST_TEST(!reg.all_of<pointer_component>(target));
+}
+
+// The ids the sandbox released on an earlier apply are not live: they make no world entity.
+BOOST_AUTO_TEST_CASE(released_sandbox_ids_make_no_world_entity)
+{
+	entt::registry reg;
+	auto& sandbox = reg.ctx().emplace<ecs::entity_spawner>();
+	static_cast<void>(sandbox.create());
+	static_cast<void>(sandbox.create());
+	scn::world_context::apply_commands(reg);
+	BOOST_TEST(live_entities(reg) == 2u);
+
+	static_cast<void>(sandbox.create());
+	scn::world_context::apply_commands(reg);
+	BOOST_TEST(live_entities(reg) == 3u);
+}
+
+// An empty component has no value to read: the entity read alone must advance, or every tag lands on one entity.
+BOOST_AUTO_TEST_CASE(a_tag_lands_on_every_entity_that_has_it)
+{
+	entt::meta_ctx layer;
+	ecs::register_component<tag_component>(layer);
+	entt::registry reg;
+	auto& sandbox = reg.ctx().emplace<ecs::entity_spawner>();
+	for (int i = 0; i < 3; ++i) {
+		sandbox.emplace<tag_component>(sandbox.create());
+	}
+
+	scn::world_context::apply_commands(reg, &layer);
+
+	BOOST_TEST(live_entities(reg) == 3u);
+	BOOST_TEST(reg.storage<tag_component>().size() == 3u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
