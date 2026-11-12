@@ -26,6 +26,10 @@ namespace ecs
     template<typename Storage>
     struct sandbox_loader_archive {
         static constexpr bool is_entity_storage = std::is_same_v<typename Storage::element_type, sandbox_entity>;
+        // The loader's counts are entity_type: were it std::size_t, `in_use` would reach operator()(std::size_t&) and
+        // every released id would be restored as live.
+        static_assert(!std::is_same_v<typename entt::entt_traits<entt::entity>::entity_type, std::size_t>,
+            "sandbox_loader_archive tells the element count from the in-use count by the entity_type overload");
 
         entt::continuous_loader& loader;
         const Storage& storage;

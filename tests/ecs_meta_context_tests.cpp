@@ -121,8 +121,9 @@ BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_refere
 	entt::meta_factory<pointer_component>{}.data<&pointer_component::target>("target"_hs);
 
 	entt::registry reg;
-	static_cast<void>(reg.create()); // the world's ids differ from the sandbox's
-	static_cast<void>(reg.create());
+	// The world's ids differ from the sandbox's: an unmapped raw id would name one of these.
+	const entt::entity w0 = reg.create();
+	const entt::entity w1 = reg.create();
 	auto& sandbox = reg.ctx().emplace<ecs::entity_spawner>();
 	// The bare entity first: the old entity pass mapped only the last packed one, which the pool maps anyway.
 	const auto bare = sandbox.create();
@@ -139,6 +140,7 @@ BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_refere
 	const entt::entity target = view.get<const pointer_component>(moved_pointer).target;
 	BOOST_TEST((target != entt::null));
 	BOOST_TEST(reg.valid(target));
+	BOOST_TEST((target != w0 && target != w1));
 	BOOST_TEST((target != moved_pointer));
 	BOOST_TEST(!reg.all_of<pointer_component>(target));
 }

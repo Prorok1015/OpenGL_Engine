@@ -672,8 +672,9 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_map_a_reference_to_an_entity_without_compo
 	BOOST_REQUIRE(static_cast<bool>(link));
 	mgr.create_set("s", layer);
 	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
-	static_cast<void>(world.state().create()); // the world's ids differ from the sandbox's
-	static_cast<void>(world.state().create());
+	// The world's ids differ from the sandbox's: an unmapped raw id would name one of these.
+	const entt::entity w0 = world.state().create();
+	const entt::entity w1 = world.state().create();
 	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
 		world.state().ctx().emplace<ecs::entity_spawner>();
 	}
@@ -692,6 +693,7 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_map_a_reference_to_an_entity_without_compo
 	BOOST_REQUIRE(!target.is_null());
 	const auto moved_bare = static_cast<entt::entity>(static_cast<std::uint32_t>(target.to_number<std::uint64_t>()));
 	BOOST_TEST(world.state().valid(moved_bare));
+	BOOST_TEST((moved_bare != w0 && moved_bare != w1));
 	BOOST_TEST((moved_bare != moved_pointer));
 }
 
