@@ -39,6 +39,38 @@ namespace desc
 			|| (tag.starts_with("memory://modules/") && tag.find("/overrides/") != std::string_view::npos);
 	}
 
+	// What a migration step reported besides upgrading the object: a loss of data or an assumption (EPIC-58).
+	struct migration_warning
+	{
+		std::string type;
+		int from_version = 0;
+		std::string file;
+		std::string message;
+	};
+
+	// Handed to a step registered with a summary. A step sees only the JSON of its object, never the project: it does not
+	// rewrite references or create files (EPIC-58 3.2).
+	class SNK_API migration_context
+	{
+	public:
+		// `sink` null: warn() only logs.
+		migration_context(std::string_view type, int from_version, std::string_view file, std::vector<migration_warning>* sink);
+
+		std::string_view type() const { return m_type; }
+		int from_version() const { return m_from_version; }
+		// Empty when the object is migrated from memory.
+		std::string_view file() const { return m_file; }
+
+		// Logged as a warning, and kept for the report when the migration collects them.
+		void warn(std::string message);
+
+	private:
+		std::string_view m_type;
+		int m_from_version = 0;
+		std::string_view m_file;
+		std::vector<migration_warning>* m_sink = nullptr;
+	};
+
 	class SNK_API desc_system
 	{
 	public:
@@ -148,6 +180,15 @@ namespace desc
 			m_schemas.set_version(type, current_version(type));
 		}
 
+		// The same step with a one-line summary (for the migration plan and report) and a context for warnings. Kept in
+		// the one registry above, so current_version, the duplicate check and modules built before it see it as any
+		// other step; the inline migrate_tree runs it with warnings going to the log only.
+		void register_migration(std::string_view type, int from_version, std::string_view summary,
+			std::function<void(json::object&, migration_context&)> fn);
+
+		// The summary of the step from `from_version`; empty for a step without one or none.
+		std::string migration_summary(std::string_view type, int from_version) const;
+
 		void unregister_migrations(std::string_view type)
 		{
 			m_migrations.erase(std::string{ type });
@@ -167,8 +208,11 @@ namespace desc
 		// a malformed or newer-than-supported __version, or when a migration step is missing.
 		void migrate_tree(json::object& root, std::string_view context) const
 		{
-			migrate_object(root, context);
+			migrate_object(root, context, [](const migration_step_fn& step, json::object& obj, const std::string&, int) { step(obj); });
 		}
+
+		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
+		void migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const;
 
 		// Writes the current __version into an object that has a string __type, and moves the header keys
 		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
@@ -293,7 +337,8 @@ namespace desc
 
 	private:
 		using factory_fn = std::function<std::shared_ptr<desc::desc_base>()>;
-		using migration_steps = std::map<int, std::function<void(json::object&)>>;
+		using migration_step_fn = std::function<void(json::object&)>;
+		using migration_steps = std::map<int, migration_step_fn>;
 
 		const factory_fn* find_factory(std::string_view type_name) const
 		{
@@ -339,21 +384,24 @@ namespace desc
 		}
 
 		// Migrates the object itself first, then its members, so children a migration creates are visited too.
-		void migrate_object(json::object& obj, std::string_view context) const
+		// `run(step, obj, type, from)` applies one step.
+		template<class RunStep>
+		void migrate_object(json::object& obj, std::string_view context, const RunStep& run) const
 		{
 			auto type_it = obj.find("__type");
 			if (type_it != obj.end() && type_it->value().is_string()) {
-				migrate_typed(obj, std::string{ type_it->value().as_string() }, context);
+				migrate_typed(obj, std::string{ type_it->value().as_string() }, context, run);
 			}
 			for (auto& member : obj) {
-				migrate_value(member.value(), context);
+				migrate_value(member.value(), context, run);
 			}
 		}
 
-		void migrate_value(json::value& value, std::string_view context) const
+		template<class RunStep>
+		void migrate_value(json::value& value, std::string_view context, const RunStep& run) const
 		{
 			if (value.is_object()) {
-				migrate_object(value.as_object(), context);
+				migrate_object(value.as_object(), context, run);
 			}
 			else if (value.is_array()) {
 				auto& arr = value.as_array();
@@ -362,12 +410,13 @@ namespace desc
 					return;
 				}
 				for (auto& element : arr) {
-					migrate_value(element, context);
+					migrate_value(element, context, run);
 				}
 			}
 		}
 
-		void migrate_typed(json::object& obj, const std::string& type, std::string_view context) const
+		template<class RunStep>
+		void migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const
 		{
 			constexpr std::int64_t max_version = std::numeric_limits<int>::max();
 
@@ -400,7 +449,7 @@ namespace desc
 					if (step == steps.end()) {
 						throw std::runtime_error(std::format("{}: no migration for '{}' from version {}", context, type, from));
 					}
-					step->second(obj);
+					run(step->second, obj, type, from);
 				}
 			}
 			obj["__version"] = current;

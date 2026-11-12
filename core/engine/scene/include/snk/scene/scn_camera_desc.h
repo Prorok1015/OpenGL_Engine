@@ -2,6 +2,7 @@
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/scene/scn_camera_component.hpp>
+#include <snk/desc/desc_system.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/resource/res_tag.h>
@@ -9,6 +10,8 @@
 #include <boost/describe.hpp>
 #include <glm/glm.hpp>
 #include <snk/common/snk_api.h>
+#include <functional>
+#include <string>
 
 namespace scn {
 	BOOST_DESCRIBE_ENUM(camera_clear, all, depth, none)
@@ -145,9 +148,12 @@ namespace scn {
 	// drops camera_desc.transform. A narrow adapter on purpose: it moves into the general migrator chain of #28 (ADR-06)
 	// as it is. Called by the prefab_desc / world_desc v3 -> v4 step, which owns the node.
 	SNK_API void migrate_camera_transform_into_node(json::object& node);
+	// The same, telling `warn` what it drops (the prefab_desc / world_desc 3 -> 4 step hands its migration context).
+	SNK_API void migrate_camera_transform_into_node(json::object& node, const std::function<void(std::string)>& warn);
 
 	// LEGACY (camera_desc v1 -> v2) for a camera desc outside a node (a file a component refers to): there is no node to
 	// take the pose, so camera_desc.transform is dropped with a warning. (A camera that derives from another desc, with
 	// "__parent", or is referenced by a "res://..." tag gets the same warning: only an inline camera is baked.)
 	SNK_API void migrate_camera_v1(json::object& camera);
+	SNK_API void migrate_camera_v1(json::object& camera, desc::migration_context& context);
 }

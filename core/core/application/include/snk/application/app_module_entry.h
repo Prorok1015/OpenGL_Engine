@@ -83,7 +83,14 @@
 // visits the bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
 // scn::input_actions_desc gains `gamepad` at its end (engine-made, not in the layout key). New: inp::gamepad_config, the
 // gamepad names in inp_actions.h, wnd::gamepad_source, gs::input_actions::rebind and the player's bindings (#736).
-#define SNK_MODULE_API_VERSION 0x0003'0010u // major << 16 | minor
+// 3.17 (#751): migration steps with a summary and a context (desc::migration_context, desc::migration_warning,
+// desc_system::register_migration(type, from, summary, fn), migration_summary, migrate_tree(root, file, warnings),
+// scn::registration_scope::migration(type, from, summary, fn)) are new exports. A step with a summary is stored in the same
+// registry as any other, so desc_system keeps its size (scn::scene_layer holds one by value) and a module of 3.16 runs it
+// through its inline migrate_tree, its warnings going to the log. New overloads: scn::migrate_prefab_v3 and
+// scn::migrate_camera_v1 with a context, scn::migrate_camera_transform_into_node with a warning callback. A module that
+// registers a step with a summary needs an engine of 3.17 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0011u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.

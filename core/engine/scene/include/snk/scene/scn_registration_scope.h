@@ -46,6 +46,14 @@ namespace scn
 			m_entries.push_back({ entry_kind::migration, std::string{ type } });
 		}
 
+		// With a one-line summary for the migration plan and a context for warnings (needs an engine of 3.17 or newer).
+		void migration(std::string_view type, int from_version, std::string_view summary,
+			std::function<void(json::object&, desc::migration_context&)> fn)
+		{
+			m_desc_sys->register_migration(type, from_version, summary, std::move(fn));
+			m_entries.push_back({ entry_kind::migration, std::string{ type } });
+		}
+
 		void spawner(std::string_view type,
 					 ecs_assembler::desc_spawner_fn spawn,
 					 ecs_assembler::desc_patcher_fn patch = {},
