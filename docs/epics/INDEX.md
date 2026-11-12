@@ -47,6 +47,7 @@
 | [EPIC-09](desc-driven/EPIC-09.md) | Scene Editing Operations | done |
 | [EPIC-10](desc-driven/EPIC-10.md) | Inspector & Hierarchy Redesign | done |
 | [EPIC-11](desc-driven/EPIC-11.md) | Editor Camera & Render Targets | done |
+| [EPIC-58](desc-driven/EPIC-58.md) | Data Versioning & Migration — версии форматов, явная миграция проекта с бэкапом и отчётом (#28) | design |
 
 ### Prefab-First
 
