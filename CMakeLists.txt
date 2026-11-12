@@ -162,6 +162,7 @@ endif()
 add_subdirectory(Editor)
 # The shipping host `game` (#591): static engine only, the counterpart of the editor's shared-only executable.
 add_subdirectory(apps/game)
+add_subdirectory(core/core/project_migration)
 add_subdirectory(tools/desc_resave)
 add_subdirectory(tools/model_decoder)
 snk_isolate_third_party_warnings()
@@ -178,6 +179,7 @@ endif()
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+target_link_libraries(unit_tests PRIVATE snk::project_migration)
 # The MCP server module is tested on its own (tests/mcp_*.cpp): a fake host over sockets and in process. The socket tests use Asio directly.
 target_link_libraries(unit_tests PRIVATE snk::mcp_server PRIVATE Boost::asio)
 # The tests create the null and validation backends: their public headers (snk/driver_null, snk/driver_validation).
