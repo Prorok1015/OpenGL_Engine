@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace json = boost::json;
@@ -66,8 +67,10 @@ BOOST_AUTO_TEST_CASE(AStepWithASummary_AndAnOldStep_MakeOneChain)
 BOOST_AUTO_TEST_CASE(TheInlineMigrateTree_RunsAStepWithASummary)
 {
 	descs->register_migration("ctx_test_desc", 1, "renames x", [](json::object& obj, desc::migration_context& context) {
-		obj["y"] = obj.at("x");
+		// A copy first: inserting "y" may move the members, and a reference to "x" with them.
+		json::value x = obj.at("x");
 		obj.erase("x");
+		obj["y"] = std::move(x);
 		context.warn("x was renamed");
 	});
 	auto obj = json::parse(R"({"__type":"ctx_test_desc","x":5})").as_object();
