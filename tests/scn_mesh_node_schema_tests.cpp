@@ -85,6 +85,19 @@ BOOST_AUTO_TEST_CASE(AFieldOfTheWrongType_KeepsItsDefault)
 	BOOST_TEST(mesh->vx_end == 4u);
 }
 
+// The assembler reads a component into a desc without a tag; the importer writes the material inline (the robot of
+// smoke_level). The generic reader refuses an inline desc for an untagged owner, the mesh keeps the material.
+BOOST_AUTO_TEST_CASE(AnUntaggedMesh_KeepsTheInlineMaterialOfAnImportedModel)
+{
+	auto mesh = std::dynamic_pointer_cast<scn::mesh_node_desc>(descs->create_instance("mesh_node_desc", res::tag{}));
+	BOOST_REQUIRE(mesh);
+	mesh->deserialize(*descs, parse(R"({"vx_end":3,"ind_end":3,
+		"material":{"__type":"material_desc","__parent":"res://base_material.desc","queue":"mix"}})"));
+	BOOST_TEST(mesh->material.is_valid());
+	BOOST_TEST(desc::is_override_tag(mesh->material.get_tag().view()));
+	BOOST_TEST(mesh->ind_end == 3u);
+}
+
 // The schema is what component.set and the pre-Play check read: its two references are desc references to the geometry
 // and the material.
 BOOST_AUTO_TEST_CASE(TheSchema_NamesTheTwoReferencesAndTheSevenFields)
