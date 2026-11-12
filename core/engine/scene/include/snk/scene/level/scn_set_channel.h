@@ -71,6 +71,9 @@ namespace scn
 		// writes it outside an exchange.
 		ecs::blackboard_data& restorable_blackboard() { return m_board; }
 
+		// Messages sent and not delivered yet (#668): the external posts and the outboxes of `contexts`. Read only.
+		size_t pending_messages(std::span<const ecs::channel_participant> contexts) const;
+
 		// Exchanges done so far (a frozen frame is not one).
 		uint64_t exchange_count() const { return m_exchanges; }
 

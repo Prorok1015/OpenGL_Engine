@@ -201,11 +201,12 @@ void gs::input_actions::warn_about_old_modules(const ds::app_data_storage& data)
 	m_warned_revision = revision;
 	if (!apis || !m_has_gamepad_bindings) return;
 
-	constexpr std::uint32_t first_with_gamepad = 16;
+	// Only a module of the host's major older than 3.16 reads bindings as keyboard or mouse only: none under 4.x.
+	constexpr std::uint32_t first_with_gamepad = 0x0003'0010u;
 	std::string old;
 	for (const auto& [name, api] : apis->api) {
 		if (api == 0 || app::modules::api_major(api) != app::modules::api_major(SNK_MODULE_API_VERSION)) continue;
-		if (app::modules::api_minor(api) < first_with_gamepad) {
+		if (api < first_with_gamepad) {
 			old += (old.empty() ? "" : ", ") + name + " (api 3." + std::to_string(app::modules::api_minor(api)) + ")";
 		}
 	}

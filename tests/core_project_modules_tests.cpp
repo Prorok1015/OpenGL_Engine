@@ -723,17 +723,20 @@ BOOST_AUTO_TEST_CASE(a_new_build_takes_the_place_of_the_running_one)
 
 BOOST_AUTO_TEST_CASE(a_reload_records_the_api_of_the_build_that_runs)
 {
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status == core::reload_status::reloaded));
+	BOOST_REQUIRE(root.has_value<app::modules::loaded_module_apis>());
+	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
+	const auto revision = root.require<app::modules::loaded_module_apis>().revision;
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v1_entry()), rollback_to(reload_v2_entry()), hooks).status == core::reload_status::reloaded));
+	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
+	BOOST_TEST(root.require<app::modules::loaded_module_apis>().revision > revision);
+
+	// A build of 3.15 no longer loads under 4.0 (#758), so the record keeps the running build's api.
 	auto older = reload_v2_entry();
 	older.api_version = &api_of_315;
 	older.build_info = &build_info_of_315;
-	BOOST_REQUIRE((host.reload("reload_game", compiled(older), rollback_to(reload_v1_entry()), hooks).status == core::reload_status::reloaded));
-	BOOST_REQUIRE(root.has_value<app::modules::loaded_module_apis>());
-	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == 0x0003'000Fu);
-
-	const auto revision = root.require<app::modules::loaded_module_apis>().revision;
-	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(older), hooks).status == core::reload_status::reloaded));
+	BOOST_TEST((host.reload("reload_game", compiled(older), rollback_to(reload_v2_entry()), hooks).status == core::reload_status::refused));
 	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
-	BOOST_TEST(root.require<app::modules::loaded_module_apis>().revision > revision);
 }
 
 BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_one_is_not_touched)

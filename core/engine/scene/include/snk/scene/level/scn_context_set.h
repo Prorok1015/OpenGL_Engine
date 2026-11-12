@@ -105,6 +105,8 @@ namespace scn
 		// the blackboard survives reload_context, the reloaded context's inbox and outbox do not.
 		scn::set_channel& channel() { return m_channel; }
 		const scn::set_channel& channel() const { return m_channel; }
+		// The mail of the set not delivered yet (#668): external posts and the outboxes of its contexts. Read only.
+		size_t pending_mail() const;
 
 		// The event types of the set's worlds (WORLD_BUS.md 3). Every world has an ecs::world_bus in its ctx, bound
 		// to them; a type registered later is bound at the next update(). Delivery: right after the builtin `update`

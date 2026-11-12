@@ -57,8 +57,9 @@ namespace gs
 			// bus_type_impl<T> makes the slot of an event type of the module; writers and readers are its system
 			// arguments. Their members do not depend on T, so <int> stands for every T.
 			ecs::detail::bus_slot_impl<int>, ecs::event_writer<int>, ecs::event_reader<int>,
-			// pin_resource<T> makes the resource block in module code; require<T> builds the handle the module keeps (in
-			// components the engine reads), make_dep<T> the dependency. The handle's members do not depend on T.
+			// The engine makes every resource block (pin_block, #758), but the handle reads it inline (is_ready, has_error);
+			// require<T> builds the handle the module keeps (in components the engine reads), make_dep<T> the dependency.
+			// The handle's members do not depend on T.
 			core::res::res_resource_block, core::res::res_handle<int>, res::res_dep,
 			// component_catalog::add<T> builds the entry, desc::bind_described<T> the schema binding and its field ops.
 			scn::component_entry, desc::schema_binding, desc::field_ops,

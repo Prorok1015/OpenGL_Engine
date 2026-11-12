@@ -1,4 +1,6 @@
 #include <snk/desc/desc_system.h>
+#include <snk/desc/desc_schema_ops.h>
+#include <snk/resource/res_reference.h>
 #include <algorithm>
 #include <utility>
 
@@ -120,4 +122,18 @@ std::vector<std::string> desc::desc_system::document_types() const
 	}
 	std::ranges::sort(names);
 	return names;
+}
+
+res::tag desc::desc_system::resolve_reference(const res::reference& ref) const
+{
+	return m_res_system.resolve_reference(ref);
+}
+
+std::optional<res::tag> desc::reference_tag(const json::value& in, const read_context& ctx)
+{
+	const auto read = res::reference_from_json(in);
+	if (!read) {
+		return std::nullopt;
+	}
+	return ctx.system ? ctx.system->resolve_reference(*read) : read->path;
 }

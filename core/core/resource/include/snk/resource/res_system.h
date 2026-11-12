@@ -5,6 +5,7 @@
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/res_mount_table.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resources/res_resource_base.h>
@@ -20,6 +21,7 @@
 #include <shared_mutex>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
@@ -129,92 +131,30 @@ namespace res
 		// Why a request for `tag` finds no resolver: it has no protocol (#631), or its protocol is not mounted.
 		std::string not_mounted_error(const tag& tag) const;
 
-		bool exists(const tag& tag) const {
-			const auto& resolvers = root().m_resolvers;
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/exists", "{}", not_mounted_error(tag));
-				return false;
-			}
-			return resolvers.at(tag.protocol())->exists(tag);
-		}
+		bool exists(const tag& tag) const;
 
 		// Throws std::logic_error for a tag outside limit_writes_to.
-		bool store(const tag& tag, const std::vector<std::byte>& data) {
-			check_writable(tag);
-			const auto& resolvers = root().m_resolvers;
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
-				return false;
-			}
-
-			return resolvers.at(tag.protocol())->store(tag, data);
-		}
+		bool store(const tag& tag, const std::vector<std::byte>& data);
 
 		// store() that returns once the data is written, and whether it was (resolver::store_sync). Blocks the caller.
-		bool store_sync(const tag& tag, const std::vector<std::byte>& data) {
-			check_writable(tag);
-			const auto& resolvers = root().m_resolvers;
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
-				return false;
-			}
-			return resolvers.at(tag.protocol())->store_sync(tag, data);
-		}
+		bool store_sync(const tag& tag, const std::vector<std::byte>& data);
 
 		// store_sync() for a new file: refused when the tag already has one, also when one appears while the data is
 		// written (the resolver moves the temp file in without replacing). Says why it did not happen.
-		file_operation create_sync(const tag& tag, const std::vector<std::byte>& data) {
-			check_writable(tag);
-			const auto& resolvers = root().m_resolvers;
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				std::string error = not_mounted_error(tag);
-				egLOG_WARN("resource/store", "{}", error);
-				return file_operation::failure(std::move(error));
-			}
-			auto result = resolvers.at(tag.protocol())->create_sync(tag, data);
-			// Whatever was loaded under the tag meanwhile is dropped, created or refused.
-			signal_changed(tag);
-			return result;
-		}
+		file_operation create_sync(const tag& tag, const std::vector<std::byte>& data);
 
 
 		// keep_dependencies retains graph edges until unwatch, without retaining resource data.
-		void watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies = false) {
-			std::lock_guard lock(m_cache_mutex);
-			m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch, keep_dependencies };
-		}
+		void watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies = false);
 
-		void unwatch(const res::tag& tag, void* owner) {
-			std::lock_guard lock(m_cache_mutex);
-			const auto it = m_watchers.find(tag);
-			if (it == m_watchers.end()) return;
-			it->second.erase(owner);
-			if (it->second.empty()) {
-				m_watchers.erase(it);
-			}
-		}
+		void unwatch(const res::tag& tag, void* owner);
 
 		// Tags with at least one watcher. For tests and diagnostics.
-		std::size_t watched_tag_count() const {
-			std::shared_lock lock(m_cache_mutex);
-			return m_watchers.size();
-		}
+		std::size_t watched_tag_count() const;
 
 		// Read-only: cached resources that were requested but have neither finished nor failed yet.
 		// Used to tell that the scene has settled (deterministic headless runs).
-		std::size_t pending_loads() const {
-			std::shared_lock lock(m_cache_mutex);
-			std::size_t count = 0;
-			m_cache.for_each([&count](const cache_entry& entry) {
-				if (const auto block = entry.lock()) {
-					const auto status = block->status.load();
-					if (status != core::res::res_status::ready && status != core::res::res_status::error) {
-						++count;
-					}
-				}
-			});
-			return count;
-		}
+		std::size_t pending_loads() const;
 
 		// Any thread. Drops the cache entries of the tag and of everything built from it (the reverse edges of the
 		// dependency graph, transitively) right away. The watchers are called later on the main thread
@@ -224,161 +164,74 @@ namespace res
 
 		// Read-only: cached resources of this system (a layer: of the layer only) that someone still references, pinned
 		// ones included. For tests and diagnostics.
-		std::size_t live_resources() const {
-			std::shared_lock lock(m_cache_mutex);
-			std::size_t count = 0;
-			m_cache.for_each([&count](const cache_entry& entry) {
-				if (!entry.expired()) {
-					++count;
-				}
-			});
-			return count;
-		}
+		std::size_t live_resources() const;
 
 		// Up to `limit` of the cached resources live_resources counts, sorted by tag, each "<tag> (refs <n>)": <n> is how
 		// many hold its block besides this call, read under the cache lock. For the warning of a destroyed layer (#657).
 		std::vector<std::string> live_resource_tags(std::size_t limit) const;
 
 		// Read-only: dependency targets this system keeps for its layers. For tests and diagnostics.
-		std::size_t layer_needs_count() const {
-			std::lock_guard lock(m_layer_needs_mutex);
-			return m_layer_needs.size();
-		}
+		std::size_t layer_needs_count() const;
 
 		// Read-only: resources pinned in this system (warmup, pin_resource; a layer: the layer's only). For tests and
 		// diagnostics.
-		std::size_t pinned_count() const {
-			std::shared_lock lock(m_pinning_mutex);
-			std::size_t count = 0;
-			m_pinned_resources.for_each([&count](const std::shared_ptr<resource_handle>& entry) {
-				if (entry) {
-					++count;
-				}
-			});
-			return count;
-		}
+		std::size_t pinned_count() const;
 
 		// The system this one is a layer of; null for the root.
 		// Const: a layer's user (a game module) must not write past the layer into the base.
-		const resource_system* parent() const { return m_parent; }
+		const resource_system* parent() const;
 
 		// A layer only: store, erase and pin_resource of a tag not stored yet accept only tags that start with `prefix`
 		// (a game module's memory://modules/<name>/, MODULE_LAYER.md); any other tag throws std::logic_error, like a
 		// service the module's storage does not expose. The layer's desc_system keeps its inline sub-descs under
 		// <prefix>overrides/ (desc::override_root). Empty: no limit. Main thread, before the layer is handed out.
 		void limit_writes_to(std::string prefix);
-		const std::string& write_prefix() const { return m_write_prefix; }
+		const std::string& write_prefix() const;
 
 		// Read-only: how many (tag, dependency) edges the hot reload graph holds. For tests and diagnostics.
-		std::size_t dependency_edge_count() const {
-			std::shared_lock lock(m_cache_mutex);
-			std::size_t count = 0;
-			for (const auto& [tag, targets] : m_depends_on) {
-				count += targets.size();
-			}
-			return count;
-		}
+		std::size_t dependency_edge_count() const;
 
 		// Read-only: how many blocks the wait graph holds (waiting or waited for). For tests and diagnostics.
 		std::size_t wait_graph_nodes() const;
 
 		// Read-only: how many alias edges register_alias() holds. For tests and diagnostics.
-		std::size_t alias_edge_count() const {
-			std::shared_lock lock(m_cache_mutex);
-			return m_alias_edges.size();
-		}
+		std::size_t alias_edge_count() const;
 
 		// Read-only: how many sweeps of the hot reload graph have run. For tests and diagnostics.
-		std::size_t edge_sweep_count() const {
-			std::shared_lock lock(m_cache_mutex);
-			return m_edge_sweeps;
-		}
+		std::size_t edge_sweep_count() const;
 
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
-			ASSERT_MSG(!m_parent, "A resource layer uses the resolvers of its root");
-			ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
-			return *std::static_pointer_cast<T>(m_resolvers[prt] = std::make_unique<T>(prt, std::forward<ARGS>(args)...));
+			std::shared_ptr<T> made = std::make_unique<T>(prt, std::forward<ARGS>(args)...);
+			T& registered = *made;
+			add_resolver(prt, std::move(made));
+			return registered;
 		}
+		// Not root, not a protocol that has one already (asserts).
+		void add_resolver(protocol prt, resolver added);
 
-		void unregistrate_resolver(protocol prt) {
-			m_resolvers.erase(prt);
-		}
+		void unregistrate_resolver(protocol prt);
 
 		template<class T, class... ARGS>
 		T& registrate_adapter(extension extension, ARGS&&... args) {
 			auto adapter_new = std::make_shared<T>(std::forward<ARGS>(args)...);
-			m_adapter_infos[adapter_new] = extension;
-
-			if (extension.extensions.empty()) {
-				m_adapters[std::pair{ extension.resource_type, std::string{ "*" }}] = adapter_new;
-
-				if (extension.magic_number != 0) {
-					m_extensions_with_magic.insert(std::pair{ extension.resource_type, std::string{ "*" }});
-				}
-			}
-
-			for (auto& ext : extension.extensions) {
-				m_adapters[std::pair{ extension.resource_type, ext }] = adapter_new;
-
-				if (extension.magic_number != 0) {
-					m_extensions_with_magic.insert(std::pair{ extension.resource_type, ext });
-				}
-			}
-			return *adapter_new;
+			T& registered = *adapter_new;
+			add_adapter(std::move(extension), std::move(adapter_new));
+			return registered;
 		}
+		void add_adapter(extension extension, adapter added);
 
 		// The extensions of `extension` that its adapter serves now, here or in a parent: empty when it is not registered
 		// (a build without the importer).
-		std::vector<std::string> registered_extensions(const extension& extension) const {
-			std::vector<std::string> out;
-			for (const auto& ext : extension.extensions) {
-				for (const resource_system* system = this; system; system = system->m_parent) {
-					const auto it = system->m_adapters.find(std::pair{ extension.resource_type, ext });
-					const auto info = it == system->m_adapters.end() ? system->m_adapter_infos.end() : system->m_adapter_infos.find(it->second);
-					if (info != system->m_adapter_infos.end() && info->second == extension) {
-						out.push_back(ext);
-						break;
-					}
-				}
-			}
-			return out;
-		}
+		std::vector<std::string> registered_extensions(const extension& extension) const;
 
-		void unregistrate_adapter(extension extension) {
-			for(auto& ext : extension.extensions) {
-				auto it = m_adapters.find(std::pair{ extension.resource_type, ext });
-				if (it != m_adapters.end())
-				{
-					m_adapter_infos.erase(it->second);
-					m_adapters.erase(it);
-				}
-				if (extension.magic_number != 0)
-					m_extensions_with_magic.erase(std::pair{ extension.resource_type, ext });
-			}
+		void unregistrate_adapter(extension extension);
 
-			if (extension.extensions.empty()) {
-				auto it = m_adapters.find(std::pair{ extension.resource_type, std::string{ "*" } });
-				if (it != m_adapters.end()) {
-					m_adapter_infos.erase(it->second);
-					m_adapters.erase(it);
-				}
+		data fetch_data(const tag& tag) const;
 
-				if (extension.magic_number != 0)
-					m_extensions_with_magic.erase(std::pair{ extension.resource_type, std::string{ "*" } });
-			}
-		}
-
-		data fetch_data(const tag& tag) const
-		{
-			const auto& resolvers = root().m_resolvers;
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG_WARN("resource/require", "{}", not_mounted_error(tag));
-				return data{};
-			}
-
-			return resolvers.at(tag.protocol())->resolve(tag);
-		}
+		// The tag a reference read from a file loads. Until the asset index (S57-7) the guid is not looked up: the path
+		// is the tag, and a reference with a guid but no path resolves to the empty tag, with a warning.
+		tag resolve_reference(const reference& ref) const;
 
 		template<class RESOURCE>
 		auto require(const res::tag& tag) {
@@ -390,7 +243,7 @@ namespace res
 		// later require) can load the refused one; `tag` and `reason` stay in the block's error and diagnostics. Not cached.
 		template<class RESOURCE>
 		res_handle<RESOURCE> refused(const res::tag& tag, std::string reason) {
-			return res_handle<RESOURCE>(refused_block(tag, std::move(reason)), res::tag{}, &m_tasks);
+			return res_handle<RESOURCE>(refused_block(tag, std::move(reason)), res::tag{}, handle_tasks());
 		}
 
 		// Blocks until the resource is ready or failed. Main thread only: a pool worker that waits stalls the pool
@@ -398,8 +251,7 @@ namespace res
 		// resource that needs others declares them instead (adapter_interface::collect_dependencies).
 		template<class RESOURCE>
 		auto require_sync(const res::tag& tag) {
-			ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
-				"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
+			check_sync_require(tag);
 			return require_resource_internal<RESOURCE, true>(tag, resolve_alias(tag));
 		}
 
@@ -416,19 +268,9 @@ namespace res
 
 		template<class RESOURCE>
 		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
-			const bool stored = exists(tag);
-			if (!stored) {
-				check_writable(tag); // a pin that is not stored yet is written out: refused before anything is pinned
-			}
-			auto block = std::make_shared<resource_handle>();
-			block->set_ready(std::make_shared<RESOURCE>(std::forward<RESOURCE>(resource)));
-			const cache_key key = key_for<RESOURCE>(tag);
-			push_resource_to_strong_cache(key, block);
-			push_resource_to_cache(key, block);
-
-			if (!stored) {
-				serialize_pinned(tag, block, find_adapter_in_chain<RESOURCE>(tag));
-			}
+			using stored_type = std::remove_cvref_t<RESOURCE>;
+			const auto chain = type_chain<stored_type>();
+			pin_block(tag, std::make_shared<stored_type>(std::forward<RESOURCE>(resource)), chain);
 		}
 
 		// Any thread. Removes what store() put under the tag (the resolvers are the root's, so a layer removes it for
@@ -458,10 +300,7 @@ namespace res
 		void subscribe_changes(std::string_view protocol, void* owner, changes_listener listener);
 		void unsubscribe_changes(void* owner);
 
-		void unpin_resource(const res::tag& tag) {
-			std::unique_lock lock(m_pinning_mutex);
-			m_pinned_resources.erase_tag(tag);
-		}
+		void unpin_resource(const res::tag& tag);
 
 		// Besides copying the cache entries of `original` (the ones the alias lacks), makes `alias` depend on it: a
 		// signal_changed(original) evicts the alias too, and reaches what depends on the alias. One alias per
@@ -469,16 +308,7 @@ namespace res
 		// load re-registers it. register_alias(x, x) does nothing.
 		void register_alias(const res::tag& original, const res::tag& alias);
 		// A layer's own aliases first, then its parent's.
-		res::tag resolve_alias(const res::tag& tag) const {
-			{
-				std::shared_lock lock(m_alias_mutex);
-				auto it = m_aliases.find(tag);
-				if (it != m_aliases.end()) {
-					return it->second;
-				}
-			}
-			return m_parent ? m_parent->resolve_alias(tag) : tag;
-		}
+		res::tag resolve_alias(const res::tag& tag) const;
 
 	private:
 		void register_mount(const mount& mounted);
@@ -501,22 +331,24 @@ namespace res
 		};
 
 		void check_writable(const res::tag& tag) const;
-		const resource_system& root() const { return m_parent ? m_parent->root() : *this; }
-		resource_system& root() { return m_parent ? m_parent->root() : *this; }
+		const resource_system& root() const;
+		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
 		void signal_changed_local(const res::tag& tag);
 		// erase(): drops the pin and the alias mappings of the tag here and in every layer.
 		void forget_erased(const res::tag& tag);
 
-		std::shared_ptr<resource_handle> find_cached(const cache_key& key) {
-			std::shared_lock lock(m_cache_mutex);
-			const cache_entry* slot = m_cache.find(key);
-			return slot ? slot->lock() : nullptr;
-		}
+		std::shared_ptr<resource_handle> find_cached(const cache_key& key);
 
 		// warmup / pin_resource: not templates, so the callbacks they leave on blocks (the parent's, the main queue) are
 		// the engine's code and hold nothing of the caller's binary.
 		void keep_warm(const std::shared_ptr<resource_handle>& block, cache_key key);
+		// pin_resource: the block is made here, in the engine, whoever pins (#758).
+		void pin_block(const res::tag& tag, std::shared_ptr<resource_entry> resource, std::span<const ds::type_id> chain);
+		// The task_system the handles of this system deliver through.
+		ds::task_system* handle_tasks();
+		// require_sync's check, in the engine.
+		void check_sync_require(const res::tag& tag) const;
 		void serialize_pinned(const res::tag& tag, std::shared_ptr<resource_handle> block, adapter ad);
 
 		struct await_state;
@@ -570,16 +402,9 @@ namespace res
 		// that requested it (#416).
 		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key);
 
-		void push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource) {
-			std::unique_lock lock(m_cache_mutex);
-			m_cache[key] = resource;
-		}
+		void push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource);
 
-		void push_resource_to_strong_cache(const cache_key& key, std::shared_ptr<resource_handle> resource)
-		{
-			std::unique_lock lock(m_pinning_mutex);
-			m_pinned_resources[key] = resource;
-		}
+		void push_resource_to_strong_cache(const cache_key& key, std::shared_ptr<resource_handle> resource);
 
 		struct wait_graph;
 
@@ -635,7 +460,7 @@ namespace res
 			const auto chain = type_chain<RESOURCE>();
 			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
 			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
-			return res_handle<RESOURCE>(require_block(tag, chain, is_sync), requested, &m_tasks);
+			return res_handle<RESOURCE>(require_block(tag, chain, is_sync), requested, handle_tasks());
 		}
 
 		// The block of `tag` for the type levels `chain` (type_chain): found in the cache or made and loaded, in this
@@ -664,10 +489,10 @@ namespace res
 		template<class T>
 		cache_key key_for(const res::tag& tag) const {
 			const auto chain = type_chain<T>();
-			ds::type_id type = chain.front();
-			find_adapter_in_chain(tag, chain, &type);
-			return cache_key{ tag, type };
+			return key_for(tag, chain);
 		}
+		// The type a resource of the levels `chain` is cached as: the one its adapter was registered for.
+		cache_key key_for(const res::tag& tag, std::span<const ds::type_id> chain) const;
 
 		adapter find_adapter(ds::type_id type, std::string_view ext) const;
 
