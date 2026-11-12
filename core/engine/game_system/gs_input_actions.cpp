@@ -1,8 +1,21 @@
 #include <snk/game/gs_input_actions.h>
+#include <snk/game/gs_input_bindings_file.h>
 #include <snk/input/inp_actions.h>
 #include <snk/project/prj_project.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/logger/engine_log.h>
+#include <algorithm>
+#include <cctype>
+
+namespace
+{
+	std::string file_stem(std::string_view project_name)
+	{
+		std::string stem{ project_name };
+		std::ranges::replace_if(stem, [](char c) { return !(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.'); }, '_');
+		return stem;
+	}
+}
 
 gs::input_actions::input_actions(res::resource_system& resources)
 	: m_resources(resources)
@@ -22,6 +35,10 @@ void gs::input_actions::drop()
 	m_tag.clear();
 	m_handle = {};
 	m_map.reset();
+	m_project.reset();
+	m_user = {};
+	m_user_file.clear();
+	m_project_name.clear();
 	m_changed = false;
 	m_built = false;
 	m_reported = false;
@@ -29,16 +46,79 @@ void gs::input_actions::drop()
 
 void gs::input_actions::update(const ds::app_data_storage& data)
 {
-	const bool open = data.has_value<prj::project_context>();
-	update(open ? std::string_view{ data.require<prj::project_context>().data.input_actions } : std::string_view{});
+	if (!data.has_value<prj::project_context>()) {
+		update(std::string_view{});
+		return;
+	}
+	const auto& manifest = data.require<prj::project_context>().data;
+	update(std::string_view{ manifest.input_actions }, manifest.name);
 }
 
 void gs::input_actions::update(std::string_view tag)
+{
+	update(tag, {});
+}
+
+void gs::input_actions::set_user_folder(std::filesystem::path folder)
+{
+	m_user_folder = std::move(folder);
+	load_user();
+}
+
+void gs::input_actions::load_user()
+{
+	m_user_file.clear();
+	if (m_user_folder.empty() || m_project_name.empty()) return;
+	m_user_file = m_user_folder / (file_stem(m_project_name) + ".json");
+	m_user = load_user_bindings(m_user_file);
+	if (m_project) rebuild_effective();
+}
+
+void gs::input_actions::rebuild_effective()
+{
+	m_map = std::make_shared<const inp::action_map>(m_user.apply(*m_project));
+}
+
+void gs::input_actions::save_user()
+{
+	if (!m_user_file.empty()) save_user_bindings(m_user_file, m_user);
+}
+
+inp::rebind_result gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding)
+{
+	if (!m_project) return { inp::rebind_status::unknown_action, {} };
+	const inp::rebind_result result = m_user.rebind(*m_project, action, slot, binding);
+	if (result.ok()) {
+		rebuild_effective();
+		save_user();
+	}
+	return result;
+}
+
+bool gs::input_actions::reset_binding(std::string_view action)
+{
+	if (!m_user.reset(action)) return false;
+	if (m_project) rebuild_effective();
+	save_user();
+	return true;
+}
+
+void gs::input_actions::reset_all_bindings()
+{
+	if (m_user.empty()) return;
+	m_user.reset_all();
+	if (m_project) rebuild_effective();
+	save_user();
+}
+
+void gs::input_actions::update(std::string_view tag, std::string_view project_name)
 {
 	if (tag != m_tag) {
 		drop();
 		if (tag.empty()) return;
 		m_tag = std::string{ tag };
+		m_project_name = std::string{ project_name };
+		load_user();
 		m_handle = m_resources.require<scn::input_actions_desc>(res::tag{ m_tag });
 		m_resources.watch(res::tag{ m_tag }, this, [this](const res::tag&) { m_changed = true; });
 	}
@@ -53,7 +133,8 @@ void gs::input_actions::update(std::string_view tag)
 	if (m_built) return;
 
 	if (m_handle.is_ready()) {
-		m_map = std::make_shared<const inp::action_map>(scn::build_action_map(*m_handle.get(), m_tag));
+		m_project = std::make_shared<const inp::action_map>(scn::build_action_map(*m_handle.get(), m_tag));
+		rebuild_effective();
 		m_built = true;
 		egLOG_INFO("input", "game actions from {}: {}", m_tag, m_map->size());
 	} else if (m_handle.has_error() && !m_reported) {

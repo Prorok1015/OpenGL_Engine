@@ -4,6 +4,7 @@
 #include <snk/resource/resources/res_resource_picture.h>
 #include <snk/window/wnd_window_system.h>
 #include <snk/input/inp_input_system.h>
+#include <snk/game/gs_input_actions.h>
 #include "edt_editor_system.h"
 #include "edt_data_protocol.h"
 #include <snk/common/fs_paths.h>
@@ -52,6 +53,10 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 
 	const auto user_data_path = cfg_edt_user_data_path->empty() ? edt::default_user_data_dir() : std::filesystem::path{ *cfg_edt_user_data_path };
 	edt::register_data_protocol(res, cfg_edt_data_path, user_data_path, *cfg_edt_write_patterns);
+	// An unusable user folder (the home directory was not found) leaves the player's bindings in memory only.
+	if (user_data_path.is_absolute() && data.has_value<gs::input_actions>()) {
+		data.require<gs::input_actions>().set_user_folder(user_data_path / "settings" / "input_bindings");
+	}
 
 #if SNK_HAS_ASSIMP
 	auto& desc_system = data.require<desc::desc_system>();

@@ -12,6 +12,7 @@
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -687,6 +688,46 @@ BOOST_AUTO_TEST_CASE(ABrokenEdit_KeepsThePreviousActions)
 	pump();
 	load(actions, tag);
 	BOOST_TEST(actions.map() == before);
+}
+
+BOOST_AUTO_TEST_CASE(TheUserBindings_AreAppliedKeepTheIdsAndSurviveAnEditOfTheDesc)
+{
+	gs::input_actions actions(*rs);
+	const auto folder = std::filesystem::temp_directory_path() / "snk_gs_user_bindings_test";
+	std::filesystem::remove_all(folder);
+	actions.set_user_folder(folder);
+	const auto tag = put("actions.desc", ACTIONS_SPACE);
+	actions.update(tag.view(), "Game");
+	pump();
+	actions.update(tag.view(), "Game");
+	BOOST_REQUIRE(actions.map());
+	const inp::action_id jump = actions.map()->id("Jump");
+
+	BOOST_REQUIRE(actions.rebind("Jump", 0, KB::K).ok());
+	BOOST_TEST((actions.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::K }));
+	BOOST_TEST((actions.project_map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::SPACE }));
+	BOOST_TEST(std::filesystem::exists(folder / "Game.json"));
+
+	put("actions.desc", ACTIONS_J);
+	rs->signal_changed(tag);
+	pump();
+	actions.update(tag.view(), "Game");
+	pump();
+	actions.update(tag.view(), "Game");
+	BOOST_TEST((actions.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::K }));
+	BOOST_TEST((actions.project_map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::J }));
+
+	gs::input_actions again(*rs);
+	again.set_user_folder(folder);
+	again.update(tag.view(), "Game");
+	pump();
+	again.update(tag.view(), "Game");
+	BOOST_REQUIRE(again.map());
+	BOOST_TEST((again.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::K }));
+
+	BOOST_TEST(again.reset_binding("Jump"));
+	BOOST_TEST((again.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::J }));
+	std::filesystem::remove_all(folder);
 }
 
 BOOST_AUTO_TEST_CASE(NoTag_NoMap)
