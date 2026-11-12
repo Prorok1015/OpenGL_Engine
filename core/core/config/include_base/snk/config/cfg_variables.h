@@ -1,4 +1,5 @@
 #pragma once
+#include <exception>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -25,6 +26,9 @@ namespace cfg {
 		const std::filesystem::path& default_config);
 	// Why a program that needs a config file has none: no --config and no `default_config` (#160).
 	SNK_API std::string no_config_message(const std::filesystem::path& default_config);
+	// What a host logs when initialize_configs throws: the config file it was loading (loaded_config_path) and why,
+	// or, before any file, what is wrong with the command line (#731).
+	SNK_API std::string startup_error_message(const std::exception& error);
 	// The absolute path of the file initialize_configs loaded (--config); empty when none was. The editor passes it on
 	// when it restarts itself into another project (EPIC-42 #158).
 	SNK_API std::filesystem::path loaded_config_path();
