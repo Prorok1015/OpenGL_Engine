@@ -7,6 +7,7 @@
 #include <snk/scene/scn_animation.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <utility>
 
 static entt::entity find_skeleton_root(entt::registry& reg, entt::entity ent)
 {
@@ -61,6 +62,8 @@ void update_nodes_animation_system(
     entt::view<entt::get_t<const scn::animated_node_component>> anim_nodes_view,
     ecs::event<scn::transform_updated>& event)
 {
+    const auto* controllers = std::as_const(reg).storage<scn::animation_controller_component>();
+    scn::clip_per_root<scn::animation_clip_desc> clips(controllers ? controllers->size() : 0);
     for (auto [ent, anim_node_comp] : anim_nodes_view.each()) {
         entt::entity root = find_skeleton_root(reg, ent);
         auto* ctrl = reg.try_get<scn::animation_controller_component>(root);
@@ -70,7 +73,7 @@ void update_nodes_animation_system(
         auto* clips_comp = reg.try_get<scn::animation_collection_component>(root);
         if (!clips_comp) continue;
 
-        const auto* clip = clips_comp->find(ctrl->current_animation);
+        const auto* clip = clips.get(root, [&] { return clips_comp->find(ctrl->current_animation); });
         if (!clip) continue;
 
         auto ch_it = clip->channels.find(anim_node_comp.node_name);
