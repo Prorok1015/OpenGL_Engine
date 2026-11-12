@@ -15,3 +15,10 @@ The SDK (include/, lib/, lib/cmake/snake_sdk) builds game modules: the editor fi
 itself. find_package(snake_sdk) gives snk::engine (snk_engine.dll, the editor and game.dll) and
 snk::engine_static (one executable, Shipping). The Debug engine is a separate archive
 (Snake-<version>-windows-x64-debug.zip): unpack it over this folder.
+
+Compiler: Visual Studio 2022 17.14 or newer (MSVC toolset 14.44, _MSC_VER 1944, or newer). The
+engine is built with MSVC 14.44; a game module must be built with the same MSVC or a newer one and
+with the DLL runtime (/MD). find_package(snake_sdk) refuses an older MSVC or a static runtime, and
+the editor refuses to load a module built with an older MSVC than the engine's. The project
+template's DebugGame configuration (/Od, /MD) links the Release engine; a Debug (/MDd) build
+needs the Debug archive above.

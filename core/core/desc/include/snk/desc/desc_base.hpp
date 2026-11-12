@@ -2,7 +2,7 @@
 #include <snk/common/common.h>
 #include <snk/common/snk_api.h>
 // json::object appears only as a reference parameter in the pure-virtual serialize/deserialize
-// below, so a forward declaration suffices — this keeps full <boost/json.hpp> out of the ~25
+// below, so a forward declaration suffices - this keeps full <boost/json.hpp> out of the ~25
 // headers that include desc_base.hpp (EPIC-49 US-49-4). TUs that actually call json methods
 // include <boost/json.hpp> themselves.
 #include <boost/json/fwd.hpp>
@@ -21,7 +21,7 @@ namespace desc
 		friend desc_system;
 	public:
 		desc_base() = default;
-		// Do not copy m_guid — a copy is a new file, so it must get its own __guid (same as m_tag).
+		// Do not copy m_guid - a copy is a new file, so it must get its own __guid (same as m_tag).
 		desc_base(const desc_base& other) : res::resource_entry(), type(other.type) {};
 		desc_base(desc_base&&) = default;
 		desc_base& operator=(desc_base&&) = default;
@@ -35,7 +35,7 @@ namespace desc
 
 		desc_base& operator=(const desc_base& other)
 		{
-			// Do not copy m_tag or m_guid — resource identity is per-instance.
+			// Do not copy m_tag or m_guid - resource identity is per-instance.
 			type = other.type;
 			return *this;
 		}

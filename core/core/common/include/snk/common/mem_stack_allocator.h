@@ -26,7 +26,7 @@ namespace ds {
 			std::size_t capacity,
 			std::pmr::memory_resource* upstream = std::pmr::get_default_resource());
 
-		/// Use an externally-owned buffer. No upstream — exhaustion throws.
+		/// Use an externally-owned buffer. No upstream - exhaustion throws.
 		stack_resource(void* buffer, std::size_t size);
 
 		~stack_resource() override;

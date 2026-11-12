@@ -57,7 +57,7 @@ namespace gui
 		std::vector<smoothed_zone> display_stats_;
 		std::unordered_map<const char*, smoothed_zone> smoothed_map_;
 
-		// Hierarchy view data — roots grouped by timeline
+		// Hierarchy view data - roots grouped by timeline
 		std::map<uint8_t, std::vector<hierarchy_node>> hierarchy_by_timeline_;
 
 		std::chrono::steady_clock::time_point last_update_time_{};

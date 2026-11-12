@@ -7,7 +7,7 @@
 #include <snk/common/snk_api.h>
 #include <snk/project/prj_version.h>
 
-// project.snkproj: the manifest of a game project (ADR-02, docs/roadmap/design/EPIC-42-PLAN.md §2.1).
+// project.snkproj: the manifest of a game project (ADR-02, docs/roadmap/design/EPIC-42-PLAN.md sec. 2.1).
 namespace prj
 {
 	inline constexpr int k_manifest_format_version = 1;

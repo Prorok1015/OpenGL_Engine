@@ -58,7 +58,7 @@ jobs:
       # Full adds Windows MSVC Shared+PCH (#557): the only Windows build that compiles through the precompiled header
       # (sccache cannot cache /Yu, so it is a cold build), with the shared engine where core/ exports IMGUI_API.
       matrix:
-        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"},{"name":"Windows MSVC Shared+PCH","os":"windows-latest","preset":"ci-windows-msvc-pch-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"}]') }}
+        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-2025","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"},{"name":"Windows MSVC Shared+PCH","os":"windows-2025","preset":"ci-windows-msvc-pch-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-2025","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -74,11 +74,14 @@ jobs:
         with:
           packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
+      # The engine is built with the oldest MSVC it supports (#219): toolset 14.44 (_MSC_VER 1944), installed in the
+      # windows-2025 image next to VS 18's own 14.51.
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          toolset: "14.44"
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -512,6 +515,16 @@ jobs:
         run: |
           python3 tools/ci/check_engine_components.py --self-test
           python3 tools/ci/check_engine_components.py
+
+      # #219: what the SDK package refuses of an MSVC consumer (an older MSVC than the engine's, a static runtime).
+      - name: Check the SDK's MSVC rule
+        run: cmake -P tools/ci/test_sdk_msvc_check.cmake
+
+      # #219: a game module compiles the public headers without /utf-8, in the code page of the user's machine.
+      - name: Check the public headers are ASCII
+        run: |
+          python3 tools/ci/check_ascii_headers.py --self-test
+          python3 tools/ci/check_ascii_headers.py --repo .
 
       # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
       # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure

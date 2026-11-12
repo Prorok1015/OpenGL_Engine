@@ -7,7 +7,7 @@
 #include <string>
 #include <version>
 
-// C entry point of a loadable game module (EPIC-29 #62, docs/roadmap/design/EPIC-29_SERVICES_DLL.md §6).
+// C entry point of a loadable game module (EPIC-29 #62, docs/roadmap/design/EPIC-29_SERVICES_DLL.md sec. 6).
 //
 // A module binary exports four C-named functions; behind them is a C++ module_interface, so host
 // and module must share toolchain, standard library and CRT. The host checks that through
@@ -205,6 +205,27 @@ namespace app::modules {
 		std::uint64_t (*layout_key)() = nullptr;
 	};
 
+	// Empty when a module built by `module_compiler` (snk_module_build_info::compiler) can run in a host built by
+	// `host_compiler`, otherwise why not. MSVC toolsets are binary compatible forwards only (#219): a module needs the
+	// host's _MSC_VER or a newer one. GCC and Clang need the same major.
+	inline std::string compiler_problem(std::uint32_t module_compiler, std::uint32_t host_compiler)
+	{
+		const bool both_msvc = (module_compiler >> 16) == compiler_id::msvc && (host_compiler >> 16) == compiler_id::msvc;
+		if (both_msvc) {
+			const std::uint32_t module_version = module_compiler & 0xffffu;
+			const std::uint32_t host_version = host_compiler & 0xffffu;
+			if (module_version < host_version) {
+				return std::format("built with MSVC {} (_MSC_VER), older than the MSVC {} the engine was built with: rebuild "
+					"the module with Visual Studio 2022 17.14 or newer, MSVC {} at least", module_version, host_version, host_version);
+			}
+			return {};
+		}
+		if (module_compiler != host_compiler) {
+			return std::format("built with a different compiler (module {}, host {})", module_compiler, host_compiler);
+		}
+		return {};
+	}
+
 	// Empty string when the module can be loaded by this host, otherwise the reason it cannot.
 	inline std::string check_module_entry(const module_entry& entry)
 	{
@@ -230,12 +251,8 @@ namespace app::modules {
 			return "build info api does not match snk_module_api_version";
 		}
 		const snk_module_build_info host = make_build_info();
-		// Same compiler family; for MSVC every 19.x toolset is binary compatible, otherwise the major must match.
-		const bool same_compiler = (info->compiler >> 16) == (host.compiler >> 16)
-			&& ((host.compiler >> 16) == compiler_id::msvc || info->compiler == host.compiler);
-		if (!same_compiler) {
-			return "built with a different compiler (module " + std::to_string(info->compiler)
-				+ ", host " + std::to_string(host.compiler) + ")";
+		if (std::string problem = compiler_problem(info->compiler, host.compiler); !problem.empty()) {
+			return problem;
 		}
 		if (info->flags != host.flags) {
 			return "build flags differ (module " + std::to_string(info->flags) + ", host "

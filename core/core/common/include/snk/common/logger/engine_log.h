@@ -36,7 +36,7 @@ namespace engine
 	SNK_API void set_category_level(std::string_view category, log_level level);
 
 	// Set the global log file path. There is none until this is called (an empty path: none), so a process writes no file into
-	// the folder it was started from. Call before init_logger() or at any time — existing loggers are updated. The first
+	// the folder it was started from. Call before init_logger() or at any time - existing loggers are updated. The first
 	// file attached to a running logger also gets what the journal holds of the process's earlier lines (the newest 2000 /
 	// 256 KiB; a line says how many are missing).
 	SNK_API void set_log_file(std::string_view path);
@@ -109,7 +109,7 @@ namespace engine
 } // namespace engine
 namespace eg = engine;
 
-// ─── Level macros ────────────────────────────────────────────────────────────
+// --- Level macros ------------------------------------------------------------
 // Each macro: first arg = category string, then format + args.
 // Category becomes the spdlog logger name (e.g. "edt/import", "resource").
 
