@@ -266,6 +266,22 @@ namespace {
 		});
 	}
 
+	// The api version of the build that runs, kept for the engine (app::modules::loaded_module_apis).
+	void note_module_api(ds::app_data_storage& data, const std::string& name, std::uint32_t api)
+	{
+		if (!data.has_value<app::modules::loaded_module_apis>()) {
+			data.construct<app::modules::loaded_module_apis>();
+		}
+		data.require<app::modules::loaded_module_apis>().set(name, api);
+	}
+
+	void forget_module_api(ds::app_data_storage& data, const std::string& name)
+	{
+		if (data.has_value<app::modules::loaded_module_apis>()) {
+			data.require<app::modules::loaded_module_apis>().erase(name);
+		}
+	}
+
 	// Empty string once the module is loaded. The module is checked against the manifest's name before it gets a
 	// layer; when refused it is gone by the time this returns.
 	std::string load_module(app::modules::module_loader& loader, ds::app_data_storage& data,
@@ -275,11 +291,9 @@ namespace {
 		if (prepared.name() != name) {
 			return std::format("{} is the module '{}'", prepared.describe(), prepared.name());
 		}
-		if (!data.has_value<app::modules::loaded_module_apis>()) {
-			data.construct<app::modules::loaded_module_apis>();
-		}
-		data.require<app::modules::loaded_module_apis>().api[std::string{ prepared.name() }] = prepared.api_version();
+		const std::uint32_t api = prepared.api_version();
 		loader.load(std::move(prepared), data);
+		note_module_api(data, name, api);
 		return {};
 	}
 
@@ -694,6 +708,9 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	const bool was_loaded = m_loader.state(name) == app::modules::module_state::initialized;
 	if (was_loaded) {
 		problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
+		if (m_loader.state(name) != app::modules::module_state::initialized) {
+			forget_module_api(m_data, name);
+		}
 		if (!problem.empty() && m_loader.state(name) == app::modules::module_state::initialized) {
 			prepared.reset();
 			drop_copy();
@@ -711,9 +728,11 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	revert_point next_revert = can_revert ? revert_point{ previous, copies.current, copy } : revert_point{};
 	revert_point* revert_slot = can_revert ? &m_revert[name] : nullptr;
 
+	const std::uint32_t loaded_api = prepared->api_version();
 	problem = guarded([&] { m_loader.load(std::move(*prepared), m_data); return std::string{}; });
 	prepared.reset();
 	if (problem.empty()) {
+		note_module_api(m_data, name, loaded_api);
 		if (copy) {
 			copies.previous = std::exchange(copies.current, *copy);
 		}
@@ -881,6 +900,9 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 
 	if (was_loaded) {
 		problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
+		if (m_loader.state(name) != app::modules::module_state::initialized) {
+			forget_module_api(m_data, name);
+		}
 		if (m_loader.state(name) == app::modules::module_state::initialized) {
 			prepared.reset();
 			drop_copy();
@@ -891,9 +913,11 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 			egLOG_ERROR("project", "editor module '{}': {}", name, problem);
 		}
 	}
+	const std::uint32_t loaded_api = prepared->api_version();
 	problem = guarded([&] { m_loader.load(std::move(*prepared), m_data); return std::string{}; });
 	prepared.reset();
 	if (problem.empty()) {
+		note_module_api(m_data, name, loaded_api);
 		if (copy) {
 			copies.previous = std::move(copies.current);
 			copies.current = std::move(next_current);
@@ -1016,6 +1040,9 @@ std::string core::project_module_host::unload_editor_modules()
 	while (!m_editor_loaded.empty()) {
 		const std::string name = m_editor_loaded.back();
 		const std::string problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
+		if (m_loader.state(name) != app::modules::module_state::initialized) {
+			forget_module_api(m_data, name);
+		}
 		if (m_loader.state(name) == app::modules::module_state::initialized) {
 			// Still there (the loader refused): the ones unloaded before it come back, so a refusal leaves the editor as it was.
 			egLOG_ERROR("project", "editor module '{}' not unloaded: {}", name, problem);

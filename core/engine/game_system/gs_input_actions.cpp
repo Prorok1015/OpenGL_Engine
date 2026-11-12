@@ -49,6 +49,7 @@ void gs::input_actions::drop()
 	m_map.reset();
 	m_project.reset();
 	m_gamepad = {};
+	m_has_gamepad_bindings = false;
 	m_user = {};
 	m_user_file.clear();
 	m_project_name.clear();
@@ -90,6 +91,12 @@ void gs::input_actions::load_user()
 void gs::input_actions::rebuild_effective()
 {
 	m_map = std::make_shared<const inp::action_map>(m_user.apply(*m_project));
+	m_has_gamepad_bindings = false;
+	for (const inp::action& action : m_map->actions()) {
+		for (const inp::action_binding& binding : action.bindings) {
+			if (std::holds_alternative<inp::GAMEPAD_BUTTONS>(binding) || std::holds_alternative<inp::GAMEPAD_AXES>(binding)) m_has_gamepad_bindings = true;
+		}
+	}
 	// A file or an edit of the desc can leave one binding on two actions; rebind never does. Said once per rebuild, and
 	// only for what the project's own map does not already have.
 	const auto already = inp::find_binding_conflicts(*m_project);
@@ -165,32 +172,23 @@ void gs::input_actions::update(std::string_view tag, std::string_view project_na
 	}
 }
 
-bool gs::input_actions::has_gamepad_bindings() const
-{
-	if (!m_map) return false;
-	for (const inp::action& action : m_map->actions()) {
-		for (const inp::action_binding& binding : action.bindings) {
-			if (std::holds_alternative<inp::GAMEPAD_BUTTONS>(binding) || std::holds_alternative<inp::GAMEPAD_AXES>(binding)) return true;
-		}
-	}
-	return false;
-}
-
 void gs::input_actions::warn_about_old_modules(const ds::app_data_storage& data)
 {
+	const auto* apis = data.has_value<app::modules::loaded_module_apis>() ? &data.require<app::modules::loaded_module_apis>() : nullptr;
+	const std::uint64_t revision = apis ? apis->revision : 0;
+	if (m_warned_map == m_map.get() && m_warned_revision == revision) return;
+	m_warned_map = m_map.get();
+	m_warned_revision = revision;
+	if (!apis || !m_has_gamepad_bindings) return;
+
+	constexpr std::uint32_t first_with_gamepad = 16;
 	std::string old;
-	if (has_gamepad_bindings() && data.has_value<app::modules::loaded_module_apis>()) {
-		constexpr std::uint32_t first_with_gamepad = 16;
-		for (const auto& [name, api] : data.require<app::modules::loaded_module_apis>().api) {
-			if (api == 0 || app::modules::api_major(api) != app::modules::api_major(SNK_MODULE_API_VERSION)) continue;
-			if (app::modules::api_minor(api) < first_with_gamepad) {
-				old += (old.empty() ? "" : ", ") + name + " (api 3." + std::to_string(app::modules::api_minor(api)) + ")";
-			}
+	for (const auto& [name, api] : apis->api) {
+		if (api == 0 || app::modules::api_major(api) != app::modules::api_major(SNK_MODULE_API_VERSION)) continue;
+		if (app::modules::api_minor(api) < first_with_gamepad) {
+			old += (old.empty() ? "" : ", ") + name + " (api 3." + std::to_string(app::modules::api_minor(api)) + ")";
 		}
 	}
-	if (m_warned_map == m_map.get() && m_warned_modules == old) return;
-	m_warned_map = m_map.get();
-	m_warned_modules = old;
 	if (!old.empty()) {
 		egLOG_WARN("input", "{} has gamepad bindings, and these modules were built for an older API and read bindings as keyboard or mouse only: {}",
 			m_tag, old);

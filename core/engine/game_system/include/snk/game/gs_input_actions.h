@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/common/snk_api.h>
 #include <filesystem>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -46,7 +47,7 @@ namespace gs
 		// The project's map as written, for a UI that offers "reset". Null when map() is.
 		std::shared_ptr<const inp::action_map> project_map() const { return m_project; }
 		// True when map() has a gamepad button or axis binding.
-		bool has_gamepad_bindings() const;
+		bool has_gamepad_bindings() const { return m_has_gamepad_bindings; }
 		// After update(), each frame: a module built for an API minor before 3.16 reads bindings as keyboard or mouse only, and
 		// a visit over them of its own fails on a gamepad one. Warns once per map and set of such modules (the map is not
 		// filtered), naming them. Needs the versions the host keeps (app::modules::loaded_module_apis).
@@ -82,8 +83,9 @@ namespace gs
 		std::filesystem::path m_user_file{};
 		std::string m_project_name{};
 		bool m_saved = true;
-		std::string m_warned_modules{};
+		bool m_has_gamepad_bindings = false;
 		const inp::action_map* m_warned_map = nullptr;
+		std::uint64_t m_warned_revision = ~std::uint64_t{ 0 };
 		bool m_changed = false;
 		bool m_built = false;
 		bool m_reported = false;
