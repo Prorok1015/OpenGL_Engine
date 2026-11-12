@@ -42,6 +42,11 @@ inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::st
 	return { rebind_status::applied, std::move(shared_with) };
 }
 
+inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding)
+{
+	return rebind(project, action, slot, binding, false);
+}
+
 inp::rebind_result inp::user_bindings::remove(const action_map& project, std::string_view action, std::size_t slot)
 {
 	const auto actions = project.actions();

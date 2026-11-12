@@ -15,32 +15,39 @@ namespace edt
 		m_rows_revision = actions.revision();
 	}
 
-	void input_actions_panel::update_capture(gs::input_actions& actions)
+	bool input_actions_panel::capturing() const
 	{
-		if (!m_capture.active()) return;
+		return m_capture.active() && ImGui::GetCurrentContext() != nullptr && ImGui::GetFrameCount() - m_rendered_frame <= 1;
+	}
+
+	bool input_actions_panel::update_capture(gs::input_actions& actions)
+	{
+		if (!m_capture.active()) return false;
 		// The window is the only place a key is taken from: another window, or another application, ends the wait.
 		if (ImGui::GetIO().AppFocusLost || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
 			m_capture.cancel();
-			return;
+			return false;
 		}
 		if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
 			m_capture.cancel();
-			return;
+			return false;
 		}
 
 		std::optional<inp::action_binding> picked;
 		if (const auto key = gui::pressed_key()) {
 			picked = *key;
-		} else if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
+		} else if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !ImGui::IsAnyItemHovered()) {
+			// A button of the panel acts on the release of its click: the press that lands on one (Reset all, "press...") is its own.
 			if (const auto button = gui::clicked_mouse_button()) picked = *button;
 		}
 		if (!picked && m_gamepad) picked = m_gamepad();
-		if (!picked) return;
+		if (!picked) return false;
 
 		const std::string action = m_capture.action();
 		const std::size_t slot = m_capture.slot();
 		m_capture.cancel();
 		m_message = input_actions_view::outcome_text(actions.rebind(action, slot, *picked, true), action, &*picked);
+		return true;
 	}
 
 	void input_actions_panel::on_render()
@@ -51,7 +58,11 @@ namespace edt
 			ImGui::TextDisabled("The project has no input actions");
 			return;
 		}
-		update_capture(*actions);
+		// Not drawn for a while (the game layout, a hidden tab): the wait is over, it must not come back with the panel.
+		if (ImGui::GetFrameCount() - m_rendered_frame > 1) m_capture.cancel();
+		m_rendered_frame = ImGui::GetFrameCount();
+		// A key that ended the wait may also have pressed the focused button (navigation): that press is not a request.
+		const bool took_input = update_capture(*actions);
 		if (m_rows_revision != actions->revision()) rebuild_rows(*actions);
 
 		// What a button asked for; done after the table, which reads rows a change replaces.
@@ -118,6 +129,7 @@ namespace edt
 			ImGui::EndTable();
 		}
 
+		if (took_input) asked.what = request::kind::none;
 		switch (asked.what) {
 		case request::kind::none:
 			break;

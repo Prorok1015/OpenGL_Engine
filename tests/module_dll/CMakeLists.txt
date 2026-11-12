@@ -42,3 +42,16 @@ target_sources(unit_tests PRIVATE ${_dll_tests})
 set_source_files_properties(${_dll_tests} TARGET_DIRECTORY unit_tests
 	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_GAME_DLL_PATH=\"$<TARGET_FILE:test_game_dll>\";SNK_TEST_GAME_DLL_V2_PATH=\"$<TARGET_FILE:test_game_dll_v2>\";SNK_TEST_GAME_DLL_FAILING_PATH=\"$<TARGET_FILE:test_game_dll_failing>\";SNK_TEST_GAME_DLL_BAD_API_PATH=\"$<TARGET_FILE:test_game_dll_bad_api>\";SNK_TEST_GAME_DLL_BAD_RESTORE_PATH=\"$<TARGET_FILE:test_game_dll_bad_restore>\";SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH=\"$<TARGET_FILE:test_game_dll_bad_layout>\";SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\";SNK_TEST_COPY_PREFAB_DLL_PATH=\"$<TARGET_FILE:test_copy_prefab_dll>\"" SKIP_PRECOMPILE_HEADERS ON)
 target_link_libraries(unit_tests PRIVATE ${CMAKE_DL_LIBS})
+
+# US-542-C: a module that reads the action map inline and calls gs::input_actions through its exports (rebind of 3.16
+# included), loaded by gs_input_actions_dll_tests.
+add_library(test_input_actions_dll SHARED test_input_actions_dll.cpp)
+target_link_libraries(test_input_actions_dll PRIVATE snk::engine snk::engine_api snk::sanitizers)
+if(MSVC)
+	target_link_libraries(test_input_actions_dll PRIVATE Boost::json)
+endif()
+add_dependencies(unit_tests test_input_actions_dll)
+set(_input_dll_tests "${CMAKE_CURRENT_SOURCE_DIR}/gs_input_actions_dll_tests.cpp")
+target_sources(unit_tests PRIVATE ${_input_dll_tests})
+set_source_files_properties(${_input_dll_tests} TARGET_DIRECTORY unit_tests
+	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_INPUT_ACTIONS_DLL_PATH=\"$<TARGET_FILE:test_input_actions_dll>\"" SKIP_PRECOMPILE_HEADERS ON)

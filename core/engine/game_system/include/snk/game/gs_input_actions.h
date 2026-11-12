@@ -61,7 +61,9 @@ namespace gs
 		void set_user_folder(std::filesystem::path folder);
 		const inp::user_bindings& user_bindings() const { return m_user; }
 		// `allow_conflict`: a binding another action has is put all the same (both keep it, conflicts() names the pair).
-		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding, bool allow_conflict = false);
+		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding, bool allow_conflict);
+		// The export of 3.16 (a module built for it imports this symbol): a conflict is refused.
+		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding);
 		rebind_outcome remove_binding(std::string_view action, std::size_t slot);
 		// The bindings two actions of map() share that the project's own map does not (what the player's changes or an edit of
 		// the desc made); rebuilt with the map.
@@ -92,12 +94,13 @@ namespace gs
 		std::string m_project_name{};
 		bool m_saved = true;
 		bool m_has_gamepad_bindings = false;
-		std::vector<inp::binding_conflict> m_conflicts{};
-		std::uint64_t m_revision = 0;
 		const inp::action_map* m_warned_map = nullptr;
 		std::uint64_t m_warned_revision = ~std::uint64_t{ 0 };
 		bool m_changed = false;
 		bool m_built = false;
 		bool m_reported = false;
+		// Added after the first 3.16 build: at the end, so nothing a module read before moves.
+		std::vector<inp::binding_conflict> m_conflicts{};
+		std::uint64_t m_revision = 0;
 	};
 }

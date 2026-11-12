@@ -29,15 +29,17 @@ namespace edt
 		// The place a gamepad button will come from once the editor has a device source (US-542-B0): asked while waiting.
 		void set_gamepad_poll(gamepad_poll poll) { m_gamepad = std::move(poll); }
 
-		// True while the panel waits for a key: the editor's own shortcuts must stay quiet (modal_active, #470).
-		bool capturing() const { return m_capture.active(); }
+		// True while the panel waits for a key and was drawn in the last frame or this one: the editor's own shortcuts must stay
+		// quiet (modal_active, #470). A frame the panel is not drawn in (the game layout, a hidden tab) does not hold them.
+		bool capturing() const;
 
 	protected:
 		void on_render() override;
 		void on_hidden() override { m_capture.cancel(); }
 
 	private:
-		void update_capture(gs::input_actions& actions);
+		// True when it took a key or a button this frame.
+		bool update_capture(gs::input_actions& actions);
 		void rebuild_rows(const gs::input_actions& actions);
 
 		actions_getter m_actions;
@@ -46,5 +48,6 @@ namespace edt
 		std::vector<input_actions_view::action_row> m_rows;
 		std::uint64_t m_rows_revision = ~std::uint64_t{ 0 };
 		std::string m_message;
+		int m_rendered_frame = -100;
 	};
 }

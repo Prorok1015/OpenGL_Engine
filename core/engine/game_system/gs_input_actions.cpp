@@ -127,6 +127,11 @@ gs::rebind_outcome gs::input_actions::rebind(std::string_view action, std::size_
 	return { result, m_saved };
 }
 
+gs::rebind_outcome gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding)
+{
+	return rebind(action, slot, binding, false);
+}
+
 gs::rebind_outcome gs::input_actions::remove_binding(std::string_view action, std::size_t slot)
 {
 	if (!m_project) return { { inp::rebind_status::unknown_action, {} }, true };

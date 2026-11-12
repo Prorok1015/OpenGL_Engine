@@ -832,6 +832,39 @@ BOOST_AUTO_TEST_CASE(AReboundKey_PlaysTheActionInTheWorld_TheOldOneNoLonger_AndR
 	BOOST_TEST(!held(a, "Jump"));
 }
 
+BOOST_AUTO_TEST_CASE(AReboundKey_ReachesTheFirstWorldOfThePlaySet_AndTheOtherOneStaysWithoutActions)
+{
+	gs::input_actions actions(*rs);
+	load(actions, put("actions.desc", ACTIONS_SPACE));
+	BOOST_REQUIRE(actions.map());
+
+	mgr.create_set("play");
+	const auto make = [this](std::string_view name, uint32_t desc_index) -> scn::world_context& {
+		auto& context = mgr.create_context("play", name, scn::context_kind::level, WITH_ACTIONS);
+		context.set_desc_index(desc_index);
+		return context;
+	};
+	auto& a = make("a", 0);
+	auto& b = make("b", 1);
+	router.set_default_target(inp::input_target{ .set = "play" });
+	frame(actions.map());
+
+	BOOST_REQUIRE(actions.rebind("Jump", 0, KB::K).ok());
+	frame(actions.map());
+	key(KB::SPACE, KEY_ACTION::DOWN);
+	frame(actions.map());
+	BOOST_TEST(!held(a, "Jump"));
+	key(KB::SPACE, KEY_ACTION::UP);
+	frame(actions.map());
+
+	key(KB::K, KEY_ACTION::DOWN);
+	frame(actions.map());
+	BOOST_TEST(held(a, "Jump"));
+	BOOST_TEST(!held(b, "Jump"));
+	BOOST_REQUIRE_EQUAL(count(inp::action_edge::pressed), 1u);
+	BOOST_TEST(seen.back().world == "a");
+}
+
 BOOST_AUTO_TEST_CASE(ABindingTwoActionsShare_IsKeptWhenAllowed_AndNamedByTheConflicts)
 {
 	gs::input_actions actions(*rs);

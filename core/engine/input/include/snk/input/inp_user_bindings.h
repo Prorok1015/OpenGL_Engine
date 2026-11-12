@@ -44,7 +44,9 @@ namespace inp
 		// With `allow_conflict` the conflict is only reported (`status` conflict is returned as applied with `conflict_with` set):
 		// the binding is put and both actions keep it; a duplicate is refused always.
 		rebind_result rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding,
-			bool allow_conflict = false);
+			bool allow_conflict);
+		// The export of 3.16 (a module built for it imports this symbol): a conflict is refused.
+		rebind_result rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding);
 		// Takes the binding at `slot` out of the action's current bindings; `bad_slot` for a slot that is not there.
 		rebind_result remove(const action_map& project, std::string_view action, std::size_t slot);
 		// Drops the change of one action; false when it had none.
