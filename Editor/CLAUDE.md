@@ -102,6 +102,8 @@ code/model_import/                    # snk::model_import (#647): what reads a m
 
 **`prefab_document`** (`controller/edt_prefab_document.h`): read-only (`can_save()` false), opened with `document_manager::open_prefab`, owns the set `preview:<tag>` while open.
 
+**`data_document`** (`controller/edt_data_document.h`, #791, EPIC-56 S56-3): a `*.desc` file of a type with a schema and `is_document` (S56-1) edited as data, `kind()` = `"data"`. `open(tag)` reads fresh bytes (`fetch_data`, not the cache), migrates them in memory and follows `__parent` (each parent migrated the same way, same `__type`, a cycle, a `reference_problem` tag or more than 16 files is an error naming the file and `/__parent`); it keeps `own()` (the file as written: `__type`, `__parent`, `__guid` and only the set fields) apart from `inherited()` (the parents merged by `json_deep_merge`, header keys out). `shown()` / `base()` are `schema_ui::compose`, `edit(draw)` is `schema_ui::edit_component` over `inherited()` and `own()`, so a field edited back to the inherited value leaves the file. `save()` writes `own`, never the flattened `serialize` of the desc adapter: nothing when clean; a file whose `code_version_of` is no longer the one read is refused ("changed on disk", nothing written); `validate_desc_tree` (error = file + JSON pointer + reason), `stamp_tree` (an existing `__guid` stays, none is made), pretty JSON, `store_sync` + `signal_changed`. `restore_own(snapshot)` is for undo (S56-5). Not in `document_manager` yet (S56-4); the base is not recomputed when a parent changes (the next PR of #791).
+
 Controllers communicate via `std::function` callbacks set by `editor_system` during `init()`.
 
 ## Panels
