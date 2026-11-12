@@ -524,7 +524,7 @@ namespace res
 		// The part of a load of this system that waits for the root's side (a resolver's data, a parent's block, the
 		// main queue): what runs next and the block it fills. The root side holds only the id, so nothing it keeps
 		// refers to this system's adapters, blocks or resources (which a module's code may have made) once the system
-		// is gone; the destructor fails the blocks still parked and drops the rest (MODULE_LAYER.md §5).
+		// is gone; the destructor fails the blocks still parked and drops the rest (MODULE_LAYER.md sec. 5).
 		struct parked {
 			std::shared_ptr<resource_handle> block;
 			std::function<void()> run;

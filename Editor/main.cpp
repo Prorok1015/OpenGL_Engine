@@ -84,6 +84,9 @@ int main(int argc, char* argv[])
 	}
 	egLOG_INFO("app", "config: {}", cfg::loaded_config_path().generic_string());
 
+	// What the editor defaults after the configs: the window layout goes to the user's folder, not to the current one.
+	editor::apply_default_settings();
+
 	ds::app_data_storage app_storage;
 	if (protocol_fd >= 0) {
 		app_storage.construct<platform::protocol_stdout>(protocol_fd);

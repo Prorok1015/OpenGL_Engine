@@ -35,7 +35,7 @@ namespace scn {
 		std::string name;
 		float duration = 0.f;
 		float ticks_per_second = 25.f;
-		// node_name → keyframes for that node in this animation
+		// node_name -> keyframes for that node in this animation
 		std::unordered_map<std::string, scn::animation_node> channels;
 	};
 

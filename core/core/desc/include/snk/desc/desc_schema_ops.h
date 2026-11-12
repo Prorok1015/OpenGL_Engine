@@ -14,7 +14,7 @@
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 
-// Generic operations over a type_schema (docs/roadmap/design/DESC_SCHEMA.md §2.3). A schema_binding pairs a
+// Generic operations over a type_schema (docs/roadmap/design/DESC_SCHEMA.md sec. 2.3). A schema_binding pairs a
 // schema with per-field ops that know where a field lives in an object: a member pointer for a C++ type
 // (desc_describe_ops.h) or an offset in a runtime blob (bind_runtime). Everything below works on bindings and
 // never learns where the schema came from.

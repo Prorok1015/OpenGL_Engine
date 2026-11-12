@@ -11,7 +11,7 @@ namespace ds
 {
 	static constexpr uint32_t PROFILER_RING_BUFFER_SIZE = 4096;
 
-	// Timeline IDs — each represents a separate execution context
+	// Timeline IDs - each represents a separate execution context
 	enum class profiler_timeline : uint8_t
 	{
 		cpu = 0,
@@ -59,7 +59,7 @@ namespace ds
 	// Thread data access (lazy-registers thread on first call)
 	SNK_API profiler_thread_data& profiler_get_thread_data();
 
-	// Mark frame boundary — increments frame counter, records prev frame duration
+	// Mark frame boundary - increments frame counter, records prev frame duration
 	SNK_API void profiler_mark_frame(const char* name);
 
 	// Copy all entries from all registered threads
@@ -129,7 +129,7 @@ namespace ds
 #define PROFILE_CONCAT_IMPL(a, b) a##b
 #define PROFILE_CONCAT(a, b) PROFILE_CONCAT_IMPL(a, b)
 
-// Unified check — use ENGINE_PROFILE_ENABLED in client code instead of
+// Unified check - use ENGINE_PROFILE_ENABLED in client code instead of
 // checking ENGINE_PROFILE_INTERNAL || ENGINE_PROFILE_TRACY everywhere
 #if defined(ENGINE_PROFILE_INTERNAL) || defined(ENGINE_PROFILE_TRACY)
 #define ENGINE_PROFILE_ENABLED 1
@@ -154,7 +154,7 @@ namespace ds
 
 #endif
 
-// Default no-op for GPU profiling — overridden by rnd_gpu_profiler.h when included
+// Default no-op for GPU profiling - overridden by rnd_gpu_profiler.h when included
 #if !defined(PROFILE_GPU_SCOPE)
 #define PROFILE_GPU_SCOPE(name) (void)0
 #endif

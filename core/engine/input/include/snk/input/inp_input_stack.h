@@ -290,7 +290,7 @@ namespace inp
 	// held keys disarmed. `actions`: the map of resolve, null when there is none.
 	// (declared above, before input_stack, which it befriends)
 
-	// The printable keys of INPUT_STACK.md §4.4; Escape, Enter, Tab, F-keys and modifiers are not.
+	// The printable keys of INPUT_STACK.md sec. 4.4; Escape, Enter, Tab, F-keys and modifiers are not.
 	SNK_API bool is_text_key(KEYBOARD_BUTTONS key);
 	// "W", "K_0", "ESCAPE": the names of KEYBOARD_BUTTONS (physical positions on a US layout, INPUT_STACK.md).
 	SNK_API std::optional<KEYBOARD_BUTTONS> key_from_name(std::string_view name);
