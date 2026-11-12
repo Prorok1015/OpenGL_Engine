@@ -346,7 +346,7 @@ BOOST_AUTO_TEST_CASE(RestoreOwn_RefusesASnapshotOfAnotherTypeOrParent)
 	json::object other_type = before;
 	other_type["__type"] = "test.plain";
 	BOOST_TEST(!document.restore_own(other_type));
-	BOOST_TEST(document.own() == before);
+	BOOST_CHECK(document.own() == before);
 }
 
 BOOST_AUTO_TEST_CASE(Save_OfAFileThatBecameTheOpenLevels_IsRefused)
