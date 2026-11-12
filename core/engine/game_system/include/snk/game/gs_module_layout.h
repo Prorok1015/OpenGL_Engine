@@ -20,9 +20,10 @@
 // size or alignment is refused by the host before it is created ("rebuild the project"). The list holds the types
 // whose size is compiled into module code: a module constructs, copies or allocates them through engine templates
 // (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION). A type the engine creates and a module only reads through
-// inline accessors (scene_layer, world_context, context_set, module_context, ecs::bus_context...) stays out: a field
-// appended at its end moves nothing a module reads and is a minor change, while a reorder or removal there is a major
-// bump by hand. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
+// inline accessors (scene_layer, context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
+// moves nothing a module reads and is a minor change, while a reorder or removal there is a major bump by hand, or in
+// the window of 4.0 (#758) a new layout_revision. world_context has no inline accessor since #802: its layout is the
+// engine's alone. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
 // fields of one size is not caught, nor a change of a vtable (bus_slot, bus_type, module_interface). A new type, a
 // comment or a rebuilt engine leave the key as it is. Debug and Release differ only where the standard library does
 // (MSVC's _ITERATOR_DEBUG_LEVEL); such a mix is refused earlier anyway, by the build flags.
@@ -39,10 +40,14 @@ namespace gs
 			return hash;
 		}
 
+		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
+		// type modules read inline. 1: world_context's accessors out of line (#802).
+		inline constexpr std::uint64_t layout_revision = 1;
+
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
 		{
-			std::uint64_t hash = 0xcbf29ce484222325ull;
+			std::uint64_t hash = mix_layout(0xcbf29ce484222325ull, layout_revision);
 			((hash = mix_layout(mix_layout(hash, sizeof(Types)), alignof(Types))), ...);
 			return hash;
 		}
