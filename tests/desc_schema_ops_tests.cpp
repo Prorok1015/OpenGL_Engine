@@ -1186,6 +1186,23 @@ BOOST_AUTO_TEST_CASE(AJsonSchemaWithIsDocumentKeepsTheFlagOnlyWhenEveryFieldIsDe
 	BOOST_CHECK((fx.ds.document_types() == std::vector<std::string>{ "mymod.settings" }));
 }
 
+BOOST_AUTO_TEST_CASE(TheRegistryItselfDropsTheDocumentFlagOfASchemaThatCannotBeOne)
+{
+	desc::schema_registry registry;
+	const desc::type_schema* opaque = registry.add(desc::parse_type_schema(parse(R"({
+		"name": "mymod.opaque", "kind": "desc", "is_document": true,
+		"fields": [ { "name": "blob", "kind": "custom" } ]
+	})")));
+	BOOST_REQUIRE(opaque != nullptr);
+	BOOST_TEST(!opaque->is_document);
+	const desc::type_schema* plain = registry.add(desc::parse_type_schema(parse(R"({
+		"name": "mymod.plain", "kind": "desc", "is_document": true,
+		"fields": [ { "name": "speed", "kind": "f32" } ]
+	})")));
+	BOOST_REQUIRE(plain != nullptr);
+	BOOST_TEST(plain->is_document);
+}
+
 BOOST_AUTO_TEST_CASE(ALayerListsItsDocumentsAndTheParentsAndNeverMarksTheParentsType)
 {
 	ops_fixture fx;

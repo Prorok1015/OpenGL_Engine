@@ -130,12 +130,6 @@ namespace desc
 			ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
 				schema.name, schema.version, current_version(schema.name));
 			ASSERT_MSG(!m_schemas.contains(schema.name), "Schema '{}' is already registered!", schema.name);
-			if (schema.is_document) {
-				if (const std::string problem = document_problem(schema, {}); !problem.empty()) {
-					egLOG_ERROR("desc/error", "Schema '{}' is registered without is_document: {}", schema.name, problem);
-					schema.is_document = false;
-				}
-			}
 			const type_schema* stored = m_schemas.add(std::move(schema));
 			if (stored && !factory_map.contains(stored->name)) {
 				if (auto factory = make_dynamic_factory(*stored, m_schemas)) {

@@ -1,6 +1,5 @@
 #include <snk/desc/desc_system.h>
 #include <algorithm>
-#include <format>
 
 desc::desc_system::desc_system(res::resource_system& res_system_)
 	: m_res_system(res_system_)
@@ -14,64 +13,9 @@ desc::desc_system::desc_system(res::resource_system& res_system_, const desc_sys
 {
 }
 
-namespace
-{
-	constexpr int max_document_depth = 8;
-
-	std::string field_problem(const desc::field_schema& field, const desc::schema_registry& schemas, std::span<const std::string_view> codec_fields, int depth, const std::string& path)
-	{
-		const std::string where = path + field.name;
-		auto structure_problem = [&](const std::string& name) -> std::string {
-			if (depth >= max_document_depth) {
-				return std::format("field '{}' is nested deeper than {} levels", where, max_document_depth);
-			}
-			const desc::type_schema* nested = schemas.find(name);
-			if (!nested) {
-				return std::format("field '{}' is of structure '{}', which has no schema", where, name);
-			}
-			for (const auto& inner : nested->fields) {
-				if (std::string problem = field_problem(inner, schemas, {}, depth + 1, where + "/"); !problem.empty()) {
-					return problem;
-				}
-			}
-			return {};
-		};
-
-		switch (field.kind) {
-		case desc::field_kind::custom: {
-			const bool has_codec = std::ranges::find(codec_fields, std::string_view{ field.name }) != codec_fields.end();
-			if (has_codec) {
-				return {};
-			}
-			return std::format("field '{}' is a custom value without a json_codec, so the schema does not describe it", where);
-		}
-		case desc::field_kind::structure:
-			return structure_problem(field.ref_type);
-		case desc::field_kind::array:
-			if (field.element == desc::field_kind::custom) {
-				return std::format("field '{}' is a list of custom values, so the schema does not describe its elements", where);
-			}
-			if (field.element == desc::field_kind::structure) {
-				return structure_problem(field.ref_type);
-			}
-			return {};
-		default:
-			return {};
-		}
-	}
-}
-
 std::string desc::desc_system::document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const
 {
-	if (schema.kind != schema_kind::desc || schema.is_component) {
-		return std::format("a {} cannot be a document, only a plain desc can", schema.is_component ? "component" : std::string{ to_string(schema.kind) });
-	}
-	for (const auto& field : schema.fields) {
-		if (std::string problem = field_problem(field, m_schemas, codec_fields, 0, {}); !problem.empty()) {
-			return problem;
-		}
-	}
-	return {};
+	return desc::document_problem(schema, m_schemas, codec_fields);
 }
 
 bool desc::desc_system::mark_document(std::string_view type_name, std::span<const std::string_view> codec_fields)
