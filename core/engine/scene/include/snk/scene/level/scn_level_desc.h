@@ -31,7 +31,7 @@ namespace scn
 		const std::string& get_name() const { return name; }
 
 		// Build a complete level_desc JSON object from value-typed world descs.
-		// Delegates world serialization to world_desc::serialize — no hardcoded JSON.
+		// Delegates world serialization to world_desc::serialize - no hardcoded JSON.
 		// desc_system is needed to stamp __version (the editor saves through here, not the adapter).
 		// Empty guid means the file gets no __guid (the caller owns the guid of the file it writes).
 		static json::object build_json(std::string_view name, const std::vector<world_desc>& worlds, const desc::desc_system& desc_system, std::string_view guid = {});

@@ -23,7 +23,7 @@ permissions:
 jobs:
   package:
     name: Windows package (${{ matrix.config }})
-    runs-on: windows-latest
+    runs-on: windows-2025
     strategy:
       fail-fast: false
       matrix:
@@ -40,10 +40,13 @@ jobs:
         with:
           submodules: recursive
 
+      # The engine of the package is built with the oldest MSVC it supports (#219): toolset 14.44 (_MSC_VER 1944),
+      # which snake_sdkConfig.cmake then records as the oldest a game module may use.
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          toolset: "14.44"
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -170,7 +173,7 @@ jobs:
   check:
     name: Windows package check
     needs: package
-    runs-on: windows-latest
+    runs-on: windows-2025
     defaults:
       run:
         shell: bash
@@ -178,6 +181,8 @@ jobs:
       # The consumer and the project template come from the sources; the engine only from the archives.
       - uses: actions/checkout@v4
 
+      # No toolset pin here on purpose (#219): the consumer and the project template are built with the image's newest
+      # MSVC, newer than the package's 14.44, the way a user with a current Visual Studio builds a game module.
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
         with:

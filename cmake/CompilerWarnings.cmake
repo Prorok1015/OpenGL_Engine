@@ -12,6 +12,9 @@ add_library(snk_compiler_warnings INTERFACE)
 if(MSVC)
 	# /W3, not /W4: /W4 is too noisy with third-party headers.
 	target_compile_options(snk_compiler_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/W3>)
+	# Sources and narrow literals are UTF-8 whatever the machine's code page (#219): the toolset 14.44 the engine is built
+	# with otherwise reads them as code page 1252 and fails a literal such as "\u202e" with C4566.
+	target_compile_options(snk_compiler_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
 	# Headers behind SYSTEM include directories (/external:I, see snk_isolate_third_party_warnings
 	# below) report nothing, so a third-party header cannot fail a project translation unit.
 	if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND CMAKE_INCLUDE_SYSTEM_FLAG_CXX MATCHES "external")

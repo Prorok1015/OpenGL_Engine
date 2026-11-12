@@ -26,7 +26,7 @@ namespace ds {
 			: m_parent(parent) {
 		}
 		// A child that reads through to the parent only the services listed with expose<T>(): a game module's layer,
-		// whose module must not reach the base's registries (MODULE_LAYER.md §5). Anything else of the parent is
+		// whose module must not reach the base's registries (MODULE_LAYER.md sec. 5). Anything else of the parent is
 		// refused: has_value false, require_shared null, require throws std::logic_error.
 		app_data_storage(app_data_storage* parent, isolated_t)
 			: m_parent(parent), m_isolated(true) {

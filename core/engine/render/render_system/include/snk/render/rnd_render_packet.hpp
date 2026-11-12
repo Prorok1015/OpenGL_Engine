@@ -82,7 +82,7 @@ namespace rnd {
 		return std::nullopt;
 	}
 
-	// Resolve helpers — fallback to legacy static tags when camera doesn't specify
+	// Resolve helpers - fallback to legacy static tags when camera doesn't specify
 	inline res::tag resolve_color_target(const camera_render_data_t& cam, std::size_t index = 0)
 	{
 		if (index < cam.color_targets.size() && cam.color_targets[index].is_valid())
