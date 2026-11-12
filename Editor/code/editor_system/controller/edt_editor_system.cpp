@@ -311,6 +311,7 @@ edt::editor_system::~editor_system()
 	if (editor_layer) {
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
 		editor_layer->set_loading_screen(nullptr, nullptr);
+		editor_layer->set_modal_probe(nullptr);
 	}
 	m_mode_changed.disconnect();
 	m_modes.reset();
@@ -488,6 +489,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	// The views show the set "play" while Play runs (view_set), the level otherwise.
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* { return view_registry(m_services, m_state); });
+	m_game_view_panel->set_world_name_getter([this] {
+		const std::string* name = m_state.active_world_name();
+		return name ? *name : std::string{};
+	});
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
 		if (scn::context_set* set = view_set(m_services)) {
 			set->for_each([&visit](scn::world_context& world) { visit(world.state()); });
@@ -896,8 +901,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		constexpr int never_after_minutes = 7 * 24 * 60;
 		options.session_idle_timeout = std::chrono::minutes{ (idle_minutes > never_after_minutes) ? 0 : std::max(idle_minutes, 0) };
 		const std::string project_dir = cfg_project_dir;
+		const auto agent_roots = m_res.mount_roots("edt");
 		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
-			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
+			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt,
+			agent_roots.empty() ? default_user_data_dir() : agent_roots.back());
 		const std::filesystem::path project_policy = options.project_dir / ".snk" / "agent_policy.json";
 		const auto user_roots = m_res.mount_roots("edt");
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
@@ -1251,6 +1258,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	editor_layer->set_loading_screen(
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
 		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label())); });
+	editor_layer->set_modal_probe([this] { return m_context->dialogs().pending() > 0; });
 	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});

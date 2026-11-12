@@ -27,6 +27,13 @@ include(cmake/SnkBuildCache.cmake NO_POLICY_SCOPE)
 
 project(build_all)
 
+# The oldest MSVC the engine supports (owner decision, #219): VS 2022 17.14, toolset 14.44. The SDK's config refuses a game
+# module older than the MSVC that built the engine, so the engine is built with the oldest one CI pins.
+if(MSVC AND MSVC_VERSION LESS 1944)
+    message(FATAL_ERROR "snake: MSVC ${MSVC_VERSION} is older than the oldest supported 1944 (Visual Studio 2022 17.14, "
+        "toolset 14.44). Update Visual Studio, or pick a newer toolset (-T version=14.44 or the vcvars -vcvars_ver).")
+endif()
+
 # /MD everywhere, Shipping included (owner decision R11, #223): the editor, snk_engine.dll and game.dll share
 # one C++ runtime, which the release package bundles. Debug builds use its debug variant (/MDd), never shipped.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")

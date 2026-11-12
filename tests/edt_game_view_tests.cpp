@@ -6,6 +6,8 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -15,6 +17,13 @@ entt::entity add_game_camera(entt::registry& reg, const char* name)
 	const auto ent = reg.create();
 	reg.emplace<scn::camera_component>(ent);
 	if (name) reg.emplace<scn::name_component>(ent, std::string{ name });
+	return ent;
+}
+
+entt::entity add_node_camera(entt::registry& reg, const char* name, std::vector<std::uint64_t> path)
+{
+	const auto ent = add_game_camera(reg, name);
+	reg.emplace<scn::node_id_component>(ent, std::move(path));
 	return ent;
 }
 
@@ -183,6 +192,142 @@ BOOST_AUTO_TEST_CASE(AForgottenPickWhoseNodeIsGoneFallsBackToTheFirstCamera)
 	redirect(after);
 	sel.refresh(&after, edt::game_view::collect_cameras(after));
 	BOOST_TEST((sel.selected() == a));
+}
+
+BOOST_AUTO_TEST_CASE(ARegistryMadeAtTheAddressOfAGoneOne_IsAnotherRegistry_AndItsPickIsFoundAgainByNode)
+{
+	edt::game_view::selection sel;
+	std::optional<entt::registry> world;
+	world.emplace();
+	add_node_camera(*world, "A", { 1 });
+	add_node_camera(*world, "B", { 2 });
+	redirect(*world);
+	sel.refresh(&*world, edt::game_view::collect_cameras(*world), "w0");
+	sel.select(1);
+	const entt::entity old_pick = sel.selected();
+	const entt::registry* address = &*world;
+	const std::uint64_t old_token = edt::game_view::registry_token(*world);
+
+	world.reset();
+	world.emplace();
+	BOOST_REQUIRE(&*world == address);
+	// The rebuilt world spawns its nodes in the other order, so the entity id the old pick had is now the camera of node 1.
+	const auto b = add_node_camera(*world, "B", { 2 });
+	const auto a = add_node_camera(*world, "A", { 1 });
+	redirect(*world);
+	BOOST_REQUIRE((old_pick == a));
+	BOOST_TEST(edt::game_view::registry_token(*world) != old_token);
+
+	sel.refresh(&*world, edt::game_view::collect_cameras(*world), "w0");
+	BOOST_TEST((sel.selected() == b));
+	BOOST_TEST(!(sel.selected() == old_pick));
+}
+
+BOOST_AUTO_TEST_CASE(ClearOfTheSameRegistry_KeepsItsToken_ButNotTheEntitiesTheOldPickHeld)
+{
+	edt::game_view::selection sel;
+	entt::registry world;
+	add_node_camera(world, "A", { 1 });
+	add_node_camera(world, "B", { 2 });
+	redirect(world);
+	sel.refresh(&world, edt::game_view::collect_cameras(world), "w0");
+	sel.select(1);
+	const entt::entity old_pick = sel.selected();
+	const std::uint64_t token = edt::game_view::registry_token(world);
+
+	world.clear();
+	const auto b = add_node_camera(world, "B", { 2 });
+	const auto a = add_node_camera(world, "A", { 1 });
+	redirect(world);
+	// registry::clear() leaves the ctx, but the ids come back with a new version: neither camera is the entity of the pick.
+	BOOST_TEST(edt::game_view::registry_token(world) == token);
+	BOOST_TEST(!(a == old_pick));
+	BOOST_TEST(!(b == old_pick));
+
+	sel.refresh(&world, edt::game_view::collect_cameras(world), "w0");
+	BOOST_TEST((sel.selected() == b));
+}
+
+BOOST_AUTO_TEST_CASE(ARebuiltWorldOfTheSameName_KeepsThePickedNode_AndFallsBackWhenTheNodeIsGone)
+{
+	edt::game_view::selection sel;
+	entt::registry before;
+	add_node_camera(before, "A", { 1 });
+	add_node_camera(before, "B", { 2 });
+	redirect(before);
+	sel.refresh(&before, edt::game_view::collect_cameras(before), "w0");
+	sel.select(1);
+
+	// Not forgotten by anyone: the registry is simply another one.
+	entt::registry after;
+	add_game_camera(after, "Unnamed");
+	const auto b = add_node_camera(after, "B", { 2 });
+	add_node_camera(after, "A", { 1 });
+	redirect(after);
+	sel.refresh(&after, edt::game_view::collect_cameras(after), "w0");
+	BOOST_TEST((sel.selected() == b));
+
+	// The same registry on the next frame: nothing is looked for again.
+	sel.select(0);
+	sel.refresh(&after, edt::game_view::collect_cameras(after), "w0");
+	BOOST_TEST(sel.selected_index() == 0);
+
+	// Rebuilt again, and now without the node of the pick (B, node 2): the first camera.
+	sel.select(1);
+	entt::registry gone;
+	const auto first = add_node_camera(gone, "A", { 1 });
+	redirect(gone);
+	sel.refresh(&gone, edt::game_view::collect_cameras(gone), "w0");
+	BOOST_TEST((sel.selected() == first));
+}
+
+BOOST_AUTO_TEST_CASE(AFrameWithoutARegistry_DoesNotLoseTheNodeOfThePickForTheSameWorld)
+{
+	edt::game_view::selection sel;
+	entt::registry before;
+	add_node_camera(before, "A", { 1 });
+	add_node_camera(before, "B", { 2 });
+	redirect(before);
+	sel.refresh(&before, edt::game_view::collect_cameras(before), "w0");
+	sel.select(1);
+
+	sel.refresh(nullptr, {}, {});
+	BOOST_TEST((sel.selected() == entt::null));
+
+	entt::registry after;
+	add_node_camera(after, "A", { 1 });
+	const auto b = add_node_camera(after, "B", { 2 });
+	redirect(after);
+	sel.refresh(&after, edt::game_view::collect_cameras(after), "w0");
+	BOOST_TEST((sel.selected() == b));
+}
+
+BOOST_AUTO_TEST_CASE(AnotherWorldName_StartsOver_EvenWhenItsCamerasHaveTheSameNodes)
+{
+	edt::game_view::selection sel;
+	entt::registry w0;
+	add_node_camera(w0, "A", { 1 });
+	add_node_camera(w0, "B", { 2 });
+	redirect(w0, "w0");
+	sel.refresh(&w0, edt::game_view::collect_cameras(w0), "w0");
+	sel.select(1);
+
+	entt::registry w1;
+	const auto first = add_node_camera(w1, "A", { 1 });
+	add_node_camera(w1, "B", { 2 });
+	redirect(w1, "w1");
+	sel.refresh(&w1, edt::game_view::collect_cameras(w1), "w1");
+	BOOST_TEST((sel.selected() == first));
+}
+
+BOOST_AUTO_TEST_CASE(TheRegistryToken_IsStableForOneRegistryAndNewForAnother)
+{
+	entt::registry one;
+	entt::registry other;
+	const std::uint64_t first = edt::game_view::registry_token(one);
+	BOOST_TEST(first != 0u);
+	BOOST_TEST(edt::game_view::registry_token(one) == first);
+	BOOST_TEST(edt::game_view::registry_token(other) != first);
 }
 
 BOOST_AUTO_TEST_CASE(EveryCameraOfThePickedTargetGetsTheViewportAcrossWorlds)

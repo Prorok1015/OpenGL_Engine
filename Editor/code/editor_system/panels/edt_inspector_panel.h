@@ -15,6 +15,11 @@ namespace edt::override_edit { class view_cache; }
 
 namespace edt
 {
+	// A custom renderer of a component without its own data draws on a copy of its parent's; only what it changed
+	// against the parent becomes the component's own data (`apply` false: drawn, nothing kept). True when it changed.
+	bool edit_against_parent(scn::prefab_desc::prefab_comp_node& comp, const boost::json::object* parent,
+		const std::function<bool(scn::prefab_desc::prefab_comp_node&)>& renderer, bool apply = true);
+
 	class inspector_panel : public panel_base
 	{
 	public:

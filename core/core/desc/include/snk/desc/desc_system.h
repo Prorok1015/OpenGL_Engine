@@ -259,7 +259,7 @@ namespace desc
 
 			res::tag mem_tag = make_mem_tag_deterministic(owner, json::value_to<std::string>(data.at("__type")), data);
 
-			// Only store if not already in cache — avoids re-creating the same resource on every assembly.
+			// Only store if not already in cache - avoids re-creating the same resource on every assembly.
 			if (!m_res_system.exists(mem_tag)) {
 				m_res_system.store(mem_tag, serialize_to_bytes(data));
 			}

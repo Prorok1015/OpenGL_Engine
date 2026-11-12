@@ -21,11 +21,14 @@ namespace edt {
 		std::function<bool()> game_active{};
 		std::function<void()> draw_game{};
 		std::function<bool(std::string_view)> game_shortcuts{};
+		// #470: while a modal dialog of dialog_service waits for its answer no shortcut fires (Ctrl+S would save under the
+		// question). Null: as without it. The agent's question window is not modal and does not count.
+		std::function<bool()> modal_active{};
 	};
 
 	enum class drawn_layout { editor, game, loading };
 
-	// One frame of the layouts: the shortcut pass, then the loading screen, the game layout or the dockspace with its
+	// One frame of the layouts: the shortcut pass (not while `modal_active` says so), then the loading screen, the game layout or the dockspace with its
 	// menu bar and panels. Without the loading screen it makes the same ImGui calls as before #518.
 	drawn_layout draw_layouts(dockspace& dock, panel_registry& panels, action_registry& actions, const editor_layouts& layouts);
 
@@ -81,6 +84,8 @@ namespace edt {
 			m_layouts.loading_active = std::move(active);
 			m_layouts.draw_loading = std::move(draw);
 		}
+		// #470: see editor_layouts::modal_active.
+		void set_modal_probe(std::function<bool()> active) { m_layouts.modal_active = std::move(active); }
 
 	private:
 		gui::menu_layout_manager m_manager;

@@ -5,7 +5,7 @@
 #include <string>
 #include <utility>
 
-// Where a module's code comes from (MODULE_LAYER.md §6): compiled into the host or a shared library on disk.
+// Where a module's code comes from (MODULE_LAYER.md sec. 6): compiled into the host or a shared library on disk.
 // module_loader opens the source, creates the module through its entry and closes the source only after the
 // module and its layer are gone, so no code of the module can run once the library is released.
 namespace app::modules {
@@ -45,7 +45,7 @@ namespace app::modules {
 	// with the DLL's own directory and the system directories as the only search path for its dependencies, dlopen
 	// with a path (never a bare name, which LD_LIBRARY_PATH and the loader's search order would resolve). A relative
 	// path, a bare name or a file outside the directory is refused by open() before anything is loaded.
-	// On Linux the image is unmapped by close() only if the module keeps hidden visibility (SPIKE-218 §3.5).
+	// On Linux the image is unmapped by close() only if the module keeps hidden visibility (SPIKE-218 sec. 3.5).
 	//
 	// For module authors: the library's static initializers (and DllMain) run inside open(), before the host has
 	// checked snk_module_build_info. They must not use the engine or EnTT; do that in the module's services.

@@ -66,7 +66,7 @@ namespace gs
 	// other tag, res:// included, is refused with std::logic_error.
 	SNK_API std::string module_resource_prefix(std::string_view module);
 
-	// What a game module registers in the engine outside its layer (MODULE_LAYER.md §5), in its layer's storage
+	// What a game module registers in the engine outside its layer (MODULE_LAYER.md sec. 5), in its layer's storage
 	// (data.require<gs::module_context>()). Every registration is kept by the layer and removed when the layer goes, so
 	// the engine holds nothing that refers to the module.
 	class SNK_API module_context
@@ -135,7 +135,7 @@ namespace gs
 	// The engine's module_layer_factory: while a game module is loaded its layer is the game layer, and a fresh empty
 	// one replaces it afterwards. One game module at a time: a second one is refused (std::logic_error) until layers
 	// of several modules are designed (#21). Destroying a module's layer goes: its tasks, its worlds, the rest of the
-	// layer, then the module's services (MODULE_LAYER.md §6).
+	// layer, then the module's services (MODULE_LAYER.md sec. 6).
 	class SNK_API game_layer_factory final : public app::modules::module_layer_factory
 	{
 	public:

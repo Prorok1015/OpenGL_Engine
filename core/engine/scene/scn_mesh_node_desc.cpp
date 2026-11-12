@@ -16,6 +16,8 @@ void scn::mesh_node_desc::deserialize(desc::desc_system& desc_system, const json
 		ind_end = p->to_number<std::size_t>();
 	if (auto const* p = data.if_contains("material"))
 		material = desc_system.get_field_desc<scn::material_desc>(*this, *p);
+	if (auto const* p = data.if_contains("visible"); p && p->is_bool())
+		visible = p->as_bool();
 }
 
 void scn::mesh_node_desc::serialize(json::object& data) const
@@ -28,6 +30,9 @@ void scn::mesh_node_desc::serialize(json::object& data) const
 	data["ind_end"] = ind_end;
 	if (material.get_tag().is_valid())
 		data["material"] = json::value_from(material.get_tag());
+	// Only a hidden mesh writes it, so a resaved file of an imported model stays as it was.
+	if (!visible)
+		data["visible"] = false;
 }
 
 void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name)
@@ -46,5 +51,5 @@ void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_nod
 	if (desc.material.is_valid())
 		reg.emplace_or_replace<scn::material_desc_component>(e, scn::material_desc_component{ .mlt_desc = desc.material });
 
-	reg.emplace_or_replace<scn::renderable>(e);
+	scn::set_visible(reg, e, desc.visible);
 }

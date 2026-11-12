@@ -58,7 +58,7 @@ jobs:
       # Full adds Windows MSVC Shared+PCH (#557): the only Windows build that compiles through the precompiled header
       # (sccache cannot cache /Yu, so it is a cold build), with the shared engine where core/ exports IMGUI_API.
       matrix:
-        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"},{"name":"Windows MSVC Shared+PCH","os":"windows-latest","preset":"ci-windows-msvc-pch-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"}]') }}
+        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-2025","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"},{"name":"Windows MSVC Shared+PCH","os":"windows-2025","preset":"ci-windows-msvc-pch-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-2025","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -74,11 +74,14 @@ jobs:
         with:
           packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
+      # The engine is built with the oldest MSVC it supports (#219): toolset 14.44 (_MSC_VER 1944), installed in the
+      # windows-2025 image next to VS 18's own 14.51.
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          toolset: "14.44"
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -183,6 +186,25 @@ jobs:
           if grep -q "watched for hot reload" "$log"; then echo "::error::the level is watched for hot reload"; exit 1; fi
           if grep -E '\[(error|critical)\]' "$log"; then echo "::error::errors in the game host log"; exit 1; fi
           if grep -F "are still referenced:" "$log"; then echo "::error::resources outlived their layer at shutdown (#657)"; exit 1; fi
+          # #713: a host started in an empty folder writes nothing there; its log is under user:// (the project is read-only).
+          test -f "$user_dir/logs/engine.log"
+          empty="$(mktemp -d)"
+          rc=0
+          (cd "$empty" && env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 "$GITHUB_WORKSPACE/build/ci-linux-clang-debug/apps/game/game" \
+            --config "$GITHUB_WORKSPACE/apps/game/config/game.cfg" --headless --project "$project" \
+            --set game/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 1000 \
+              resource/user_path "$user_dir" \
+            >"$RUNNER_TEMP/game_cwd.out" 2>"$RUNNER_TEMP/game_cwd.log") || rc=$?
+          tail -5 "$RUNNER_TEMP/game_cwd.log"
+          if [ "$rc" -ne 0 ]; then echo "::error::the game host started in an empty folder exited with $rc"; exit 1; fi
+          if [ -n "$(find "$empty" -mindepth 1)" ]; then
+            echo "::error::the game host wrote into the folder it was started from (#713):"; find "$empty" -mindepth 1; exit 1
+          fi
+          if [ "$(tree_hash "$project")" != "$before" ]; then
+            echo "::error::the game host started in an empty folder changed its project folder"; exit 1
+          fi
+          grep -q "mounted read-only; user:// in $user_dir" "$RUNNER_TEMP/game_cwd.log"
+          if grep -E '\[(error|critical)\]' "$RUNNER_TEMP/game_cwd.log"; then echo "::error::errors in the log of the host started in an empty folder"; exit 1; fi
 
       # #591: the host links no editor, MCP or git code and does not load snk_engine (it is the static engine).
       - name: Game host dependency check
@@ -494,6 +516,16 @@ jobs:
           python3 tools/ci/check_engine_components.py --self-test
           python3 tools/ci/check_engine_components.py
 
+      # #219: what the SDK package refuses of an MSVC consumer (an older MSVC than the engine's, a static runtime).
+      - name: Check the SDK's MSVC rule
+        run: cmake -P tools/ci/test_sdk_msvc_check.cmake
+
+      # #219: a game module compiles the public headers without /utf-8, in the code page of the user's machine.
+      - name: Check the public headers are ASCII
+        run: |
+          python3 tools/ci/check_ascii_headers.py --self-test
+          python3 tools/ci/check_ascii_headers.py --repo .
+
       # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
       # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure
       # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.
@@ -723,6 +755,27 @@ jobs:
           if [ "$rc" -ne 2 ]; then echo "expected exit code 2 without --project, got $rc"; exit 1; fi
           grep -q -- "--headless needs --project" headless_out/headless/no_project.log
 
+      # #713: the editor started in an empty folder writes nothing there: its log is the project's .cache/logs/engine.log
+      # (with the lines it logged before the config named the file), its layout and settings go to editor/user_data_path.
+      - name: Headless run from an empty folder writes nothing there
+        run: |
+          empty="$(mktemp -d)"
+          user="$(mktemp -d)"
+          rm -rf projects/sandbox/.cache/logs
+          rc=0
+          (cd "$empty" && env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 "$EDITOR_BIN" --config "$GITHUB_WORKSPACE/Editor/config/editor.cfg" --headless \
+            --project "$GITHUB_WORKSPACE/projects/sandbox" --set editor/startup_level levels/smoke_level.desc \
+            editor/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 1000 editor/user_data_path "$user" \
+            >"$RUNNER_TEMP/editor_cwd.out" 2>"$RUNNER_TEMP/editor_cwd.log") || rc=$?
+          tail -5 "$RUNNER_TEMP/editor_cwd.log"
+          if [ "$rc" -ne 0 ]; then echo "::error::the editor started in an empty folder exited with $rc"; exit 1; fi
+          if [ -n "$(find "$empty" -mindepth 1)" ]; then
+            echo "::error::the editor wrote into the folder it was started from (#713):"; find "$empty" -mindepth 1; exit 1
+          fi
+          log=projects/sandbox/.cache/logs/engine.log
+          test -f "$log"
+          grep -q "opened project" "$log"
+
       # MCP over stdio (#452): an agent drives the headless editor through its stdin/stdout. Every stdout line must be
       # JSON-RPC, problems_list must answer, Play must start, step 2 frames and stop (#491), and closing stdin must end
       # the editor with 0.
@@ -838,6 +891,14 @@ jobs:
             -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true
           tools/headless/check_smoke.sh headless_out/drag_drop/final.png headless_out/drag_drop/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/drag_drop/editor.log 'Editor/Drop' "Added 'base_material' to scene"
+
+      # #713: every run above started with the repository root as the working directory (a GL backend under Xvfb included):
+      # none of them may have left the layout file or a log folder there.
+      - name: Smoke runs leave nothing in the working directory
+        run: |
+          for leftover in layout_settings.ini logs imgui.ini; do
+            if [ -e "$leftover" ]; then echo "::error::a run wrote $leftover into the working directory (#713)"; exit 1; fi
+          done
 
       - name: Upload screenshots, diff images and logs
         if: always()

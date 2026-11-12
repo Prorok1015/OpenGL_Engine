@@ -83,7 +83,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.camera.wireframe = cam.wireframe;
             packet.camera.time = rnd::shader_time(reg.ctx().get<scn::world_time>().seconds);
 
-            auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
+            auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform, scn::renderable>();
             auto mesh_count = meshes_view.size_hint();
             packet.opaque_draws.reserve(mesh_count);
             packet.transparent_draws.reserve(mesh_count);

@@ -15,7 +15,8 @@
 #   bin/snk_engine.dll, lib/snk/snk_engine.lib   a shared build on Windows
 #   lib/cmake/snake_sdk/                snake_sdkConfig.cmake, ...ConfigVersion.cmake,
 #                                       snake_sdk_{shared,static}Targets[-<config>].cmake,
-#                                       SnkGameHost.cmake (a static build: snk_add_game_host, #592)
+#                                       SnkGameHost.cmake (a static build: snk_add_game_host, #592),
+#                                       SnkMsvcCheck.cmake (what the config refuses of an MSVC consumer, #219)
 #
 # One prefix holds both engines, installed from two builds of the same sources (#223): a shared build
 # exports snk::engine (the editor and game modules link it with snk::engine_api; every other target of the set is an
@@ -523,6 +524,11 @@ function(snk_install_sdk)
 		endif()
 	endif()
 
+	# The config refuses an MSVC consumer older than this build's compiler (#219).
+	set(SNK_MSVC_VERSION "")
+	if(MSVC)
+		set(SNK_MSVC_VERSION ${MSVC_VERSION})
+	endif()
 	configure_package_config_file(
 		"${CMAKE_SOURCE_DIR}/cmake/snake_sdkConfig.cmake.in"
 		"${CMAKE_BINARY_DIR}/snake_sdkConfig.cmake"
@@ -534,6 +540,7 @@ function(snk_install_sdk)
 	install(FILES
 		"${CMAKE_BINARY_DIR}/snake_sdkConfig.cmake"
 		"${CMAKE_BINARY_DIR}/snake_sdkConfigVersion.cmake"
+		"${CMAKE_SOURCE_DIR}/cmake/SnkMsvcCheck.cmake"
 		DESTINATION ${SNK_SDK_CMAKE_DIR}
 		COMPONENT snake_sdk)
 	# snk_add_game_host() for a consumer of snk::game_host; the config includes it when the static set is there. The
@@ -554,6 +561,7 @@ function(snk_install_sdk)
 		INSTALL_DESTINATION "${_tree_dir}"
 		INSTALL_PREFIX "${CMAKE_BINARY_DIR}")
 	configure_file("${CMAKE_BINARY_DIR}/snake_sdkConfigVersion.cmake" "${_tree_dir}/snake_sdkConfigVersion.cmake" COPYONLY)
+	configure_file("${CMAKE_SOURCE_DIR}/cmake/SnkMsvcCheck.cmake" "${_tree_dir}/SnkMsvcCheck.cmake" COPYONLY)
 	if(NOT SNK_ENGINE_SHARED AND TARGET game_host)
 		configure_file("${CMAKE_SOURCE_DIR}/cmake/SnkGameHost.cmake" "${_tree_dir}/SnkGameHost.cmake" COPYONLY)
 	endif()

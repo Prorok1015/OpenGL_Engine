@@ -46,11 +46,12 @@ namespace edt
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		if (!reg) {
 			apply_viewports_to_all({}, {});
-			m_selection.refresh(nullptr, {});
+			m_selection.refresh(nullptr, {}, {});
 			why = "(no active world)";
 			return nullptr;
 		}
-		m_selection.refresh(reg, game_view::collect_cameras(*reg));
+		const std::string world = m_get_world_name ? m_get_world_name() : std::string{};
+		m_selection.refresh(reg, game_view::collect_cameras(*reg), world);
 		if (m_selection.cameras().empty()) {
 			apply_viewports_to_all({}, {});
 			why = "(no game camera in this world)";

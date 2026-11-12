@@ -106,9 +106,24 @@ namespace scn {
     // A tree scn::spawn_prefab built: a prefab's hot reload leaves it under the node it was spawned under.
     struct spawned_root_component {};
 
+    // The mark of what the render data extractor draws: a mesh or the sky. Without it the entity is hidden (#560).
     struct renderable {
 
     };
+
+    inline bool is_visible(const entt::registry& reg, entt::entity e)
+    {
+        return reg.all_of<renderable>(e);
+    }
+
+    inline void set_visible(entt::registry& reg, entt::entity e, bool visible)
+    {
+        if (visible) {
+            reg.emplace_or_replace<renderable>(e);
+        } else {
+            reg.remove<renderable>(e);
+        }
+    }
 
     struct sky_component
     {
