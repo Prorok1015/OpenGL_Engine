@@ -211,7 +211,7 @@ struct project_step {
 
 **Записи в проекте:** `applied_steps` в `project.snkproj` перечисляет выполненные шаги. Шаг идемпотентен; запись нужна для отчёта и быстрого `needed`.
 
-**Место кода.** `project_system` (`core/core/project`) сейчас не зависит от `desc`. Реестр шагов и `migrate_project` живут в **новом компоненте `core/core/project_migration`** (зависит от `project`, `desc`, `res`); `prj` остаётся без `desc`.
+**Место кода.** `project_system` (`core/core/project`) сейчас не зависит от `desc`. Реестр шагов и `migrate_project` живут в **новом компоненте `tools/project_migration`** (`snk::project_migration`, STATIC, вне `snk_engine` и SDK; зависит от движка как его потребитель — всё под `core/` собирается как часть `snk_engine`); `prj` остаётся без `desc`.
 
 ### 3.4. Версия `.resource`
 
@@ -240,7 +240,7 @@ struct project_step {
 
 ### 4.1. Ядро
 
-`prj::migrate_project(project, options) → migration_report` в `core/core/project_migration`. Три фазы.
+`prj::migrate_project(project, options) → migration_report` в `tools/project_migration`. Три фазы.
 
 1. **scan.** Обход content roots проекта — только слой проекта, не движка: `*.desc`, `*.resource`, `project.snkproj` и другие файлы версионируемых форматов из §1.5, которые лежат в проекте. Для каждого файла — разбор JSON и пары `(type, version, current)` по всем типизированным объектам. Класс файла:
    - `current`;
@@ -382,7 +382,7 @@ struct project_step {
 |---|---|---|---|---|
 | S0 | Фикстура проекта старых версий (общая для S2–S7): world/prefab v1–v3, camera v1, ресурсы без `.resource`, `.resource` версии 1 (для тестового шага v1→v2 из S4), тип незагруженного модуля, файл `newer`, битый JSON | лежит в `tests/data/projects/`; тесты S2–S7 используют её копию | S | — |
 | S1 | Шаги с контекстом: `migration_step`, `m_described_migrations` в конце класса, out-of-line перегрузка, минор module API; шаги движка с `summary`, 3→4 пишет `ctx.warn` | старый модуль, регистрирующий шаги старым API, работает; тест на warn 3→4; дубль `(type, from)` в двух реестрах — ошибка | S | — |
-| S2 | Скан и план (dry-run) в `core/core/project_migration` | все классы на фикстуре S0, включая `unknown_type` через `desc_system` игрового слоя и `missing_resource`; план со шагами и предупреждениями; хеши файлов до и после совпадают (ничего не записано) | M | S0, S1 |
+| S2 | Скан и план (dry-run) в `tools/project_migration` | все классы на фикстуре S0, включая `unknown_type` через `desc_system` игрового слоя и `missing_resource`; план со шагами и предупреждениями; хеши файлов до и после совпадают (ничего не записано) | M | S0, S1 |
 | S3 | Apply: журнал `in_progress`, бэкап в `.snk/migrations/`, `.gitignore` шаблона, пауза наблюдателя, атомарная запись внутри корня, проверка мимо кэша, автооткат, отчёт | фикстура → текущие версии, отчёт `ok`; искусственный сбой → `rolled_back`, файлы как были, созданные удалены; журнал `in_progress` после убитого процесса распознаётся | M | S2 |
 | S4 | Шаги уровня проекта: реестр `project_step`, `format_version` манифеста, `engine_version`/`migrated_with`/`applied_steps`, хук версии `.resource` (`resource_meta`) | проект старой версии движка после apply открывается без диалога; повторный запуск — «нечего делать»; хук версии `.resource` проверен **тестовым** шагом v1→v2 на фикстуре (текущая версия `.resource` — 1, реальных шагов пока нет) | M | S3 |
 | S5 | Хук для EPIC-57: фазы `pre`/`post` и API `migration_apply_context` (создание файла с записью в отчёт, удаление с бэкапом, перестройка базы ассетов). Сами шаги `asset_ids`/`asset_refs` — в EPIC-57 (S57-12, #776) | тестовые шаги `pre` и `post` на фикстуре: порядок pre → типовые → post; созданный шагом файл в отчёте, откат его удаляет; проверка не считает `__guid` в desc расхождением | S | S4 |
