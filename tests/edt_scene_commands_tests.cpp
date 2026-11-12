@@ -747,4 +747,34 @@ BOOST_AUTO_TEST_CASE(an_inline_desc_is_checked_by_the_schema_of_its_type)
 	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
 }
 
+// #740: a partial patch of an inline material may leave out its __type: the type comes from the component as the patch
+// leaves it, and the material's references are checked by that schema. Over a tag there is no type to take.
+BOOST_AUTO_TEST_CASE(a_partial_patch_of_an_inline_desc_takes_its_type_from_the_component)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto set = [&](const std::string& patch) {
+		return call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":)" + patch + "}");
+	};
+	const auto inline_material = set(R"({"material":{"__type":"material_desc","__parent":"res://base_material.desc"}})");
+	BOOST_REQUIRE_MESSAGE(inline_material.ok, inline_material.error);
+
+	const auto texture = set(R"({"material":{"samplers":["res://t.png"]}})");
+	BOOST_CHECK_MESSAGE(texture.ok, texture.error);
+	const auto& material = child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_object();
+	BOOST_TEST(material.at("__type").as_string() == "material_desc");
+	BOOST_TEST(material.at("samplers").as_array().size() == 1u);
+
+	const auto refused = set(R"({"material":{"samplers":["user://saves/t.png"]}})");
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(refused.error.find("material/samplers/0") != std::string::npos, refused.error);
+	const auto& kept = child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_object();
+	BOOST_TEST(kept.at("samplers").as_array().at(0).as_string() == "res://t.png");
+
+	BOOST_REQUIRE(set(R"({"material":"res://materials/red.mat.desc"})").ok);
+	BOOST_TEST(set(R"({"material":{"samplers":["res://t.png"]}})").code == cmd::codes::invalid_args);
+	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_string() == "res://materials/red.mat.desc");
+}
+
 BOOST_AUTO_TEST_SUITE_END()
