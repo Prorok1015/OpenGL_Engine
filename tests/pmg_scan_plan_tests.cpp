@@ -220,4 +220,68 @@ BOOST_AUTO_TEST_CASE(ABadVersion_IsInvalid_ANewerManifest_IsNewer)
 	BOOST_TEST(newer.files.empty());
 }
 
+// The desc loader reads 128 levels; Boost.JSON's default is 32. A deep prefab is not invalid here.
+BOOST_AUTO_TEST_CASE(ADeeplyNestedDesc_IsReadAsTheLoaderReadsIt)
+{
+	scratch_project project;
+	std::string deep = R"({"__type":"camera_desc","__version":1,"transform":{"position":[1,2,3],"rotation":[0,0,0]},"pad":)";
+	for (int i = 0; i < 60; ++i) deep += R"({"a":)";
+	deep += "1";
+	for (int i = 0; i < 60; ++i) deep += "}";
+	deep += "}";
+	project.write("res/deep.desc", deep);
+	const pmg::scan_result scan = pmg::scan_project(project.root, *descs);
+	BOOST_TEST((kind_of(scan, "res/deep.desc") == pmg::file_class::outdated));
+	const pmg::migration_plan plan = pmg::plan_migration(project.root, scan, *descs);
+	BOOST_TEST(plan.files.size() == 1u);
+}
+
+// One folder that cannot be listed is reported; the files after it are still scanned.
+BOOST_AUTO_TEST_CASE(AFolderThatCannotBeListed_IsReported_TheRestIsScanned)
+{
+	scratch_project project;
+	project.write("res/a/locked/x.desc", R"({"__type":"camera_desc","__version":2})");
+	project.write("res/z/after.desc", R"({"__type":"camera_desc","__version":1})");
+	const fs::path locked = project.root / "res/a/locked";
+	std::error_code ec;
+	fs::permissions(locked, fs::perms::none, ec);
+	std::error_code probe;
+	fs::directory_iterator still_readable(locked, probe);
+	if (ec || !probe) {
+		fs::permissions(locked, fs::perms::owner_all, ec);
+		BOOST_TEST_MESSAGE("folder permissions do not stop this user here: nothing to check");
+		return;
+	}
+	const pmg::scan_result scan = pmg::scan_project(project.root, *descs);
+	fs::permissions(locked, fs::perms::owner_all, ec);
+	BOOST_TEST((kind_of(scan, "res/a/locked") == pmg::file_class::invalid));
+	BOOST_TEST((kind_of(scan, "res/z/after.desc") == pmg::file_class::outdated));
+}
+
+// A content root that is a link may lead out of the project: it is reported, not followed.
+BOOST_AUTO_TEST_CASE(AContentRootThatIsALink_IsNotFollowed)
+{
+	scratch_project project;
+	scratch_project outside;
+	outside.write("elsewhere/x.desc", R"({"__type":"camera_desc","__version":1})");
+	fs::remove_all(project.root / "res");
+	std::error_code link_error;
+	fs::create_directory_symlink(outside.root / "elsewhere", project.root / "res", link_error);
+	if (link_error) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << link_error.message());
+		return;
+	}
+	const pmg::scan_result scan = pmg::scan_project(project.root, *descs);
+	BOOST_TEST((kind_of(scan, "res") == pmg::file_class::invalid));
+	BOOST_TEST((scan.find("res/x.desc") == nullptr));
+}
+
+BOOST_AUTO_TEST_CASE(AFormatVersionOutOfRange_IsInvalid)
+{
+	scratch_project project;
+	project.write("project.snkproj", R"({"format_version": 18446744073709551615, "name": "Scratch", "engine_version": "0.1.0"})");
+	const pmg::scan_result scan = pmg::scan_project(project.root, *descs);
+	BOOST_TEST((scan.manifest.kind == pmg::file_class::invalid));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

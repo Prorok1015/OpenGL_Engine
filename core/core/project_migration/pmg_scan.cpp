@@ -1,5 +1,6 @@
 #include <snk/project_migration/pmg_scan.h>
 #include <snk/common/fs_paths.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/project/prj_manifest.h>
 #include <boost/json.hpp>
@@ -68,9 +69,21 @@ namespace
 		if (size > max_bytes) return { {}, std::format("too big ({} bytes, at most {})", size, max_bytes) };
 		std::ifstream in(path, std::ios::binary);
 		if (!in) return { {}, "cannot be opened" };
-		std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		// At most one byte past the limit: a file that grew since its size was read is still refused, not read whole.
+		std::string text(static_cast<std::size_t>(std::min<std::uintmax_t>(size, max_bytes) + 1), '\0');
+		in.read(text.data(), static_cast<std::streamsize>(text.size()));
 		if (in.bad()) return { {}, "cannot be read" };
+		text.resize(static_cast<std::size_t>(in.gcount()));
+		if (text.size() > max_bytes) return { {}, std::format("too big (more than {} bytes)", max_bytes) };
 		return { std::move(text), {} };
+	}
+
+	// The depth the desc loader allows (desc_adapter_t), so a file the engine loads is not refused here.
+	json::value parse_desc_json(std::string_view text, boost::system::error_code& error)
+	{
+		json::parse_options options;
+		options.max_depth = 128;
+		return json::parse(text, error, {}, options);
 	}
 
 	// The version of an object as desc_system::migrate_typed reads it; nullopt for one it refuses.
@@ -137,32 +150,46 @@ namespace
 		}
 	};
 
-	void scan_desc(prj::migration::scanned_file& file, const fs::path& path, const desc::desc_system& descs, std::uintmax_t max_bytes)
+	void set_invalid(prj::migration::scanned_file& file, std::string reason)
+	{
+		file.kind = file_class::invalid;
+		file.reason = std::move(reason);
+		file.objects.clear();
+		file.unknown_types.clear();
+	}
+
+	// Reads and parses a desc file; on a refusal `file` is invalid and the result is null.
+	json::value read_desc(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes)
 	{
 		read_result read = read_file(path, max_bytes);
 		if (!read.error.empty()) {
-			file.kind = file_class::invalid;
-			file.reason = std::move(read.error);
-			return;
+			set_invalid(file, std::move(read.error));
+			return {};
 		}
 		boost::system::error_code error;
-		const json::value root = json::parse(read.text, error);
+		json::value root = parse_desc_json(read.text, error);
 		if (error) {
-			file.kind = file_class::invalid;
-			file.reason = std::format("not JSON: {}", error.message());
-			return;
+			set_invalid(file, std::format("not JSON: {}", error.message()));
+			return {};
 		}
 		if (!root.is_object()) {
-			file.kind = file_class::invalid;
-			file.reason = "the root is not a JSON object";
-			return;
+			set_invalid(file, "the root is not a JSON object");
+			return {};
 		}
+		return root;
+	}
 
+	// The class of a desc file from its typed objects.
+	void classify(prj::migration::scanned_file& file, const json::object& root, const desc::desc_system& descs)
+	{
+		file.kind = file_class::current;
+		file.reason.clear();
+		file.objects.clear();
+		file.unknown_types.clear();
 		object_walker walker{ descs, file.objects, {} };
-		walker.object(root.as_object(), "");
+		walker.object(root, "");
 		if (!walker.bad_version.empty()) {
-			file.kind = file_class::invalid;
-			file.reason = std::move(walker.bad_version);
+			set_invalid(file, std::move(walker.bad_version));
 			return;
 		}
 
@@ -188,6 +215,12 @@ namespace
 		file.kind = kind;
 	}
 
+	void scan_desc(prj::migration::scanned_file& file, const fs::path& path, const desc::desc_system& descs, std::uintmax_t max_bytes)
+	{
+		const json::value root = read_desc(file, path, max_bytes);
+		if (root.is_object()) classify(file, root.as_object(), descs);
+	}
+
 	bool is_hidden(const fs::path& name)
 	{
 		const std::string text = fs_paths::utf8_of(name);
@@ -203,38 +236,41 @@ namespace
 		return fs::is_regular_file(fs::symlink_status(sidecar, ec));
 	}
 
-	void scan_root(prj::migration::scan_result& result, const fs::path& project, const fs::path& content_root, const desc::desc_system& descs,
-		const prj::migration::scan_options& options)
+	struct root_walk
 	{
-		std::error_code ec;
-		const auto root_status = fs::symlink_status(content_root, ec);
-		if (ec || !fs::is_directory(root_status)) return;
+		prj::migration::scan_result& result;
+		const fs::path& project;
+		const desc::desc_system& descs;
+		const prj::migration::scan_options& options;
 
-		fs::recursive_directory_iterator it(content_root, fs::directory_options::none, ec);
-		const fs::recursive_directory_iterator end;
-		for (; !ec && it != end; it.increment(ec)) {
-			const fs::directory_entry& entry = *it;
-			std::error_code status_error;
-			const fs::file_status status = entry.symlink_status(status_error);
-			const fs::path& path = entry.path();
+		void refuse(const fs::path& path, std::string reason)
+		{
+			prj::migration::scanned_file file;
+			file.path = fs_paths::generic_utf8_of(path.lexically_relative(project));
+			egLOG_WARN("project/migrate", "{}: {}", file.path, reason);
+			set_invalid(file, std::move(reason));
+			result.files.push_back(std::move(file));
+		}
+
+		void entry(const fs::path& path, const fs::file_status& status)
+		{
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
-			if (is_hidden(path.filename()) || (at_project_root && (name == "code" || name == "build"))) {
-				if (fs::is_directory(status)) it.disable_recursion_pending();
-				continue;
+			if (is_hidden(path.filename()) || (at_project_root && (name == "code" || name == "build"))) return;
+			if (at_project_root && name == "project.snkproj") return;
+			// Only a real folder is entered: a link or a junction to one is reported, never followed.
+			if (fs::is_directory(status)) {
+				folder(path);
+				return;
 			}
-			if (fs::is_directory(status)) continue;
-			if (at_project_root && name == "project.snkproj") continue;
+			if (!fs::is_regular_file(status)) {
+				refuse(path, fs::is_symlink(status) ? "a link: it is not followed" : "not a regular file");
+				return;
+			}
 
 			prj::migration::scanned_file file;
 			file.path = fs_paths::generic_utf8_of(path.lexically_relative(project));
-			if (status_error || !fs::is_regular_file(status)) {
-				file.kind = file_class::invalid;
-				file.reason = fs::is_symlink(status) ? "a link: it is not followed" : "not a regular file";
-				result.files.push_back(std::move(file));
-				continue;
-			}
 			const std::string extension = lower(fs_paths::utf8_of(path.extension()));
 			if (extension == ".desc") {
 				scan_desc(file, path, descs, options.max_file_bytes);
@@ -246,6 +282,48 @@ namespace
 			}
 			result.files.push_back(std::move(file));
 		}
+
+		// One folder at a time: a folder that cannot be listed is reported and the walk goes on with the others.
+		void folder(const fs::path& dir)
+		{
+			std::error_code ec;
+			fs::directory_iterator it(dir, fs::directory_options::none, ec);
+			if (ec) {
+				refuse(dir, std::format("the folder cannot be listed: {}", ec.message()));
+				return;
+			}
+			std::vector<std::pair<fs::path, fs::file_status>> entries;
+			for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+				std::error_code status_error;
+				const fs::file_status status = it->symlink_status(status_error);
+				entries.emplace_back(it->path(), status_error ? fs::file_status{ fs::file_type::unknown } : status);
+			}
+			if (ec) refuse(dir, std::format("the folder could not be listed to the end: {}", ec.message()));
+			for (const auto& [path, status] : entries) entry(path, status);
+		}
+	};
+
+	void scan_root(prj::migration::scan_result& result, const fs::path& project, const fs::path& content_root, const desc::desc_system& descs,
+		const prj::migration::scan_options& options)
+	{
+		root_walk walk{ result, project, descs, options };
+		std::error_code ec;
+		const fs::file_status status = fs::symlink_status(content_root, ec);
+		if (ec || status.type() == fs::file_type::not_found) return;
+		if (!fs::is_directory(status)) {
+			walk.refuse(content_root, fs::is_symlink(status) ? "the content root is a link: it is not followed" : "the content root is not a folder");
+			return;
+		}
+		// A folder on the way to the root may be a link out of the project.
+		std::error_code project_error;
+		std::error_code root_error;
+		const fs::path real_project = fs::weakly_canonical(project, project_error);
+		const fs::path real_root = fs::weakly_canonical(content_root, root_error);
+		if (project_error || root_error || !fs_paths::is_inside(real_project, real_root)) {
+			walk.refuse(content_root, "the content root is outside the project (a link on its way): it is not scanned");
+			return;
+		}
+		walk.folder(content_root);
 	}
 
 	prj::migration::manifest_state scan_manifest(const fs::path& root, std::optional<prj::manifest>& manifest)
@@ -261,7 +339,13 @@ namespace
 		boost::system::error_code error;
 		const json::value raw = json::parse(read.text, error);
 		if (!error && raw.is_object()) {
-			if (const auto* format = raw.as_object().if_contains("format_version"); format && format->is_int64()) {
+			const auto* format = raw.as_object().if_contains("format_version");
+			if (format && format->is_uint64()) {
+				state.kind = file_class::invalid;
+				state.reason = "format_version is out of range";
+				return state;
+			}
+			if (format && format->is_int64()) {
 				state.format_version = static_cast<int>(std::clamp<std::int64_t>(format->as_int64(), 0, std::numeric_limits<int>::max()));
 				if (format->as_int64() > prj::k_manifest_format_version) {
 					state.kind = file_class::newer;
@@ -295,12 +379,13 @@ namespace
 			for (const auto& member : value.as_object()) {
 				flatten(member.value(), std::format("{}/{}", pointer, escape_pointer_token(member.key())), leaves);
 			}
-		} else if (value.is_array()) {
+		} else if (value.is_array() && !(value.as_array().empty() || value.as_array().front().is_number())) {
 			const auto& array = value.as_array();
 			for (std::size_t i = 0; i < array.size(); ++i) {
 				flatten(array[i], std::format("{}/{}", pointer, i), leaves);
 			}
 		} else {
+			// A numeric array (a vector, geometry) is one leaf: a file of inline geometry is not a map of millions of numbers.
 			leaves.emplace(pointer, &value);
 		}
 	}
@@ -439,15 +524,17 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 	for (scanned_file& file : plan.scan.files) {
 		if (file.kind != file_class::outdated) continue;
 
-		read_result read = read_file(root / fs_paths::path_from_utf8(file.path), options.scan.max_file_bytes);
-		boost::system::error_code error;
-		json::value before;
-		if (read.error.empty()) before = json::parse(read.text, error);
-		if (!read.error.empty() || error || !before.is_object()) {
-			file.kind = file_class::invalid;
-			file.reason = read.error.empty() ? std::string{ "changed since the scan: not a JSON object any more" } : read.error;
+		// The file as it is now, not as the scan saw it: its steps come from what will be migrated.
+		const fs::path path = root / fs_paths::path_from_utf8(file.path);
+		std::error_code status_error;
+		if (!fs::is_regular_file(fs::symlink_status(path, status_error))) {
+			set_invalid(file, "changed since the scan: not a regular file any more");
 			continue;
 		}
+		const json::value before = read_desc(file, path, options.scan.max_file_bytes);
+		if (!before.is_object()) continue;
+		classify(file, before.as_object(), game_layer);
+		if (file.kind != file_class::outdated) continue;
 
 		file_plan planned;
 		planned.path = file.path;
@@ -455,8 +542,7 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 		try {
 			game_layer.migrate_tree(after.as_object(), file.path, planned.warnings);
 		} catch (const std::exception& e) {
-			file.kind = file_class::invalid;
-			file.reason = e.what();
+			set_invalid(file, e.what());
 			continue;
 		}
 		for (const typed_object& object : file.objects) {
