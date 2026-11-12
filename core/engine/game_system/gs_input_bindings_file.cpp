@@ -1,10 +1,11 @@
 #include <snk/game/gs_input_bindings_file.h>
 #include <snk/input/inp_input_stack.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/fs_paths.h>
+#include <snk/project/prj_json_text.h>
 #include <boost/json.hpp>
 #include <format>
-#include <fstream>
-#include <sstream>
+#include <algorithm>
 #include <system_error>
 #include <variant>
 
@@ -13,6 +14,10 @@ namespace json = boost::json;
 namespace
 {
 	constexpr std::string_view k_type = "user_input_bindings";
+	// The file is the player's, but a profile can be shared or damaged: what it may hold is bounded.
+	constexpr std::uint64_t k_max_file_bytes = 256u * 1024u;
+	constexpr std::size_t k_max_actions = 256;
+	constexpr std::size_t k_max_bindings_per_action = 16;
 
 	std::string string_field(const json::object& object, std::string_view key, bool& not_text)
 	{
@@ -70,7 +75,10 @@ inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_vi
 	const json::value* actions = document->if_contains("actions");
 	if (!actions || !actions->is_array()) return result;
 
-	for (std::size_t i = 0; i < actions->as_array().size(); ++i) {
+	if (actions->as_array().size() > k_max_actions) {
+		egLOG_WARN("input", "{}: /actions: {} actions, only the first {} are read", file, actions->as_array().size(), k_max_actions);
+	}
+	for (std::size_t i = 0; i < std::min(actions->as_array().size(), k_max_actions); ++i) {
 		const json::object* entry = actions->as_array()[i].if_object();
 		const json::value* name = entry ? entry->if_contains("name") : nullptr;
 		const json::value* bindings = entry ? entry->if_contains("bindings") : nullptr;
@@ -79,7 +87,7 @@ inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_vi
 			continue;
 		}
 		std::vector<inp::action_binding> parsed;
-		for (std::size_t j = 0; j < bindings->as_array().size(); ++j) {
+		for (std::size_t j = 0; j < std::min(bindings->as_array().size(), k_max_bindings_per_action); ++j) {
 			parse_binding(bindings->as_array()[j], parsed, std::format("{}: /actions/{}/bindings/{}", file, i, j));
 		}
 		result.set(std::string{ name->as_string() }, std::move(parsed));
@@ -112,36 +120,23 @@ std::string gs::write_user_bindings(const inp::user_bindings& bindings)
 
 inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file)
 {
-	std::error_code ec;
-	if (!std::filesystem::exists(file, ec)) return {};
-	std::ifstream in(file, std::ios::binary);
-	if (!in) {
-		egLOG_WARN("input", "cannot read {}", file.string());
+	const std::string name = fs_paths::utf8_of(file);
+	const prj::project_file_location where = prj::project_file_location_of(file);
+	const prj::project_file_text found = prj::read_project_file(where.root, where.relative, k_max_file_bytes);
+	if (!found.error.empty()) {
+		egLOG_WARN("input", "cannot read {}: {}", name, found.error);
 		return {};
 	}
-	std::ostringstream text;
-	text << in.rdbuf();
-	return parse_user_bindings(text.str(), file.string());
+	if (!found.exists) return {};
+	return parse_user_bindings(found.text, name);
 }
 
 bool gs::save_user_bindings(const std::filesystem::path& file, const inp::user_bindings& bindings)
 {
 	std::error_code ec;
 	if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
-	std::filesystem::path temp = file;
-	temp += ".tmp";
-	{
-		std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-		out << write_user_bindings(bindings);
-		if (!out) {
-			egLOG_WARN("input", "cannot write {}", temp.string());
-			return false;
-		}
-	}
-	std::filesystem::rename(temp, file, ec);
-	if (ec) {
-		egLOG_WARN("input", "cannot replace {}: {}", file.string(), ec.message());
-		std::filesystem::remove(temp, ec);
+	if (const auto error = prj::write_text_atomically(file, write_user_bindings(bindings))) {
+		egLOG_WARN("input", "cannot write {}: {}", fs_paths::utf8_of(file), *error);
 		return false;
 	}
 	return true;

@@ -18,6 +18,9 @@ inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::st
 
 	std::vector<action_binding> bindings = current_bindings(*this, *target);
 	if (slot > bindings.size()) return { rebind_status::bad_slot, {} };
+	for (std::size_t i = 0; i < bindings.size(); ++i) {
+		if (i != slot && bindings[i] == binding) return { rebind_status::duplicate, {} };
+	}
 
 	for (const inp::action& other : actions) {
 		if (other.name == action) continue;
@@ -54,4 +57,20 @@ inp::action_map inp::user_bindings::apply(const action_map& project) const
 		effective.add(a.name, current_bindings(*this, a));
 	}
 	return effective;
+}
+
+std::vector<inp::binding_conflict> inp::find_binding_conflicts(const action_map& map)
+{
+	std::vector<binding_conflict> found;
+	const auto actions = map.actions();
+	for (std::size_t i = 0; i < actions.size(); ++i) {
+		for (std::size_t j = i + 1; j < actions.size(); ++j) {
+			for (const action_binding& binding : actions[i].bindings) {
+				if (std::ranges::find(actions[j].bindings, binding) != actions[j].bindings.end()) {
+					found.push_back({ binding, actions[i].name, actions[j].name });
+				}
+			}
+		}
+	}
+	return found;
 }

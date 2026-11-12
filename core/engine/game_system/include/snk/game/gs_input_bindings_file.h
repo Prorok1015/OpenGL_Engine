@@ -16,8 +16,10 @@ namespace gs
 	SNK_API inp::user_bindings parse_user_bindings(std::string_view text, std::string_view source = {});
 	SNK_API std::string write_user_bindings(const inp::user_bindings& bindings);
 
-	// A file that is not there reads as no bindings without a warning. Main thread.
+	// A file that is not there reads as no bindings without a warning; a link, a folder or a file over 256 KiB at its name
+	// is warned about and read as none. At most 256 actions of 16 bindings are read. Main thread.
 	SNK_API inp::user_bindings load_user_bindings(const std::filesystem::path& file);
-	// Writes next to the file and renames over it, so a crash leaves the old one; false (and a warning) when that failed.
+	// prj::write_text_atomically (a temp file next to it, renamed over it, so a crash leaves the old one); false (and a
+	// warning) when that failed.
 	SNK_API bool save_user_bindings(const std::filesystem::path& file, const inp::user_bindings& bindings);
 }

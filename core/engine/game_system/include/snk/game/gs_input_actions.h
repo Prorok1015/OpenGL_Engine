@@ -13,6 +13,15 @@ namespace inp { class action_map; }
 
 namespace gs
 {
+	// What rebind did: `result` says whether the binding took; `saved` is false when it did but the file could not be
+	// written (the change holds for this run only).
+	struct rebind_outcome
+	{
+		inp::rebind_result result{};
+		bool saved = true;
+		bool ok() const { return result.ok(); }
+	};
+
 	// The project's game actions (manifest field `input_actions`, WORLD_BUS.md 4.1): loads the desc, rebuilds the map
 	// when the file changes on disk and keeps the last good map while a broken edit is fixed. gs::route_input hands the
 	// map to the worlds. Main thread.
@@ -37,13 +46,16 @@ namespace gs
 		// The project's map as written, for a UI that offers "reset". Null when map() is.
 		std::shared_ptr<const inp::action_map> project_map() const { return m_project; }
 
-		// The player's bindings live in `folder`/<project name>.json (#736); an empty folder keeps them in memory only. They
+		// The player's bindings live in `folder`, one file per project named by the hash of the project name (#736); an empty folder keeps them in memory only. They
 		// are read when the project opens and written after each change.
 		void set_user_folder(std::filesystem::path folder);
 		const inp::user_bindings& user_bindings() const { return m_user; }
-		inp::rebind_result rebind(std::string_view action, std::size_t slot, inp::action_binding binding);
+		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding);
+		// False when the action had no change; the file of the others is written again.
 		bool reset_binding(std::string_view action);
 		void reset_all_bindings();
+		// False after a change the file could not take, until the next one that it does.
+		bool user_file_saved() const { return m_saved; }
 
 	private:
 		void drop();
@@ -60,6 +72,7 @@ namespace gs
 		std::filesystem::path m_user_folder{};
 		std::filesystem::path m_user_file{};
 		std::string m_project_name{};
+		bool m_saved = true;
 		bool m_changed = false;
 		bool m_built = false;
 		bool m_reported = false;

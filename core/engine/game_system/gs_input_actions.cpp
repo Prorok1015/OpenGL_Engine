@@ -4,17 +4,26 @@
 #include <snk/project/prj_project.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/ds/ds_type_id.hpp>
 #include <algorithm>
 #include <cctype>
+#include <format>
 
 namespace
 {
+	// A name from project.snkproj is anything a repository says: the file is named by the hash of the raw name, with a short
+	// ASCII prefix only for a person to tell the files apart (never a bare Windows device name, the hash follows a dash).
 	std::string file_stem(std::string_view project_name)
 	{
-		std::string stem{ project_name };
-		std::ranges::replace_if(stem, [](char c) { return !(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.'); }, '_');
-		return stem;
+		std::string prefix;
+		for (const char c : project_name) {
+			if (prefix.size() == 24) break;
+			if (std::isalnum(static_cast<unsigned char>(c))) prefix += c;
+		}
+		const std::string hash = std::format("{:016x}", ds::fnv1a_64(project_name));
+		return prefix.empty() ? hash : prefix + "-" + hash;
 	}
+}
 }
 
 gs::input_actions::input_actions(res::resource_system& resources)
@@ -77,22 +86,29 @@ void gs::input_actions::load_user()
 void gs::input_actions::rebuild_effective()
 {
 	m_map = std::make_shared<const inp::action_map>(m_user.apply(*m_project));
+	// A file or an edit of the desc can leave one binding on two actions; rebind never does. Said once per rebuild, and
+	// only for what the project's own map does not already have.
+	const auto already = inp::find_binding_conflicts(*m_project);
+	for (const auto& conflict : inp::find_binding_conflicts(*m_map)) {
+		if (std::ranges::find(already, conflict) == already.end()) {
+			egLOG_WARN("input", "actions '{}' and '{}' share a binding", conflict.first, conflict.second);
+		}
+	}
 }
 
 void gs::input_actions::save_user()
 {
-	if (!m_user_file.empty()) save_user_bindings(m_user_file, m_user);
+	m_saved = m_user_file.empty() || save_user_bindings(m_user_file, m_user);
 }
 
-inp::rebind_result gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding)
+gs::rebind_outcome gs::input_actions::rebind(std::string_view action, std::size_t slot, inp::action_binding binding)
 {
-	if (!m_project) return { inp::rebind_status::unknown_action, {} };
+	if (!m_project) return { { inp::rebind_status::unknown_action, {} }, true };
 	const inp::rebind_result result = m_user.rebind(*m_project, action, slot, binding);
-	if (result.ok()) {
-		rebuild_effective();
-		save_user();
-	}
-	return result;
+	if (!result.ok()) return { result, true };
+	rebuild_effective();
+	save_user();
+	return { result, m_saved };
 }
 
 bool gs::input_actions::reset_binding(std::string_view action)

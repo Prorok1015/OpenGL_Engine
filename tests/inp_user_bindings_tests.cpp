@@ -86,6 +86,29 @@ BOOST_AUTO_TEST_CASE(TheSameBindingOnTheSameAction_IsNoConflict)
 	BOOST_TEST(user.rebind(project, "MoveLeft", 1, KB::LEFT).ok());
 }
 
+BOOST_AUTO_TEST_CASE(TheSameKeyInTwoSlotsOfOneAction_IsRefused)
+{
+	const inp::action_map project = project_map();
+	inp::user_bindings user;
+	const auto result = user.rebind(project, "MoveLeft", 0, KB::LEFT);
+	BOOST_TEST((result.status == inp::rebind_status::duplicate));
+	BOOST_TEST(user.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ASharedBinding_IsFoundAndNamedOnce_AndAMapWithoutOneHasNone)
+{
+	BOOST_TEST(inp::find_binding_conflicts(project_map()).empty());
+	inp::action_map map = project_map();
+	inp::action_map shared;
+	shared.add("MoveLeft", { KB::A });
+	shared.add("MoveRight", { KB::A, KB::D });
+	const auto found = inp::find_binding_conflicts(shared);
+	BOOST_REQUIRE_EQUAL(found.size(), 1u);
+	BOOST_TEST(found[0].first == "MoveLeft");
+	BOOST_TEST(found[0].second == "MoveRight");
+	BOOST_TEST((found[0].binding == inp::action_binding{ KB::A }));
+}
+
 BOOST_AUTO_TEST_CASE(AnUnknownAction_IsRefused)
 {
 	const inp::action_map project = project_map();

@@ -84,6 +84,28 @@ BOOST_AUTO_TEST_CASE(SaveCreatesTheFolder_ReplacesTheFile_AndLeavesNoTemporaryOn
 	BOOST_TEST(!std::filesystem::exists(dir.path / "settings" / "game.json.tmp"));
 }
 
+BOOST_AUTO_TEST_CASE(MoreThanTheLimitOfActionsAndBindings_IsCut)
+{
+	std::string text = R"json({"__type":"user_input_bindings","__version":1,"actions":[)json";
+	for (int i = 0; i < 300; ++i) {
+		text += std::string(i ? "," : "") + "{\"name\":\"A" + std::to_string(i) + "\",\"bindings\":[";
+		for (int j = 0; j < 20; ++j) text += std::string(j ? "," : "") + R"json({"key":"Q"})json";
+		text += "]}";
+	}
+	text += "]}";
+	const inp::user_bindings user = gs::parse_user_bindings(text);
+	BOOST_TEST(user.overrides().size() == 256u);
+	BOOST_TEST(user.overrides().at("A0").size() == 16u);
+}
+
+BOOST_AUTO_TEST_CASE(AFileOverTheLimit_GivesNoBindings)
+{
+	temp_folder dir;
+	const auto file = dir.path / "big.json";
+	std::ofstream(file) << R"json({"__type":"user_input_bindings","__version":1,"actions":[],"pad":")json" << std::string(300 * 1024, 'x') << "\"}";
+	BOOST_TEST(gs::load_user_bindings(file).empty());
+}
+
 BOOST_AUTO_TEST_CASE(ABrokenFileOnDisk_GivesNoBindings)
 {
 	temp_folder dir;

@@ -12,15 +12,25 @@
 // so the ids a module looked up stay valid.
 namespace inp
 {
-	enum class rebind_status { applied, unknown_action, bad_slot, conflict };
+	enum class rebind_status { applied, unknown_action, bad_slot, conflict, duplicate };
 
 	struct rebind_result
 	{
 		rebind_status status = rebind_status::applied;
-		// With `conflict`: the action that already has the binding.
+		// With `conflict`: the action that already has the binding. `duplicate`: the action has it in another slot.
 		std::string conflict_with{};
 		bool ok() const { return status == rebind_status::applied; }
 	};
+
+	// A binding two actions of a map share (the player's file or an edit of the desc can make one; rebind cannot).
+	struct binding_conflict
+	{
+		action_binding binding;
+		std::string first;
+		std::string second;
+		bool operator==(const binding_conflict&) const = default;
+	};
+	SNK_API std::vector<binding_conflict> find_binding_conflicts(const action_map& map);
 
 	class SNK_API user_bindings
 	{
@@ -28,7 +38,7 @@ namespace inp
 		using overrides_map = std::map<std::string, std::vector<action_binding>, std::less<>>;
 
 		// Puts `binding` at `slot` of the action's current bindings (slot == their count adds one). A binding another action
-		// of the effective map already has is a conflict, and nothing changes.
+		// of the effective map already has is a conflict, one the action has in another slot a duplicate; nothing changes.
 		rebind_result rebind(const action_map& project, std::string_view action, std::size_t slot, action_binding binding);
 		// Drops the change of one action; false when it had none.
 		bool reset(std::string_view action);

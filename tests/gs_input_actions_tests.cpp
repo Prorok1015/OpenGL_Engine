@@ -12,7 +12,9 @@
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <string>
@@ -693,7 +695,7 @@ BOOST_AUTO_TEST_CASE(ABrokenEdit_KeepsThePreviousActions)
 BOOST_AUTO_TEST_CASE(TheUserBindings_AreAppliedKeepTheIdsAndSurviveAnEditOfTheDesc)
 {
 	gs::input_actions actions(*rs);
-	const auto folder = std::filesystem::temp_directory_path() / "snk_gs_user_bindings_test";
+	const auto folder = std::filesystem::temp_directory_path() / ("snk_gs_user_bindings_" + std::to_string(reinterpret_cast<std::uintptr_t>(&actions)));
 	std::filesystem::remove_all(folder);
 	actions.set_user_folder(folder);
 	const auto tag = put("actions.desc", ACTIONS_SPACE);
@@ -706,7 +708,12 @@ BOOST_AUTO_TEST_CASE(TheUserBindings_AreAppliedKeepTheIdsAndSurviveAnEditOfTheDe
 	BOOST_REQUIRE(actions.rebind("Jump", 0, KB::K).ok());
 	BOOST_TEST((actions.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::K }));
 	BOOST_TEST((actions.project_map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::SPACE }));
-	BOOST_TEST(std::filesystem::exists(folder / "Game.json"));
+	std::size_t written = 0;
+	for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+		BOOST_TEST(entry.path().extension() == ".json");
+		++written;
+	}
+	BOOST_TEST(written == 1u);
 
 	put("actions.desc", ACTIONS_J);
 	rs->signal_changed(tag);
@@ -728,6 +735,28 @@ BOOST_AUTO_TEST_CASE(TheUserBindings_AreAppliedKeepTheIdsAndSurviveAnEditOfTheDe
 	BOOST_TEST(again.reset_binding("Jump"));
 	BOOST_TEST((again.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::J }));
 	std::filesystem::remove_all(folder);
+}
+
+BOOST_AUTO_TEST_CASE(AChangeTheFileCannotTake_IsAppliedAndSaysItWasNotSaved)
+{
+	gs::input_actions actions(*rs);
+	const auto base = std::filesystem::temp_directory_path() / ("snk_gs_user_blocker_" + std::to_string(reinterpret_cast<std::uintptr_t>(&actions)));
+	std::filesystem::remove_all(base);
+	std::filesystem::create_directories(base);
+	std::ofstream(base / "blocker") << "a file where a folder should be";
+	actions.set_user_folder(base / "blocker" / "bindings");
+	const auto tag = put("actions.desc", ACTIONS_SPACE);
+	actions.update(tag.view(), "Game");
+	pump();
+	actions.update(tag.view(), "Game");
+	BOOST_REQUIRE(actions.map());
+
+	const gs::rebind_outcome outcome = actions.rebind("Jump", 0, KB::K);
+	BOOST_TEST(outcome.ok());
+	BOOST_TEST(!outcome.saved);
+	BOOST_TEST(!actions.user_file_saved());
+	BOOST_TEST((actions.map()->find(actions.map()->id("Jump"))->bindings == std::vector<inp::action_binding>{ KB::K }));
+	std::filesystem::remove_all(base);
 }
 
 BOOST_AUTO_TEST_CASE(NoTag_NoMap)
