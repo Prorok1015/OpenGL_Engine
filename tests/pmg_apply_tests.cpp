@@ -403,6 +403,8 @@ BOOST_AUTO_TEST_CASE(ARollbackThatStopped_CanRunAgain)
 	};
 	BOOST_REQUIRE(pmg::rollback_migration(copy.root(), "test-migration", failing).has_value());
 	BOOST_TEST((content_of(copy.root()) != before));
+	BOOST_TEST((pmg::unfinished_migrations(copy.root()) == std::vector<std::string>{ "test-migration" }));
+	BOOST_TEST(json::parse(read_text(copy.root() / ".snk/migrations/test-migration/report.json")).at("status").as_string() == "rollback_failed");
 
 	std::vector<std::string> events;
 	pmg::rollback_context context;
@@ -412,6 +414,7 @@ BOOST_AUTO_TEST_CASE(ARollbackThatStopped_CanRunAgain)
 	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
 	BOOST_TEST((content_of(copy.root()) == before));
 	BOOST_TEST((events == std::vector<std::string>{ "pause", "resume" }));
+	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
 }
 
 // A journal is a file anyone can edit: a created file outside the content roots is refused and stays.

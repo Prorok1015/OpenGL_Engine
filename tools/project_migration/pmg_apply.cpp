@@ -113,7 +113,10 @@ namespace
 	{
 		std::string md = std::format("# Migration {}\n\nStatus: **{}**. Engine {} -> {}. Backup: `{}`.\n", report.id, to_string(report.status),
 			report.engine_before, report.engine_after, report.backup);
-		if (!report.error.empty()) md += std::format("\nRolled back: {}\n", report.error);
+		if (!report.error.empty()) {
+		const std::string_view label = report.status == migration_status::rollback_failed ? "Rollback failed" : "Rolled back";
+		md += std::format("\n{}: {}\n", label, report.error);
+	}
 		bool any_warning = false;
 		for (const applied_file& file : report.files) any_warning = any_warning || !file.warnings.empty() || !file.notes.empty();
 		if (any_warning) {
@@ -678,20 +681,41 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		return std::format("migration {} cannot be rolled back, nothing was written: {}", id, list);
 	}
 
-	watch_pause watch{ context.pause_watch, context.resume_watch };
-	watch.pause();
-	for (const entry& file : files) {
-		if (file.state != file_state::migrated) continue;
-		const prj::project_file_text saved = prj::read_project_file(root, fs_paths::path_from_utf8(backup + "/" + file.path), k_max_file_bytes);
-		if (!saved.exists || !saved.error.empty()) {
-			return std::format("{}: the backup cannot be read{}", file.path, saved.error.empty() ? "" : ": " + saved.error);
+	// in_progress before the first write: a rollback that stops half way leaves the project for unfinished_migrations.
+	const auto journal_as = [&](migration_status status) {
+		object["status"] = std::string(to_string(status));
+		return writer(root, fs_paths::path_from_utf8(journal_path), prj::to_indented_json(journal));
+	};
+	if (auto failed = journal_as(migration_status::in_progress)) return std::format("the journal cannot be written: {}", *failed);
+
+	const auto roll_back_files = [&]() -> std::optional<std::string> {
+		for (const entry& file : files) {
+			if (file.state != file_state::migrated) continue;
+			const prj::project_file_text saved = prj::read_project_file(root, fs_paths::path_from_utf8(backup + "/" + file.path), k_max_file_bytes);
+			if (!saved.exists || !saved.error.empty()) {
+				return std::format("{}: the backup cannot be read{}", file.path, saved.error.empty() ? "" : ": " + saved.error);
+			}
+			if (auto failed = restore_file(root, writer, file.path, file.hash_before, file.hash_after, saved.text, false)) return failed;
 		}
-		if (auto failed = restore_file(root, writer, file.path, file.hash_before, file.hash_after, saved.text, false)) return failed;
+		for (const std::string& path : created) {
+			if (auto failed = remove_created(root, path)) return failed;
+		}
+		return std::nullopt;
+	};
+
+	std::optional<std::string> failed;
+	{
+		watch_pause watch{ context.pause_watch, context.resume_watch };
+		watch.pause();
+		failed = roll_back_files();
 	}
-	for (const std::string& path : created) {
-		if (auto failed = remove_created(root, path)) return failed;
+	if (failed) {
+		object["error"] = *failed;
+		if (auto journal_failed = journal_as(migration_status::rollback_failed)) {
+			egLOG_ERROR("project/migrate", "the journal of {} cannot be written: {}", id, *journal_failed);
+		}
+		return failed;
 	}
-	object["status"] = std::string(to_string(migration_status::rolled_back));
-	if (auto failed = writer(root, fs_paths::path_from_utf8(journal_path), prj::to_indented_json(journal))) return *failed;
+	if (auto journal_failed = journal_as(migration_status::rolled_back)) return std::format("the journal cannot be written: {}", *journal_failed);
 	return std::nullopt;
 }
