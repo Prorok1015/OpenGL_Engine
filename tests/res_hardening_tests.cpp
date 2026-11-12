@@ -293,7 +293,7 @@ BOOST_AUTO_TEST_CASE(Desc_OfAnotherType_IsAFailedHandleWithoutAsserting)
 	BOOST_CHECK(std::dynamic_pointer_cast<other_test_desc>(any.get_sync()) != nullptr);
 }
 
-// #632: the handle remembers its type check; a copy, an assignment and a reload keep answering as the first check did.
+// #632: the handle remembers its type check; its copies and the handles it is assigned to answer as the first check did.
 BOOST_AUTO_TEST_CASE(A_HandlesTypeCheck_IsRememberedAndTravelsWithItsBlock)
 {
 	desc_fixture f;

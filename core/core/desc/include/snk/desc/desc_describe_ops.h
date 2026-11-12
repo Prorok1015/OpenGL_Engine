@@ -246,12 +246,11 @@ namespace desc
 						value = res::tag{};
 						return true;
 					}
-					// No resource_system here: the path is the tag; a guid is looked up once the asset index exists (S57-7).
-					const auto reference = res::reference_from_json(in);
+					const auto reference = reference_tag(in, ctx);
 					if (!reference) {
 						return false;
 					}
-					value = reference->path;
+					value = *reference;
 					if (value.is_valid() && value.protocol().empty()) {
 						// Kept as written, so a save does not change the file; nothing can load it (#631).
 						::res::report_load_warning(::res::diagnostic_kind::schema, ctx.field_pointer, ::res::no_protocol_reason(value));

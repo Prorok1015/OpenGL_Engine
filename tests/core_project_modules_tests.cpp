@@ -726,6 +726,10 @@ BOOST_AUTO_TEST_CASE(a_reload_records_the_api_of_the_build_that_runs)
 	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status == core::reload_status::reloaded));
 	BOOST_REQUIRE(root.has_value<app::modules::loaded_module_apis>());
 	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
+	const auto revision = root.require<app::modules::loaded_module_apis>().revision;
+	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v1_entry()), rollback_to(reload_v2_entry()), hooks).status == core::reload_status::reloaded));
+	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
+	BOOST_TEST(root.require<app::modules::loaded_module_apis>().revision > revision);
 
 	// A build of 3.15 no longer loads under 4.0 (#758), so the record keeps the running build's api.
 	auto older = reload_v2_entry();

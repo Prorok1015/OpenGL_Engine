@@ -717,6 +717,9 @@ BOOST_FIXTURE_TEST_CASE(GetFieldDescRefusesWhatIsNotAReference, ref_fixture)
 	const auto handle = ds.get_field_desc<ops_test::target>(*owner, json::value(5), "/link");
 	BOOST_TEST(!handle.get_tag().is_valid());
 	BOOST_TEST(!handle.is_ready());
+	const auto bad_type = ds.get_field_desc<ops_test::target>(*owner, json::value(parse(R"({ "__type": 5 })")), "/link");
+	BOOST_TEST(!bad_type.get_tag().is_valid());
+	BOOST_TEST(!bad_type.is_ready());
 }
 
 BOOST_FIXTURE_TEST_CASE(DescRefReadsAnInlineObjectUnderADeterministicMemoryTag, ref_fixture)

@@ -454,8 +454,8 @@ namespace desc
 				}
 				json::value stored = in;
 				// A {guid, path} reference (#758): the field holds the tag, as a described res::tag field does.
-				const auto as_path = [](json::value& item) {
-					if (item.is_object()) item = json::value(res::reference_from_json(item)->path.view());
+				const auto as_path = [&ctx](json::value& item) {
+					if (item.is_object()) item = json::value(reference_tag(item, ctx).value_or(res::tag{}).view());
 				};
 				if (ops.kind == field_kind::res_tag) {
 					as_path(stored);

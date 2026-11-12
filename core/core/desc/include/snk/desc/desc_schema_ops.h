@@ -48,6 +48,11 @@ namespace desc
 		std::string_view field_pointer{};
 	};
 
+	// The tag a reference field reads (#758): a path string or a {guid, path} object (res::reference_from_json), resolved
+	// by the resource_system of ctx.system when the context has one, else its path. nullopt when `in` is no reference.
+	// Not inline, so what a reference loads is the engine's to decide, also for a module's fields.
+	SNK_API std::optional<res::tag> reference_tag(const json::value& in, const read_context& ctx);
+
 	// obj is the address of the whole object (a T* for C++ bindings, a dyn_ref* for runtime ones).
 	struct field_ops
 	{

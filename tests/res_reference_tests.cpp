@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/res_tag_json.h>
 #include <boost/json/parse.hpp>
 #include <string_view>
 
@@ -56,6 +57,15 @@ BOOST_AUTO_TEST_CASE(anything_else_is_not_a_reference)
 	BOOST_TEST(!read(R"({ "path": 3 })"));
 	BOOST_TEST(!read(R"({ "guid": "not-a-guid", "path": "res://a.png" })"));
 	BOOST_TEST(!read(R"({ "guid": "00000000-0000-0000-0000-000000000000", "path": "res://a.png" })"));
+}
+
+// The exported value_to<res::tag> (__parent of a desc, skins) reads the object form as its path.
+BOOST_AUTO_TEST_CASE(value_to_a_tag_reads_the_object_form_as_its_path)
+{
+	BOOST_TEST((json::value_to<res::tag>(json::parse(R"({ "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://a.desc" })"))
+		== res::tag{ "res://a.desc" }));
+	BOOST_TEST((json::value_to<res::tag>(json::parse(R"("res://a.desc")")) == res::tag{ "res://a.desc" }));
+	BOOST_TEST(!json::value_to<res::tag>(json::parse("5")).is_valid());
 }
 
 BOOST_FIXTURE_TEST_CASE(resolve_takes_the_path_until_the_asset_index, test_util::ram_res_env)
