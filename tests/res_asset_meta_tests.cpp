@@ -176,6 +176,22 @@ BOOST_AUTO_TEST_CASE(other_fields_are_checked_with_their_path)
 	require_error(replaced(full_meta, "    \"flags\"", "    \"extra\" : null,\n    \"flags\""), "extra");
 }
 
+BOOST_AUTO_TEST_CASE(a_key_given_twice_is_an_error_not_the_last_value)
+{
+	require_error(replaced(full_meta, "    \"importer\"",
+		"    \"__guid\" : \"00000000-0000-4000-8000-000000000001\",\n    \"importer\""), "__guid");
+	// Equal keys inside settings belong to the importer's data, not to the sidecar's own fields.
+	BOOST_TEST(static_cast<bool>(res::read_asset_meta(replaced(full_meta, "\"scale\" : 0.5", "\"scale\" : 0.5, \"srgb\" : false"))));
+}
+
+BOOST_AUTO_TEST_CASE(a_utf8_bom_is_skipped)
+{
+	const std::string with_bom = "\xEF\xBB\xBF" + std::string{ full_meta };
+	const auto result = res::read_asset_meta(with_bom);
+	BOOST_REQUIRE(result);
+	BOOST_TEST(res::write_asset_meta(*result.meta) == full_meta);
+}
+
 BOOST_AUTO_TEST_CASE(a_document_that_is_not_a_meta_object_fails_at_the_root)
 {
 	require_error("not json", "");

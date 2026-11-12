@@ -55,8 +55,13 @@ std::string res::to_text(const asset_id& id)
 
 res::asset_id res::generate_asset_id()
 {
-	thread_local std::mt19937_64 engine{ std::random_device{}() };
-	asset_id id{ engine(), engine() };
+	// Straight from random_device, not a PRNG seeded by it: one 32-bit seed gives only 2^32 streams, and two machines
+	// that drew the same seed would hand out the same ids. Ids are made rarely, so the cost does not matter.
+	std::random_device device;
+	const auto word = [&device] {
+		return (static_cast<std::uint64_t>(device()) << 32) | static_cast<std::uint64_t>(device());
+	};
+	asset_id id{ word(), word() };
 	id.hi = (id.hi & ~0xF000ull) | 0x4000ull;            // version 4: the 13th hex digit
 	id.lo = (id.lo & ~(0xCull << 60)) | (0x8ull << 60); // variant 8-b: the 17th hex digit
 	return id;

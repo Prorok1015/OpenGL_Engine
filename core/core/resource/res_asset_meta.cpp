@@ -5,6 +5,8 @@
 #include <format>
 #include <limits>
 #include <sstream>
+#include <set>
+#include <boost/json/basic_parser_impl.hpp>
 #include <boost/json/parse.hpp>
 #include <snk/resource/res_pretty_json.h>
 
@@ -19,6 +21,60 @@ namespace
 		return res::asset_meta_result{ std::nullopt, res::asset_meta_error{ kind, std::move(field_path), std::move(message) } };
 	}
 
+	// json::parse keeps the last of two equal keys without a word, so a .resource left with two "__guid" by a bad merge
+	// would change its id silently; this pass over the text finds such a key of the root object first.
+	struct root_key_scan
+	{
+		static constexpr std::size_t max_object_size = static_cast<std::size_t>(-1);
+		static constexpr std::size_t max_array_size = static_cast<std::size_t>(-1);
+		static constexpr std::size_t max_key_size = static_cast<std::size_t>(-1);
+		static constexpr std::size_t max_string_size = static_cast<std::size_t>(-1);
+
+		int depth = 0;
+		std::string key;
+		std::set<std::string, std::less<>> seen;
+		std::optional<std::string> duplicate;
+
+		bool on_document_begin(json::error_code&) { return true; }
+		bool on_document_end(json::error_code&) { return true; }
+		bool on_object_begin(json::error_code&) { ++depth; return true; }
+		bool on_object_end(std::size_t, json::error_code&) { --depth; return true; }
+		bool on_array_begin(json::error_code&) { ++depth; return true; }
+		bool on_array_end(std::size_t, json::error_code&) { --depth; return true; }
+		bool on_key_part(json::string_view part, std::size_t, json::error_code&)
+		{
+			if (depth == 1) key.append(part.data(), part.size());
+			return true;
+		}
+		bool on_key(json::string_view part, std::size_t, json::error_code&)
+		{
+			if (depth != 1) return true;
+			key.append(part.data(), part.size());
+			if (!seen.insert(key).second && !duplicate) duplicate = key;
+			key.clear();
+			return true;
+		}
+		bool on_string_part(json::string_view, std::size_t, json::error_code&) { return true; }
+		bool on_string(json::string_view, std::size_t, json::error_code&) { return true; }
+		bool on_number_part(json::string_view, json::error_code&) { return true; }
+		bool on_int64(std::int64_t, json::string_view, json::error_code&) { return true; }
+		bool on_uint64(std::uint64_t, json::string_view, json::error_code&) { return true; }
+		bool on_double(double, json::string_view, json::error_code&) { return true; }
+		bool on_bool(bool, json::error_code&) { return true; }
+		bool on_null(json::error_code&) { return true; }
+		bool on_comment_part(json::string_view, json::error_code&) { return true; }
+		bool on_comment(json::string_view, json::error_code&) { return true; }
+	};
+
+	std::optional<std::string> duplicate_root_key(std::string_view text)
+	{
+		json::basic_parser<root_key_scan> parser{ json::parse_options{} };
+		json::error_code ec;
+		const std::size_t consumed = parser.write_some(false, text.data(), text.size(), ec);
+		if (ec || consumed != text.size()) return std::nullopt;
+		return parser.handler().duplicate;
+	}
+
 	std::optional<std::int64_t> integer_of(const json::value& value)
 	{
 		if (value.is_int64()) return value.get_int64();
@@ -31,6 +87,11 @@ namespace
 
 res::asset_meta_result res::read_asset_meta(std::string_view text)
 {
+	// Editors on Windows may save with a UTF-8 BOM.
+	if (text.starts_with("\xEF\xBB\xBF")) {
+		text.remove_prefix(3);
+	}
+
 	boost::system::error_code ec;
 	const json::value document = json::parse(text, ec);
 	if (ec) {
@@ -39,6 +100,10 @@ res::asset_meta_result res::read_asset_meta(std::string_view text)
 	const json::object* root = document.if_object();
 	if (!root) {
 		return fail("", "the document is not an object");
+	}
+
+	if (const auto duplicate = duplicate_root_key(text)) {
+		return fail(*duplicate, "the key is given twice");
 	}
 
 	const json::value* type = root->if_contains("__type");
