@@ -27,6 +27,9 @@ namespace dll_game {
 	// the module), and a type of a schema alone it marks through gs::module_context::mark_document (an export of 3.17).
 	inline constexpr std::string_view document_type = "dll.config";
 	inline constexpr std::string_view schema_document_type = "dll.settings";
+	// A described desc of the module with a desc reference (link, to a dll.config) and a res::tag (icon): the module's
+	// inline readers take a path or a {guid, path} object alike (#758).
+	inline constexpr std::string_view linked_type = "dll.linked";
 	inline constexpr const char* schema_document_json = R"json({
 		"name": "dll.settings", "kind": "desc",
 		"fields": [ { "name": "speed", "kind": "f32", "default": 2 }, { "name": "goals", "kind": "array", "element": "i32" } ]

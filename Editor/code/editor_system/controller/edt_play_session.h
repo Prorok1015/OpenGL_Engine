@@ -240,6 +240,8 @@ namespace edt
 			std::uint32_t pending_steps = 0;
 			scn::snapshot_report report{};
 			std::size_t bus_events = 0;
+			// The set's mail not delivered yet (#668): dropped, the outboxes and the external posts go with the worlds.
+			std::size_t mail_in_flight = 0;
 			// The layers a module put on the input stack of "play" and the worlds it switched off; the fronts memory and the queues are not kept.
 			inp::stack_snapshot input_stack{};
 			std::size_t injected_dropped = 0;

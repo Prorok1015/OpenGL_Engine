@@ -286,6 +286,30 @@ BOOST_AUTO_TEST_CASE(Order_ExternalFirstThenContextsByAscendingIdThenSend)
 	BOOST_TEST((seen(lo).inbox_from[1] == std::vector<std::string>{ "", "", "hi", "hi" }));
 }
 
+// #668: what a reload would drop, counted without touching it.
+BOOST_AUTO_TEST_CASE(PendingMail_CountsTheOutboxesAndTheExternalPostsUntilTheExchange)
+{
+	auto set = make_set();
+	BOOST_TEST(set->pending_mail() == 0u);
+	auto send_two = [](entt::registry& reg, int frame) {
+		record(reg);
+		if (frame != 0) return;
+		auto& out = reg.ctx().get<ecs::outbox<msg>>();
+		out.send({}, msg{ 1 });
+		out.send({ "b" }, msg{ 2 });
+	};
+	add(*set, "a", 0, { "script_early" }, send_two);
+	add(*set, "b", 1, { "script_early" }, send_two);
+
+	set->update(one_frame);
+	set->channel().post_external<add_value>({}, add_value{ 3 });
+	BOOST_TEST(set->pending_mail() == 5u);
+	BOOST_TEST(set->pending_mail() == 5u); // read only
+
+	set->update(one_frame);
+	BOOST_TEST(set->pending_mail() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(Delivery_BroadcastReachesOthersNotTheSenderSelfAddressReachesTheSender)
 {
 	auto set = make_set();

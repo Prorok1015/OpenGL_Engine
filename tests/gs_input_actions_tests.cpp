@@ -763,7 +763,8 @@ BOOST_AUTO_TEST_CASE(AChangeTheFileCannotTake_IsAppliedAndSaysItWasNotSaved)
 	std::filesystem::remove_all(base);
 }
 
-BOOST_AUTO_TEST_CASE(AMapWithGamepadBindings_WarnsOncePerMapAboutModulesOfAnOlderApi)
+// Under 4.0 (#758) no module of 3.15 loads, so an entry of another major is never warned about; #781 drops the warning.
+BOOST_AUTO_TEST_CASE(AMapWithGamepadBindings_DoesNotWarnAboutAModuleOfAnotherMajor)
 {
 	std::vector<std::string> warnings;
 	const auto sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view message) {
@@ -786,7 +787,7 @@ BOOST_AUTO_TEST_CASE(AMapWithGamepadBindings_WarnsOncePerMapAboutModulesOfAnOlde
 		if (w.find("old_game (api 3.15)") != std::string::npos) ++about_old;
 		BOOST_TEST(w.find("new_game") == std::string::npos);
 	}
-	BOOST_TEST(about_old == 1u);
+	BOOST_TEST(about_old == 0u);
 
 	const auto without = put("keys.desc", ACTIONS_SPACE);
 	gs::input_actions keys_only(*rs);

@@ -55,6 +55,20 @@ void scn::set_channel::skip_frame(std::span<const ecs::channel_participant> cont
 	}
 }
 
+size_t scn::set_channel::pending_messages(std::span<const ecs::channel_participant> contexts) const
+{
+	size_t count = 0;
+	for (size_t i = 0; i < m_types->size(); ++i) {
+		if (i < m_slots.size()) {
+			count += m_slots[i]->pending(contexts);
+		} else {
+			// No exchange made the slot yet, so no external post either; the outboxes may hold messages already.
+			count += m_types->type(i).make_slot()->pending(contexts);
+		}
+	}
+	return count;
+}
+
 void scn::set_channel::clear()
 {
 	m_board.clear();

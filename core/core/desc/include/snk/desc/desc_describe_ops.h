@@ -8,6 +8,7 @@
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
@@ -26,13 +27,14 @@
 namespace desc
 {
 	// field_kind::desc_ref for a res::res_handle<T> member (set the kind with field_attr::kind, the handle itself is a
-	// custom type to the deduction). Reads what desc_system::get_field_desc<T> reads: a string tag, or an inline
-	// object with "__type" that is stored once under a deterministic memory:// tag of the owner and required from there.
+	// custom type to the deduction). Reads what desc_system::get_field_desc<T> reads: a string tag, a {guid, path}
+	// reference (res::reference_from_json, #758), or an inline object with "__type" that is stored once under a
+	// deterministic memory:// tag of the owner and required from there.
 	// An empty string clears the handle (so does a null on a field with write_null_if_empty). Written as the tag of the
 	// handle, an empty string while it is not set (so write_if_valid() leaves the key out). A handle whose tag is one of
 	// those memory copies (desc::is_override_tag) is written as the inline object again (the loaded desc's own serialize plus
 	// "__type"): the copy lives in the memory store of this process only, and a saved tag would not resolve in the next
-	// one. A value that is neither a tag nor an object with "__type", a read without a desc_system and owner in the
+	// one. A value that is neither a reference nor an object with "__type", a read without a desc_system and owner in the
 	// context, or an inline object of an owner without a tag, does not fit: the field keeps its handle. Only the
 	// handle itself is a desc_ref: the elements of a vector of handles are custom fields.
 	template<typename T>
@@ -49,7 +51,7 @@ namespace desc
 				const json::value* type = in.as_object().if_contains("__type");
 				inline_desc = type && type->is_string();
 			}
-			if (!in.is_string() && !inline_desc) {
+			if (!inline_desc && !res::reference_from_json(in)) {
 				return false;
 			}
 			if (!ctx.system || !ctx.owner) {
@@ -244,10 +246,11 @@ namespace desc
 						value = res::tag{};
 						return true;
 					}
-					if (!in.is_string()) {
+					const auto reference = reference_tag(in, ctx);
+					if (!reference) {
 						return false;
 					}
-					value = in.as_string().empty() ? res::tag{} : res::tag{ std::string_view{ in.as_string() } };
+					value = *reference;
 					if (value.is_valid() && value.protocol().empty()) {
 						// Kept as written, so a save does not change the file; nothing can load it (#631).
 						::res::report_load_warning(::res::diagnostic_kind::schema, ctx.field_pointer, ::res::no_protocol_reason(value));

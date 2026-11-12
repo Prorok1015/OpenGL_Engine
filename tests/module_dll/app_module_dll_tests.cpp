@@ -54,6 +54,7 @@ const std::filesystem::path g_module_path{ SNK_TEST_GAME_DLL_PATH };
 const std::filesystem::path g_v2_path{ SNK_TEST_GAME_DLL_V2_PATH };
 const std::filesystem::path g_failing_path{ SNK_TEST_GAME_DLL_FAILING_PATH };
 const std::filesystem::path g_bad_api_path{ SNK_TEST_GAME_DLL_BAD_API_PATH };
+const std::filesystem::path g_old_api_path{ SNK_TEST_GAME_DLL_OLD_API_PATH };
 const std::filesystem::path g_bad_layout_path{ SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH };
 
 // The editor's options (#614): the engine's layout key is checked.
@@ -321,6 +322,38 @@ BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with
 	auto* after = contexts().game_layer();
 	BOOST_REQUIRE(after != nullptr);
 	BOOST_TEST(after->descs().document_types().empty());
+}
+
+// #758: the module's inline readers (desc_ref and res_tag fields, compiled in the module) read a reference written as
+// {guid, path} as they read its path, through the engine's export res::reference_from_json.
+BOOST_AUTO_TEST_CASE(a_module_reads_a_reference_object_like_its_path)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	auto& descs = layer->descs();
+	const res::tag owner{ "res://dll/owner.desc" };
+	auto from_string = descs.create_instance(dll_game::linked_type, owner);
+	auto from_object = descs.create_instance(dll_game::linked_type, owner);
+	BOOST_REQUIRE(from_string);
+	BOOST_REQUIRE(from_object);
+
+	from_string->deserialize(descs, boost::json::parse(R"({ "link": "res://dll/config.desc", "icon": "res://dll/icon.png" })").as_object());
+	from_object->deserialize(descs, boost::json::parse(R"({
+		"link": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://dll/config.desc" },
+		"icon": { "path": "res://dll/icon.png" } })").as_object());
+	boost::json::object by_string;
+	boost::json::object by_object;
+	from_string->serialize(by_string);
+	from_object->serialize(by_object);
+	BOOST_TEST(by_string.at("link").as_string() == "res://dll/config.desc");
+	BOOST_TEST(by_string.at("icon").as_string() == "res://dll/icon.png");
+	BOOST_TEST(boost::json::value(by_string) == boost::json::value(by_object));
+
+	from_string.reset();
+	from_object.reset();
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
 }
 
 // #605: the journal finds the module's bus_journal_source with dynamic_cast across the library boundary and calls the
@@ -729,6 +762,25 @@ BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_reported_for_its_api_even_with_an
 	BOOST_TEST((report.status == core::reload_status::refused));
 	BOOST_CHECK_MESSAGE(report.message.find("api major") != std::string::npos, report.message);
 	BOOST_CHECK_MESSAGE(report.message.find("another layout") == std::string::npos, report.message);
+	BOOST_TEST(resident(project.copy(0)));
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// A game built for 3.x (#758): refused before anything of it runs, with what to do about it.
+BOOST_AUTO_TEST_CASE(a_build_of_module_api_3_is_refused_and_told_to_rebuild)
+{
+	dll_project project("dll_old_api", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, checked_layouts());
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	project.rebuild(g_old_api_path);
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("api major version 3") != std::string::npos, report.message);
+	BOOST_CHECK_MESSAGE(report.message.find("rebuild the project") != std::string::npos, report.message);
 	BOOST_TEST(resident(project.copy(0)));
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();

@@ -1233,7 +1233,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_writes_its_report_and_tells_what_play_lost)
 	BOOST_TEST(report.at("play").as_string() == "kept");
 	BOOST_TEST(report.at("module_reload").at("status").as_string() == "reloaded");
 	BOOST_TEST(report.at("dropped_no_schema").at("test.schemaless").to_number<int>() == 1);
-	BOOST_TEST(report.at("mail_dropped").is_string());
+	BOOST_TEST(report.at("mail_dropped").to_number<int>() == 0); // #668: a number now; nothing was sent
 	BOOST_TEST(report.at("written_at").is_string());
 	BOOST_TEST(report.at("duration_ms").is_int64());
 	BOOST_REQUIRE(report.at("worlds").as_array().size() == 1u);
