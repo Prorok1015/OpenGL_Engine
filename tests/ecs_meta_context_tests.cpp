@@ -33,7 +33,8 @@ namespace {
 
 	std::size_t live_entities(const entt::registry& reg)
 	{
-		return reg.storage<entt::entity>().free_list();
+		const auto* entities = reg.storage<entt::entity>(); // a const registry gives the storage by pointer
+		return entities ? entities->free_list() : 0u;
 	}
 
 	constexpr entt::id_type registered_hash = entt::type_hash<registered_component>::value();
