@@ -242,3 +242,24 @@
 ### Итог #131
 
 Все четыре типа EPIC-55 (свет, камера, материал, skybox) описаны схемой; `desc_resave --check` не меняет ни одного отгруженного файла. Не переведено и не планируется: prefab/world/level (документы) и geometry (свой кодек). Остаётся за пределами #131: anchor/object/bone/animated_node, текстуры (`texture`, `texture_2d`, `texture_cubemap`), skin/animation и остальные типы сцены, список ведётся в описании #16. Поле `samplers` материала — JSON-редактор (вид `custom`), пока схема не принимает `null` в элементе массива.
+
+## Узел меша (#720, 2026-11-12)
+
+- `mesh_node_desc` описан схемой (`schema_desc<mesh_node_desc>`, вид `desc`, как у материала: тип регистрируется без флага `component`; `scn_mesh_node_desc.h`):
+  - `geometry` и `material` — `desc_ref` (`ref` `geometry_desc` / `material_desc`, `write_if_valid`);
+  - `vx_begin`, `vx_end`, `ind_begin`, `ind_end` — пишутся всегда;
+  - `visible` (#560) — `write_if_not_default`, то есть пишется только `false`.
+- Ключи, их порядок и правила записи прежние. Узлы `bench_100_meshes.desc` при пересохранении дают те же байты (`ScnMeshNodeSchemaTests`). Префаб импортированной модели хранит компоненты меша как JSON (материал inline), и он тоже пересохраняется в те же байты (`Gltf_TheImportedPrefab_ResavesToTheSameBytes`).
+- ABI (решение владельца): `serialize`/`deserialize` остаются объявленными в классе `SNK_API` и определёнными в `scn_mesh_node_desc.cpp`. Модуль 3.15 импортирует эти символы, поэтому API модулей не повышается. Раскладка не меняется: у `schema_desc` нет своих членов данных.
+- Кастомный рендерер `edt_cr_mesh.cpp` (галка Visible, остальное только для чтения) удалён: инспектор строится из схемы. Явная запись `visible:true`, когда база скрывает меш, теперь получается из правила `apply_edit`: значение, отличное от базы, записывается своим указателем (`EdtMeshVisibleInspector`).
+- `component.set` и `component.add` проверяют для всех типов со схемой правило ссылок #697 во всех ссылках, которые прочтёт desc. Раньше проверялась только форма JSON. Проверка обходит:
+  - поля-теги (`res_tag`/`desc_ref`) и их массивы;
+  - структуры и массивы структур (путь в ответе полный: `slots/1/icon`);
+  - inline-desc в `desc_ref`: его `__parent` и его поля по схеме его `__type`; inline-desc типа без схемы отказывает, потому что его ссылки не проверить;
+  - строки с протоколом в полях `custom` (сэмплеры материала).
+- Проверка перед Play (#597) видит ошибки полей меша без доработки, потому что берёт их типы из схемы.
+- Чтение и запись ссылок остались ручными (решение ведущего: правило #337 не меняем, исключение локально):
+  - Общий читатель `desc_ref` принимает inline-объект только у владельца с тегом (как у skybox). Но ассемблер читает компонент в копию без тега (`scn_ecs_assembler.cpp`), а импортёр пишет материал inline. Поэтому `geometry` и `material` меш читает сам, как прежний ручной читатель (`get_field_desc`), а схема читает остальные поля. Без этого робот `smoke_level` терял материал (smoke CI на PR #735).
+  - `serialize` тоже ручной. Общий писатель записал бы ссылку на `memory://` как inline-копию (`get_sync` на главном потоке). Тогда переопределение узла модели (`serialize(parent)` + `deserialize` в ассемблере) создавало бы вторую копию материала вместо общей с родителем.
+  - Тесты: `AnUntaggedMesh_KeepsTheInlineMaterialOfAnImportedModel`, `Gltf_AMeshOfTheImportedModel_SpawnsWithItsMaterial_WithoutAWarning`, `Gltf_AHiddenMeshOfTheImportedModel_SharesTheMaterialOfItsParent`.
+  - Общее правило меняется только со вторым таким компонентом, отдельным issue.
