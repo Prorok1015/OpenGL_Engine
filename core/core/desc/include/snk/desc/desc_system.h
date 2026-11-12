@@ -16,6 +16,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,6 +39,38 @@ namespace desc
 		return tag.starts_with("memory://overrides/")
 			|| (tag.starts_with("memory://modules/") && tag.find("/overrides/") != std::string_view::npos);
 	}
+
+	// What a migration step reported besides upgrading the object: a loss of data or an assumption (EPIC-58).
+	struct migration_warning
+	{
+		std::string type;
+		int from_version = 0;
+		std::string file;
+		std::string message;
+	};
+
+	// Handed to a step registered with a summary. A step sees only the JSON of its object, never the project: it does not
+	// rewrite references or create files (EPIC-58 3.2).
+	class SNK_API migration_context
+	{
+	public:
+		// `sink` null: warn() only logs.
+		migration_context(std::string_view type, int from_version, std::string_view file, std::vector<migration_warning>* sink);
+
+		std::string_view type() const { return m_type; }
+		int from_version() const { return m_from_version; }
+		// Empty when the object is migrated from memory.
+		std::string_view file() const { return m_file; }
+
+		// Logged as a warning, and kept for the report when the migration collects them.
+		void warn(std::string message);
+
+	private:
+		std::string_view m_type;
+		int m_from_version = 0;
+		std::string_view m_file;
+		std::vector<migration_warning>* m_sink = nullptr;
+	};
 
 	class SNK_API desc_system
 	{
@@ -79,6 +112,33 @@ namespace desc
 				m_component_type_names.push_back(std::string{ type_name });
 			}
 		}
+
+		// register_desc plus mark_document, for a type the editor opens as a data document (EPIC-56). A custom field that has a
+		// json_codec counts as being on the schema. The type stays a registered desc when it cannot be a document (logged);
+		// false then, and false when the registration itself is refused.
+		template<typename T>
+		bool register_document(const std::string_view type_name)
+		{
+			if (!add_desc<T>(type_name, schema_kind::desc)) {
+				return false;
+			}
+			if constexpr (desc::is_described<T>) {
+				const std::vector<std::string_view> codec_fields = desc::schema_generator<T>::codec_fields();
+				return mark_document(type_name, codec_fields);
+			} else {
+				return mark_document(type_name);
+			}
+		}
+
+		// Marks the schema of `type_name` as a data document (type_schema::is_document). Only a plain desc whose every field
+		// the schema describes can be one: the file's `__parent` chain is merged as JSON by the schema alone, and that matches
+		// what the runtime reads only when no field hides behind a custom value. `codec_fields` names the top-level custom
+		// fields that have a json_codec (register_document<T> finds them); a custom field elsewhere, or without a codec,
+		// refuses the type. False (logged, nothing changed) when refused, or when the type belongs to the parent desc system.
+		bool mark_document(std::string_view type_name, std::span<const std::string_view> codec_fields = {});
+
+		// Every document type, this layer's and the parent's, sorted by name.
+		std::vector<std::string> document_types() const;
 
 		void unregister_desc(const std::string_view type_name)
 		{
@@ -148,6 +208,15 @@ namespace desc
 			m_schemas.set_version(type, current_version(type));
 		}
 
+		// The same step with a one-line summary (for the migration plan and report) and a context for warnings. Kept in
+		// the one registry above, so current_version, the duplicate check and modules built before it see it as any
+		// other step; the inline migrate_tree runs it with warnings going to the log only.
+		void register_migration(std::string_view type, int from_version, std::string_view summary,
+			std::function<void(json::object&, migration_context&)> fn);
+
+		// The summary of the step from `from_version`; empty for a step without one or none.
+		std::string migration_summary(std::string_view type, int from_version) const;
+
 		void unregister_migrations(std::string_view type)
 		{
 			m_migrations.erase(std::string{ type });
@@ -169,6 +238,9 @@ namespace desc
 		{
 			migrate_object(root, context);
 		}
+
+		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
+		void migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const;
 
 		// Writes the current __version into an object that has a string __type, and moves the header keys
 		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
@@ -293,7 +365,8 @@ namespace desc
 
 	private:
 		using factory_fn = std::function<std::shared_ptr<desc::desc_base>()>;
-		using migration_steps = std::map<int, std::function<void(json::object&)>>;
+		using migration_step_fn = std::function<void(json::object&)>;
+		using migration_steps = std::map<int, migration_step_fn>;
 
 		const factory_fn* find_factory(std::string_view type_name) const
 		{
@@ -303,6 +376,9 @@ namespace desc
 			}
 			return m_parent ? m_parent->find_factory(type_name) : nullptr;
 		}
+
+		// Why `schema` cannot be a document (empty: it can); see mark_document.
+		std::string document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const;
 
 		const migration_steps* find_migrations(std::string_view type) const
 		{
@@ -338,22 +414,47 @@ namespace desc
 			return true;
 		}
 
-		// Migrates the object itself first, then its members, so children a migration creates are visited too.
+		// The members of 3.16: MSVC exports the inline members of an exported class, and a module of 3.16 built without
+		// inlining imports these symbols from the engine. Keep them, with these signatures, until 4.0 (#786).
 		void migrate_object(json::object& obj, std::string_view context) const
 		{
-			auto type_it = obj.find("__type");
-			if (type_it != obj.end() && type_it->value().is_string()) {
-				migrate_typed(obj, std::string{ type_it->value().as_string() }, context);
-			}
-			for (auto& member : obj) {
-				migrate_value(member.value(), context);
-			}
+			migrate_object(obj, context, plain_step{});
 		}
 
 		void migrate_value(json::value& value, std::string_view context) const
 		{
+			migrate_value(value, context, plain_step{});
+		}
+
+		void migrate_typed(json::object& obj, const std::string& type, std::string_view context) const
+		{
+			migrate_typed(obj, type, context, plain_step{});
+		}
+
+		struct plain_step
+		{
+			void operator()(const migration_step_fn& step, json::object& obj, const std::string&, int) const { step(obj); }
+		};
+
+		// Migrates the object itself first, then its members, so children a migration creates are visited too.
+		// `run(step, obj, type, from)` applies one step.
+		template<class RunStep>
+		void migrate_object(json::object& obj, std::string_view context, const RunStep& run) const
+		{
+			auto type_it = obj.find("__type");
+			if (type_it != obj.end() && type_it->value().is_string()) {
+				migrate_typed(obj, std::string{ type_it->value().as_string() }, context, run);
+			}
+			for (auto& member : obj) {
+				migrate_value(member.value(), context, run);
+			}
+		}
+
+		template<class RunStep>
+		void migrate_value(json::value& value, std::string_view context, const RunStep& run) const
+		{
 			if (value.is_object()) {
-				migrate_object(value.as_object(), context);
+				migrate_object(value.as_object(), context, run);
 			}
 			else if (value.is_array()) {
 				auto& arr = value.as_array();
@@ -362,12 +463,13 @@ namespace desc
 					return;
 				}
 				for (auto& element : arr) {
-					migrate_value(element, context);
+					migrate_value(element, context, run);
 				}
 			}
 		}
 
-		void migrate_typed(json::object& obj, const std::string& type, std::string_view context) const
+		template<class RunStep>
+		void migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const
 		{
 			constexpr std::int64_t max_version = std::numeric_limits<int>::max();
 
@@ -400,7 +502,7 @@ namespace desc
 					if (step == steps.end()) {
 						throw std::runtime_error(std::format("{}: no migration for '{}' from version {}", context, type, from));
 					}
-					step->second(obj);
+					run(step->second, obj, type, from);
 				}
 			}
 			obj["__version"] = current;

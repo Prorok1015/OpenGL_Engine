@@ -181,6 +181,11 @@ bool gs::module_context::register_component(desc::type_schema schema)
 	return true;
 }
 
+bool gs::module_context::mark_document(std::string_view type_name)
+{
+	return m_layer.descs().mark_document(type_name);
+}
+
 gs::input_stack_handle gs::module_context::input_stack(std::string_view set) const
 {
 	if (!m_input) {

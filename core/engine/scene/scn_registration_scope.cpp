@@ -118,19 +118,24 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	scope.desc<animation_collection_desc>(animation_collection_desc::__type);
 	scope.desc<input_actions_desc>(input_actions_desc::__type);
 
-	// v2: children are an array of nodes with __id and name (the world is a prefab, so it shares the step).
-	scope.migration("prefab_desc", 1, migrate_prefab_v1);
-	scope.migration(world_desc::__type, 1, migrate_prefab_v1);
-	// v3: the override layer of an explicit nested instance becomes `overrides` records.
-	scope.migration("prefab_desc", 2, migrate_prefab_v2);
-	scope.migration(world_desc::__type, 2, migrate_prefab_v2);
-	// v4: a camera takes the transform of its node. LEGACY adapter, moves into the migrator chain of #28 (ADR-06):
-	// camera_desc v1 -> v2 for a camera outside a node, the node-level bake for the rest (parent first: the node
-	// step runs before the camera objects below it are visited, and stamps them v2).
-	scope.migration("prefab_desc", 3, migrate_prefab_v3);
-	scope.migration(world_desc::__type, 3, migrate_prefab_v3);
-	scope.migration(camera_desc::__type, 1, migrate_camera_v1);
-	scope.migration("level_desc", 1, [](json::object&) {}); // the worlds are typed objects and migrate on their own
+	const auto v1 = [](json::object& obj, desc::migration_context&) { migrate_prefab_v1(obj); };
+	const auto v2 = [](json::object& obj, desc::migration_context&) { migrate_prefab_v2(obj); };
+	const auto v3 = [](json::object& obj, desc::migration_context& context) { migrate_prefab_v3(obj, context); };
+	constexpr std::string_view v1_summary = "children become an array of nodes with __id and name";
+	constexpr std::string_view v2_summary = "the override layer of a nested instance becomes override records";
+	constexpr std::string_view v3_summary = "a camera takes the transform of its node (a partial camera pose override is dropped)";
+	// The world is a prefab, so it shares the steps.
+	scope.migration("prefab_desc", 1, v1_summary, v1);
+	scope.migration(world_desc::__type, 1, v1_summary, v1);
+	scope.migration("prefab_desc", 2, v2_summary, v2);
+	scope.migration(world_desc::__type, 2, v2_summary, v2);
+	// Parent first: the node step runs before the camera objects below it are visited, and stamps them v2.
+	scope.migration("prefab_desc", 3, v3_summary, v3);
+	scope.migration(world_desc::__type, 3, v3_summary, v3);
+	scope.migration(camera_desc::__type, 1, "a camera outside a node drops its pose (the node's transform is the pose)",
+		[](json::object& obj, desc::migration_context& context) { migrate_camera_v1(obj, context); });
+	scope.migration("level_desc", 1, "nothing: the worlds are typed objects and migrate on their own",
+		[](json::object&, desc::migration_context&) {});
 
 	// The assembler that runs it: a prefab spawned in a layer builds its components with the layer's.
 	auto prefab_spawn = [](const ecs_assembler& running, entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {

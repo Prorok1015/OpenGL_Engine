@@ -1,0 +1,7 @@
+{
+	"__type": "prefab_desc",
+	"children": {
+		"body": {},
+		"head": { "children": { "eye": {} } }
+	}
+}

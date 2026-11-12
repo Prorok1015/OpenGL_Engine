@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <format>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -1001,7 +1002,9 @@ namespace {
 	//   transform record the instance already has, further down, wins); a partial pose cannot be converted (it is merged onto
 	//   a pose in the prefab, which is not loaded here) and is dropped with a warning; fields set besides stay;
 	// - a record into camera_desc.transform itself ("/transform/position") is dropped with a warning, for the same reason.
-	void migrate_camera_records(json::object& node, const std::unordered_set<std::string>& camera_keys)
+	using warn_fn = std::function<void(std::string)>;
+
+	void migrate_camera_records(json::object& node, const std::unordered_set<std::string>& camera_keys, const warn_fn& warn)
 	{
 		const auto records = node.find("overrides");
 		if (records == node.end() || !records->value().is_array()) return;
@@ -1038,7 +1041,7 @@ namespace {
 				if (legacy.is_object() && has_vec3(legacy.as_object(), "position") && has_vec3(legacy.as_object(), "rotation")) {
 					json::object holder;
 					holder["components"] = json::object{ { "camera", json::object{ { "__type", std::string{ scn::camera_desc::__type } }, { "transform", legacy } } } };
-					scn::migrate_camera_transform_into_node(holder);
+					scn::migrate_camera_transform_into_node(holder, warn);
 					const json::object& pose = holder.at("transform").as_object();
 					for (const char* field : { "position", "rotation" }) {
 						json::object entry;
@@ -1049,8 +1052,8 @@ namespace {
 						moved.push_back(std::move(entry));
 					}
 				} else {
-					egLOG_WARN("desc", "an override of '{}' sets no whole legacy camera_desc.transform: it is dropped, the transform of the "
-						"node is the pose now (a partial pose cannot be converted here, the rest of it is in the prefab)", key);
+					warn(std::format("an override of '{}' sets no whole legacy camera_desc.transform: it is dropped, the transform of the "
+						"node is the pose now (a partial pose cannot be converted here, the rest of it is in the prefab)", key));
 				}
 
 				// what is left of the record: a typed record may create the camera component, so it stays; a diff stays when it
@@ -1063,8 +1066,8 @@ namespace {
 				continue;
 			}
 			if (where == "/transform" || where.starts_with("/transform/")) {
-				egLOG_WARN("desc", "an override of '{}' at '{}' is dropped: camera_desc has no transform any more, the transform of the node is the "
-					"pose (it cannot be converted here, the pose it edits is in the prefab)", key, where);
+				warn(std::format("an override of '{}' at '{}' is dropped: camera_desc has no transform any more, the transform of the node is the "
+					"pose (it cannot be converted here, the pose it edits is in the prefab)", key, where));
 				continue;
 			}
 			migrated.push_back(std::move(record));
@@ -1073,13 +1076,13 @@ namespace {
 	}
 
 	// Every node of the tree: its children and the nodes an `add_node` record carries.
-	void bake_camera_poses(json::object& node, const std::unordered_set<std::string>& camera_keys)
+	void bake_camera_poses(json::object& node, const std::unordered_set<std::string>& camera_keys, const warn_fn& warn)
 	{
-		scn::migrate_camera_transform_into_node(node);
-		migrate_camera_records(node, camera_keys);
+		scn::migrate_camera_transform_into_node(node, warn);
+		migrate_camera_records(node, camera_keys, warn);
 		if (auto children = node.find("children"); children != node.end() && children->value().is_array()) {
 			for (auto& child : children->value().as_array()) {
-				if (child.is_object()) bake_camera_poses(child.as_object(), camera_keys);
+				if (child.is_object()) bake_camera_poses(child.as_object(), camera_keys, warn);
 			}
 		}
 		if (auto records = node.find("overrides"); records != node.end() && records->value().is_array()) {
@@ -1088,7 +1091,7 @@ namespace {
 				auto added = record.as_object().find("value");
 				const auto op = record.as_object().if_contains("op");
 				if (added != record.as_object().end() && added->value().is_object() && op && op->is_string() && op->as_string() == "add_node") {
-					bake_camera_poses(added->value().as_object(), camera_keys);
+					bake_camera_poses(added->value().as_object(), camera_keys, warn);
 				}
 			}
 		}
@@ -1096,11 +1099,23 @@ namespace {
 }
 
 // v4: a camera takes the transform of its node; the pose it kept in camera_desc.transform is written into the node.
+namespace {
+	void bake_prefab_camera_poses(json::object& obj, const warn_fn& warn)
+	{
+		std::unordered_set<std::string> camera_keys{ std::string{ "camera" }, std::string{ scn::camera_desc::__type } };
+		collect_camera_keys(obj, camera_keys);
+		bake_camera_poses(obj, camera_keys, warn);
+	}
+}
+
 void scn::migrate_prefab_v3(json::object& obj)
 {
-	std::unordered_set<std::string> camera_keys{ std::string{ "camera" }, std::string{ scn::camera_desc::__type } };
-	collect_camera_keys(obj, camera_keys);
-	bake_camera_poses(obj, camera_keys);
+	bake_prefab_camera_poses(obj, [](std::string message) { egLOG_WARN("desc", "{}", message); });
+}
+
+void scn::migrate_prefab_v3(json::object& obj, desc::migration_context& context)
+{
+	bake_prefab_camera_poses(obj, [&context](std::string message) { context.warn(std::move(message)); });
 }
 
 namespace {
