@@ -73,6 +73,21 @@ BOOST_AUTO_TEST_CASE(ConfigFile_LoadsFromAFolderOutsideTheCodePage)
 	BOOST_TEST(!cfg::load_config_file(dir.path() / folder / "missing.cfg"));
 }
 
+// Which form applies depends on whether an earlier test of this process already went through initialize_configs (its
+// once-per-process guard keeps the path); CI runs both forms against the game host (#731).
+BOOST_AUTO_TEST_CASE(StartupErrorMessage_NamesTheConfigBeingLoadedElseTheCommandLine)
+{
+	const std::runtime_error error("boom");
+	const std::string message = cfg::startup_error_message(error);
+	if (cfg::loaded_config_path().empty()) {
+		BOOST_TEST(message == "command line: boom");
+	} else {
+		BOOST_TEST(message.find("config ") == 0u);
+		BOOST_TEST(message.find(cfg::loaded_config_path().filename().string()) != std::string::npos);
+		BOOST_TEST(message.find(" could not be loaded: boom") != std::string::npos);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(Cli_AllowEngineVersionMismatchSetsItsVariable)
 {
 	// Stands in for core_module's variable of the same name for the length of the test.

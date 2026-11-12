@@ -38,8 +38,13 @@ int snk::game_host::run(int argc, char* argv[], std::map<std::string, app::modul
 	}
 	engine::init_logger(log_to_stderr ? engine::console_target::stderr_ : engine::console_target::stdout_);
 
-	if (!cfg::initialize_configs(argc, argv)) {
-		return -1;
+	try {
+		if (!cfg::initialize_configs(argc, argv)) {
+			return -1;
+		}
+	} catch (const std::exception& e) {
+		egLOG_ERROR("app", "{}", cfg::startup_error_message(e));
+		return 2;
 	}
 	// Whatever the config files and --set say: a shipped game reloads nothing, writes nothing into its project (#593),
 	// cannot ask about a project of another engine version and cannot run without a project.

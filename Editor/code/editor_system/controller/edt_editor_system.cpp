@@ -457,6 +457,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
 		*m_hierarchy_panel, *m_inspector_panel,
 		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
+	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
 
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);

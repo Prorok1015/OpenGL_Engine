@@ -206,6 +206,27 @@ jobs:
           grep -q "mounted read-only; user:// in $user_dir" "$RUNNER_TEMP/game_cwd.log"
           if grep -E '\[(error|critical)\]' "$RUNNER_TEMP/game_cwd.log"; then echo "::error::errors in the log of the host started in an empty folder"; exit 1; fi
 
+      # #731: a config that is not valid yaml, and an unknown option, stop the host with exit code 2 and the reason.
+      - name: Game host stops on a broken config or an unknown option
+        if: matrix.preset == 'ci-linux-clang-debug'
+        timeout-minutes: 2
+        run: |
+          game=build/ci-linux-clang-debug/apps/game/game
+          broken="$RUNNER_TEMP/broken_game.cfg"
+          printf 'resource: [unclosed\n' > "$broken"
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$game" --config "$broken" --headless --project projects/sandbox \
+            > /dev/null 2> "$RUNNER_TEMP/game_broken_config.log" || rc=$?
+          cat "$RUNNER_TEMP/game_broken_config.log"
+          if [ "$rc" -ne 2 ]; then echo "::error::expected exit code 2 with a broken config, got $rc"; exit 1; fi
+          grep -q "config .*/broken_game.cfg could not be loaded" "$RUNNER_TEMP/game_broken_config.log"
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$game" --headless --no-such-option \
+            > /dev/null 2> "$RUNNER_TEMP/game_bad_option.log" || rc=$?
+          cat "$RUNNER_TEMP/game_bad_option.log"
+          if [ "$rc" -ne 2 ]; then echo "::error::expected exit code 2 with an unknown option, got $rc"; exit 1; fi
+          grep -q "command line: .*no-such-option" "$RUNNER_TEMP/game_bad_option.log"
+
       # #591: the host links no editor, MCP or git code and does not load snk_engine (it is the static engine).
       - name: Game host dependency check
         if: matrix.preset == 'ci-linux-clang-debug'
