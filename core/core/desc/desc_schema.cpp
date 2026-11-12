@@ -386,6 +386,16 @@ namespace desc
 		return true;
 	}
 
+	bool schema_registry::set_document(std::string_view name, bool is_document)
+	{
+		auto it = m_types.find(std::string{ name });
+		if (it == m_types.end()) {
+			return false;
+		}
+		it->second.is_document = is_document;
+		return true;
+	}
+
 	const type_schema* schema_registry::find(std::string_view name) const
 	{
 		auto it = m_types.find(std::string{ name });

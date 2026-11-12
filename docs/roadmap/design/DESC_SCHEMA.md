@@ -263,3 +263,10 @@
   - `serialize` тоже ручной. Общий писатель записал бы ссылку на `memory://` как inline-копию (`get_sync` на главном потоке). Тогда переопределение узла модели (`serialize(parent)` + `deserialize` в ассемблере) создавало бы вторую копию материала вместо общей с родителем.
   - Тесты: `AnUntaggedMesh_KeepsTheInlineMaterialOfAnImportedModel`, `Gltf_AMeshOfTheImportedModel_SpawnsWithItsMaterial_WithoutAWarning`, `Gltf_AHiddenMeshOfTheImportedModel_SharesTheMaterialOfItsParent`.
   - Общее правило меняется только со вторым таким компонентом, отдельным issue.
+
+## Документ данных: флаг `is_document` (#789, EPIC-56 S56-1)
+
+- Флаг ставят: JSON-схема (`"is_document": true`), `desc_system::register_document<T>(name)` (регистрация + пометка), `desc_system::mark_document(name, codec_fields)` для уже зарегистрированного типа и `gs::module_context::mark_document(name)` из модуля игры. `schema_registry::set_document` только меняет флаг, проверок не делает.
+- Документом бывает простой desc (`schema_kind::desc`, не компонент и не структура), целиком описанный схемой: итог цепочки `__parent` склеивается глубоким слиянием JSON по схеме, и это совпадает с рантаймом только без значений, которых схема не описывает. Отказывает: поле `custom` без `json_codec`, `custom` во вложенной структуре или списке (вложенным типам кодек не передаётся), список `custom`, структура без схемы, вложенность глубже 8. Отказ — ошибка в логе (`desc/error`) с именем поля, тип остаётся зарегистрированным обычным desc.
+- JSON-схема с `is_document: true` и таким полем регистрируется без флага (с ошибкой в логе): кодеков у неё нет.
+- `desc_system::document_types()` — документы слоя и родителя, по имени. `component.schema` выводит `is_document`, JSON Schema — `"x-document": true`. Тип родителя слою не помечается.

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_dynamic.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_json_schema.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_schema_ops.h>
 
@@ -91,6 +93,29 @@ namespace ops_test {
 		std::vector<tagged> list;
 
 		BOOST_DESCRIBE_CLASS(ctx_holder, (), (direct, nested, list), (), ())
+	};
+
+	// Documents (EPIC-56): a custom field with a codec, and one without.
+	class codec_doc : public desc::schema_desc<codec_doc>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.codec_doc";
+
+		int hp = 4;
+		tagged direct;
+
+		BOOST_DESCRIBE_CLASS(codec_doc, (), (hp, direct), (), ())
+	};
+
+	class table_doc : public desc::schema_desc<table_doc>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.table_doc";
+
+		int hp = 4;
+		std::map<std::string, int> table;
+
+		BOOST_DESCRIBE_CLASS(table_doc, (), (hp, table), (), ())
 	};
 
 	// A desc other descs point to, and one that points to it.
@@ -1075,6 +1100,117 @@ BOOST_AUTO_TEST_CASE(EnumSchemaConvertsBothWaysWithFallback)
 	desc::enum_schema strict;
 	strict.items.push_back({ "a", 1 });
 	BOOST_TEST(!desc::enum_from_json(strict, json::value("b")).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(RegisterDocumentMarksAPlainDescAndListsIt)
+{
+	ops_fixture fx;
+	BOOST_TEST(fx.ds.document_types().empty());
+	BOOST_TEST(fx.ds.register_document<ops_test::sibling>("ops.sibling"));
+	fx.ds.register_desc<ops_test::target>("ops.target");
+	BOOST_REQUIRE(fx.ds.find_schema("ops.sibling") != nullptr);
+	BOOST_TEST(fx.ds.find_schema("ops.sibling")->is_document);
+	BOOST_TEST(!fx.ds.find_schema("ops.target")->is_document);
+	BOOST_TEST(fx.ds.is_registered("ops.sibling"));
+	BOOST_CHECK((fx.ds.document_types() == std::vector<std::string>{ "ops.sibling" }));
+}
+
+BOOST_AUTO_TEST_CASE(MarkDocumentMarksATypeRegisteredBefore)
+{
+	ops_fixture fx;
+	fx.ds.register_desc<ops_test::sibling>("ops.sibling");
+	BOOST_TEST(fx.ds.mark_document("ops.sibling"));
+	BOOST_CHECK_MESSAGE(fx.ds.mark_document("ops.sibling"), "marking twice keeps it a document");
+	BOOST_TEST(fx.ds.find_schema("ops.sibling")->is_document);
+	fx.ds.unregister_desc("ops.sibling");
+	BOOST_TEST(fx.ds.document_types().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ADocumentMayHaveACustomFieldWithACodec_NotOneWithout)
+{
+	ops_fixture fx;
+	BOOST_TEST(fx.ds.register_document<ops_test::codec_doc>("ops.codec_doc"));
+	BOOST_TEST(fx.ds.find_schema("ops.codec_doc")->is_document);
+
+	BOOST_TEST(!fx.ds.register_document<ops_test::table_doc>("ops.table_doc"));
+	BOOST_CHECK_MESSAGE(fx.ds.is_registered("ops.table_doc"), "a refused type stays an ordinary desc");
+	BOOST_TEST(!fx.ds.find_schema("ops.table_doc")->is_document);
+	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.table_doc"), "mark_document does not know a codec");
+}
+
+BOOST_AUTO_TEST_CASE(ACustomFieldInAStructureOrAListRefusesTheDocument)
+{
+	ops_fixture fx;
+	fx.ds.register_desc<ops_test::ctx_holder>("ops.ctx_holder");
+	const std::string_view codecs[] = { "direct", "list" };
+	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.ctx_holder", codecs), "a structure without a registered schema, and a list of custom values, are not described");
+	BOOST_TEST(fx.ds.document_types().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ADocumentIsAPlainDescNotAComponent)
+{
+	ops_fixture fx;
+	BOOST_TEST(!fx.ds.register_document<ops_test::widget>("ops.widget"));
+	BOOST_TEST(fx.ds.is_registered("ops.widget"));
+	BOOST_TEST(!fx.ds.find_schema("ops.widget")->is_document);
+
+	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.nothing"), "an unknown type");
+}
+
+BOOST_AUTO_TEST_CASE(AStructureWithoutASchemaRefusesTheDocument)
+{
+	ops_fixture fx;
+	desc::schema_registry resolve;
+	resolve.add(desc::parse_type_schema(parse(k_inner_schema)));
+	fx.ds.register_schema(desc::parse_type_schema(parse(R"({
+		"name": "mymod.config", "kind": "desc",
+		"fields": [ { "name": "nested", "kind": "structure", "ref_type": "ops.inner" } ]
+	})"), &resolve));
+	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("mymod.config"), "ops.inner is not in the registry of the system");
+}
+
+BOOST_AUTO_TEST_CASE(AJsonSchemaWithIsDocumentKeepsTheFlagOnlyWhenEveryFieldIsDescribed)
+{
+	ops_fixture fx;
+	fx.ds.register_schema(desc::parse_type_schema(parse(R"({
+		"name": "mymod.settings", "kind": "desc", "is_document": true,
+		"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 }, { "name": "ids", "kind": "array", "element": "i32" } ]
+	})")));
+	fx.ds.register_schema(desc::parse_type_schema(parse(R"({
+		"name": "mymod.opaque", "kind": "desc", "is_document": true,
+		"fields": [ { "name": "blob", "kind": "custom" } ]
+	})")));
+	BOOST_TEST(fx.ds.find_schema("mymod.settings")->is_document);
+	BOOST_REQUIRE(fx.ds.find_schema("mymod.opaque") != nullptr);
+	BOOST_TEST(!fx.ds.find_schema("mymod.opaque")->is_document);
+	BOOST_CHECK((fx.ds.document_types() == std::vector<std::string>{ "mymod.settings" }));
+}
+
+BOOST_AUTO_TEST_CASE(ALayerListsItsDocumentsAndTheParentsAndNeverMarksTheParentsType)
+{
+	ops_fixture fx;
+	fx.ds.register_document<ops_test::sibling>("ops.sibling");
+	fx.ds.register_desc<ops_test::target>("ops.target");
+
+	desc::desc_system layer(*fx.rs, &fx.ds);
+	BOOST_TEST(layer.register_document<ops_test::codec_doc>("ops.codec_doc"));
+	BOOST_CHECK_MESSAGE(!layer.mark_document("ops.target"), "the type belongs to the parent");
+	BOOST_TEST(!fx.ds.find_schema("ops.target")->is_document);
+
+	BOOST_CHECK((layer.document_types() == std::vector<std::string>{ "ops.codec_doc", "ops.sibling" }));
+	BOOST_CHECK((fx.ds.document_types() == std::vector<std::string>{ "ops.sibling" }));
+	layer.unregister_desc("ops.codec_doc");
+	BOOST_CHECK((layer.document_types() == std::vector<std::string>{ "ops.sibling" }));
+}
+
+BOOST_AUTO_TEST_CASE(TheJsonSchemaOfADocumentCarriesTheMarker)
+{
+	ops_fixture fx;
+	fx.ds.register_document<ops_test::sibling>("ops.sibling");
+	fx.ds.register_desc<ops_test::target>("ops.target");
+	const json::object document = desc::to_json_schema(*fx.ds.find_schema("ops.sibling"), fx.ds.schemas());
+	BOOST_TEST(document.contains("x-document"));
+	BOOST_TEST(!desc::to_json_schema(*fx.ds.find_schema("ops.target"), fx.ds.schemas()).contains("x-document"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

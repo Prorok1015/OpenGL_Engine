@@ -119,6 +119,12 @@ namespace gs
 		// schema that cannot be bound.
 		bool register_component(desc::type_schema schema);
 
+		// Marks a desc type of the layer (registered with layer.descs().register_desc<T>, or register_component) as a data
+		// document the editor opens and edits from its schema (module API 3.17, EPIC-56, scenario F33): `desc::desc_system::
+		// mark_document` of the layer's desc system. A type that has a custom field with a json_codec is marked through
+		// layer.descs().register_document<T> instead, which knows the codecs. False when the type is refused (logged).
+		bool mark_document(std::string_view type_name);
+
 		// The input stack of `set` (module API 3.7). A set that does not exist (`"play"` while Play does not run) gives an empty
 		// handle and an error in the log: the stack lives and dies with its set, the file of the level holds the defaults.
 		input_stack_handle input_stack(std::string_view set) const;

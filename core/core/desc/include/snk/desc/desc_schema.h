@@ -182,6 +182,9 @@ namespace desc
 		bool remove(std::string_view name);
 		// Keeps a stored schema in step with current_version(name); false if there is no such schema.
 		bool set_version(std::string_view name, int version);
+		// Sets type_schema::is_document of a schema of this layer; false when this layer has no such schema. It does not
+		// check that the type can be a document: desc_system::mark_document does.
+		bool set_document(std::string_view name, bool is_document);
 		const type_schema* find(std::string_view name) const;
 		const type_schema* find(std::uint64_t id) const;
 		bool contains(std::string_view name) const;

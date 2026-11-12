@@ -83,7 +83,10 @@
 // visits the bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
 // scn::input_actions_desc gains `gamepad` at its end (engine-made, not in the layout key). New: inp::gamepad_config, the
 // gamepad names in inp_actions.h, wnd::gamepad_source, gs::input_actions::rebind and the player's bindings (#736).
-#define SNK_MODULE_API_VERSION 0x0003'0010u // major << 16 | minor
+// 3.17 (#789): gs::module_context::mark_document, desc::desc_system::mark_document / register_document / document_types and
+// desc::schema_registry::set_document are new exports (a type the editor opens as a data document, EPIC-56); nothing that
+// exists changes layout. A module that marks a document type needs an engine of 3.17 or newer.
+#define SNK_MODULE_API_VERSION 0x0003'0011u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.
