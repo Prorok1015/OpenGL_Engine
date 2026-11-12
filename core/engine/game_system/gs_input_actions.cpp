@@ -44,6 +44,7 @@ void gs::input_actions::drop()
 	m_handle = {};
 	m_map.reset();
 	m_project.reset();
+	m_gamepad = {};
 	m_user = {};
 	m_user_file.clear();
 	m_project_name.clear();
@@ -149,6 +150,7 @@ void gs::input_actions::update(std::string_view tag, std::string_view project_na
 
 	if (m_handle.is_ready()) {
 		m_project = std::make_shared<const inp::action_map>(scn::build_action_map(*m_handle.get(), m_tag));
+		m_gamepad = scn::build_gamepad_config(*m_handle.get(), m_tag);
 		rebuild_effective();
 		m_built = true;
 		egLOG_INFO("input", "game actions from {}: {}", m_tag, m_map->size());

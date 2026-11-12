@@ -45,6 +45,8 @@ namespace gs
 		std::shared_ptr<const inp::action_map> map() const { return m_map; }
 		// The project's map as written, for a UI that offers "reset". Null when map() is.
 		std::shared_ptr<const inp::action_map> project_map() const { return m_project; }
+		// The "gamepad" setting of the desc (the defaults without one), shared by the bindings of a device.
+		inp::gamepad_config gamepad_config() const { return m_gamepad; }
 
 		// The player's bindings live in `folder`, one file per project named by the hash of the project name (#736); an empty folder keeps them in memory only. They
 		// are read when the project opens and written after each change.
@@ -68,6 +70,7 @@ namespace gs
 		res::res_handle<scn::input_actions_desc> m_handle{};
 		std::shared_ptr<const inp::action_map> m_map{};
 		std::shared_ptr<const inp::action_map> m_project{};
+		inp::gamepad_config m_gamepad{};
 		inp::user_bindings m_user{};
 		std::filesystem::path m_user_folder{};
 		std::filesystem::path m_user_file{};

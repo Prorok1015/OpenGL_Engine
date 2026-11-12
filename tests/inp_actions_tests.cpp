@@ -27,6 +27,54 @@ BOOST_AUTO_TEST_CASE(EveryKeyHasOneNameThatReadsBack)
 	BOOST_TEST(!inp::key_from_name("a").has_value()); // names are upper case
 }
 
+BOOST_AUTO_TEST_CASE(EveryGamepadButtonAndAxisHasOneNameThatReadsBack)
+{
+	std::set<std::string> names;
+	for (std::size_t i = 0; i < core::inp::gamepad_button_count; ++i) {
+		const auto button = static_cast<inp::GAMEPAD_BUTTONS>(i);
+		const auto name = inp::gamepad_button_name(button);
+		BOOST_TEST_INFO("button " << i);
+		BOOST_TEST(!name.empty());
+		BOOST_TEST(names.emplace(name).second);
+		BOOST_TEST((inp::gamepad_button_from_name(name) == button));
+	}
+	BOOST_TEST(inp::gamepad_button_name(inp::GAMEPAD_BUTTONS::COUNT).empty());
+	BOOST_TEST(!inp::gamepad_button_from_name("a").has_value());
+
+	for (std::size_t i = 0; i < static_cast<std::size_t>(inp::GAMEPAD_AXES::COUNT); ++i) {
+		const auto axis = static_cast<inp::GAMEPAD_AXES>(i);
+		const auto name = inp::gamepad_axis_name(axis);
+		BOOST_TEST_INFO("axis " << i);
+		BOOST_TEST(!name.empty());
+		BOOST_TEST(names.emplace(name).second);
+		BOOST_TEST((inp::gamepad_axis_from_name(name) == axis));
+		BOOST_TEST((inp::gamepad_axis_id(axis) != inp::GAMEPAD_AXIS_IDS::COUNT));
+	}
+	BOOST_TEST(inp::gamepad_axis_name(inp::GAMEPAD_AXES::COUNT).empty());
+	BOOST_TEST(!inp::gamepad_axis_from_name("LeftX").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ADirectedAxisKnowsItsDeviceAxisAndItsDirection)
+{
+	BOOST_TEST((inp::gamepad_axis_id(inp::GAMEPAD_AXES::LEFT_Y_POS) == inp::GAMEPAD_AXIS_IDS::LEFT_Y));
+	BOOST_TEST(inp::gamepad_axis_direction(inp::GAMEPAD_AXES::LEFT_Y_POS) == 1);
+	BOOST_TEST(inp::gamepad_axis_direction(inp::GAMEPAD_AXES::RIGHT_X_NEG) == -1);
+	BOOST_TEST((inp::gamepad_axis_id(inp::GAMEPAD_AXES::RIGHT_TRIGGER) == inp::GAMEPAD_AXIS_IDS::RIGHT_TRIGGER));
+	BOOST_TEST(inp::gamepad_axis_direction(inp::GAMEPAD_AXES::RIGHT_TRIGGER) == 1);
+}
+
+BOOST_AUTO_TEST_CASE(TheBindingsOfVersion315_ConvertToTheCurrentOnes_AndABracedListStaysUnambiguous)
+{
+	inp::action_map map;
+	BOOST_TEST(map.add("Old", std::vector<inp::action_binding_v1>{ inp::KEYBOARD_BUTTONS::A, inp::MOUSE_BUTTONS::LEFT }));
+	BOOST_TEST(map.add("Braced", { inp::KEYBOARD_BUTTONS::B, inp::GAMEPAD_BUTTONS::A }));
+	BOOST_TEST(map.add("Empty", {}));
+	BOOST_REQUIRE_EQUAL(map.size(), 3u);
+	BOOST_TEST((map.actions()[0].bindings == std::vector<inp::action_binding>{ inp::KEYBOARD_BUTTONS::A, inp::MOUSE_BUTTONS::LEFT }));
+	BOOST_TEST((map.actions()[1].bindings == std::vector<inp::action_binding>{ inp::KEYBOARD_BUTTONS::B, inp::GAMEPAD_BUTTONS::A }));
+	BOOST_TEST(map.actions()[2].bindings.empty());
+}
+
 BOOST_AUTO_TEST_CASE(EveryMouseButtonHasOneNameWithoutTheAliases)
 {
 	std::set<std::string> names;
