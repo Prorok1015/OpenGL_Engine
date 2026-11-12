@@ -392,54 +392,73 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 	return {};
 }
 
+namespace {
+	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes; `file_out`,
+	// `size_out` and `path_out` are set when the result is ok.
+	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request, fd_holder& file_out,
+		std::uint64_t& size_out, fs::path& path_out)
+	{
+		using namespace platform::beneath;
+		const auto parts = folder_parts(request.folder);
+		if (!parts || !is_plain_name(request.leaf)) {
+			return { read_status::failed, std::string{ k_not_below } };
+		}
+		if (request.hook && *request.hook) {
+			(*request.hook)(read_stage::before_walk);
+		}
+		const fd_holder root{ ::open(request.root.c_str(), k_dir_flags) };
+		if (root.get() < 0) {
+			return { errno == ENOENT ? read_status::missing : read_status::failed, errno_text("cannot open the root", request.root) };
+		}
+		fs::path reached = request.root;
+		const fd_holder folder = open_below(root.get(), *parts, false, reached);
+		if (folder.get() < 0) {
+			return { errno == ENOENT ? read_status::missing : read_status::failed,
+				errno_text("cannot open the folder (a link, or not a folder)", reached) };
+		}
+		if (request.hook && *request.hook) {
+			(*request.hook)(read_stage::folders_held);
+		}
+		// O_NONBLOCK: opening a FIFO without a writer, or a device, must not wait; the type is checked right after.
+		file_out = fd_holder{ ::openat(folder.get(), request.leaf.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC) };
+		if (file_out.get() < 0) {
+			if (errno == ENOENT) {
+				return { read_status::missing, {} };
+			}
+			// ELOOP: the name is a link.
+			return { errno == ELOOP ? read_status::not_regular : read_status::failed, errno_text("cannot open", reached / request.leaf) };
+		}
+		struct stat information;
+		if (::fstat(file_out.get(), &information) != 0) {
+			return { read_status::failed, errno_text("cannot inspect", reached / request.leaf) };
+		}
+		if (!S_ISREG(information.st_mode)) {
+			return { read_status::not_regular, {} };
+		}
+		// A regular file now: back to blocking reads, which FUSE and network file systems may need.
+		const int flags = ::fcntl(file_out.get(), F_GETFL);
+		if (flags < 0 || ::fcntl(file_out.get(), F_SETFL, flags & ~O_NONBLOCK) != 0) {
+			return { read_status::failed, errno_text("cannot inspect", reached / request.leaf) };
+		}
+		if (information.st_size < 0 || static_cast<std::uint64_t>(information.st_size) > request.max_bytes) {
+			return { read_status::too_large, {} };
+		}
+		size_out = static_cast<std::uint64_t>(information.st_size);
+		path_out = reached / request.leaf;
+		return { read_status::ok, {} };
+	}
+}
+
 platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, std::vector<std::byte>& out)
 {
 	out.clear();
-	const auto parts = folder_parts(request.folder);
-	if (!parts || !is_plain_name(request.leaf)) {
-		return { read_status::failed, std::string{ k_not_below } };
+	fd_holder file;
+	std::uint64_t size = 0;
+	fs::path path;
+	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+		return opened;
 	}
-	if (request.hook && *request.hook) {
-		(*request.hook)(read_stage::before_walk);
-	}
-	const fd_holder root{ ::open(request.root.c_str(), k_dir_flags) };
-	if (root.get() < 0) {
-		return { errno == ENOENT ? read_status::missing : read_status::failed, errno_text("cannot open the root", request.root) };
-	}
-	fs::path reached = request.root;
-	const fd_holder folder = open_below(root.get(), *parts, false, reached);
-	if (folder.get() < 0) {
-		return { errno == ENOENT ? read_status::missing : read_status::failed,
-			errno_text("cannot open the folder (a link, or not a folder)", reached) };
-	}
-	if (request.hook && *request.hook) {
-		(*request.hook)(read_stage::folders_held);
-	}
-	// O_NONBLOCK: opening a FIFO without a writer, or a device, must not wait; the type is checked right after.
-	const fd_holder file{ ::openat(folder.get(), request.leaf.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC) };
-	if (file.get() < 0) {
-		if (errno == ENOENT) {
-			return { read_status::missing, {} };
-		}
-		// ELOOP: the name is a link.
-		return { errno == ELOOP ? read_status::not_regular : read_status::failed, errno_text("cannot open", reached / request.leaf) };
-	}
-	struct stat information;
-	if (::fstat(file.get(), &information) != 0) {
-		return { read_status::failed, errno_text("cannot inspect", reached / request.leaf) };
-	}
-	if (!S_ISREG(information.st_mode)) {
-		return { read_status::not_regular, {} };
-	}
-	// A regular file now: back to blocking reads, which FUSE and network file systems may need.
-	const int flags = ::fcntl(file.get(), F_GETFL);
-	if (flags < 0 || ::fcntl(file.get(), F_SETFL, flags & ~O_NONBLOCK) != 0) {
-		return { read_status::failed, errno_text("cannot inspect", reached / request.leaf) };
-	}
-	if (information.st_size < 0 || static_cast<std::uint64_t>(information.st_size) > request.max_bytes) {
-		return { read_status::too_large, {} };
-	}
-	out.resize(static_cast<std::size_t>(information.st_size));
+	out.resize(static_cast<std::size_t>(size));
 	std::size_t done = 0;
 	while (done < out.size()) {
 		const ssize_t got = ::read(file.get(), out.data() + done, out.size() - done);
@@ -448,7 +467,7 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 				continue;
 			}
 			out.clear();
-			return { read_status::failed, errno_text("cannot read", reached / request.leaf) };
+			return { read_status::failed, errno_text("cannot read", path) };
 		}
 		if (got == 0) {
 			break; // shortened since fstat: what is there now
@@ -456,6 +475,34 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 		done += static_cast<std::size_t>(got);
 	}
 	out.resize(done);
+	return { read_status::ok, {} };
+}
+
+platform::beneath::read_result platform::beneath::read_beneath_stream(const read_request& request,
+	const std::function<bool(std::span<const std::byte>)>& sink)
+{
+	fd_holder file;
+	std::uint64_t size = 0;
+	fs::path path;
+	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+		return opened;
+	}
+	std::vector<std::byte> buffer(64 * 1024);
+	for (;;) {
+		const ssize_t got = ::read(file.get(), buffer.data(), buffer.size());
+		if (got < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			return { read_status::failed, errno_text("cannot read", path) };
+		}
+		if (got == 0) {
+			break;
+		}
+		if (!sink(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)))) {
+			break;
+		}
+	}
 	return { read_status::ok, {} };
 }
 
@@ -910,76 +957,95 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 	return {};
 }
 
+namespace {
+	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes; `file_out`,
+	// `size_out` and `path_out` are set when the result is ok.
+	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request, handle_holder& file_out,
+		std::uint64_t& size_out, fs::path& path_out)
+	{
+		using namespace platform::beneath;
+		const auto parts = folder_parts(request.folder);
+		if (!parts || !is_plain_name(request.leaf)) {
+			return { read_status::failed, std::string{ k_not_below } };
+		}
+		if (request.hook && *request.hook) {
+			(*request.hook)(read_stage::before_walk);
+		}
+		const auto is_missing = [] {
+			const DWORD code = ::GetLastError();
+			return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
+		};
+		fs::path reached;
+		const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached);
+		if (chain.empty()) {
+			return { is_missing() ? read_status::missing : read_status::failed,
+				last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached) };
+		}
+		if (request.hook && *request.hook) {
+			(*request.hook)(read_stage::folders_held);
+		}
+		const fs::path path = reached / request.leaf;
+		// Opened itself if it is a reparse point (open_in adds FILE_OPEN_REPARSE_POINT); shared, so a writer may still
+		// replace or remove the file while it is read.
+		constexpr ULONG k_file_share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+		file_out = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN, 0);
+		if (!file_out.valid()) {
+			if (is_missing()) {
+				return { read_status::missing, {} };
+			}
+			return { read_status::failed, last_error_text("cannot open", path) };
+		}
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(file_out.get(), &information)) {
+			return { read_status::failed, last_error_text("cannot inspect", path) };
+		}
+		if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+			return { read_status::not_regular, {} };
+		}
+		switch (reparse_of(file_out.get(), information)) {
+		case reparse_kind::none:
+			break;
+		case reparse_kind::redirect:
+			return { read_status::not_regular, {} };
+		case reparse_kind::unknown:
+			return { read_status::failed, last_error_text("cannot inspect the reparse point", path) };
+		case reparse_kind::filter: {
+			// A placeholder or a deduplicated file: read through its filter, if that is still the same file.
+			handle_holder followed = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN,
+				FILE_NON_DIRECTORY_FILE, false);
+			BY_HANDLE_FILE_INFORMATION after{};
+			if (!followed.valid() || !::GetFileInformationByHandle(followed.get(), &after)) {
+				return { read_status::failed, last_error_text("cannot open through its file system filter", path) };
+			}
+			if (!same_file(information, after)) {
+				return { read_status::not_regular, {} };
+			}
+			file_out = std::move(followed);
+			information = after;
+			break;
+		}
+		}
+		if (::GetFileType(file_out.get()) != FILE_TYPE_DISK) {
+			return { read_status::not_regular, {} };
+		}
+		const std::uint64_t size = (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
+		if (size > request.max_bytes) {
+			return { read_status::too_large, {} };
+		}
+		size_out = size;
+		path_out = path;
+		return { read_status::ok, {} };
+	}
+}
+
 platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, std::vector<std::byte>& out)
 {
 	out.clear();
-	const auto parts = folder_parts(request.folder);
-	if (!parts || !is_plain_name(request.leaf)) {
-		return { read_status::failed, std::string{ k_not_below } };
-	}
-	if (request.hook && *request.hook) {
-		(*request.hook)(read_stage::before_walk);
-	}
-	const auto is_missing = [] {
-		const DWORD code = ::GetLastError();
-		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
-	};
-	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached);
-	if (chain.empty()) {
-		return { is_missing() ? read_status::missing : read_status::failed,
-			last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached) };
-	}
-	if (request.hook && *request.hook) {
-		(*request.hook)(read_stage::folders_held);
-	}
-	const fs::path path = reached / request.leaf;
-	// Opened itself if it is a reparse point (open_in adds FILE_OPEN_REPARSE_POINT); shared, so a writer may still
-	// replace or remove the file while it is read.
-	constexpr ULONG k_file_share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-	handle_holder file = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN, 0);
-	if (!file.valid()) {
-		if (is_missing()) {
-			return { read_status::missing, {} };
-		}
-		return { read_status::failed, last_error_text("cannot open", path) };
-	}
-	BY_HANDLE_FILE_INFORMATION information{};
-	if (!::GetFileInformationByHandle(file.get(), &information)) {
-		return { read_status::failed, last_error_text("cannot inspect", path) };
-	}
-	if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-		return { read_status::not_regular, {} };
-	}
-	switch (reparse_of(file.get(), information)) {
-	case reparse_kind::none:
-		break;
-	case reparse_kind::redirect:
-		return { read_status::not_regular, {} };
-	case reparse_kind::unknown:
-		return { read_status::failed, last_error_text("cannot inspect the reparse point", path) };
-	case reparse_kind::filter: {
-		// A placeholder or a deduplicated file: read through its filter, if that is still the same file.
-		handle_holder followed = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN,
-			FILE_NON_DIRECTORY_FILE, false);
-		BY_HANDLE_FILE_INFORMATION after{};
-		if (!followed.valid() || !::GetFileInformationByHandle(followed.get(), &after)) {
-			return { read_status::failed, last_error_text("cannot open through its file system filter", path) };
-		}
-		if (!same_file(information, after)) {
-			return { read_status::not_regular, {} };
-		}
-		file = std::move(followed);
-		information = after;
-		break;
-	}
-	}
-	if (::GetFileType(file.get()) != FILE_TYPE_DISK) {
-		return { read_status::not_regular, {} };
-	}
-	const std::uint64_t size = (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
-	if (size > request.max_bytes) {
-		return { read_status::too_large, {} };
+	handle_holder file;
+	std::uint64_t size = 0;
+	fs::path path;
+	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+		return opened;
 	}
 	out.resize(static_cast<std::size_t>(size));
 	std::size_t done = 0;
@@ -996,6 +1062,31 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 		done += got;
 	}
 	out.resize(done);
+	return { read_status::ok, {} };
+}
+
+platform::beneath::read_result platform::beneath::read_beneath_stream(const read_request& request,
+	const std::function<bool(std::span<const std::byte>)>& sink)
+{
+	handle_holder file;
+	std::uint64_t size = 0;
+	fs::path path;
+	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+		return opened;
+	}
+	std::vector<std::byte> buffer(64 * 1024);
+	for (;;) {
+		DWORD got = 0;
+		if (!::ReadFile(file.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &got, nullptr)) {
+			return { read_status::failed, last_error_text("cannot read", path) };
+		}
+		if (got == 0) {
+			break;
+		}
+		if (!sink(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)))) {
+			break;
+		}
+	}
 	return { read_status::ok, {} };
 }
 
