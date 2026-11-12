@@ -51,7 +51,7 @@
 |---|---|---|---|---|
 | S0 | #750 | Фикстура проекта старых версий (`tests/data/projects/`) | (мягко #755: `.resource` в фикстуре) | 1 |
 | S1 | #751 | Шаги с контекстом (`summary`, `ctx.warn`), минор module API | — | 1 |
-| S2 | #752 | Скан и план (dry-run), `core/core/project_migration` | #750, #751; #755 (класс `missing_resource`) | 1–2 |
+| S2 | #752 | Скан и план (dry-run), `tools/project_migration` | #750, #751; #755 (класс `missing_resource`) | 1–2 |
 | S3 | #753 | Apply: журнал, бэкап `.snk/migrations/`, атомарная запись, проверка, автооткат, отчёт | #752 | 1–2 |
 | S4 | #754 | Шаги проекта: реестр `project_step`, `format_version`, `applied_steps`, версия `.resource` | #753; #755 | 1–2 |
 | S5 | #756 | **Хук для EPIC-57**: фазы `pre`/`post`, `migration_apply_context` | #754 | 1 |
