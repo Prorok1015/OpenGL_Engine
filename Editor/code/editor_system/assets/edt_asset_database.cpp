@@ -4,11 +4,16 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_beneath.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/resource/res_asset_meta.h>
 #include <boost/json/parse.hpp>
+#include <boost/json/serialize.hpp>
+#include <boost/json/value.hpp>
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <fstream>
+#include <sstream>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -94,8 +99,15 @@ namespace
 		}
 #if defined(_WIN32)
 		WIN32_FIND_DATAW data{};
-		const HANDLE found = ::FindFirstFileW(entry.path().c_str(), &data);
+		// The \\?\ prefix lifts MAX_PATH for an absolute path.
+		std::wstring query = entry.path().native();
+		if (entry.path().is_absolute() && !query.starts_with(LR"(\\?\)")) {
+			query.insert(0, LR"(\\?\)");
+		}
+		const HANDLE found = ::FindFirstFileW(query.c_str(), &data);
 		if (found == INVALID_HANDLE_VALUE) {
+			egLOG_WARN("assets", "{}: cannot be inspected ({}), left out of the asset database", fs_paths::utf8_of(entry.path()),
+				std::system_category().message(static_cast<int>(::GetLastError())));
 			return true;
 		}
 		::FindClose(found);
@@ -127,7 +139,7 @@ namespace
 	// One folder of the merged tree. `in_layers`: the layers (ascending) where `relative_dir` is a real folder.
 	void walk(walk_state& state, const fs::path& relative_dir, const std::vector<std::size_t>& in_layers, int depth)
 	{
-		if (depth > edt::asset_database::max_depth) {
+		if (depth >= edt::asset_database::max_depth) {
 			if (!state.depth_warned) {
 				egLOG_WARN("assets", "res://{}: deeper than {} folders, not walked further", fs_paths::generic_utf8_of(relative_dir),
 					edt::asset_database::max_depth);
@@ -249,7 +261,8 @@ std::string edt::asset_type_of(std::string_view path)
 	return "file";
 }
 
-edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, const std::function<bool()>& stopped)
+edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, const std::function<bool()>& stopped,
+	const std::map<std::string, asset_record>* known)
 {
 	std::vector<merged_file> files;
 	std::vector<std::size_t> all_layers(layers.size());
@@ -296,6 +309,21 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 			const file_stat meta_stat = stat_of(meta->second->physical);
 			record.meta_size = meta_stat.size;
 			record.meta_mtime = meta_stat.mtime;
+			const asset_record* before = nullptr;
+			if (known) {
+				if (const auto found = known->find(record.path.string()); found != known->end()) {
+					before = &found->second;
+				}
+			}
+			if (before && before->has_meta && before->meta_size == meta_stat.size && before->meta_mtime == meta_stat.mtime) {
+				record.has_meta = true;
+				record.id = before->id;
+				record.flags = before->flags;
+				record.meta_error = before->meta_error;
+				scan.records.push_back(std::move(record));
+				continue;
+			}
+			++scan.meta_reads;
 			const meta_read read = read_meta(layers[meta->second->layer], meta->second->relative);
 			record.has_meta = read.present;
 			if (read.meta) {
@@ -314,6 +342,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		}
 		asset_orphan orphan;
 		orphan.meta_path = res::tag::make(fs_paths::generic_utf8_of(file->relative));
+		++scan.meta_reads;
 		const meta_read read = read_meta(layers[file->layer], file->relative);
 		if (read.meta) {
 			orphan.id = read.meta->guid;
@@ -375,14 +404,24 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	return out;
 }
 
-edt::asset_database::asset_database(job_service& jobs, editor_events* events, std::vector<fs::path> layers)
+edt::asset_database::asset_database(job_service& jobs, editor_events* events, std::vector<fs::path> layers, fs::path cache_dir)
 	: m_jobs(jobs)
+	, m_cache_dir(std::move(cache_dir))
 {
 	m_layers.reserve(layers.size());
 	for (fs::path& layer : layers) {
 		std::error_code ec;
 		fs::path canonical = fs::weakly_canonical(layer, ec);
 		m_layers.push_back(ec ? std::move(layer) : std::move(canonical));
+	}
+	if (!m_cache_dir.empty()) {
+		std::string error;
+		m_lock = platform::file_lock::try_acquire(m_cache_dir / ".lock", &error);
+		if (!m_lock) {
+			egLOG_INFO("assets", "{}: the asset database cache is held by another editor{}; this one keeps its database in memory",
+				fs_paths::utf8_of(m_cache_dir), error.empty() ? std::string{} : " (" + error + ")");
+		}
+		load_cache();
 	}
 	if (events) {
 		m_job_finished = events->job_finished.subscribe(
@@ -392,7 +431,10 @@ edt::asset_database::asset_database(job_service& jobs, editor_events* events, st
 	}
 }
 
-edt::asset_database::~asset_database() = default;
+edt::asset_database::~asset_database()
+{
+	save();
+}
 
 void edt::asset_database::rebuild()
 {
@@ -406,8 +448,8 @@ void edt::asset_database::rebuild()
 	const std::uint64_t number = ++m_scan_number;
 	m_scanning = true;
 	m_scan_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Scan assets", "assets", true }, m_lifetime,
-		[layers = m_layers](ds::task_context& ctx) {
-			return scan_asset_layers(layers, [&ctx] { return ctx.stop.stop_requested(); });
+		[layers = m_layers, known = m_records](ds::task_context& ctx) {
+			return scan_asset_layers(layers, [&ctx] { return ctx.stop.stop_requested(); }, &known);
 		},
 		[this, number](ds::task_result<asset_scan>& result) {
 			if (number != m_scan_number) {
@@ -471,8 +513,11 @@ void edt::asset_database::apply_scan(asset_scan scan)
 		m_records.emplace(std::move(key), std::move(record));
 	}
 	m_orphans = std::move(scan.orphans);
+	m_files_read += scan.meta_reads;
+	m_dirty = true;
 	++m_revision;
 	hash_next();
+	save_when_idle();
 }
 
 void edt::asset_database::index_id(const asset_record& record)
@@ -529,6 +574,7 @@ void edt::asset_database::hash_next()
 				bool changed = false;
 				for (auto& [key, content] : *result.value) {
 					std::erase(m_in_flight, key);
+					++m_files_read;
 					const auto found = m_records.find(key);
 					if (found == m_records.end()) {
 						continue;
@@ -537,8 +583,13 @@ void edt::asset_database::hash_next()
 						egLOG_WARN("assets", "{}: {}", key, content.error);
 						continue;
 					}
-					// Written while it was read, or since the walk: the next walk or batch of changes hashes it again.
-					if (!content.unchanged || found->second.size != content.size || found->second.mtime != content.mtime) {
+					// Changed since the walk: the next walk or batch of changes updates the record and hashes it again.
+					if (found->second.size != content.size || found->second.mtime != content.mtime) {
+						continue;
+					}
+					// Written while it was read, now as the record says: hashed again with the next batch.
+					if (!content.unchanged) {
+						m_unhashed.push_back(key);
 						continue;
 					}
 					found->second.content_hash = std::move(content.content_hash);
@@ -546,6 +597,7 @@ void edt::asset_database::hash_next()
 					changed = true;
 				}
 				if (changed) {
+					m_dirty = true;
 					++m_revision;
 				}
 			} else {
@@ -557,6 +609,7 @@ void edt::asset_database::hash_next()
 			// What the job did not get to (stopped half way) is hashed with the next batch.
 			requeue_in_flight();
 			hash_next();
+			save_when_idle();
 		});
 }
 
@@ -594,4 +647,197 @@ std::vector<res::asset_id> edt::asset_database::duplicates() const
 		it = next;
 	}
 	return out;
+}
+
+void edt::asset_database::save_when_idle()
+{
+	if (!m_scanning && m_hash_job == 0 && m_unhashed.empty()) {
+		save();
+	}
+}
+
+namespace
+{
+	constexpr std::string_view k_cache_type = "asset_db";
+	constexpr std::int64_t k_cache_version = 1;
+
+	boost::json::array layer_texts(const std::vector<fs::path>& layers)
+	{
+		boost::json::array out;
+		for (const fs::path& layer : layers) {
+			out.emplace_back(fs_paths::generic_utf8_of(layer));
+		}
+		return out;
+	}
+
+	boost::json::value to_json(const edt::asset_record& record)
+	{
+		boost::json::object out;
+		out["path"] = record.path.view();
+		out["layer"] = record.layer;
+		boost::json::array shadowed;
+		for (const std::size_t layer : record.shadowed_layers) {
+			shadowed.emplace_back(layer);
+		}
+		out["shadowed"] = std::move(shadowed);
+		if (record.id) {
+			out["id"] = res::to_text(*record.id);
+		}
+		out["size"] = record.size;
+		out["mtime"] = record.mtime;
+		out["has_meta"] = record.has_meta;
+		out["meta_size"] = record.meta_size;
+		out["meta_mtime"] = record.meta_mtime;
+		if (!record.meta_error.empty()) {
+			out["meta_error"] = record.meta_error;
+		}
+		boost::json::array flags;
+		for (const std::string& flag : record.flags) {
+			flags.emplace_back(flag);
+		}
+		out["flags"] = std::move(flags);
+		out["type"] = record.type;
+		out["hash"] = record.content_hash;
+		if (record.desc_type) {
+			out["desc_type"] = *record.desc_type;
+		}
+		return out;
+	}
+
+	std::optional<edt::asset_record> record_of(const boost::json::value& value, std::size_t layer_count)
+	{
+		const boost::json::object* object = value.if_object();
+		if (!object) {
+			return std::nullopt;
+		}
+		const auto text = [object](std::string_view key) -> std::optional<std::string> {
+			const boost::json::value* field = object->if_contains(key);
+			if (!field || !field->is_string()) return std::nullopt;
+			return std::string{ field->get_string() };
+		};
+		const auto integer = [object](std::string_view key) -> std::optional<std::int64_t> {
+			const boost::json::value* field = object->if_contains(key);
+			if (!field) return std::nullopt;
+			if (field->is_int64()) return field->get_int64();
+			if (field->is_uint64()) return static_cast<std::int64_t>(field->get_uint64());
+			return std::nullopt;
+		};
+		const auto path = text("path");
+		const auto layer = integer("layer");
+		const auto size = integer("size");
+		const auto mtime = integer("mtime");
+		const auto type = text("type");
+		const auto hash = text("hash");
+		if (!path || !layer || *layer < 0 || static_cast<std::size_t>(*layer) >= layer_count || !size || !mtime || !type || !hash) {
+			return std::nullopt;
+		}
+		edt::asset_record record;
+		record.path = res::tag{ *path };
+		record.layer = static_cast<std::size_t>(*layer);
+		record.size = *size;
+		record.mtime = *mtime;
+		record.type = *type;
+		record.content_hash = *hash;
+		if (const boost::json::value* shadowed = object->if_contains("shadowed"); shadowed && shadowed->is_array()) {
+			for (const boost::json::value& item : shadowed->get_array()) {
+				if (item.is_int64() && item.get_int64() >= 0) record.shadowed_layers.push_back(static_cast<std::size_t>(item.get_int64()));
+				else if (item.is_uint64()) record.shadowed_layers.push_back(static_cast<std::size_t>(item.get_uint64()));
+			}
+		}
+		if (const auto id = text("id")) {
+			record.id = res::asset_id_from_text(*id);
+			if (!record.id) return std::nullopt;
+		}
+		if (const boost::json::value* has_meta = object->if_contains("has_meta"); has_meta && has_meta->is_bool()) {
+			record.has_meta = has_meta->get_bool();
+		}
+		record.meta_size = integer("meta_size").value_or(0);
+		record.meta_mtime = integer("meta_mtime").value_or(0);
+		record.meta_error = text("meta_error").value_or(std::string{});
+		if (const boost::json::value* flags = object->if_contains("flags"); flags && flags->is_array()) {
+			for (const boost::json::value& flag : flags->get_array()) {
+				if (flag.is_string()) record.flags.emplace_back(flag.get_string());
+			}
+		}
+		record.desc_type = text("desc_type");
+		return record;
+	}
+}
+
+void edt::asset_database::load_cache()
+{
+	const fs::path file = m_cache_dir / "assets.json";
+	std::ifstream in(file, std::ios::binary);
+	if (!in) {
+		return;
+	}
+	std::ostringstream text;
+	text << in.rdbuf();
+	boost::system::error_code ec;
+	const boost::json::value document = boost::json::parse(text.str(), ec);
+	const boost::json::object* root = ec ? nullptr : document.if_object();
+	const auto rejected = [&file](std::string_view why) {
+		egLOG_WARN("assets", "{}: {}, the asset database is built from the files", fs_paths::utf8_of(file), why);
+	};
+	if (!root) {
+		rejected("not a JSON object");
+		return;
+	}
+	const boost::json::value* type = root->if_contains("__type");
+	const boost::json::value* version = root->if_contains("__version");
+	if (!type || !type->is_string() || type->get_string() != k_cache_type || !version || !version->is_int64()
+		|| version->get_int64() != k_cache_version) {
+		rejected("another format");
+		return;
+	}
+	// The layers are part of what a record means (its layer index): a cache of other layers is of no use.
+	const boost::json::value* layers = root->if_contains("layers");
+	if (!layers || *layers != boost::json::value(layer_texts(m_layers))) {
+		return;
+	}
+	const boost::json::value* records = root->if_contains("records");
+	if (!records || !records->is_array()) {
+		rejected("no records");
+		return;
+	}
+	std::map<std::string, asset_record> loaded;
+	for (const boost::json::value& item : records->get_array()) {
+		std::optional<asset_record> record = record_of(item, m_layers.size());
+		if (!record) {
+			rejected("a record is malformed");
+			return;
+		}
+		std::string key = record->path.string();
+		loaded.emplace(std::move(key), std::move(*record));
+	}
+	m_records = std::move(loaded);
+	for (const auto& [key, record] : m_records) {
+		index_id(record);
+	}
+	m_loaded_from_cache = true;
+	++m_revision;
+}
+
+void edt::asset_database::save()
+{
+	if (!m_lock || !m_dirty) {
+		return;
+	}
+	boost::json::object document;
+	document["__type"] = k_cache_type;
+	document["__version"] = k_cache_version;
+	document["layers"] = layer_texts(m_layers);
+	boost::json::array records;
+	records.reserve(m_records.size());
+	for (const auto& [key, record] : m_records) {
+		records.push_back(to_json(record));
+	}
+	document["records"] = std::move(records);
+	std::error_code ec;
+	fs::create_directories(m_cache_dir, ec);
+	if (const std::optional<std::string> error = prj::write_text_atomically(m_cache_dir / "assets.json", boost::json::serialize(document))) {
+		egLOG_WARN("assets", "the asset database cache was not written: {}", *error);
+		return;
+	}
+	m_dirty = false;
 }

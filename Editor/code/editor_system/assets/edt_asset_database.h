@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <snk/platform/plt_file_lock.h>
 
 namespace edt
 {
@@ -56,6 +57,8 @@ namespace edt
 	{
 		std::vector<asset_record> records;
 		std::vector<asset_orphan> orphans;
+		// .resource files the walk read (an unchanged one known from the cache is not read).
+		std::size_t meta_reads = 0;
 	};
 
 	// What the background pass reads of one file: its hash and, for a desc, its "__type".
@@ -80,7 +83,10 @@ namespace edt
 	// them (an upper layer shadows a name below, case folded on Windows), and reads every file's .resource. In every
 	// layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are skipped.
 	// `stopped` (may be empty) ends the walk early.
-	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {});
+	// `known` (may be null): records by path text, from the cache or the last walk; a file whose .resource has the size
+	// and time recorded there keeps the record's ID and flags without the .resource being read again.
+	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {},
+		const std::map<std::string, asset_record>* known = nullptr);
 
 	// Hashes the file at `relative` below `layer_root` through a read that follows no link (platform::beneath), in chunks;
 	// a desc file of at most `max_desc_bytes` is parsed for its "__type" too.
@@ -99,7 +105,11 @@ namespace edt
 
 		// `events` (may be null) tells the database about a job someone cancelled (job.cancel): its work is queued again
 		// and goes on at the next rebuild. Without it a cancelled hashing job is only noticed by rebuild().
-		asset_database(job_service& jobs, editor_events* events, std::vector<std::filesystem::path> layers);
+		// `cache_dir` (cache://asset_db/; empty: no cache): the database starts from assets.json there, so a walk reads
+		// only what changed, and writes it back when its work is done and when it goes. Only the holder of the lock
+		// file next to it writes: a second editor on the project reads the cache and keeps its database in memory.
+		asset_database(job_service& jobs, editor_events* events, std::vector<std::filesystem::path> layers,
+			std::filesystem::path cache_dir = {});
 		~asset_database();
 		asset_database(const asset_database&) = delete;
 		asset_database& operator=(const asset_database&) = delete;
@@ -110,6 +120,14 @@ namespace edt
 		bool scanning() const { return m_scanning; }
 		// Files whose hash is not known yet (queued or running).
 		std::size_t pending_hashes() const;
+		// This database holds the lock of the cache and writes it.
+		bool writes_cache() const { return m_lock.has_value(); }
+		// The cache gave the records before the first walk.
+		bool loaded_from_cache() const { return m_loaded_from_cache; }
+		// Files read so far: .resource files and files hashed. For tests of the cache.
+		std::size_t files_read() const { return m_files_read; }
+		// Writes the cache now when something changed since it was last written (and the lock is held).
+		void save();
 
 		const asset_record* find(const res::tag& path) const;
 		std::vector<const asset_record*> find(const res::asset_id& id) const;
@@ -125,6 +143,8 @@ namespace edt
 		void hash_next();
 		void index_id(const asset_record& record);
 		void on_job_finished(std::uint64_t id, job_status status);
+		void load_cache();
+		void save_when_idle();
 		// The keys of the hashing job that ended without an answer for them go back into the queue.
 		void requeue_in_flight();
 
@@ -140,6 +160,11 @@ namespace edt
 		bool m_scanning = false;
 		std::uint64_t m_scan_number = 0;
 		std::uint64_t m_revision = 0;
+		std::filesystem::path m_cache_dir;
+		std::optional<platform::file_lock> m_lock;
+		bool m_loaded_from_cache = false;
+		bool m_dirty = false;
+		std::size_t m_files_read = 0;
 		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};

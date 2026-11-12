@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,7 +32,22 @@ constexpr std::string_view k_guid_b = "00000000-0000-4000-8000-000000000002";
 
 struct asset_db_fixture
 {
-	asset_db_fixture() : lower("asset_db_lower"), upper("asset_db_upper") {}
+	asset_db_fixture() : lower("asset_db_lower"), upper("asset_db_upper"), cache("asset_db_cache") {}
+
+	std::unique_ptr<edt::asset_database> cached()
+	{
+		auto made = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() },
+			cache.path() / "asset_db");
+		made->rebuild();
+		test_util::pump(tasks);
+		return made;
+	}
+
+	std::string cache_bytes() const
+	{
+		std::ifstream in(cache.path() / "asset_db" / "assets.json", std::ios::binary);
+		return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
 
 	edt::asset_database& open()
 	{
@@ -50,6 +66,7 @@ struct asset_db_fixture
 
 	test_util::temp_dir lower;
 	test_util::temp_dir upper;
+	test_util::temp_dir cache;
 	// Runs queued work until the walk's result was applied, before any hashing ran.
 	void run_walk()
 	{
@@ -292,6 +309,74 @@ BOOST_AUTO_TEST_CASE(hidden_folders_are_not_walked)
 	auto& assets = open();
 	BOOST_TEST(assets.records().size() == 1u);
 	BOOST_TEST(assets.find(res::tag::make("shown/a.txt")) != nullptr);
+}
+
+// AC #760: a database built from the cache reads no file that did not change.
+BOOST_AUTO_TEST_CASE(the_cache_spares_reading_unchanged_files)
+{
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	upper.write("b.desc", R"({ "__type": "b_type" })");
+	{
+		auto first = cached();
+		BOOST_TEST(first->writes_cache());
+		BOOST_TEST(!first->loaded_from_cache());
+		BOOST_TEST(first->files_read() == 3u); // a.png.resource, a.png, b.desc
+	}
+	BOOST_REQUIRE(!cache_bytes().empty());
+
+	auto second = cached();
+	BOOST_TEST(second->loaded_from_cache());
+	BOOST_TEST(second->files_read() == 0u);
+	const edt::asset_record* a = second->find(res::tag::make("a.png"));
+	BOOST_REQUIRE(a);
+	BOOST_REQUIRE(a->id.has_value());
+	BOOST_TEST(res::to_text(*a->id) == k_guid_a);
+	BOOST_TEST(!a->content_hash.empty());
+	const edt::asset_record* b = second->find(res::tag::make("b.desc"));
+	BOOST_REQUIRE(b);
+	BOOST_TEST((b->desc_type == std::optional<std::string>{ "b_type" }));
+}
+
+BOOST_AUTO_TEST_CASE(only_a_changed_file_is_read_again)
+{
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	upper.write("b.txt", "b");
+	cached().reset();
+
+	upper.write("b.txt", "b, longer now");
+	auto second = cached();
+	BOOST_TEST(second->files_read() == 1u);
+	BOOST_TEST(second->find(res::tag::make("b.txt"))->size == 13);
+}
+
+// AC #760: a second editor on the project reads the cache and never writes it.
+BOOST_AUTO_TEST_CASE(a_second_editor_does_not_write_the_cache)
+{
+	upper.write("a.txt", "a");
+	auto first = cached();
+	BOOST_REQUIRE(first->writes_cache());
+	const std::string before = cache_bytes();
+	BOOST_REQUIRE(!before.empty());
+
+	upper.write("new.txt", "new");
+	{
+		auto second = cached();
+		BOOST_TEST(!second->writes_cache());
+		BOOST_TEST(second->loaded_from_cache());
+		BOOST_TEST(second->find(res::tag::make("new.txt")) != nullptr);
+		second->save();
+	}
+	BOOST_TEST(cache_bytes() == before);
+}
+
+BOOST_AUTO_TEST_CASE(a_cache_of_other_layers_is_not_used)
+{
+	upper.write("a.txt", "a");
+	cached().reset();
+	auto other = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ upper.path() }, cache.path() / "asset_db");
+	BOOST_TEST(!other->loaded_from_cache());
 }
 
 BOOST_AUTO_TEST_CASE(the_kind_of_asset_comes_from_the_suffix)
