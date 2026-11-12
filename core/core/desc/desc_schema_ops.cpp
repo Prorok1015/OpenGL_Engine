@@ -2,6 +2,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_reference.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -452,6 +453,15 @@ namespace desc
 					return false;
 				}
 				json::value stored = in;
+				// A {guid, path} reference (#758): the field holds the tag, as a described res::tag field does.
+				const auto as_path = [](json::value& item) {
+					if (item.is_object()) item = json::value(res::reference_from_json(item)->path.view());
+				};
+				if (ops.kind == field_kind::res_tag) {
+					as_path(stored);
+				} else if (ops.kind == field_kind::array && ops.element == field_kind::res_tag && stored.is_array()) {
+					std::ranges::for_each(stored.as_array(), as_path);
+				}
 				if (ops.kind == field_kind::array && ops.element == field_kind::entity && in.is_array()) {
 					for (json::value& item : stored.as_array()) {
 						std::uint32_t raw = null_entity;
@@ -779,15 +789,16 @@ namespace desc
 			float components[4] = {};
 			return read_components(kind, value, components);
 		}
-		case field_kind::string:
-		case field_kind::res_tag: return value.is_string();
+		case field_kind::string: return value.is_string();
+		case field_kind::res_tag: return value.is_string() || res::reference_from_json(value).has_value();
 		case field_kind::enumeration:
 			if (enumeration) {
 				return enum_from_json(*enumeration, value).has_value();
 			}
 			return value.is_string() || is_integer(value);
 		case field_kind::desc_ref:
-			return value.is_string() || (value.is_object() && value.as_object().if_contains("__type") && value.as_object().at("__type").is_string());
+			return value.is_string() || (value.is_object() && value.as_object().if_contains("__type") && value.as_object().at("__type").is_string())
+				|| res::reference_from_json(value).has_value();
 		case field_kind::node_ref: return read_node_ref(value, unsigned_value);
 		case field_kind::structure: return value.is_object();
 		case field_kind::array:
