@@ -313,8 +313,8 @@ BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with
 	BOOST_REQUIRE(settings != nullptr);
 	BOOST_TEST(settings->is_document);
 	const std::vector<std::string> documents = layer->descs().document_types();
-	BOOST_TEST(std::ranges::find(documents, std::string{ dll_game::document_type }) != documents.end());
-	BOOST_TEST(std::ranges::find(documents, std::string{ dll_game::schema_document_type }) != documents.end());
+	BOOST_TEST(std::ranges::count(documents, std::string{ dll_game::document_type }) == 1);
+	BOOST_TEST(std::ranges::count(documents, std::string{ dll_game::schema_document_type }) == 1);
 
 	loader.unload(dll_game::module_name, root);
 	BOOST_TEST(!resident(g_module_path));
