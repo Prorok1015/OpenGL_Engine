@@ -25,7 +25,14 @@ public:
 		m_root = std::filesystem::temp_directory_path()
 			/ std::format("snk_fixture_{}_{}_{}", name, std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
 		std::filesystem::create_directories(m_root);
-		std::filesystem::copy(fixture_source(name), m_root, std::filesystem::copy_options::recursive);
+		try {
+			std::filesystem::copy(fixture_source(name), m_root, std::filesystem::copy_options::recursive);
+		} catch (...) {
+			// The destructor does not run for a constructor that throws.
+			std::error_code ignored;
+			std::filesystem::remove_all(m_root, ignored);
+			throw;
+		}
 	}
 
 	~fixture_copy()
