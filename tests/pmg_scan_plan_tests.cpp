@@ -3,6 +3,7 @@
 #include "test_scene_env.hpp"
 #include <snk/project_migration/pmg_scan.h>
 #include <snk/desc/desc_schema.h>
+#include <snk/resource/res_asset_meta.h>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -185,7 +186,9 @@ BOOST_AUTO_TEST_CASE(ABigFileALinkAndASidecar)
 	project.write("res/small.desc", R"({"__type":"camera_desc","__version":2})");
 	project.write("res/big.desc", std::string(R"({"__type":"camera_desc","__version":2,"pad":")") + std::string(256, 'x') + "\"}");
 	project.write("res/tex.png", "png");
-	project.write("res/tex.png.resource", "{}");
+	project.write("res/tex.png.resource", res::write_asset_meta(res::asset_meta{ res::generate_asset_id(), "copy", {}, {} }));
+	project.write("res/newer.png.resource", R"({"__type": "resource", "__version": 2, "__guid": "x", "future": 1})");
+	project.write("res/broken.png.resource", "{}");
 	project.write("res/.hidden/skip.desc", "not json");
 	std::error_code link_error;
 	fs::create_symlink(project.root / "res/small.desc", project.root / "res/link.desc", link_error);
@@ -198,6 +201,8 @@ BOOST_AUTO_TEST_CASE(ABigFileALinkAndASidecar)
 	BOOST_TEST(scan.find("res/big.desc")->reason.find("too big") != std::string::npos);
 	BOOST_TEST((kind_of(scan, "res/tex.png") == pmg::file_class::current));
 	BOOST_TEST((kind_of(scan, "res/tex.png.resource") == pmg::file_class::current));
+	BOOST_TEST((kind_of(scan, "res/newer.png.resource") == pmg::file_class::newer));
+	BOOST_TEST((kind_of(scan, "res/broken.png.resource") == pmg::file_class::invalid));
 	BOOST_TEST((scan.find("res/.hidden/skip.desc") == nullptr));
 	if (!link_error) {
 		BOOST_TEST((kind_of(scan, "res/link.desc") == pmg::file_class::invalid));
