@@ -12,6 +12,18 @@
 
 namespace edt
 {
+	bool edit_against_parent(scn::prefab_desc::prefab_comp_node& comp, const boost::json::object* parent,
+		const std::function<bool(scn::prefab_desc::prefab_comp_node&)>& renderer, bool apply)
+	{
+		auto scratch = comp;
+		if (parent)
+			scratch.overrides = *parent;
+		if (!renderer(scratch) || !apply)
+			return false;
+		comp.overrides = override_edit::diff(parent ? *parent : boost::json::object{}, scratch.overrides);
+		return true;
+	}
+
 	inspector_panel::inspector_panel()
 		: panel_base("inspector", "Inspector")
 	{
@@ -228,19 +240,13 @@ namespace edt
 						changed = true;
 					}
 				} else if (custom) {
-					// No overrides yet: the renderer shows the effective values (parent data) on a scratch copy.
-					// Only what it changed against the parent becomes the node's own data, so the first edit
-					// of one field does not make every other field of the parent an override.
+					// No overrides yet: the first edit of one field must not make every other field of the parent an override.
 					m_ui_sources[key] = component_ui::custom;
-					auto scratch = comp;
-					const boost::json::object* parent = parent_json(key, comp);
-					if (parent)
-						scratch.overrides = *parent;
-					auto result = m_inspectors->invoke(effective_type, scratch);
-					if (result.has_value() && *result && !m_readonly) {
-						comp.overrides = override_edit::diff(parent ? *parent : boost::json::object{}, scratch.overrides);
-						changed = true;
-					}
+					const auto renderer = [&](scn::prefab_desc::prefab_comp_node& scratch) {
+						const auto result = m_inspectors->invoke(effective_type, scratch);
+						return result.has_value() && *result;
+					};
+					changed |= edit_against_parent(comp, parent_json(key, comp), renderer, !m_readonly);
 				} else if (schema) {
 					m_ui_sources[key] = component_ui::schema;
 					changed |= render_schema_component(key, comp, *schema);

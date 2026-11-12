@@ -73,7 +73,10 @@
 // bus_slot, bus_slot_impl and the layout key are unchanged; bus_state, input_router gain members at their end
 // (engine-made). inp::action_trace, inp::update_and_trace_actions_system and scn::animation_finished_json are new. A
 // module that gives its events a payload writer needs an engine of 3.14 or newer.
-#define SNK_MODULE_API_VERSION 0x0003'000Eu // major << 16 | minor
+// 3.15 (#560): scn::set_visible / scn::is_visible (inline, scn_model.h) hide a mesh by taking its scn::renderable, which the
+// render data extractor requires of meshes from 3.15 on; an older engine draws the mesh anyway, so a module that hides
+// meshes needs an engine of 3.15 or newer. mesh_node_desc gains `visible` at its end (engine-made, not in the layout key).
+#define SNK_MODULE_API_VERSION 0x0003'000Fu // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
 // without that header a module reports 0, which the host does not check.
