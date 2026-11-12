@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -182,6 +183,9 @@ namespace desc
 		bool remove(std::string_view name);
 		// Keeps a stored schema in step with current_version(name); false if there is no such schema.
 		bool set_version(std::string_view name, int version);
+		// Sets type_schema::is_document of a schema of this layer; false when this layer has no such schema. It does not
+		// check that the type can be a document: desc_system::mark_document does.
+		bool set_document(std::string_view name, bool is_document);
 		const type_schema* find(std::string_view name) const;
 		const type_schema* find(std::uint64_t id) const;
 		bool contains(std::string_view name) const;
@@ -201,6 +205,12 @@ namespace desc
 		std::unordered_map<std::uint64_t, std::string> m_names_by_id;
 		std::unordered_map<std::string, enum_schema> m_enums;
 	};
+
+	// Why `schema` cannot be a data document (empty: it can): a plain desc only, every field described by the schema.
+	// A custom field is refused unless `codec_fields` names it (a top-level field with a json_codec); the same at any depth
+	// in nested structures and lists, and for a structure missing from `resolve` or nested deeper than 8 levels.
+	// schema_registry::add applies it with no codec fields: a schema that asks for is_document and fails is stored without it.
+	SNK_API std::string document_problem(const type_schema& schema, const schema_registry& resolve, std::span<const std::string_view> codec_fields = {});
 
 	// Size and alignment of one field in a runtime blob (C layout, no pointers): string, res_tag,
 	// desc_ref, array and custom are a u32 index into the handle table; structure is resolved by

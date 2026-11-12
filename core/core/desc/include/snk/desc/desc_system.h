@@ -16,6 +16,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -79,6 +80,33 @@ namespace desc
 				m_component_type_names.push_back(std::string{ type_name });
 			}
 		}
+
+		// register_desc plus mark_document, for a type the editor opens as a data document (EPIC-56). A custom field that has a
+		// json_codec counts as being on the schema. The type stays a registered desc when it cannot be a document (logged);
+		// false then, and false when the registration itself is refused.
+		template<typename T>
+		bool register_document(const std::string_view type_name)
+		{
+			if (!add_desc<T>(type_name, schema_kind::desc)) {
+				return false;
+			}
+			if constexpr (desc::is_described<T>) {
+				const std::vector<std::string_view> codec_fields = desc::schema_generator<T>::codec_fields();
+				return mark_document(type_name, codec_fields);
+			} else {
+				return mark_document(type_name);
+			}
+		}
+
+		// Marks the schema of `type_name` as a data document (type_schema::is_document). Only a plain desc whose every field
+		// the schema describes can be one: the file's `__parent` chain is merged as JSON by the schema alone, and that matches
+		// what the runtime reads only when no field hides behind a custom value. `codec_fields` names the top-level custom
+		// fields that have a json_codec (register_document<T> finds them); a custom field elsewhere, or without a codec,
+		// refuses the type. False (logged, nothing changed) when refused, or when the type belongs to the parent desc system.
+		bool mark_document(std::string_view type_name, std::span<const std::string_view> codec_fields = {});
+
+		// Every document type, this layer's and the parent's, sorted by name.
+		std::vector<std::string> document_types() const;
 
 		void unregister_desc(const std::string_view type_name)
 		{
@@ -303,6 +331,9 @@ namespace desc
 			}
 			return m_parent ? m_parent->find_factory(type_name) : nullptr;
 		}
+
+		// Why `schema` cannot be a document (empty: it can); see mark_document.
+		std::string document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const;
 
 		const migration_steps* find_migrations(std::string_view type) const
 		{

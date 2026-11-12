@@ -47,7 +47,7 @@ namespace edt
 	// node.get {ref, components?[]} -> {ref, document, generation, world, name, parent, in_instance, prefab?, transform?,
 	//   components: {key: desc-json with __type}, children: [{ref, name, components[], has_children}], child_count,
 	//   children_truncated, overrides[]}; not_found for a ref that leads nowhere
-	// component.schema {type} -> {type, version, kind, is_component, schema}; schema is a JSON Schema generated from the
+	// component.schema {type} -> {type, version, kind, is_component, is_document, schema}; schema is a JSON Schema generated from the
 	//   type_schema of the desc type; not_found for a type without one
 	// asset.query {glob?, kind?, directory?, page_size?, cursor?} -> {items: [{tag, kind, size, layer}], next_cursor?,
 	//   scan_truncated}; the merged view of the resource layers (a file of an upper layer shadows the same path below),

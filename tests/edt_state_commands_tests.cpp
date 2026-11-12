@@ -505,6 +505,7 @@ BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheLightIsGeneratedFromItsTypeSchema)
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
 	BOOST_TEST(at(result, "/type").as_string() == "directional_light_desc");
 	BOOST_TEST(at(result, "/is_component").as_bool());
+	BOOST_TEST(!at(result, "/is_document").as_bool());
 	BOOST_TEST(at(result, "/schema/type").as_string() == "object");
 	BOOST_TEST(at(result, "/schema/properties/__type/const").as_string() == "directional_light_desc");
 	for (const char* field : { "direction", "diffuse", "ambient", "specular" }) {
@@ -622,6 +623,20 @@ BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_StructuresThatRefereToThemselvesStayBou
 
 	// 4 fields per level, 8 levels deep is 87381 nodes unbounded; the budget stops it far earlier.
 	BOOST_TEST(json::serialize(out).size() < 600000u);
+}
+
+BOOST_AUTO_TEST_CASE(ComponentSchema_OfADocumentTypeSaysSoAndItsJsonSchemaIsMarked)
+{
+	descs->register_schema(desc::parse_type_schema(json::parse(R"({
+		"name": "test.game_config", "kind": "desc", "is_document": true,
+		"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 } ]
+	})").as_object()));
+
+	const auto result = call("component.schema", R"({"type":"test.game_config"})");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST(at(result, "/is_document").as_bool());
+	BOOST_TEST(!at(result, "/is_component").as_bool());
+	BOOST_TEST(at(result, "/schema/x-document").as_bool());
 }
 
 BOOST_AUTO_TEST_CASE(ComponentSchema_UnknownAndSchemalessTypesAreNotFound)

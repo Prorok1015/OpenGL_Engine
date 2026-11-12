@@ -1,4 +1,5 @@
 #include <snk/desc/desc_schema.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <format>
 #include <limits>
@@ -360,6 +361,12 @@ namespace desc
 		if (find(id)) {
 			return nullptr;
 		}
+		if (schema.is_document) {
+			if (const std::string problem = document_problem(schema, *this); !problem.empty()) {
+				egLOG_ERROR("desc/error", "Schema '{}' is stored without is_document: {}", schema.name, problem);
+				schema.is_document = false;
+			}
+		}
 		const std::string name = schema.name;
 		m_names_by_id.emplace(id, name);
 		return &m_types.emplace(name, std::move(schema)).first->second;
@@ -383,6 +390,16 @@ namespace desc
 			return false;
 		}
 		it->second.version = version;
+		return true;
+	}
+
+	bool schema_registry::set_document(std::string_view name, bool is_document)
+	{
+		auto it = m_types.find(std::string{ name });
+		if (it == m_types.end()) {
+			return false;
+		}
+		it->second.is_document = is_document;
 		return true;
 	}
 
@@ -593,5 +610,68 @@ namespace desc
 			schema.null_value = item->value;
 		}
 		return schema;
+	}
+}
+
+namespace desc
+{
+	namespace
+	{
+		constexpr int max_document_depth = 8;
+
+		std::string field_problem(const field_schema& field, const schema_registry& schemas, std::span<const std::string_view> codec_fields, int depth, const std::string& path)
+		{
+			const std::string where = path + field.name;
+			auto structure_problem = [&](const std::string& name) -> std::string {
+				if (depth >= max_document_depth) {
+					return std::format("field '{}' is nested deeper than {} levels", where, max_document_depth);
+				}
+				const type_schema* nested = schemas.find(name);
+				if (!nested) {
+					return std::format("field '{}' is of structure '{}', which has no schema", where, name);
+				}
+				for (const auto& inner : nested->fields) {
+					if (std::string problem = field_problem(inner, schemas, {}, depth + 1, where + "/"); !problem.empty()) {
+						return problem;
+					}
+				}
+				return {};
+			};
+
+			switch (field.kind) {
+			case field_kind::custom: {
+				const bool has_codec = std::ranges::find(codec_fields, std::string_view{ field.name }) != codec_fields.end();
+				if (has_codec) {
+					return {};
+				}
+				return std::format("field '{}' is a custom value without a json_codec, so the schema does not describe it", where);
+			}
+			case field_kind::structure:
+				return structure_problem(field.ref_type);
+			case field_kind::array:
+				if (field.element == field_kind::custom) {
+					return std::format("field '{}' is a list of custom values, so the schema does not describe its elements", where);
+				}
+				if (field.element == field_kind::structure) {
+					return structure_problem(field.ref_type);
+				}
+				return {};
+			default:
+				return {};
+			}
+		}
+	}
+
+	std::string document_problem(const type_schema& schema, const schema_registry& resolve, std::span<const std::string_view> codec_fields)
+	{
+		if (schema.kind != schema_kind::desc || schema.is_component) {
+			return std::format("a {} cannot be a document, only a plain desc can", schema.is_component ? "component" : std::string{ to_string(schema.kind) });
+		}
+		for (const auto& field : schema.fields) {
+			if (std::string problem = field_problem(field, resolve, codec_fields, 0, {}); !problem.empty()) {
+				return problem;
+			}
+		}
+		return {};
 	}
 }
