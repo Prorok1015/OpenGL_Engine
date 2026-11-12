@@ -13,7 +13,8 @@ namespace res { class resource_system; }
 // report (EPIC-58 S3, #753). Everything it writes is below <project>/.snk/migrations/<id>/ or a file the plan migrates.
 namespace prj::migration
 {
-	enum class migration_status { in_progress, ok, partial, rolled_back };
+	// rollback_failed: a file could not be put back; the project is partly migrated until rollback_migration succeeds.
+	enum class migration_status { in_progress, ok, partial, rolled_back, rollback_failed };
 
 	std::string_view to_string(migration_status status);
 
@@ -23,7 +24,8 @@ namespace prj::migration
 		std::vector<step_use> steps;
 		std::vector<desc::migration_warning> warnings;
 		std::string hash_before;
-		// Empty until the file is written.
+		// Recorded in the journal just before the file is written, so a rollback after a crash recognizes it either way;
+		// empty for a file the migration never reached.
 		std::string hash_after;
 		// "engine": loaded and saved by the engine, as desc_resave does; "json": the migrated JSON, for a file the engine
 		// cannot load or whose type would not keep its __parent (the reason is among the notes).
@@ -81,15 +83,28 @@ namespace prj::migration
 		migration_report report;
 	};
 
-	// Refuses a plan with newer or invalid files. An empty plan writes nothing (status ok, no id). Otherwise writes the
-	// journal (status in_progress) before the first change, backs every file up, writes the files and checks each one
-	// again from the disk; any failure restores the backup and deletes the created files (rolled_back).
+	// Refuses a plan with newer or invalid files. An empty plan writes nothing (status ok, no id). Otherwise creates the
+	// journal (status in_progress; its folder is taken exclusively, so two processes never share an id) before the first
+	// change, backs every file up, writes the files and checks each one again from the disk; any failure puts back every
+	// file it wrote, checked by its hash, and deletes the created files: rolled_back, or rollback_failed when one could
+	// not be put back.
 	apply_outcome apply_migration(const migration_plan& plan, const apply_context& context);
 
-	// Ids of the migrations whose journal still says in_progress: a process that stopped in the middle.
+	// Ids of the migrations a person has to look at: the journal still says in_progress (the process stopped in the
+	// middle) or rollback_failed.
 	std::vector<std::string> unfinished_migrations(const std::filesystem::path& root);
 
-	// Restores the backup of migration `id` and deletes the files it created. Refuses (naming the files) when a file was
-	// changed after the migration wrote it. The error; nullopt on success.
-	std::optional<std::string> rollback_migration(const std::filesystem::path& root, std::string_view id, const project_writer& write = {});
+	struct rollback_context
+	{
+		// prj::write_project_file by default.
+		project_writer write;
+		std::function<void()> pause_watch;
+		std::function<void()> resume_watch;
+	};
+
+	// Restores the backup of migration `id` and deletes the files it created. A file already back to its original is
+	// left as it is, so a rollback that stopped half way can be run again. Refuses before writing anything (naming the
+	// files) when a file is neither what the migration wrote nor the original, or a path of the journal is not a
+	// relative path inside the project (a created file: inside a content root). The error; nullopt on success.
+	std::optional<std::string> rollback_migration(const std::filesystem::path& root, std::string_view id, const rollback_context& context = {});
 }

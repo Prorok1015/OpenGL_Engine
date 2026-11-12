@@ -245,9 +245,11 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsParentAndOnlyItsOwnFields)
 	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::partial));
 
-	for (const auto& file : outcome.report.files) {
-		if (file.path.starts_with("res/derive/")) BOOST_TEST_MESSAGE(file.path << " written as " << file.written_as);
-	}
+	// The answer of #753 to "which types flatten": neither prefab_desc nor camera_desc, both are saved by the engine.
+	std::map<std::string, std::string> written_as;
+	for (const auto& file : outcome.report.files) written_as[file.path] = file.written_as;
+	BOOST_TEST(written_as["res/derive/variant.prefab.desc"] == "engine");
+	BOOST_TEST(written_as["res/derive/cam.desc"] == "engine");
 	const json::value variant = json::parse(read_text(copy.res() / "derive/variant.prefab.desc"));
 	BOOST_TEST(variant.at("__parent").as_string() == "res://derive/base.prefab.desc");
 	BOOST_TEST(json::serialize(variant).find("\"body\"") == std::string::npos);
@@ -271,11 +273,170 @@ BOOST_AUTO_TEST_CASE(ATypeThatDropsItsParent_IsWrittenAsMigratedJson)
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 	const auto file = std::ranges::find_if(outcome.report.files, [](const auto& f) { return f.path == "res/derive/unit.desc"; });
 	BOOST_REQUIRE(file != outcome.report.files.end());
-	BOOST_TEST_MESSAGE("res/derive/unit.desc written as " << file->written_as);
+	BOOST_TEST(file->written_as == "json");
+	BOOST_REQUIRE(file->notes.size() == 1u);
+	BOOST_TEST(file->notes[0].find("__parent") != std::string::npos);
 	const json::value unit = json::parse(read_text(copy.res() / "derive/unit.desc"));
 	BOOST_TEST(unit.at("__parent").as_string() == "res://derive/base_unit.desc");
 	BOOST_TEST(unit.at("hp").as_int64() == 7);
-	if (file->written_as == "json") BOOST_TEST(!file->notes.empty());
+	// Its own fields and what its migration added, nothing of the parent's baked in.
+	BOOST_TEST(unit.at("armor").as_int64() == 1);
+	BOOST_TEST(unit.as_object().size() == 5u); // __type, __version, __parent, hp, armor
+}
+
+// A file the rollback cannot put back leaves the migration rollback_failed, which unfinished_migrations reports.
+BOOST_AUTO_TEST_CASE(ARestoreThatFails_IsRollbackFailed_AndUnfinished)
+{
+	pmg::apply_context context = context_for(copy.root());
+	std::map<std::string, int> writes;
+	context.write = [&writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		const std::string path = relative.generic_string();
+		if (!path.starts_with(".snk/")) {
+			const int count = ++writes[path];
+			if (writes.size() == 3u && count == 1) return std::string{ "injected failure" };
+			if (count == 2) return std::string{ "injected restore failure" };
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = apply(copy.root(), context);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rollback_failed));
+	BOOST_TEST(outcome.report.error.find("injected restore failure") != std::string::npos);
+	const json::value journal = json::parse(read_text(copy.root() / ".snk/migrations/test-migration/report.json"));
+	BOOST_TEST(journal.at("status").as_string() == "rollback_failed");
+	const std::vector<std::string> unfinished = pmg::unfinished_migrations(copy.root());
+	BOOST_TEST((unfinished == std::vector<std::string>{ "test-migration" }));
+}
+
+// What check() reads from the disk differs from what was written: the migration rolls back.
+BOOST_AUTO_TEST_CASE(ACheckThatFails_RollsBack)
+{
+	const auto before = content_of(copy.root());
+	pmg::apply_context context = context_for(copy.root());
+	std::map<std::string, int> writes;
+	context.write = [&writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		const std::string path = relative.generic_string();
+		if (!path.starts_with(".snk/") && ++writes[path] == 1 && writes.size() == 2u) {
+			return prj::write_project_file(root, relative, std::string(text) + "\n ");
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = apply(copy.root(), context);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("is not what was written") != std::string::npos);
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWriteThatFailsMidway_RollsBack)
+{
+	const auto before = content_of(copy.root());
+	pmg::apply_context context = context_for(copy.root());
+	int journal_writes = 0;
+	context.write = [&journal_writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (relative.generic_string().ends_with("/report.json") && ++journal_writes == 3) return std::string{ "injected journal failure" };
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = apply(copy.root(), context);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("injected journal failure") != std::string::npos);
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// Two migrations that get the same id never share its folder.
+BOOST_AUTO_TEST_CASE(ATakenId_GetsASuffix)
+{
+	write_text(copy.root() / ".snk/migrations/test-migration/report.json", R"({"id": "test-migration", "status": "ok"})");
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(outcome.report.id == "test-migration-2");
+	BOOST_TEST(json::parse(read_text(copy.root() / ".snk/migrations/test-migration/report.json")).at("status").as_string() == "ok");
+	BOOST_TEST(fs::exists(copy.root() / ".snk/migrations/test-migration-2/backup"));
+}
+
+// A process that stopped in the middle leaves the journal in_progress; its rollback puts the project back.
+BOOST_AUTO_TEST_CASE(ARollback_OfAJournalLeftInProgress_RestoresTheProject)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	journal.as_object()["status"] = "in_progress";
+	write_text(journal_path, json::serialize(journal));
+	BOOST_TEST((pmg::unfinished_migrations(copy.root()) == std::vector<std::string>{ "test-migration" }));
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST((content_of(copy.root()) == before));
+	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
+}
+
+// The journal never recorded a write of the file, so a file that is not the original was changed by someone else.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAFileNeverWrittenThatIsNotTheOriginal)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const auto after = content_of(copy.root());
+	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	for (json::value& file : journal.as_object()["files"].as_array()) {
+		if (file.as_object()["path"].as_string() == "res/cameras/cam_v1.desc") file.as_object()["hash_after"] = "";
+	}
+	write_text(journal_path, json::serialize(journal));
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("res/cameras/cam_v1.desc") != std::string::npos);
+	BOOST_TEST((content_of(copy.root()) == after));
+}
+
+// A rollback that stopped half way leaves files already back to the original; running it again finishes it.
+BOOST_AUTO_TEST_CASE(ARollbackThatStopped_CanRunAgain)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	int writes = 0;
+	pmg::rollback_context failing;
+	failing.write = [&writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (++writes == 2) return std::string{ "injected failure" };
+		return prj::write_project_file(root, relative, text);
+	};
+	BOOST_REQUIRE(pmg::rollback_migration(copy.root(), "test-migration", failing).has_value());
+	BOOST_TEST((content_of(copy.root()) != before));
+
+	std::vector<std::string> events;
+	pmg::rollback_context context;
+	context.pause_watch = [&events] { events.push_back("pause"); };
+	context.resume_watch = [&events] { events.push_back("resume"); };
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration", context);
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST((content_of(copy.root()) == before));
+	BOOST_TEST((events == std::vector<std::string>{ "pause", "resume" }));
+}
+
+// A journal is a file anyone can edit: a created file outside the content roots is refused and stays.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileOutsideTheContentRoots)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const auto after = content_of(copy.root());
+	const fs::path outside = copy.root().parent_path() / (copy.root().filename().string() + "-outside.txt");
+	write_text(outside, "keep");
+	write_text(copy.root() / "keep.txt", "keep");
+	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
+	for (const std::string& path : { "../" + outside.filename().string(), outside.generic_string(), std::string{ "keep.txt" },
+			 std::string{ "res/../keep.txt" } }) {
+		BOOST_TEST_INFO(path);
+		json::value journal = json::parse(read_text(journal_path));
+		journal.as_object()["created_files"] = json::array{ json::string(path) };
+		write_text(journal_path, json::serialize(journal));
+		const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+		BOOST_TEST(error.has_value());
+		BOOST_TEST(fs::exists(outside));
+		BOOST_TEST(fs::exists(copy.root() / "keep.txt"));
+	}
+	fs::remove(outside);
+	fs::remove(copy.root() / "keep.txt");
+	BOOST_TEST((content_of(copy.root()) == after));
 }
 
 BOOST_AUTO_TEST_CASE(TheProjectTemplate_KeepsMigrationsOutOfGit_ButNotTheAgentPolicy)

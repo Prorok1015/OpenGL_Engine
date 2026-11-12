@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_schema.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project/prj_version.h>
@@ -13,6 +14,8 @@
 #include <cstdint>
 #include <exception>
 #include <format>
+#include <random>
+#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -150,50 +153,218 @@ namespace
 		return std::nullopt;
 	}
 
-	struct watch_pause
+	// A journal is a file in the project anyone can edit: every path it names must stay a chain of plain names below the root.
+	bool is_plain_relative(std::string_view path)
 	{
-		explicit watch_pause(const apply_context& owner) : context(owner) {}
+		if (path.empty() || path.find('\\') != std::string_view::npos || path.find(':') != std::string_view::npos) return false;
+		const fs::path relative = fs_paths::path_from_utf8(path);
+		if (relative.has_root_path()) return false;
+		for (const fs::path& part : relative) {
+			if (part.empty() || part == "." || part == "..") return false;
+		}
+		return true;
+	}
+
+	std::optional<std::string> created_file_error(const std::string& path, const std::vector<fs::path>& content_roots)
+	{
+		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", path);
+		if (!tag_of(path, content_roots)) return std::format("'{}' is not inside a content root", path);
+		return std::nullopt;
+	}
+
+	// Removes a file the migration created without following a link below the root (platform::beneath).
+	std::optional<std::string> remove_created(const fs::path& root, const std::string& path)
+	{
+		std::error_code ec;
+		const fs::path canonical_root = fs::canonical(root, ec);
+		if (ec) return std::format("the project root cannot be opened: {}", ec.message());
+		platform::beneath::pinned_root pinned{ canonical_root };
+		const fs::path relative = fs_paths::path_from_utf8(path);
+		if (std::string error = platform::beneath::remove_beneath(pinned, relative.parent_path(), relative.filename(), true); !error.empty()) {
+			return std::format("{} not deleted: {}", path, error);
+		}
+		return std::nullopt;
+	}
+
+	enum class create_result { created, taken, failed };
+
+	// Creates <root>/<relative> only if nothing is at its name, without following a link below the root.
+	create_result create_new_file(const fs::path& root, const std::string& relative, std::string_view text, std::string& error)
+	{
+		std::error_code ec;
+		const fs::path canonical_root = fs::canonical(root, ec);
+		if (ec) {
+			error = std::format("the project root cannot be opened: {}", ec.message());
+			return create_result::failed;
+		}
+		const fs::path path = fs_paths::path_from_utf8(relative);
+		std::random_device random;
+		fs::path temp_leaf{ "." };
+		temp_leaf += path.filename();
+		temp_leaf += std::format(".{:08x}.tmp", random());
+		platform::beneath::pinned_root pinned{ canonical_root };
+		platform::beneath::write_request request;
+		request.folder = path.parent_path();
+		request.leaf = path.filename();
+		request.tmp_leaf = temp_leaf;
+		request.data = std::as_bytes(std::span<const char>(text.data(), text.size()));
+		request.replace = false;
+		request.tmp_path = canonical_root / request.folder / temp_leaf;
+		error = platform::beneath::write_beneath(pinned, request);
+		if (error.empty()) return create_result::created;
+		return prj::read_project_file(root, path).exists ? create_result::taken : create_result::failed;
+	}
+
+	enum class file_state { original, migrated, changed };
+
+	file_state state_of(const fs::path& root, const std::string& path, const std::string& hash_before, const std::string& hash_after)
+	{
+		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(path), k_max_file_bytes);
+		if (!now.exists || !now.error.empty()) return file_state::changed;
+		const std::string hash = hash_of(now.text);
+		if (hash == hash_before) return file_state::original;
+		if (!hash_after.empty() && hash == hash_after) return file_state::migrated;
+		return file_state::changed;
+	}
+
+	// Puts `original` back where the migration wrote `hash_after`, and checks that it is back. `ours`: the failed
+	// migration itself puts back what it has just written, with the watcher paused, whatever is on the disk (a failed
+	// check may be the reason); a later rollback refuses a file someone else changed.
+	std::optional<std::string> restore_file(const fs::path& root, const project_writer& write, const std::string& path,
+		const std::string& hash_before, const std::string& hash_after, const std::string& original, bool ours)
+	{
+		switch (state_of(root, path, hash_before, hash_after)) {
+		case file_state::original:
+			return std::nullopt;
+		case file_state::changed:
+			if (!ours) return std::format("{} was changed after the migration wrote it", path);
+			break;
+		case file_state::migrated:
+			break;
+		}
+		if (hash_of(original) != hash_before) return std::format("{}: the backup is not the original", path);
+		if (auto error = write(root, fs_paths::path_from_utf8(path), original)) return std::format("{} not restored: {}", path, *error);
+		if (state_of(root, path, hash_before, hash_after) != file_state::original) {
+			return std::format("{} not restored: the file on the disk is not the original", path);
+		}
+		return std::nullopt;
+	}
+
+	class watch_pause
+	{
+	public:
+		watch_pause(const std::function<void()>& pause, const std::function<void()>& resume) : m_pause(pause), m_resume(resume) {}
 		watch_pause(const watch_pause&) = delete;
 		watch_pause& operator=(const watch_pause&) = delete;
 
-		const apply_context& context;
-		bool paused = false;
-
 		void pause()
 		{
-			if (context.pause_watch) context.pause_watch();
-			paused = true;
+			if (m_pause) m_pause();
+			m_paused = true;
 		}
 
 		~watch_pause()
 		{
-			if (paused && context.resume_watch) context.resume_watch();
+			if (!m_paused || !m_resume) return;
+			try {
+				m_resume();
+			} catch (const std::exception& e) {
+				egLOG_ERROR("project/migrate", "the file watcher cannot be resumed: {}", e.what());
+			} catch (...) {
+				egLOG_ERROR("project/migrate", "the file watcher cannot be resumed");
+			}
 		}
+
+	private:
+		const std::function<void()>& m_pause;
+		const std::function<void()>& m_resume;
+		bool m_paused = false;
 	};
+
+	json::parse_options parse_options()
+	{
+		json::parse_options options;
+		options.max_depth = 128;
+		return options;
+	}
+
+	bool is_engine_key(std::string_view key)
+	{
+		return key == "__type" || key == "__version" || key == "__guid" || key == "__id";
+	}
+
+	// Why `written` loses what derives from a parent in `migrated`: an object with __parent whose saved form names
+	// another parent (or none), or has a field its file does not have (the parent's, baked in). Empty when nothing is lost.
+	std::string lost_parent(const json::value& migrated, const json::value* written, const std::string& at)
+	{
+		if (migrated.is_object()) {
+			const json::object& object = migrated.as_object();
+			const json::object* saved = written && written->is_object() ? &written->as_object() : nullptr;
+			const std::string where = at.empty() ? std::string{ "/" } : at;
+			if (const json::value* parent = object.if_contains("__parent")) {
+				// prefab_desc saves a component that only names its parent as the parent's tag alone.
+				const bool only_parent = std::ranges::all_of(object, [](const auto& member) { return member.key() == "__parent"; });
+				if (only_parent && written && *written == *parent) return {};
+				const json::value* kept = saved ? saved->if_contains("__parent") : nullptr;
+				if (!kept || *kept != *parent) return std::format("{} does not keep its __parent", where);
+				for (const auto& member : *saved) {
+					if (!object.contains(member.key()) && !is_engine_key(member.key())) {
+						return std::format("{} gets '{}' of its parent baked in", where, std::string_view(member.key()));
+					}
+				}
+			}
+			for (const auto& member : object) {
+				const json::value* next = saved ? saved->if_contains(member.key()) : nullptr;
+				std::string why = lost_parent(member.value(), next, std::format("{}/{}", at, std::string_view(member.key())));
+				if (!why.empty()) return why;
+			}
+		} else if (migrated.is_array()) {
+			const json::array& array = migrated.as_array();
+			const json::array* saved = written && written->is_array() ? &written->as_array() : nullptr;
+			for (std::size_t i = 0; i < array.size(); ++i) {
+				const json::value* next = saved && i < saved->size() ? &(*saved)[i] : nullptr;
+				std::string why = lost_parent(array[i], next, std::format("{}/{}", at, i));
+				if (!why.empty()) return why;
+			}
+		}
+		return {};
+	}
 
 	class applier
 	{
 	public:
-		applier(const apply_context& context, migration_report& report)
+		applier(const apply_context& context, migration_report& report, const std::vector<fs::path>& content_roots)
 			: m_context(context)
 			, m_report(report)
+			, m_content_roots(content_roots)
 			, m_write(context.write ? context.write : project_writer{ default_write })
 			, m_adapter(context.resources, context.descs)
 		{
 		}
 
+		const project_writer& writer() const { return m_write; }
+
+		std::string journal_path() const
+		{
+			return std::format("{}/{}/report.json", k_migrations_dir, m_report.id);
+		}
+
+		std::string journal_text() const
+		{
+			return prj::to_indented_json(report_json(m_report));
+		}
+
 		void journal()
 		{
-			const std::string dir = std::string(k_migrations_dir) + "/" + m_report.id;
-			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(dir + "/report.json"), prj::to_indented_json(report_json(m_report)))) {
+			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(journal_path()), journal_text())) {
 				throw std::runtime_error(std::format("the journal cannot be written: {}", *error));
 			}
 		}
 
 		void write_report_md()
 		{
-			const std::string dir = std::string(k_migrations_dir) + "/" + m_report.id;
-			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(dir + "/report.md"), report_markdown(m_report))) {
+			const std::string path = std::format("{}/{}/report.md", k_migrations_dir, m_report.id);
+			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(path), report_markdown(m_report))) {
 				egLOG_WARN("project/migrate", "report.md of {} cannot be written: {}", m_report.id, *error);
 			}
 		}
@@ -203,54 +374,40 @@ namespace
 			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(relative), text)) throw std::runtime_error(*error);
 		}
 
-		// What desc_resave writes: the file loaded by the engine (migrated on load) and saved by its adapter. The migrated
-		// JSON instead when the engine cannot load it or its type does not write __parent back (it would be flattened).
-		std::string form_of(applied_file& file, const std::string& original, const std::vector<fs::path>& content_roots)
+		// What desc_resave writes: the file loaded by the engine (migrated on load) and saved by its adapter. Loaded
+		// from `original`, the text on the disk, not from the cache, which may hold an older or edited state. The
+		// migrated JSON instead when the engine cannot load it or its saved form would lose a __parent.
+		std::string form_of(applied_file& file, const std::string& original)
 		{
-			const json::value source = json::parse(original, {}, parse_options());
-			const json::object& source_root = source.as_object();
-			const std::string type = source_root.contains("__type") && source_root.at("__type").is_string()
-				? std::string(source_root.at("__type").as_string()) : std::string{};
+			json::value migrated = json::parse(original, {}, parse_options());
+			m_context.descs.migrate_tree(migrated.as_object(), file.path);
+			m_context.descs.stamp_tree(migrated);
 
-			const std::optional<res::tag> tag = tag_of(file.path, content_roots);
 			std::string why_json;
-			if (!tag) {
+			if (const std::optional<res::tag> tag = tag_of(file.path, m_content_roots); !tag) {
 				why_json = "not under a content root";
 			} else {
-				std::shared_ptr<desc::desc_base> loaded;
 				try {
-					loaded = m_context.resources.require_sync<desc::desc_base>(*tag).get_sync();
+					std::string saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original)));
+					const json::value written = json::parse(saved, {}, parse_options());
+					why_json = lost_parent(migrated, &written, {});
+					if (why_json.empty()) {
+						file.written_as = "engine";
+						return saved;
+					}
 				} catch (const std::exception& e) {
 					why_json = std::format("the engine cannot load it: {}", e.what());
 				}
-				if (!loaded && why_json.empty()) why_json = "the engine cannot load it";
-				if (loaded) {
-					std::string saved = text_of(m_adapter.serialize(*tag, loaded));
-					const json::value* parent = source_root.if_contains("__parent");
-					if (!parent) {
-						file.written_as = "engine";
-						return saved;
-					}
-					const json::value written = json::parse(saved, {}, parse_options());
-					const json::value* kept = written.is_object() ? written.as_object().if_contains("__parent") : nullptr;
-					if (kept && *kept == *parent) {
-						file.written_as = "engine";
-						return saved;
-					}
-					why_json = std::format("'{}' does not keep its __parent when saved", type);
-				}
 			}
 
-			json::value migrated = source;
-			m_context.descs.migrate_tree(migrated.as_object(), file.path);
-			m_context.descs.stamp_tree(migrated);
 			file.written_as = "json";
 			file.notes.push_back(std::format("written as migrated JSON: {}", why_json));
 			egLOG_WARN("project/migrate", "{}: written as migrated JSON: {}", file.path, why_json);
 			return text_of(m_context.descs.serialize_to_bytes(migrated));
 		}
 
-		// The file as it is on the disk now, not as any cache holds it.
+		// The file as it is on the disk now, not as any cache holds it. A file the engine wrote must load again, its
+		// parent included; the migrated JSON of a file the engine could not load is only classified.
 		void check(const applied_file& file, std::string_view written)
 		{
 			const std::string on_disk = read_or_throw(m_context.root, file.path);
@@ -259,35 +416,59 @@ namespace
 			if (again.kind != file_class::current) {
 				throw std::runtime_error(std::format("{}: still {} after the migration {}", file.path, to_string(again.kind), again.reason));
 			}
-			const json::value root = json::parse(on_disk, {}, parse_options());
-			const json::object& object = root.as_object();
-			if (const json::value* type = object.if_contains("__type"); type && type->is_string()) {
-				const std::string name(type->as_string());
-				if (m_context.descs.is_registered(name)) {
-					auto instance = m_context.descs.create_instance(name, res::tag::make(file.path));
-					if (instance) instance->deserialize(m_context.descs, object);
-				}
+			if (file.written_as != "engine") return;
+			const std::optional<res::tag> tag = tag_of(file.path, m_content_roots);
+			if (!tag) return;
+			try {
+				load_from(*tag, on_disk);
+			} catch (const std::exception& e) {
+				throw std::runtime_error(std::format("{}: does not load after the migration: {}", file.path, e.what()));
 			}
 		}
 
 	private:
-		static json::parse_options parse_options()
+		std::shared_ptr<res::resource_entry> load_from(const res::tag& tag, std::string_view text) const
 		{
-			json::parse_options options;
-			options.max_depth = 128;
-			return options;
+			const auto* first = reinterpret_cast<const std::byte*>(text.data());
+			const std::vector<std::byte> bytes(first, first + text.size());
+			res::res_deps deps;
+			for (res::res_dep& dep : m_adapter.collect_dependencies(tag, bytes)) {
+				auto parent = m_context.resources.require_sync<desc::desc_base>(dep.target).get_sync();
+				if (!parent) throw std::runtime_error(std::format("its parent '{}' does not load", dep.target.view()));
+				deps.add(std::move(dep), parent);
+			}
+			auto loaded = m_adapter.deserialize(tag, bytes, deps);
+			if (!loaded) throw std::runtime_error("the engine returned nothing");
+			return loaded;
 		}
 
 		const apply_context& m_context;
 		migration_report& m_report;
+		const std::vector<fs::path>& m_content_roots;
 		project_writer m_write;
 		core::desc::desc_adapter_t m_adapter;
 	};
 
-	bool is_regular(const fs::path& path)
+	// Puts back every file the failed migration may have written and deletes what it created; the errors, empty when
+	// the project is as it was.
+	std::string roll_back(const fs::path& root, const project_writer& write, const migration_report& report,
+		const std::vector<std::string>& originals, const std::vector<fs::path>& content_roots)
 	{
-		std::error_code ec;
-		return fs::is_regular_file(fs::symlink_status(path, ec));
+		std::string errors;
+		const auto add = [&errors](const std::string& error) { errors += (errors.empty() ? "" : "; ") + error; };
+		for (std::size_t i = 0; i < report.files.size(); ++i) {
+			const applied_file& file = report.files[i];
+			if (file.hash_after.empty()) continue;
+			if (auto error = restore_file(root, write, file.path, file.hash_before, file.hash_after, originals[i], true)) add(*error);
+		}
+		for (const std::string& created : report.created_files) {
+			if (auto error = created_file_error(created, content_roots)) {
+				add(*error);
+			} else if (auto removed = remove_created(root, created)) {
+				add(*removed);
+			}
+		}
+		return errors;
 	}
 }
 
@@ -298,6 +479,7 @@ std::string_view prj::migration::to_string(migration_status status)
 	case migration_status::ok: return "ok";
 	case migration_status::partial: return "partial";
 	case migration_status::rolled_back: return "rolled_back";
+	case migration_status::rollback_failed: return "rollback_failed";
 	}
 	return "in_progress";
 }
@@ -332,10 +514,12 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		outcome.refused = "project.snkproj cannot be read";
 		return outcome;
 	}
+	const std::vector<fs::path>& content_roots = loaded_manifest.data->content_roots;
 
 	std::vector<std::string> originals;
 	try {
 		for (const file_plan& planned : plan.files) {
+			if (!is_plain_relative(planned.path)) throw std::runtime_error(std::format("'{}' is not a relative path inside the project", planned.path));
 			applied_file file;
 			file.path = planned.path;
 			file.steps = planned.steps;
@@ -350,26 +534,30 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		return outcome;
 	}
 
+	applier apply(context, report, content_roots);
+	report.status = migration_status::in_progress;
 	const auto make_id = context.make_id ? context.make_id : std::function<std::string()>{ default_id };
 	const std::string base_id = make_id();
-	report.id = base_id;
-	for (int suffix = 2; prj::read_project_file(context.root, fs_paths::path_from_utf8(std::format("{}/{}/report.json", k_migrations_dir, report.id))).exists; ++suffix) {
-		report.id = std::format("{}-{}", base_id, suffix);
-	}
-	report.backup = std::format("{}/{}/backup", k_migrations_dir, report.id);
-
-	applier apply(context, report);
-	report.status = migration_status::in_progress;
-	try {
-		apply.journal();
-	} catch (const std::exception& e) {
-		outcome.refused = e.what();
+	if (!is_plain_relative(base_id) || base_id.find('/') != std::string::npos) {
+		outcome.refused = std::format("'{}' cannot name a migration", base_id);
 		return outcome;
 	}
+	for (int suffix = 1;; ++suffix) {
+		report.id = suffix == 1 ? base_id : std::format("{}-{}", base_id, suffix);
+		report.backup = std::format("{}/{}/backup", k_migrations_dir, report.id);
+		std::string error;
+		const create_result created = create_new_file(context.root, apply.journal_path(), apply.journal_text(), error);
+		if (created == create_result::created) break;
+		if (created == create_result::failed || suffix == 1000) {
+			outcome.refused = std::format("the journal cannot be written: {}", error);
+			report.id.clear();
+			report.backup.clear();
+			return outcome;
+		}
+	}
 
-	std::size_t written = 0;
 	{
-		watch_pause watch{ context };
+		watch_pause watch{ context.pause_watch, context.resume_watch };
 		try {
 			for (std::size_t i = 0; i < report.files.size(); ++i) {
 				apply.write(report.backup + "/" + report.files[i].path, originals[i]);
@@ -377,32 +565,24 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 			watch.pause();
 			for (std::size_t i = 0; i < report.files.size(); ++i) {
 				applied_file& file = report.files[i];
-				const std::string text = apply.form_of(file, originals[i], loaded_manifest.data->content_roots);
-				apply.write(file.path, text);
-				++written;
+				const std::string text = apply.form_of(file, originals[i]);
 				file.hash_after = hash_of(text);
 				apply.journal();
+				apply.write(file.path, text);
 				apply.check(file, text);
 			}
 			report.status = report.skipped.empty() ? migration_status::ok : migration_status::partial;
 		} catch (const std::exception& e) {
 			report.error = e.what();
 			egLOG_ERROR("project/migrate", "migration {} failed, rolling back: {}", report.id, report.error);
-			std::string restore_errors;
-			for (std::size_t i = 0; i < written; ++i) {
-				try {
-					apply.write(report.files[i].path, originals[i]);
-				} catch (const std::exception& restore) {
-					restore_errors += std::format("; {} not restored: {}", report.files[i].path, restore.what());
-				}
+			const std::string restore_errors = roll_back(context.root, apply.writer(), report, originals, content_roots);
+			if (restore_errors.empty()) {
+				report.status = migration_status::rolled_back;
+			} else {
+				report.status = migration_status::rollback_failed;
+				report.error += "; the rollback failed: " + restore_errors;
+				egLOG_ERROR("project/migrate", "migration {}: the rollback failed: {}", report.id, restore_errors);
 			}
-			for (const std::string& created : report.created_files) {
-				const fs::path path = context.root / fs_paths::path_from_utf8(created);
-				std::error_code ec;
-				if (is_regular(path)) fs::remove(path, ec);
-			}
-			report.error += restore_errors;
-			report.status = migration_status::rolled_back;
 		}
 	}
 
@@ -427,65 +607,89 @@ std::vector<std::string> prj::migration::unfinished_migrations(const fs::path& r
 		const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format("{}/{}/report.json", k_migrations_dir, id)));
 		if (!text.exists || !text.error.empty()) continue;
 		boost::system::error_code error;
-		const json::value journal = json::parse(text.text, error);
+		const json::value journal = json::parse(text.text, error, {}, parse_options());
 		if (error || !journal.is_object()) continue;
 		const json::value* status = journal.as_object().if_contains("status");
-		if (status && status->is_string() && status->as_string() == to_string(migration_status::in_progress)) ids.push_back(id);
+		if (!status || !status->is_string()) continue;
+		if (status->as_string() == to_string(migration_status::in_progress) || status->as_string() == to_string(migration_status::rollback_failed)) {
+			ids.push_back(id);
+		}
 	}
 	std::ranges::sort(ids);
 	return ids;
 }
 
-std::optional<std::string> prj::migration::rollback_migration(const fs::path& root, std::string_view id, const project_writer& write)
+std::optional<std::string> prj::migration::rollback_migration(const fs::path& root, std::string_view id, const rollback_context& context)
 {
-	const project_writer writer = write ? write : project_writer{ default_write };
+	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos) return std::format("'{}' does not name a migration", id);
+	const project_writer writer = context.write ? context.write : project_writer{ default_write };
 	const std::string journal_path = std::format("{}/{}/report.json", k_migrations_dir, id);
 	const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(journal_path));
 	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", id, text.error.empty() ? "" : ": " + text.error);
 	boost::system::error_code error;
-	json::value journal = json::parse(text.text, error);
+	json::value journal = json::parse(text.text, error, {}, parse_options());
 	if (error || !journal.is_object()) return std::format("the journal of migration {} cannot be read", id);
 	json::object& object = journal.as_object();
-	const std::string backup = object.contains("backup") && object.at("backup").is_string() ? std::string(object.at("backup").as_string()) : std::string{};
+	const auto string_of = [](const json::object& from, std::string_view key) {
+		const json::value* value = from.if_contains(key);
+		return value && value->is_string() ? std::string(value->as_string()) : std::string{};
+	};
+	const std::string backup = string_of(object, "backup");
 
-	struct entry { std::string path; std::string hash_after; };
+	struct entry { std::string path; std::string hash_before; std::string hash_after; file_state state; };
 	std::vector<entry> files;
+	std::vector<std::string> refused;
 	if (const json::value* list = object.if_contains("files"); list && list->is_array()) {
 		for (const json::value& item : list->as_array()) {
 			if (!item.is_object()) continue;
 			const json::object& file = item.as_object();
-			const json::value* path = file.if_contains("path");
-			const json::value* hash = file.if_contains("hash_after");
-			if (!path || !path->is_string()) continue;
-			files.push_back({ std::string(path->as_string()), hash && hash->is_string() ? std::string(hash->as_string()) : std::string{} });
+			entry next{ string_of(file, "path"), string_of(file, "hash_before"), string_of(file, "hash_after"), file_state::changed };
+			if (!is_plain_relative(next.path) || next.hash_before.empty()) {
+				refused.push_back(std::format("'{}' (not a relative path inside the project, or no hash)", next.path));
+				continue;
+			}
+			next.state = state_of(root, next.path, next.hash_before, next.hash_after);
+			if (next.state == file_state::changed) refused.push_back(next.path);
+			files.push_back(std::move(next));
 		}
 	}
+	const bool restores = std::ranges::any_of(files, [](const entry& file) { return file.state == file_state::migrated; });
+	if (restores && !is_plain_relative(backup)) refused.push_back(std::format("the backup '{}' (not a relative path inside the project)", backup));
 
-	std::vector<std::string> changed;
-	for (const entry& file : files) {
-		if (file.hash_after.empty()) continue;
-		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(file.path), k_max_file_bytes);
-		if (!now.exists || !now.error.empty() || hash_of(now.text) != file.hash_after) changed.push_back(file.path);
+	std::vector<std::string> created;
+	if (const json::value* list = object.if_contains("created_files"); list && list->is_array()) {
+		for (const json::value& item : list->as_array()) {
+			if (item.is_string()) created.emplace_back(item.as_string());
+		}
 	}
-	if (!changed.empty()) {
+	if (!created.empty()) {
+		const prj::manifest_result manifest = prj::load_manifest(root);
+		for (const std::string& path : created) {
+			if (!manifest.data) {
+				refused.push_back(std::format("'{}' (project.snkproj cannot be read, so its content roots are unknown)", path));
+			} else if (auto why = created_file_error(path, manifest.data->content_roots)) {
+				refused.push_back(*why);
+			}
+		}
+	}
+	if (!refused.empty()) {
 		std::string list;
-		for (const std::string& path : changed) list += (list.empty() ? "" : ", ") + path;
-		return std::format("changed after migration {}: {}", id, list);
+		for (const std::string& path : refused) list += (list.empty() ? "" : ", ") + path;
+		return std::format("migration {} cannot be rolled back, nothing was written: {}", id, list);
 	}
 
+	watch_pause watch{ context.pause_watch, context.resume_watch };
+	watch.pause();
 	for (const entry& file : files) {
+		if (file.state != file_state::migrated) continue;
 		const prj::project_file_text saved = prj::read_project_file(root, fs_paths::path_from_utf8(backup + "/" + file.path), k_max_file_bytes);
-		if (!saved.exists) continue; // never backed up, so never written
-		if (!saved.error.empty()) return std::format("{}: the backup cannot be read: {}", file.path, saved.error);
-		if (auto failed = writer(root, fs_paths::path_from_utf8(file.path), saved.text)) return std::format("{}: {}", file.path, *failed);
-	}
-	if (const json::value* created = object.if_contains("created_files"); created && created->is_array()) {
-		for (const json::value& item : created->as_array()) {
-			if (!item.is_string()) continue;
-			const fs::path path = root / fs_paths::path_from_utf8(std::string_view(item.as_string()));
-			std::error_code ec;
-			if (is_regular(path)) fs::remove(path, ec);
+		if (!saved.exists || !saved.error.empty()) {
+			return std::format("{}: the backup cannot be read{}", file.path, saved.error.empty() ? "" : ": " + saved.error);
 		}
+		if (auto failed = restore_file(root, writer, file.path, file.hash_before, file.hash_after, saved.text, false)) return failed;
+	}
+	for (const std::string& path : created) {
+		if (auto failed = remove_created(root, path)) return failed;
 	}
 	object["status"] = std::string(to_string(migration_status::rolled_back));
 	if (auto failed = writer(root, fs_paths::path_from_utf8(journal_path), prj::to_indented_json(journal))) return *failed;
