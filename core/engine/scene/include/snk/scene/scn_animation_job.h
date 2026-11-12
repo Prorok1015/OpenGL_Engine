@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <iterator>
 #include <snk/common/snk_api.h>
+#include <snk/common/mem_allocator.h>
+#include <memory_resource>
+#include <unordered_map>
 
 namespace scn
 {
@@ -39,4 +42,31 @@ namespace scn
 	SNK_API void calc_interpolated_scaling(glm::vec3& out, float time_ticks, const animation_node& anim);
 	SNK_API void calc_interpolated_position(glm::vec3& out, float time_ticks, const animation_node& anim);
 	SNK_API void calc_interpolated_rotation(glm::quat& out, float time_ticks, const animation_node& anim);
+
+	// The animated nodes of a skeleton all play the clip of its root, and the lookup walks every clip of the root
+	// (animation_collection_component::find): asked once per root in a pass, not once per node (#742). The map is
+	// frame-allocated, so an instance lives for one pass and nothing is kept across frames.
+	template<class Clip>
+	class clip_per_root
+	{
+	public:
+		explicit clip_per_root(std::size_t expected_roots)
+			: m_clips(ds::frame_allocator())
+		{
+			m_clips.reserve(expected_roots);
+		}
+
+		// What `lookup()` gives for `root`, called the first time the root is asked for; a root without a clip is
+		// remembered as null.
+		template<class Lookup>
+		const Clip* get(entt::entity root, Lookup&& lookup)
+		{
+			const auto [it, inserted] = m_clips.try_emplace(root, nullptr);
+			if (inserted) it->second = lookup();
+			return it->second;
+		}
+
+	private:
+		std::pmr::unordered_map<entt::entity, const Clip*> m_clips;
+	};
 }

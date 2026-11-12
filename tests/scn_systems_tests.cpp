@@ -426,6 +426,50 @@ BOOST_FIXTURE_TEST_CASE(Anim_NodeWithoutChannelInClipIsSkipped, anim_fixture)
 	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(bone).local[3]) == glm::vec3{ 0, 0, 0 }));
 }
 
+// #742: the clip is looked up once per skeleton root in a pass; each root keeps its own answer, a missing clip included.
+BOOST_AUTO_TEST_CASE(Anim_ClipPerRoot_LooksUpOncePerRoot)
+{
+	entt::registry r;
+	const entt::entity a = r.create();
+	const entt::entity b = r.create();
+	const int clip_a = 1;
+	int lookups = 0;
+	scn::clip_per_root<int> clips(2);
+	const auto found = [&](const int* clip) { return [&lookups, clip] { ++lookups; return clip; }; };
+	BOOST_TEST(clips.get(a, found(&clip_a)) == &clip_a);
+	BOOST_TEST(clips.get(a, found(nullptr)) == &clip_a);
+	BOOST_TEST(lookups == 1);
+	BOOST_TEST(clips.get(b, found(nullptr)) == nullptr);
+	BOOST_TEST(clips.get(b, found(&clip_a)) == nullptr);
+	BOOST_TEST(lookups == 2);
+}
+
+// Two nodes of one skeleton play its clip; a second skeleton whose clip is missing leaves its node alone.
+BOOST_FIXTURE_TEST_CASE(Anim_NodesOfOneSkeletonShareItsClip_AnotherSkeletonKeepsItsOwn, anim_fixture)
+{
+	const entt::entity twin = node(*reg, root, {});
+	reg->emplace<scn::animated_node_component>(twin, scn::animated_node_component{ "Bone" });
+	const entt::entity other_root = node(*reg, entt::null, {});
+	const entt::entity other_bone = node(*reg, other_root, {});
+	scn::animation_collection_component other_clips;
+	other_clips.clips = collection->clips;
+	reg->emplace<scn::animation_collection_component>(other_root, std::move(other_clips));
+	auto& other = reg->emplace<scn::animation_controller_component>(other_root);
+	other.current_animation = "Run";
+	other.duration = 10.0f;
+	other.ticks_per_second = 10.0f;
+	other.playing = true;
+	reg->emplace<scn::animated_node_component>(other_bone, scn::animated_node_component{ "Bone" });
+	emit_hierarchy(*reg, root);
+	emit_hierarchy(*reg, other_root);
+	emit_transform(*reg, other_root);
+
+	run_for(0.5f); // 5 ticks -> halfway along the 0..10 position track
+	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(bone).local[3]) == glm::vec3{ 5, 0, 0 }));
+	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(twin).local[3]) == glm::vec3{ 5, 0, 0 }));
+	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(other_bone).local[3]) == glm::vec3{ 0, 0, 0 }));
+}
+
 struct anim_despawn_fixture : anim_fixture
 {
 	anim_despawn_fixture() : anim_fixture(true) {}
