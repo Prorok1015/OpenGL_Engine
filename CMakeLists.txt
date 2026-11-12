@@ -162,7 +162,7 @@ endif()
 add_subdirectory(Editor)
 # The shipping host `game` (#591): static engine only, the counterpart of the editor's shared-only executable.
 add_subdirectory(apps/game)
-add_subdirectory(core/core/project_migration)
+add_subdirectory(tools/project_migration)
 add_subdirectory(tools/desc_resave)
 add_subdirectory(tools/model_decoder)
 snk_isolate_third_party_warnings()

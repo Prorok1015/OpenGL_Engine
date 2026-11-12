@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 project(project_migration)
 
 # EPIC-58: scan, plan (and later apply) of a project's data migration. Outside snk_engine and the SDK: the editor, its
-# tools and the tests use it, a game never does (#752).
+# tools and the tests use it, a game never does (#752). Not under core/: everything there is compiled as part of
+# snk_engine (SNK_ENGINE_BUILD, dllexport), and this library imports the engine like any consumer.
 add_library(project_migration STATIC)
 add_library(snk::project_migration ALIAS project_migration)
 
