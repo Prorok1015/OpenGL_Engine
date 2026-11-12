@@ -1,9 +1,27 @@
 #include "edt_asset_exporter.h"
 #include "edt_process_decoder.h"
+#include <snk/desc/desc_pretty_json.h>
 #include <boost/json.hpp>
+#include <cstring>
 #include <format>
+#include <string_view>
 
 namespace json = boost::json;
+
+namespace {
+	// Vertex and index arrays nobody edits by hand: one line, as the importer stores it (#559).
+	bool is_geometry_desc(std::string_view path)
+	{
+		return path.ends_with(".geom.desc");
+	}
+
+	std::vector<std::byte> bytes_of(const std::string& text)
+	{
+		std::vector<std::byte> bytes(text.size());
+		std::memcpy(bytes.data(), text.data(), text.size());
+		return bytes;
+	}
+}
 
 edt::asset_exporter::asset_exporter(res::resource_system& res)
 	: m_res(res)
@@ -71,6 +89,15 @@ std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag
 	return {};
 }
 
+bool edt::asset_exporter::unchanged_on_disk(const res::tag& tag, const std::vector<std::byte>& bytes) const
+{
+	if (!m_res.exists(tag)) return false;
+	const auto current = m_res.fetch_data(tag);
+	if (!current) return false;
+	const std::vector<std::byte>& on_disk = current->get();
+	return !current->has_error() && on_disk == bytes;
+}
+
 void edt::asset_exporter::remap_json_strings(
 	json::value& val,
 	const std::unordered_map<res::tag, res::tag>& remap)
@@ -122,6 +149,7 @@ bool edt::asset_exporter::export_to_project(
 	}
 
 	int files_done = 0;
+	int files_written = 0;
 	for (const auto& mem_tag : ordered_tags) {
 		if (ctx) ctx->throw_if_stopped();
 		auto remap_it = remap.find(mem_tag);
@@ -154,9 +182,7 @@ bool edt::asset_exporter::export_to_project(
 				opts.max_depth = 128;
 				json::value val = json::parse(json_str, {}, opts);
 				remap_json_strings(val, remap);
-				std::string remapped = json::serialize(val);
-				output_bytes.resize(remapped.size());
-				std::memcpy(output_bytes.data(), remapped.data(), remapped.size());
+				output_bytes = is_geometry_desc(rel) ? bytes_of(json::serialize(val)) : desc::pretty_json_bytes(val);
 			} catch (const std::exception& e) {
 				egLOG_ERROR("edt/export", "Failed to parse JSON for '{}': {}", mem_tag.view(), e.what());
 				output_bytes = bytes;
@@ -165,16 +191,21 @@ bool edt::asset_exporter::export_to_project(
 			output_bytes = bytes;
 		}
 
-		// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
-		if (wait_for_writes) {
-			if (!m_res.store_sync(res_tag, output_bytes)) {
-				egLOG_ERROR("edt/export", "'{}' could not be written", res_tag.view());
-				return false;
-			}
+		if (unchanged_on_disk(res_tag, output_bytes)) {
+			egLOG_INFO("edt/export", "Unchanged: {}", res_tag.view());
 		} else {
-			m_res.store(res_tag, output_bytes);
+			// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
+			if (wait_for_writes) {
+				if (!m_res.store_sync(res_tag, output_bytes)) {
+					egLOG_ERROR("edt/export", "'{}' could not be written", res_tag.view());
+					return false;
+				}
+			} else {
+				m_res.store(res_tag, output_bytes);
+			}
+			if (written) written->push_back(res_tag);
+			++files_written;
 		}
-		if (written) written->push_back(res_tag);
 
 		if (progress) progress->done.fetch_add(1);
 		++files_done;
@@ -191,6 +222,6 @@ bool edt::asset_exporter::export_to_project(
 		progress->finished.store(true);
 	}
 
-	egLOG_INFO("edt/export", "Export complete: {} files written", ordered_tags.size());
+	egLOG_INFO("edt/export", "Export complete: {} files written, {} unchanged", files_written, files_done - files_written);
 	return true;
 }

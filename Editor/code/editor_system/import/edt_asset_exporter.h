@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace edt {
 
@@ -54,6 +55,10 @@ namespace edt {
 
 	private:
 		res::resource_system& m_res;
+
+		// The file holds these bytes already (an import of an unchanged model): it is not written again, so file watchers and
+		// git see nothing (#559).
+		bool unchanged_on_disk(const res::tag& tag, const std::vector<std::byte>& bytes) const;
 
 		// Remap all string values in a JSON tree that match memory:// tags
 		static void remap_json_strings(
