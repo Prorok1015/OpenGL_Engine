@@ -2,6 +2,10 @@
 #include "test_scene_env.hpp"
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <snk/scene/scn_glm_json_convert.h>
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/common/logger/engine_log_sinks.h>
+#include <entt/entt.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
 #include <format>
@@ -9,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 // scn::model_importer_adapter: Assimp -> prefab_desc conversion, driven by tiny in-memory models.
 
@@ -174,7 +179,118 @@ struct importer_fixture : test_util::scene_env
 
 }
 
+namespace {
+
+struct warning_log
+{
+	warning_log()
+	{
+		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn) warnings.emplace_back(message);
+		});
+	}
+
+	// What the desc reference readers warn when they keep the current reference (the test env has no
+	// res://base_material.desc, so the material's parent may warn on its own).
+	bool kept_a_reference() const
+	{
+		for (const auto& warning : warnings) {
+			if (warning.find("keeping the current") != std::string::npos || warning.find("inline desc") != std::string::npos) return true;
+		}
+		return false;
+	}
+
+	std::vector<std::string> warnings;
+	engine::log_sink_handle sink; // last: removed first
+};
+
+// The mesh_node_desc component of the first mesh of an imported model, as the assembler gets it: the data without __type.
+json::object imported_mesh_component(importer_fixture& env, const scn::prefab_desc& prefab)
+{
+	const json::object out = env.serialized(prefab);
+	const json::object* mesh = importer_fixture::first_mesh_node(out);
+	BOOST_REQUIRE(mesh);
+	json::object component = *mesh;
+	component.erase("__type");
+	BOOST_REQUIRE(component.at("material").is_object());
+	return component;
+}
+
+}
+
 BOOST_FIXTURE_TEST_SUITE(ScnModelImporterTests, importer_fixture)
+
+// #720: the assembler reads a component into a desc without a tag, and the importer writes the material inline. Read by
+// the generic schema reader, such a material was refused: the smoke_level robot lost its material.
+BOOST_AUTO_TEST_CASE(Gltf_AMeshOfTheImportedModel_SpawnsWithItsMaterial_WithoutAWarning)
+{
+	const auto prefab = import("tri.gltf", GLTF_TRIANGLE);
+	BOOST_REQUIRE(prefab);
+	const json::object component = imported_mesh_component(*this, *prefab);
+	warning_log log;
+	entt::registry reg;
+	const auto e = reg.create();
+	assembler->assemble_and_apply(reg, e, std::string(scn::mesh_node_desc::__type), {}, component, "mesh");
+	pump();
+	const auto* material = reg.try_get<scn::material_desc_component>(e);
+	BOOST_REQUIRE(material);
+	BOOST_TEST(material->mlt_desc.is_valid());
+	BOOST_TEST(desc::is_override_tag(material->mlt_desc.get_tag().view()));
+	BOOST_TEST(reg.all_of<scn::mesh_component>(e));
+	BOOST_TEST(!log.kept_a_reference());
+}
+
+// #720 changes nothing in the files of an imported model: the prefab keeps the mesh components as their JSON (the material
+// inline), and a mesh read from one writes what the hand-written serializer wrote: the tags, the material as its memory copy.
+BOOST_AUTO_TEST_CASE(Gltf_TheImportedPrefab_ResavesToTheSameBytes)
+{
+	const auto prefab = import("tri.gltf", GLTF_TRIANGLE);
+	BOOST_REQUIRE(prefab);
+	const std::string first = json::serialize(serialized(*prefab));
+	const auto resaved = std::dynamic_pointer_cast<scn::prefab_desc>(descs->create_instance(std::string(scn::prefab_desc::__type), tag_of("resaved.desc")));
+	BOOST_REQUIRE(resaved);
+	resaved->deserialize(*descs, json::parse(first).as_object());
+	BOOST_TEST(json::serialize(serialized(*resaved)) == first);
+
+	json::object component = imported_mesh_component(*this, *prefab);
+	const auto mesh = std::dynamic_pointer_cast<scn::mesh_node_desc>(descs->create_instance(std::string(scn::mesh_node_desc::__type), tag_of("mesh.desc")));
+	BOOST_REQUIRE(mesh);
+	mesh->deserialize(*descs, component);
+	json::object written;
+	mesh->serialize(written);
+	std::vector<std::string> keys;
+	for (const auto& member : written) keys.emplace_back(member.key());
+	BOOST_TEST((keys == std::vector<std::string>{ "geometry", "vx_begin", "vx_end", "ind_begin", "ind_end", "material" }));
+	BOOST_TEST(written.at("geometry") == component.at("geometry"));
+	BOOST_TEST(written.at("ind_end") == component.at("ind_end"));
+	BOOST_REQUIRE(written.at("material").is_string());
+	BOOST_TEST(desc::is_override_tag(written.at("material").as_string()));
+}
+
+// An override of a node of the model (a hidden mesh) goes through serialize(parent) and back: the mesh keeps the parent's
+// material, not a second copy of it, and nothing warns.
+BOOST_AUTO_TEST_CASE(Gltf_AHiddenMeshOfTheImportedModel_SharesTheMaterialOfItsParent)
+{
+	const auto prefab = import("tri.gltf", GLTF_TRIANGLE);
+	BOOST_REQUIRE(prefab);
+	json::object file = imported_mesh_component(*this, *prefab);
+	file["__type"] = std::string(scn::mesh_node_desc::__type);
+	const auto parent = require_loaded<desc::desc_base>(put("mesh.desc", json::serialize(file)));
+	BOOST_REQUIRE(parent.is_ready());
+	const auto parent_mesh = std::dynamic_pointer_cast<scn::mesh_node_desc>(parent.get_sync());
+	BOOST_REQUIRE(parent_mesh);
+	BOOST_REQUIRE(parent_mesh->material.is_valid());
+
+	warning_log log;
+	entt::registry reg;
+	const auto e = reg.create();
+	assembler->assemble_and_apply(reg, e, std::string(scn::mesh_node_desc::__type), parent, json::object{ { "visible", false } }, "mesh");
+	pump();
+	const auto* material = reg.try_get<scn::material_desc_component>(e);
+	BOOST_REQUIRE(material);
+	BOOST_TEST(material->mlt_desc.get_tag().view() == parent_mesh->material.get_tag().view());
+	BOOST_TEST(!log.kept_a_reference());
+}
 
 BOOST_AUTO_TEST_CASE(Obj_TriangleBecomesPrefabWithMeshNodeAndDefaultMaterial)
 {

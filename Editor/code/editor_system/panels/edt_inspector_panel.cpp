@@ -99,17 +99,11 @@ namespace edt
 	bool inspector_panel::render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema)
 	{
 		const desc::schema_registry& registry = descs()->schemas();
-		const boost::json::object* parent = parent_json(key, comp);
-		// base: what the component has without its own data; before/after: what the user sees before and after the edit.
-		const boost::json::value base = schema_ui::compose(schema, registry, { parent }, false);
-		const boost::json::value before = schema_ui::compose(schema, registry, { parent, &comp.overrides });
-		boost::json::value after = before;
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
 		});
-		if (!schema_ui::draw_fields(schema, after, ctx))
-			return false;
-		return schema_ui::apply_edit(comp.overrides, schema, registry, base, before, after) > 0;
+		return schema_ui::edit_component(schema, registry, parent_json(key, comp), comp.overrides,
+			[&](boost::json::value& shown) { return schema_ui::draw_fields(schema, shown, ctx); });
 	}
 
 	bool inspector_panel::render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema)

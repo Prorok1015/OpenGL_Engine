@@ -36,9 +36,21 @@ void scn::mesh_node_desc::deserialize(desc::desc_system& desc_system, const json
 	read_reference(desc_system, *this, data, "material", material);
 }
 
+// Written by hand too: the generic writer would write a memory:// reference as an inline copy (get_sync on the main thread),
+// and the assembler's serialize(parent) + deserialize of an override would then make a second material instead of sharing
+// the parent's.
 void scn::mesh_node_desc::serialize(json::object& data) const
 {
-	schema_desc::serialize(data);
+	if (geometry.get_tag().is_valid())
+		data["geometry"] = json::value_from(geometry.get_tag());
+	data["vx_begin"] = vx_begin;
+	data["vx_end"] = vx_end;
+	data["ind_begin"] = ind_begin;
+	data["ind_end"] = ind_end;
+	if (material.get_tag().is_valid())
+		data["material"] = json::value_from(material.get_tag());
+	if (!visible)
+		data["visible"] = false;
 }
 
 void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name)

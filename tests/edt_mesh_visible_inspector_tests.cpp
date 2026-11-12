@@ -12,8 +12,8 @@
 #include <string_view>
 
 // The Inspector draws mesh_node_desc from its schema (#720; #560 had a renderer of its own with a Visible box). These
-// tests run the edit the Inspector makes of a component (inspector_panel::render_schema_component): the base is the
-// parent's data, the edit is written back as the pointers it changed against that base.
+// tests run the edit the Inspector makes of a component (schema_ui::edit_component, which render_schema_component calls
+// with the ImGui widgets): the base is the parent's data, the edit is written back as the pointers it changed against it.
 
 namespace {
 
@@ -47,14 +47,14 @@ struct mesh_inspector_fixture : test_util::scene_env
 		return edt::schema_ui::compose(schema(), descs->schemas(), { parent, &node.overrides });
 	}
 
-	// One edit in the Inspector: `change` edits what is shown, the difference lands in the node's own data.
+	// One edit in the Inspector, through what inspector_panel::render_schema_component runs: `change` stands in for the
+	// widgets, the difference lands in the node's own data.
 	bool edit(scn::prefab_desc::prefab_comp_node& node, const json::object* parent, const std::function<void(json::value&)>& change) const
 	{
-		const json::value base = edt::schema_ui::compose(schema(), descs->schemas(), { parent }, false);
-		const json::value before = shown(node, parent);
-		json::value after = before;
-		change(after);
-		return edt::schema_ui::apply_edit(node.overrides, schema(), descs->schemas(), base, before, after) > 0;
+		return edt::schema_ui::edit_component(schema(), descs->schemas(), parent, node.overrides, [&change](json::value& shown) {
+			change(shown);
+			return true;
+		});
 	}
 
 	static bool visible_in(const json::value& shown)

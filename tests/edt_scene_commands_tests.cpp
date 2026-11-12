@@ -8,6 +8,7 @@
 #include "edt_document_cast.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_node_id.h>
+#include <snk/desc/desc_schema.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
@@ -686,6 +687,59 @@ BOOST_AUTO_TEST_CASE(a_tag_field_refuses_a_reference_a_desc_may_not_hold)
 	BOOST_TEST(call("component.add", R"({"ref":)" + crate
 		+ R"(,"key":"sky","type":"skybox_desc","fields":{"material":"user://sky.mat.desc"}})").code == cmd::codes::invalid_args);
 	BOOST_TEST(!child(root(), 0xa4)->components.contains("sky"));
+}
+
+// Nested references follow #697 too: a tag inside a structure and inside an array of structures, named by its full path.
+BOOST_AUTO_TEST_CASE(a_tag_inside_a_structure_or_an_array_of_them_is_checked)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.slot","kind":"struct",
+		"fields":[{"name":"icon","kind":"res_tag","default":""}]})").as_object())));
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.refs","kind":"component",
+		"fields":[{"name":"slot","kind":"structure","ref_type":"probe.slot"},
+			{"name":"slots","kind":"array","element":"structure","ref_type":"probe.slot"}]})").as_object(), &descs->schemas())));
+	const std::string crate = ref({ "00000000000000a4" });
+	const auto added = call("component.add", R"({"ref":)" + crate + R"(,"key":"refs","type":"probe.refs"})");
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+
+	const auto in_structure = call("component.set", R"({"ref":)" + crate + R"(,"key":"refs","patch":{"slot":{"icon":"user://x.png"}}})");
+	BOOST_TEST(in_structure.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(in_structure.error.find("slot/icon") != std::string::npos, in_structure.error);
+
+	const auto in_array = call("component.set", R"({"ref":)" + crate
+		+ R"(,"key":"refs","patch":{"slots":[{"icon":"res://a.png"},{"icon":"cache://b.png"}]}})");
+	BOOST_TEST(in_array.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(in_array.error.find("slots/1/icon") != std::string::npos, in_array.error);
+	BOOST_TEST(!child(root(), 0xa4)->components.at("refs").overrides.contains("slots"));
+
+	const auto fine = call("component.set", R"({"ref":)" + crate
+		+ R"(,"key":"refs","patch":{"slot":{"icon":"res://ok.png"},"slots":[{"icon":"engine://ok.png"}]}})");
+	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
+}
+
+// An inline desc is read with its __parent and its own references: each follows #697, by the schema of its __type. A type
+// without a schema cannot be checked and is refused.
+BOOST_AUTO_TEST_CASE(an_inline_desc_is_checked_by_the_schema_of_its_type)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto material = [&](const std::string& inline_desc) {
+		return call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":)" + inline_desc + "}}");
+	};
+
+	const auto parent = material(R"({"__type":"material_desc","__parent":"user://m.desc"})");
+	BOOST_TEST(parent.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(parent.error.find("material/__parent") != std::string::npos, parent.error);
+
+	const auto texture = material(R"({"__type":"material_desc","samplers":["res://t.png","user://saves/t.png"]})");
+	BOOST_TEST(texture.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(texture.error.find("material/samplers/1") != std::string::npos, texture.error);
+
+	BOOST_TEST(material(R"({"__type":"no_such_desc"})").code == cmd::codes::invalid_args);
+	BOOST_TEST(!child(root(), 0xa4)->components.at("mesh").overrides.contains("material"));
+
+	const auto fine = material(R"({"__type":"material_desc","__parent":"res://base_material.desc","samplers":["res://t.png",null]})");
+	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

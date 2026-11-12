@@ -85,4 +85,10 @@ namespace edt::schema_ui
 	// fields the edit changed.
 	std::size_t apply_edit(boost::json::object& overrides, const desc::type_schema& schema, const desc::schema_registry& registry,
 		const boost::json::value& base, const boost::json::value& before, const boost::json::value& after);
+
+	// One edit of a component in the Inspector: `draw` edits what is shown (the `parent` data with the component's own
+	// `overrides` on top) and returns true when it changed something; apply_edit then writes the difference against the
+	// parent into `overrides`. True when the overrides changed.
+	bool edit_component(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
+		boost::json::object& overrides, const std::function<bool(boost::json::value& shown)>& draw);
 }

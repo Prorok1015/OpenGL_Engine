@@ -8,6 +8,7 @@
 #include <snk/editor/edt_selection_service.h>
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
@@ -102,28 +103,128 @@ namespace {
 		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
 	}
 
-	// Why a value the patch puts into a tag field (a tag, or a list of them) is a reference a desc may not hold (#697), or
-	// empty. An object there is an inline desc, checked by the desc_system when it is read; an empty string clears.
-	std::string reference_refusal(const json::value& value, std::string_view owner_protocol)
+	// Why a tag the patch puts into a tag field is a reference a desc may not hold (#697), or empty. An empty string clears.
+	std::string reference_refusal(const json::string& text, std::string_view owner_protocol)
+	{
+		if (text.empty()) return {};
+		const res::tag reference{ std::string(text.data(), text.size()) };
+		if (reference.protocol().empty()) return res::no_protocol_reason(reference);
+		return res::reference_problem(reference, owner_protocol);
+	}
+
+	struct reference_issue
+	{
+		std::string path; // below the field that holds it, '/'-separated; empty for the value itself
+		std::string why;
+	};
+
+	std::optional<reference_issue> under(std::optional<reference_issue> issue, std::string_view step)
+	{
+		if (issue) issue->path = issue->path.empty() ? std::string(step) : std::format("{}/{}", step, issue->path);
+		return issue;
+	}
+
+	// Inline descs inside inline descs: deeper than any shipped data, and a patch must not recurse without end.
+	constexpr int k_max_inline_depth = 8;
+
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& data,
+		std::string_view owner_protocol, int depth);
+
+	// A tag, or a desc written inline: then its __parent and the references its own schema names, since the desc_system
+	// loads them as it reads the inline copy. An inline desc of a type without a schema cannot be checked, so it is refused.
+	std::optional<reference_issue> reference_of(const desc::desc_system& descs, const json::value& value, std::string_view owner_protocol, int depth)
 	{
 		if (const auto* text = value.if_string()) {
-			if (text->empty()) return {};
-			const res::tag reference{ std::string(text->data(), text->size()) };
-			if (reference.protocol().empty()) return res::no_protocol_reason(reference);
-			return res::reference_problem(reference, owner_protocol);
+			if (std::string why = reference_refusal(*text, owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+			return std::nullopt;
 		}
-		if (const auto* array = value.if_array()) {
-			for (const json::value& item : *array) {
-				if (std::string why = reference_refusal(item, owner_protocol); !why.empty()) return why;
+		const json::object* inline_desc = value.if_object();
+		if (!inline_desc) return std::nullopt;
+		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
+		const json::value* type = inline_desc->if_contains("__type");
+		const desc::type_schema* schema = type && type->is_string() ? descs.find_schema(std::string_view(type->as_string())) : nullptr;
+		if (!schema) return reference_issue{ {}, "an inline desc of a type without a schema: its references cannot be checked" };
+		if (const json::value* parent = inline_desc->if_contains("__parent")) {
+			if (auto issue = reference_of(descs, *parent, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
+		}
+		return references_of(descs, *schema, value, owner_protocol, depth + 1);
+	}
+
+	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
+	// a tag the codec may load, and is held to the same rule.
+	std::optional<reference_issue> tags_in(const json::value& value, std::string_view owner_protocol)
+	{
+		if (const auto* text = value.if_string()) {
+			if (std::string_view(*text).find("://") == std::string_view::npos) return std::nullopt;
+			if (std::string why = reference_refusal(*text, owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+			return std::nullopt;
+		}
+		if (const auto* items = value.if_array()) {
+			for (std::size_t i = 0; i < items->size(); ++i) {
+				if (auto issue = tags_in((*items)[i], owner_protocol)) return under(std::move(issue), std::to_string(i));
 			}
 		}
-		return {};
+		if (const auto* object = value.if_object()) {
+			for (const auto& member : *object) {
+				if (auto issue = tags_in(member.value(), owner_protocol)) return under(std::move(issue), std::string_view(member.key()));
+			}
+		}
+		return std::nullopt;
+	}
+
+	std::optional<reference_issue> structure_references(const desc::desc_system& descs, const desc::field_schema& field, const json::value& value,
+		std::string_view owner_protocol, int depth)
+	{
+		const desc::type_schema* nested = value.is_object() ? descs.find_schema(field.ref_type) : nullptr;
+		if (!nested || depth >= k_max_inline_depth) return std::nullopt;
+		return references_of(descs, *nested, value, owner_protocol, depth + 1);
+	}
+
+	std::optional<reference_issue> field_references(const desc::desc_system& descs, const desc::field_schema& field, const json::value& value,
+		std::string_view owner_protocol, int depth)
+	{
+		if (is_tag_kind(field.kind)) return reference_of(descs, value, owner_protocol, depth);
+		if (field.kind == desc::field_kind::structure) return structure_references(descs, field, value, owner_protocol, depth);
+		if (field.kind == desc::field_kind::custom) return tags_in(value, owner_protocol);
+		const json::array* items = value.if_array();
+		if (field.kind != desc::field_kind::array || !items) return std::nullopt;
+		for (std::size_t i = 0; i < items->size(); ++i) {
+			std::optional<reference_issue> issue;
+			if (is_tag_kind(field.element)) issue = reference_of(descs, (*items)[i], owner_protocol, depth);
+			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, field, (*items)[i], owner_protocol, depth);
+			else if (field.element == desc::field_kind::custom) issue = tags_in((*items)[i], owner_protocol);
+			if (issue) return under(std::move(issue), std::to_string(i));
+		}
+		return std::nullopt;
+	}
+
+	std::string pointer_of(std::string_view key)
+	{
+		return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
+	}
+
+	// Every reference `data` (a patch or a whole component of `schema`) holds, in its own fields and through structures,
+	// arrays and inline descs, read where the desc reads it: the field's key or one of its read aliases.
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& data,
+		std::string_view owner_protocol, int depth)
+	{
+		for (const desc::field_schema& field : schema.fields) {
+			std::vector<std::string> pointers{ pointer_of(field.key) };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			for (const std::string& pointer : pointers) {
+				const json::value* value = desc::json_pointer_get(data, pointer);
+				if (!value || value->is_null()) continue;
+				if (auto issue = field_references(descs, field, *value, owner_protocol, depth)) return under(std::move(issue), std::string_view(pointer).substr(1));
+			}
+		}
+		return std::nullopt;
 	}
 
 	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it. The schema
 	// publishes leaves ("/transform/position") and a patch nests them as objects; the check descends through those and
-	// through structure fields, quietly, and names the full path of the first field that does not fit. A tag field also
-	// follows the reference rule of #697 for a desc of `owner_protocol` (the level's), as it would when loaded.
+	// through structure fields, quietly, and names the full path of the first field that does not fit. Every reference in
+	// it, nested ones and those of inline descs included, follows the rule of #697 for a desc of `owner_protocol` (the
+	// level's), as it would when loaded.
 	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const std::string& type, const json::object& patch,
 		const json::object& edited, std::string_view owner_protocol)
 	{
@@ -136,16 +237,8 @@ namespace {
 			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, std::string_view(bad.pointer).substr(1),
 				bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"));
 		}
-		for (const auto& member : patch) {
-			const std::string_view key(member.key().data(), member.key().size());
-			const desc::field_schema* field = schema->find_field(key);
-			if (!field) field = schema->find_field("/" + std::string(key));
-			if (!field) continue;
-			const bool tag_field = is_tag_kind(field->kind) || (field->kind == desc::field_kind::array && is_tag_kind(field->element));
-			if (!tag_field) continue;
-			if (std::string why = reference_refusal(member.value(), owner_protocol); !why.empty()) {
-				return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, key, why));
-			}
+		if (auto issue = references_of(descs, *schema, json::value(patch), owner_protocol, 0)) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, issue->path, issue->why));
 		}
 		return std::nullopt;
 	}

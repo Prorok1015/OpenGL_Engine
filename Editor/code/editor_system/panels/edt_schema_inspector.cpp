@@ -790,3 +790,15 @@ std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type
 	overrides = std::move(holder.as_object());
 	return changes.size();
 }
+
+bool edt::schema_ui::edit_component(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
+	boost::json::object& overrides, const std::function<bool(boost::json::value& shown)>& draw)
+{
+	// base: what the component has without its own data; before/after: what the user sees before and after the edit.
+	const boost::json::value base = compose(schema, registry, { parent }, false);
+	const boost::json::value before = compose(schema, registry, { parent, &overrides });
+	boost::json::value after = before;
+	if (!draw(after))
+		return false;
+	return apply_edit(overrides, schema, registry, base, before, after) > 0;
+}
