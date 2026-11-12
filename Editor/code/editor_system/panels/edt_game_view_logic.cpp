@@ -1,5 +1,6 @@
 #include "edt_game_view_logic.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <format>
 #include "edt_camera_redirect.h"
@@ -14,6 +15,19 @@ namespace edt::game_view
 		{
 			return !cam.color_targets.empty() && is_game_camera_target(cam.color_targets[0]);
 		}
+
+		// The editor's own type in a registry's ctx (never one of the engine's).
+		struct registry_mark
+		{
+			std::uint64_t id = 0;
+		};
+	}
+
+	std::uint64_t registry_token(entt::registry& reg)
+	{
+		static std::atomic<std::uint64_t> last{ 0 };
+		if (const registry_mark* mark = reg.ctx().find<registry_mark>()) return mark->id;
+		return reg.ctx().emplace<registry_mark>(registry_mark{ ++last }).id;
 	}
 
 	std::vector<camera_entry> collect_cameras(entt::registry& reg)
@@ -33,38 +47,56 @@ namespace edt::game_view
 		return out;
 	}
 
-	void selection::refresh(const entt::registry* reg, std::vector<camera_entry> cameras)
+	void selection::refresh(entt::registry* reg, std::vector<camera_entry> cameras, std::string_view world)
 	{
-		if (reg != m_registry) {
-			m_registry = reg;
+		m_cameras = std::move(cameras);
+		if (!reg) {
+			// No world on show: the pick and its node wait for the world (the same one made again, or another).
+			m_token = 0;
+			m_selected = entt::null;
+			return;
+		}
+		if (world != m_world) {
+			m_world = std::string{ world };
+			m_pick_path.clear();
 			m_selected = entt::null;
 		}
-		m_cameras = std::move(cameras);
-		if (!m_forgotten_path.empty() && m_registry) {
-			const auto same_node = std::ranges::find(m_cameras, m_forgotten_path, &camera_entry::path);
-			if (same_node != m_cameras.end()) m_selected = same_node->entity;
-			m_forgotten_path.clear();
+		const std::uint64_t token = registry_token(*reg);
+		if (token != m_token) {
+			// A registry this selection has not seen: whatever its entity ids were in the last one, they mean nothing here.
+			m_token = token;
+			m_selected = entt::null;
 		}
-		const auto it = std::ranges::find(m_cameras, m_selected, &camera_entry::entity);
-		if (it == m_cameras.end()) {
-			m_selected = m_cameras.empty() ? entt::null : m_cameras.front().entity;
+		auto it = std::ranges::find(m_cameras, m_selected, &camera_entry::entity);
+		if (it == m_cameras.end() && !m_pick_path.empty()) {
+			it = std::ranges::find(m_cameras, m_pick_path, &camera_entry::path);
 		}
+		if (it == m_cameras.end() && !m_cameras.empty()) it = m_cameras.begin();
+		m_selected = it == m_cameras.end() ? entt::null : it->entity;
+		remember_path();
 	}
 
 	void selection::forget()
 	{
-		const auto it = std::ranges::find(m_cameras, m_selected, &camera_entry::entity);
-		// A forget before the first refresh of the rebuilt registry keeps the path the first one saved.
-		if (it != m_cameras.end()) m_forgotten_path = it->path;
-		m_registry = nullptr;
+		remember_path();
+		m_token = 0;
 		m_cameras.clear();
 		m_selected = entt::null;
+	}
+
+	void selection::remember_path()
+	{
+		const auto it = std::ranges::find(m_cameras, m_selected, &camera_entry::entity);
+		// A camera no desc spawned has no node: the path of the pick before it stays until another pick replaces it.
+		if (it != m_cameras.end() && !it->path.empty()) m_pick_path = it->path;
+		else if (it != m_cameras.end()) m_pick_path.clear();
 	}
 
 	void selection::select(int index)
 	{
 		if (index >= 0 && index < static_cast<int>(m_cameras.size())) {
 			m_selected = m_cameras[static_cast<std::size_t>(index)].entity;
+			remember_path();
 		}
 	}
 
