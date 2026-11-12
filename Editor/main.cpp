@@ -84,11 +84,7 @@ int main(int argc, char* argv[])
 			return -1;
 		}
 	} catch (const std::exception& e) {
-		if (cfg::loaded_config_path().empty()) {
-			egLOG_ERROR("app", "command line: {}", e.what());
-		} else {
-			egLOG_ERROR("app", "config {} could not be loaded: {}", fs_paths::generic_utf8_of(cfg::loaded_config_path()), e.what());
-		}
+		egLOG_ERROR("app", "{}", cfg::startup_error_message(e));
 		return 2;
 	}
 	if (cfg::loaded_config_path().empty()) {

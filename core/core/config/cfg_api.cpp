@@ -206,6 +206,14 @@ std::string cfg::no_config_message(const std::filesystem::path& default_config)
 		fs_paths::generic_utf8_of(default_config.lexically_normal()) + ")";
 }
 
+std::string cfg::startup_error_message(const std::exception& error)
+{
+	if (loaded_config_file.empty()) {
+		return std::string("command line: ") + error.what();
+	}
+	return "config " + fs_paths::generic_utf8_of(loaded_config_file) + " could not be loaded: " + error.what();
+}
+
 bool cfg::initialize_configs(int argc, char* argv[])
 {
 	return initialize_configs(argc, argv, {});
