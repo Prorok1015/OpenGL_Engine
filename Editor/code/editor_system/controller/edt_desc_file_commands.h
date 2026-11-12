@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
+#include <snk/resource/res_tag.h>
 #include <snk/resource/res_diagnostics.h>
 #include <boost/json/value.hpp>
 #include <cstddef>
@@ -47,6 +48,29 @@ namespace edt
 	};
 
 	[[nodiscard]] std::vector<registration> register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps);
+
+	// Where the desc files of the project are: the same three functions as in desc_file_deps, for what edits a file without
+	// holding the services (a data document).
+	struct desc_file_layout
+	{
+		std::function<std::filesystem::path()> top_layer;
+		std::function<std::vector<std::filesystem::path>()> layers;
+		std::function<std::vector<std::string>()> open_level_files;
+	};
+
+	// A desc file read the way desc.read does, with what desc.write asks before it replaces one: `tag` must be a res://
+	// file named as check_agent_level_path wants (inside the project, *.desc, no link on the way), at most
+	// k_desc_file_limit bytes (checked before the read), read fresh through the resolver. `error` is empty when the bytes
+	// are there. `top_layer`: the file is in the project's own res/ (a lower layer, the engine or a package, is not
+	// the project's to write); `in_open_level`: it is the open level's file or one of its worlds (the level document owns it).
+	struct desc_file_read
+	{
+		std::vector<std::byte> bytes;
+		std::string error;
+		bool top_layer = false;
+		bool in_open_level = false;
+	};
+	desc_file_read read_desc_file(res::resource_system& resources, const desc::desc_system& descriptions, const desc_file_layout& layout, const res::tag& tag);
 
 	// What desc.read gives and desc.write takes back is edt::code_version_of(bytes); one call moves at most this many bytes.
 	inline constexpr std::size_t k_desc_file_limit = 1024 * 1024;

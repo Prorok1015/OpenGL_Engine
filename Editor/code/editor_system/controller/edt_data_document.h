@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_desc_file_commands.h"
 #include <snk/editor/edt_document.h>
 #include <snk/resource/res_tag.h>
 #include <boost/json/object.hpp>
@@ -31,10 +32,12 @@ namespace edt
 	class data_document final : public document
 	{
 	public:
-		explicit data_document(editor_services& services);
+		// `files`: where the project's desc files are (what desc.write asks before it replaces one is asked here too).
+		data_document(editor_services& services, desc_file_layout files);
 
-		// Reads the file (fresh bytes, not the cache), migrates it in memory and follows __parent. A failure names the
-		// file and the JSON pointer and leaves the document closed.
+		// Reads the file (fresh bytes, not the cache), migrates it in memory and follows __parent. Only a res:// file of the
+		// project's own top layer that is not the open level's (read_desc_file) is taken, and a parent is literally res://
+		// (what validate_desc_tree writes). A failure names the file and the JSON pointer and leaves the document closed.
 		open_result open(const res::tag& file);
 		bool is_open() const { return m_open; }
 
@@ -58,13 +61,16 @@ namespace edt
 		// True when `own` changed.
 		bool edit(const std::function<bool(boost::json::value& shown)>& draw);
 		// Puts a snapshot of `own` back (undo and redo, S56-5); the document is dirty when it differs from the saved one.
-		void restore_own(boost::json::object own);
+		// False, and nothing changed, for a snapshot of another __type or __parent: what the document inherits would
+		// not follow it.
+		bool restore_own(boost::json::object own);
 
 	private:
 		const desc::type_schema* schema() const;
-		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version) const;
+		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr) const;
 
 		editor_services& m_services;
+		desc_file_layout m_files;
 		res::tag m_source;
 		std::string m_title;
 		std::string m_type;

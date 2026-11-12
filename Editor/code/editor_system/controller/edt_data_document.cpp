@@ -7,9 +7,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
-#include <boost/json/value_to.hpp>
 #include <algorithm>
-#include <chrono>
 #include <format>
 #include <optional>
 #include <string_view>
@@ -20,7 +18,6 @@ namespace
 {
 	namespace json = boost::json;
 
-	constexpr std::chrono::seconds k_read_timeout{ 5 };
 	constexpr std::size_t k_max_chain = 16;
 
 	std::string_view stem_of(const res::tag& tag)
@@ -46,23 +43,17 @@ namespace
 		if (!field) {
 			return std::nullopt;
 		}
-		res::tag parent;
-		try {
-			parent = json::value_to<res::tag>(*field);
-		} catch (const std::exception& e) {
-			error = std::format("{} /__parent: {}", where(file), e.what());
+		if (!field->is_string() || !std::string_view{ field->as_string() }.starts_with("res://")) {
+			error = std::format("{} /__parent: a parent is written as res://<path> (a path inside the project)", where(file));
 			return std::nullopt;
 		}
-		if (std::string why = res::reference_problem(parent, file.protocol()); !why.empty()) {
-			error = std::format("{} /__parent: {}", where(file), why);
-			return std::nullopt;
-		}
-		return parent;
+		return res::tag{ std::string_view{ field->as_string() } };
 	}
 }
 
-edt::data_document::data_document(editor_services& services)
+edt::data_document::data_document(editor_services& services, desc_file_layout files)
 	: m_services(services)
+	, m_files(std::move(files))
 {
 }
 
@@ -72,24 +63,18 @@ const desc::type_schema* edt::data_document::schema() const
 	return descs ? descs->find_schema(m_type) : nullptr;
 }
 
-edt::open_result edt::data_document::read_file(const res::tag& file, json::object& out, std::string& version) const
+edt::open_result edt::data_document::read_file(const res::tag& file, json::object& out, std::string& version, desc_file_read* checks) const
 {
 	res::resource_system* resources = m_services.resources();
 	desc::desc_system* descs = m_services.descs();
 	if (!resources || !descs) {
 		return open_result::failure("the project resources are not available");
 	}
-	const auto raw = resources->fetch_data(file);
-	if (!raw) {
-		return open_result::failure(std::format("{} could not be read: its resources are not mounted", where(file)));
+	desc_file_read read = read_desc_file(*resources, *descs, m_files, file);
+	if (!read.error.empty()) {
+		return open_result::failure(std::format("{} {}", where(file), read.error));
 	}
-	if (!raw->wait_for(k_read_timeout) || !raw->is_ready()) {
-		return open_result::failure(std::format("{} could not be read", where(file)));
-	}
-	if (raw->data.size() > k_desc_file_limit) {
-		return open_result::failure(std::format("{} is {} bytes: a data document holds at most {}", where(file), raw->data.size(), k_desc_file_limit));
-	}
-	const std::string_view text(reinterpret_cast<const char*>(raw->data.data()), raw->data.size());
+	const std::string_view text(reinterpret_cast<const char*>(read.bytes.data()), read.bytes.size());
 	boost::system::error_code parse_error;
 	json::parse_options options;
 	options.max_depth = 128;
@@ -103,7 +88,11 @@ edt::open_result edt::data_document::read_file(const res::tag& file, json::objec
 		return open_result::failure(std::format("{}: {}", where(file), e.what()));
 	}
 	out = std::move(parsed.as_object());
-	version = code_version_of(raw->data);
+	version = code_version_of(read.bytes);
+	if (checks) {
+		checks->top_layer = read.top_layer;
+		checks->in_open_level = read.in_open_level;
+	}
 	return open_result::ok();
 }
 
@@ -117,8 +106,15 @@ edt::open_result edt::data_document::open(const res::tag& file)
 
 	json::object own;
 	std::string version;
-	if (open_result read = read_file(file, own, version); !read.opened) {
+	desc_file_read checks;
+	if (open_result read = read_file(file, own, version, &checks); !read.opened) {
 		return read;
+	}
+	if (!checks.top_layer) {
+		return open_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/", where(file)));
+	}
+	if (checks.in_open_level) {
+		return open_result::failure(std::format("{} belongs to the open level (its file or one of its worlds)", where(file)));
 	}
 	const json::value* type_field = own.if_contains("__type");
 	if (!type_field || !type_field->is_string()) {
@@ -150,7 +146,7 @@ edt::open_result edt::data_document::open(const res::tag& file)
 			return open_result::failure(std::format("{} /__parent: '__parent' cycle through '{}'", where(current_tag), parent->view()));
 		}
 		if (chain.size() >= k_max_chain) {
-			return open_result::failure(std::format("{} /__parent: the chain is longer than {} files", where(file), k_max_chain));
+			return open_result::failure(std::format("{} /__parent: the chain has more than {} parents", where(file), k_max_chain));
 		}
 		json::object loaded;
 		std::string ignored;
@@ -223,13 +219,20 @@ bool edt::data_document::edit(const std::function<bool(json::value&)>& draw)
 	return true;
 }
 
-void edt::data_document::restore_own(json::object own)
+bool edt::data_document::restore_own(json::object own)
 {
-	if (own == m_own) {
-		return;
+	for (const std::string_view key : { "__type", "__parent" }) {
+		const json::value* current = m_own.if_contains(key);
+		const json::value* wanted = own.if_contains(key);
+		if ((current == nullptr) != (wanted == nullptr) || (current && !(*current == *wanted))) {
+			return false;
+		}
 	}
-	m_own = std::move(own);
-	++m_generation;
+	if (!(own == m_own)) {
+		m_own = std::move(own);
+		++m_generation;
+	}
+	return true;
 }
 
 edt::save_result edt::data_document::save()
@@ -249,8 +252,15 @@ edt::save_result edt::data_document::save()
 
 	json::object on_disk;
 	std::string disk_version;
-	if (open_result read = read_file(m_source, on_disk, disk_version); !read.opened) {
+	desc_file_read checks;
+	if (open_result read = read_file(m_source, on_disk, disk_version, &checks); !read.opened) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", where(m_source), read.error));
+	}
+	if (!checks.top_layer) {
+		return save_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", where(m_source)));
+	}
+	if (checks.in_open_level) {
+		return save_result::failure(std::format("{} belongs to the open level now: nothing was written", where(m_source)));
 	}
 	if (disk_version != m_version) {
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
@@ -259,7 +269,7 @@ edt::save_result edt::data_document::save()
 	json::value content(m_own);
 	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view())) {
 		if (item.severity == res::diagnostic_severity::error) {
-			return save_result::failure(std::format("{}{}: {}", where(m_source), item.json_path, item.reason));
+			return save_result::failure(std::format("{}: {}", where(m_source, item.json_path), item.reason));
 		}
 	}
 	descs->stamp_tree(content);

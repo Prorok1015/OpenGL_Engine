@@ -591,3 +591,40 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 		version_result, true, true, cmd::agent_category::scene_edit, cmd::danger::confirm, &desc_commands::write);
 	return out;
 }
+
+edt::desc_file_read edt::read_desc_file(res::resource_system& resources, const desc::desc_system& descriptions, const desc_file_layout& layout, const res::tag& tag)
+{
+	desc_file_read out;
+	if (tag.protocol() != res::tag::default_protocol()) {
+		out.error = std::format("'{}': only res:// files of the project are data documents", tag.view());
+		return out;
+	}
+	const agent_level_path named = check_agent_level_path(tag.view());
+	if (!named.ok()) {
+		out.error = std::format("'{}': {}", tag.view(), named.error);
+		return out;
+	}
+	desc_file_deps deps{ resources, descriptions };
+	deps.top_layer = layout.top_layer;
+	deps.layers = layout.layers;
+	deps.open_level_files = layout.open_level_files;
+	const desc_files files{ std::move(deps) };
+	const located_file found = files.locate(named.path);
+	if (!found.error.empty()) {
+		out.error = found.error;
+		return out;
+	}
+	if (!found.found) {
+		out.error = std::format("no file '{}'", tag.view());
+		return out;
+	}
+	desc_files::read_result read = files.read_fresh(named.path, found);
+	if (!read.ok()) {
+		out.error = std::move(read.error);
+		return out;
+	}
+	out.bytes = std::move(read.bytes);
+	out.top_layer = files.is_top_layer(found);
+	out.in_open_level = files.belongs_to_open_level(found);
+	return out;
+}
