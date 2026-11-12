@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_repository_marker.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -18,15 +19,6 @@ namespace edt
 
 namespace edt::vcs
 {
-	struct file_stamp
-	{
-		// Write time in the clock's own ticks: only compared.
-		std::int64_t mtime = 0;
-		std::uint64_t size = 0;
-
-		bool operator==(const file_stamp&) const = default;
-	};
-
 	struct dir_entry
 	{
 		std::filesystem::path name{};
@@ -77,6 +69,13 @@ namespace edt::vcs
 		void set_paths(const std::filesystem::path& git_dir, const std::filesystem::path& common_dir,
 			const std::filesystem::path& repo_root, const std::filesystem::path& project_root);
 		bool armed() const { return m_armed; }
+		// Not armed and the project is no repository: each poll looks only for its marker (vcs::repository_marker, a
+		// stat per folder) and reports `refs` once when it appears, goes or is written (path and stamp), so the Git panel
+		// asks vcs.info, which probes again (#561). `baseline` is the marker the probe saw (vcs_service::probed_marker):
+		// a `git init` between the probe and this call is still reported; without one, the marker as it is now. An empty
+		// `project_root` stops it; set_paths does too.
+		void watch_marker(const std::filesystem::path& project_root, std::optional<repository_marker_state> baseline = std::nullopt);
+		bool watching_marker() const { return m_marker_root.has_value(); }
 		const std::filesystem::path& watched_git_dir() const { return m_git_dir; }
 
 		// Re-arms from the service's cached state when its state_generation() moved since the last call (never probes:
@@ -112,6 +111,8 @@ namespace edt::vcs
 		// Every folder under refs/ (refs/ included), at most k_refs_budget.
 		std::vector<std::filesystem::path> walk_ref_folders() const;
 		void add(stamps& out, const std::filesystem::path& path) const;
+		repository_marker_state marker_now() const;
+		repository_changes tick_marker();
 
 		ports m_ports;
 		bool m_armed = false;
@@ -135,5 +136,7 @@ namespace edt::vcs
 		// An index change found when an own write began, reported by the next tick.
 		bool m_pending_index = false;
 		std::optional<std::uint64_t> m_followed_generation;
+		std::optional<std::filesystem::path> m_marker_root;
+		repository_marker_state m_marker;
 	};
 }

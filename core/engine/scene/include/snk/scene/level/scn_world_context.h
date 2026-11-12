@@ -51,7 +51,7 @@ namespace scn
 		void set_input_layer(int layer) { m_input_layer = layer; }
 
 		// Where the world stands among the worlds of its set: the order of the level file, worlds made while it runs after
-		// all of them. Never reused (a world id is), so it orders equal input layers (INPUT_STACK.md §3.1).
+		// all of them. Never reused (a world id is), so it orders equal input layers (INPUT_STACK.md sec. 3.1).
 		uint32_t desc_index() const { return m_desc_index; }
 		void set_desc_index(uint32_t index) { m_desc_index = index; }
 		// The level's defaults for the base input layer; none when the file has no `input_stack` for the world.

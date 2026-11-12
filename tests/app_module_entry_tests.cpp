@@ -97,6 +97,19 @@ const build_info_t* wrong_compiler_info()
 	const auto host = app::modules::make_build_info();
 	return info_with(host.api, ((host.compiler >> 16) % 3 + 1) << 16, host.flags);
 }
+// The host's compiler family, one version (MSVC: _MSC_VER, GCC/Clang: major) older or newer.
+const build_info_t* older_compiler_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, host.compiler - 1, host.flags);
+}
+const build_info_t* newer_compiler_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, host.compiler + 1, host.flags);
+}
+
+constexpr std::uint32_t compiler_of(std::uint32_t family, std::uint32_t version) { return (family << 16) | version; }
 
 void counting_destroy(app::modules::module_interface* m)
 {
@@ -355,6 +368,46 @@ BOOST_AUTO_TEST_CASE(MismatchedCompilerIsRefused)
 	auto entry = generated_entry();
 	entry.build_info = &wrong_compiler_info;
 	BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnMsvcModuleNeedsTheEnginesMsvcOrANewerOne)
+{
+	using namespace app::modules;
+	const std::uint32_t engine = compiler_of(compiler_id::msvc, 1944);
+	const std::string older = compiler_problem(compiler_of(compiler_id::msvc, 1943), engine);
+	BOOST_TEST(older.find("MSVC 1943") != std::string::npos);
+	BOOST_TEST(older.find("MSVC 1944") != std::string::npos);
+	BOOST_TEST(compiler_problem(engine, engine).empty());
+	BOOST_TEST(compiler_problem(compiler_of(compiler_id::msvc, 1951), engine).empty());
+}
+
+BOOST_AUTO_TEST_CASE(GccAndClangModulesNeedTheEnginesMajor_AndAnotherFamilyIsRefused)
+{
+	using namespace app::modules;
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::gcc, 13), compiler_of(compiler_id::gcc, 14)).empty());
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::gcc, 15), compiler_of(compiler_id::gcc, 14)).empty());
+	BOOST_TEST(compiler_problem(compiler_of(compiler_id::clang, 18), compiler_of(compiler_id::clang, 18)).empty());
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::msvc, 1951), compiler_of(compiler_id::clang, 18)).empty());
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::clang, 18), compiler_of(compiler_id::msvc, 1944)).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AModuleOfAnOlderCompilerIsRefused_ANewerOneLoadsOnlyWithMsvc)
+{
+	auto older = generated_entry();
+	older.build_info = &older_compiler_info;
+	BOOST_CHECK_THROW(loader.load(older, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+
+	auto newer = generated_entry();
+	newer.build_info = &newer_compiler_info;
+	if ((app::modules::make_build_info().compiler >> 16) == app::modules::compiler_id::msvc) {
+		loader.load(newer, storage);
+		BOOST_TEST(g_alive == 1);
+		loader.unload("sample", storage);
+	} else {
+		BOOST_CHECK_THROW(loader.load(newer, storage), std::logic_error);
+	}
 	BOOST_TEST(g_alive == 0);
 }
 

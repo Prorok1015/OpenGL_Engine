@@ -11,18 +11,7 @@ namespace fs = std::filesystem;
 
 std::optional<edt::vcs::file_stamp> edt::vcs::repository_watcher::default_stat(const fs::path& path)
 {
-	std::error_code ec;
-	const fs::file_status status = fs::status(path, ec);
-	if (ec || !fs::exists(status)) return std::nullopt;
-	const fs::file_time_type time = fs::last_write_time(path, ec);
-	if (ec) return std::nullopt;
-	file_stamp out;
-	out.mtime = static_cast<std::int64_t>(time.time_since_epoch().count());
-	if (fs::is_regular_file(status)) {
-		const std::uintmax_t size = fs::file_size(path, ec);
-		if (!ec) out.size = static_cast<std::uint64_t>(size);
-	}
-	return out;
+	return stat_entry(path);
 }
 
 std::vector<edt::vcs::dir_entry> edt::vcs::repository_watcher::default_list_dir(const fs::path& path)
@@ -51,7 +40,7 @@ void edt::vcs::repository_watcher::follow(const vcs_service& service)
 	if (service.current_project() != service.probed_project()) {
 		// The old repository is not the project's any more; whatever probes next arms it again (forgetting the
 		// generation also re-arms a switch back to the probed project).
-		if (m_armed) set_paths({}, {}, {}, {});
+		if (m_armed || m_marker_root) set_paths({}, {}, {}, {});
 		m_followed_generation.reset();
 		return;
 	}
@@ -60,7 +49,8 @@ void edt::vcs::repository_watcher::follow(const vcs_service& service)
 	m_followed_generation = generation;
 	const vcs_service::state& state = service.cached_state();
 	if (!state.available || !state.git_dir || !state.common_dir) {
-		if (m_armed) set_paths({}, {}, {}, {});
+		if (m_armed || m_marker_root) set_paths({}, {}, {}, {});
+		if (state.code == "not_a_repository" && service.probed_project()) watch_marker(*service.probed_project(), service.probed_marker());
 		return;
 	}
 	const std::vector<fs::path> arm{ *state.git_dir, *state.common_dir, state.root.value_or(fs::path{}),
@@ -70,11 +60,46 @@ void edt::vcs::repository_watcher::follow(const vcs_service& service)
 	set_paths(arm[0], arm[1], arm[2], arm[3]);
 }
 
+void edt::vcs::repository_watcher::watch_marker(const fs::path& project_root, std::optional<repository_marker_state> baseline)
+{
+	if (m_armed) set_paths({}, {}, {}, {});
+	m_last_poll.reset();
+	if (project_root.empty()) {
+		m_marker_root.reset();
+		m_marker = {};
+		return;
+	}
+	m_marker_root = project_root;
+	m_marker = baseline ? std::move(*baseline) : marker_now();
+}
+
+edt::vcs::repository_marker_state edt::vcs::repository_watcher::marker_now() const
+{
+	return repository_marker(*m_marker_root, m_ports.stat_file);
+}
+
+edt::vcs::repository_changes edt::vcs::repository_watcher::tick_marker()
+{
+	repository_changes out;
+	if (!m_marker_root) return out;
+	const clock::time_point now = m_ports.now();
+	if (m_last_poll && now - *m_last_poll < k_poll_interval) return out;
+	m_last_poll = now;
+	repository_marker_state marker = marker_now();
+	if (marker != m_marker) {
+		m_marker = std::move(marker);
+		out.refs = true;
+	}
+	return out;
+}
+
 void edt::vcs::repository_watcher::set_paths(const fs::path& git_dir, const fs::path& common_dir, const fs::path& repo_root,
 	const fs::path& project_root)
 {
 	m_armed = !git_dir.empty();
 	m_armed_with = { git_dir, common_dir, repo_root, project_root };
+	m_marker_root.reset();
+	m_marker = {};
 	m_git_dir = git_dir;
 	m_common_dir = common_dir.empty() ? git_dir : common_dir;
 	m_work_roots.clear();
@@ -114,7 +139,7 @@ void edt::vcs::repository_watcher::begin_own_write()
 edt::vcs::repository_changes edt::vcs::repository_watcher::tick()
 {
 	repository_changes out;
-	if (!m_armed) return out;
+	if (!m_armed) return tick_marker();
 	if (m_ports.own_writes_running && m_ports.own_writes_running()) {
 		m_own_write = true;
 	} else if (m_own_write) {

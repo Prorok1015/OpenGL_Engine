@@ -108,6 +108,11 @@ DISPLAY_NUM="$(head -n 1 "$DISPLAY_FILE" 2>/dev/null || true)"
 [[ "$DISPLAY_NUM" =~ ^[0-9]+$ ]] || { echo "error: Xvfb gave no display number after 20 s" >&2; xvfb_report; exit 1; }
 export DISPLAY=":${DISPLAY_NUM}"
 
+# The editor keeps the window layout and its other per-user settings in the user's folder (#713). One folder for every run of
+# a job, as the cwd was before (a layout saved by one run is the next one's start), and never the developer's own settings.
+# First, so a --set editor/user_data_path of the caller (after --) wins.
+EXTRA=(--set editor/user_data_path "${HEADLESS_USER_DIR:-$(pwd)/headless_out/user}" "${EXTRA[@]}")
+
 if [[ -n "$FRAMES" ]]; then
 	EXTRA+=(--set app/fixed_frame_dt "$FRAME_DT" app/freeze_after_frames "$FRAMES")
 fi

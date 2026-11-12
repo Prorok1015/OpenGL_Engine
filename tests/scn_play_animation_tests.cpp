@@ -309,7 +309,10 @@ BOOST_AUTO_TEST_CASE(TheBusJournalShowsTheModelAndTheClipThatEnded)
 
 BOOST_AUTO_TEST_CASE(TheJournalPayloadEscapesTheClipAndWritesNoEntityAsNull)
 {
-	BOOST_TEST(scn::animation_finished_json({ entt::null, "say \"hi\"" }) == R"json({"entity":null,"clip":"say \"hi\""})json");
+	// Outside the macro: toolset 14.44 mis-stringizes an escaped quote and a raw string in one BOOST_TEST argument (#219).
+	const std::string clip = "say \"hi\"";
+	const std::string expected = R"json({"entity":null,"clip":"say \"hi\""})json";
+	BOOST_TEST(scn::animation_finished_json({ entt::null, clip }) == expected);
 }
 
 BOOST_AUTO_TEST_CASE(ALoopGoingRoundTellsNothing)

@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-// The undo history of a document (EPIC-15 #29, #141-#144; AI_INTEGRATION.md §3.4). The document diffs every edit against
+// The undo history of a document (EPIC-15 #29, #141-#144; AI_INTEGRATION.md sec. 3.4). The document diffs every edit against
 // its last committed state and records the difference as history_changes: the history knows no document type. A scene
 // keys its changes by node, a data document (#146) will key them by field.
 namespace edt

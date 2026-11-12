@@ -30,7 +30,7 @@ namespace ds {
 		pool_resource(const pool_resource&) = delete;
 		pool_resource& operator=(const pool_resource&) = delete;
 
-		/// Rebuild free-list from all chunks — all blocks become available. O(N).
+		/// Rebuild free-list from all chunks - all blocks become available. O(N).
 		void reset() noexcept;
 
 		/// Size of each block in bytes.

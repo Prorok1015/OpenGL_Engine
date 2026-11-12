@@ -5,7 +5,7 @@
 
 namespace scn
 {
-	// What a level file says about the base layer ("world") of a world's input stack (INPUT_STACK.md §3.1), as the
+	// What a level file says about the base layer ("world") of a world's input stack (INPUT_STACK.md sec. 3.1), as the
 	// file holds it: key names stay text, inp resolves them.
 	struct input_stack_desc
 	{
