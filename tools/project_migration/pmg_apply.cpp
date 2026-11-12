@@ -152,6 +152,10 @@ namespace
 
 	struct watch_pause
 	{
+		explicit watch_pause(const apply_context& owner) : context(owner) {}
+		watch_pause(const watch_pause&) = delete;
+		watch_pause& operator=(const watch_pause&) = delete;
+
 		const apply_context& context;
 		bool paused = false;
 
