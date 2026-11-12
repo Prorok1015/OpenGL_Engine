@@ -488,6 +488,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	// The views show the set "play" while Play runs (view_set), the level otherwise.
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* { return view_registry(m_services, m_state); });
+	m_game_view_panel->set_world_name_getter([this] {
+		const std::string* name = m_state.active_world_name();
+		return name ? *name : std::string{};
+	});
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
 		if (scn::context_set* set = view_set(m_services)) {
 			set->for_each([&visit](scn::world_context& world) { visit(world.state()); });

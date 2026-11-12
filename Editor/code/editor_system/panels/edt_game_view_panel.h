@@ -22,6 +22,9 @@ namespace edt
 		using registry_visitor = std::function<void(entt::registry&)>;
 
 		void set_registry_getter(std::function<entt::registry*()> getter) { m_get_registry = std::move(getter); }
+		// The name of the world the registry belongs to: another name is another world (the pick starts over), the same
+		// name with another registry is the world rebuilt (the pick follows its camera's node). Unset: one unnamed world.
+		void set_world_name_getter(std::function<std::string()> getter) { m_get_world_name = std::move(getter); }
 		// Shown instead of the picture while not empty ("Reloading... (3 resources)"); its cameras stay switched off.
 		void set_notice(std::function<std::string()> notice) { m_notice = std::move(notice); }
 		// The worlds were rebuilt (play_session_options::forget_runtime_entities).
@@ -69,6 +72,7 @@ namespace edt
 		bool draw_picked_camera(entt::registry& reg, glm::vec2 avail);
 
 		std::function<entt::registry*()> m_get_registry;
+		std::function<std::string()> m_get_world_name;
 		std::function<std::string()> m_notice;
 		std::string m_notice_text;
 		std::function<void(const registry_visitor&)> m_for_each_registry;
