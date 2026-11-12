@@ -73,6 +73,9 @@ namespace edt
 	void viewport_panel::on_render()
 	{
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
+		// A registry that is not the one seen last time (the world was rebuilt): the selected entity is taken again and a
+		// drag of the rotate ring that was in progress ends.
+		if (m_selection.refresh(reg)) m_rotate.reset();
 		const bool locked = m_edits_locked && m_edits_locked();
 
 		render_toolbar();
@@ -132,7 +135,7 @@ namespace edt
 		const view_item view = capture_view_item();
 
 		// Interactive transform gizmo (drawn on top of scene image)
-		if (!locked && reg && m_selected != entt::null && reg->valid(m_selected))
+		if (!locked && reg && m_selection.get() != entt::null && reg->valid(m_selection.get()))
 			render_transform_gizmo(*reg, cam_view, cam_proj);
 
 		// Re-fetch: on_transform_committed inside the gizmo may have triggered
@@ -204,14 +207,14 @@ namespace edt
 
 	scn::skeleton_component* viewport_panel::find_skeleton_for_selected(entt::registry& reg)
 	{
-		if (m_selected == entt::null || !reg.valid(m_selected)) return nullptr;
+		if (m_selection.get() == entt::null || !reg.valid(m_selection.get())) return nullptr;
 
 		// Check selected entity itself
-		if (auto* skel = reg.try_get<scn::skeleton_component>(m_selected))
+		if (auto* skel = reg.try_get<scn::skeleton_component>(m_selection.get()))
 			return skel;
 
 		// Walk up ancestors
-		entt::entity current = m_selected;
+		entt::entity current = m_selection.get();
 		while (auto* pc = reg.try_get<scn::parent_component>(current)) {
 			current = pc->parent;
 			if (auto* skel = reg.try_get<scn::skeleton_component>(current))
@@ -262,20 +265,20 @@ namespace edt
 	{
 		bool committed = false;
 		edt::draw_transform_gizmo(
-			reg, m_selected,
+			reg, m_selection.get(),
 			view, proj,
 			m_image_pos.x, m_image_pos.y,
 			m_viewport_size.x, m_viewport_size.y,
-			m_gizmo_op, m_rotate_ent, m_active_ring, &committed);
+			m_gizmo_op, m_rotate, &committed);
 
-		if (committed && m_on_transform_committed && reg.valid(m_selected)) {
+		if (committed && m_on_transform_committed && reg.valid(m_selection.get())) {
 			// Copied: the callback may reload the world and with it the component this path lives in.
 			std::vector<uint64_t> path;
-			if (const auto* id = reg.try_get<scn::node_id_component>(m_selected))
+			if (const auto* id = reg.try_get<scn::node_id_component>(m_selection.get()))
 				path = id->path;
 
-			if (!path.empty() && reg.all_of<scn::local_transform>(m_selected)) {
-				const auto& lt = reg.get<scn::local_transform>(m_selected);
+			if (!path.empty() && reg.all_of<scn::local_transform>(m_selection.get())) {
+				const auto& lt = reg.get<scn::local_transform>(m_selection.get());
 				eng::transform3d tr{ lt.local };
 				m_on_transform_committed(path, tr.get_pos(), tr.get_angles_degrees(), tr.get_scale());
 				// The callback may trigger reload_world() — `reg` is dangling from here on.

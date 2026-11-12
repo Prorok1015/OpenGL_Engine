@@ -27,9 +27,12 @@ namespace edt
 
 
 		void set_registry_getter(std::function<entt::registry*()> getter);
-		void set_selected_entity(ecs::entity ent) { m_selected = ent; }
+		void set_selected_entity(ecs::entity ent) { m_selection.set(ent); }
+		// What names the selected entity again when the registry on show is another one (a world rebuilt without a
+		// selection event: a hot reload, a module swap): editor_system gives it selection_service::entity.
+		void set_selected_resolver(std::function<ecs::entity()> find) { m_selection.set_resolver(std::move(find)); }
 		// The worlds were rebuilt (play_session_options::forget_runtime_entities): the ring held an id of the old one.
-		void forget_runtime_entities() { m_rotate_ent = entt::null; }
+		void forget_runtime_entities() { m_rotate.reset(); }
 
 		// The viewport feeds the context `target` names (the active world of the level) while hovered.
 		void set_input_router(inp::input_router* router, input_target_getter target) {
@@ -57,7 +60,7 @@ namespace edt
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }
 		bool is_focused() const { return m_focused; }
 		// A rotate ring of the gizmo is being dragged (translate and scale handles are active ImGui items).
-		bool is_dragging_gizmo() const { return m_active_ring >= 0; }
+		bool is_dragging_gizmo() const { return m_rotate.ring >= 0; }
 
 		// Wireframe view of the editor camera. A state of this viewport, not of the level: it is not saved.
 		bool wireframe() const { return m_wireframe; }
@@ -82,15 +85,14 @@ namespace edt
 		std::function<bool()> m_edits_locked;
 		inp::input_router* m_router = nullptr;
 		input_target_getter m_input_target;
-		ecs::entity m_selected = entt::null;
+		viewport_selection m_selection;
 		glm::vec2 m_image_pos = {};      // screen pos of the scene image (after toolbar)
 		glm::vec2 m_viewport_size = {800.f, 600.f};
 		bool m_focused = false;
 		bool m_wireframe = false;
 		std::optional<glm::ivec2> m_suspended_size;
 		int            m_gizmo_op     = 0;            // 0=translate, 1=rotate, 2=scale
-		entt::entity   m_rotate_ent   = entt::null;   // gizmo rotate ring state
-		int            m_active_ring  = -1;
+		rotate_gizmo_state m_rotate;                  // gizmo rotate ring state
 		float m_fps = 0.f;
 		float m_fps_timer = 0.f;
 		int m_frame_count = 0;

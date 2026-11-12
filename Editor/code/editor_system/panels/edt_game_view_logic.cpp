@@ -1,6 +1,5 @@
 #include "edt_game_view_logic.h"
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <format>
 #include "edt_camera_redirect.h"
@@ -15,19 +14,6 @@ namespace edt::game_view
 		{
 			return !cam.color_targets.empty() && is_game_camera_target(cam.color_targets[0]);
 		}
-
-		// The editor's own type in a registry's ctx (never one of the engine's).
-		struct registry_mark
-		{
-			std::uint64_t id = 0;
-		};
-	}
-
-	std::uint64_t registry_token(entt::registry& reg)
-	{
-		static std::atomic<std::uint64_t> last{ 0 };
-		if (const registry_mark* mark = reg.ctx().find<registry_mark>()) return mark->id;
-		return reg.ctx().emplace<registry_mark>(registry_mark{ ++last }).id;
 	}
 
 	std::vector<camera_entry> collect_cameras(entt::registry& reg)

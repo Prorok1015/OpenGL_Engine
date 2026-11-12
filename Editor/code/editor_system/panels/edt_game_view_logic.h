@@ -6,6 +6,7 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <snk/resource/res_tag.h>
+#include "edt_registry_token.h"
 
 // GL- and ImGui-free part of the Game view: which game cameras exist, which one is picked, and the
 // rule that only the picked camera gets a viewport (the others keep a zero viewport and are skipped
@@ -23,11 +24,8 @@ namespace edt::game_view
 	// Game cameras = cameras that edt::camera_redirector gave their own texture.
 	std::vector<camera_entry> collect_cameras(entt::registry& reg);
 
-	// Which registry this is, not where it lives: a stamp the editor keeps in the registry's ctx, taken the first time it is
-	// asked for. A registry made later gets another one even at the address of a registry that is gone (a world is destroyed
-	// and made again by every rebuild, and the allocator hands the same block back). registry::clear() leaves the ctx
-	// alone, but gives every entity back with a new version, so a pick made before it no longer matches any entity.
-	std::uint64_t registry_token(entt::registry& reg);
+	// Moved to edt_registry_token.h (the viewport uses it too).
+	using edt::registry_token;
 
 	class selection
 	{
