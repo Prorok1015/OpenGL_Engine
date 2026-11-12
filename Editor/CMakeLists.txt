@@ -35,6 +35,10 @@ endif()
 #   projects/sandbox/ (the test project)  README.txt  LICENSE
 # editor.cfg resolves its paths relative to itself, so the packaged copy points one level up instead of into the repository.
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin COMPONENT editor)
+if(UNIX AND NOT APPLE)
+	# The installed bin/editor finds libsnk_engine.so in <prefix>/lib without LD_LIBRARY_PATH (#722).
+	set_target_properties(${PROJECT_NAME} PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
+endif()
 if(MSVC)
 	install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION bin OPTIONAL COMPONENT editor)
 endif()

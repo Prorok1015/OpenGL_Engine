@@ -28,6 +28,9 @@ target_compile_definitions(snk_model_decoder_selftest PRIVATE SNK_MODEL_DECODER_
 # engine has no editor to ship it with.
 if(SNK_ENGINE_SHARED)
 	install(TARGETS snk_model_decoder RUNTIME DESTINATION bin COMPONENT editor)
+	if(UNIX AND NOT APPLE)
+		set_target_properties(snk_model_decoder PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
+	endif()
 	if(MSVC)
 		install(FILES $<TARGET_PDB_FILE:snk_model_decoder> DESTINATION bin OPTIONAL COMPONENT editor)
 	endif()
