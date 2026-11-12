@@ -50,7 +50,8 @@ BOOST_AUTO_TEST_CASE(ConfigToLoad_ExplicitWins_ElseTheDefaultFileWhenItExists)
 
 BOOST_AUTO_TEST_CASE(NoConfigMessage_NamesTheOptionAndTheDefaultPath)
 {
-	const std::string message = cfg::no_config_message("/opt/snake/bin/../config/editor.cfg");
+	// absolute(): "/opt/..." has no drive on Windows, so it is not absolute there by itself.
+	const std::string message = cfg::no_config_message(std::filesystem::absolute("/opt/snake/bin/../config/editor.cfg"));
 	BOOST_TEST(message.find("no configuration") != std::string::npos);
 	BOOST_TEST(message.find("--config") != std::string::npos);
 	BOOST_TEST(message.find("/opt/snake/config/editor.cfg") != std::string::npos);
