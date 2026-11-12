@@ -11,6 +11,7 @@
 #include <snk/editor/editor_module.h>
 #include <snk/game/gs_module_layout.h>
 #include <edt_decode_runner.h>
+#include <snk/common/fs_paths.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
@@ -74,15 +75,27 @@ int main(int argc, char* argv[])
 	}
 
 	// The package's layout (bin/, config/editor.cfg): from the executable's folder, whatever the working directory (#160).
-	const std::filesystem::path default_config = platform::current_executable().parent_path() / ".." / "config" / "editor.cfg";
-	if (!cfg::initialize_configs(argc, argv, default_config)) {
-		return -1;
+	// An unknown executable path leaves no default rather than one relative to the working directory.
+	const std::filesystem::path executable = platform::current_executable();
+	const std::filesystem::path default_config =
+		executable.empty() ? std::filesystem::path{} : executable.parent_path() / ".." / "config" / "editor.cfg";
+	try {
+		if (!cfg::initialize_configs(argc, argv, default_config)) {
+			return -1;
+		}
+	} catch (const std::exception& e) {
+		if (cfg::loaded_config_path().empty()) {
+			egLOG_ERROR("app", "command line: {}", e.what());
+		} else {
+			egLOG_ERROR("app", "config {} could not be loaded: {}", fs_paths::generic_utf8_of(cfg::loaded_config_path()), e.what());
+		}
+		return 2;
 	}
 	if (cfg::loaded_config_path().empty()) {
 		egLOG_ERROR("app", "{}", cfg::no_config_message(default_config));
 		return 2;
 	}
-	egLOG_INFO("app", "config: {}", cfg::loaded_config_path().generic_string());
+	egLOG_INFO("app", "config: {}", fs_paths::generic_utf8_of(cfg::loaded_config_path()));
 
 	// What the editor defaults after the configs: the window layout goes to the user's folder, not to the current one.
 	editor::apply_default_settings();

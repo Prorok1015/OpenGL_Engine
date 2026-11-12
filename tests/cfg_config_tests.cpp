@@ -40,6 +40,12 @@ BOOST_AUTO_TEST_CASE(ConfigToLoad_ExplicitWins_ElseTheDefaultFileWhenItExists)
 	BOOST_TEST(!cfg::config_to_load(std::nullopt, dir.path() / "missing.cfg").has_value());
 	BOOST_TEST(!cfg::config_to_load(std::nullopt, dir.path()).has_value()); // a folder is no config file
 	BOOST_TEST(!cfg::config_to_load(std::nullopt, {}).has_value());
+
+	// A relative default resolves against the working directory: never taken, even when that file exists.
+	const std::filesystem::path relative_default = std::filesystem::relative(default_config);
+	BOOST_REQUIRE(relative_default.is_relative());
+	BOOST_REQUIRE(std::filesystem::is_regular_file(relative_default));
+	BOOST_TEST(!cfg::config_to_load(std::nullopt, relative_default).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(NoConfigMessage_NamesTheOptionAndTheDefaultPath)
@@ -48,6 +54,22 @@ BOOST_AUTO_TEST_CASE(NoConfigMessage_NamesTheOptionAndTheDefaultPath)
 	BOOST_TEST(message.find("no configuration") != std::string::npos);
 	BOOST_TEST(message.find("--config") != std::string::npos);
 	BOOST_TEST(message.find("/opt/snake/config/editor.cfg") != std::string::npos);
+
+	const std::string without_default = cfg::no_config_message({});
+	BOOST_TEST(without_default.find("--config") != std::string::npos);
+	BOOST_TEST(without_default.find("folder could not be found") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ConfigFile_LoadsFromAFolderOutsideTheCodePage)
+{
+	test_util::temp_dir dir("cfg_unicode_path");
+	const std::filesystem::path folder{ u8"\u043a\u043e\u043d\u0444\u0438\u0433" };
+	const auto file = dir.write(folder / "editor.cfg", "cfgtest:\n  unicode_path: 7\n");
+	cfg::variable<int> value{ "cfgtest/unicode_path", -1 };
+
+	BOOST_TEST(cfg::load_config_file(file));
+	BOOST_TEST(static_cast<int>(value) == 7);
+	BOOST_TEST(!cfg::load_config_file(dir.path() / folder / "missing.cfg"));
 }
 
 BOOST_AUTO_TEST_CASE(Cli_AllowEngineVersionMismatchSetsItsVariable)

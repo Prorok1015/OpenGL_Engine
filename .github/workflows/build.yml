@@ -776,15 +776,28 @@ jobs:
           grep -q -- "--headless needs --project" headless_out/headless/no_project.log
 
       # #160: without --config the editor loads <exe>/../config/editor.cfg; the build tree has none, so it stops with a
-      # reason and exit code 2 instead of starting without the engine's base resources.
+      # reason and exit code 2 instead of starting without the engine's base resources. A default config that is not
+      # valid yaml stops it the same way, naming the file.
       - name: The editor without a config file stops with a reason
         run: |
+          default_config="$(dirname "$EDITOR_BIN")/../config/editor.cfg"
+          if [ -e "$default_config" ]; then echo "::error::$default_config exists in the build tree"; exit 1; fi
           rc=0
           (cd "$RUNNER_TEMP" && env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$EDITOR_BIN" --headless --project "$GITHUB_WORKSPACE/projects/sandbox" \
             > /dev/null 2> "$GITHUB_WORKSPACE/headless_out/headless/no_config.log") || rc=$?
           cat headless_out/headless/no_config.log
           if [ "$rc" -ne 2 ]; then echo "::error::expected exit code 2 without a config, got $rc"; exit 1; fi
           grep -q "no configuration: pass --config" headless_out/headless/no_config.log
+
+          mkdir -p "$(dirname "$default_config")"
+          printf 'resource: [unclosed\n' > "$default_config"
+          rc=0
+          (cd "$RUNNER_TEMP" && env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$EDITOR_BIN" --headless --project "$GITHUB_WORKSPACE/projects/sandbox" \
+            > /dev/null 2> "$GITHUB_WORKSPACE/headless_out/headless/broken_config.log") || rc=$?
+          rm -f "$default_config"
+          cat headless_out/headless/broken_config.log
+          if [ "$rc" -ne 2 ]; then echo "::error::expected exit code 2 with a broken default config, got $rc"; exit 1; fi
+          grep -q "config .*/config/editor.cfg could not be loaded" headless_out/headless/broken_config.log
 
       # #713: the editor started in an empty folder writes nothing there: its log is the project's .cache/logs/engine.log
       # (with the lines it logged before the config named the file), its layout and settings go to editor/user_data_path.

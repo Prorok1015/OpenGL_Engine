@@ -16,9 +16,11 @@ namespace cfg {
 
 	SNK_API void initialize_configs(std::filesystem::path init_file);
 	SNK_API bool initialize_configs(int argc, char* args[]);
-	// As above, but without --config it loads `default_config` when that file exists (#160).
+	// As above, but without --config it loads `default_config` when that file exists (#160). Throws when the file
+	// chosen cannot be read or is not valid yaml, and on an unknown or malformed option.
 	SNK_API bool initialize_configs(int argc, char* args[], const std::filesystem::path& default_config);
-	// The file to load: `explicit_config` (--config) when given, else `default_config` when it is a regular file, else none.
+	// The file to load: `explicit_config` (--config) when given, else `default_config` when it is an absolute path to a
+	// regular file, else none.
 	SNK_API std::optional<std::filesystem::path> config_to_load(const std::optional<std::filesystem::path>& explicit_config,
 		const std::filesystem::path& default_config);
 	// Why a program that needs a config file has none: no --config and no `default_config` (#160).
