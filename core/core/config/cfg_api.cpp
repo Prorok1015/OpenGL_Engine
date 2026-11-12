@@ -1,7 +1,9 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/fs_paths.h>
 #include <algorithm>
 #include <cstddef>
+#include <fstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <optional>
@@ -138,9 +140,19 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 	}
 }
 
+YAML::Node load_yaml_file(const std::filesystem::path& file)
+{
+	// Not YAML::LoadFile: its narrow file name cannot hold, on MSVC, a path outside the active code page.
+	std::ifstream in(file, std::ios::binary);
+	if (!in) {
+		throw YAML::BadFile(fs_paths::utf8_of(file));
+	}
+	return YAML::Load(in);
+}
+
 void load_config_file_with_extends(std::filesystem::path file_path)
 {
-	YAML::Node config = YAML::LoadFile(std::filesystem::absolute(file_path).string());
+	YAML::Node config = load_yaml_file(std::filesystem::absolute(file_path));
 	if (config[EXTENDS_KEY]) {
 		// TODO: add assert if its not a sequence
 		for (auto it = config[EXTENDS_KEY].begin(); it != config[EXTENDS_KEY].end(); ++it) {
@@ -170,7 +182,36 @@ std::filesystem::path cfg::loaded_config_path()
 	return loaded_config_file;
 }
 
+std::optional<std::filesystem::path> cfg::config_to_load(const std::optional<std::filesystem::path>& explicit_config,
+	const std::filesystem::path& default_config)
+{
+	if (explicit_config) {
+		return explicit_config;
+	}
+	// A relative default would resolve against the working directory and could load someone else's config.
+	std::error_code ec;
+	if (default_config.is_absolute() && std::filesystem::is_regular_file(default_config, ec)) {
+		return default_config;
+	}
+	return std::nullopt;
+}
+
+std::string cfg::no_config_message(const std::filesystem::path& default_config)
+{
+	if (!default_config.is_absolute()) {
+		return "no configuration: pass --config <file> (the program's own folder could not be found, so there is no "
+			"default config)";
+	}
+	return "no configuration: pass --config <file>, or keep the config next to the program (" +
+		fs_paths::generic_utf8_of(default_config.lexically_normal()) + ")";
+}
+
 bool cfg::initialize_configs(int argc, char* argv[])
+{
+	return initialize_configs(argc, argv, {});
+}
+
+bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path& default_config)
 {
 	po::options_description desc("Allowed options");
 	desc.add_options()
@@ -211,9 +252,12 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		return false;
 	}
 
+	std::optional<std::filesystem::path> explicit_config;
 	if (vm.count("config")) {
-		std::string config_path = vm["config"].as<std::string>();
-		cfg::initialize_configs(config_path);
+		explicit_config = vm["config"].as<std::string>();
+	}
+	if (const auto file = config_to_load(explicit_config, default_config)) {
+		cfg::initialize_configs(*file);
 	}
 
 	// Before --set, so that `--set project/...` still wins like every other --set.
@@ -265,7 +309,7 @@ bool cfg::load_config_file(const std::filesystem::path& file)
 		load_config_file_with_extends(file);
 		return true;
 	} catch (const YAML::Exception& e) {
-		egLOG_ERROR("config", "cannot load '{}': {}", file.string(), e.what());
+		egLOG_ERROR("config", "cannot load '{}': {}", fs_paths::utf8_of(file), e.what());
 		return false;
 	}
 }
