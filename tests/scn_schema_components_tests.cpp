@@ -665,6 +665,36 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_move_the_component_and_map_its_entities)
 	BOOST_TEST(sandbox.storage<desc::dyn_blob>(link.id()).empty());
 }
 
+// #708: an entity of the sandbox without any component still reaches the world, and a schema field naming it is mapped.
+BOOST_AUTO_TEST_CASE(sandbox_commands_map_a_reference_to_an_entity_without_components)
+{
+	auto link = register_health(k_link_schema);
+	BOOST_REQUIRE(static_cast<bool>(link));
+	mgr.create_set("s", layer);
+	auto& world = mgr.create_context("s", "w", scn::context_kind::runtime);
+	static_cast<void>(world.state().create()); // the world's ids differ from the sandbox's
+	static_cast<void>(world.state().create());
+	if (!world.state().ctx().contains<ecs::entity_spawner>()) {
+		world.state().ctx().emplace<ecs::entity_spawner>();
+	}
+	auto& sandbox = world.state().ctx().get<ecs::entity_spawner>();
+	// The bare entity first: the old entity pass mapped only the last packed one, which the pool maps anyway.
+	const auto bare = sandbox.create();
+	const auto pointer = sandbox.create();
+	sandbox.storage<desc::dyn_blob>(link.id()).emplace(pointer, link_blob(1, entt::to_integral(bare)));
+	const std::size_t live_before = world.state().storage<entt::entity>().free_list();
+
+	world.apply_commands();
+	BOOST_TEST(world.state().storage<entt::entity>().free_list() == live_before + 2u);
+	const entt::entity moved_pointer = link_of(world.state(), 1);
+	BOOST_REQUIRE((moved_pointer != entt::null));
+	const boost::json::value target = target_of(world.state(), moved_pointer);
+	BOOST_REQUIRE(!target.is_null());
+	const auto moved_bare = static_cast<entt::entity>(static_cast<std::uint32_t>(target.to_number<std::uint64_t>()));
+	BOOST_TEST(world.state().valid(moved_bare));
+	BOOST_TEST((moved_bare != moved_pointer));
+}
+
 BOOST_AUTO_TEST_CASE(a_sandbox_blob_of_another_layout_is_dropped)
 {
 	auto health = register_health();
