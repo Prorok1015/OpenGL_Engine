@@ -59,6 +59,7 @@ namespace scn
 		bool has_press_threshold = false;
 		bool deadzone_not_number = false;
 		bool press_threshold_not_number = false;
+		bool not_object = false;
 		json::value source;
 		bool operator==(const input_gamepad_settings& other) const { return config == other.config && has_deadzone == other.has_deadzone && has_press_threshold == other.has_press_threshold; }
 	};
@@ -87,7 +88,7 @@ namespace desc
 	template<>
 	inline constexpr auto field_attrs<scn::input_actions_desc> = attrs(
 		f("actions").kind(field_kind::custom).optional().tooltip("Named actions with their bindings: {\"key\": \"A\"}, {\"mouse\": \"LEFT\"}, {\"gamepad\": \"A\"} or {\"axis\": \"LeftX-\"}"),
-		f("gamepad").kind(field_kind::custom).optional().tooltip("Gamepad setting: {\"deadzone\": 0.25, \"press_threshold\": 0.5}"));
+		f("gamepad").kind(field_kind::custom).optional().write_if_not_default().tooltip("Gamepad setting: {\"deadzone\": 0.25, \"press_threshold\": 0.5}"));
 }
 
 namespace scn
@@ -104,8 +105,8 @@ namespace scn
 		BOOST_DESCRIBE_CLASS(input_actions_desc, (), (actions, gamepad), (), ())
 	};
 
-	// The actions of the desc. A problem in the file (an empty or repeated action name, an unknown key or button, a
-	// binding with neither or both of "key" and "mouse") is warned about with its JSON path and skipped.
+	// The actions of the desc. A problem in the file (an empty or repeated action name, an unknown key, button or axis, a
+	// binding with none or more than one of "key", "mouse", "gamepad" and "axis") is warned about with its JSON path and skipped.
 	SNK_API inp::action_map build_action_map(const input_actions_desc& desc, std::string_view source = {});
 	// The gamepad setting of the desc; a number out of 0..1 or of the wrong type is warned about and the default stays.
 	SNK_API inp::gamepad_config build_gamepad_config(const input_actions_desc& desc, std::string_view source = {});

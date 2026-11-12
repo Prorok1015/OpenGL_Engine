@@ -175,4 +175,23 @@ BOOST_AUTO_TEST_CASE(TheGamepadSetting_IsReadWithDefaultsForWhatIsMissing_AndBad
 	BOOST_TEST(warned("/gamepad/press_threshold: not a number"));
 }
 
+BOOST_AUTO_TEST_CASE(AFileWithoutTheGamepadKey_IsSavedWithoutIt)
+{
+	const auto desc = read(GOOD);
+	boost::json::object saved;
+	desc.serialize(saved);
+	BOOST_TEST(!saved.contains("gamepad"));
+}
+
+BOOST_AUTO_TEST_CASE(AGamepadSettingThatIsNoObjectOrAHugeNumber_IsWarnedAboutWithTheFile)
+{
+	const auto notobject = scn::build_gamepad_config(read(R"({ "gamepad": 5 })"), "res://input/actions.desc");
+	BOOST_TEST((notobject == inp::gamepad_config{}));
+	BOOST_TEST(warned("res://input/actions.desc: /gamepad: expected an object"));
+
+	const auto huge = scn::build_gamepad_config(read(R"({ "gamepad": { "deadzone": 1e300 } })"), "res://input/actions.desc");
+	BOOST_TEST((huge == inp::gamepad_config{}));
+	BOOST_TEST(warned("/gamepad/deadzone:"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

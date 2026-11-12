@@ -7,14 +7,19 @@
 
 namespace
 {
+	// A gamepad binding is never down, reached or armed here: nothing polls a device into input_state yet (US-542-B0), and
+	// the mouse branch must not take it (its value would index the mouse buttons).
 	bool binding_down(const inp::action_binding& binding, const inp::input_state& state)
 	{
 		return std::visit([&state](auto button) {
+			using button_type = decltype(button);
 			const auto index = static_cast<std::size_t>(button);
-			if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+			if constexpr (std::is_same_v<button_type, inp::KEYBOARD_BUTTONS>) {
 				return index < state.keyboard.size() && state.keyboard[index];
-			} else {
+			} else if constexpr (std::is_same_v<button_type, inp::MOUSE_BUTTONS>) {
 				return index < state.mouse.size() && state.mouse[index];
+			} else {
+				return false;
 			}
 		}, binding);
 	}
@@ -30,10 +35,13 @@ namespace
 	bool binding_reached(const inp::action_binding& binding, const inp::action_reach& reach)
 	{
 		return std::visit([&reach](auto button) {
-			if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+			using button_type = decltype(button);
+			if constexpr (std::is_same_v<button_type, inp::KEYBOARD_BUTTONS>) {
 				return reach.keys.test(static_cast<std::size_t>(button));
-			} else {
+			} else if constexpr (std::is_same_v<button_type, inp::MOUSE_BUTTONS>) {
 				return reach.buttons;
+			} else {
+				return false;
 			}
 		}, binding);
 	}
@@ -41,11 +49,14 @@ namespace
 	bool binding_armed(const inp::action_binding& binding, const inp::action_reach& reach)
 	{
 		return std::visit([&reach](auto button) {
+			using button_type = decltype(button);
 			const auto index = static_cast<std::size_t>(button);
-			if constexpr (std::is_same_v<decltype(button), inp::KEYBOARD_BUTTONS>) {
+			if constexpr (std::is_same_v<button_type, inp::KEYBOARD_BUTTONS>) {
 				return reach.armed_keys.test(index);
-			} else {
+			} else if constexpr (std::is_same_v<button_type, inp::MOUSE_BUTTONS>) {
 				return index < inp::mouse_count && reach.armed_buttons.test(index);
+			} else {
+				return false;
 			}
 		}, binding);
 	}

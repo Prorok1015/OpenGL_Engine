@@ -1,4 +1,5 @@
 #include <snk/core/core_project_modules.h>
+#include <snk/application/app_loaded_module_apis.h>
 #include <snk/application/app_module_loader.hpp>
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_store.hpp>
@@ -274,6 +275,10 @@ namespace {
 		if (prepared.name() != name) {
 			return std::format("{} is the module '{}'", prepared.describe(), prepared.name());
 		}
+		if (!data.has_value<app::modules::loaded_module_apis>()) {
+			data.construct<app::modules::loaded_module_apis>();
+		}
+		data.require<app::modules::loaded_module_apis>().api[std::string{ prepared.name() }] = prepared.api_version();
 		loader.load(std::move(prepared), data);
 		return {};
 	}

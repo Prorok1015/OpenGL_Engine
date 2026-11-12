@@ -156,7 +156,7 @@ namespace
 			wrong_type = true;
 			return false;
 		}
-		out = static_cast<float>(value->to_number<double>());
+		out = static_cast<float>(std::clamp(value->to_number<double>(), -1e9, 1e9));
 		return true;
 	}
 }
@@ -180,7 +180,7 @@ bool desc::json_codec<scn::input_gamepad_settings>::from_json(scn::input_gamepad
 	settings.source = in;
 	const json::object* object = in.if_object();
 	if (!object) {
-		egLOG_WARN("input", "input_actions_desc: /gamepad: expected an object, the defaults stay");
+		settings.not_object = true;
 		return true;
 	}
 	settings.has_deadzone = false;
@@ -195,6 +195,7 @@ inp::gamepad_config scn::build_gamepad_config(const input_actions_desc& desc, st
 	const std::string_view file = source.empty() ? std::string_view{ "input actions" } : source;
 	const input_gamepad_settings& settings = desc.gamepad;
 	inp::gamepad_config config;
+	if (settings.not_object) egLOG_WARN("input", "{}: /gamepad: expected an object, the defaults stay", file);
 	const auto take = [&](const char* key, float value, bool present, bool not_number, float& target) {
 		if (!present) return;
 		if (not_number) {
