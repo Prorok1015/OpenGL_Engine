@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/desc_system.h>
 
 void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
@@ -116,6 +117,11 @@ namespace {
 
 void scn::migrate_camera_transform_into_node(json::object& node)
 {
+	migrate_camera_transform_into_node(node, [](std::string message) { egLOG_WARN("scene/camera", "{}", message); });
+}
+
+void scn::migrate_camera_transform_into_node(json::object& node, const std::function<void(std::string)>& warn)
+{
 	const auto components = node.find("components");
 	if (components == node.end() || !components->value().is_object()) return;
 
@@ -128,7 +134,7 @@ void scn::migrate_camera_transform_into_node(json::object& node)
 		if (version_of(camera) >= 2) continue;
 		if (camera.contains("__parent")) {
 			// The pose may sit in the desc this one derives from, which is not loaded here: it cannot be baked.
-			egLOG_WARN("scene/camera", "a camera that derives from another desc keeps no pose of its own any more: the transform of its node "
+			warn("a camera that derives from another desc keeps no pose of its own any more: the transform of its node "
 				"is the pose, any camera_desc.transform it or its parent has is dropped");
 			camera.erase("transform");
 			camera["__version"] = 2;
@@ -156,10 +162,21 @@ void scn::migrate_camera_transform_into_node(json::object& node)
 	if (placed) node["transform"] = std::move(*placed);
 }
 
+namespace {
+	constexpr const char* k_camera_pose_dropped = "camera_desc.transform is gone: the camera takes the transform of its node. "
+		"This camera desc is not part of a node, so its pose was dropped";
+}
+
 void scn::migrate_camera_v1(json::object& camera)
 {
 	if (camera.erase("transform") != 0) {
-		egLOG_WARN("scene/camera", "camera_desc.transform is gone: the camera takes the transform of its node. "
-			"This camera desc is not part of a node, so its pose was dropped");
+		egLOG_WARN("scene/camera", "{}", k_camera_pose_dropped);
+	}
+}
+
+void scn::migrate_camera_v1(json::object& camera, desc::migration_context& context)
+{
+	if (camera.erase("transform") != 0) {
+		context.warn(k_camera_pose_dropped);
 	}
 }
