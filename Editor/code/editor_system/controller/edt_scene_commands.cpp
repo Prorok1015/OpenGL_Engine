@@ -97,20 +97,57 @@ namespace {
 		}
 	}
 
+	bool is_tag_kind(desc::field_kind kind)
+	{
+		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
+	}
+
+	// Why a value the patch puts into a tag field (a tag, or a list of them) is a reference a desc may not hold (#697), or
+	// empty. An object there is an inline desc, checked by the desc_system when it is read; an empty string clears.
+	std::string reference_refusal(const json::value& value, std::string_view owner_protocol)
+	{
+		if (const auto* text = value.if_string()) {
+			if (text->empty()) return {};
+			const res::tag reference{ std::string(text->data(), text->size()) };
+			if (reference.protocol().empty()) return res::no_protocol_reason(reference);
+			return res::reference_problem(reference, owner_protocol);
+		}
+		if (const auto* array = value.if_array()) {
+			for (const json::value& item : *array) {
+				if (std::string why = reference_refusal(item, owner_protocol); !why.empty()) return why;
+			}
+		}
+		return {};
+	}
+
 	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it. The schema
 	// publishes leaves ("/transform/position") and a patch nests them as objects; the check descends through those and
-	// through structure fields, quietly, and names the full path of the first field that does not fit.
+	// through structure fields, quietly, and names the full path of the first field that does not fit. A tag field also
+	// follows the reference rule of #697 for a desc of `owner_protocol` (the level's), as it would when loaded.
 	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const std::string& type, const json::object& patch,
-		const json::object& edited)
+		const json::object& edited, std::string_view owner_protocol)
 	{
 		const desc::type_schema* schema = descs.find_schema(type);
 		if (!schema) {
 			return failure(cmd::codes::invalid_args, std::format("'{}' has no schema: its fields cannot be checked", type));
 		}
 		const desc::override_failure bad = desc::check_override_object(*schema, patch, &edited, &descs.schemas());
-		if (bad.status == desc::override_status::valid) return std::nullopt;
-		return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, std::string_view(bad.pointer).substr(1),
-			bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"));
+		if (bad.status != desc::override_status::valid) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, std::string_view(bad.pointer).substr(1),
+				bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"));
+		}
+		for (const auto& member : patch) {
+			const std::string_view key(member.key().data(), member.key().size());
+			const desc::field_schema* field = schema->find_field(key);
+			if (!field) field = schema->find_field("/" + std::string(key));
+			if (!field) continue;
+			const bool tag_field = is_tag_kind(field->kind) || (field->kind == desc::field_kind::array && is_tag_kind(field->element));
+			if (!tag_field) continue;
+			if (std::string why = reference_refusal(member.value(), owner_protocol); !why.empty()) {
+				return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, key, why));
+			}
+		}
+		return std::nullopt;
 	}
 
 	// Three finite numbers a float holds.
@@ -302,13 +339,13 @@ namespace {
 
 		// A component of `type` with `fields`, checked against the type.
 		std::optional<cmd::result> make_component(const std::string& type, const json::object& fields,
-			scn::prefab_desc::prefab_comp_node& out) const
+			std::string_view owner_protocol, scn::prefab_desc::prefab_comp_node& out) const
 		{
 			if (auto bad = check_type(type)) return bad;
 			json::object kept = fields;
 			strip_nulls(kept);
 			if (!kept.empty()) {
-				if (auto bad = check_fields(*sources.services.descs(), type, kept, kept)) return bad;
+				if (auto bad = check_fields(*sources.services.descs(), type, kept, kept, owner_protocol)) return bad;
 			}
 			out.type_name = type;
 			out.overrides = std::move(kept);
@@ -342,7 +379,7 @@ namespace {
 					}
 					scn::prefab_desc::prefab_comp_node component;
 					if (auto bad = ctx.make_component(std::string(type->as_string()),
-							fields ? fields->as_object() : json::object{}, component)) {
+							fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), component)) {
 						return *bad;
 					}
 					node.components[std::string(key)] = std::move(component);
@@ -478,7 +515,7 @@ namespace {
 			}
 			const json::value* fields = args.if_contains("fields");
 			scn::prefab_desc::prefab_comp_node component;
-			if (auto bad = ctx.make_component(std::string(args.at("type").as_string()), fields ? fields->as_object() : json::object{}, component)) {
+			if (auto bad = ctx.make_component(std::string(args.at("type").as_string()), fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), component)) {
 				return *bad;
 			}
 			changing();
@@ -522,7 +559,7 @@ namespace {
 					return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
 				}
 				json::object edited = merge_patch(component->second.overrides, patch).as_object();
-				if (auto bad = check_fields(*descs, type_of(component->second), patch, edited)) return *bad;
+				if (auto bad = check_fields(*descs, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
 				if (edited == component->second.overrides) return cmd::result::success();
 				changing();
 				component->second.overrides = std::move(edited);
@@ -541,7 +578,7 @@ namespace {
 			const json::object base_json = edt::override_edit::component_json(component->second);
 			const json::object effective = edt::override_edit::effective_component(*at.owner, at.target, key, base_json);
 			json::object edited = merge_patch(effective, patch).as_object();
-			if (auto bad = check_fields(*descs, type_of(component->second), patch, edited)) return *bad;
+			if (auto bad = check_fields(*descs, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
 			if (edited == effective) return cmd::result::success();
 			changing();
 			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited);

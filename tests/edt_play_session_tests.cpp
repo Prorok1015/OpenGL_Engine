@@ -3230,6 +3230,29 @@ BOOST_AUTO_TEST_CASE(a_tag_field_holds_a_reference_any_other_text_only_warns_abo
 	BOOST_TEST(rs->pending_loads() == pending);
 }
 
+// #720: the mesh node has a schema, so its geometry and material are tag fields: a reference the rule of #697 refuses and
+// a file that is not there are errors, as for the sky, not the warnings a field of no known type gets.
+BOOST_AUTO_TEST_CASE(the_tag_fields_of_a_mesh_are_checked_by_its_schema)
+{
+	open_level();
+	scn::prefab_desc::prefab_comp_node mesh;
+	mesh.type_name = "mesh_node_desc";
+	mesh.overrides["geometry"] = tag_of("gone.geom.desc").string();
+	mesh.overrides["material"] = "user://saves/m.mat.desc";
+	mesh.overrides["vx_end"] = 3;
+	crate().components["mesh"] = std::move(mesh);
+
+	const auto found = edt::run_play_preflight(state, checks());
+	const auto* missing = with_note(found, "/worlds/0/children/1/components/mesh/geometry", "missing_resource");
+	BOOST_REQUIRE(missing);
+	BOOST_TEST((missing->item.severity == edt::problem_severity::error));
+	const auto* refused = with_note(found, "/worlds/0/children/1/components/mesh/material", "reference");
+	BOOST_REQUIRE(refused);
+	BOOST_TEST((refused->item.severity == edt::problem_severity::error));
+	BOOST_TEST(!with_note(found, "/worlds/0/children/1/components/mesh/vx_end"));
+	BOOST_TEST(edt::has_errors(found));
+}
+
 BOOST_AUTO_TEST_CASE(a_web_address_in_a_text_field_does_not_stop_an_agent)
 {
 	open_level();

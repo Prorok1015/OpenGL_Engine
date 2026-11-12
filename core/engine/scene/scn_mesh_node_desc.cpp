@@ -4,35 +4,12 @@
 
 void scn::mesh_node_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	if (auto const* p = data.if_contains("geometry"))
-		geometry = desc_system.get_field_desc<rnd::geometry_desc>(*this, *p);
-	if (auto const* p = data.if_contains("vx_begin"))
-		vx_begin = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("vx_end"))
-		vx_end = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("ind_begin"))
-		ind_begin = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("ind_end"))
-		ind_end = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("material"))
-		material = desc_system.get_field_desc<scn::material_desc>(*this, *p);
-	if (auto const* p = data.if_contains("visible"); p && p->is_bool())
-		visible = p->as_bool();
+	schema_desc::deserialize(desc_system, data);
 }
 
 void scn::mesh_node_desc::serialize(json::object& data) const
 {
-	if (geometry.get_tag().is_valid())
-		data["geometry"] = json::value_from(geometry.get_tag());
-	data["vx_begin"] = vx_begin;
-	data["vx_end"] = vx_end;
-	data["ind_begin"] = ind_begin;
-	data["ind_end"] = ind_end;
-	if (material.get_tag().is_valid())
-		data["material"] = json::value_from(material.get_tag());
-	// Only a hidden mesh writes it, so a resaved file of an imported model stays as it was.
-	if (!visible)
-		data["visible"] = false;
+	schema_desc::serialize(data);
 }
 
 void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name)
