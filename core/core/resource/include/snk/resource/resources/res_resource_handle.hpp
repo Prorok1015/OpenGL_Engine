@@ -5,7 +5,10 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
+#include <atomic>
 #include <chrono>
+#include <compare>
+#include <cstdint>
 #include <concepts>
 #include <format>
 #include <memory>
@@ -23,6 +26,36 @@ namespace core::res
         // pointer to the block's data, on the main thread; a failed block empties it without a call.
         SNK_API void then_on_main(const std::shared_ptr<res_resource_block>& block, ds::task_system& tasks,
             std::shared_ptr<ds::detail::held_slot> slot);
+    }
+
+    namespace detail {
+        // What res_handle<T> found its ready block's data to be (#632): unchecked, a mismatch, or else the address of the
+        // data as a T. The data of a ready block never changes (a reload makes another block), and the value is copied
+        // only together with the block it belongs to. Equal whatever it holds, so it never takes part in a comparison.
+        class checked_cast_cache {
+        public:
+            static constexpr std::uintptr_t unchecked = 0;
+            static constexpr std::uintptr_t mismatch = 1;
+
+            checked_cast_cache() = default;
+            checked_cast_cache(const checked_cast_cache& other) noexcept : m_value(other.load()) {}
+            checked_cast_cache& operator=(const checked_cast_cache& other) noexcept {
+                store(other.load());
+                return *this;
+            }
+
+            // Relaxed: every thread that checks the same block finds the same value.
+            std::uintptr_t load() const noexcept { return m_value.load(std::memory_order_relaxed); }
+            void store(std::uintptr_t value) const noexcept { m_value.store(value, std::memory_order_relaxed); }
+
+            friend bool operator==(const checked_cast_cache&, const checked_cast_cache&) noexcept { return true; }
+            friend std::strong_ordering operator<=>(const checked_cast_cache&, const checked_cast_cache&) noexcept {
+                return std::strong_ordering::equal;
+            }
+
+        private:
+            mutable std::atomic<std::uintptr_t> m_value{ unchecked };
+        };
     }
 
     // Whether a loaded resource is a T: what a res_handle<T> accepts, also for the collector's field check (#615).
@@ -68,7 +101,7 @@ namespace core::res
 
         std::shared_ptr<T> get() const {
             if (!m_block || !m_block->is_ready()) return nullptr;
-            return std::dynamic_pointer_cast<T>(m_block->data);
+            return typed_data();
         }
 
         // Why has_error(); empty when it has none.
@@ -117,7 +150,7 @@ namespace core::res
                 egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), m_block->error_msg);
                 return nullptr;
             }
-            auto typed = std::dynamic_pointer_cast<T>(m_block->data);
+            auto typed = typed_data();
             if (!typed) {
                 egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), type_mismatch_text());
             }
@@ -167,7 +200,24 @@ namespace core::res
     private:
         // Read only once the block is ready (its data is published then).
         bool holds_t() const {
-            return !m_block->data || holds<T>(*m_block->data);
+            return !m_block->data || checked_data() != nullptr;
+        }
+
+        // The block's data as a T, null when it is none (or there is none); the dynamic_cast runs once per handle (#632).
+        T* checked_data() const {
+            if (!m_block->data) return nullptr;
+            const std::uintptr_t known = m_checked.load();
+            if (known == detail::checked_cast_cache::mismatch) return nullptr;
+            if (known != detail::checked_cast_cache::unchecked) return reinterpret_cast<T*>(known);
+            T* typed = dynamic_cast<T*>(m_block->data.get());
+            m_checked.store(typed ? reinterpret_cast<std::uintptr_t>(typed) : detail::checked_cast_cache::mismatch);
+            return typed;
+        }
+
+        // Shares ownership with the block's data.
+        std::shared_ptr<T> typed_data() const {
+            T* typed = checked_data();
+            return typed ? std::shared_ptr<T>(m_block->data, typed) : nullptr;
         }
 
         std::string type_mismatch_text() const {
@@ -182,6 +232,7 @@ namespace core::res
         std::shared_ptr<resource_control_block> m_block;
         ::res::tag m_tag;
         ds::task_system* m_tasks = nullptr;
+        detail::checked_cast_cache m_checked;
     };
 
 }
