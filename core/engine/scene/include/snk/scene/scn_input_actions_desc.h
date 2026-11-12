@@ -88,7 +88,7 @@ namespace desc
 	template<>
 	inline constexpr auto field_attrs<scn::input_actions_desc> = attrs(
 		f("actions").kind(field_kind::custom).optional().tooltip("Named actions with their bindings: {\"key\": \"A\"}, {\"mouse\": \"LEFT\"}, {\"gamepad\": \"A\"} or {\"axis\": \"LeftX-\"}"),
-		f("gamepad").kind(field_kind::custom).optional().write_if_not_default().tooltip("Gamepad setting: {\"deadzone\": 0.25, \"press_threshold\": 0.5}"));
+		f("gamepad").kind(field_kind::custom).optional().tooltip("Gamepad setting: {\"deadzone\": 0.25, \"press_threshold\": 0.5}"));
 }
 
 namespace scn

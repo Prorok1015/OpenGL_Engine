@@ -168,6 +168,8 @@ json::value desc::json_codec<scn::input_gamepad_settings>::to_json(const scn::in
 		from_json(reread, settings.source);
 		if (reread == settings) return settings.source;
 	}
+	// Nothing to write and no key in the file: null, which the desc leaves out (no "gamepad": {} added to a file without one).
+	if (!settings.has_deadzone && !settings.has_press_threshold) return json::value();
 	json::object out;
 	if (settings.has_deadzone) out["deadzone"] = settings.config.deadzone;
 	if (settings.has_press_threshold) out["press_threshold"] = settings.config.press_threshold;
