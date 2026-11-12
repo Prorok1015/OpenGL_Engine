@@ -89,6 +89,7 @@ class dll_config final : public desc::schema_desc<dll_config>
 {
 public:
 	static constexpr std::string_view __type = "dll.config";
+	using base_type = desc::desc_base; // dll_linked refers to it: the resource system finds the desc adapter through it
 
 	float speed = 3.0f;
 	int goal = 10;
