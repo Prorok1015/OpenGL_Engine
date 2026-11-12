@@ -25,7 +25,7 @@ namespace inp
 	// A binding two actions of a map share (the player's file or an edit of the desc can make one; rebind cannot).
 	struct binding_conflict
 	{
-		action_binding binding;
+		action_binding binding{};
 		std::string first;
 		std::string second;
 		bool operator==(const binding_conflict&) const = default;

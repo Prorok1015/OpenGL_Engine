@@ -18,12 +18,11 @@ namespace
 		std::string prefix;
 		for (const char c : project_name) {
 			if (prefix.size() == 24) break;
-			if (std::isalnum(static_cast<unsigned char>(c))) prefix += c;
+			if (std::isalnum(static_cast<unsigned char>(c)) && static_cast<unsigned char>(c) < 0x80) prefix += c;
 		}
 		const std::string hash = std::format("{:016x}", ds::fnv1a_64(project_name));
 		return prefix.empty() ? hash : prefix + "-" + hash;
 	}
-}
 }
 
 gs::input_actions::input_actions(res::resource_system& resources)

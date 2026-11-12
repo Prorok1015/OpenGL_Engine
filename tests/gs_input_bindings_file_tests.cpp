@@ -106,6 +106,28 @@ BOOST_AUTO_TEST_CASE(AFileOverTheLimit_GivesNoBindings)
 	BOOST_TEST(gs::load_user_bindings(file).empty());
 }
 
+BOOST_AUTO_TEST_CASE(AFileThatIsALink_IsNotWrittenThrough)
+{
+	temp_folder dir;
+	const auto target = dir.path / "target.txt";
+	std::ofstream(target) << "KEEP";
+	const auto link = dir.path / "bindings" / "game.json";
+	std::filesystem::create_directories(link.parent_path());
+	std::error_code ec;
+	std::filesystem::create_symlink(target, link, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no symbolic links here: " << ec.message());
+		return;
+	}
+	inp::user_bindings user;
+	user.set("Fire", { MB::RIGHT });
+	BOOST_TEST(!gs::save_user_bindings(link, user));
+
+	std::string kept;
+	std::ifstream(target) >> kept;
+	BOOST_TEST(kept == "KEEP");
+}
+
 BOOST_AUTO_TEST_CASE(ABrokenFileOnDisk_GivesNoBindings)
 {
 	temp_folder dir;

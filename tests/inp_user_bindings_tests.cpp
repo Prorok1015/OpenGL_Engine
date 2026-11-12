@@ -98,7 +98,6 @@ BOOST_AUTO_TEST_CASE(TheSameKeyInTwoSlotsOfOneAction_IsRefused)
 BOOST_AUTO_TEST_CASE(ASharedBinding_IsFoundAndNamedOnce_AndAMapWithoutOneHasNone)
 {
 	BOOST_TEST(inp::find_binding_conflicts(project_map()).empty());
-	inp::action_map map = project_map();
 	inp::action_map shared;
 	shared.add("MoveLeft", { KB::A });
 	shared.add("MoveRight", { KB::A, KB::D });

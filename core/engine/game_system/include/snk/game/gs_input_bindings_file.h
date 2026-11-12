@@ -19,7 +19,8 @@ namespace gs
 	// A file that is not there reads as no bindings without a warning; a link, a folder or a file over 256 KiB at its name
 	// is warned about and read as none. At most 256 actions of 16 bindings are read. Main thread.
 	SNK_API inp::user_bindings load_user_bindings(const std::filesystem::path& file);
-	// prj::write_text_atomically (a temp file next to it, renamed over it, so a crash leaves the old one); false (and a
-	// warning) when that failed.
+	// prj::write_project_file with the file's folder below its parent: the folder and the file are opened without following
+	// a link (a link at the name is an error and its target stays), the new text goes to a temp file renamed over it, so a
+	// crash leaves the old one. False (and a warning) when that failed.
 	SNK_API bool save_user_bindings(const std::filesystem::path& file, const inp::user_bindings& bindings);
 }

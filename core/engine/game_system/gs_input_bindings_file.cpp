@@ -135,7 +135,8 @@ bool gs::save_user_bindings(const std::filesystem::path& file, const inp::user_b
 {
 	std::error_code ec;
 	if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
-	if (const auto error = prj::write_text_atomically(file, write_user_bindings(bindings))) {
+	const prj::project_file_location where = prj::project_file_location_of(file);
+	if (const auto error = prj::write_project_file(where.root, where.relative, write_user_bindings(bindings))) {
 		egLOG_WARN("input", "cannot write {}: {}", fs_paths::utf8_of(file), *error);
 		return false;
 	}
