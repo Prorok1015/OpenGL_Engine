@@ -735,6 +735,11 @@ BOOST_AUTO_TEST_CASE(an_inline_desc_is_checked_by_the_schema_of_its_type)
 	BOOST_TEST(texture.code == cmd::codes::invalid_args);
 	BOOST_CHECK_MESSAGE(texture.error.find("material/samplers/1") != std::string::npos, texture.error);
 
+	// Backslashes are what res::tag turns into the separator: the tag is judged as it would be loaded.
+	const auto backslashed = material(R"({"__type":"material_desc","samplers":["user:\\\\x.png"]})");
+	BOOST_TEST(backslashed.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(backslashed.error.find("material/samplers/0") != std::string::npos, backslashed.error);
+
 	BOOST_TEST(material(R"({"__type":"no_such_desc"})").code == cmd::codes::invalid_args);
 	BOOST_TEST(!child(root(), 0xa4)->components.at("mesh").overrides.contains("material"));
 

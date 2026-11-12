@@ -151,12 +151,14 @@ namespace {
 	}
 
 	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
-	// a tag the codec may load, and is held to the same rule.
+	// a tag the codec may load, and is held to the same rule. A string without one is not taken for a tag.
 	std::optional<reference_issue> tags_in(const json::value& value, std::string_view owner_protocol)
 	{
 		if (const auto* text = value.if_string()) {
-			if (std::string_view(*text).find("://") == std::string_view::npos) return std::nullopt;
-			if (std::string why = reference_refusal(*text, owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+			// Judged as the codec would load it: res::tag normalizes the text first ("user:\\x" names user://).
+			const res::tag reference{ std::string(text->data(), text->size()) };
+			if (reference.protocol().empty()) return std::nullopt;
+			if (std::string why = res::reference_problem(reference, owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
 			return std::nullopt;
 		}
 		if (const auto* items = value.if_array()) {
@@ -176,7 +178,8 @@ namespace {
 		std::string_view owner_protocol, int depth)
 	{
 		const desc::type_schema* nested = value.is_object() ? descs.find_schema(field.ref_type) : nullptr;
-		if (!nested || depth >= k_max_inline_depth) return std::nullopt;
+		if (!nested) return std::nullopt;
+		if (depth >= k_max_inline_depth) return reference_issue{ {}, "structures nested too deep" };
 		return references_of(descs, *nested, value, owner_protocol, depth + 1);
 	}
 
