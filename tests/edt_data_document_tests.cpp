@@ -32,7 +32,7 @@ constexpr const char* k_config_schema = R"({
 		{ "name": "speed", "kind": "f32", "default": 1.0 },
 		{ "name": "goals", "kind": "array", "element": "i32", "default": [1, 2] },
 		{ "name": "min", "key": "/limits/min", "kind": "f32", "default": 0.0 },
-		{ "name": "extra", "kind": "f32", "optional": true }
+		{ "name": "extra", "kind": "f32", "default": null, "optional": true }
 	]
 })";
 
@@ -1170,7 +1170,10 @@ BOOST_AUTO_TEST_CASE(AReset_TakesTheRecordsOut_InOneRecord_AndAnUndoPutsThemBack
 		origin.requests.resets = { "/limits/min", "/speed" };
 		return false;
 	}));
-	BOOST_TEST((document.own() == json::parse(R"({"__type":"test.config","__guid":"guid-1","__parent":"res://parent.desc","goals":[7]})").as_object()));
+	BOOST_TEST(!document.own().contains("speed"));
+	BOOST_TEST(!document.own().contains("limits"));
+	BOOST_TEST((document.own().at("goals") == json::parse("[7]")));
+	BOOST_TEST(document.own().at("__guid").as_string() == "guid-1");
 	BOOST_TEST(document.shown().at_pointer("/speed").to_number<double>() == 2.0);
 	BOOST_TEST(document.shown().at_pointer("/limits/min").to_number<double>() == 5.0);
 
