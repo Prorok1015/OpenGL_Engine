@@ -13,9 +13,12 @@ namespace platform
 	class SNK_API file_lock
 	{
 	public:
-		// The lock on `path` (made, with its folder, when missing); none when another holder has it, or `error` (may
-		// be null) says why the file could not be opened.
-		static std::optional<file_lock> try_acquire(const std::filesystem::path& path, std::string* error = nullptr);
+		// The lock on <root>/<relative> (made, with its folders, when missing); none when another holder has it, or
+		// `error` (may be null) says why the file could not be opened. `relative` is a chain of plain names. Below the
+		// root nothing is followed: a link (or a junction) at a folder or at the file is an error and its target stays
+		// untouched, so a project cannot point the lock at a file outside it. The root itself may be a link.
+		static std::optional<file_lock> try_acquire(const std::filesystem::path& root, const std::filesystem::path& relative,
+			std::string* error = nullptr);
 
 		file_lock(file_lock&& other) noexcept;
 		file_lock& operator=(file_lock&& other) noexcept;

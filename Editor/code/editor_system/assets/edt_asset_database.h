@@ -4,11 +4,13 @@
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_file_change.h>
 #include <snk/resource/res_tag.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -24,6 +26,8 @@ namespace res
 namespace edt
 {
 	class job_service;
+	// Orders the writes of the cache file (asset_database.cpp).
+	struct asset_cache_writer;
 
 	// One file of the resource tree as the asset database knows it (EPIC-57 section 4.3).
 	struct asset_record
@@ -50,6 +54,15 @@ namespace edt
 		std::string content_hash;
 		// The "__type" of a desc file's root, once hashed; none for any other file (or a desc without one).
 		std::optional<std::string> desc_type;
+		// When the file's stamp (size, mtime) and the .resource's were taken, in ticks of
+		// std::filesystem::file_time_type::clock: a stamp this close to its check may not have moved for a change made
+		// just after (one tick of a coarse file system), so the cache trusts what was learned from it only after it was
+		// read again. Kept apart, so a .resource carried over from an older check leaves the file's own check alone.
+		std::int64_t content_checked_at = 0;
+		std::int64_t meta_checked_at = 0;
+
+		// Everything but the times of the checks: what the record says of the file.
+		bool same_as(const asset_record& other) const;
 	};
 
 	// A .resource without its file.
@@ -57,6 +70,17 @@ namespace edt
 	{
 		res::tag meta_path;
 		std::optional<res::asset_id> id;
+
+		bool operator==(const asset_orphan&) const = default;
+	};
+
+	// Where the database keeps its cache: <root>/<relative>, every folder below the root and the files reached without
+	// following a link (prj::write_project_file, prj::read_project_file), so a project cannot point it outside itself.
+	struct asset_cache_location
+	{
+		std::filesystem::path root;
+		// A chain of plain names, e.g. ".cache/asset_db".
+		std::filesystem::path relative;
 	};
 
 	// What a walk of the layers found, built off the main thread.
@@ -105,6 +129,11 @@ namespace edt
 	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {},
 		const std::map<std::string, asset_record>* known = nullptr);
 
+	// Writes the cache file of `records` (the format load_cache reads) through prj::write_project_file. The error, nullopt on
+	// success.
+	std::optional<std::string> write_cache(const asset_cache_location& cache, const std::vector<std::filesystem::path>& layers,
+		const std::map<std::string, asset_record>& records);
+
 	// Hashes the file at `relative` below `layer_root` through a read that follows no link (platform::beneath), in chunks;
 	// a desc file of at most `max_desc_bytes` is parsed for its "__type" too.
 	asset_content read_asset_content(const std::filesystem::path& layer_root, const std::filesystem::path& relative,
@@ -119,14 +148,20 @@ namespace edt
 		static constexpr std::uint64_t max_desc_bytes = 4u * 1024u * 1024u;
 		static constexpr std::size_t hash_batch = 64;
 		static constexpr int max_depth = 64;
+		// A larger cache is not read (the walk then reads every file).
+		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
+		// A cache file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s).
+		static constexpr std::chrono::seconds stamp_granularity{ 2 };
 
 		// `events` (may be null) tells the database about a job someone cancelled (job.cancel): its work is queued again
 		// and goes on at the next rebuild. Without it a cancelled hashing job is only noticed by rebuild().
-		// `cache_dir` (cache://asset_db/; empty: no cache): the database starts from assets.json there, so a walk reads
-		// only what changed, and writes it back when its work is done and when it goes. Only the holder of the lock
-		// file next to it writes: a second editor on the project reads the cache and keeps its database in memory.
+		// `cache` (cache://asset_db/; no root: no cache): the walk starts from assets.json there, so it reads only what
+		// changed; the records of the cache are not published before the first walk confirmed them. The cache is written
+		// back off the main thread when something changed and the work is done, and once more when the database goes.
+		// Only the holder of the lock file next to it writes: a second editor on the project reads the cache and keeps
+		// its database in memory.
 		asset_database(job_service& jobs, editor_events* events, std::vector<std::filesystem::path> layers,
-			std::filesystem::path cache_dir = {});
+			asset_cache_location cache = {});
 		~asset_database();
 		asset_database(const asset_database&) = delete;
 		asset_database& operator=(const asset_database&) = delete;
@@ -138,12 +173,13 @@ namespace edt
 		// Files whose hash is not known yet (queued or running).
 		std::size_t pending_hashes() const;
 		// This database holds the lock of the cache and writes it.
-		bool writes_cache() const { return m_lock.has_value(); }
+		bool writes_cache() const { return m_lock != nullptr; }
 		// The cache gave the records before the first walk.
 		bool loaded_from_cache() const { return m_loaded_from_cache; }
 		// Files read so far: .resource files and files hashed. For tests of the cache.
 		std::size_t files_read() const { return m_files_read; }
-		// Writes the cache now when something changed since it was last written (and the lock is held).
+		// Writes the cache now, on the calling thread, when something changed since it was last written (and the lock is
+		// held).
 		void save();
 
 		// Follows the changes below res:// of `resources` (resource_system::subscribe_changes) until the database goes.
@@ -174,6 +210,7 @@ namespace edt
 		std::optional<asset_record> look_up(const std::string& relative, const asset_record* before);
 		void reindex();
 		void save_when_idle();
+		std::filesystem::path cache_file() const;
 		// The keys of the hashing job that ended without an answer for them go back into the queue.
 		void requeue_in_flight();
 
@@ -189,8 +226,16 @@ namespace edt
 		bool m_scanning = false;
 		std::uint64_t m_scan_number = 0;
 		std::uint64_t m_revision = 0;
-		std::filesystem::path m_cache_dir;
-		std::optional<platform::file_lock> m_lock;
+		asset_cache_location m_cache;
+		// Shared with a background write, so the lock is held until that write is done.
+		std::shared_ptr<platform::file_lock> m_lock;
+		// Records read from the cache: what the first walk starts from; not published.
+		std::map<std::string, asset_record> m_cached;
+		std::uint64_t m_save_job = 0;
+		bool m_save_again = false;
+		// Shared with a background write: one write at a time, and an older snapshot never replaces a newer one.
+		std::shared_ptr<asset_cache_writer> m_writer;
+		std::uint64_t m_snapshots = 0;
 		bool m_loaded_from_cache = false;
 		bool m_dirty = false;
 		std::size_t m_files_read = 0;

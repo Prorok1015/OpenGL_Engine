@@ -805,8 +805,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (m_repo_watcher) m_repo_watcher->begin_own_write();
 	});
 	if (data.has_value<prj::project_context>()) {
+		const prj::project_context& project = data.require<prj::project_context>();
 		m_assets = std::make_unique<asset_database>(m_context->jobs(), &m_context->events(), m_res.get_resource_layers(),
-			data.require<prj::project_context>().cache_dir() / "asset_db");
+			asset_cache_location{ project.root, project.cache_dir().lexically_relative(project.root) / "asset_db" });
 		m_assets->attach(m_res);
 		m_assets->rebuild();
 	}
