@@ -18,6 +18,7 @@
 #include <exception>
 #include <format>
 #include <map>
+#include <optional>
 #include <random>
 #include <span>
 #include <stdexcept>
@@ -353,6 +354,35 @@ namespace
 		return {};
 	}
 
+	struct root_guid
+	{
+		json::value value;
+		std::size_t position = 0;
+	};
+
+	// Puts the root __guid of a saved desc back to what the file had: the same value, or none. One the save dropped
+	// goes back at the position it had in the file. Whether anything changed.
+	bool restore_guid(json::object& saved, const std::optional<root_guid>& before)
+	{
+		json::value* now = saved.if_contains("__guid");
+		if (!before) return now && saved.erase("__guid") > 0;
+		if (now) {
+			if (*now == before->value) return false;
+			*now = before->value;
+			return true;
+		}
+		json::object ordered;
+		ordered.reserve(saved.size() + 1);
+		std::size_t index = 0;
+		for (auto& member : saved) {
+			if (index++ == before->position) ordered.emplace("__guid", before->value);
+			ordered.emplace(member.key(), std::move(member.value()));
+		}
+		if (!ordered.contains("__guid")) ordered.emplace("__guid", before->value);
+		saved = std::move(ordered);
+		return true;
+	}
+
 	bool is_desc_path(std::string_view path)
 	{
 		constexpr std::string_view suffix = ".desc";
@@ -511,6 +541,18 @@ namespace
 				file.written_as = "json";
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
+			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
+			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
+			// .resource's (EPIC-57 4.2).
+			std::optional<root_guid> guid_before;
+			if (migrated.is_object()) {
+				const json::object& root = migrated.as_object();
+				for (auto member = root.begin(); member != root.end(); ++member) {
+					if (member->key() != "__guid") continue;
+					guid_before = root_guid{ member->value(), static_cast<std::size_t>(member - root.begin()) };
+					break;
+				}
+			}
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
 
@@ -520,10 +562,13 @@ namespace
 			} else {
 				try {
 					std::string saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original)));
-					const json::value written = json::parse(saved, {}, parse_options());
+					json::value written = json::parse(saved, {}, parse_options());
 					why_json = lost_parent(migrated, &written, {});
 					if (why_json.empty()) {
 						file.written_as = "engine";
+						if (written.is_object() && restore_guid(written.as_object(), guid_before)) {
+							return text_of(m_context.descs.serialize_to_bytes(written));
+						}
 						return saved;
 					}
 				} catch (const std::exception& e) {
