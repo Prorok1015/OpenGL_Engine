@@ -640,4 +640,265 @@ BOOST_AUTO_TEST_CASE(TheWindowTitle_KeepsItsIdentityWhateverTheLabelSays)
 	BOOST_TEST(edt::data_document_window_title(document, 7) == "child (test.config)###data_doc:7");
 }
 
+BOOST_AUTO_TEST_CASE(Reload_TakesTheFileOnDiskAndDropsTheUnsavedEdits)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::editor_events events;
+	int announced = 0;
+	const edt::connection heard = events.document_changed.subscribe([&](edt::document_id, std::uint64_t) { ++announced; });
+	edt::data_document document = make();
+	document.bind_events(&events);
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+	const int before = announced;
+
+	const edt::open_result reloaded = document.reload();
+	BOOST_REQUIRE_MESSAGE(reloaded.opened, reloaded.error);
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(!document.changed_on_disk());
+	BOOST_TEST(document.shown().at("speed").as_double() == 4.0);
+	BOOST_TEST(announced == before + 1);
+}
+
+BOOST_AUTO_TEST_CASE(Reload_OfAFileThatIsGone_LeavesTheDocumentAsItWas)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	fs::remove(res_root / "config.desc");
+
+	BOOST_TEST(!document.reload().opened);
+	BOOST_TEST(document.is_dirty());
+	BOOST_TEST(document.shown().at("speed").as_double() == 9.0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_WritesOverTheFileThatChangedOnDisk)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+	BOOST_TEST(!document.save().saved);
+
+	const edt::save_result saved = document.save_over();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(!document.changed_on_disk());
+	BOOST_TEST(document.save().saved);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_StillRunsEveryCheckOfASave_AndAFailureLeavesTheFlag)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+	const std::string on_disk = text_of("config.desc");
+
+	open_level = { "config.desc" };
+	BOOST_TEST(!document.save_over().saved);
+	BOOST_TEST(text_of("config.desc") == on_disk);
+	BOOST_TEST(document.changed_on_disk());
+	BOOST_TEST(document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(ASaveThatFindsAnotherVersionOnDisk_FlagsTheDocumentBeforeTheWatcherSaysSo)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	BOOST_TEST(!document.save().saved);
+	BOOST_TEST(document.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_OfACleanDocument_StillWrites_WhenTheFileBecameSomethingElse)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	put("config.desc", R"({"__type":"test.plain","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+	BOOST_TEST(!document.reload().opened);
+
+	const edt::save_result saved = document.save_over();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	BOOST_TEST(parsed("config.desc").at("__type").as_string() == "test.config");
+	BOOST_TEST(!document.changed_on_disk());
+	// the version of what was written is the base now: the next save finds nothing foreign
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 5.0;
+		return true;
+	}));
+	BOOST_TEST(document.save().saved);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 5.0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_CreatesAFileThatIsGone_AndWritesOverOneThatNoLongerParses)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+
+	fs::remove(res_root / "config.desc");
+	BOOST_TEST(!document.save().saved);
+	BOOST_REQUIRE_MESSAGE(document.save_over().saved, "a gone file is created again");
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
+
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 8.0;
+		return true;
+	}));
+	put("config.desc", "{ not json");
+	BOOST_TEST(!document.save().saved);
+	BOOST_REQUIRE_MESSAGE(document.save_over().saved, "a file that does not parse is replaced");
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 8.0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_OfAGoneFile_StillRefusesTheOpenLevelsName)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	fs::remove(res_root / "config.desc");
+	open_level = { "config.desc" };
+
+	BOOST_TEST(!document.save_over().saved);
+	BOOST_TEST(!fs::exists(res_root / "config.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(TheOwnWriteOfASaveOver_IsNoChangeOnDisk)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+
+	BOOST_REQUIRE(document.save_over().saved);
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(!document.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(DiskChangeSerial_MovesForANewOutsideVersionOnly)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const std::uint64_t start = document.disk_change_serial();
+
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	const std::uint64_t first = document.disk_change_serial();
+	BOOST_TEST(first == start + 1);
+
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == first);
+
+	put("config.desc", R"({"__type":"test.config","speed":6.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == first + 1);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_OfAGoneWorldOfTheOpenLevel_IsRefused)
+{
+	fs::create_directories(res_root / "worlds");
+	fs::create_directories(res_root / "levels");
+	const res::tag file = put("worlds/w.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	fs::remove(res_root / "worlds" / "w.desc");
+	put("levels/a.desc", R"({"__type":"level_desc","worlds":["worlds/w.desc"]})");
+	open_level = { "levels/a.desc" };
+
+	BOOST_TEST(!document.save_over().saved);
+	BOOST_TEST(!fs::exists(res_root / "worlds" / "w.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DiskChangeSerial_TellsAGoneFileFromOneThatCameBackBroken)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const std::uint64_t start = document.disk_change_serial();
+
+	fs::remove(res_root / "config.desc");
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == start + 1);
+
+	put("config.desc", "{ broken");
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == start + 2);
+
+	put("config.desc", "{ broken again");
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == start + 3);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

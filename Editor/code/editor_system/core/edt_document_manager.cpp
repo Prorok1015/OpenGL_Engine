@@ -56,7 +56,7 @@ std::string source_key(const res::tag& source)
 	}
 	std::string key = protocol + "://";
 	for (const std::string& part : parts) key += part + "/";
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 	std::ranges::transform(key, key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 #endif
 	return key;
