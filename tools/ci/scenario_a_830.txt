@@ -1,0 +1,1 @@
+Scenario (a) of #830: a PR with no header, CMake or workflow change runs Plan, the 6 fast jobs and CI summary only.
