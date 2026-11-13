@@ -521,7 +521,17 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 									}
 								}
 							};
-							check_tag(check_tag, *held, pointer + "/" + res::json_pointer_token(key));
+							const std::string at = pointer + "/" + res::json_pointer_token(key);
+							if (field.kind == desc::field_kind::map) {
+								// The values of a map are the tags (or inline descs), one by one, never the map itself as one inline desc.
+								if (const json::object* entries = held->if_object()) {
+									for (const auto& entry : *entries) {
+										check_tag(check_tag, entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+									}
+								}
+								continue;
+							}
+							check_tag(check_tag, *held, at);
 						}
 					}
 				}

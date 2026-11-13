@@ -10,6 +10,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_node_id.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_system.h>
@@ -118,17 +119,6 @@ namespace {
 		std::string why;
 	};
 
-	std::string pointer_escaped(std::string_view key)
-	{
-		std::string out;
-		for (const char c : key) {
-			if (c == '~') out += "~0";
-			else if (c == '/') out += "~1";
-			else out += c;
-		}
-		return out;
-	}
-
 	std::optional<reference_issue> under(std::optional<reference_issue> issue, std::string_view step)
 	{
 		if (issue) issue->path = issue->path.empty() ? std::string(step) : std::format("{}/{}", step, issue->path);
@@ -230,7 +220,7 @@ namespace {
 				if (is_tag_kind(field.element)) issue = reference_of(descs, entry.value(), nullptr, owner_protocol, depth);
 				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, field, entry.value(), nullptr, owner_protocol, depth);
 				else if (field.element == desc::field_kind::custom) issue = tags_in(entry.value(), owner_protocol);
-				if (issue) return under(std::move(issue), pointer_escaped(entry.key()));
+				if (issue) return under(std::move(issue), res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
 			}
 			return std::nullopt;
 		}
