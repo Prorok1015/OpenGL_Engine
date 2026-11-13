@@ -32,6 +32,7 @@ namespace edt
 	void inspector_panel::set_selected_node(scn::prefab_desc::prefab_node* node, bool readonly)
 	{
 		m_selected_node = node;
+		m_map_state.clear();
 		m_readonly = readonly;
 		m_owner = nullptr;
 		m_target.clear();
@@ -90,9 +91,10 @@ namespace edt
 
 	namespace
 	{
-		schema_ui::context make_schema_context(const desc::schema_registry& registry, std::function<bool(const std::string&, boost::json::value&)> draw_json)
+		schema_ui::context make_schema_context(const desc::schema_registry& registry, std::function<bool(const std::string&, boost::json::value&)> draw_json,
+			schema_ui::map_edit_state& map_state)
 		{
-			return schema_ui::context{ registry, std::move(draw_json), {} };
+			return schema_ui::context{ registry, std::move(draw_json), {}, &map_state };
 		}
 	}
 
@@ -101,7 +103,7 @@ namespace edt
 		const desc::schema_registry& registry = descs()->schemas();
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
-		});
+		}, m_map_state);
 		return schema_ui::edit_component(schema, registry, parent_json(key, comp), comp.overrides,
 			[&](boost::json::value& shown) { return schema_ui::draw_fields(schema, shown, ctx); });
 	}
@@ -114,7 +116,7 @@ namespace edt
 		boost::json::value after = before;
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
-		});
+		}, m_map_state);
 		if (!schema_ui::draw_fields(schema, after, ctx))
 			return false;
 		return schema_ui::apply_edit(scratch.overrides, schema, registry, base, before, after) > 0;

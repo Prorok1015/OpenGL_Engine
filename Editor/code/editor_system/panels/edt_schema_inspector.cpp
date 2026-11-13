@@ -13,6 +13,8 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace json = boost::json;
@@ -37,6 +39,36 @@ namespace
 	}
 
 	json::value defaults_impl(const desc::type_schema& schema, const desc::schema_registry& registry, int depth, bool fill_missing);
+
+	// A null under a map key is an override that removes the key a parent has (the read of a null takes it out): what is
+	// shown has no such key.
+	void drop_null_keys(const desc::type_schema& schema, const desc::schema_registry& registry, json::value& object, int depth)
+	{
+		if (!object.is_object() || depth >= max_depth) {
+			return;
+		}
+		for (const auto& field : schema.fields) {
+			json::value* slot = const_cast<json::value*>(desc::json_pointer_get(object, field.key));
+			if (!slot) {
+				continue;
+			}
+			// A null for an optional field is "not set" (the field is back to its default): shown as absent, with its "Set".
+			if (field.optional && slot->is_null()) {
+				desc::json_pointer_remove(object, field.key);
+				continue;
+			}
+			if (field.kind == field_kind::map && slot->is_object()) {
+				json::object& entries = slot->as_object();
+				for (auto it = entries.begin(); it != entries.end();) {
+					it = it->value().is_null() ? entries.erase(it) : std::next(it);
+				}
+			} else if (field.kind == field_kind::structure) {
+				if (const desc::type_schema* nested = field.ref_type.empty() ? nullptr : registry.find(field.ref_type)) {
+					drop_null_keys(*nested, registry, *slot, depth + 1);
+				}
+			}
+		}
+	}
 
 	json::value zero_of(field_kind kind, std::string_view ref_type, const desc::schema_registry& registry, int depth, bool fill_missing = true)
 	{
@@ -220,6 +252,7 @@ namespace
 		case widget::asset: return value.is_string();
 		case widget::group: return value.is_object();
 		case widget::list: return value.is_array();
+		case widget::map: return value.is_object();
 		case widget::hidden:
 		case widget::label:
 		case widget::json: return true;
@@ -597,6 +630,123 @@ namespace
 		return changed;
 	}
 
+	std::string escaped_token(std::string_view key)
+	{
+		std::string out;
+		for (const char c : key) {
+			if (c == '~') out += "~0";
+			else if (c == '/') out += "~1";
+			else out += c;
+		}
+		return out;
+	}
+
+	bool edit_map(const char* label, const desc::field_schema& field, const widget_spec& spec, json::value& value,
+		const std::string& pointer, const context& ctx, int depth)
+	{
+		json::object& entries = value.as_object();
+		const std::string header = std::format("{} ({} keys)", label, entries.size());
+		const bool open = ImGui::TreeNodeEx("map", ImGuiTreeNodeFlags_DefaultOpen, "%s", header.c_str());
+		show_tooltip(field, spec);
+		if (!open) {
+			return false;
+		}
+		edt::schema_ui::map_edit_state scratch;
+		edt::schema_ui::map_edit_state& state = ctx.map_state ? *ctx.map_state : scratch;
+		const field_kind element_kind = field.element == field_kind::array || field.element == field_kind::map ? field_kind::custom : field.element;
+		bool changed = false;
+		std::vector<std::string> keys;
+		keys.reserve(entries.size());
+		for (const auto& entry : entries) {
+			keys.emplace_back(entry.key());
+		}
+		std::optional<std::string> remove;
+		std::optional<std::pair<std::string, std::string>> rename;
+		const std::size_t shown = std::min(keys.size(), max_listed);
+		for (std::size_t i = 0; i < shown; ++i) {
+			const std::string& key = keys[i];
+			// By the key, not the row's place: a map that changes under the person (a parent read again, an undo) keeps each
+			// text field with its own key.
+			ImGui::PushID(key.c_str());
+			std::vector<char> buffer(std::max<std::size_t>(key.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
+			std::copy(key.begin(), key.end(), buffer.begin());
+			ImGui::SetNextItemWidth(140.0f);
+			const bool entered = ImGui::InputText("##key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+			const ImGuiID row = ImGui::GetItemID();
+			if (ImGui::IsItemActivated()) {
+				state.rename_errors.erase(row);
+			}
+			if ((entered || ImGui::IsItemDeactivatedAfterEdit()) && buffer.data() != key) {
+				rename = std::pair{ key, std::string(buffer.data()) };
+				if (const std::string problem = edt::schema_ui::map_key_problem(entries, rename->second); !problem.empty()) {
+					state.rename_errors[row] = problem;
+					rename.reset();
+				} else {
+					state.rename_errors.erase(row);
+				}
+			}
+			ImGui::SameLine();
+			desc::field_schema element;
+			element.name = key;
+			element.key = "/" + escaped_token(key);
+			element.kind = element_kind;
+			element.ref_type = field.ref_type;
+			element.range = field.range;
+			element.color = field.color;
+			element.degrees = field.degrees;
+			element.read_only = field.read_only;
+			element.filter = field.filter;
+			if (depth < max_depth) {
+				changed |= draw_field(element, entries[key], pointer + element.key, ctx, depth + 1);
+			}
+			ImGui::SameLine();
+			if (ImGui::SmallButton("x")) {
+				remove = key;
+			}
+			if (const auto refused = state.rename_errors.find(row); refused != state.rename_errors.end()) {
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+				ImGui::TextWrapped("%s", refused->second.c_str());
+				ImGui::PopStyleColor();
+			}
+			ImGui::PopID();
+		}
+		if (keys.size() > shown) {
+			ImGui::TextDisabled("... and %zu more keys", keys.size() - shown);
+		}
+		if (remove && entries.erase(*remove) > 0) {
+			changed = true;
+		}
+		if (rename && edt::schema_ui::rename_map_key(entries, rename->first, rename->second)) {
+			changed = true;
+		}
+
+		std::string& fresh = state.new_keys[ImGui::GetID("new_key")];
+		std::vector<char> buffer(std::max<std::size_t>(fresh.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
+		std::copy(fresh.begin(), fresh.end(), buffer.begin());
+		ImGui::SetNextItemWidth(140.0f);
+		const bool entered = ImGui::InputTextWithHint("##new_key", "new key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (ImGui::IsItemEdited() || entered) {
+			fresh = buffer.data();
+		}
+		ImGui::SameLine();
+		const std::string problem = edt::schema_ui::map_key_problem(entries, fresh);
+		const bool can_add = problem.empty() && !field.read_only;
+		ImGui::BeginDisabled(!can_add);
+		const bool clicked = ImGui::SmallButton("+ Add");
+		ImGui::EndDisabled();
+		if ((clicked || entered) && can_add
+			&& edt::schema_ui::add_map_key(entries, fresh, zero_of(element_kind, field.ref_type, ctx.registry, depth))) {
+			fresh.clear();
+			changed = true;
+		}
+		if (!fresh.empty() && !problem.empty()) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", problem.c_str());
+		}
+		ImGui::TreePop();
+		return changed;
+	}
+
 	bool draw_field(const desc::field_schema& field, json::value& value, const std::string& pointer, const context& ctx, int depth)
 	{
 		const desc::enum_schema* enumeration = enum_of(field, ctx.registry);
@@ -630,6 +780,7 @@ namespace
 		case widget::asset: changed = edit_text(label.c_str(), field, true, value); break;
 		case widget::group: changed = edit_group(label.c_str(), field, spec, *nested, value, pointer, ctx, depth); break;
 		case widget::list: changed = edit_list(label.c_str(), field, spec, value, pointer, ctx, depth); break;
+		case widget::map: changed = edit_map(label.c_str(), field, spec, value, pointer, ctx, depth); break;
 		case widget::label: ImGui::TextDisabled("%s: %s", label.c_str(), json::serialize(value).c_str()); break;
 		case widget::json: changed = edit_json(label.c_str(), value, ctx); break;
 		case widget::hidden: break;
@@ -637,7 +788,7 @@ namespace
 		if (spec.disabled) {
 			ImGui::EndDisabled();
 		}
-		if (spec.kind != widget::group && spec.kind != widget::list) {
+		if (spec.kind != widget::group && spec.kind != widget::list && spec.kind != widget::map) {
 			show_tooltip(field, spec);
 		}
 		return changed;
@@ -684,7 +835,7 @@ edt::schema_ui::widget_spec edt::schema_ui::describe_widget(const desc::field_sc
 	case field_kind::entity: spec.kind = widget::label; break;
 	case field_kind::structure: spec.kind = nested_known ? widget::group : widget::json; break;
 	case field_kind::array: spec.kind = widget::list; break;
-	case field_kind::map:
+	case field_kind::map: spec.kind = widget::map; break;
 	case field_kind::custom: spec.kind = widget::json; break;
 	}
 
@@ -731,6 +882,35 @@ std::string edt::schema_ui::display_label(const desc::field_schema& field)
 	return text;
 }
 
+std::string edt::schema_ui::map_key_problem(const json::object& entries, std::string_view key)
+{
+	if (key.empty()) return "a key cannot be empty";
+	if (key.size() > k_max_map_key) return std::format("a key is at most {} bytes", k_max_map_key);
+	if (entries.contains(key)) return std::format("'{}' is taken", key);
+	return {};
+}
+
+bool edt::schema_ui::add_map_key(json::object& entries, std::string_view key, json::value value)
+{
+	if (!map_key_problem(entries, key).empty()) return false;
+	entries.emplace(key, std::move(value));
+	return true;
+}
+
+bool edt::schema_ui::rename_map_key(json::object& entries, std::string_view from, std::string_view to)
+{
+	if (!entries.contains(from)) return false;
+	if (from == to) return true;
+	if (!map_key_problem(entries, to).empty()) return false;
+	json::object renamed;
+	for (auto& entry : entries) {
+		if (entry.key() == from) renamed.emplace(to, std::move(entry.value()));
+		else renamed.emplace(entry.key(), std::move(entry.value()));
+	}
+	entries = std::move(renamed);
+	return true;
+}
+
 json::value edt::schema_ui::zero_value(const desc::field_schema& field, const desc::schema_registry& registry)
 {
 	return zero_of(field.kind, field.ref_type, registry, 0);
@@ -753,6 +933,7 @@ json::value edt::schema_ui::compose(const desc::type_schema& schema, const desc:
 		resolve_aliases(schema, copy);
 		desc::json_deep_merge(result.as_object(), copy.as_object());
 	}
+	drop_null_keys(schema, registry, result, 0);
 	return result;
 }
 
