@@ -159,6 +159,8 @@ namespace res
 		// Read-only: cached resources that were requested but have neither finished nor failed yet.
 		// Used to tell that the scene has settled (deterministic headless runs).
 		std::size_t pending_loads() const;
+		// Read-only: live blocks a rebind found under a key another live block already held (#858). For tests and diagnostics.
+		std::size_t displaced_count() const;
 
 		// Any thread. Drops the cache entries of the tag and of everything built from it (the reverse edges of the
 		// dependency graph, transitively) right away. The watchers are called later on the main thread
@@ -599,6 +601,11 @@ namespace res
 
 		std::unordered_map<protocol, resolver> m_resolvers;
 		tag_keyed_map<cache_entry> m_cache;
+		// A rebind that moves a key onto one whose live block is another (two spellings of one file, one loaded before the
+		// index knew its ID) keeps the moved block here, by the new key (#858). Requests get m_cache's block; these still
+		// count as loading, record their edges, hold the key's edges and go with the key when it is evicted, until their
+		// holders let go. Under m_cache_mutex.
+		std::unordered_map<res::tag, std::vector<cache_entry>> m_displaced;
 		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
 
 		struct watcher {
