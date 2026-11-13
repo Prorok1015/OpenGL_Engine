@@ -208,7 +208,7 @@ BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_AsksFirst_CancelKeepsIt_DiscardClose
 	BOOST_TEST(!host->owns(id));
 }
 
-BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AFailedSaveKeepsItOpen)
+BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AChangedFileIsAskedAbout)
 {
 	edt::document& open = open_config();
 	const edt::document_id id = open.id();
@@ -220,10 +220,13 @@ BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AFailedSaveK
 	}
 	host->request_close(id);
 	answer_unsaved("save");
+	// the file changed on disk: the refused save is a question now, and Cancel keeps the window and the edits
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().kind == "choice");
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
 	BOOST_TEST(open_documents() == 2u);
 	BOOST_TEST(host->owns(id));
-	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
-	BOOST_TEST(context->dialogs().list().front().kind == "message");
+	BOOST_TEST(open.is_dirty());
 }
 
 BOOST_AUTO_TEST_CASE(DirtyAndSaveAll_CoverEveryOpenDataDocument)
