@@ -56,9 +56,17 @@ namespace
 		return hash;
 	}
 
-	bool ends_with_meta_suffix(std::string_view name)
+	// A .resource sidecar by the one rule of the editor (any letter case), with a name before the suffix.
+	bool is_sidecar(std::string_view relative)
 	{
-		return name.size() > edt::k_asset_meta_suffix.size() && name.ends_with(edt::k_asset_meta_suffix);
+		const std::string_view name = relative.substr(relative.find_last_of('/') + 1);
+		return name.size() > res::asset_meta_suffix.size() && res::is_asset_meta_name(name);
+	}
+
+	// The path of the file a sidecar belongs to.
+	std::string_view sidecar_owner(std::string_view relative)
+	{
+		return relative.substr(0, relative.size() - res::asset_meta_suffix.size());
 	}
 
 	struct file_stat
@@ -289,12 +297,13 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 	walk_state state{ layers, stopped, files, false };
 	walk(state, fs::path{}, all_layers, 0);
 
-	// Keyed as the merge keys names: on Windows "A.png.resource" belongs to "a.png".
+	// Keyed by the file they belong to, as the merge keys names: "a.png.RESOURCE" belongs to "a.png" everywhere, and on
+	// Windows "A.png.resource" to "a.png" too.
 	std::unordered_map<std::string, const merged_file*> metas;
 	for (const merged_file& file : files) {
 		const std::string relative = fs_paths::generic_utf8_of(file.relative);
-		if (ends_with_meta_suffix(relative)) {
-			metas.emplace(edt::layer_merge_key(relative, k_case_insensitive), &file);
+		if (is_sidecar(relative)) {
+			metas.emplace(edt::layer_merge_key(std::string{ sidecar_owner(relative) }, k_case_insensitive), &file);
 		}
 	}
 
@@ -306,7 +315,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 			return scan;
 		}
 		const std::string relative = fs_paths::generic_utf8_of(file.relative);
-		if (ends_with_meta_suffix(relative)) {
+		if (is_sidecar(relative)) {
 			continue;
 		}
 		const std::int64_t checked_at = now_ticks();
@@ -323,7 +332,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		record.size = stat.size;
 		record.mtime = stat.mtime;
 		record.type = asset_type_of(relative);
-		const std::string meta_key = edt::layer_merge_key(relative + std::string{ k_asset_meta_suffix }, k_case_insensitive);
+		const std::string meta_key = edt::layer_merge_key(relative, k_case_insensitive);
 		if (const auto meta = metas.find(meta_key); meta != metas.end()) {
 			paired.insert(meta_key);
 			const file_stat meta_stat = stat_of(meta->second->physical);
@@ -1100,6 +1109,35 @@ namespace
 		}
 		return presence::missing;
 	}
+
+	struct sidecar_hit
+	{
+		presence kind = presence::missing;
+		std::string relative;
+	};
+
+	// The .resource of `relative` in one layer, in any letter case of the suffix (res::is_asset_meta_name), as the
+	// walk pairs them.
+	sidecar_hit sidecar_in(const fs::path& layer, const std::string& relative)
+	{
+		std::string exact = relative + std::string{ res::asset_meta_suffix };
+		if (const presence here = presence_in(layer, exact); here != presence::missing) {
+			return { here, std::move(exact) };
+		}
+		const fs::path rel = fs_paths::path_from_utf8(relative);
+		const std::string owner_key = edt::layer_merge_key(fs_paths::utf8_of(rel.filename()), k_case_insensitive);
+		const std::string parent = fs_paths::generic_utf8_of(rel.parent_path());
+		std::error_code ec;
+		for (auto it = fs::directory_iterator(layer / rel.parent_path(), ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {
+			const std::string name = fs_paths::utf8_of(it->path().filename());
+			if (!is_sidecar(name) || edt::layer_merge_key(std::string{ sidecar_owner(name) }, k_case_insensitive) != owner_key) {
+				continue;
+			}
+			std::string found = parent.empty() ? name : parent + "/" + name;
+			return { presence_in(layer, found), std::move(found) };
+		}
+		return {};
+	}
 }
 
 void edt::asset_database::attach(res::resource_system& resources)
@@ -1156,9 +1194,10 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 		record.content_checked_at = std::min(record.content_checked_at, before->content_checked_at);
 	}
 
-	const std::string meta_relative = relative + std::string{ k_asset_meta_suffix };
 	for (std::size_t layer = m_layers.size(); layer-- > 0;) {
-		const presence here = presence_in(m_layers[layer], meta_relative);
+		const sidecar_hit sidecar = sidecar_in(m_layers[layer], relative);
+		const presence here = sidecar.kind;
+		const std::string& meta_relative = sidecar.relative;
 		if (here == presence::missing) {
 			continue;
 		}
@@ -1207,8 +1246,8 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		if (!relative || relative->empty()) {
 			return;
 		}
-		if (ends_with_meta_suffix(*relative)) {
-			relative->resize(relative->size() - k_asset_meta_suffix.size());
+		if (is_sidecar(*relative)) {
+			relative->resize(sidecar_owner(*relative).size());
 		}
 		files.insert(std::move(*relative));
 	};
@@ -1232,13 +1271,17 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		const auto known = m_records.find(key);
 		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
 		std::optional<asset_record> now = look_up(relative, before);
-		const std::string meta_key = res::tag::make(relative + std::string{ k_asset_meta_suffix }).string();
-		std::erase_if(m_orphans, [&meta_key](const asset_orphan& orphan) { return orphan.meta_path.string() == meta_key; });
+		const std::string owner_key = edt::layer_merge_key(relative, k_case_insensitive);
+		std::erase_if(m_orphans, [&owner_key](const asset_orphan& orphan) {
+			const std::optional<std::string> meta = relative_of(orphan.meta_path);
+			return meta && is_sidecar(*meta) && edt::layer_merge_key(std::string{ sidecar_owner(*meta) }, k_case_insensitive) == owner_key;
+		});
 		if (!now) {
 			// The file is gone; a .resource left behind is an orphan.
 			for (std::size_t layer = m_layers.size(); layer-- > 0;) {
-				const std::string meta_relative = relative + std::string{ k_asset_meta_suffix };
-				if (presence_in(m_layers[layer], meta_relative) == presence::file) {
+				const sidecar_hit sidecar = sidecar_in(m_layers[layer], relative);
+				const std::string& meta_relative = sidecar.relative;
+				if (sidecar.kind == presence::file) {
 					asset_orphan orphan;
 					orphan.meta_path = res::tag::make(meta_relative);
 					++m_files_read;

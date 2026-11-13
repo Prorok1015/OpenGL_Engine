@@ -223,6 +223,26 @@ BOOST_AUTO_TEST_CASE(duplicate_ids_and_orphans_are_found)
 	BOOST_TEST(res::to_text(*assets.orphans().front().id) == k_guid_b);
 }
 
+// One rule with res::is_asset_meta_name (#817): a sidecar in any letter case is a sidecar, not an asset, and belongs to
+// its file.
+BOOST_AUTO_TEST_CASE(a_sidecar_in_any_letter_case_is_a_sidecar)
+{
+	upper.write("A.PNG", "a");
+	upper.write("A.PNG.RESOURCE", meta_text(k_guid_a));
+	upper.write("b.png", "b");
+	upper.write("b.png.Resource", meta_text(k_guid_b));
+	auto& assets = open();
+
+	BOOST_TEST(assets.find(res::tag::make("A.PNG.RESOURCE")) == nullptr);
+	BOOST_TEST(assets.find(res::tag::make("b.png.Resource")) == nullptr);
+	BOOST_TEST(assets.records().size() == 2u);
+	BOOST_REQUIRE(record("A.PNG").id.has_value());
+	BOOST_TEST(res::to_text(*record("A.PNG").id) == k_guid_a);
+	BOOST_REQUIRE(record("b.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("b.png").id) == k_guid_b);
+	BOOST_TEST(assets.orphans().empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_bad_sidecar_leaves_the_file_without_id_and_says_why)
 {
 	upper.write("broken.png", "x");
@@ -419,6 +439,29 @@ BOOST_AUTO_TEST_CASE(a_cache_of_other_layers_is_not_used)
 	auto other = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ upper.path() },
 		edt::asset_cache_location{ cache.path(), "asset_db" });
 	BOOST_TEST(!other->loaded_from_cache());
+}
+
+// A batch finds a .resource in any letter case, as the walk does, and its going makes no orphan of another name.
+BOOST_AUTO_TEST_CASE(a_batch_pairs_a_sidecar_in_any_letter_case)
+{
+	upper.write("a.png", "a");
+	auto& assets = open();
+	BOOST_TEST(!record("a.png").id.has_value());
+
+	upper.write("a.png.RESOURCE", meta_text(k_guid_a));
+	assets.apply_changes(std::vector<res::file_change>{ change("a.png.RESOURCE", res::change_kind::created) });
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_a);
+	BOOST_TEST(assets.find(res::tag::make("a.png.RESOURCE")) == nullptr);
+
+	fs::remove(upper.path() / "a.png");
+	assets.apply_changes(std::vector<res::file_change>{ change("a.png", res::change_kind::deleted) });
+	BOOST_REQUIRE(assets.orphans().size() == 1u);
+	BOOST_TEST(assets.orphans().front().meta_path.string() == "res://a.png.RESOURCE");
+
+	fs::remove(upper.path() / "a.png.RESOURCE");
+	assets.apply_changes(std::vector<res::file_change>{ change("a.png.RESOURCE", res::change_kind::deleted) });
+	BOOST_TEST(assets.orphans().empty());
 }
 
 // AC #760: create, change and delete of a file and of its .resource are each seen in one batch.
