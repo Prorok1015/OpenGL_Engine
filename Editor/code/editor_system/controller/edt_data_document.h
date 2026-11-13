@@ -9,8 +9,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace desc { class desc_system; class schema_registry; struct type_schema; }
+namespace res { class resource_system; }
 
 namespace edt
 {
@@ -34,6 +36,9 @@ namespace edt
 	public:
 		// `files`: where the project's desc files are (what desc.write asks before it replaces one is asked here too).
 		data_document(editor_services& services, desc_file_layout files);
+		~data_document() override;
+		data_document(const data_document&) = delete;
+		data_document& operator=(const data_document&) = delete;
 
 		// Reads the file (fresh bytes, not the cache), migrates it in memory and follows __parent. Only a res:// file of the
 		// project's own top layer that is not the open level's (read_desc_file) is taken, and a parent is literally res://
@@ -48,6 +53,16 @@ namespace edt
 		std::uint64_t generation() const override { return m_generation; }
 		bool can_save() const override { return m_open; }
 		save_result save() override;
+		// Where document_changed goes (set by the document_manager): announced when what the document shows changed
+		// without an edit of its own (a parent file was written, the file itself was changed by someone else).
+		void bind_events(editor_events* events) override { m_events = events; }
+
+		// The file was changed by someone else (an agent through desc.write, an editor, a VCS) and the document holds
+		// unsaved edits, or the file is gone: save() refuses until the document is opened again. A clean document
+		// reads the new file by itself.
+		bool changed_on_disk() const { return m_changed_on_disk; }
+		// Why the parents could not be read again after one of them changed (the last good ones stay shown); empty: none.
+		const std::string& chain_problem() const { return m_chain_problem; }
 
 		const std::string& type() const { return m_type; }
 		const boost::json::object& own() const { return m_own; }
@@ -66,7 +81,25 @@ namespace edt
 		bool restore_own(boost::json::object own);
 
 	private:
+		struct loaded
+		{
+			boost::json::object own;
+			boost::json::object inherited;
+			std::string type;
+			std::string version;
+			std::vector<res::tag> parents;
+		};
+
 		const desc::type_schema* schema() const;
+		open_result load(const res::tag& file, loaded& out) const;
+		open_result resolve_chain(const res::tag& file, const boost::json::object& own, const std::string& type,
+			boost::json::object& inherited, std::vector<res::tag>& parents) const;
+		void apply(const res::tag& file, loaded&& state);
+		void watch_files();
+		void sync_watches(const std::vector<res::tag>& wanted);
+		void unwatch_files();
+		void on_changed(const res::tag& tag);
+		void announce() const;
 		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr) const;
 
 		editor_services& m_services;
@@ -81,5 +114,12 @@ namespace edt
 		std::string m_version;
 		std::uint64_t m_generation = 0;
 		bool m_open = false;
+		bool m_changed_on_disk = false;
+		std::string m_chain_problem;
+		std::vector<res::tag> m_parents;
+		editor_events* m_events = nullptr;
+		// The resource system the watchers are on (the base one, which outlives every document) and what is watched.
+		res::resource_system* m_watching = nullptr;
+		std::vector<res::tag> m_watched;
 	};
 }

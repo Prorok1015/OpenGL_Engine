@@ -4,6 +4,7 @@
 #include "edt_data_document.h"
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
@@ -364,6 +365,237 @@ BOOST_AUTO_TEST_CASE(Save_OfAFileThatBecameTheOpenLevels_IsRefused)
 	const edt::save_result saved = document.save();
 	BOOST_TEST(!saved.saved);
 	BOOST_TEST(saved.error.find("open level") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AParentThatChanges_GivesANewBaseAndAnAnnouncement)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::editor_events events;
+	int announced = 0;
+	const edt::connection heard = events.document_changed.subscribe([&](edt::document_id, std::uint64_t) { ++announced; });
+	edt::data_document document = make();
+	document.bind_events(&events);
+	BOOST_REQUIRE(document.open(child).opened);
+	const std::uint64_t before = document.generation();
+
+	put("parent.desc", R"({"__type":"test.config","speed":6.0,"limits":{"min":9.0}})");
+	rs->signal_changed(parent);
+	pump();
+
+	BOOST_TEST(announced == 1);
+	BOOST_TEST(document.generation() > before);
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 6.0);
+	const json::value shown = document.shown();
+	BOOST_TEST(shown.at("speed").to_number<double>() == 3.0);
+	BOOST_TEST(shown.at("limits").at("min").to_number<double>() == 9.0);
+	BOOST_TEST(!document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AParentSignalledWithoutAChange_AnnouncesNothing)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::editor_events events;
+	int announced = 0;
+	const edt::connection heard = events.document_changed.subscribe([&](edt::document_id, std::uint64_t) { ++announced; });
+	edt::data_document document = make();
+	document.bind_events(&events);
+	BOOST_REQUIRE(document.open(child).opened);
+	const std::uint64_t before = document.generation();
+
+	rs->signal_changed(parent);
+	pump();
+	BOOST_TEST(announced == 0);
+	BOOST_TEST(document.generation() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AParentThatBreaks_KeepsTheLastBaseAndSaysWhy_AndRecovers)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::editor_events events;
+	int announced = 0;
+	const edt::connection heard = events.document_changed.subscribe([&](edt::document_id, std::uint64_t) { ++announced; });
+	edt::data_document document = make();
+	document.bind_events(&events);
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("parent.desc", R"({"__type":"test.plain","speed":6.0})");
+	rs->signal_changed(parent);
+	pump();
+	BOOST_TEST(!document.chain_problem().empty());
+	BOOST_TEST(document.chain_problem().find("another type") != std::string::npos);
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 2.0);
+	BOOST_TEST(announced == 1);
+
+	put("parent.desc", R"({"__type":"test.config","speed":6.0})");
+	rs->signal_changed(parent);
+	pump();
+	BOOST_TEST(document.chain_problem().empty());
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 6.0);
+	BOOST_TEST(announced == 2);
+}
+
+BOOST_AUTO_TEST_CASE(AParentThatGainsAParent_IsWatchedFromThenOn)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag grand = put("grand.desc", R"({"__type":"test.config","speed":1.5})");
+	const res::tag child = put("child.desc", R"({"__type":"test.config","__parent":"res://parent.desc"})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("parent.desc", R"({"__type":"test.config","__parent":"res://grand.desc"})");
+	rs->signal_changed(parent);
+	pump();
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 1.5);
+
+	put("grand.desc", R"({"__type":"test.config","speed":4.5})");
+	rs->signal_changed(grand);
+	pump();
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 4.5);
+}
+
+BOOST_AUTO_TEST_CASE(TheDocumentsOwnSave_IsNoChangeOnDisk)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::editor_events events;
+	int announced = 0;
+	const edt::connection heard = events.document_changed.subscribe([&](edt::document_id, std::uint64_t) { ++announced; });
+	edt::data_document document = make();
+	document.bind_events(&events);
+	BOOST_REQUIRE(document.open(child).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 4.0;
+		return true;
+	}));
+	BOOST_REQUIRE(document.save().saved);
+	pump();
+
+	BOOST_TEST(announced == 0);
+	BOOST_TEST(!document.changed_on_disk());
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(document.shown().at("speed").to_number<double>() == 4.0);
+}
+
+BOOST_AUTO_TEST_CASE(AFileChangedBySomeoneElse_IsReadAgainByACleanDocument)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::editor_events events;
+	int announced = 0;
+	const edt::connection heard = events.document_changed.subscribe([&](edt::document_id, std::uint64_t) { ++announced; });
+	edt::data_document document = make();
+	document.bind_events(&events);
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("child.desc", R"({"__type":"test.config","__guid":"guid-1","__parent":"res://parent.desc","speed":7.0})");
+	rs->signal_changed(child);
+	pump();
+
+	BOOST_TEST(announced == 1);
+	BOOST_TEST(!document.changed_on_disk());
+	BOOST_TEST(document.shown().at("speed").to_number<double>() == 7.0);
+	BOOST_TEST(!document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AFileChangedUnderUnsavedEdits_IsFlaggedAndNotOverwritten)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+
+	const std::string elsewhere = R"({"__type":"test.config","speed":4.0})";
+	put("config.desc", elsewhere);
+	rs->signal_changed(file);
+	pump();
+
+	BOOST_TEST(document.changed_on_disk());
+	BOOST_TEST(document.is_dirty());
+	BOOST_TEST(document.own().at("speed").to_number<double>() == 9.0);
+	BOOST_TEST(!document.save().saved);
+	BOOST_TEST(text_of("config.desc") == elsewhere);
+}
+
+BOOST_AUTO_TEST_CASE(ADestroyedDocument_LeavesNoWatcher)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	const std::size_t before = rs->watched_tag_count();
+	{
+		edt::data_document document = make();
+		BOOST_REQUIRE(document.open(child).opened);
+		BOOST_TEST(rs->watched_tag_count() == before + 2u);
+	}
+	BOOST_TEST(rs->watched_tag_count() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AParentAndTheChildSignalledTogether_BothReachTheDocument)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("parent.desc", R"({"__type":"test.config","speed":6.0,"limits":{"min":9.0}})");
+	put("child.desc", R"({"__type":"test.config","__guid":"guid-1","__parent":"res://parent.desc","speed":7.0})");
+	rs->signal_changed(parent);
+	rs->signal_changed(child);
+	pump();
+
+	BOOST_TEST(!document.changed_on_disk());
+	const json::value shown = document.shown();
+	BOOST_TEST(shown.at("speed").to_number<double>() == 7.0);
+	BOOST_TEST(shown.at("limits").at("min").to_number<double>() == 9.0);
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 6.0);
+}
+
+BOOST_AUTO_TEST_CASE(AParentThatPointsAtAFileNotThereYet_IsWatchedUntilItAppears)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", R"({"__type":"test.config","__parent":"res://parent.desc"})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	put("parent.desc", R"({"__type":"test.config","__parent":"res://later.desc"})");
+	rs->signal_changed(parent);
+	pump();
+	BOOST_TEST(!document.chain_problem().empty());
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 2.0);
+
+	const res::tag later = put("later.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(later);
+	pump();
+	BOOST_TEST(document.chain_problem().empty());
+	BOOST_TEST(document.base().at("speed").to_number<double>() == 4.0);
+}
+
+BOOST_AUTO_TEST_CASE(AFlaggedChangeOnDisk_BlocksTheSaveEvenIfTheFileIsBackAsItWas)
+{
+	const std::string original = R"({"__type":"test.config","speed":2.0})";
+	const res::tag file = put("config.desc", original);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+
+	put("config.desc", original);
+	const edt::save_result saved = document.save();
+	BOOST_TEST(!saved.saved);
+	BOOST_TEST(saved.error.find("changed on disk") != std::string::npos);
+	BOOST_TEST(text_of("config.desc") == original);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
