@@ -21,8 +21,8 @@ namespace scn
 	// and files name the component); a collision with another component is refused when it is registered.
 	SNK_API entt::id_type schema_component_id(std::string_view name);
 
-	// The blob `entity` holds in the pool `id`; null when it holds none.
-	SNK_API desc::dyn_blob* find_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id);
+	// The blob `entity` holds in the pool `id`; null when it holds none. Read-only: a blob changes through
+	// emplace_schema_component or the desc ops, so a value in a resource of the caller's never reaches it (#826).
 	SNK_API const desc::dyn_blob* find_schema_component(const entt::registry& reg, entt::entity entity, entt::id_type id);
 	// Places a copy of `blob` as the component `id` of `entity`, replacing the one it has. The copy is the engine's, its
 	// handles in the default resource: a blob never crosses into the engine by value, so what a module built (with its own

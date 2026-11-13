@@ -336,6 +336,31 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
 }
 
+// #826: a blob the module builds with a handle in an arena of its own reaches the world as the engine's copy, readable
+// after the arena is gone.
+BOOST_AUTO_TEST_CASE(a_blob_from_a_module_arena_is_kept_as_the_engines_copy)
+{
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(contexts().load_level(put("arena_lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":["dll::arena_blob"]}]})")));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	contexts().level_set().set_mode(ecs::run_mode::play);
+	contexts().update(std::chrono::duration<float>(0.016f));
+
+	const entt::registry& reg = world->state();
+	const auto* pool = reg.storage<desc::dyn_blob>(scn::schema_component_id(dll_game::arena_blob_name));
+	BOOST_REQUIRE(pool != nullptr);
+	BOOST_REQUIRE(pool->size() == 1u);
+	const desc::dyn_blob* kept = scn::find_schema_component(reg, *static_cast<const entt::sparse_set&>(*pool).begin(),
+		scn::schema_component_id(dll_game::arena_blob_name));
+	BOOST_REQUIRE(kept != nullptr);
+	BOOST_REQUIRE(kept->handles.size() == 1u);
+	BOOST_TEST((kept->handles[0].storage().get() == json::storage_ptr().get()));
+	BOOST_TEST(kept->handles[0].as_string() == dll_game::arena_blob_text);
+}
+
 // #789: the types a module marks as data documents, from its own code (register_document<T>) and through the export of
 // module_context (mark_document), are documents of the module's layer for the host and go with the module.
 BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with_it)

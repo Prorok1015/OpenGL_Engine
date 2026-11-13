@@ -3,7 +3,6 @@
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_interface.hpp>
 #include <snk/common/snk_api.h>
-#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <memory>

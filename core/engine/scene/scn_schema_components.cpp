@@ -117,12 +117,6 @@ entt::id_type scn::schema_component_id(std::string_view name)
 	return entt::hashed_string::value(name.data(), name.size());
 }
 
-desc::dyn_blob* scn::find_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id)
-{
-	// Through the const registry, which looks a pool up without making one.
-	return const_cast<desc::dyn_blob*>(find_schema_component(std::as_const(reg), entity, id));
-}
-
 const desc::dyn_blob* scn::find_schema_component(const entt::registry& reg, entt::entity entity, entt::id_type id)
 {
 	const pool_type* pool = reg.storage<desc::dyn_blob>(id);
