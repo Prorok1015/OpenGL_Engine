@@ -36,6 +36,7 @@
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
 #include "edt_file_menu.h"
+#include "edt_template_ids.h"
 #include "edt_agent_model_import.h"
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
@@ -655,7 +656,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.open_project = start_editor_on;
 	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
 	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
-		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name);
+		// The template ships without .resource sidecars: each new project gets ids of its own (#765).
+		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name,
+			[](const std::filesystem::path& staging) { return edt::give_template_fresh_ids(staging); });
 	};
 	// Next to the open project, else where the editor was started.
 	hooks.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
@@ -855,6 +858,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_assets = std::make_unique<asset_database>(m_context->jobs(), &m_context->events(), m_res.get_resource_layers(),
 			asset_cache_location{ project.root, project.cache_dir().lexically_relative(project.root) / "asset_db" });
 		m_assets->attach(m_res);
+		m_assets->set_vcs_busy([this] { return m_vcs && m_vcs->running_writes() > 0; });
+		m_assets->set_git_dir_provider([this]() -> std::optional<std::filesystem::path> {
+			return m_vcs ? m_vcs->cached_state().git_dir : std::nullopt;
+		});
 		m_assets->rebuild();
 		m_asset_problems = std::make_unique<asset_problem_publisher>();
 	}
@@ -1183,6 +1190,8 @@ void edt::editor_system::tick_asset_problems()
 	if (!m_assets || !m_asset_problems || !m_context) {
 		return;
 	}
+	// New files waiting for an ID: a git operation that held them back may have ended (#765).
+	m_assets->poll();
 	m_asset_problems->publish(m_context->problems(), *m_assets);
 }
 

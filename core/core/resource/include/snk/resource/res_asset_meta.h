@@ -15,6 +15,9 @@ namespace json = boost::json;
 namespace res
 {
 	inline constexpr std::int64_t asset_meta_version = 1;
+	// Also the pseudo-type under which project migration keeps the steps of a sidecar (EPIC-58 3.4); a step that
+	// raises the version raises asset_meta_version with it.
+	inline constexpr std::string_view asset_meta_type = "resource_meta";
 	inline constexpr std::string_view asset_meta_suffix = ".resource";
 
 	// A name or path ending in ".resource" in any letter case: one spelling rule for the editor and the database, so a
@@ -28,6 +31,32 @@ namespace res
 			if (c != asset_meta_suffix[i]) return false;
 		}
 		return true;
+	}
+
+	// Not an asset: dot files (.gitkeep, .DS_Store, .x.swp) and well-known temporary or system names (Thumbs.db,
+	// desktop.ini, ~$x, x.tmp, x~). The asset database does not list them and no .resource is made for them.
+	inline bool is_ignored_asset_name(std::string_view name)
+	{
+		const auto equals_lower = [](std::string_view text, std::string_view lower) {
+			if (text.size() != lower.size()) {
+				return false;
+			}
+			for (std::size_t i = 0; i < text.size(); ++i) {
+				const char c = text[i] >= 'A' && text[i] <= 'Z' ? static_cast<char>(text[i] - 'A' + 'a') : text[i];
+				if (c != lower[i]) {
+					return false;
+				}
+			}
+			return true;
+		};
+		if (name.empty() || name.front() == '.' || name.starts_with("~$") || name.back() == '~') {
+			return true;
+		}
+		if (equals_lower(name, "thumbs.db") || equals_lower(name, "desktop.ini")) {
+			return true;
+		}
+		constexpr std::string_view tmp_suffix = ".tmp";
+		return name.size() > tmp_suffix.size() && equals_lower(name.substr(name.size() - tmp_suffix.size()), tmp_suffix);
 	}
 
 	struct asset_meta

@@ -78,9 +78,8 @@
 // meshes needs an engine of 3.15 or newer. mesh_node_desc gains `visible` at its end (engine-made, not in the layout key).
 // 3.16 (#744): inp::action_binding gains the alternatives GAMEPAD_BUTTONS (index 2) and GAMEPAD_AXES (index 3), appended after
 // the keyboard (0) and the mouse (1): it is still one variant of two bytes, which static_asserts in inp_actions.h hold, so a
-// module of 3.15 that reads the bindings of an action by its stride and indices still reads right. inp::action_binding_v1
-// is the old type; action_map::add keeps its old overload (the symbol modules of 3.15 import) and converts. A module that
-// visits the bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
+// module of 3.15 that reads the bindings of an action by its stride and indices still reads right. A module that visits the
+// bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
 // scn::input_actions_desc gains `gamepad` at its end (engine-made, not in the layout key). New: inp::gamepad_config, the
 // gamepad names in inp_actions.h, wnd::gamepad_source, gs::input_actions::rebind and the player's bindings (#736).
 // 3.17 (#789): gs::module_context::mark_document, desc::desc_system::mark_document / register_document / document_types and
@@ -111,6 +110,12 @@
 // #790: field_kind::map and std::optional<T> in schemas (layout_revision 4). #785/#826: system_registry is all exports,
 // the entry and its map node are the engine's; emplace_schema_component takes a const dyn_blob& and the world keeps
 // the engine's copy in the default resource (layout_revision 5).
+// #781: the 3.15 overloads of inp::action_map::add (std::vector of the old two-alternative binding) are gone; a module of 3.x is
+// refused at load, and one built in the window that imports them fails to load on the unresolved symbol.
+// #782: app::modules::loaded_module_apis, prepared_module::api_version and gs::input_actions::warn_about_old_modules are gone;
+// gs::input_actions loses m_warned_map and m_warned_revision, so its later members move (layout_revision 6).
+// #783: inp::action_binding is a struct {kind, code, threshold} (in the layout key), inp::action_map::actions()/size() are exports
+// (layout_revision 7). Pad bindings take an optional threshold in actions.desc.
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

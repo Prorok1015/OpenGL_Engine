@@ -1,6 +1,5 @@
 #include <snk/game/gs_input_actions.h>
 #include <snk/game/gs_input_bindings_file.h>
-#include <snk/application/app_loaded_module_apis.h>
 #include <snk/application/app_module_entry.h>
 #include <snk/input/inp_actions.h>
 #include <snk/project/prj_project.h>
@@ -96,7 +95,7 @@ void gs::input_actions::rebuild_effective()
 	m_has_gamepad_bindings = false;
 	for (const inp::action& action : m_map->actions()) {
 		for (const inp::action_binding& binding : action.bindings) {
-			if (std::holds_alternative<inp::GAMEPAD_BUTTONS>(binding) || std::holds_alternative<inp::GAMEPAD_AXES>(binding)) m_has_gamepad_bindings = true;
+			if (binding.is_gamepad()) m_has_gamepad_bindings = true;
 		}
 	}
 	// A file, an edit of the desc or a rebind that allowed it can leave one binding on two actions. Said once per rebuild, and
@@ -189,29 +188,5 @@ void gs::input_actions::update(std::string_view tag, std::string_view project_na
 		m_reported = true;
 		egLOG_ERROR("input", "game actions {} did not load{}: {}", m_tag, m_map ? ", the previous ones stay" : "",
 			m_handle.error_text());
-	}
-}
-
-void gs::input_actions::warn_about_old_modules(const ds::app_data_storage& data)
-{
-	const auto* apis = data.has_value<app::modules::loaded_module_apis>() ? &data.require<app::modules::loaded_module_apis>() : nullptr;
-	const std::uint64_t revision = apis ? apis->revision : 0;
-	if (m_warned_map == m_map.get() && m_warned_revision == revision) return;
-	m_warned_map = m_map.get();
-	m_warned_revision = revision;
-	if (!apis || !m_has_gamepad_bindings) return;
-
-	// Only a module of the host's major older than 3.16 reads bindings as keyboard or mouse only: none under 4.x.
-	constexpr std::uint32_t first_with_gamepad = 0x0003'0010u;
-	std::string old;
-	for (const auto& [name, api] : apis->api) {
-		if (api == 0 || app::modules::api_major(api) != app::modules::api_major(SNK_MODULE_API_VERSION)) continue;
-		if (api < first_with_gamepad) {
-			old += (old.empty() ? "" : ", ") + name + " (api 3." + std::to_string(app::modules::api_minor(api)) + ")";
-		}
-	}
-	if (!old.empty()) {
-		egLOG_WARN("input", "{} has gamepad bindings, and these modules were built for an older API and read bindings as keyboard or mouse only: {}",
-			m_tag, old);
 	}
 }

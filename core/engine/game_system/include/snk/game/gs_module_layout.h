@@ -45,9 +45,12 @@ namespace gs
 		// type modules read inline. 1: world_context's accessors out of line (#802). 2: desc_system, schema_registry and
 		// dynamic_desc touch their members only out of line (#786). 3: the sandbox's components move into the world by
 		// engine code through the module's ecs::sandbox_emplace<T> (#784, #738). 4: field_kind::map and std::optional in
-		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before. 6: desc_base
-		// gains the tag of its parent and joins the list (#812); the list now sees its size, the revision marks the change.
-		inline constexpr std::uint64_t layout_revision = 6;
+		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before. 5: system_registry
+		// is all exports and the world keeps the engine's copy of a component's default (#785, #826). 6: gs::input_actions loses
+		// its two warning fields, so the members after them move (#782).
+		// 7: inp::action_binding is a {kind, code, threshold} struct, not a variant (#783).
+		// 8: desc_base gains the tag of its parent and joins the list (#812); the list now sees its size.
+		inline constexpr std::uint64_t layout_revision = 8;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
@@ -86,7 +89,7 @@ namespace gs
 			// module_context::input_stack hands the module an input_stack_handle by value; the module builds the layers it
 			// passes (stack_layer_desc), and a system that takes input_stack_control& gets it made in module code by
 			// ecs_invoker's reg.ctx().emplace<T>(), so the module allocates and destroys it.
-			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control>();
+			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::action_binding>();
 	}
 
 	// module_layout_key() as the engine was built: what the host compares a module's key with.

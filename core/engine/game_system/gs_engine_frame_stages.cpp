@@ -23,7 +23,6 @@ void gs::register_scene_frame_stages(app::frame_stage_registry& registry)
 			if (c.storage.has_value<gs::input_actions>()) {
 				auto& project_actions = c.storage.require<gs::input_actions>();
 				project_actions.update(c.storage);
-				project_actions.warn_about_old_modules(c.storage);
 				actions = project_actions.map();
 			}
 			gs::route_input(router, contexts, actions);

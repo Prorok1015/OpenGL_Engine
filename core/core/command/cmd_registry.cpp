@@ -2,6 +2,7 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/ds/ds_json_storage.hpp>
 #include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <exception>
@@ -60,6 +61,8 @@ cmd::registration cmd::command_registry::add(command_desc desc)
 
 	if (desc.args_schema.is_null()) desc.args_schema = no_args_schema();
 	if (desc.result_schema.is_null()) desc.result_schema = no_args_schema();
+	ds::keep_in_default_resource(desc.args_schema);
+	ds::keep_in_default_resource(desc.result_schema);
 	for (const auto* schema : { &desc.args_schema, &desc.result_schema }) {
 		if (auto problem = json_schema::check_schema(*schema)) {
 			egLOG_ERROR("command", "command '{}' not registered: bad schema {}", desc.id, *problem);
@@ -148,6 +151,8 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 		return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': {}", id, *problem));
 
 	result outcome = command->desc.invoke(request);
+	// The caller may keep it (through a future) past the module that made it (#827).
+	ds::keep_in_default_resource(outcome.value);
 	if (outcome.ok) {
 		if (auto problem = json_schema::validate(command->desc.result_schema, outcome.value)) {
 			egLOG_ERROR("command", "command '{}' ran but returned a malformed result: {}", id, *problem);

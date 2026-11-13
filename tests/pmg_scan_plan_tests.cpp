@@ -103,6 +103,8 @@ BOOST_AUTO_TEST_CASE(EveryClassOfTheFixture_IsFound)
 	BOOST_TEST(!scan.find("res/newer.desc")->reason.empty());
 	BOOST_TEST((kind_of(scan, "res/broken.desc") == pmg::file_class::invalid));
 	BOOST_TEST((kind_of(scan, "res/textures/plain.png") == pmg::file_class::missing_resource));
+	BOOST_TEST((kind_of(scan, "res/textures/with_meta.png") == pmg::file_class::current));
+	BOOST_TEST((kind_of(scan, "res/textures/with_meta.png.resource") == pmg::file_class::current));
 	BOOST_TEST((scan.find("README.md") == nullptr)); // not under a content root
 
 	const auto& camera = scan.find("res/cameras/cam_v1.desc")->objects;
@@ -209,7 +211,30 @@ BOOST_AUTO_TEST_CASE(ABigFileALinkAndASidecar)
 	} else {
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << link_error.message());
 	}
-	BOOST_TEST(pmg::plan_migration(project.root, scan, *descs).empty());
+	// Nothing to migrate among them; the manifest of 0.1.0 alone still has the engine_version to bring along.
+	BOOST_TEST(pmg::plan_migration(project.root, scan, *descs).files.empty());
+}
+
+// The scan skips what the asset database skips (res::is_ignored_asset_name), with the .resource of such a file.
+BOOST_AUTO_TEST_CASE(IgnoredNames_AndTheirSidecars_AreNotScanned)
+{
+	scratch_project project;
+	project.write("res/Thumbs.db", "x");
+	project.write("res/desktop.ini", "x");
+	project.write("res/~$scene.desc", "not json");
+	project.write("res/scene.desc~", "not json");
+	project.write("res/draft.TMP", "x");
+	project.write("res/draft.TMP.resource", "{}");
+	project.write("res/.gitkeep", "");
+	project.write("res/cache.tmp/inside.desc", "not json");
+	project.write("res/tex.png", "png");
+
+	const pmg::scan_result scan = pmg::scan_project(project.root, *descs);
+	for (const std::string_view skipped : { "res/Thumbs.db", "res/desktop.ini", "res/~$scene.desc", "res/scene.desc~", "res/draft.TMP",
+			"res/draft.TMP.resource", "res/.gitkeep", "res/cache.tmp/inside.desc" }) {
+		BOOST_TEST((scan.find(skipped) == nullptr), skipped);
+	}
+	BOOST_TEST((kind_of(scan, "res/tex.png") == pmg::file_class::missing_resource));
 }
 
 BOOST_AUTO_TEST_CASE(ABadVersion_IsInvalid_ANewerManifest_IsNewer)

@@ -70,7 +70,7 @@ struct apply_fixture : test_util::scene_env
 
 	pmg::apply_context context_for(const fs::path& root)
 	{
-		pmg::apply_context context{ root, *descs, *rs, {}, {}, {}, {} };
+		pmg::apply_context context{ root, *descs, *rs, {}, {}, {}, {}, nullptr };
 		context.make_id = [] { return std::string{ "test-migration" }; };
 		return context;
 	}

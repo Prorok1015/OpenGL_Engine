@@ -7,13 +7,11 @@
 
 std::string edt::input_actions_view::binding_text(const inp::action_binding& binding)
 {
-	return std::visit([](const auto value) -> std::string {
-		using value_type = std::decay_t<decltype(value)>;
-		if constexpr (std::is_same_v<value_type, inp::KEYBOARD_BUTTONS>) return std::string{ inp::key_code_name(value) };
-		else if constexpr (std::is_same_v<value_type, inp::MOUSE_BUTTONS>) return "Mouse " + std::string{ inp::mouse_button_name(value) };
-		else if constexpr (std::is_same_v<value_type, inp::GAMEPAD_BUTTONS>) return "Pad " + std::string{ inp::gamepad_button_name(value) };
-		else return "Axis " + std::string{ inp::gamepad_axis_name(value) };
-	}, binding);
+	if (const auto key = binding.key()) return std::string{ inp::key_code_name(*key) };
+	if (const auto button = binding.mouse_button()) return "Mouse " + std::string{ inp::mouse_button_name(*button) };
+	if (const auto pad = binding.gamepad_button()) return "Pad " + std::string{ inp::gamepad_button_name(*pad) };
+	if (const auto axis = binding.gamepad_axis()) return "Axis " + std::string{ inp::gamepad_axis_name(*axis) };
+	return {};
 }
 
 std::vector<edt::input_actions_view::action_row> edt::input_actions_view::build_rows(const inp::action_map& project,

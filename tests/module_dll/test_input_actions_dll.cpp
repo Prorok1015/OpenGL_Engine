@@ -17,7 +17,7 @@ namespace {
 
 const inp::action* find_action(const inp::action_map* map, const char* name)
 {
-	// actions() is inline: the offset of the vector and the size of an action are the module's own copy.
+	// actions() is exported: the module does not know where the vector is.
 	for (const inp::action& action : map->actions()) {
 		if (action.name == name) return &action;
 	}
@@ -32,7 +32,7 @@ SNK_TEST_INPUT_EXPORT int snk_test_key_at(const inp::action_map* map, const char
 	const inp::action* found = find_action(map, action);
 	if (!found) return -3;
 	if (slot < 0 || static_cast<std::size_t>(slot) >= found->bindings.size()) return -1;
-	const auto* key = std::get_if<inp::KEYBOARD_BUTTONS>(&found->bindings[static_cast<std::size_t>(slot)]);
+	const auto key = found->bindings[static_cast<std::size_t>(slot)].key();
 	return key ? static_cast<int>(*key) : -2;
 }
 

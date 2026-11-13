@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/project_migration/pmg_project_steps.h>
 #include <snk/project_migration/pmg_scan.h>
 #include <filesystem>
 #include <functional>
@@ -27,8 +28,9 @@ namespace prj::migration
 		// Recorded in the journal just before the file is written, so a rollback after a crash recognizes it either way;
 		// empty for a file the migration never reached.
 		std::string hash_after;
-		// "engine": loaded and saved by the engine, as desc_resave does; "json": the migrated JSON, for a file the engine
-		// cannot load or whose type would not keep its __parent (the reason is among the notes).
+		// "engine": loaded and saved by the engine, as desc_resave does; "json": the migrated JSON, for a .resource
+		// sidecar or a file the engine cannot load or whose type would not keep its __parent (the reason is among the
+		// notes); "manifest": project.snkproj, after the project steps, with the stamp of the migration.
 		std::string written_as;
 		std::vector<std::string> notes;
 	};
@@ -52,6 +54,9 @@ namespace prj::migration
 		std::vector<skipped_file> skipped;
 		// Files a project step created (EPIC-58 S5): a rollback deletes them.
 		std::vector<std::string> created_files;
+		// The project steps that ran, in order, and what they said; project.snkproj adds them to applied_steps.
+		std::vector<std::string> project_steps;
+		std::vector<std::string> project_notes;
 		// Relative to the project root; empty when nothing was written.
 		std::string backup;
 		// Why the migration was rolled back.
@@ -74,6 +79,8 @@ namespace prj::migration
 		project_writer write;
 		// "<UTC yyyymmddThhmmssZ>-<engine version>" by default; a taken name gets "-2", "-3"...
 		std::function<std::string()> make_id;
+		// Where the plan's project steps are found; a plan with project steps is refused without them.
+		const project_step_registry* project_steps = nullptr;
 	};
 
 	struct apply_outcome
@@ -85,9 +92,11 @@ namespace prj::migration
 
 	// Refuses a plan with newer or invalid files. An empty plan writes nothing (status ok, no id). Otherwise creates the
 	// journal (status in_progress; its folder is taken exclusively, so two processes never share an id) before the first
-	// change, backs every file up, writes the files and checks each one again from the disk; any failure puts back every
-	// file it wrote, checked by its hash, and deletes the created files: rolled_back, or rollback_failed when one could
-	// not be put back.
+	// change and backs every file up, project.snkproj included. Then the pre project steps, the files, the post project
+	// steps, and last project.snkproj with engine_version and migrated_with of this engine and the steps added to
+	// applied_steps (EPIC-58 4.1); each written file is checked again from the disk. Any failure puts back every file it
+	// wrote, checked by its hash, and deletes the created files: rolled_back, or rollback_failed when one could not be
+	// put back.
 	apply_outcome apply_migration(const migration_plan& plan, const apply_context& context);
 
 	// Ids of the migrations a person has to look at: the journal still says in_progress (the process stopped in the

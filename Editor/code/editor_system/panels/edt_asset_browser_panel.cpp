@@ -71,7 +71,7 @@ namespace edt
 		const std::string search_lower = to_lower(m_search);
 
 		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
-			if (!src.is_dir && res::is_asset_meta_name(src.name)) continue;
+			if (!src.is_dir && (res::is_asset_meta_name(src.name) || res::is_ignored_asset_name(src.name))) continue;
 			// Search filter (dirs always pass)
 			if (!search_lower.empty() && !src.is_dir) {
 				if (to_lower(src.name).find(search_lower) == std::string::npos)

@@ -20,14 +20,14 @@ inp::rebind_result inp::user_bindings::rebind(const action_map& project, std::st
 	std::vector<action_binding> bindings = current_bindings(*this, *target);
 	if (slot > bindings.size()) return { rebind_status::bad_slot, {} };
 	for (std::size_t i = 0; i < bindings.size(); ++i) {
-		if (i != slot && bindings[i] == binding) return { rebind_status::duplicate, {} };
+		if (i != slot && bindings[i].same_input(binding)) return { rebind_status::duplicate, {} };
 	}
 
 	std::string shared_with;
 	for (const inp::action& other : actions) {
 		if (other.name == action) continue;
 		const auto& theirs = current_bindings(*this, other);
-		if (std::ranges::find(theirs, binding) != theirs.end()) {
+		if (std::ranges::any_of(theirs, [&](const action_binding& other) { return other.same_input(binding); })) {
 			if (!allow_conflict) return { rebind_status::conflict, other.name };
 			if (shared_with.empty()) shared_with = other.name;
 		}
@@ -89,7 +89,7 @@ std::vector<inp::binding_conflict> inp::find_binding_conflicts(const action_map&
 	for (std::size_t i = 0; i < actions.size(); ++i) {
 		for (std::size_t j = i + 1; j < actions.size(); ++j) {
 			for (const action_binding& binding : actions[i].bindings) {
-				if (std::ranges::find(actions[j].bindings, binding) != actions[j].bindings.end()) {
+				if (std::ranges::any_of(actions[j].bindings, [&](const action_binding& other) { return other.same_input(binding); })) {
 					found.push_back({ binding, actions[i].name, actions[j].name });
 				}
 			}

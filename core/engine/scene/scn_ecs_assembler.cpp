@@ -34,7 +34,7 @@ namespace scn {
 		bool is_structural = (found->category == spawner_category::structural);
 
 		if (parent_desc.is_valid() && !is_hot_reload && !is_structural) {
-			scn::tracked_component_info info{ actual_type, parent_desc.get_tag(), overrides };
+			scn::tracked_component_info info{ actual_type, parent_desc.get_tag(), boost::json::object(overrides, boost::json::storage_ptr{}) }; // kept past the caller (#827)
 			// Fill before the registry signals, so hot_reload_manager sees the source desc.
 			if (reg.all_of<scn::component_tracker>(e)) {
 				reg.patch<scn::component_tracker>(e, [&] (scn::component_tracker& tracker) {

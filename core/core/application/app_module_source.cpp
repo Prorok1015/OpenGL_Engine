@@ -31,7 +31,12 @@ namespace {
 	std::string last_error()
 	{
 #if defined(_WIN32)
-		return std::format("error {}", ::GetLastError());
+		const DWORD code = ::GetLastError();
+		// 127: the module imports a function this engine does not export (built against another engine version).
+		if (code == ERROR_PROC_NOT_FOUND) {
+			return "error 127: the module imports a function the engine does not export; rebuild it against this engine";
+		}
+		return std::format("error {}", code);
 #else
 		const char* text = ::dlerror();
 		return text ? text : "unknown error";

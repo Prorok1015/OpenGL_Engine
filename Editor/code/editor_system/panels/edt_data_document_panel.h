@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_document.h>
 #include <snk/editor/edt_panel_base.h>
+#include "edt_schema_inspector.h"
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -30,6 +31,9 @@ namespace edt
 		// The window comes to the front at its next frame.
 		void request_focus() { m_focus = true; }
 		document_id id() const { return m_id; }
+		// What the map rows of this window keep between frames (the text of a "new key" field, a refused rename). Its own,
+		// not the inspector's: it is dropped when the document changes under the window (a reload, a parent that changed).
+		schema_ui::map_edit_state& map_state() { return m_map_state; }
 
 	protected:
 		void on_before_begin() override;
@@ -49,5 +53,7 @@ namespace edt
 		bool m_dismissed = false;
 		std::string m_error;
 		bool m_focus = false;
+		schema_ui::map_edit_state m_map_state;
+		std::uint64_t m_state_generation = 0;
 	};
 }

@@ -120,6 +120,25 @@ BOOST_AUTO_TEST_CASE(AGamepadButtonAndAnAxisCanBeBound_AndConflictLikeKeys)
 	BOOST_TEST((user.apply(project).find(project.id("Fire"))->bindings == std::vector<inp::action_binding>{ MB::LEFT, inp::GAMEPAD_AXES::RIGHT_TRIGGER }));
 }
 
+BOOST_AUTO_TEST_CASE(TheSameInputWithAnotherThreshold_IsAConflictAndADuplicate)
+{
+	inp::action_map project = project_map();
+	project.add("Aim", { inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.3f } });
+	inp::user_bindings user;
+	const auto taken = user.rebind(project, "Fire", 1, inp::GAMEPAD_AXES::RIGHT_TRIGGER);
+	BOOST_TEST((taken.status == inp::rebind_status::conflict));
+	BOOST_TEST(taken.conflict_with == "Aim");
+	BOOST_TEST((user.rebind(project, "Aim", 1, inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.6f }).status == inp::rebind_status::duplicate));
+
+	inp::action_map shared;
+	shared.add("Fire", { inp::GAMEPAD_AXES::RIGHT_TRIGGER });
+	shared.add("Aim", { inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.3f } });
+	const auto found = inp::find_binding_conflicts(shared);
+	BOOST_REQUIRE_EQUAL(found.size(), 1u);
+	BOOST_TEST((found == inp::find_binding_conflicts(shared)));
+	BOOST_TEST(found[0].second == "Aim");
+}
+
 BOOST_AUTO_TEST_CASE(AConflictAllowed_IsAppliedAndNamed_AndASlotCanBeTakenOut)
 {
 	const inp::action_map project = project_map();

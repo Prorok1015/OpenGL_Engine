@@ -3,6 +3,7 @@
 #include <snk/scene/scn_input_actions_desc.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <boost/json.hpp>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -55,8 +56,8 @@ BOOST_AUTO_TEST_CASE(AGoodFileGivesItsActionsInOrder)
 	BOOST_REQUIRE(map.size() == 2u);
 	BOOST_TEST(map.actions()[0].name == "MoveLeft");
 	BOOST_TEST(map.actions()[0].bindings.size() == 2u);
-	BOOST_TEST((std::get<inp::KEYBOARD_BUTTONS>(map.actions()[0].bindings[1]) == inp::KEYBOARD_BUTTONS::LEFT));
-	BOOST_TEST((std::get<inp::MOUSE_BUTTONS>(map.actions()[1].bindings[0]) == inp::MOUSE_BUTTONS::LEFT));
+	BOOST_TEST((map.actions()[0].bindings[1].key() == inp::KEYBOARD_BUTTONS::LEFT));
+	BOOST_TEST((map.actions()[1].bindings[0].mouse_button() == inp::MOUSE_BUTTONS::LEFT));
 }
 
 BOOST_AUTO_TEST_CASE(TheDescSavesWhatItRead)
@@ -65,6 +66,43 @@ BOOST_AUTO_TEST_CASE(TheDescSavesWhatItRead)
 	boost::json::object saved;
 	desc.serialize(saved);
 	BOOST_TEST((saved.at("actions") == boost::json::parse(GOOD).as_object().at("actions")));
+}
+
+BOOST_AUTO_TEST_CASE(AGamepadBindingTakesAThreshold_WhichTheDescSavesBack_AndAWrongOneIsWarnedAbout)
+{
+	const char* text = R"({ "actions": [ { "name": "Aim", "bindings": [
+		{ "axis": "RightTrigger", "threshold": 0.3 }, { "gamepad": "A", "threshold": 0.5 }, { "axis": "LeftX-" }, { "axis": "LeftX+", "threshold": 2 } ] } ] })";
+	const auto desc = read(text);
+	const auto map = scn::build_action_map(desc, "res://input/actions.desc");
+	BOOST_REQUIRE(map.size() == 1u);
+	const auto& bindings = map.actions()[0].bindings;
+	BOOST_REQUIRE(bindings.size() == 4u);
+	BOOST_TEST(bindings[0].threshold() == 0.3f);
+	BOOST_TEST(bindings[1].threshold() == 0.5f);
+	BOOST_TEST(bindings[2].threshold() == 0.0f);
+	BOOST_TEST(bindings[3].threshold() == 0.0f);
+	BOOST_TEST(warned("/actions/0/bindings/3/threshold: not a number in 0..1"));
+
+	boost::json::object saved;
+	desc.serialize(saved);
+	BOOST_TEST((saved.at("actions") == boost::json::parse(text).as_object().at("actions")));
+}
+
+BOOST_AUTO_TEST_CASE(AThresholdOnAKeyIsWarnedAboutOnce_AndABindingSkippedForItsNameAddsNoSecondWarning)
+{
+	const auto map = scn::build_action_map(read(R"({ "actions": [
+		{ "name": "A", "bindings": [ { "key": "SPACE", "threshold": 0.4 }, { "mouse": "LEFT", "threshold": "x" },
+			{ "gamepad": "TURBO", "threshold": 9 }, { "axis": "LeftX-", "threshold": 0.2 } ] } ] })"), "res://input/actions.desc");
+	BOOST_REQUIRE(map.size() == 1u);
+	BOOST_TEST(map.actions()[0].bindings.size() == 3u);
+	std::size_t about_threshold = 0;
+	for (const auto& w : warnings) {
+		if (w.find("threshold") != std::string::npos) ++about_threshold;
+	}
+	BOOST_TEST(about_threshold == 2u);
+	BOOST_TEST(warned("/actions/0/bindings/0/threshold: ignored for a key or a mouse button"));
+	BOOST_TEST(warned("/actions/0/bindings/1/threshold: ignored for a key or a mouse button"));
+	BOOST_TEST(!warned("/actions/0/bindings/2/threshold"));
 }
 
 BOOST_AUTO_TEST_CASE(ProblemsAreWarnedWithTheirPathAndSkipped)
@@ -138,8 +176,8 @@ BOOST_AUTO_TEST_CASE(GamepadButtonsAndAxesAreBindings_AndTheirMistakesAreWarnedW
 	BOOST_REQUIRE(map.size() == 1u);
 	const auto& bindings = map.actions()[0].bindings;
 	BOOST_REQUIRE(bindings.size() == 3u);
-	BOOST_TEST((std::get<inp::GAMEPAD_BUTTONS>(bindings[1]) == inp::GAMEPAD_BUTTONS::A));
-	BOOST_TEST((std::get<inp::GAMEPAD_AXES>(bindings[2]) == inp::GAMEPAD_AXES::LEFT_X_NEG));
+	BOOST_TEST((bindings[1].gamepad_button() == inp::GAMEPAD_BUTTONS::A));
+	BOOST_TEST((bindings[2].gamepad_axis() == inp::GAMEPAD_AXES::LEFT_X_NEG));
 	BOOST_TEST(warned("/actions/0/bindings/3/gamepad: unknown gamepad button 'TURBO'"));
 	BOOST_TEST(warned("/actions/0/bindings/4/axis: unknown gamepad axis 'LeftZ'"));
 	BOOST_TEST(warned("/actions/0/bindings/5: a binding names exactly one"));
@@ -192,6 +230,35 @@ BOOST_AUTO_TEST_CASE(AGamepadSettingThatIsNoObjectOrAHugeNumber_IsWarnedAboutWit
 	const auto huge = scn::build_gamepad_config(read(R"({ "gamepad": { "deadzone": 1e300 } })"), "res://input/actions.desc");
 	BOOST_TEST((huge == inp::gamepad_config{}));
 	BOOST_TEST(warned("/gamepad/deadzone:"));
+}
+
+// #827: the codecs keep the file's JSON in the default resource, also when the target was in another one (assignment would
+// keep that): a desc copied from a module's starts so.
+BOOST_AUTO_TEST_CASE(CodecsKeepTheSourceInTheDefaultResource_EvenWhenTheTargetWasNot)
+{
+	scn::input_action_list actions;
+	scn::input_gamepad_settings gamepad;
+	{
+		boost::json::monotonic_resource arena;
+		const auto bind_to_arena = [&arena](boost::json::value& field) {
+			std::destroy_at(&field);
+			std::construct_at(&field, boost::json::storage_ptr(&arena));
+		};
+		bind_to_arena(actions.source);
+		bind_to_arena(gamepad.source);
+		const boost::json::value in = boost::json::parse(R"({
+			"actions": [ { "name": "AnActionNameLongerThanTheSmallBuffer", "bindings": [ { "key": "A" } ] } ],
+			"gamepad": { "deadzone": 0.25, "press_threshold": 0.5 } })", boost::json::storage_ptr(&arena));
+		BOOST_REQUIRE(desc::json_codec<scn::input_action_list>::from_json(actions, in.at("actions")));
+		BOOST_REQUIRE(desc::json_codec<scn::input_gamepad_settings>::from_json(gamepad, in.at("gamepad")));
+	}
+	BOOST_TEST((actions.source.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST((gamepad.source.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_REQUIRE(actions.source.is_array());
+	BOOST_TEST(actions.source.as_array().at(0).at("name").as_string() == "AnActionNameLongerThanTheSmallBuffer");
+	BOOST_TEST(gamepad.source.at("press_threshold").as_double() == 0.5);
+	BOOST_REQUIRE(actions.entries.size() == 1u);
+	BOOST_TEST(actions.entries[0].name == "AnActionNameLongerThanTheSmallBuffer");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
