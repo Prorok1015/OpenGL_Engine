@@ -469,7 +469,8 @@ jobs:
           expect() {
             want="$1"; shift
             rc=0
-            env -u DISPLAY -u WAYLAND_DISPLAY timeout 300 "$editor" --headless "$@" > /dev/null 2> "$log" || rc=$?
+            env -u DISPLAY -u WAYLAND_DISPLAY timeout 300 "$editor" --config "${GITHUB_WORKSPACE}/Editor/config/editor.cfg" --headless "$@" \
+              > /dev/null 2> "$log" || rc=$?
             tail -40 "$log"
             if [ "$rc" -ne "$want" ]; then echo "::error::editor --headless $* exited with $rc, expected $want"; exit 1; fi
           }
