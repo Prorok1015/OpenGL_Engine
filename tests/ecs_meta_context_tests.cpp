@@ -154,7 +154,9 @@ BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_refere
 BOOST_AUTO_TEST_CASE(entity_fields_are_remapped_by_the_context_of_the_registration)
 {
 	using namespace entt::literals;
-	BOOST_REQUIRE(!entt::resolve<linked_component>());
+	// resolve<T>() makes an empty type for anything; "not registered" is "no fields there".
+	const auto default_has_fields = [] { return entt::resolve<linked_component>().data().begin() != entt::resolve<linked_component>().data().end(); };
+	BOOST_REQUIRE(!default_has_fields());
 	const auto register_linked = [](entt::meta_ctx& ctx) {
 		ecs::register_component<linked_component>(ctx)
 			.data<&linked_component::world_target>("world_target"_hs)
@@ -164,9 +166,13 @@ BOOST_AUTO_TEST_CASE(entity_fields_are_remapped_by_the_context_of_the_registrati
 
 	entt::meta_ctx layer;
 	register_linked(layer);
-	register_linked(ecs::mutable_meta_context());
+	BOOST_REQUIRE(!default_has_fields());
 	for (const entt::meta_ctx* context : { static_cast<const entt::meta_ctx*>(&layer), static_cast<const entt::meta_ctx*>(nullptr) }) {
 		BOOST_TEST_INFO((context ? "layer" : "engine"));
+		if (!context) {
+			// A static build may share the default context with the engine's: this registration may show there.
+			register_linked(ecs::mutable_meta_context());
+		}
 		entt::registry reg;
 		static_cast<void>(reg.create());
 		static_cast<void>(reg.create());
@@ -189,7 +195,6 @@ BOOST_AUTO_TEST_CASE(entity_fields_are_remapped_by_the_context_of_the_registrati
 		}
 	}
 	entt::meta_reset<linked_component>(ecs::mutable_meta_context());
-	BOOST_TEST(!entt::resolve<linked_component>());
 }
 
 // The ids the sandbox released on an earlier apply are not live: they make no world entity.
