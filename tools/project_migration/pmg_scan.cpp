@@ -1,5 +1,6 @@
 #include <snk/project_migration/pmg_scan.h>
 #include <snk/project_migration/pmg_project_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
@@ -15,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -325,15 +327,6 @@ namespace
 		}
 	}
 
-	// A sidecar is <name>.resource next to the asset (EPIC-57 4.2; the paths of sidecars are S57-6, #768).
-	bool has_sidecar(const fs::path& asset)
-	{
-		std::error_code ec;
-		fs::path sidecar = asset;
-		sidecar += ".resource";
-		return fs::is_regular_file(fs::symlink_status(sidecar, ec));
-	}
-
 	struct root_walk
 	{
 		prj::migration::scan_result& result;
@@ -350,13 +343,13 @@ namespace
 			result.files.push_back(std::move(file));
 		}
 
-		void entry(const fs::path& path, const fs::file_status& status)
+		// `owners`: the res::asset_name_key of every file a .resource of this folder belongs to (EPIC-57 4.2).
+		void entry(const fs::path& path, const fs::file_status& status, const std::set<std::string>& owners)
 		{
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
-			if (res::is_skipped_asset_name(name, fs::is_directory(status)) || (at_project_root && (name == "code" || name == "build"))) return;
-			if (at_project_root && name == "project.snkproj") return;
+			if (res::is_skipped_asset_name(name, fs::is_directory(status)) || (at_project_root && prj::migration::is_project_own_name(name))) return;
 			// Only a real folder is entered: a link or a junction to one is reported, never followed.
 			if (fs::is_directory(status)) {
 				folder(path);
@@ -370,12 +363,15 @@ namespace
 			prj::migration::scanned_file file;
 			file.path = fs_paths::generic_utf8_of(path.lexically_relative(project));
 			const std::string extension = lower(fs_paths::utf8_of(path.extension()));
-			if (extension == ".desc") {
-				scan_desc(file, path, descs, options.max_file_bytes);
-			} else if (extension == ".resource") {
+			if (extension == ".resource") {
 				scan_sidecar(file, path, descs, options);
 			} else {
-				file.kind = has_sidecar(path) ? file_class::current : file_class::missing_resource;
+				file.has_resource = owners.contains(res::asset_name_key(name, res::asset_names_case_insensitive));
+				if (extension == ".desc") {
+					scan_desc(file, path, descs, options.max_file_bytes);
+				} else {
+					file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
+				}
 			}
 			result.files.push_back(std::move(file));
 		}
@@ -396,7 +392,14 @@ namespace
 				entries.emplace_back(it->path(), status_error ? fs::file_status{ fs::file_type::unknown } : status);
 			}
 			if (ec) refuse(dir, std::format("the folder could not be listed to the end: {}", ec.message()));
-			for (const auto& [path, status] : entries) entry(path, status);
+			std::set<std::string> owners;
+			for (const auto& [path, status] : entries) {
+				const std::string name = fs_paths::utf8_of(path.filename());
+				if (fs::is_regular_file(status) && res::is_asset_meta_sidecar(name)) {
+					owners.insert(res::asset_name_key(res::asset_meta_owner(name), res::asset_names_case_insensitive));
+				}
+			}
+			for (const auto& [path, status] : entries) entry(path, status, owners);
 		}
 	};
 
@@ -664,6 +667,23 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		scan_root(result, project, normalized(project / content_root), game_layer, options);
 	}
 	std::ranges::sort(result.files, {}, &scanned_file::path);
+
+	// What the editor lists has a .resource when the editor pairs one with it, in any content root (a file of a higher
+	// root may take its .resource from a lower one); a file it does not list, one a higher root covers, by its own
+	// folder. assets.ids decides by this alone, so its plan and what it does agree.
+	project_assets assets(project, manifest->content_roots);
+	assets.rebuild();
+	for (scanned_file& file : result.files) {
+		if (res::is_asset_meta_sidecar(file.path)) continue;
+		const auto listed = assets.assets().find(file.path);
+		if (listed == assets.assets().end()) continue;
+		file.has_resource = listed->second.has_meta;
+		if (file.kind == file_class::current || file.kind == file_class::missing_resource) {
+			if (lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) != ".desc") {
+				file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
+			}
+		}
+	}
 	return result;
 }
 

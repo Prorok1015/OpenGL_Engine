@@ -13,6 +13,13 @@
 // migration runs from the command line too.
 namespace prj::migration
 {
+	// A name directly in the project folder that is no content even when the folder is a content root ".": the
+	// project's code, its build output and project.snkproj. The scan and the index leave them out alike.
+	inline bool is_project_own_name(std::string_view name)
+	{
+		return name == "code" || name == "build" || name == "project.snkproj";
+	}
+
 	struct indexed_asset
 	{
 		// Relative to the project root, with '/' ("res/textures/a.png").
@@ -21,6 +28,8 @@ namespace prj::migration
 		std::string res_path;
 		// None: the file has no .resource, or it could not be read (problems() says why).
 		std::optional<res::asset_id> id;
+		// A .resource pairs with the file, read or not.
+		bool has_meta = false;
 	};
 
 	class project_assets

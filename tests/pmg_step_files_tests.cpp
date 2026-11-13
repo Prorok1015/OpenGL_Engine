@@ -76,6 +76,26 @@ std::string id_text(const std::optional<res::asset_id>& id)
 	return id ? res::to_text(*id) : std::string{ "none" };
 }
 
+// `text` with a root __guid, written right after __type.
+std::string with_guid(const std::string& text, const json::value& guid)
+{
+	json::object root = json::parse(text).as_object();
+	json::object out;
+	for (const auto& member : root) {
+		out[member.key()] = member.value();
+		if (member.key() == "__type") out["__guid"] = guid;
+	}
+	return json::serialize(out);
+}
+
+// The root __guid of a desc's text, "none" without one.
+std::string guid_in(const std::string& text)
+{
+	const json::value root = json::parse(text);
+	const json::value* guid = root.as_object().if_contains("__guid");
+	return guid ? std::string(guid->as_string()) : std::string{ "none" };
+}
+
 std::string new_meta_text()
 {
 	res::asset_meta meta;
@@ -170,6 +190,13 @@ struct step_files_fixture : test_util::scene_env
 		context.files.write("res//textures//plain.png", "second");
 	}
 
+	static void pre_drops_the_guid(pmg::project_step_context& context)
+	{
+		json::object root = json::parse(context.files.read("res/worlds/w_v1.desc")).as_object();
+		root.erase("__guid");
+		context.files.write("res/worlds/w_v1.desc", json::serialize(root));
+	}
+
 	// Deleted, then made again: a change of that file, not a created one.
 	static void post_deletes_and_makes_again(pmg::project_step_context& context)
 	{
@@ -195,6 +222,19 @@ struct step_files_fixture : test_util::scene_env
 	{
 		const auto found = std::ranges::find(report.files, path, &pmg::applied_file::path);
 		return found == report.files.end() ? nullptr : &*found;
+	}
+
+	void expect_the_guid_kept(const json::value& guid)
+	{
+		write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), guid));
+		const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+		BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+		BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+		BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
+		const json::value saved = json::parse(read_text(copy.res() / "worlds/w_v1.desc"));
+		const json::value* kept = saved.as_object().if_contains("__guid");
+		BOOST_REQUIRE(kept != nullptr);
+		BOOST_TEST((*kept == guid), json::serialize(*kept));
 	}
 
 	test_util::fixture_copy copy{ "migration_v1" };
@@ -269,17 +309,60 @@ BOOST_AUTO_TEST_CASE(AFailingStep_RollsBackWhatTheStepsBeforeItDid)
 	BOOST_TEST((content_of(copy.root()) == before));
 }
 
-// The engine's save gives a res:// desc a __guid in its header (desc_adapter_t::serialize); the check after the
-// write takes the class from __type and __version only, so that is no difference. That the save makes one at all is #851.
-BOOST_AUTO_TEST_CASE(AGuidInTheHeaderOfAMigratedDesc_IsNoDifferenceForTheCheck)
+// #851: the engine's save makes a __guid for a res:// desc that has none (desc_adapter_t::serialize); a migration writes
+// the one the file had, or none.
+BOOST_AUTO_TEST_CASE(AMigratedDesc_KeepsItsGuid_AndGetsNoneItDidNotHave)
 {
-	BOOST_REQUIRE(read_text(copy.res() / "worlds/w_v1.desc").find("__guid") == std::string::npos);
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), json::string(k_new_guid)));
+	BOOST_REQUIRE(read_text(copy.res() / "worlds/w_v2.desc").find("__guid") == std::string::npos);
 	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
-	const json::value migrated = json::parse(read_text(copy.res() / "worlds/w_v1.desc"));
-	BOOST_TEST(migrated.as_object().contains("__guid"));
+	BOOST_TEST(file_of(outcome.report, "res/worlds/w_v1.desc")->written_as == "engine");
+	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v1.desc")) == k_new_guid);
+	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v2.desc")) == "none");
+}
+
+// The case of #851: a pre step takes the __guid away (as assets.ids will once #772 is done), the type migration that
+// follows must not bring a new one back.
+BOOST_AUTO_TEST_CASE(AGuidAPreStepTookAway_DoesNotComeBack)
+{
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), json::string(k_new_guid)));
+	registry.add(test_step("test.drop_guid", pmg::project_phase::pre, pre_drops_the_guid));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
+	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v1.desc")) == "none");
+	BOOST_TEST(json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().at("__version").as_int64()
+		== descs->current_version("world_desc"));
+}
+
+// An empty __guid is a __guid the file had: it stays as it was, the engine's save makes no new one in its place.
+BOOST_AUTO_TEST_CASE(AnEmptyGuid_StaysEmpty)
+{
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), ""));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
+	const json::value saved = json::parse(read_text(copy.res() / "worlds/w_v1.desc"));
+	const json::value* guid = saved.as_object().if_contains("__guid");
+	BOOST_REQUIRE(guid != nullptr);
+	BOOST_TEST(guid->as_string() == "");
+}
+
+// A __guid that is no ID is still the file's: the engine's save keeps a string one and makes a new one for any other,
+// the migration writes what the file had.
+BOOST_AUTO_TEST_CASE(AStringGuidThatIsNoId_StaysAsItWas)
+{
+	expect_the_guid_kept(json::value("abc"));
+}
+
+BOOST_AUTO_TEST_CASE(AGuidThatIsNoString_StaysAsItWas)
+{
+	expect_the_guid_kept(json::value(7));
 }
 
 BOOST_AUTO_TEST_CASE(WhatAStepMayNotTouch_IsRefused_AndChangesNothing)
@@ -374,15 +457,27 @@ void expect_the_editors_view(const fs::path& root, const std::vector<fs::path>& 
 
 	std::set<std::string> from_index;
 	for (const auto& [path, asset] : assets.assets()) from_index.insert(res::tag::make(asset.res_path).string() + " " + id_text(asset.id));
+	// The editor walks a content root "." whole; the index leaves out the project's code, build output and manifest,
+	// as the scan does.
+	const bool project_root = content_roots.size() == 1 && content_roots.front() == ".";
+	const auto own = [project_root](const res::tag& tag) {
+		if (!project_root) return false;
+		const std::string path(tag.relative());
+		return pmg::is_project_own_name(std::string_view(path).substr(0, path.find('/')));
+	};
 	std::set<std::string> from_database;
-	for (const auto& [key, record] : database.records()) from_database.insert(record.path.string() + " " + id_text(record.id));
+	for (const auto& [key, record] : database.records()) {
+		if (!own(record.path)) from_database.insert(record.path.string() + " " + id_text(record.id));
+	}
 	BOOST_TEST((from_index == from_database));
 	BOOST_TEST(!from_index.empty());
 
 	std::set<std::string> index_orphans;
 	for (const auto& [path, meta] : assets.orphans()) index_orphans.insert(res::tag::make(meta.res_path).string() + " " + id_text(meta.id));
 	std::set<std::string> database_orphans;
-	for (const edt::asset_orphan& orphan : database.orphans()) database_orphans.insert(orphan.meta_path.string() + " " + id_text(orphan.id));
+	for (const edt::asset_orphan& orphan : database.orphans()) {
+		if (!own(orphan.meta_path)) database_orphans.insert(orphan.meta_path.string() + " " + id_text(orphan.id));
+	}
 	BOOST_TEST((index_orphans == database_orphans));
 }
 
@@ -439,9 +534,16 @@ BOOST_AUTO_TEST_CASE(TwoContentRoots_AreStackedAsTheEditorStacksThem)
 
 BOOST_AUTO_TEST_CASE(TheProjectFolderAsItsContentRoot_IsWalkedAsTheEditorWalksIt)
 {
+	write_text(copy.root() / "code/game.png", "x");
+	write_text(copy.root() / "build/out.png", "x");
+	write_text(copy.root() / "build/lost.png.resource", new_meta_text());
 	expect_the_editors_view(copy.root(), { "." });
 	pmg::project_assets assets(copy.root(), { "." });
 	assets.rebuild();
+	BOOST_TEST(!assets.assets().contains("code/game.png"));
+	BOOST_TEST(!assets.assets().contains("build/out.png"));
+	BOOST_TEST(!assets.assets().contains("project.snkproj"));
+	BOOST_TEST(!assets.orphans().contains("build/lost.png.resource"));
 	BOOST_TEST(assets.assets().contains(std::string(k_plain)));
 	BOOST_TEST(assets.assets().at(std::string(k_plain)).res_path == "res/textures/plain.png");
 }

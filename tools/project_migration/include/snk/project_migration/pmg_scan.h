@@ -48,6 +48,9 @@ namespace prj::migration
 		std::vector<std::string> unknown_types;
 		// Why the file is invalid or newer; empty otherwise.
 		std::string reason;
+		// A file that is no .resource has one beside it, paired as the editor's asset database pairs them
+		// (res::asset_name_key of its owner); false is what EPIC-57's assets.ids step gives one (#776).
+		bool has_resource = true;
 	};
 
 	struct manifest_state
