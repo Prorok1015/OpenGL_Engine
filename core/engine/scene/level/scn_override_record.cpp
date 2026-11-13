@@ -1,6 +1,7 @@
 #include <snk/scene/level/scn_override_record.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_node_id.h>
+#include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>
 #include <map>
 
@@ -120,6 +121,7 @@ namespace scn {
 		}
 		if (const auto* value = obj.if_contains("value")) {
 			record.value = *value;
+			ds::keep_in_default_resource(record.value);
 		}
 
 		if (record.op == override_op::set && (record.component.empty() || !obj.contains("value"))) {

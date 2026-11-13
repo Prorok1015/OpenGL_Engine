@@ -1,6 +1,7 @@
 #include <snk/scene/scn_input_actions_desc.h>
 #include <snk/input/inp_input_stack.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>
 #include <optional>
 
@@ -73,10 +74,12 @@ bool desc::json_codec<scn::input_action_list>::from_json(scn::input_action_list&
 		egLOG_WARN("input", "input_actions_desc: /actions: expected an array, the file has no actions");
 		actions.entries.clear();
 		actions.source = in;
+		ds::keep_in_default_resource(actions.source);
 		return true;
 	}
 	actions.entries = parse_entries(in.as_array());
 	actions.source = in;
+	ds::keep_in_default_resource(actions.source);
 	return true;
 }
 
@@ -180,6 +183,7 @@ bool desc::json_codec<scn::input_gamepad_settings>::from_json(scn::input_gamepad
 {
 	settings = {};
 	settings.source = in;
+	ds::keep_in_default_resource(settings.source);
 	const json::object* object = in.if_object();
 	if (!object) {
 		settings.not_object = true;
