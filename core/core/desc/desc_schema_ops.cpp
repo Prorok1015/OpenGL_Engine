@@ -171,21 +171,6 @@ namespace desc
 			}
 		}
 
-		std::string escape_token(std::string_view token)
-		{
-			std::string result;
-			for (char c : token) {
-				if (c == '~') {
-					result += "~0";
-				} else if (c == '/') {
-					result += "~1";
-				} else {
-					result.push_back(c);
-				}
-			}
-			return result;
-		}
-
 		const json::value* pointer_get(const json::value& root, const std::vector<std::string>& tokens, std::size_t first)
 		{
 			const json::value* node = &root;
@@ -543,6 +528,23 @@ namespace desc
 			return found ? std::make_shared<const enum_schema>(*found) : nullptr;
 		}
 
+		json::value zero_json(const field_ops& ops);
+
+		// Every field of a structure at its default, or at the empty value of its kind when it has none: what a null for the
+		// whole structure sets it back to.
+		json::value defaults_object(const schema_binding& nested)
+		{
+			json::value out(json::object{});
+			for (std::size_t i = 0; i < nested.schema->fields.size(); ++i) {
+				const field_schema& field = nested.schema->fields[i];
+				json::value value = field.default_value.is_null() ? zero_json(nested.ops[i]) : field.default_value;
+				if (!value.is_null()) {
+					json_pointer_set(out, field.key, std::move(value));
+				}
+			}
+			return out;
+		}
+
 		// What a field is set back to by a null in the file (field_schema::optional): its kind's empty value. Null: there is none (a
 		// custom value, an entity, a node reference), the field keeps what it has.
 		json::value zero_json(const field_ops& ops)
@@ -570,7 +572,7 @@ namespace desc
 			case field_kind::desc_ref: return json::value(std::string_view{});
 			case field_kind::enumeration:
 				return ops.enumeration && !ops.enumeration->items.empty() ? json::value(ops.enumeration->items.front().name) : json::value();
-			case field_kind::structure:
+			case field_kind::structure: return ops.nested ? defaults_object(*ops.nested) : json::value(json::object{});
 			case field_kind::map: return json::value(json::object{});
 			case field_kind::array: return json::value(json::array{});
 			case field_kind::node_ref:
@@ -601,7 +603,7 @@ namespace desc
 		void diff_untyped(const std::string& prefix, const json::value& base, const json::value& edited, std::vector<json_change>& out)
 		{
 			for (const auto& member : edited.as_object()) {
-				const std::string pointer = prefix + "/" + escape_token(member.key());
+				const std::string pointer = prefix + "/" + res::json_pointer_token(member.key());
 				const json::value* before = base.as_object().if_contains(member.key());
 				if (!before) {
 					out.push_back({ pointer, member.value() });
@@ -620,15 +622,16 @@ namespace desc
 		{
 			const double tolerance = tolerance_for(field.element, field.element);
 			for (const auto& member : after) {
-				const std::string key_pointer = pointer + "/" + escape_token(member.key());
+				if (member.key().empty()) continue; // no such key in a map: the read refuses it
+				const std::string key_pointer = pointer + "/" + res::json_pointer_token(member.key());
 				const json::value* was = before.if_contains(member.key());
 				if (!was || !json_equal(*was, member.value(), tolerance)) {
 					out.push_back({ key_pointer, member.value() });
 				}
 			}
 			for (const auto& member : before) {
-				if (!after.contains(member.key())) {
-					out.push_back({ pointer + "/" + escape_token(member.key()), json::value() });
+				if (!member.key().empty() && !after.contains(member.key())) {
+					out.push_back({ pointer + "/" + res::json_pointer_token(member.key()), json::value() });
 				}
 			}
 		}
@@ -775,7 +778,7 @@ namespace desc
 		{
 			for (const auto& member : patch) {
 				if (member.value().is_null()) continue;
-				const std::string here = local + "/" + escape_token(member.key());
+				const std::string here = local + "/" + res::json_pointer_token(member.key());
 				const json::value* now = current ? current->if_contains(member.key()) : nullptr;
 				const json::object* now_object = now && now->is_object() ? &now->as_object() : nullptr;
 

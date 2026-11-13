@@ -10,10 +10,10 @@
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_node_id.h>
-#include <snk/resource/res_diagnostics.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_system.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <boost/json.hpp>
