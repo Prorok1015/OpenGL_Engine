@@ -157,6 +157,24 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesOverlappingContentRoots)
 	BOOST_TEST(opened.error.find("overlap") != std::string::npos);
 }
 
+#if !defined(_WIN32)
+// #856: the manifest refuses roots whose paths overlap; a link can still join two that do not, and opening refuses those.
+BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsALinkMakesOverlap)
+{
+	test_util::temp_dir dir("prj_overlap_link");
+	dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0",
+		"content_roots": ["res", "shared"] })");
+	fs::create_directories(dir.path() / "res" / "sub");
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "res" / "sub", dir.path() / "shared", ec);
+	BOOST_REQUIRE(!ec);
+
+	const auto opened = prj::open_project(dir.path());
+	BOOST_TEST(!opened.context.has_value());
+	BOOST_TEST(opened.error.find("overlap") != std::string::npos);
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsOverTheEngineBase)
 {
 	test_util::temp_dir dir("prj_engine_overlap");

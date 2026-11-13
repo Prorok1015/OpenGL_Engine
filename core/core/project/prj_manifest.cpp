@@ -8,6 +8,7 @@
 #include <set>
 #include <system_error>
 #include <utility>
+#include <vector>
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 #include <snk/common/logger/engine_log.h>
@@ -90,6 +91,24 @@ namespace
 			out.pop_back();
 		}
 		return out;
+	}
+
+	// A manifest means one project on every file system, so roots that differ only in letter case are one folder.
+	std::string folded_dir(std::string_view text)
+	{
+		std::string out = normalized_dir(text);
+		for (char& ch : out) {
+			if (ch >= 'A' && ch <= 'Z') {
+				ch = static_cast<char>(ch - 'A' + 'a');
+			}
+		}
+		return out;
+	}
+
+	// Both are folded_dir of safe relative dirs, so a prefix ending at a '/' is a parent folder.
+	bool dir_within(std::string_view inner, std::string_view outer)
+	{
+		return inner.starts_with(outer) && (inner.size() == outer.size() || inner[outer.size()] == '/');
 	}
 
 	// Unknown keys come from the file: control characters would forge log lines, so they are shown as \u00XX.
@@ -299,6 +318,7 @@ namespace
 				fail("$.content_roots", "expected at least one content root");
 			}
 			std::set<std::string> seen;
+			std::vector<std::pair<std::string, std::string>> folded_roots;
 			for (std::size_t i = 0; i < array.size(); ++i) {
 				const std::string path = std::format("$.content_roots[{}]", i);
 				const std::string_view text = require_string(array[i], path);
@@ -308,6 +328,15 @@ namespace
 				if (!seen.insert(normalized_dir(text)).second) {
 					fail(path, "duplicate content root");
 				}
+				// One file would sit under two res:// tags, and every walk of the roots would meet it twice (#856).
+				// prj::verify_project_mounts also compares the real paths, which a link may join.
+				const std::string folded = folded_dir(text);
+				for (const auto& [other_folded, other] : folded_roots) {
+					if (dir_within(folded, other_folded) || dir_within(other_folded, folded)) {
+						fail(path, std::format("content roots '{}' and '{}' overlap", other, normalized_dir(text)));
+					}
+				}
+				folded_roots.emplace_back(folded, normalized_dir(text));
 				result.content_roots.emplace_back(std::string{ text });
 			}
 		} else {
