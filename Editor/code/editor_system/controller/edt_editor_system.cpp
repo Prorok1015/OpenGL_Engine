@@ -23,6 +23,8 @@
 #include "edt_code_section.h"
 #include <snk/platform/plt_shell_open.h>
 #include "edt_prefab_editor_panel.h"
+#include "edt_data_document.h"
+#include "edt_data_document_panel.h"
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
@@ -332,6 +334,8 @@ edt::editor_system::~editor_system()
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
 		// Jobs run the importer and exporter of this system: none may be left running when they are destroyed.
 		context->jobs().cancel_all_and_wait();
+		m_data_window_closed.disconnect();
+		m_data_windows.clear();
 		context->documents().shutdown();
 	}
 	if (m_prefab_panel) {
@@ -468,6 +472,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	asset_kind_hooks asset_hooks;
 	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	asset_hooks.open_data_document = [this](const res::tag& tag) { open_data_document(tag); };
+	m_data_window_closed = m_context->events().document_closed.subscribe([this](document_id id) { m_data_windows.erase(id); });
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
 		if (refused_during_play(m_play.get(), m_context->dialogs(), "Stop Play to add an asset to the scene.")) return;
 		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
@@ -657,15 +663,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// #550: the agent's reads and writes of the desc files of res/, checked against the schemas first.
 	{
 		edt::desc_file_deps desc_files{ m_res, desc_system };
-		desc_files.top_layer = [this] { return m_res.get_resources_path(); };
-		desc_files.layers = [this] { return m_res.get_resource_layers(); };
-		desc_files.open_level_files = [this] {
-			std::vector<std::string> open;
-			for (const res::tag* tag : { &current_level_tag(), &current_editor_tag() }) {
-				if (!tag->view().empty()) open.emplace_back(tag->relative());
-			}
-			return open;
-		};
+		desc_file_layout layout = desc_layout();
+		desc_files.top_layer = std::move(layout.top_layer);
+		desc_files.layers = std::move(layout.layers);
+		desc_files.open_level_files = std::move(layout.open_level_files);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
@@ -1994,6 +1995,89 @@ void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
 	}
+}
+
+edt::desc_file_layout edt::editor_system::desc_layout()
+{
+	desc_file_layout layout;
+	layout.top_layer = [this] { return m_res.get_resources_path(); };
+	layout.layers = [this] { return m_res.get_resource_layers(); };
+	layout.open_level_files = [this] {
+		std::vector<std::string> open;
+		for (const res::tag* tag : { &current_level_tag(), &current_editor_tag() }) {
+			if (!tag->view().empty()) open.emplace_back(tag->relative());
+		}
+		return open;
+	};
+	return layout;
+}
+
+// ─── Data documents (EPIC-56, #793) ─────────────────────────────────────────
+
+void edt::editor_system::open_data_document(const res::tag& tag)
+{
+	document_manager& documents = m_context->documents();
+	if (document* open = documents.find_by_source(tag)) {
+		focus_document(*open);
+		return;
+	}
+	auto created = std::make_unique<data_document>(m_services, desc_layout());
+	if (const open_result opened = created->open(tag); !opened.opened) {
+		egLOG_WARN("editor", "{}", opened.error);
+		m_context->dialogs().message(message_level::warning, std::format("'{}' cannot be opened as a data document:\n{}", tag.view(), opened.error));
+		return;
+	}
+	data_document& data = *created;
+	const document_id id = documents.adopt(std::move(created)).id();
+	auto panel = std::make_shared<data_document_panel>(data, m_services, id);
+	panel->set_on_close([this, id] { request_close_data_document(id); });
+	registration window = m_context->panels().add({
+		.id = panel->get_id(), .title = panel->get_title(), .slot = dock_slot::floating, .open_by_default = true,
+		.show_in_view_menu = false, .panel = panel });
+	m_data_windows.emplace(id, data_window{ std::move(panel), std::move(window) });
+}
+
+void edt::editor_system::focus_document(document& open)
+{
+	document_manager& documents = m_context->documents();
+	documents.set_active(open.id());
+	if (const auto window = m_data_windows.find(open.id()); window != m_data_windows.end()) {
+		window->second.panel->set_open(true);
+		window->second.panel->request_focus();
+		return;
+	}
+	if (documents.preview() == &open) m_prefab_panel->set_open(true);
+}
+
+void edt::editor_system::request_close_data_document(document_id id)
+{
+	document* open = m_context->documents().find(id);
+	const auto window = m_data_windows.find(id);
+	if (!open || window == m_data_windows.end()) return;
+	if (!open->is_dirty()) {
+		close_data_document(id);
+		return;
+	}
+	// The window stays while the question is open (closing it asked, nothing was decided).
+	window->second.panel->set_open(true);
+	m_context->dialogs().confirm_unsaved([this, id](unsaved_choice choice) {
+		document* still_open = m_context->documents().find(id);
+		if (!still_open || choice == unsaved_choice::cancel) return;
+		if (choice == unsaved_choice::save) {
+			if (const save_result saved = still_open->save(); !saved.saved) {
+				egLOG_WARN("editor", "{}", saved.error);
+				m_context->dialogs().message(message_level::error, std::format("'{}' was not saved and stays open:\n{}", still_open->title(), saved.error));
+				return;
+			}
+		}
+		close_data_document(id);
+	});
+}
+
+void edt::editor_system::close_data_document(document_id id)
+{
+	m_data_windows.erase(id);
+	m_context->documents().close(id);
 }
 
 bool edt::editor_system::person_is_editing() const

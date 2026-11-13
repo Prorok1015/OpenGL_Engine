@@ -45,6 +45,7 @@ void edt::document_manager::shutdown()
 {
 	if (!m_scene) return;
 	if (m_open_preview) close(m_open_preview->id());
+	while (!m_adopted.empty()) close(m_adopted.back()->id());
 	m_scene->bind_events(nullptr);
 	m_scene = nullptr;
 	m_active = 0;
@@ -59,7 +60,8 @@ edt::document* edt::document_manager::find(document_id id)
 {
 	if (m_scene && id == m_scene->id()) return m_scene;
 	if (m_open_preview && m_open_preview->is_open() && m_open_preview->id() == id) return m_open_preview;
-	return nullptr;
+	const auto kept = std::find_if(m_adopted.begin(), m_adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	return kept != m_adopted.end() ? kept->get() : nullptr;
 }
 
 void edt::document_manager::set_active(document_id id)
@@ -111,6 +113,27 @@ edt::previewable_document* edt::document_manager::open_preview(std::string_view 
 	return preview ? open_with(*preview, source) : nullptr;
 }
 
+edt::document& edt::document_manager::adopt(std::unique_ptr<document> adopted)
+{
+	ASSERT_MSG(adopted, "document_manager::adopt: no document");
+	document& kept = *adopted;
+	kept.assign_id(m_next_id++);
+	kept.bind_events(&m_events);
+	m_adopted.push_back(std::move(adopted));
+	m_events.document_opened.emit(kept.id());
+	set_active(kept.id());
+	return kept;
+}
+
+edt::document* edt::document_manager::find_by_source(const res::tag& source)
+{
+	document* found = nullptr;
+	for_each([&](document& candidate) {
+		if (!found && candidate.source() == source) found = &candidate;
+	});
+	return found;
+}
+
 edt::previewable_document* edt::document_manager::preview()
 {
 	return m_open_preview && m_open_preview->is_open() ? m_open_preview : nullptr;
@@ -120,6 +143,19 @@ void edt::document_manager::close(document_id id)
 {
 	if (m_scene && id == m_scene->id()) {
 		egLOG_WARN("Editor/Documents", "The scene document cannot be closed");
+		return;
+	}
+	const auto adopted = std::find_if(m_adopted.begin(), m_adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	if (adopted != m_adopted.end()) {
+		// Out of the list before anything is announced, and destroyed after: a listener may still read the closing document.
+		std::unique_ptr<document> closing = std::move(*adopted);
+		m_adopted.erase(adopted);
+		closing->bind_events(nullptr);
+		if (m_active == id) {
+			m_active = m_scene ? m_scene->id() : 0;
+			m_events.document_activated.emit(m_active);
+		}
+		m_events.document_closed.emit(id);
 		return;
 	}
 	if (!m_open_preview || !m_open_preview->is_open() || m_open_preview->id() != id) return;
@@ -164,4 +200,6 @@ void edt::document_manager::for_each(const std::function<void(document&)>& fn)
 {
 	if (m_scene) fn(*m_scene);
 	if (preview()) fn(*m_open_preview);
+	// By index: a visitor may close a document.
+	for (std::size_t i = 0; i < m_adopted.size(); ++i) fn(*m_adopted[i]);
 }

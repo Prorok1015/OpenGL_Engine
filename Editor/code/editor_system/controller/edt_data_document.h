@@ -65,6 +65,10 @@ namespace edt
 		const std::string& chain_problem() const { return m_chain_problem; }
 
 		const std::string& type() const { return m_type; }
+		// The schema of the document's type (null when it is gone, e.g. the game layer that registered it was replaced).
+		const desc::type_schema* schema() const;
+		// The files the document inherits from, the nearest first (empty without __parent).
+		const std::vector<res::tag>& parents() const { return m_parents; }
 		const boost::json::object& own() const { return m_own; }
 		// The values the file inherits, header keys left out (empty without __parent).
 		const boost::json::object& inherited() const { return m_inherited; }
@@ -90,7 +94,6 @@ namespace edt
 			std::vector<res::tag> parents;
 		};
 
-		const desc::type_schema* schema() const;
 		open_result load(const res::tag& file, loaded& out) const;
 		open_result resolve_chain(const res::tag& file, const boost::json::object& own, const std::string& type,
 			boost::json::object& inherited, std::vector<res::tag>& parents) const;

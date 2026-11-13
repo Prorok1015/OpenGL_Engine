@@ -95,6 +95,33 @@ struct document_fixture : test_util::scene_env
 
 }
 
+namespace {
+
+// A document of the editor's own, as the manager's adopt() takes them (a data document).
+class adopted_document final : public edt::document
+{
+public:
+	explicit adopted_document(std::string name, std::vector<std::string>* destroyed = nullptr)
+		: m_title(std::move(name)), m_source(res::tag::make(m_title + ".desc")), m_destroyed(destroyed) {}
+	~adopted_document() override { if (m_destroyed) m_destroyed->push_back(m_title); }
+
+	std::string_view kind() const override { return "adopted"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return false; }
+	std::uint64_t generation() const override { return 0; }
+	void bind_events(edt::editor_events* events) override { m_events = events; }
+	edt::editor_events* events() const { return m_events; }
+
+private:
+	std::string m_title;
+	res::tag m_source;
+	std::vector<std::string>* m_destroyed;
+	edt::editor_events* m_events = nullptr;
+};
+
+}
+
 BOOST_FIXTURE_TEST_SUITE(EdtDocumentTests, document_fixture)
 
 BOOST_AUTO_TEST_CASE(Scene_IsTheOnlyDocumentAndTheActiveOne)
@@ -463,6 +490,70 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_ChoosesTheBuiltInPreview_EvenWhenAModulePreviewH
 
 	// The prefab editor asks for the prefab document by its id: a document of another type is never cast to it.
 	BOOST_CHECK_NO_THROW(edt::open_prefab(documents, ui_prefab));
+}
+
+BOOST_AUTO_TEST_CASE(Adopt_GivesTheDocumentAnIdAnnouncesItAndMakesItActive)
+{
+	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
+
+	BOOST_TEST(data.id() != 0u);
+	BOOST_TEST(data.id() != scene.id());
+	BOOST_TEST(documents.find(data.id()) == &data);
+	BOOST_TEST(documents.active() == &data);
+	BOOST_TEST(static_cast<adopted_document&>(data).events() == &events);
+	BOOST_TEST(count_documents() == 2u);
+	BOOST_TEST((log == std::vector<std::string>{
+		"opened:" + std::to_string(data.id()), "activated:" + std::to_string(data.id()) }));
+}
+
+BOOST_AUTO_TEST_CASE(TwoAdoptedDocuments_AreOpenAtOnceAndCloseIndependently)
+{
+	std::vector<std::string> destroyed;
+	auto& first = documents.adopt(std::make_unique<adopted_document>("first", &destroyed));
+	auto& second = documents.adopt(std::make_unique<adopted_document>("second", &destroyed));
+	const edt::document_id first_id = first.id();
+	const edt::document_id second_id = second.id();
+	BOOST_TEST(first_id != second_id);
+	BOOST_TEST(count_documents() == 3u);
+
+	log.clear();
+	documents.close(first_id);
+	BOOST_TEST(documents.find(first_id) == nullptr);
+	BOOST_TEST(documents.find(second_id) == &second);
+	BOOST_TEST(documents.active() == &second);
+	BOOST_TEST((destroyed == std::vector<std::string>{ "first" }));
+	BOOST_TEST((log == std::vector<std::string>{ "closed:" + std::to_string(first_id) }));
+
+	log.clear();
+	documents.close(second_id);
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST((destroyed == std::vector<std::string>{ "first", "second" }));
+	BOOST_TEST((log == std::vector<std::string>{ "activated:" + std::to_string(scene.id()), "closed:" + std::to_string(second_id) }));
+	BOOST_TEST(count_documents() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(FindBySource_FindsTheSceneThePreviewAndTheAdoptedDocuments)
+{
+	documents.adopt(std::make_unique<adopted_document>("config"));
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+
+	BOOST_TEST(documents.find_by_source(res::tag::make("config.desc")) != nullptr);
+	BOOST_TEST(documents.find_by_source(prefab_a) == &prefab);
+	BOOST_TEST(documents.find_by_source(res::tag::make("nothing.desc")) == nullptr);
+	scene.level_tag = res::tag::make("levels/a.desc");
+	BOOST_TEST(documents.find_by_source(res::tag::make("levels/a.desc")) == &scene);
+}
+
+BOOST_AUTO_TEST_CASE(Shutdown_ClosesTheAdoptedDocuments_AndNeitherTheSceneNorALaterCloseLeaksThem)
+{
+	std::vector<std::string> destroyed;
+	documents.adopt(std::make_unique<adopted_document>("one", &destroyed));
+	documents.adopt(std::make_unique<adopted_document>("two", &destroyed));
+	documents.close(scene.id());
+	BOOST_TEST(count_documents() == 3u);
+
+	documents.shutdown();
+	BOOST_TEST((destroyed.size() == 2u));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

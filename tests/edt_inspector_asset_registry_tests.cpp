@@ -425,6 +425,7 @@ struct builtin_kinds_fixture : context_fixture
 	{
 		edt::asset_kind_hooks hooks;
 		hooks.open_prefab = [this](const res::tag& tag) { log.push_back("prefab:" + std::string(tag.relative())); };
+		hooks.open_data_document = [this](const res::tag& tag) { log.push_back("data:" + std::string(tag.relative())); };
 		hooks.add_desc_to_scene = [this](const res::tag& tag) { log.push_back("add:" + std::string(tag.relative())); };
 		registrations = edt::register_builtin_asset_kinds(context->asset_kinds(), std::move(hooks));
 	}
@@ -436,15 +437,26 @@ struct builtin_kinds_fixture : context_fixture
 BOOST_FIXTURE_TEST_CASE(Builtin_PrefabSuffixOpensThePrefabDocument, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "desc" }));
+	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "data_document", "desc" }));
 	BOOST_CHECK(kinds.open(*context, res::tag::make("prefabs/tree.prefab.desc")));
 	BOOST_CHECK((log == std::vector<std::string>{ "prefab:prefabs/tree.prefab.desc" }));
+}
+
+BOOST_FIXTURE_TEST_CASE(Builtin_OtherDescFilesOpenAsDataDocuments, builtin_kinds_fixture)
+{
+	auto& kinds = context->asset_kinds();
+	for (const char* path : { "levels/a.desc", "config/game.desc", "materials/red.mat.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			BOOST_CHECK(kinds.open(*context, res::tag::make(path)));
+		}
+	}
+	BOOST_CHECK((log == std::vector<std::string>{ "data:levels/a.desc", "data:config/game.desc", "data:materials/red.mat.desc" }));
 }
 
 BOOST_FIXTURE_TEST_CASE(Builtin_OtherAssetsAreNotOpened, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	for (const char* path : { "levels/a.desc", "models/x.glb", "x.prefab", "x.prefab.desc.bak" }) {
+	for (const char* path : { "models/x.glb", "x.prefab", "x.prefab.desc.bak", "x.desc.bak" }) {
 		BOOST_TEST_CONTEXT(path) {
 			BOOST_CHECK(!kinds.open(*context, res::tag::make(path)));
 		}

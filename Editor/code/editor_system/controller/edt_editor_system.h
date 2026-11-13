@@ -2,6 +2,7 @@
 #include "edt_world_problems.h"
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
+#include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
 #include <snk/command/cmd_types.h>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
 #include "edt_scene_document.h"
@@ -55,6 +57,7 @@ namespace edt {
 	class live_mode;
 	class editor_context;
 	class editor_layer;
+	class data_document_panel;
 	class model_importer;
 	class process_decoder;
 	class asset_exporter;
@@ -233,6 +236,21 @@ namespace edt {
 		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
 		void close_prefab_editor();
+
+		// Data documents (EPIC-56, #793): the document is owned by the document_manager (adopt), its window by the
+		// panel registry (the registration here); the window goes first, it holds the document.
+		struct data_window
+		{
+			std::shared_ptr<data_document_panel> panel;
+			registration window;
+		};
+		desc_file_layout desc_layout();
+		void open_data_document(const res::tag& tag);
+		void focus_document(document& open);
+		void request_close_data_document(document_id id);
+		void close_data_document(document_id id);
+		std::unordered_map<document_id, data_window> m_data_windows;
+		connection m_data_window_closed;
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;
