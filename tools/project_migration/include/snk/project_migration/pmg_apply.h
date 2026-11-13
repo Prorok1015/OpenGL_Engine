@@ -90,6 +90,11 @@ namespace prj::migration
 		migration_report report;
 	};
 
+	// The root __guid of a desc the engine saved, made what `original` (the file before the save) had: the same value at
+	// its place, or none. The engine's save makes one for a res:// desc without one (#851); a migration and desc_resave
+	// write none. Whether `saved` changed.
+	bool keep_root_guid(json::object& saved, const json::object& original);
+
 	// Why apply_migration refuses `plan` before writing anything: a project.snkproj that is newer or invalid, an invalid
 	// file without plan.force, or plan.refused. Empty when it may run.
 	std::string plan_refusal(const migration_plan& plan);

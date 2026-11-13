@@ -364,6 +364,7 @@ struct project_step {
   - Логика — `prj::migration::run_migrate`/`run_migrate_rollback` (`pmg_command.h`), коды — `k_exit_*`.
   - `--dry-run` вызывает только `scan_project` и `plan_migration`, которые ничего не пишут. `--report <file>` внутри корня проекта — отказ (2).
   - `--force` = `plan_options::force`: `invalid`-файлы не мигрируются и попадают в отчёт. `newer`-файлы с S6 не повод для отказа: они остаются как есть, статус `partial` (раньше apply отказывал).
+  - `desc_resave` следует правилу #851, что и миграция (`prj::migration::keep_root_guid`): корневой `__guid` остаётся, как в файле, новый не придумывается. Поэтому `desc_resave --check` на результате миграции чист.
   - Незавершённая миграция (журнал `in_progress` или `rollback_failed`) — отказ (2) с подсказкой `--migrate-rollback <id>`, и для `--dry-run` тоже.
 
 ### 4.4. MCP (агент)

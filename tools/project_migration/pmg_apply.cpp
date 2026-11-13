@@ -360,6 +360,14 @@ namespace
 		std::size_t position = 0;
 	};
 
+	std::optional<root_guid> root_guid_of(const json::object& root)
+	{
+		for (auto member = root.begin(); member != root.end(); ++member) {
+			if (member->key() == "__guid") return root_guid{ member->value(), static_cast<std::size_t>(member - root.begin()) };
+		}
+		return std::nullopt;
+	}
+
 	// Puts the root __guid of a saved desc back to what the file had: the same value, or none. One the save dropped
 	// goes back at the position it had in the file. Whether anything changed.
 	bool restore_guid(json::object& saved, const std::optional<root_guid>& before)
@@ -544,15 +552,7 @@ namespace
 			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
 			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
 			// .resource's (EPIC-57 4.2).
-			std::optional<root_guid> guid_before;
-			if (migrated.is_object()) {
-				const json::object& root = migrated.as_object();
-				for (auto member = root.begin(); member != root.end(); ++member) {
-					if (member->key() != "__guid") continue;
-					guid_before = root_guid{ member->value(), static_cast<std::size_t>(member - root.begin()) };
-					break;
-				}
-			}
+			const std::optional<root_guid> guid_before = migrated.is_object() ? root_guid_of(migrated.as_object()) : std::nullopt;
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
 
@@ -885,6 +885,11 @@ std::string_view prj::migration::to_string(migration_status status)
 	case migration_status::rollback_failed: return "rollback_failed";
 	}
 	return "in_progress";
+}
+
+bool prj::migration::keep_root_guid(json::object& saved, const json::object& original)
+{
+	return restore_guid(saved, root_guid_of(original));
 }
 
 std::string prj::migration::plan_refusal(const migration_plan& plan)
