@@ -379,6 +379,34 @@ BOOST_AUTO_TEST_CASE(Confirmation_TravelsAsAParameterOfItsOwn_NotInTheArguments)
 	BOOST_TEST(runs == 1);
 }
 
+// #827: a posted call runs on a later frame; its arguments must not stay in the caller's resource (a module's arena).
+BOOST_AUTO_TEST_CASE(Post_KeepsTheArgumentsPastTheCallersResource)
+{
+	std::string seen;
+	bool in_default_resource = false;
+	cmd::command_desc desc;
+	desc.id = "test.keep_args";
+	desc.args_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]})");
+	desc.invoke = [&](const cmd::call& request) {
+		in_default_resource = request.args.storage().get() == boost::json::storage_ptr().get();
+		seen = std::string(request.args.at("text").as_string());
+		return cmd::result::success();
+	};
+	auto reg = commands.add(std::move(desc));
+
+	std::future<cmd::result> outcome;
+	{
+		boost::json::monotonic_resource arena;
+		outcome = queue.post("test.keep_args", boost::json::parse(R"({"text":"a text long enough to be allocated in the arena"})",
+			boost::json::storage_ptr(&arena)), cmd::origin::test());
+	}
+	BOOST_CHECK_EQUAL(drain(), 1u);
+	BOOST_REQUIRE(is_ready(outcome));
+	BOOST_CHECK(outcome.get().ok);
+	BOOST_CHECK(in_default_resource);
+	BOOST_CHECK_EQUAL(seen, "a text long enough to be allocated in the arena");
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(CmdMainThreadQueueLifetimeTests)
@@ -419,34 +447,6 @@ BOOST_AUTO_TEST_CASE(TaskSystemShutdown_FailsPendingCallsInsteadOfBreakingThePro
 	const cmd::result result = outcome.get();
 	BOOST_CHECK(!result.ok);
 	BOOST_CHECK_EQUAL(result.code, "failed");
-}
-
-// #827: a posted call runs on a later frame; its arguments must not stay in the caller's resource (a module's arena).
-BOOST_AUTO_TEST_CASE(Post_KeepsTheArgumentsPastTheCallersResource)
-{
-	std::string seen;
-	bool in_default_resource = false;
-	cmd::command_desc desc;
-	desc.id = "test.keep_args";
-	desc.args_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]})");
-	desc.invoke = [&](const cmd::call& request) {
-		in_default_resource = request.args.storage().get() == boost::json::storage_ptr().get();
-		seen = std::string(request.args.at("text").as_string());
-		return cmd::result::success();
-	};
-	auto reg = commands.add(std::move(desc));
-
-	std::future<cmd::result> outcome;
-	{
-		boost::json::monotonic_resource arena;
-		outcome = queue.post("test.keep_args", boost::json::parse(R"({"text":"a text long enough to be allocated in the arena"})",
-			boost::json::storage_ptr(&arena)), cmd::origin::test());
-	}
-	BOOST_CHECK_EQUAL(drain(), 1u);
-	BOOST_REQUIRE(is_ready(outcome));
-	BOOST_CHECK(outcome.get().ok);
-	BOOST_CHECK(in_default_resource);
-	BOOST_CHECK_EQUAL(seen, "a text long enough to be allocated in the arena");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
