@@ -5,6 +5,7 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/resource/res_asset_id.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -39,6 +40,46 @@ void core::res::detail::then_on_main(const std::shared_ptr<res_resource_block>& 
 
 namespace {
 constexpr std::size_t k_max_dependency_depth = 32;
+
+// The key of an asset with an ID (resource_system::node_of): a protocol no mount serves, so no load ever reads it.
+constexpr std::string_view k_asset_node_protocol = "asset-id";
+
+res::tag asset_node(const res::asset_id &id) { return res::tag{k_asset_node_protocol, res::to_text(id)}; }
+
+std::optional<res::asset_id> asset_of_node(const res::tag &node) {
+  if (node.protocol() != k_asset_node_protocol) {
+    return std::nullopt;
+  }
+  return res::asset_id_from_text(node.relative());
+}
+
+// Set while the asset index answers on this thread: it must not call back into resource_system (res_asset_index.h).
+thread_local bool t_in_asset_index = false;
+
+struct asset_index_call {
+  asset_index_call() {
+    ASSERT_MSG(!t_in_asset_index, "the asset index called resource_system: it answers from a snapshot of its own");
+    t_in_asset_index = true;
+  }
+  ~asset_index_call() { t_in_asset_index = false; }
+  asset_index_call(const asset_index_call &) = delete;
+  asset_index_call &operator=(const asset_index_call &) = delete;
+};
+
+std::optional<res::tag> path_in(const res::asset_index &index, const res::asset_id &id) {
+  const asset_index_call call;
+  return index.path_of(id);
+}
+
+// A key as people read it: the file that holds the ID now.
+std::string display_name(const res::tag &node, const res::asset_index *index) {
+  if (const auto id = asset_of_node(node); id && index) {
+    if (const auto path = path_in(*index, *id)) {
+      return std::string{path->view()};
+    }
+  }
+  return std::string{node.view()};
+}
 
 bool is_finished(const res::resource_system::resource_handle &block) {
   const auto status = block.status.load(std::memory_order_acquire);
@@ -258,12 +299,21 @@ void res::resource_system::register_mount(const mount &mounted) {
   resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
   if (watch.report_changes) {
+    {
+      std::lock_guard lock(m_waiting_mutex);
+      m_reporting_protocols.emplace(mounted.protocol);
+    }
     resolver.set_changes_callback([this, protocol = std::string{mounted.protocol}](std::vector<res::file_change> batch) {
-      m_tasks.post_main([this, protocol, batch = std::move(batch), alive = m_lifetime.token()]() {
+      // Numbered here, as it is made: a batch already queued for the main thread does not take what goes after it. The
+      // number and the post go together (post_main only queues), so the queue holds batches in number order whichever
+      // thread makes them (the watcher's, or the one of an operation).
+      std::lock_guard order(m_batch_order_mutex);
+      const std::uint64_t number = number_batch(batch);
+      m_tasks.post_main([this, protocol, batch = std::move(batch), number, alive = m_lifetime.token()]() {
         if (alive.expired()) {
           return;
         }
-        deliver_changes(protocol, batch);
+        deliver_changes(protocol, batch, number);
       });
     });
   }
@@ -299,11 +349,19 @@ bool res::resource_system::remount(std::string_view protocol, std::vector<std::f
 }
 
 void res::resource_system::collect_cached_tags(std::string_view protocol, std::vector<res::tag> &out) {
+  const auto index = current_index();
   {
     std::shared_lock lock(m_cache_mutex);
     m_cache.for_each_tag([&](const res::tag &tag) {
       if (tag.protocol() == protocol) {
         out.push_back(tag);
+        return;
+      }
+      // An ID's key: by the protocol of the file that holds it.
+      if (const auto id = asset_of_node(tag); id && index) {
+        if (const auto path = path_in(*index, *id); path && path->protocol() == protocol) {
+          out.push_back(tag);
+        }
       }
     });
   }
@@ -409,9 +467,10 @@ void res::resource_system::run_on_compute(std::function<void()> cb,
 }
 
 std::pair<std::shared_ptr<res::resource_system::resource_handle>, bool>
-res::resource_system::find_or_insert_cache(const cache_key &key) {
+res::resource_system::find_or_insert_cache(const res::tag &tag, ds::type_id type) {
+  const node_candidate candidate = candidate_node(tag);
   std::unique_lock lock(m_cache_mutex);
-  auto &slot = m_cache[key];
+  auto &slot = m_cache[cache_key{bind_locked(tag, candidate), type}];
   if (auto sp = slot.lock()) {
     return {std::move(sp), false};
   }
@@ -464,7 +523,7 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
   if (m_parent && owner != this) {
     // The most specific adapter is a parent's (or there is none): the parent's block, unless the layer
     // pinned one (warmup and pin_resource also put it in the layer's cache, which a change evicts).
-    if (auto pinned = find_cached(cache_key{tag, type})) {
+    if (auto pinned = find_cached(cache_key{node_of(tag), type})) {
       if (sync) {
         wait_for_block(pinned);
       }
@@ -480,7 +539,7 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
                 tag.view(), tag.extension());
   }
 
-  auto [block, is_new] = find_or_insert_cache(cache_key{tag, type});
+  auto [block, is_new] = find_or_insert_cache(tag, type);
   if (is_new) {
     block->diagnostics.set_resource(std::string{tag.view()});
     start_loading(tag, block, std::move(found));
@@ -837,18 +896,26 @@ void res::resource_system::wait_for_block(const std::shared_ptr<resource_handle>
   block->wait();
 }
 
-void res::resource_system::record_dependencies(const res::tag &dependent,
+void res::resource_system::record_dependencies(const res::tag &requested,
                                                const std::shared_ptr<resource_handle> &block,
                                                const std::vector<res_dep> &declared) {
+  // The keys the dependencies' own requests use (their bindings), read before the lock.
+  std::vector<node_candidate> candidates;
+  candidates.reserve(declared.size());
+  for (const auto &dep : declared) {
+    candidates.push_back(candidate_node(dep.target));
+  }
   if (declared.empty()) {
     // The common case: nothing to record, and nothing recorded by an earlier load to drop.
     std::shared_lock lock(m_cache_mutex);
-    if (!m_depends_on.contains(dependent)) {
+    if (!m_depends_on.contains(node_locked(requested))) {
       return;
     }
   }
 
   std::unique_lock lock(m_cache_mutex);
+  // The key the block is cached under: the binding its request made (a rebind since then moved the block with it).
+  const res::tag dependent = node_locked(requested);
   if (!m_cache.any_of_tag(dependent, [&block](const cache_entry &entry) { return entry.lock() == block; })) {
     return;
   }
@@ -870,12 +937,13 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
 
   std::vector<res::tag> targets;
   targets.reserve(declared.size());
-  for (const auto &dep : declared) {
+  for (std::size_t i = 0; i < declared.size(); ++i) {
+    const res::tag target = bind_locked(declared[i].target, candidates[i]);
     // A resource that names itself fails on its own; it needs no edge to be reloaded with itself.
-    if (dep.target != dependent && std::ranges::find(targets, dep.target) == targets.end()) {
-      targets.push_back(dep.target);
-      m_dependents[dep.target].push_back(dependent);
-      retain_in_parents(dep.target);
+    if (target != dependent && std::ranges::find(targets, target) == targets.end()) {
+      targets.push_back(target);
+      m_dependents[target].push_back(dependent);
+      retain_in_parents(target);
     }
   }
   if (!targets.empty()) {
@@ -896,7 +964,16 @@ void res::resource_system::prune_released_edges() {
   // whether or not the tag has been loaded again. An opt-in watcher also keeps edges after the last handle expires,
   // so a GPU-resident resource can follow dependency changes without keeping decoded data. A load in flight has an
   // entry, and a tag that loads again records its edges anew, so nothing is lost.
-  const auto is_released = [this](const res::tag &tag) {
+  // Edges sit under the key the block is cached by (the alias target); the watcher may have used the original tag.
+  // Lock order: m_cache_mutex first, m_alias_mutex nested inside it (as in signal_changed); never the reverse.
+  std::unordered_multimap<res::tag, res::tag> originals_by_alias;
+  {
+    std::shared_lock alias_lock(m_alias_mutex);
+    for (const auto &[original, alias] : m_aliases) {
+      originals_by_alias.emplace(node_locked(alias), original);
+    }
+  }
+  const auto is_released = [this, &originals_by_alias](const res::tag &tag) {
     if (m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); })) {
       return false;
     }
@@ -913,10 +990,8 @@ void res::resource_system::prune_released_edges() {
     if (has_watchers(tag)) {
       return false;
     }
-    // Edges sit under the tag the block is cached by (the alias target); the watcher may have used the original tag.
-    // Lock order: m_cache_mutex first, m_alias_mutex nested inside it (as in signal_changed); never the reverse.
-    std::shared_lock alias_lock(m_alias_mutex);
-    return std::ranges::none_of(m_aliases, [&](const auto &pair) { return pair.second == tag && has_watchers(pair.first); });
+    const auto [first, last] = originals_by_alias.equal_range(tag);
+    return std::none_of(first, last, [&](const auto &pair) { return has_watchers(pair.second); });
   };
   std::unordered_set<res::tag> released;
   for (const auto &[tag, targets] : m_depends_on) {
@@ -1038,12 +1113,525 @@ void res::resource_system::signal_changed(const res::tag &tag) {
     root().signal_changed(tag);
     return;
   }
+  // Under its key first; what sits under the tag itself (a duplicate, an entry made before the index knew the file)
+  // goes as before.
+  const std::uint64_t generation = m_index_generation.load(std::memory_order_acquire);
+  if (const res::tag node = node_of(tag); node != tag && !wait_for_index(tag, node, generation, false)) {
+    signal_changed_local(node);
+  }
   signal_changed_local(tag);
+}
+
+std::shared_ptr<const res::asset_index> res::resource_system::current_index() const {
+  if (m_parent) {
+    return root().current_index();
+  }
+  std::shared_lock lock(m_index_mutex);
+  return m_index;
+}
+
+res::tag res::resource_system::index_node(const res::tag &tag, const asset_index *index) {
+  if (!index || asset_of_node(tag)) {
+    return tag;
+  }
+  std::optional<res::asset_id> id;
+  {
+    const asset_index_call call;
+    id = index->id_of(tag);
+  }
+  return id && !id->is_nil() ? asset_node(*id) : tag;
+}
+
+bool res::resource_system::keyed_by_tag_locked(const res::tag &tag) const {
+  return m_cache.any_of_tag(tag, [](const cache_entry &) { return true; }) || m_watchers.contains(tag) ||
+         m_depends_on.contains(tag) || m_dependents.contains(tag);
+}
+
+res::tag res::resource_system::node_locked(const res::tag &tag) const {
+  if (const auto bound = m_bindings.find(tag); bound != m_bindings.end()) {
+    return bound->second;
+  }
+  if (keyed_by_tag_locked(tag)) {
+    return tag;
+  }
+  return index_node(tag, current_index().get());
+}
+
+res::tag res::resource_system::node_of(const res::tag &tag) const {
+  {
+    std::shared_lock lock(m_cache_mutex);
+    if (const auto bound = m_bindings.find(tag); bound != m_bindings.end()) {
+      return bound->second;
+    }
+    if (keyed_by_tag_locked(tag)) {
+      return tag;
+    }
+  }
+  return index_node(tag, current_index().get());
+}
+
+res::resource_system::node_candidate res::resource_system::candidate_node(const res::tag &tag) const {
+  const std::uint64_t epoch = root().m_rebind_epoch.load(std::memory_order_acquire);
+  return node_candidate{node_of(tag), epoch};
+}
+
+res::tag res::resource_system::bind_locked(const res::tag &tag, const node_candidate &candidate) {
+  if (const auto bound = m_bindings.find(tag); bound != m_bindings.end()) {
+    return bound->second;
+  }
+  if (keyed_by_tag_locked(tag)) {
+    return tag;
+  }
+  // A rebind between the candidate and the lock may have changed the answer: asked again, under the lock (rare).
+  res::tag node = candidate.epoch == root().m_rebind_epoch.load(std::memory_order_acquire)
+                      ? candidate.node
+                      : index_node(tag, current_index().get());
+  if (asset_of_node(node)) {
+    m_bindings.emplace(tag, node);
+  }
+  return node;
+}
+
+bool res::resource_system::wait_for_index(const res::tag &tag, const res::tag &node, std::uint64_t generation,
+                                          bool forget) {
+  // Still on disk: its content changed, its key's resource goes now. Gone: the index owner's batch says whether it moved.
+  if (exists(tag)) {
+    return false;
+  }
+  std::lock_guard lock(m_waiting_mutex);
+  // The index changed since `node` was read: no batch of the old one will decide it.
+  if (generation != m_index_generation.load(std::memory_order_acquire)) {
+    return false;
+  }
+  auto &entry = m_waiting_for_index[tag];
+  entry.node = node;
+  entry.forget = entry.forget || forget;
+  entry.confirmed = true;
+  return true;
+}
+
+bool res::resource_system::expect_gone(const res::tag &tag, const res::tag &node, std::uint64_t generation) {
+  std::lock_guard lock(m_waiting_mutex);
+  if (generation != m_index_generation.load(std::memory_order_acquire)) {
+    return false;
+  }
+  // A file already waiting (gone from disk, perhaps numbered) keeps its entry, node and number.
+  auto [entry, inserted] = m_waiting_for_index.try_emplace(tag);
+  if (inserted) {
+    entry->second.node = node;
+  }
+  ++entry->second.operations;
+  return true;
+}
+
+void res::resource_system::finish_expected(const res::tag &tag, bool done) {
+  std::lock_guard lock(m_waiting_mutex);
+  const auto waiting = m_waiting_for_index.find(tag);
+  if (waiting == m_waiting_for_index.end()) {
+    return;
+  }
+  auto &entry = waiting->second;
+  if (entry.operations > 0) {
+    --entry.operations;
+  }
+  if (done) {
+    entry.confirmed = true;
+    entry.forget = true;
+  } else if (entry.operations == 0 && !entry.confirmed) {
+    // Even when a batch has numbered it meanwhile (a mount that reports nothing): nothing went.
+    m_waiting_for_index.erase(waiting);
+  }
+}
+
+std::uint64_t res::resource_system::number_batch(const std::vector<file_change> &batch) {
+  std::lock_guard lock(m_waiting_mutex);
+  const std::uint64_t number = ++m_created_batches;
+  for (const auto &change : batch) {
+    if (change.is_directory) {
+      continue;
+    }
+    const res::tag *gone = change.kind == change_kind::deleted   ? &change.tag
+                           : change.kind == change_kind::renamed ? &change.old_tag
+                                                                 : nullptr;
+    if (!gone) {
+      continue;
+    }
+    if (const auto waiting = m_waiting_for_index.find(*gone);
+        waiting != m_waiting_for_index.end() && waiting->second.batch == 0) {
+      waiting->second.batch = number;
+    }
+  }
+  // A file of a mount that reports nothing is never named: it waits for the first batch made after it went.
+  for (auto &[tag, waiting] : m_waiting_for_index) {
+    if (waiting.batch == 0 && !m_reporting_protocols.contains(std::string{tag.protocol()})) {
+      waiting.batch = number;
+    }
+  }
+  return number;
+}
+
+std::unordered_map<res::tag, res::tag> res::resource_system::alias_value_nodes() const {
+  std::vector<res::tag> aliases;
+  {
+    std::shared_lock lock(m_alias_mutex);
+    aliases.reserve(m_aliases.size());
+    for (const auto &[original, alias] : m_aliases) {
+      aliases.push_back(alias);
+    }
+  }
+  std::unordered_map<res::tag, res::tag> nodes;
+  for (const auto &alias : aliases) {
+    if (!nodes.contains(alias)) {
+      nodes.emplace(alias, node_of(alias));
+    }
+  }
+  return nodes;
+}
+
+void res::resource_system::evict_waiting(std::vector<std::pair<res::tag, waiting_entry>> entries,
+                                         const std::unordered_map<res::tag, res::tag> &remap) {
+  for (const auto &[tag, entry] : entries) {
+    // Removed through this system and still gone: forgotten like erase(). Back on disk (removed and made again before
+    // the batch was decided, or a lower root holds the same path and the tag now serves that file), its pins and
+    // aliases stay.
+    if (entry.forget && !exists(tag)) {
+      forget_erased(tag);
+    }
+    const auto moved = remap.find(entry.node);
+    signal_changed_local(moved == remap.end() ? entry.node : moved->second);
+  }
+}
+
+void res::resource_system::set_asset_index(std::shared_ptr<const asset_index> index) {
+  ASSERT_MSG(!m_parent, "set_asset_index: the root only, its layers use its index");
+  ASSERT_MSG(m_tasks.on_main(), "set_asset_index: main thread only");
+  {
+    std::unique_lock lock(m_index_mutex);
+    m_index = std::move(index);
+  }
+  std::vector<std::pair<res::tag, waiting_entry>> flushed;
+  {
+    // No batch of the old index decides what waits for one: evicted now. A gone file signalled meanwhile sees the new
+    // generation and is evicted at once.
+    std::lock_guard lock(m_waiting_mutex);
+    for (auto &entry : m_waiting_for_index) {
+      flushed.emplace_back(entry.first, std::move(entry.second));
+    }
+    m_waiting_for_index.clear();
+    m_index_generation.fetch_add(1, std::memory_order_acq_rel);
+  }
+  m_rebind_epoch.fetch_add(1, std::memory_order_acq_rel);
+  const auto remap = rebind_all();
+  evict_waiting(std::move(flushed), remap);
+}
+
+std::uint64_t res::resource_system::delivering_batch() const {
+  return root().m_delivering_batch;
+}
+
+void res::resource_system::apply_asset_batch(std::uint64_t through,
+                                             std::span<const std::pair<res::tag, res::tag>> moved) {
+  ASSERT_MSG(!m_parent, "apply_asset_batch: the root only, its layers use its index");
+  ASSERT_MSG(m_tasks.on_main(), "apply_asset_batch: main thread only");
+  std::vector<std::pair<res::tag, waiting_entry>> decided;
+  {
+    // Only what came in a batch the owner has taken in: a later one may still pair its file with a new one.
+    std::lock_guard lock(m_waiting_mutex);
+    for (auto it = m_waiting_for_index.begin(); it != m_waiting_for_index.end();) {
+      // An entry only an operation still running expects is decided once that operation is over.
+      if (it->second.batch != 0 && it->second.batch <= through && it->second.confirmed) {
+        decided.emplace_back(it->first, std::move(it->second));
+        it = m_waiting_for_index.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  const auto index = current_index();
+  std::vector<std::pair<res::tag, waiting_entry>> evicted;
+  for (auto &[tag, entry] : decided) {
+    const auto move = std::ranges::find_if(moved, [&tag](const auto &pair) { return pair.first == tag; });
+    if (move != moved.end() && index_node(move->second, index.get()) == entry.node) {
+      follow_move(entry.node, tag, move->second);
+    } else {
+      evicted.emplace_back(tag, std::move(entry));
+    }
+  }
+  m_rebind_epoch.fetch_add(1, std::memory_order_acq_rel);
+  const auto remap = rebind_all();
+  evict_waiting(std::move(evicted), remap);
+}
+
+std::size_t res::resource_system::waiting_for_index_count() const {
+  if (m_parent) {
+    return root().waiting_for_index_count();
+  }
+  std::lock_guard lock(m_waiting_mutex);
+  return m_waiting_for_index.size();
+}
+
+void res::resource_system::follow_move(const res::tag &node, const res::tag &from, const res::tag &to) {
+  {
+    std::unique_lock lock(m_cache_mutex);
+    if (const auto watched = m_watchers.find(node); watched != m_watchers.end()) {
+      for (auto &[key, entry] : watched->second) {
+        if (entry.current == from) {
+          entry.current = to;
+        }
+      }
+    }
+    std::unique_lock alias_lock(m_alias_mutex);
+    for (auto &[original, alias] : m_aliases) {
+      if (alias == from) {
+        alias = to;
+      }
+    }
+  }
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->follow_move(node, from, to);
+  }
+}
+
+void res::resource_system::collect_bindings(std::vector<std::pair<res::tag, res::tag>> &out) {
+  const auto add_key = [&out](const res::tag &key) {
+    if (!asset_of_node(key)) {
+      out.emplace_back(key, key);
+    }
+  };
+  {
+    std::shared_lock lock(m_cache_mutex);
+    for (const auto &binding : m_bindings) {
+      out.push_back(binding);
+    }
+    m_cache.for_each_tag(add_key);
+    for (const auto &[key, watchers] : m_watchers) {
+      add_key(key);
+    }
+    for (const auto &[dependent, targets] : m_depends_on) {
+      add_key(dependent);
+      for (const auto &target : targets) {
+        add_key(target);
+      }
+    }
+    std::shared_lock alias_lock(m_alias_mutex);
+    for (const auto &[original, alias] : m_aliases) {
+      add_key(original);
+    }
+    for (const auto &[original, alias] : m_alias_edges) {
+      add_key(original);
+      add_key(alias);
+    }
+  }
+  {
+    std::shared_lock lock(m_pinning_mutex);
+    m_pinned_resources.for_each_tag(add_key);
+  }
+  {
+    std::lock_guard lock(m_layer_needs_mutex);
+    for (const auto &[target, count] : m_layer_needs) {
+      add_key(target);
+    }
+  }
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->collect_bindings(out);
+  }
+}
+
+std::unordered_map<res::tag, res::tag> res::resource_system::rebind_all() {
+  // The index is asked here, before any lock is taken.
+  const auto index = current_index();
+  std::vector<std::pair<res::tag, res::tag>> bound;
+  collect_bindings(bound);
+  std::unordered_map<res::tag, res::tag> fresh; // tag -> its key now
+  std::unordered_map<res::tag, res::tag> remap; // old key -> new key
+  for (const auto &[tag, old] : bound) {
+    auto [it, inserted] = fresh.try_emplace(tag);
+    if (inserted) {
+      it->second = index_node(tag, index.get());
+    }
+    if (it->second == old) {
+      continue;
+    }
+    // An ID that a file holds now keeps its entries (it moved, or another spelling still names it); a tag key, or an
+    // ID no file holds any more, hands its entries to the tag's new key.
+    if (const auto id = asset_of_node(old); id && index && path_in(*index, *id)) {
+      continue;
+    }
+    remap.try_emplace(old, it->second);
+  }
+  {
+    std::lock_guard lock(m_waiting_mutex);
+    for (auto &[tag, entry] : m_waiting_for_index) {
+      if (const auto moved = remap.find(entry.node); moved != remap.end()) {
+        entry.node = moved->second;
+      }
+    }
+  }
+  apply_rebind(fresh, remap);
+  return remap;
+}
+
+void res::resource_system::apply_rebind(const std::unordered_map<res::tag, res::tag> &fresh,
+                                        const std::unordered_map<res::tag, res::tag> &remap) {
+  const auto mapped = [&remap](const res::tag &key) -> const res::tag & {
+    const auto it = remap.find(key);
+    return it == remap.end() ? key : it->second;
+  };
+  // Held until the layers are rebound too (parents before layers, as everywhere): no load of this system records an
+  // edge meanwhile. Lock order: cache, alias, pinning, as register_alias.
+  std::unique_lock lock(m_cache_mutex);
+  std::unique_lock alias_lock(m_alias_mutex);
+  std::unique_lock pin_lock(m_pinning_mutex);
+  {
+    // The tags this system binds: its bindings and its keys that are tags.
+    std::vector<res::tag> tags;
+    for (const auto &[tag, node] : m_bindings) {
+      tags.push_back(tag);
+    }
+    const auto add_key = [&tags](const res::tag &key) {
+      if (!asset_of_node(key)) {
+        tags.push_back(key);
+      }
+    };
+    m_cache.for_each_tag(add_key);
+    m_pinned_resources.for_each_tag(add_key);
+    for (const auto &[key, watchers] : m_watchers) {
+      add_key(key);
+    }
+    for (const auto &[key, alias] : m_aliases) {
+      add_key(key);
+    }
+    rekey_locked(remap);
+    std::unordered_set<res::tag> alias_nodes;
+    for (const auto &[original, alias] : m_alias_edges) {
+      alias_nodes.insert(original);
+      alias_nodes.insert(alias);
+    }
+    const auto has_entries = [&](const res::tag &node) {
+      return m_cache.any_of_tag(node, [](const cache_entry &) { return true; }) ||
+             m_pinned_resources.any_of_tag(node, [](const auto &) { return true; }) || m_watchers.contains(node) ||
+             m_depends_on.contains(node) || m_dependents.contains(node) || m_aliases.contains(node) ||
+             alias_nodes.contains(node) || needed_by_layers(node);
+    };
+    // Bindings to an ID only, and only while that ID has an entry here; a tag the collection missed (bound meanwhile)
+    // keeps its binding.
+    std::unordered_map<res::tag, res::tag> bindings;
+    for (const auto &tag : tags) {
+      const auto now = fresh.find(tag);
+      const auto old = m_bindings.find(tag);
+      const res::tag &node = now != fresh.end() ? now->second : old != m_bindings.end() ? old->second : tag;
+      if (asset_of_node(node) && has_entries(node)) {
+        bindings.insert_or_assign(tag, node);
+      }
+    }
+    m_bindings = std::move(bindings);
+  }
+  {
+    std::lock_guard layers_lock(m_layers_mutex);
+    for (resource_system *layer : m_layers) {
+      layer->apply_rebind(fresh, remap);
+    }
+  }
+  // After the layers: a load of a layer records its edges (and counts them here) under the layer's lock, so once each
+  // layer is rebound every count it made under an old key is in the map, and none comes after.
+  std::lock_guard needs_lock(m_layer_needs_mutex);
+  std::unordered_map<res::tag, std::size_t> needs;
+  for (const auto &[target, count] : m_layer_needs) {
+    needs[mapped(target)] += count;
+  }
+  m_layer_needs = std::move(needs);
+}
+
+void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::tag> &remap) {
+  if (remap.empty()) {
+    return;
+  }
+  const auto mapped = [&remap](const res::tag &key) -> const res::tag & {
+    const auto it = remap.find(key);
+    return it == remap.end() ? key : it->second;
+  };
+  for (const auto &[old_key, new_key] : remap) {
+    // A live entry already under the new key wins (the other spelling's block); the one that loses drops out of the
+    // cache and its holders get no more reloads (#858).
+    m_cache.copy_tag(old_key, new_key, [](const cache_entry &entry) { return !entry.expired(); });
+    m_cache.erase_tag(old_key);
+    m_pinned_resources.copy_tag(old_key, new_key, [](const auto &entry) { return entry != nullptr; });
+    m_pinned_resources.erase_tag(old_key);
+    if (const auto alias = m_aliases.find(old_key); alias != m_aliases.end()) {
+      res::tag target = alias->second;
+      m_aliases.erase(alias);
+      m_aliases.try_emplace(new_key, std::move(target));
+    }
+    if (const auto watched = m_watchers.find(old_key); watched != m_watchers.end()) {
+      auto moving = std::move(watched->second);
+      m_watchers.erase(watched);
+      auto &into = m_watchers[new_key];
+      for (auto &[key, entry] : moving) {
+        // Watching the new key from now on: a signal of it queued before the move is not theirs.
+        entry.epoch = ++m_watch_epoch;
+        into.try_emplace(key, std::move(entry));
+      }
+    }
+  }
+  std::unordered_map<res::tag, res::tag> alias_edges;
+  for (const auto &[original, alias] : m_alias_edges) {
+    if (mapped(original) != mapped(alias)) {
+      alias_edges.insert_or_assign(mapped(original), mapped(alias));
+    }
+  }
+  m_alias_edges = std::move(alias_edges);
+  // m_dependents is the reverse of m_depends_on: rebuilt from it.
+  std::unordered_map<res::tag, std::vector<res::tag>> depends_on;
+  for (const auto &[dependent, targets] : m_depends_on) {
+    const res::tag &from = mapped(dependent);
+    auto &into = depends_on[from];
+    for (const auto &target : targets) {
+      const res::tag &to = mapped(target);
+      if (to != from && std::ranges::find(into, to) == into.end()) {
+        into.push_back(to);
+      }
+    }
+  }
+  std::erase_if(depends_on, [](const auto &entry) { return entry.second.empty(); });
+  m_dependents.clear();
+  for (const auto &[dependent, targets] : depends_on) {
+    for (const auto &target : targets) {
+      m_dependents[target].push_back(dependent);
+    }
+  }
+  m_depends_on = std::move(depends_on);
+}
+
+void res::resource_system::pin_bound(const cache_key &key, std::shared_ptr<resource_handle> block, bool always_cache) {
+  const node_candidate candidate = candidate_node(key.tag);
+  std::unique_lock lock(m_cache_mutex);
+  const cache_key bound{bind_locked(key.tag, candidate), key.type};
+  {
+    std::unique_lock pin_lock(m_pinning_mutex);
+    m_pinned_resources[bound] = block;
+  }
+  if (always_cache) {
+    m_cache[bound] = block;
+  } else if (m_parent) {
+    // In a layer the block may be the parent's: the layer's cache entry is what its requests find, and what a change
+    // evicts (the pin alone would keep serving the old block).
+    const cache_entry *slot = m_cache.find(bound);
+    if (!slot || slot->expired()) {
+      m_cache[bound] = block;
+    }
+  }
 }
 
 void res::resource_system::signal_changed_local(const res::tag &tag) {
   std::vector<res::tag> batch;
   std::uint64_t epoch = 0;
+  const auto alias_nodes = alias_value_nodes();
+  const auto alias_node = [&](const res::tag &alias) {
+    const auto known = alias_nodes.find(alias);
+    return known != alias_nodes.end() ? known->second : node_locked(alias);
+  };
   {
     std::unique_lock lock(m_cache_mutex);
     // A small graph is swept every time (cheap, and a released tag is then never evicted or delivered). A large one only
@@ -1057,7 +1645,7 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     }
     // A changed original has to run its adapter again (it stores fresh data and registers the alias anew), so its
     // alias goes with its edge; the alias entry itself was evicted above as a dependent. The alias lock is taken inside
-    // the cache lock, the order prune_released_edges() uses too (register_alias holds one at a time). A mapping that a
+    // the cache lock, the order prune_released_edges(), register_alias and rebind_all use too. A mapping that a
     // concurrent register_alias has replaced meanwhile is a different one and stays.
     {
       std::unique_lock alias_lock(m_alias_mutex);
@@ -1066,7 +1654,7 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
         if (edge == m_alias_edges.end()) {
           continue;
         }
-        if (const auto mapped = m_aliases.find(changed); mapped != m_aliases.end() && mapped->second == edge->second) {
+        if (const auto mapped = m_aliases.find(changed); mapped != m_aliases.end() && alias_node(mapped->second) == edge->second) {
           m_aliases.erase(mapped);
         }
         m_alias_edges.erase(edge);
@@ -1145,8 +1733,20 @@ res::file_operation res::resource_system::remove(const res::tag &tag) {
     egLOG_WARN("resource/remove", "{}", error);
     return file_operation::failure(std::move(error));
   }
+  // A file with an ID waits for the index owner's batch like a deletion found on disk; that batch forgets it.
+  resource_system &base = root();
+  const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
+  const res::tag node = base.node_of(tag);
+  const bool waits = node != tag && base.expect_gone(tag, node, generation);
   auto result = found->second->remove(tag);
+  if (waits) {
+    base.finish_expected(tag, static_cast<bool>(result));
+  }
   if (!result) {
+    return result;
+  }
+  if (waits) {
+    base.signal_changed_local(tag);
     return result;
   }
   forget_erased(tag);
@@ -1167,8 +1767,21 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
     egLOG_WARN("resource/rename", "{}", error);
     return file_operation::failure(std::move(error));
   }
+  // A file with an ID keeps its pins, aliases and resource if the index owner's batch pairs it with `to`.
+  resource_system &base = root();
+  const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
+  const res::tag node = base.node_of(from);
+  const bool waits = node != from && base.expect_gone(from, node, generation);
   auto result = found->second->rename(from, to);
+  if (waits) {
+    base.finish_expected(from, static_cast<bool>(result));
+  }
   if (!result) {
+    return result;
+  }
+  if (waits) {
+    base.signal_changed_local(from);
+    signal_changed(to);
     return result;
   }
   forget_erased(from);
@@ -1190,7 +1803,9 @@ void res::resource_system::unsubscribe_changes(void *owner) {
   std::erase_if(base.m_change_subscriptions, [owner](const change_subscription &entry) { return entry.owner == owner; });
 }
 
-void res::resource_system::deliver_changes(const std::string &protocol, const std::vector<file_change> &batch) {
+void res::resource_system::deliver_changes(const std::string &protocol, const std::vector<file_change> &batch,
+                                           std::uint64_t number) {
+  m_delivering_batch = number;
   std::vector<std::uint64_t> targets;
   {
     std::lock_guard lock(m_changes_mutex);
@@ -1218,11 +1833,16 @@ void res::resource_system::deliver_changes(const std::string &protocol, const st
 void res::resource_system::forget_erased(const res::tag &tag) {
   unpin_resource(tag);
   {
+    const res::tag node = node_of(tag);
+    const auto alias_nodes = alias_value_nodes();
     // Lock order as in signal_changed: cache first, alias nested inside.
     std::unique_lock lock(m_cache_mutex);
     std::unique_lock alias_lock(m_alias_mutex);
-    std::erase_if(m_alias_edges, [&](const auto &edge) { return edge.second == tag; });
-    std::erase_if(m_aliases, [&](const auto &mapped) { return mapped.second == tag; });
+    std::erase_if(m_alias_edges, [&](const auto &edge) { return edge.second == node; });
+    std::erase_if(m_aliases, [&](const auto &mapped) {
+      const auto known = alias_nodes.find(mapped.second);
+      return (known != alias_nodes.end() ? known->second : node_locked(mapped.second)) == node;
+    });
   }
   std::lock_guard layers_lock(m_layers_mutex);
   for (resource_system *layer : m_layers) {
@@ -1230,37 +1850,39 @@ void res::resource_system::forget_erased(const res::tag &tag) {
   }
 }
 
-void res::resource_system::deliver_to_watchers(const res::tag &tag,
+void res::resource_system::deliver_to_watchers(const res::tag &node,
                                                std::uint64_t signal_epoch) {
   // Only watchers registered before the signal: a load that follows a signal registers its own watcher.
-  std::vector<std::pair<void *, std::uint64_t>> targets;
+  std::vector<std::pair<watch_key, std::uint64_t>> targets;
   {
     std::shared_lock lock(m_cache_mutex);
-    if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
-      for (const auto &[owner, entry] : it->second) {
+    if (auto it = m_watchers.find(node); it != m_watchers.end()) {
+      for (const auto &[key, entry] : it->second) {
         if (entry.epoch < signal_epoch) {
-          targets.emplace_back(owner, entry.epoch);
+          targets.emplace_back(key, entry.epoch);
         }
       }
     }
   }
 
-  for (const auto &[owner, epoch] : targets) {
+  for (const auto &[key, epoch] : targets) {
     reload_callback callback;
+    res::tag current;
     {
       // A previous callback of this delivery may have unwatched (and destroyed) this owner.
       std::shared_lock lock(m_cache_mutex);
-      auto it = m_watchers.find(tag);
+      auto it = m_watchers.find(node);
       if (it == m_watchers.end()) {
         continue;
       }
-      auto entry = it->second.find(owner);
+      auto entry = it->second.find(key);
       if (entry == it->second.end() || entry->second.epoch != epoch) {
         continue;
       }
       callback = entry->second.callback;
+      current = entry->second.current;
     }
-    callback(tag);
+    callback(current);
   }
 }
 
@@ -1269,22 +1891,24 @@ void res::resource_system::register_alias(const res::tag &original,
   if (original == alias) {
     return;
   }
-  {
-    std::unique_lock lock(m_alias_mutex);
-    m_aliases[original] = alias;
+  const node_candidate original_candidate = candidate_node(original);
+  const node_candidate alias_candidate = candidate_node(alias);
+  // Lock order: cache, then alias, then pinning (rebind_all takes all three the same way).
+  std::unique_lock lock(m_cache_mutex);
+  const res::tag original_node = bind_locked(original, original_candidate);
+  const res::tag alias_node = bind_locked(alias, alias_candidate);
+  if (original_node == alias_node) {
+    return;
   }
-
   {
-    std::unique_lock lock(m_cache_mutex);
-    m_cache.copy_tag(original, alias, [](const cache_entry &entry) { return !entry.expired(); });
-    // One alias per original, as in m_aliases: registering the same pair again changes nothing, another alias replaces it.
-    m_alias_edges.insert_or_assign(original, alias);
+    std::unique_lock alias_lock(m_alias_mutex);
+    m_aliases[original_node] = alias;
   }
-
-  {
-    std::unique_lock lock(m_pinning_mutex);
-    m_pinned_resources.copy_tag(original, alias, [](const auto &entry) { return entry != nullptr; });
-  }
+  m_cache.copy_tag(original_node, alias_node, [](const cache_entry &entry) { return !entry.expired(); });
+  // One alias per original, as in m_aliases: registering the same pair again changes nothing, another alias replaces it.
+  m_alias_edges.insert_or_assign(original_node, alias_node);
+  std::unique_lock pin_lock(m_pinning_mutex);
+  m_pinned_resources.copy_tag(original_node, alias_node, [](const auto &entry) { return entry != nullptr; });
 }
 
 std::filesystem::path res::resource_system::get_resources_path() const {
@@ -1337,11 +1961,12 @@ bool res::resource_system::watches_files() {
 
 std::vector<std::string> res::resource_system::live_resource_tags(std::size_t limit) const {
   std::vector<std::pair<std::string, long>> live;
+  const auto index = current_index();
   {
     std::shared_lock lock(m_cache_mutex);
-    m_cache.for_each_entry([&live](const cache_key &key, const cache_entry &entry) {
+    m_cache.for_each_entry([&live, &index](const cache_key &key, const cache_entry &entry) {
       if (const auto block = entry.lock()) {
-        live.emplace_back(std::string{key.tag.view()}, block.use_count() - 1);
+        live.emplace_back(display_name(key.tag, index.get()), block.use_count() - 1);
       }
     });
   }
@@ -1533,14 +2158,7 @@ void res::resource_system::keep_warm(const std::shared_ptr<resource_handle> &blo
     if (!held || held->has_error()) {
       return;
     }
-    gate->with([&](resource_system &self) {
-      self.push_resource_to_strong_cache(key, held);
-      // In a layer the block may be the parent's: the layer's cache entry is what its requests find, and what a
-      // change evicts (the pin alone would keep serving the old block).
-      if (self.m_parent && !self.find_cached(key)) {
-        self.push_resource_to_cache(key, held);
-      }
-    });
+    gate->with([&](resource_system &self) { self.pin_bound(key, held, false); });
   });
 }
 
@@ -1637,16 +2255,24 @@ res::file_operation res::resource_system::create_sync(const tag& tag, const std:
 
 void res::resource_system::watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies)
 {
+	const node_candidate candidate = candidate_node(tag);
 	std::lock_guard lock(m_cache_mutex);
-	m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch, keep_dependencies };
+	const res::tag node = bind_locked(tag, candidate);
+	m_watchers[node][watch_key{ owner, std::string{ tag.view() } }] = watcher{ std::move(cb), ++m_watch_epoch, keep_dependencies, tag };
 }
 
 void res::resource_system::unwatch(const res::tag& tag, void* owner)
 {
+	const watch_key key{ owner, std::string{ tag.view() } };
 	std::lock_guard lock(m_cache_mutex);
-	const auto it = m_watchers.find(tag);
-	if (it == m_watchers.end()) return;
-	it->second.erase(owner);
+	const auto bound = m_bindings.find(tag);
+	auto it = m_watchers.find(bound == m_bindings.end() ? tag : bound->second);
+	if (it == m_watchers.end() || !it->second.contains(key)) {
+		// Not under the tag's key now (its file moved, or got another ID): found by the tag it was registered with.
+		it = std::ranges::find_if(m_watchers, [&key](const auto& entry) { return entry.second.contains(key); });
+		if (it == m_watchers.end()) return;
+	}
+	it->second.erase(key);
 	if (it->second.empty()) {
 		m_watchers.erase(it);
 	}
@@ -1794,15 +2420,17 @@ res::resource_system::data res::resource_system::fetch_data(const tag& tag) cons
 
 void res::resource_system::unpin_resource(const res::tag& tag)
 {
+	const res::tag node = node_of(tag);
 	std::unique_lock lock(m_pinning_mutex);
-	m_pinned_resources.erase_tag(tag);
+	m_pinned_resources.erase_tag(node);
 }
 
 res::tag res::resource_system::resolve_alias(const res::tag& tag) const
 {
 	{
+		const res::tag node = node_of(tag);
 		std::shared_lock lock(m_alias_mutex);
-		auto it = m_aliases.find(tag);
+		auto it = m_aliases.find(node);
 		if (it != m_aliases.end()) {
 			return it->second;
 		}
@@ -1825,18 +2453,6 @@ std::shared_ptr<res::resource_system::resource_handle> res::resource_system::fin
 	std::shared_lock lock(m_cache_mutex);
 	const cache_entry* slot = m_cache.find(key);
 	return slot ? slot->lock() : nullptr;
-}
-
-void res::resource_system::push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource)
-{
-	std::unique_lock lock(m_cache_mutex);
-	m_cache[key] = resource;
-}
-
-void res::resource_system::push_resource_to_strong_cache(const cache_key& key, std::shared_ptr<resource_handle> resource)
-{
-	std::unique_lock lock(m_pinning_mutex);
-	m_pinned_resources[key] = resource;
 }
 
 void res::resource_system::add_resolver(protocol prt, resolver added)
@@ -1882,9 +2498,7 @@ void res::resource_system::pin_block(const res::tag& tag, std::shared_ptr<resour
 	}
 	auto block = std::make_shared<resource_handle>();
 	block->set_ready(std::move(resource));
-	const cache_key key = key_for(tag, chain);
-	push_resource_to_strong_cache(key, block);
-	push_resource_to_cache(key, block);
+	pin_bound(key_for(tag, chain), block, true);
 
 	if (!stored) {
 		serialize_pinned(tag, block, find_adapter_in_chain(tag, chain));
@@ -1904,9 +2518,16 @@ void res::resource_system::check_sync_require([[maybe_unused]] const res::tag& t
 
 res::tag res::resource_system::resolve_reference(const reference& ref) const
 {
-	if (ref.path.view().empty() && !ref.guid.is_nil()) {
-		egLOG_WARN("resource/reference", "{}: a reference by guid alone cannot be resolved yet (no asset index), it loads nothing",
-			res::to_text(ref.guid));
+	if (!ref.guid.is_nil()) {
+		if (const auto index = current_index()) {
+			if (auto path = path_in(*index, ref.guid)) {
+				return *std::move(path);
+			}
+		}
+		if (ref.path.view().empty()) {
+			egLOG_WARN("resource/reference", "{}: no file holds this guid and the reference has no path, it loads nothing",
+				res::to_text(ref.guid));
+		}
 	}
 	return ref.path;
 }
