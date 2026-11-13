@@ -210,6 +210,42 @@ edt::open_result edt::data_document::open(const res::tag& file)
 	return open_result::ok();
 }
 
+edt::open_result edt::data_document::reload()
+{
+	if (!m_open) {
+		return open_result::failure("the document is not open");
+	}
+	loaded state;
+	if (open_result result = load(m_source, state); !result.opened) {
+		return result;
+	}
+	apply(m_source, std::move(state));
+	announce();
+	return open_result::ok();
+}
+
+edt::save_result edt::data_document::save_over()
+{
+	if (!m_open) {
+		return save_result::failure("the document is not open");
+	}
+	json::object on_disk;
+	std::string disk_version;
+	if (open_result read = read_file(m_source, on_disk, disk_version); !read.opened) {
+		return save_result::failure(std::format("{} cannot be checked before it is written: {}", where(m_source), read.error));
+	}
+	const std::string kept_version = m_version;
+	const bool kept_flag = m_changed_on_disk;
+	m_version = disk_version;
+	m_changed_on_disk = false;
+	save_result saved = save();
+	if (!saved.saved) {
+		m_version = kept_version;
+		m_changed_on_disk = kept_flag;
+	}
+	return saved;
+}
+
 edt::data_document::~data_document()
 {
 	unwatch_files();
@@ -400,6 +436,8 @@ edt::save_result edt::data_document::save()
 		return save_result::failure(std::format("{} belongs to the open level now: nothing was written", where(m_source)));
 	}
 	if (disk_version != m_version) {
+		// The watcher may not have said so yet (its signal waits for the main thread): the file is known to differ now.
+		m_changed_on_disk = true;
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 

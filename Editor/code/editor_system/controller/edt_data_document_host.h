@@ -6,11 +6,13 @@
 #include <snk/resource/res_tag.h>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace edt
 {
+	class data_document;
 	class data_document_panel;
 	class editor_context;
 	struct editor_services;
@@ -34,6 +36,12 @@ namespace edt
 		// The window's close button: closes at once when clean, else asks to save, discard or keep.
 		void request_close(document_id id);
 		void close(document_id id);
+		// The window's Save. A file that changed on disk is a question, not an error: reload it (the edits are lost),
+		// overwrite it with this version, or cancel. Any other refusal is said in the window and the log.
+		void request_save(document_id id);
+		// The banner's buttons: Reload asks first when there are unsaved edits (they are lost), Overwrite always asks.
+		void request_reload(document_id id);
+		void request_overwrite(document_id id);
 		bool owns(document_id id) const { return m_windows.contains(id); }
 
 		std::vector<document_id> dirty() const;
@@ -46,10 +54,15 @@ namespace edt
 		struct window
 		{
 			std::shared_ptr<data_document_panel> panel;
+			data_document* data = nullptr;
 			registration registered;
 		};
 
 		void focus(document& open);
+		void reload_now(document_id id);
+		void overwrite_now(document_id id);
+		void ask_conflict(document_id id);
+		void show_error(document_id id, const std::string& text);
 
 		editor_context& m_context;
 		editor_services& m_services;

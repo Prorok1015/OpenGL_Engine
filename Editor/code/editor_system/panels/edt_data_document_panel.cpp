@@ -50,15 +50,29 @@ void edt::data_document_panel::on_render()
 	if (!status.chain_problem.empty()) {
 		ImGui::TextColored(k_warning, "A parent could not be read, the last good values are shown: %s", status.chain_problem.c_str());
 	}
-	if (status.changed_on_disk) {
+	if (!status.changed_on_disk) {
+		m_banner_dismissed = false;
+	} else if (!m_banner_dismissed) {
 		ImGui::TextColored(k_warning, "The file changed on disk since it was opened.");
+		if (m_on_reload && m_on_overwrite) {
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Reload")) m_on_reload();
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Overwrite")) m_on_overwrite();
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Later")) m_banner_dismissed = true;
+		}
 	}
 
 	ImGui::BeginDisabled(!status.dirty || !status.can_save);
 	if (ImGui::Button("Save")) {
-		const save_result saved = m_document.save();
-		m_error = saved.saved ? std::string{} : saved.error;
-		if (!saved.saved) egLOG_WARN("editor", "{}", saved.error);
+		if (m_on_save) {
+			m_on_save();
+		} else {
+			const save_result saved = m_document.save();
+			m_error = saved.saved ? std::string{} : saved.error;
+			if (!saved.saved) egLOG_WARN("editor", "{}", saved.error);
+		}
 	}
 	ImGui::EndDisabled();
 	if (status.dirty) {

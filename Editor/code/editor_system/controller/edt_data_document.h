@@ -65,6 +65,14 @@ namespace edt
 		// unsaved edits, or the file is gone: save() refuses until the document is opened again. A clean document
 		// reads the new file by itself.
 		bool changed_on_disk() const { return m_changed_on_disk; }
+		// Reads the file again and drops the unsaved edits (the person's choice: the file changed on disk and they take
+		// its version). A failure (the file is gone, no longer a data document...) names the file and leaves the document as
+		// it was.
+		open_result reload();
+		// Writes the document over a file that changed on disk (the person's choice, never an agent's: nothing registers a
+		// command for it): the version on disk is taken as the base, then the same save() runs with every check (project's
+		// top layer, not the open level, validate_desc_tree, size). A refusal leaves the document as it was, still flagged.
+		save_result save_over();
 		// Why the parents could not be read again after one of them changed (the last good ones stay shown); empty: none.
 		const std::string& chain_problem() const { return m_chain_problem; }
 
