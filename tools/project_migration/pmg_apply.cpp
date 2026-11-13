@@ -354,18 +354,32 @@ namespace
 		return {};
 	}
 
-	// Puts the root __guid of a saved desc back to what the file had: the same value in its place, or none. Whether
-	// anything changed.
-	bool restore_guid(json::object& saved, const std::optional<json::value>& before)
+	struct root_guid
+	{
+		json::value value;
+		std::size_t position = 0;
+	};
+
+	// Puts the root __guid of a saved desc back to what the file had: the same value, or none. One the save dropped
+	// goes back at the position it had in the file. Whether anything changed.
+	bool restore_guid(json::object& saved, const std::optional<root_guid>& before)
 	{
 		json::value* now = saved.if_contains("__guid");
 		if (!before) return now && saved.erase("__guid") > 0;
 		if (now) {
-			if (*now == *before) return false;
-			*now = *before;
+			if (*now == before->value) return false;
+			*now = before->value;
 			return true;
 		}
-		saved["__guid"] = *before;
+		json::object ordered;
+		ordered.reserve(saved.size() + 1);
+		std::size_t index = 0;
+		for (auto& member : saved) {
+			if (index++ == before->position) ordered.emplace("__guid", before->value);
+			ordered.emplace(member.key(), std::move(member.value()));
+		}
+		if (!ordered.contains("__guid")) ordered.emplace("__guid", before->value);
+		saved = std::move(ordered);
 		return true;
 	}
 
@@ -530,9 +544,14 @@ namespace
 			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
 			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
 			// .resource's (EPIC-57 4.2).
-			std::optional<json::value> guid_before;
+			std::optional<root_guid> guid_before;
 			if (migrated.is_object()) {
-				if (const json::value* guid = migrated.as_object().if_contains("__guid")) guid_before = *guid;
+				const json::object& root = migrated.as_object();
+				for (auto member = root.begin(); member != root.end(); ++member) {
+					if (member->key() != "__guid") continue;
+					guid_before = root_guid{ member->value(), static_cast<std::size_t>(member - root.begin()) };
+					break;
+				}
 			}
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);

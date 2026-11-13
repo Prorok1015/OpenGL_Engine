@@ -77,7 +77,7 @@ std::string id_text(const std::optional<res::asset_id>& id)
 }
 
 // `text` with a root __guid, written right after __type.
-std::string with_guid(const std::string& text, std::string_view guid)
+std::string with_guid(const std::string& text, const json::value& guid)
 {
 	json::object root = json::parse(text).as_object();
 	json::object out;
@@ -223,6 +223,18 @@ struct step_files_fixture : test_util::scene_env
 		return found == report.files.end() ? nullptr : &*found;
 	}
 
+	void expect_the_guid_kept(const json::value& guid)
+	{
+		write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), guid));
+		const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+		BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+		BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+		BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
+		const json::value* kept = json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().if_contains("__guid");
+		BOOST_REQUIRE(kept != nullptr);
+		BOOST_TEST((*kept == guid), json::serialize(*kept));
+	}
+
 	test_util::fixture_copy copy{ "migration_v1" };
 	pmg::project_step_registry registry;
 };
@@ -336,6 +348,18 @@ BOOST_AUTO_TEST_CASE(AnEmptyGuid_StaysEmpty)
 	const json::value* guid = json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().if_contains("__guid");
 	BOOST_REQUIRE(guid != nullptr);
 	BOOST_TEST(guid->as_string() == "");
+}
+
+// A __guid that is no ID is still the file's: the engine's save keeps a string one and makes a new one for any other,
+// the migration writes what the file had.
+BOOST_AUTO_TEST_CASE(AStringGuidThatIsNoId_StaysAsItWas)
+{
+	expect_the_guid_kept(json::value("abc"));
+}
+
+BOOST_AUTO_TEST_CASE(AGuidThatIsNoString_StaysAsItWas)
+{
+	expect_the_guid_kept(json::value(7));
 }
 
 BOOST_AUTO_TEST_CASE(WhatAStepMayNotTouch_IsRefused_AndChangesNothing)

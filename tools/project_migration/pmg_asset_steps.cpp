@@ -18,7 +18,8 @@ namespace
 
 	bool ids_needed(const scan_result& scan)
 	{
-		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return !file.has_resource; });
+		return std::ranges::any_of(scan.files,
+			[](const scanned_file& file) { return !file.has_resource && file.kind != file_class::invalid; });
 	}
 
 	bool is_desc_path(std::string_view path)
