@@ -78,9 +78,8 @@
 // meshes needs an engine of 3.15 or newer. mesh_node_desc gains `visible` at its end (engine-made, not in the layout key).
 // 3.16 (#744): inp::action_binding gains the alternatives GAMEPAD_BUTTONS (index 2) and GAMEPAD_AXES (index 3), appended after
 // the keyboard (0) and the mouse (1): it is still one variant of two bytes, which static_asserts in inp_actions.h hold, so a
-// module of 3.15 that reads the bindings of an action by its stride and indices still reads right. inp::action_binding_v1
-// is the old type; action_map::add keeps its old overload (the symbol modules of 3.15 import) and converts. A module that
-// visits the bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
+// module of 3.15 that reads the bindings of an action by its stride and indices still reads right. A module that visits the
+// bindings must know the new alternatives, which a project meets only when its actions.desc names a gamepad.
 // scn::input_actions_desc gains `gamepad` at its end (engine-made, not in the layout key). New: inp::gamepad_config, the
 // gamepad names in inp_actions.h, wnd::gamepad_source, gs::input_actions::rebind and the player's bindings (#736).
 // 3.17 (#789): gs::module_context::mark_document, desc::desc_system::mark_document / register_document / document_types and
@@ -108,7 +107,11 @@
 // that touches their containers is an export, and the non-template migrate_object/value/typed of 3.16 are gone
 // (layout_revision 2). #784/#738: the meta func loader_get of a component returns its ecs::sandbox_emplace<T>, the
 // loop and the remap of entity fields are the engine's; meta_archive and snapshot_get are gone (layout_revision 3).
-// #790: field_kind::map and std::optional<T> in schemas (layout_revision 4).
+// #790: field_kind::map and std::optional<T> in schemas (layout_revision 4). #785/#826: system_registry is all exports,
+// the entry and its map node are the engine's; emplace_schema_component takes a const dyn_blob& and the world keeps
+// the engine's copy in the default resource (layout_revision 5).
+// #781: the 3.15 overloads of inp::action_map::add (std::vector of the old two-alternative binding) are gone; a module of 3.x is
+// refused at load, and one built in the window that imports them fails to load on the unresolved symbol.
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

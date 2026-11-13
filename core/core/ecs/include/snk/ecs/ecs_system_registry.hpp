@@ -2,11 +2,12 @@
 #include <snk/ecs/ecs_phase.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_interface.hpp>
-#include <algorithm>
+#include <snk/common/snk_api.h>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -48,6 +49,8 @@ struct system_instance
 
 using system_run_fn = void (*)(void* self, const runtime_context& ctx);
 
+// Built by system_registry::add in the engine (#785). Module code may read one through find(): a field is appended at
+// the end, never reordered.
 struct system_entry
 {
 	std::string name;
@@ -58,66 +61,43 @@ struct system_entry
 };
 
 // Name -> system registration plus the phase list of the context. Pure data: plans are built
-// from it (ecs_system_plan.hpp).
-class system_registry
+// from it (ecs_system_plan.hpp). Every member is defined in the engine (#785): a module hands in the parts of an entry
+// and never builds one, so system_entry can grow without a new layout of module code.
+class SNK_API system_registry
 {
 public:
-	system_registry() = default;
+	system_registry();
 	// A layer over `parent` (MODULE_LAYER.md): find() and the phase list fall through to it, a name
 	// it has cannot be added here, and add/remove change only this layer.
-	explicit system_registry(const system_registry* parent)
-		: m_parent(parent)
-		, m_phases(parent ? &parent->m_phases : nullptr)
-	{
-	}
+	explicit system_registry(const system_registry* parent);
+	~system_registry();
+	system_registry(const system_registry&);
+	system_registry(system_registry&&);
+	system_registry& operator=(const system_registry&);
+	system_registry& operator=(system_registry&&);
 
 	// False when the name is taken (here or in the parent).
-	bool add(system_entry entry)
-	{
-		if (m_parent && m_parent->find(entry.name)) {
-			return false;
-		}
-		const std::string key = entry.name;
-		return m_entries.emplace(key, std::move(entry)).second;
-	}
+	bool add(std::string_view name, system_desc desc, system_run_fn run, std::function<system_instance()> make,
+		std::vector<access_entry> access);
 
 	// False when nothing is registered under the name. Not synchronised: remove between frames, with no task
 	// running a plan. Plans built earlier still hold the system's run function and instances: rebuild them
 	// (scn::context_set::rebuild_all_plans) before the code goes away.
-	bool remove(const std::string& name)
-	{
-		return m_entries.erase(name) != 0;
-	}
+	bool remove(const std::string& name);
 
 	// This layer's own systems, without the parent's.
-	[[nodiscard]] std::size_t size() const noexcept { return m_entries.size(); }
+	[[nodiscard]] std::size_t size() const noexcept;
 
-	[[nodiscard]] const system_entry* find(const std::string& name) const
-	{
-		auto it = m_entries.find(name);
-		if (it != m_entries.end()) {
-			return &it->second;
-		}
-		return m_parent ? m_parent->find(name) : nullptr;
-	}
+	[[nodiscard]] const system_entry* find(const std::string& name) const;
 
-	[[nodiscard]] const system_registry* parent() const noexcept { return m_parent; }
+	[[nodiscard]] const system_registry* parent() const noexcept;
 
 	// The names of every system visible from this layer (the parent's and this layer's own), in name order. A name is
 	// never in both: add() refuses a name the parent has.
-	[[nodiscard]] std::vector<std::string> names() const
-	{
-		std::vector<std::string> out = m_parent ? m_parent->names() : std::vector<std::string>{};
-		out.reserve(out.size() + m_entries.size());
-		for (const auto& entry : m_entries) {
-			out.push_back(entry.first);
-		}
-		std::sort(out.begin(), out.end());
-		return out;
-	}
+	[[nodiscard]] std::vector<std::string> names() const;
 
-	[[nodiscard]] phase_table& phases() noexcept { return m_phases; }
-	[[nodiscard]] const phase_table& phases() const noexcept { return m_phases; }
+	[[nodiscard]] phase_table& phases() noexcept;
+	[[nodiscard]] const phase_table& phases() const noexcept;
 
 private:
 	const system_registry* m_parent = nullptr;

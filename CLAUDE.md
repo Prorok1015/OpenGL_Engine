@@ -174,7 +174,7 @@ Build speed (CMake options, so local/IDE/CI behave the same):
 
 
 CI (#830, details in [`CI_PR.toon`](docs/agent/workflow/CI_PR.toon)):
-- Every PR event (drafts too): 6 fast jobs — Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke. Marking a draft ready does not re-run them on a head SHA where all six passed
+- Every PR event (drafts too): 6 fast jobs — Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke. Marking a draft ready does not re-run them on a head SHA where all six passed. A PR of `docs/**` and `*.md` only runs Plan and CI summary alone
 - Non-draft PR that touches any header (`.h`/`.hpp`/`.inl`, `SNK_API` headers live outside `include/` too), `CMakeLists.txt`, `*.cmake`/`*.cmake.in`, `cmake/**`, `CMakePresets.json` or `.github/**` (or 3000+ files; and every push to aibranch/main): + Windows MSVC Shared+PCH, Linux GCC Shared. Other PRs no longer build Linux GCC Shared
 - Required checks: `Plan`, `CI summary` (red when the plan or any job it asked for did not pass) and the 6 fast jobs
 - Nightly on aibranch (`nightly.yml`, 23:37 UTC, or by hand): Linux TSan, SDK package (Linux, with and without assimp), Windows package (Release/Debug/check), extract benchmark. The schedule and `uses: ./.github/workflows/...` come from the default branch (main) until the owner decides how nightly gets there; until then it runs only by hand. A red night (a failed plan too) opens or comments the issue "Nightly CI red" (bug, ci, P0) with the run and the commits since the last green night: fix it first, before new work

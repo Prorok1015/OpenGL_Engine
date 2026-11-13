@@ -692,6 +692,47 @@ BOOST_AUTO_TEST_CASE(NeverWrittenKeyIsReadCopiedAndComparedButNotWritten)
 	BOOST_TEST(!desc::equal(ops_test::legacy::binding(), &value, &copy));
 }
 
+// #826: what a blob keeps of its input (string, array, res_tag fields) lives in the default resource, not in the input's:
+// a module may hand in JSON parsed with any resource of its own (its own Boost.JSON on MSVC), freed when it returns.
+BOOST_FIXTURE_TEST_CASE(BlobHandlesLiveInTheDefaultResource_NotInTheInputs, ops_fixture)
+{
+	register_health(ds);
+	auto health = spawn("mymod.health");
+	BOOST_REQUIRE(health);
+	{
+		json::monotonic_resource arena;
+		const json::value in = json::parse(R"({ "info": { "label": "from the arena" }, "ids": [4, 5, 6], "owner": "res://a.desc" })",
+			json::storage_ptr(&arena));
+		health->deserialize(ds, in.as_object());
+	}
+	BOOST_REQUIRE(!health->blob().handles.empty());
+	for (const json::value& handle : health->blob().handles) {
+		BOOST_TEST((handle.storage().get() == json::storage_ptr().get()));
+	}
+	BOOST_TEST((health->get("/info/label") == json::value("from the arena")));
+	BOOST_TEST(serialized(*health).at("ids").as_array().size() == 3u);
+}
+
+// #826: a schema parsed from JSON in a resource of the caller's keeps its defaults in the default resource.
+BOOST_AUTO_TEST_CASE(SchemaDefaultsLiveInTheDefaultResource_NotInTheSchemasJson)
+{
+	desc::type_schema schema;
+	{
+		json::monotonic_resource arena;
+		const json::value raw = json::parse(R"({ "name": "ops.arena_defaults", "kind": "component",
+			"fields": [ { "name": "label", "kind": "string", "default": "from the arena" },
+			            { "name": "ids", "kind": "array", "element": "i32", "default": [1, 2, 3] } ] })", json::storage_ptr(&arena));
+		schema = desc::parse_type_schema(raw.as_object());
+	}
+	BOOST_REQUIRE(schema.fields.size() == 2u);
+	for (const desc::field_schema& field : schema.fields) {
+		BOOST_TEST_INFO(field.name);
+		BOOST_TEST((field.default_value.storage().get() == json::storage_ptr().get()));
+	}
+	BOOST_TEST(schema.fields[0].default_value.as_string() == "from the arena");
+	BOOST_TEST(schema.fields[1].default_value.as_array().size() == 3u);
+}
+
 BOOST_FIXTURE_TEST_CASE(RuntimeSchemasHonorNullIfEmptyAndNever, ops_fixture)
 {
 	ds.schemas().add_enum(desc::parse_enum_schema(parse(R"({ "name": "ops_queue2", "items": { "none": 0, "opaque": 1 }, "null_item": "none" })")));
