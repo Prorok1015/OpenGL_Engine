@@ -6,6 +6,7 @@
 #include <snk/platform/plt_beneath.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
@@ -25,22 +26,12 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <snk/platform/plt_reparse_tag.h>
-#endif
 
 namespace fs = std::filesystem;
 
 namespace
 {
-	constexpr std::uint64_t k_meta_max_bytes = 64u * 1024u;
+	constexpr std::uint64_t res::asset_meta_max_bytes = 64u * 1024u;
 
 	std::uint64_t fnv1a_64_update(std::uint64_t hash, std::span<const std::byte> bytes)
 	{
@@ -49,29 +40,6 @@ namespace
 			hash *= 1099511628211ull;
 		}
 		return hash;
-	}
-
-	// A .resource sidecar by the one rule of the editor (any letter case), with a name before the suffix.
-	bool is_sidecar(std::string_view relative)
-	{
-		const std::string_view name = relative.substr(relative.find_last_of('/') + 1);
-		return name.size() > res::asset_meta_suffix.size() && res::is_asset_meta_name(name);
-	}
-
-	// The path of the file a sidecar belongs to.
-	std::string_view sidecar_owner(std::string_view relative)
-	{
-		return relative.substr(0, relative.size() - res::asset_meta_suffix.size());
-	}
-
-	// A name the walk neither lists nor enters: one res::is_ignored_asset_name rejects (a hidden folder, a dot file, a
-	// temporary or system file), or the .resource of such a file.
-	bool skipped_name(std::string_view name, bool is_dir)
-	{
-		if (res::is_ignored_asset_name(name)) {
-			return true;
-		}
-		return !is_dir && is_sidecar(name) && res::is_ignored_asset_name(sidecar_owner(name));
 	}
 
 	struct file_stat
@@ -117,160 +85,6 @@ namespace
 		return out;
 	}
 
-	// An entry the walk neither lists nor enters: a link, or on Windows a junction or any reparse point other than one a
-	// file system filter keeps in place (a OneDrive placeholder is the file itself).
-	bool redirects(const fs::directory_entry& entry)
-	{
-		std::error_code ec;
-		if (entry.is_symlink(ec) || ec) {
-			return true;
-		}
-#if defined(_WIN32)
-		WIN32_FIND_DATAW data{};
-		// The \\?\ prefix lifts MAX_PATH for an absolute path, and turns off the normalization that would make a '/' a
-		// separator: the path goes with '\' only.
-		std::wstring query = fs::path(entry.path()).make_preferred().native();
-		if (entry.path().is_absolute() && !query.starts_with(LR"(\\?\)")) {
-			query.insert(0, LR"(\\?\)");
-		}
-		const HANDLE found = ::FindFirstFileW(query.c_str(), &data);
-		if (found == INVALID_HANDLE_VALUE) {
-			egLOG_WARN("assets", "{}: cannot be inspected ({}), left out of the asset database", fs_paths::utf8_of(entry.path()),
-				std::system_category().message(static_cast<int>(::GetLastError())));
-			return true;
-		}
-		::FindClose(found);
-		if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
-			return false;
-		}
-		return platform::beneath::reparse_tag_redirects(data.dwReserved0) || !platform::beneath::reparse_tag_kept_in_place(data.dwReserved0);
-#else
-		return false;
-#endif
-	}
-
-	struct merged_file
-	{
-		fs::path physical;
-		fs::path relative;
-		std::size_t layer = 0;
-		std::vector<std::size_t> shadowed;
-	};
-
-	struct walk_state
-	{
-		const std::vector<fs::path>& layers;
-		const std::function<bool()>& stopped;
-		std::vector<merged_file>& out;
-		bool case_insensitive = false;
-		bool depth_warned = false;
-	};
-
-	// One folder of the merged tree. `in_layers`: the layers (ascending) where `relative_dir` is a real folder.
-	void walk(walk_state& state, const fs::path& relative_dir, const std::vector<std::size_t>& in_layers, int depth)
-	{
-		if (depth >= edt::asset_database::max_depth) {
-			if (!state.depth_warned) {
-				egLOG_WARN("assets", "res://{}: deeper than {} folders, not walked further", fs_paths::generic_utf8_of(relative_dir),
-					edt::asset_database::max_depth);
-				state.depth_warned = true;
-			}
-			return;
-		}
-		struct slot
-		{
-			fs::path relative;
-			fs::path physical;
-			bool is_dir = false;
-			std::size_t layer = 0;
-			std::vector<std::size_t> dir_layers;
-			std::vector<std::size_t> shadowed;
-		};
-		std::map<std::string, slot> merged;
-		for (const std::size_t layer : in_layers) {
-			std::error_code ec;
-			fs::directory_iterator it(state.layers[layer] / relative_dir, fs::directory_options::skip_permission_denied, ec);
-			for (; !ec && it != fs::directory_iterator{}; it.increment(ec)) {
-				if (state.stopped && state.stopped()) {
-					return;
-				}
-				const fs::directory_entry& entry = *it;
-				if (redirects(entry)) {
-					continue;
-				}
-				std::error_code kind_ec;
-				const bool is_dir = entry.is_directory(kind_ec);
-				if (kind_ec) {
-					continue;
-				}
-				const std::string name = fs_paths::utf8_of(entry.path().filename());
-				if (skipped_name(name, is_dir)) {
-					continue;
-				}
-				slot& found = merged[edt::layer_merge_key(name, state.case_insensitive)];
-				const bool existed = !found.relative.empty();
-				if (existed) {
-					found.shadowed.push_back(found.layer);
-				}
-				if (is_dir && existed && found.is_dir) {
-					found.dir_layers.push_back(layer);
-				} else if (is_dir) {
-					found.dir_layers = { layer };
-				} else {
-					found.dir_layers.clear();
-				}
-				found.relative = relative_dir / entry.path().filename();
-				found.physical = entry.path();
-				found.is_dir = is_dir;
-				found.layer = layer;
-			}
-		}
-		for (auto& [key, entry] : merged) {
-			if (state.stopped && state.stopped()) {
-				return;
-			}
-			if (entry.is_dir) {
-				walk(state, entry.relative, entry.dir_layers, depth + 1);
-			} else {
-				state.out.push_back(merged_file{ std::move(entry.physical), std::move(entry.relative), entry.layer, std::move(entry.shadowed) });
-			}
-		}
-	}
-
-	struct meta_read
-	{
-		bool present = false;
-		std::optional<res::asset_meta> meta;
-		std::string error;
-	};
-
-	meta_read read_meta(const fs::path& layer_root, const fs::path& relative)
-	{
-		meta_read out;
-		platform::beneath::read_request request;
-		request.root = layer_root;
-		request.folder = relative.parent_path();
-		request.leaf = relative.filename();
-		request.max_bytes = k_meta_max_bytes;
-		std::vector<std::byte> bytes;
-		const platform::beneath::read_result result = platform::beneath::read_beneath(request, bytes);
-		if (result.status == platform::beneath::read_status::missing) {
-			return out;
-		}
-		out.present = true;
-		if (result.status != platform::beneath::read_status::ok) {
-			out.error = result.error.empty() ? std::string{ "cannot be read" } : result.error;
-			return out;
-		}
-		const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-		res::asset_meta_result read = res::read_asset_meta(text);
-		if (!read) {
-			out.error = read.error.field_path.empty() ? read.error.message : read.error.field_path + ": " + read.error.message;
-			return out;
-		}
-		out.meta = std::move(*read.meta);
-		return out;
-	}
 }
 
 std::string edt::asset_type_of(std::string_view path)
@@ -302,33 +116,23 @@ std::string edt::asset_type_of(std::string_view path)
 edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, const std::function<bool()>& stopped,
 	const std::map<std::string, asset_record>* known, bool case_insensitive)
 {
-	std::vector<merged_file> files;
-	std::vector<std::size_t> all_layers(layers.size());
-	for (std::size_t i = 0; i < layers.size(); ++i) {
-		all_layers[i] = i;
-	}
-	walk_state state{ layers, stopped, files, case_insensitive, false };
-	walk(state, fs::path{}, all_layers, 0);
-
-	// Keyed by the file they belong to, as the merge keys names: "a.png.RESOURCE" belongs to "a.png" everywhere, and on
-	// Windows "A.png.resource" to "a.png" too.
-	std::unordered_map<std::string, const merged_file*> metas;
-	for (const merged_file& file : files) {
-		const std::string relative = fs_paths::generic_utf8_of(file.relative);
-		if (is_sidecar(relative)) {
-			metas.emplace(edt::layer_merge_key(std::string{ sidecar_owner(relative) }, case_insensitive), &file);
-		}
+	const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, stopped, case_insensitive);
+	const res::asset_walk_pairing pairing = res::pair_asset_metas(files, case_insensitive);
+	std::size_t sidecars = 0;
+	for (const res::asset_walk_file& file : files) {
+		if (res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(file.relative))) ++sidecars;
 	}
 
 	asset_scan scan;
-	scan.records.reserve(files.size() - metas.size());
-	std::unordered_set<std::string> paired;
-	for (const merged_file& file : files) {
+	scan.records.reserve(files.size() - sidecars);
+	std::vector<bool> paired(files.size(), false);
+	for (std::size_t index = 0; index < files.size(); ++index) {
+		const res::asset_walk_file& file = files[index];
 		if (stopped && stopped()) {
 			return scan;
 		}
 		const std::string relative = fs_paths::generic_utf8_of(file.relative);
-		if (is_sidecar(relative)) {
+		if (res::is_asset_meta_sidecar(relative)) {
 			continue;
 		}
 		const std::int64_t checked_at = now_ticks();
@@ -345,13 +149,13 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		record.size = stat.size;
 		record.mtime = stat.mtime;
 		record.type = asset_type_of(relative);
-		const std::string meta_key = edt::layer_merge_key(relative, case_insensitive);
-		if (const auto meta = metas.find(meta_key); meta != metas.end()) {
-			paired.insert(meta_key);
-			const file_stat meta_stat = stat_of(meta->second->physical);
+		if (const std::optional<std::size_t> meta_index = pairing.meta_of[index]) {
+			paired[*meta_index] = true;
+			const res::asset_walk_file& meta = files[*meta_index];
+			const file_stat meta_stat = stat_of(meta.physical);
 			record.meta_size = meta_stat.size;
 			record.meta_mtime = meta_stat.mtime;
-			record.meta_layer = meta->second->layer;
+			record.meta_layer = meta.layer;
 			const asset_record* before = nullptr;
 			if (known) {
 				if (const auto found = known->find(record.path.string()); found != known->end()) {
@@ -369,7 +173,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 				continue;
 			}
 			++scan.meta_reads;
-			const meta_read read = read_meta(layers[meta->second->layer], meta->second->relative);
+			const res::asset_meta_file read = res::read_asset_meta_file(layers[meta.layer], meta.relative);
 			record.has_meta = read.present;
 			if (read.meta) {
 				record.id = read.meta->guid;
@@ -381,15 +185,17 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		scan.records.push_back(std::move(record));
 	}
 
-	for (const auto& [key, file] : metas) {
-		if (paired.contains(key)) {
+	// A .resource whose file could not be looked at (gone since the walk) is an orphan too, as before.
+	for (std::size_t index = 0; index < files.size(); ++index) {
+		const res::asset_walk_file& file = files[index];
+		if (paired[index] || !res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(file.relative))) {
 			continue;
 		}
 		asset_orphan orphan;
-		orphan.meta_path = res::tag::make(fs_paths::generic_utf8_of(file->relative));
-		orphan.layer = file->layer;
+		orphan.meta_path = res::tag::make(fs_paths::generic_utf8_of(file.relative));
+		orphan.layer = file.layer;
 		++scan.meta_reads;
-		const meta_read read = read_meta(layers[file->layer], file->relative);
+		const res::asset_meta_file read = res::read_asset_meta_file(layers[file.layer], file.relative);
 		if (read.meta) {
 			orphan.id = read.meta->guid;
 		}
@@ -674,7 +480,7 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	}
 	for (asset_orphan& orphan : scan.orphans) {
 		const std::string_view meta = orphan.meta_path.relative();
-		const std::string owner_key = layer_merge_key(res::tag::make(sidecar_owner(meta)).string(), m_case_insensitive);
+		const std::string owner_key = layer_merge_key(res::tag::make(res::asset_meta_owner(meta)).string(), m_case_insensitive);
 		if (const auto owner = previous_by_key.find(owner_key); owner != previous_by_key.end()) {
 			orphan.last_hash = owner->second->content_hash;
 		}
@@ -1302,13 +1108,13 @@ namespace
 	}
 
 	// What the walk skips: below a folder it skips (a folder on the way, or the folder itself), or a file it does not
-	// list (skipped_name).
+	// list (res::is_skipped_asset_name).
 	bool under_hidden_folder(std::string_view relative, bool is_directory)
 	{
 		while (true) {
 			const std::size_t slash = relative.find('/');
 			const bool last = slash == std::string_view::npos;
-			if (skipped_name(relative.substr(0, slash), !last || is_directory)) {
+			if (res::is_skipped_asset_name(relative.substr(0, slash), !last || is_directory)) {
 				return true;
 			}
 			if (last) {
@@ -1385,7 +1191,7 @@ public:
 		slot out;
 		for (const auto& [layer, path] : in.layers) {
 			const std::optional<fs::directory_entry> entry = entry_of(layer, path, name);
-			if (!entry || redirects(*entry)) {
+			if (!entry || res::asset_entry_redirects(*entry)) {
 				continue;
 			}
 			std::error_code ec;
@@ -1394,7 +1200,7 @@ public:
 				continue;
 			}
 			std::string on_disk = fs_paths::utf8_of(entry->path().filename());
-			if (skipped_name(on_disk, is_dir)) {
+			if (res::is_skipped_asset_name(on_disk, is_dir)) {
 				continue;
 			}
 			std::string child = joined(path, on_disk);
@@ -1425,7 +1231,7 @@ public:
 		std::map<std::string, std::string> names;
 		for (const auto& [layer, path] : in.layers) {
 			for (const listed& item : list(layer, path)) {
-				if (is_sidecar(item.name) && key_of(std::string{ sidecar_owner(item.name) }) == owner) {
+				if (res::is_asset_meta_sidecar(item.name) && key_of(std::string{ res::asset_meta_owner(item.name) }) == owner) {
 					names.emplace(item.key, item.name);
 				}
 			}
@@ -1535,7 +1341,7 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 	const std::function<const asset_record*(const std::string&)>& before_of)
 {
 	// The walk makes no record of a .resource, even of one named as another .resource's file.
-	if (is_sidecar(relative)) {
+	if (res::is_asset_meta_sidecar(relative)) {
 		return std::nullopt;
 	}
 	const auto [parent, name] = split_last(relative);
@@ -1588,7 +1394,7 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 		return record;
 	}
 	++m_files_read;
-	const meta_read read = read_meta(m_layers[meta.layer], meta_relative);
+	const res::asset_meta_file read = res::read_asset_meta_file(m_layers[meta.layer], meta_relative);
 	record.has_meta = read.present;
 	if (read.meta) {
 		record.id = read.meta->guid;
@@ -1641,7 +1447,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			continue;
 		}
 		if (now) {
-			if (change.kind == res::change_kind::created && !is_sidecar(*now)) {
+			if (change.kind == res::change_kind::created && !res::is_asset_meta_sidecar(*now)) {
 				bool& own = created[layer_merge_key(*now, m_case_insensitive)];
 				own = own || change.self;
 			}
@@ -1666,8 +1472,8 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	// By merge key: on Windows "A.png" and "a.png" are one file.
 	std::map<std::string, std::string> files;
 	for (std::string& relative : touched) {
-		if (is_sidecar(relative)) {
-			relative.resize(sidecar_owner(relative).size());
+		if (res::is_asset_meta_sidecar(relative)) {
+			relative.resize(res::asset_meta_owner(relative).size());
 		}
 		std::string key = lookup.key_of(relative);
 		files.emplace(std::move(key), std::move(relative));
@@ -1726,7 +1532,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		std::string last_hash = gone_hash;
 		std::erase_if(m_orphans, [&lookup, &owner_key, &last_hash](const asset_orphan& orphan) {
 			const std::optional<std::string> meta = relative_of(orphan.meta_path);
-			const bool owned = meta && is_sidecar(*meta) && lookup.key_of(std::string{ sidecar_owner(*meta) }) == owner_key;
+			const bool owned = meta && res::is_asset_meta_sidecar(*meta) && lookup.key_of(std::string{ res::asset_meta_owner(*meta) }) == owner_key;
 			if (owned && last_hash.empty()) {
 				last_hash = orphan.last_hash;
 			}
@@ -1748,7 +1554,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			orphan.layer = meta.layer;
 			orphan.last_hash = last_hash.empty() ? take_orphan_hash(orphan.meta_path) : last_hash;
 			++m_files_read;
-			const meta_read read = read_meta(m_layers[meta.layer], fs_paths::path_from_utf8(meta.in_layer));
+			const res::asset_meta_file read = res::read_asset_meta_file(m_layers[meta.layer], fs_paths::path_from_utf8(meta.in_layer));
 			if (read.meta) {
 				orphan.id = read.meta->guid;
 			}
@@ -1890,7 +1696,7 @@ namespace
 	// None when `relative` below `root` still holds exactly `expected`; else why the undo cannot go on.
 	std::optional<edt::asset_fix_result> unchanged_since(const fs::path& root, const std::string& relative, const std::string& expected)
 	{
-		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(relative), k_meta_max_bytes);
+		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(relative), res::asset_meta_max_bytes);
 		const std::string shown = res::tag::make(relative).string();
 		if (!now.error.empty()) {
 			return fix_io_error(now.error);
@@ -1945,7 +1751,7 @@ void edt::asset_database::refresh(const std::vector<std::string>& relatives)
 	std::vector<res::file_change> changes;
 	changes.reserve(relatives.size());
 	for (const std::string& relative : relatives) {
-		const std::string owner = is_sidecar(relative) ? std::string{ sidecar_owner(relative) } : relative;
+		const std::string owner = res::is_asset_meta_sidecar(relative) ? std::string{ res::asset_meta_owner(relative) } : relative;
 		// A .resource rewritten within one tick of a coarse clock keeps its size and time: it is read again anyway, also
 		// by a batch deferred behind a walk or by the next walk.
 		m_force_meta.insert(layer_merge_key(res::tag::make(owner).string(), m_case_insensitive));
@@ -2049,7 +1855,7 @@ edt::asset_fix_result edt::asset_database::link_orphan(const res::tag& meta, con
 		return fix_refused(std::format("{} was not moved to {}: {}", meta.view(), file.view(), error));
 	}
 	// The bytes as moved: the undo moves back only what the link moved.
-	const prj::project_file_text moved = prj::read_project_file(root, fs_paths::path_from_utf8(target), k_meta_max_bytes);
+	const prj::project_file_text moved = prj::read_project_file(root, fs_paths::path_from_utf8(target), res::asset_meta_max_bytes);
 	std::optional<std::string> bytes;
 	if (moved.exists && moved.error.empty()) {
 		bytes = moved.text;
@@ -2096,7 +1902,7 @@ edt::asset_fix_result edt::asset_database::new_id_for_copy(const res::tag& file)
 		return fix_refused(std::format("the .resource of {} is not in the project's own folder", file.view()));
 	}
 	const fs::path root = m_layers[top_layer()];
-	const prj::project_file_text before = prj::read_project_file(root, fs_paths::path_from_utf8(sidecar.in_layer), k_meta_max_bytes);
+	const prj::project_file_text before = prj::read_project_file(root, fs_paths::path_from_utf8(sidecar.in_layer), res::asset_meta_max_bytes);
 	if (!before.error.empty()) {
 		return fix_refused(before.error);
 	}
