@@ -460,6 +460,21 @@ bool edt::data_document::edit(const std::function<bool(json::value&)>& draw)
 	return true;
 }
 
+bool edt::data_document::edit_marked(const std::function<bool(json::value&, const schema_ui::field_origin&)>& draw)
+{
+	const desc::type_schema* type_schema = schema();
+	const desc::desc_system* descs = m_services.descs();
+	if (!m_open || !type_schema || !descs) {
+		return false;
+	}
+	const std::string parent = m_parents.empty() ? std::string{} : std::string{ m_parents.front().view() };
+	if (!schema_ui::edit_component_marked(*type_schema, descs->schemas(), &m_inherited, m_own, parent, draw)) {
+		return false;
+	}
+	++m_generation;
+	return true;
+}
+
 bool edt::data_document::restore_own(json::object own)
 {
 	for (const std::string_view key : { "__type", "__parent" }) {

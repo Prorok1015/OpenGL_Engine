@@ -313,6 +313,47 @@ namespace
 
 	bool draw_field(const desc::field_schema& field, json::value& value, const std::string& pointer, const context& ctx, int depth);
 
+	// The mark in front of a field (S56-7): a star when the own data sets it, a quiet dot otherwise, the source in its tooltip.
+	// A click opens its menu: Reset takes the record out (the field is inherited or default again), Unset (a field that
+	// can be absent, now present) takes the value out; the person's choice is queued in the origin and applied with the edit.
+	void draw_origin_mark(const context& ctx, const desc::field_schema& field, const std::string& pointer, bool present)
+	{
+		const edt::schema_ui::field_origin* origin = ctx.origin;
+		if (!origin) {
+			return;
+		}
+		const bool here = edt::schema_ui::set_here(*origin, pointer);
+		const bool can_unset = field.optional && present && !field.read_only;
+		if (here) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.45f, 0.75f, 1.0f, 1.0f });
+		}
+		bool clicked = false;
+		if (here || can_unset) {
+			clicked = ImGui::SmallButton(here ? "*##mark" : ".##mark");
+		} else {
+			ImGui::TextDisabled(".");
+		}
+		if (here) {
+			ImGui::PopStyleColor();
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::SetTooltip("%s", edt::schema_ui::source_text(*origin, pointer).c_str());
+		}
+		if (clicked) {
+			ImGui::OpenPopup("mark_menu");
+		}
+		if (ImGui::BeginPopup("mark_menu")) {
+			if (here && ImGui::MenuItem("Reset to inherited")) {
+				origin->requests.resets.push_back(pointer);
+			}
+			if (can_unset && ImGui::MenuItem("Unset")) {
+				origin->requests.unsets.push_back(pointer);
+			}
+			ImGui::EndPopup();
+		}
+		ImGui::SameLine(0.0f, 4.0f);
+	}
+
 	bool draw_object(const desc::type_schema& schema, json::value& object, const std::string& prefix, const context& ctx, int depth)
 	{
 		if (!object.is_object()) {
@@ -331,6 +372,7 @@ namespace
 			} else {
 				// Only optional fields (and custom ones without a default) can be missing: they are shown as not set.
 				const std::string label = edt::schema_ui::display_label(field);
+				draw_origin_mark(ctx, field, pointer, false);
 				ImGui::TextDisabled("%s: (not set)", label.c_str());
 				if (ctx.on_field) {
 					ctx.on_field(pointer, widget::label);
@@ -592,6 +634,9 @@ namespace
 		}
 		bool changed = false;
 		const field_kind element_kind = field.element == field_kind::array ? field_kind::custom : field.element;
+		// A list is overridden whole (a merge patch replaces an array): its items carry no marks of their own.
+		context item_ctx = ctx;
+		item_ctx.origin = nullptr;
 		std::optional<std::size_t> remove;
 		const std::size_t shown = std::min(array.size(), max_listed);
 		for (std::size_t i = 0; i < shown; ++i) {
@@ -607,7 +652,7 @@ namespace
 			element.read_only = field.read_only;
 			element.filter = field.filter;
 			if (depth < max_depth) {
-				changed |= draw_field(element, array[i], pointer + element.key, ctx, depth + 1);
+				changed |= draw_field(element, array[i], pointer + element.key, item_ctx, depth + 1);
 			}
 			ImGui::SameLine();
 			if (ImGui::SmallButton("x")) {
@@ -766,6 +811,7 @@ namespace
 
 		const std::string label = edt::schema_ui::display_label(field);
 		bool changed = false;
+		draw_origin_mark(ctx, field, pointer, true);
 		if (spec.disabled) {
 			ImGui::BeginDisabled();
 		}
@@ -939,7 +985,78 @@ json::value edt::schema_ui::compose(const desc::type_schema& schema, const desc:
 
 bool edt::schema_ui::draw_fields(const desc::type_schema& schema, json::value& object, const context& ctx)
 {
-	return draw_object(schema, object, std::string(), ctx, 0);
+	bool changed = draw_object(schema, object, std::string(), ctx, 0);
+	if (ctx.origin && !ctx.origin->requests.unsets.empty()) {
+		changed |= apply_unsets(object, ctx.origin->requests.unsets);
+		ctx.origin->requests.unsets.clear();
+	}
+	return changed;
+}
+
+bool edt::schema_ui::set_here(const field_origin& origin, std::string_view pointer)
+{
+	return desc::json_pointer_get(origin.own, pointer) != nullptr;
+}
+
+edt::schema_ui::value_source edt::schema_ui::source_of(const field_origin& origin, std::string_view pointer)
+{
+	if (set_here(origin, pointer)) {
+		return value_source::set_here;
+	}
+	if (origin.has_parent) {
+		const json::value* held = desc::json_pointer_get(origin.parent, pointer);
+		if (held && !held->is_null()) {
+			return value_source::inherited;
+		}
+	}
+	return value_source::schema_default;
+}
+
+std::string edt::schema_ui::source_text(const field_origin& origin, std::string_view pointer)
+{
+	switch (source_of(origin, pointer)) {
+	case value_source::set_here: return "set here";
+	case value_source::inherited:
+		return origin.inherited_from.empty() ? std::string{ "inherited" } : "inherited from " + origin.inherited_from;
+	case value_source::schema_default: break;
+	}
+	return "schema default";
+}
+
+bool edt::schema_ui::apply_unsets(json::value& shown, const std::vector<std::string>& pointers)
+{
+	bool changed = false;
+	for (const std::string& pointer : pointers) {
+		changed |= desc::json_pointer_remove(shown, pointer);
+	}
+	return changed;
+}
+
+std::size_t edt::schema_ui::apply_resets(json::object& own, const desc::type_schema& schema, const std::vector<std::string>& pointers)
+{
+	json::value holder(own);
+	std::size_t removed = 0;
+	for (const std::string& pointer : pointers) {
+		if (!desc::json_pointer_remove(holder, pointer)) {
+			continue;
+		}
+		++removed;
+		prune_empty_parents(holder, pointer);
+		for (const auto& field : schema.fields) {
+			if (field.key != pointer) {
+				continue;
+			}
+			for (const auto& alias : field.read_aliases) {
+				if (desc::json_pointer_remove(holder, alias)) {
+					prune_empty_parents(holder, alias);
+				}
+			}
+		}
+	}
+	if (removed > 0) {
+		own = std::move(holder.as_object());
+	}
+	return removed;
 }
 
 std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type_schema& schema, const desc::schema_registry& registry,
@@ -998,4 +1115,23 @@ bool edt::schema_ui::edit_component(const desc::type_schema& schema, const desc:
 	if (!draw(after))
 		return false;
 	return apply_edit(overrides, schema, registry, base, before, after) > 0;
+}
+
+bool edt::schema_ui::edit_component_marked(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
+	boost::json::object& overrides, std::string inherited_from,
+	const std::function<bool(boost::json::value& shown, const field_origin& origin)>& draw)
+{
+	const boost::json::value base = compose(schema, registry, { parent }, false);
+	const boost::json::value before = compose(schema, registry, { parent, &overrides });
+	boost::json::value after = before;
+	field_origin origin;
+	origin.own = overrides;
+	origin.has_parent = parent != nullptr;
+	if (parent) origin.parent = *parent;
+	origin.inherited_from = std::move(inherited_from);
+	const bool drawn = draw(after, origin);
+	const std::size_t written = drawn ? apply_edit(overrides, schema, registry, base, before, after) : 0;
+	const std::size_t reset = apply_resets(overrides, schema, origin.requests.resets);
+	origin.requests.resets.clear();
+	return written > 0 || reset > 0;
 }
