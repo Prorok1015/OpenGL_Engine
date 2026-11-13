@@ -7,33 +7,20 @@
 #include <snk/editor/edt_editor_services.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
-#include <imgui_internal.h>
 
 namespace
 {
 	constexpr ImVec4 k_warning{ 1.0f, 0.8f, 0.3f, 1.0f };
 	constexpr ImVec4 k_error{ 1.0f, 0.4f, 0.4f, 1.0f };
-
-	// The main menu bar lives in a window of the dockspace host: a click on a menu moves the focus there, and closing the
-	// menu leaves it there. None of these is a window the person works in, so the document they came from stays active.
-	std::string_view window_taking_focus()
-	{
-		const ImGuiWindow* taken = ImGui::GetCurrentContext()->NavWindow;
-		if (taken == nullptr) return {};
-		taken = taken->RootWindow;
-		constexpr ImGuiWindowFlags service = ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip
-			| ImGuiWindowFlags_ChildMenu | ImGuiWindowFlags_Modal;
-		if ((taken->Flags & service) != 0 || (taken->Name[0] == '#' && taken->Name[1] == '#')) return {};
-		return taken->Name;
-	}
 }
 
-edt::data_document_panel::data_document_panel(data_document& document, editor_services& services, document_id id)
+edt::data_document_panel::data_document_panel(data_document& document, editor_services& services, document_id id, bool quiet)
 	: panel_base(data_document_panel_id(id), data_document_window_title(document, id))
 	, m_document(document)
 	, m_services(services)
 	, m_id(id)
 {
+	if (quiet) m_flags |= ImGuiWindowFlags_NoFocusOnAppearing;
 }
 
 void edt::data_document_panel::on_before_begin()
@@ -45,37 +32,9 @@ void edt::data_document_panel::on_before_begin()
 	}
 }
 
-void edt::data_document_panel::follow_focus()
-{
-	// A menu or a dialog over the window takes the focus from it for a moment without the person leaving the document.
-	if (ImGui::IsPopupOpen(static_cast<const char*>(nullptr), ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
-		return;
-	}
-	const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-	if (focused == m_focused) {
-		return;
-	}
-	if (focused) {
-		m_focused = true;
-		if (m_on_focus) m_on_focus();
-	} else {
-		lose_focus();
-	}
-}
-
-// An edit in the middle of a drag is recorded before another window takes over: it must not be folded into an edit made there.
-void edt::data_document_panel::lose_focus()
-{
-	m_focused = false;
-	m_document.commit_pending();
-	if (m_on_blur) m_on_blur(window_taking_focus());
-}
-
 void edt::data_document_panel::on_hidden()
 {
-	if (m_focused) {
-		lose_focus();
-	}
+	m_document.commit_pending();
 	// Collapsed or behind another tab the window is still open: only a closed one asks for its document to go. The editor
 	// opens the window again when it keeps the document (unsaved changes), so this is not asked every frame.
 	if (!is_open() && m_on_close) {
@@ -85,7 +44,6 @@ void edt::data_document_panel::on_hidden()
 
 void edt::data_document_panel::on_render()
 {
-	follow_focus();
 	const data_document_status status = status_of(m_document);
 	ImGui::TextDisabled("%s", status.path.c_str());
 	if (!status.parents.empty()) {

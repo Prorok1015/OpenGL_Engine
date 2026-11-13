@@ -9,6 +9,7 @@
 #include "edt_scene_document.h"
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
+#include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
@@ -386,6 +387,7 @@ BOOST_AUTO_TEST_CASE(TheActiveDocumentFollowsTheFocusOfTwoDataWindows_InEitherRe
 		ImGui::NewFrame();
 		one->render();
 		two->render();
+		host->follow_focus();
 		ImGui::EndFrame();
 	};
 	const auto focus = [](edt::panel_base* panel) { ImGui::SetWindowFocus(panel->get_title().c_str()); };
@@ -425,6 +427,7 @@ BOOST_AUTO_TEST_CASE(AnotherWindowTakingTheFocus_GivesTheSceneTheActivityBack)
 		if (ImGui::Begin("viewport")) {
 		}
 		ImGui::End();
+		host->follow_focus();
 		ImGui::EndFrame();
 	};
 	frame();
@@ -501,6 +504,12 @@ BOOST_AUTO_TEST_CASE(EditUndoClickedWithTheMouse_TwiceInARow_UndoesTheDataDocume
 		ImGui::NewFrame();
 		menu.draw();
 		panel->render();
+		ImGui::SetNextWindowPos(ImVec2(620.f, 450.f), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(150.f, 100.f), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Viewport")) {
+		}
+		ImGui::End();
+		host->follow_focus();
 		ImGui::EndFrame();
 	};
 	const auto frames = [&](int count) {
@@ -543,6 +552,117 @@ BOOST_AUTO_TEST_CASE(EditUndoClickedWithTheMouse_TwiceInARow_UndoesTheDataDocume
 	}
 	BOOST_TEST(data.own().at("speed").to_number<double>() == original);
 	BOOST_TEST(documents.scene().next_undo_entry().has_value() == false);
+
+	// The person goes on to the viewport: the next Undo is the scene's again, not the data window's.
+	ImGui::SetWindowFocus("Viewport");
+	frames(3);
+	BOOST_TEST(documents.active() == &documents.scene());
+}
+
+namespace {
+
+class fake_preview final : public edt::previewable_document
+{
+public:
+	std::string_view kind() const override { return "prefab"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return false; }
+	std::uint64_t generation() const override { return 0; }
+	void open(const res::tag& source) override { m_source = source; m_open = true; }
+	void close() override { m_open = false; }
+	bool is_open() const override { return m_open; }
+
+private:
+	std::string m_title = "preview";
+	res::tag m_source;
+	bool m_open = false;
+};
+
+class window_panel final : public edt::panel_base
+{
+public:
+	window_panel(std::string_view id, std::string_view title) : panel_base(id, title) {}
+
+protected:
+	void on_render() override {}
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(ThePrefabPreviewWindowGivesItsDocument_TheViewportGivesTheSceneBack)
+{
+	imgui_context imgui;
+	edt::document& data = open_config();
+	edt::panel_base* panel = context->panels().find(edt::data_document_panel_id(data.id()));
+	BOOST_REQUIRE(panel != nullptr);
+	edt::document_manager& documents = context->documents();
+
+	edt::asset_preview_desc kind;
+	kind.id = "test.preview";
+	kind.suffix = ".preview";
+	kind.make_preview = [](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> { return std::make_unique<fake_preview>(); };
+	const edt::registration kind_registration = context->asset_kinds().add_preview(std::move(kind));
+	edt::previewable_document* preview = documents.open_preview("test.preview", res::tag::make("a.preview"));
+	BOOST_REQUIRE(preview != nullptr);
+	auto prefab_window = std::make_shared<window_panel>("prefab_editor", "Prefab Editor");
+	const edt::registration prefab_registration = context->panels().add({
+		.id = "prefab_editor", .title = "Prefab Editor", .slot = edt::dock_slot::floating, .open_by_default = true,
+		.show_in_view_menu = false, .panel = prefab_window });
+
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		panel->render();
+		prefab_window->render();
+		if (ImGui::Begin("Viewport")) {
+		}
+		ImGui::End();
+		host->follow_focus();
+		ImGui::EndFrame();
+	};
+	frame();
+	frame();
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frame();
+	frame();
+	BOOST_REQUIRE(documents.active() == &data);
+
+	ImGui::SetWindowFocus("Prefab Editor");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == preview);
+
+	ImGui::SetWindowFocus("Viewport");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == &documents.scene());
+
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == &data);
+}
+
+BOOST_AUTO_TEST_CASE(AQuietlyOpenedWindow_TakesNeitherTheFocusNorTheActivity_InAnyNumberOfFrames)
+{
+	imgui_context imgui;
+	const res::tag tag = put("quiet.desc", R"({"__type":"test.config","speed":2.0})");
+	host->open(tag, true);
+	edt::document* data = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(data != nullptr);
+	edt::panel_base* panel = context->panels().find(edt::data_document_panel_id(data->id()));
+	BOOST_REQUIRE(panel != nullptr);
+
+	for (int i = 0; i < 6; ++i) {
+		ImGui::NewFrame();
+		if (ImGui::Begin("Viewport")) {
+		}
+		ImGui::End();
+		panel->render();
+		host->follow_focus();
+		ImGui::EndFrame();
+		BOOST_TEST(context->documents().active() == &context->documents().scene());
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AWindowTheFocusGoesToThatIsNoPlaceToWork_LeavesTheActiveDocumentAlone)
@@ -557,6 +677,7 @@ BOOST_AUTO_TEST_CASE(AWindowTheFocusGoesToThatIsNoPlaceToWork_LeavesTheActiveDoc
 		if (ImGui::Begin("##service")) {
 		}
 		ImGui::End();
+		host->follow_focus();
 		ImGui::EndFrame();
 	};
 	frame();
@@ -604,6 +725,7 @@ BOOST_AUTO_TEST_CASE(AnEditInTheMiddleOfADrag_IsRecordedWhenAnotherWindowTakesTh
 		}
 		a->render();
 		b->render();
+		host->follow_focus();
 		ImGui::EndFrame();
 	};
 	frame(false);

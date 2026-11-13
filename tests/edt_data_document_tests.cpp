@@ -947,6 +947,22 @@ BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt
 // Undo and redo (S56-5): one record per edit of the person, snapshots of `own`.
 namespace {
 
+}
+
+namespace edt {
+
+struct data_document_test_access
+{
+	static void record_change(data_document& document, const json::object& before, const json::object& after)
+	{
+		document.record_change(before, after);
+	}
+};
+
+}
+
+namespace {
+
 bool set_speed(edt::data_document& document, double value)
 {
 	return document.edit([value](json::value& shown) {
@@ -1158,7 +1174,7 @@ BOOST_AUTO_TEST_CASE(ARecordTheDocumentCannotTakeBack_IsRefused_DroppedAndNothin
 		BOOST_TEST_CONTEXT(key) {
 			json::object foreign = before_edit;
 			foreign[key] = "res://somewhere/else";
-			document.record_change(foreign, edited);
+			edt::data_document_test_access::record_change(document, foreign, edited);
 			const std::size_t records = document.history().size();
 			const std::uint64_t generation = document.generation();
 
@@ -1173,7 +1189,7 @@ BOOST_AUTO_TEST_CASE(ARecordTheDocumentCannotTakeBack_IsRefused_DroppedAndNothin
 
 	json::object foreign = edited;
 	foreign["__parent"] = "res://somewhere/else";
-	document.record_change(before_edit, foreign);
+	edt::data_document_test_access::record_change(document, before_edit, foreign);
 	BOOST_REQUIRE(document.undo());
 	const std::uint64_t generation = document.generation();
 	BOOST_TEST(!document.redo());

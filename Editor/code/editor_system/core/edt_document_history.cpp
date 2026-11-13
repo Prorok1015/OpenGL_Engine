@@ -103,11 +103,16 @@ bool edt::document_history::discard_next_undo()
 	if (!can_undo()) {
 		return false;
 	}
-	if (m_saved && *m_saved == m_records[m_position - 1].id) {
-		m_saved.reset();
-	}
+	const bool saved_on_it = m_saved && *m_saved == m_records[m_position - 1].id;
 	m_records.erase(m_records.begin() + static_cast<std::ptrdiff_t>(m_position - 1));
 	--m_position;
+	// The document still is what the dropped record made it: that is the saved state when the save was on the record, and
+	// is not the state of the new top when the save was there (or before the first record).
+	if (saved_on_it) {
+		m_saved = top_id();
+	} else if (m_saved && *m_saved == top_id()) {
+		m_saved.reset();
+	}
 	return true;
 }
 

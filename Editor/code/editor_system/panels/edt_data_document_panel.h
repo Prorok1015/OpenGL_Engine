@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <string_view>
 
 namespace edt
 {
@@ -19,7 +18,8 @@ namespace edt
 	class data_document_panel final : public panel_base
 	{
 	public:
-		data_document_panel(data_document& document, editor_services& services, document_id id);
+		// `quiet`: the window does not take the focus when it first appears (a document opened from a problem's link).
+		data_document_panel(data_document& document, editor_services& services, document_id id, bool quiet = false);
 
 		void set_on_close(std::function<void()> on_close) { m_on_close = std::move(on_close); }
 		// What the window's buttons ask the editor for: Save (a version conflict becomes a question), and the two answers of
@@ -27,12 +27,6 @@ namespace edt
 		void set_on_save(std::function<void()> on_save) { m_on_save = std::move(on_save); }
 		void set_on_reload(std::function<void()> on_reload) { m_on_reload = std::move(on_reload); }
 		void set_on_overwrite(std::function<void()> on_overwrite) { m_on_overwrite = std::move(on_overwrite); }
-		// The window got the focus (its document is the one Edit > Undo acts on) or lost it to another window: `taken_by` is
-		// that window's name. A menu or a dialog open over the window is neither: the focus returns to it, or the person went
-		// elsewhere once they close. A window the focus goes to that is no place to work in (the dockspace host with the main
-		// menu bar, a popup, a tooltip, a window that takes no navigation focus) is reported as an empty name.
-		void set_on_focus(std::function<void()> on_focus) { m_on_focus = std::move(on_focus); }
-		void set_on_blur(std::function<void(std::string_view taken_by)> on_blur) { m_on_blur = std::move(on_blur); }
 		// The message under the Save button (what the last save said); empty clears it.
 		void set_error(std::string error) { m_error = std::move(error); }
 		// The window comes to the front at its next frame.
@@ -48,9 +42,6 @@ namespace edt
 		void on_hidden() override;
 
 	private:
-		void follow_focus();
-		void lose_focus();
-
 		data_document& m_document;
 		editor_services& m_services;
 		document_id m_id;
@@ -58,9 +49,6 @@ namespace edt
 		std::function<void()> m_on_save;
 		std::function<void()> m_on_reload;
 		std::function<void()> m_on_overwrite;
-		std::function<void()> m_on_focus;
-		std::function<void(std::string_view)> m_on_blur;
-		bool m_focused = false;
 		// The outside change the person put off with Later (data_document::disk_change_serial); a newer one shows the banner again.
 		std::uint64_t m_dismissed_serial = 0;
 		bool m_dismissed = false;
