@@ -82,14 +82,21 @@ namespace
 		}
 	};
 
-	// Writes the world ids of the sandbox ids into the entity fields of `component`, by the meta of the context the
-	// component is registered in (the layer's or the engine's, #738), not by the default one.
-	void remap_entity_fields(const entt::meta_type& type, void* component, const entt::continuous_loader& loader)
+	bool has_entity_fields(const entt::meta_type& type)
 	{
-		entt::meta_any handle = type.from_void(component);
-		if (!handle) {
-			return;
+		for (auto&& [id, data] : type.data()) {
+			const entt::type_info& field = data.type().info();
+			if (field == entt::type_id<entt::entity>() || field == entt::type_id<ecs::sandbox_entity>()) {
+				return true;
+			}
 		}
+		return false;
+	}
+
+	// Writes the world ids of the sandbox ids into the entity fields of `handle`, by the meta of the context the
+	// component is registered in (the layer's or the engine's, #738), not by the default one.
+	void remap_entity_fields(const entt::meta_type& type, entt::meta_any& handle, const entt::continuous_loader& loader)
+	{
 		for (auto&& [id, data] : type.data()) {
 			const entt::type_info& field = data.type().info();
 			if (field == entt::type_id<entt::entity>()) {
@@ -107,19 +114,32 @@ namespace
 	}
 
 	// What loader.get<T> did with the module's archive, with T's code reduced to `emplace`: every owner was made by the
-	// entity pass of this loader (a new one per apply_commands), so it has no T to remove first.
+	// entity pass of this loader (a new one per apply_commands), so it has no T to remove first. A value is remapped
+	// before it is placed, so an on_construct observer sees the world's ids (scn_component_catalog.h). An owner the
+	// loader has no world entity for is skipped: the sandbox holds a component only on a live entity, which the entity
+	// pass maps; restore() of the loader would have made a new, empty world entity for it.
 	void load_component_pool(entt::continuous_loader& loader, entt::registry& state, entt::id_type id,
 		const entt::basic_sparse_set<ecs::sandbox_entity>& pool, const entt::meta_type& type, ecs::sandbox_emplace_fn emplace)
 	{
+		const bool remap = has_entity_fields(type);
 		for (std::size_t i = 0; i < pool.size(); ++i) {
 			const ecs::sandbox_entity owner = pool.data()[i];
 			const entt::entity mapped = loader.map(ecs::to_main(owner));
 			if (mapped == entt::null) {
 				continue;
 			}
-			if (void* placed = emplace(state, id, mapped, pool.value(owner))) {
-				remap_entity_fields(type, placed, loader);
+			const void* value = pool.value(owner);
+			if (remap && value) {
+				// A copy of the value: copying a meta_any that refers to an object copies the object.
+				const entt::meta_any sandbox_value = type.from_void(value);
+				entt::meta_any copy = sandbox_value;
+				if (copy) {
+					remap_entity_fields(type, copy, loader);
+					emplace(state, id, mapped, copy.base().data());
+					continue;
+				}
 			}
+			emplace(state, id, mapped, value);
 		}
 	}
 

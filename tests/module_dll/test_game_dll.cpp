@@ -7,6 +7,7 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_bus_context.hpp>
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
@@ -261,6 +262,17 @@ private:
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },
 			desc::bind_described<dll_game::dll_component>(dll_game::component_name, 1, desc::schema_kind::component));
 		ecs::register_component<dll_game::dll_component>(layer.meta());
+		{
+			using namespace entt::literals;
+			ecs::register_component<dll_game::dll_link>(layer.meta())
+				.data<&dll_game::dll_link::target>("target"_hs)
+				.data<&dll_game::dll_link::value>("value"_hs);
+		}
+		data.require<gs::module_context>().observe<dll_game::dll_link>({}, scn::observed::construct,
+			[](ecs::bus_context& ctx, entt::entity entity) {
+				entt::registry& reg = ctx.registry();
+				reg.emplace_or_replace<dll_game::dll_link_seen>(entity, dll_game::dll_link_seen{ reg.get<dll_game::dll_link>(entity).target });
+			});
 		data.require<gs::module_context>().register_component(
 			desc::parse_type_schema(boost::json::parse(dll_game::schema_component_json).as_object()));
 		layer.events().add<dll_game::dll_event>({}, &write_dll_event);

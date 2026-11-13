@@ -1,12 +1,25 @@
 #pragma once
 #include <cstddef>
 #include <string_view>
+#include <entt/entity/entity.hpp>
 
 // What the host test knows of the game module in test_game_dll (a shared library loaded from disk).
 namespace dll_game {
 
 	struct dll_component {
 		int value = 0;
+	};
+
+	// A C++ component of the module with an entity field, registered with its fields in the module's meta context
+	// (#738, #784): moved from the sandbox by the engine's code through the module's adapter.
+	struct dll_link {
+		entt::entity target = entt::null;
+		int value = 0;
+	};
+
+	// What the module's on_construct observer of dll_link saw in `target` when the component was placed.
+	struct dll_link_seen {
+		entt::entity target = entt::null;
 	};
 
 	inline constexpr std::string_view module_name = "test_game_dll";

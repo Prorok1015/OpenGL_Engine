@@ -20,23 +20,26 @@ namespace ecs
     // engine's (#784), so only this adapter is compiled in a module.
     inline constexpr entt::hashed_string loader_get_h = "loader_get"_hs;
 
-    // Places a copy of `value` (null for an empty type) on `owner` in the world's storage `id`; the placed component,
-    // or null for an empty type.
-    using sandbox_emplace_fn = void* (*)(entt::registry& world, entt::id_type id, entt::entity owner, const void* value);
+    // Places a copy of `value` (null for an empty type) on `owner` in the world's storage `id`, replacing one already
+    // there (on_update then, as emplace_or_replace does).
+    using sandbox_emplace_fn = void (*)(entt::registry& world, entt::id_type id, entt::entity owner, const void* value);
 
     [[nodiscard]] constexpr auto to_main(ecs::sandbox_entity e) noexcept {
         return static_cast<entt::entity>(static_cast<std::uint32_t>(e));
     }
 
     template<typename T>
-    void* sandbox_emplace(entt::registry& world, entt::id_type id, entt::entity owner, const void* value) {
+    void sandbox_emplace(entt::registry& world, entt::id_type id, entt::entity owner, const void* value) {
         auto& storage = world.storage<T>(id);
         // What basic_continuous_loader::get tells a storage without values by.
         if constexpr (std::tuple_size_v<decltype(storage.get_as_tuple({}))> == 0u) {
-            storage.emplace(owner);
-            return nullptr;
+            if (!storage.contains(owner)) {
+                storage.emplace(owner);
+            }
+        } else if (storage.contains(owner)) {
+            storage.patch(owner, [value](T& placed) { placed = *static_cast<const T*>(value); });
         } else {
-            return &storage.emplace(owner, *static_cast<const T*>(value));
+            storage.emplace(owner, *static_cast<const T*>(value));
         }
     }
 
