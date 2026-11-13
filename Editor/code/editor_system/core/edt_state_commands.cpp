@@ -9,6 +9,7 @@
 #include <snk/desc/desc_json_schema.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include "edt_asset_layers.h"
@@ -721,6 +722,8 @@ namespace {
 				// Links, devices and sockets are not assets (and a link could lead out of the layer).
 				if (!is_dir && status.type() != fs::file_type::regular) continue;
 				std::string name = it->path().filename().string();
+				// A .resource sidecar (EPIC-57) belongs to its file and is not an asset of its own.
+				if (!is_dir && res::is_asset_meta_name(name)) continue;
 				if (!valid_utf8(name)) {
 					++state.bad_names;
 					continue;
