@@ -7,6 +7,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <algorithm>
@@ -51,6 +52,74 @@ namespace
 		}
 		return res::tag{ std::string_view{ field->as_string() } };
 	}
+}
+
+namespace
+{
+	// The JSON pointers of the leaves two snapshots of `own` differ at: a changed or added or removed key, or a value that
+	// is not an object on both sides (an array, a scalar) as a whole.
+	void collect_changes(const std::string& prefix, const json::value& before, const json::value& after, std::vector<std::string>& out)
+	{
+		const json::object* was = before.if_object();
+		const json::object* now = after.if_object();
+		if (was && now) {
+			for (const auto& entry : *now) {
+				const std::string pointer = prefix + "/" + res::json_pointer_token(std::string_view{ entry.key() });
+				if (const json::value* old = was->if_contains(entry.key())) {
+					collect_changes(pointer, *old, entry.value(), out);
+				} else {
+					out.push_back(pointer);
+				}
+			}
+			for (const auto& entry : *was) {
+				if (!now->contains(entry.key())) out.push_back(prefix + "/" + res::json_pointer_token(std::string_view{ entry.key() }));
+			}
+			return;
+		}
+		if (!(before == after)) out.push_back(prefix.empty() ? std::string{ "/" } : prefix);
+	}
+
+	std::string edit_label(const std::vector<std::string>& pointers)
+	{
+		if (pointers.size() == 1) {
+			const std::size_t slash = pointers.front().rfind('/');
+			const std::string name = slash == std::string::npos ? pointers.front() : pointers.front().substr(slash + 1);
+			return name.empty() ? std::string{ "Edit" } : "Edit " + name;
+		}
+		return std::format("Edit {} fields", pointers.size());
+	}
+
+	// What one edit of the person did to `own`: put back by restore_own, in either direction. The __guid of the file is
+	// not an edit: a save may add it, and an undo must not take it away again.
+	// Thrown out of a change the document cannot take back (a snapshot of another __type or __parent): the history has not moved.
+	struct restore_refused {};
+
+	class data_change final : public edt::history_change
+	{
+	public:
+		data_change(edt::data_document& document, json::object before, json::object after, std::vector<std::string> keys)
+			: m_document(document), m_before(std::move(before)), m_after(std::move(after)), m_keys(std::move(keys)) {}
+
+		void undo() override { restore(m_before); }
+		void redo() override { restore(m_after); }
+		const std::vector<std::string>& keys() const override { return m_keys; }
+
+	private:
+		void restore(json::object snapshot)
+		{
+			if (const json::value* guid = m_document.own().if_contains("__guid")) {
+				snapshot["__guid"] = *guid;
+			}
+			if (!m_document.restore_own(std::move(snapshot))) {
+				throw restore_refused{};
+			}
+		}
+
+		edt::data_document& m_document;
+		json::object m_before;
+		json::object m_after;
+		std::vector<std::string> m_keys;
+	};
 }
 
 edt::data_document::data_document(editor_services& services, desc_file_layout files)
@@ -191,6 +260,9 @@ void edt::data_document::apply(const res::tag& file, loaded&& state)
 	m_type = std::move(state.type);
 	m_own = std::move(state.own);
 	m_saved_own = m_own;
+	m_committed_own = m_own;
+	m_history.clear();
+	m_history.mark_saved();
 	m_inherited = std::move(state.inherited);
 	m_version = std::move(state.version);
 	m_parents = std::move(state.parents);
@@ -404,6 +476,83 @@ bool edt::data_document::restore_own(json::object own)
 	return true;
 }
 
+void edt::data_document::commit_pending()
+{
+	if (!has_pending_edit()) {
+		return;
+	}
+	record_change(m_committed_own, m_own);
+	m_committed_own = m_own;
+}
+
+void edt::data_document::record_change(const json::object& before, const json::object& after)
+{
+	std::vector<std::string> pointers;
+	collect_changes({}, before, after, pointers);
+	std::string label = edit_label(pointers);
+	m_history.record(std::move(label), cmd::origin::ui(), std::make_unique<data_change>(*this, before, after, std::move(pointers)));
+}
+
+bool edt::data_document::undo()
+{
+	commit_pending();
+	if (!m_open) {
+		return false;
+	}
+	try {
+		if (!m_history.undo()) {
+			return false;
+		}
+	} catch (const restore_refused&) {
+		m_history.discard_next_undo();
+		egLOG_WARN("editor", "{}: an undo was refused (the __type or __parent is not the one it was recorded for), the record is dropped", m_source.view());
+		return false;
+	}
+	m_committed_own = m_own;
+	announce();
+	return true;
+}
+
+bool edt::data_document::redo()
+{
+	commit_pending();
+	if (!m_open) {
+		return false;
+	}
+	try {
+		if (!m_history.redo()) {
+			return false;
+		}
+	} catch (const restore_refused&) {
+		m_history.discard_next_redo();
+		egLOG_WARN("editor", "{}: a redo was refused (the __type or __parent is not the one it was recorded for), the record is dropped", m_source.view());
+		return false;
+	}
+	m_committed_own = m_own;
+	announce();
+	return true;
+}
+
+std::optional<edt::history_entry> edt::data_document::next_undo_entry() const
+{
+	if (has_pending_edit()) {
+		std::vector<std::string> pointers;
+		collect_changes({}, m_committed_own, m_own, pointers);
+		return history_entry{ edit_label(pointers), cmd::origin::ui() };
+	}
+	const history_record* record = m_open ? m_history.next_undo() : nullptr;
+	return record ? std::optional<history_entry>{ history_entry{ record->label, record->origin } } : std::nullopt;
+}
+
+std::optional<edt::history_entry> edt::data_document::next_redo_entry() const
+{
+	if (has_pending_edit()) {
+		return std::nullopt;
+	}
+	const history_record* record = m_open ? m_history.next_redo() : nullptr;
+	return record ? std::optional<history_entry>{ history_entry{ record->label, record->origin } } : std::nullopt;
+}
+
 edt::save_result edt::data_document::save()
 {
 	return write(false);
@@ -414,6 +563,7 @@ edt::save_result edt::data_document::write(bool over)
 	if (!m_open) {
 		return save_result::failure("the document is not open");
 	}
+	commit_pending();
 	// An overwrite writes the document even when it has no edits: the file on disk is what the person chose to replace.
 	if (!over && !is_dirty()) {
 		return save_result::ok();
@@ -468,6 +618,8 @@ edt::save_result edt::data_document::write(bool over)
 
 	m_own = std::move(content.as_object());
 	m_saved_own = m_own;
+	m_committed_own = m_own;
+	m_history.mark_saved();
 	m_version = code_version_of(bytes);
 	m_changed_on_disk = false;
 	m_flagged_version.clear();

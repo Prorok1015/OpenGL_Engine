@@ -97,6 +97,18 @@ constexpr const char* k_child = R"({"__type":"test.config","__guid":"guid-1","__
 
 }
 
+namespace edt {
+
+struct data_document_test_access
+{
+	static void record_change(data_document& document, const boost::json::object& before, const boost::json::object& after)
+	{
+		document.record_change(before, after);
+	}
+};
+
+}
+
 BOOST_FIXTURE_TEST_SUITE(EdtDataDocumentTests, document_fixture)
 
 BOOST_AUTO_TEST_CASE(Open_ShowsTheInheritedValuesUnderTheOwnOnes)
@@ -942,6 +954,254 @@ BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt
 	frame();
 	BOOST_TEST(panel.map_state().new_keys.empty());
 	BOOST_TEST(panel.map_state().rename_errors.empty());
+}
+
+// Undo and redo (S56-5): one record per edit of the person, snapshots of `own`.
+namespace {
+
+bool set_speed(edt::data_document& document, double value)
+{
+	return document.edit([value](json::value& shown) {
+		shown.as_object()["speed"] = value;
+		return true;
+	});
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(UndoAndRedo_PutOwnBackByteForByte)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object original = document.own();
+
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	const json::object edited = document.own();
+	BOOST_REQUIRE(!(edited == original));
+
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == original));
+	BOOST_REQUIRE(document.redo());
+	BOOST_TEST((document.own() == edited));
+	BOOST_TEST(!document.redo());
+}
+
+BOOST_AUTO_TEST_CASE(ADragIsOneRecord_WhateverNumberOfFramesItTook)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object original = document.own();
+
+	for (int frame = 1; frame <= 20; ++frame) {
+		BOOST_REQUIRE(set_speed(document, 3.0 + frame));
+	}
+	BOOST_TEST(document.has_pending_edit());
+	BOOST_TEST(document.history().size() == 0u);
+	document.commit_pending();
+	BOOST_TEST(!document.has_pending_edit());
+	BOOST_TEST(document.history().size() == 1u);
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == original));
+	BOOST_TEST(!document.undo());
+}
+
+BOOST_AUTO_TEST_CASE(OneEditOfSeveralPointers_IsOneRecord_AndAnEmptyParentObjectComesBack)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object original = document.own();
+	BOOST_REQUIRE(!original.contains("limits"));
+
+	BOOST_REQUIRE(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		shown.as_object()["goals"] = json::array{ 1, 2, 3 };
+		shown.at_pointer("/limits").as_object()["min"] = 1.5;
+		return true;
+	}));
+	document.commit_pending();
+	BOOST_TEST(document.history().size() == 1u);
+	BOOST_TEST(document.own().contains("limits"));
+
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == original));
+	BOOST_TEST(!document.own().contains("limits"));
+}
+
+BOOST_AUTO_TEST_CASE(TheEntryNamesTheEditedField_OrTheNumberOfFields)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	const auto entry = document.next_undo_entry();
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(entry->label == "Edit speed");
+	BOOST_TEST((entry->origin.kind == cmd::origin_kind::ui));
+
+	BOOST_REQUIRE(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 8.0;
+		shown.as_object()["goals"] = json::array{ 4 };
+		return true;
+	}));
+	document.commit_pending();
+	BOOST_REQUIRE(document.next_undo_entry().has_value());
+	BOOST_TEST(document.next_undo_entry()->label == "Edit 2 fields");
+}
+
+BOOST_AUTO_TEST_CASE(UndoTakesWhatIsPendingFirst_AndTheMenuSeesIt)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object original = document.own();
+
+	BOOST_TEST(!document.next_undo_entry().has_value());
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	BOOST_REQUIRE(document.next_undo_entry().has_value());
+	BOOST_TEST(document.next_undo_entry()->label == "Edit speed");
+	BOOST_TEST(!document.next_redo_entry().has_value());
+
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == original));
+	BOOST_TEST(document.next_redo_entry().has_value());
+	BOOST_TEST(!document.has_pending_edit());
+}
+
+BOOST_AUTO_TEST_CASE(AnEditAfterAnUndo_DropsTheRedo)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	BOOST_REQUIRE(document.undo());
+	BOOST_REQUIRE(set_speed(document, 8.0));
+	document.commit_pending();
+	BOOST_TEST(!document.redo());
+	BOOST_TEST(document.history().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ASaveIsTheSavePoint_AnUndoAfterItMakesTheDocumentDirty_ARedoClean)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	BOOST_TEST(document.is_dirty());
+	// What is pending is recorded by the save itself.
+	BOOST_REQUIRE(document.save().saved);
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(document.history().is_at_save_point());
+	BOOST_TEST(document.history().size() == 1u);
+
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST(document.is_dirty());
+	BOOST_TEST(!document.history().is_at_save_point());
+	BOOST_REQUIRE(document.redo());
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(document.history().is_at_save_point());
+}
+
+BOOST_AUTO_TEST_CASE(AReload_IsABoundary_TheHistoryStartsAgain)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	BOOST_REQUIRE(document.history().size() == 1u);
+	BOOST_REQUIRE(document.reload().opened);
+	BOOST_TEST(document.history().size() == 0u);
+	BOOST_TEST(!document.undo());
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(!document.next_undo_entry().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_KeepsTheHistory_AndMarksTheSavePoint)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object original = document.own();
+
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	put("child.desc", R"({"__type":"test.config","__guid":"guid-1","__parent":"res://parent.desc","speed":4.0})");
+	BOOST_REQUIRE(document.save_over().saved);
+	BOOST_TEST(document.history().size() == 1u);
+	BOOST_TEST(document.history().is_at_save_point());
+	BOOST_TEST(!document.is_dirty());
+
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == original));
+	BOOST_TEST(document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(ARecordTheDocumentCannotTakeBack_IsRefused_DroppedAndNothingIsAnnounced)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object before_edit = document.own();
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	const json::object edited = document.own();
+
+	for (const char* key : { "__parent", "__type" }) {
+		BOOST_TEST_CONTEXT(key) {
+			json::object foreign = before_edit;
+			foreign[key] = "res://somewhere/else";
+			edt::data_document_test_access::record_change(document, foreign, edited);
+			const std::size_t records = document.history().size();
+			const std::uint64_t generation = document.generation();
+
+			BOOST_TEST(!document.undo());
+			BOOST_TEST((document.own() == edited));
+			BOOST_TEST(document.generation() == generation);
+			BOOST_TEST(document.history().size() == records - 1u);
+		}
+	}
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == before_edit));
+
+	json::object foreign = edited;
+	foreign["__parent"] = "res://somewhere/else";
+	edt::data_document_test_access::record_change(document, before_edit, foreign);
+	BOOST_REQUIRE(document.undo());
+	const std::uint64_t generation = document.generation();
+	BOOST_TEST(!document.redo());
+	BOOST_TEST((document.own() == before_edit));
+	BOOST_TEST(document.generation() == generation);
+	BOOST_TEST(!document.history().next_redo());
+}
+
+BOOST_AUTO_TEST_CASE(ADataDocumentHasNoAgentChangesAndIsNeverLocked)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	BOOST_TEST(!document.has_agent_changes());
+	BOOST_TEST(!document.edits_locked());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
+#include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_signal.hpp>
@@ -48,7 +49,8 @@ namespace gs
 		// is all exports and the world keeps the engine's copy of a component's default (#785, #826). 6: gs::input_actions loses
 		// its two warning fields, so the members after them move (#782).
 		// 7: inp::action_binding is a {kind, code, threshold} struct, not a variant (#783).
-		inline constexpr std::uint64_t layout_revision = 7;
+		// 8: desc_base gains the tag of its parent and joins the list (#812); the list now sees its size.
+		inline constexpr std::uint64_t layout_revision = 8;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
@@ -78,6 +80,8 @@ namespace gs
 			// A module reads a component without a C++ type through find_schema_component and may build one to hand to
 			// emplace_schema_component (a const reference: the world keeps the engine's copy, #785).
 			desc::dyn_blob,
+			// A module's desc types derive from desc_base (schema_desc<T>) and are created by its factories.
+			desc::desc_base,
 			// module_context::subscribe/observe build the filter, the slot and the connection the engine keeps.
 			scn::event_filter, scn::observer_slot, ecs::connection,
 			// module_context::run takes the task's description from module code.

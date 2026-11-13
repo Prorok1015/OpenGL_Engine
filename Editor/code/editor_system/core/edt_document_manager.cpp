@@ -178,7 +178,6 @@ edt::document& edt::document_manager::adopt(std::unique_ptr<document> adopted)
 	kept.bind_events(&m_events);
 	adopted_of(this).push_back(std::move(adopted));
 	m_events.document_opened.emit(kept.id());
-	set_active(kept.id());
 	return kept;
 }
 

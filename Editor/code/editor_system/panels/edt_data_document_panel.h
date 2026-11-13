@@ -18,7 +18,8 @@ namespace edt
 	class data_document_panel final : public panel_base
 	{
 	public:
-		data_document_panel(data_document& document, editor_services& services, document_id id);
+		// `quiet`: the window does not take the focus when it first appears (a document opened from a problem's link).
+		data_document_panel(data_document& document, editor_services& services, document_id id, bool quiet = false);
 
 		void set_on_close(std::function<void()> on_close) { m_on_close = std::move(on_close); }
 		// What the window's buttons ask the editor for: Save (a version conflict becomes a question), and the two answers of

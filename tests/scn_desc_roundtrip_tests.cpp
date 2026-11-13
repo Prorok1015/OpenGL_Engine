@@ -1,10 +1,19 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_schema_desc.h>
+#include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <sstream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -1196,6 +1205,238 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
 	BOOST_REQUIRE(mode->fallback);
 	BOOST_TEST(*mode->fallback == static_cast<std::int64_t>(rnd::driver::RENDER_MODE::TRIANGLE));
 	BOOST_TEST(mode->items.size() == 5u);
+}
+
+// ---------------------------------------------------------------- a file with a __parent resaves as one (#812)
+
+namespace {
+
+constexpr const char* BASE_MATERIAL = R"({"__type":"material_desc","defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert",
+	"shader_fragment":"res://shaders/scene.frag","shader_geometry":null,"queue":"opaque",
+	"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})";
+
+struct parent_fixture : roundtrip_fixture
+{
+	std::shared_ptr<desc::desc_base> loaded(const res::tag& tag)
+	{
+		auto handle = rs->require_sync<desc::desc_base>(tag);
+		pump();
+		return handle.get_sync();
+	}
+
+	// What desc_resave writes for the file at `tag`.
+	json::object resave(const res::tag& tag)
+	{
+		const auto desc = loaded(tag);
+		BOOST_REQUIRE(desc);
+		const auto bytes = adapter.serialize(tag, desc);
+		return json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())).as_object();
+	}
+
+	// The keys of `saved` besides the header ("__type", "__version", "__guid", "__parent").
+	static std::vector<std::string> own_keys(const json::object& saved)
+	{
+		std::vector<std::string> keys;
+		for (const auto& member : saved) {
+			if (!member.key().starts_with("__")) keys.emplace_back(member.key());
+		}
+		return keys;
+	}
+
+	// Read again on top of its parent, the saved file is the desc it was saved from.
+	void check_reads_back(const res::tag& tag, const json::object& saved, std::string_view again_name)
+	{
+		const auto again = loaded(put(again_name, json::serialize(saved)));
+		BOOST_REQUIRE(again);
+		BOOST_TEST(json::value(ser(*again)) == json::value(ser(*loaded(tag))));
+	}
+
+	json::object serialized_by_adapter(const res::tag& tag, const std::shared_ptr<desc::desc_base>& desc)
+	{
+		const auto bytes = adapter.serialize(tag, desc);
+		return json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())).as_object();
+	}
+
+	core::desc::desc_adapter_t adapter{ *rs, *descs };
+};
+
+class resave_unit_desc : public desc::schema_desc<resave_unit_desc>
+{
+public:
+	static constexpr std::string_view __type = "resave_unit";
+
+	int hp = 0;
+	std::optional<std::string> label;
+	std::map<std::string, int> tags;
+
+	BOOST_DESCRIBE_CLASS(resave_unit_desc, (), (hp, label, tags), (), ())
+};
+
+// A desc whose file cannot take back a value of its parent (a null is ignored): no form with __parent reads back.
+struct sticky_desc : desc::desc_base
+{
+	static constexpr std::string_view __type = "resave_sticky_desc";
+	std::optional<int> value;
+
+	void copy_to(desc::desc_base& other) const override { copy_to_same(*this, other); }
+	void deserialize(desc::desc_system&, const json::object& obj) override
+	{
+		if (const auto* v = obj.if_contains("value"); v && v->is_int64()) value = static_cast<int>(v->as_int64());
+	}
+	void serialize(json::object& obj) const override
+	{
+		if (value) obj["value"] = *value;
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AMaterialWithAParent_ResavesItsParentAndOnlyItsOwnFields, parent_fixture)
+{
+	put("base.mat.desc", BASE_MATERIAL);
+	const auto child = put("own.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/base.mat.desc","queue":"transparent"})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.mat.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "queue" }));
+	BOOST_TEST(saved.at("queue").as_string() == "transparent");
+	check_reads_back(child, saved, "own.mat.again.desc");
+}
+
+// A type of a module (a described schema; a runtime schema cannot hold a map): a map key the file removes from the parent's is
+// a null, an optional field reset stays reset, and a map key both have the same is not written.
+BOOST_FIXTURE_TEST_CASE(ASchemaTypeWithAParent_ResavesMapRemovalsAndResetsAgainstTheParent, parent_fixture)
+{
+	descs->register_desc<resave_unit_desc>(resave_unit_desc::__type);
+	put("base.unit.desc", R"({"__type":"resave_unit","hp":5,"label":"parent","tags":{"a":1,"b":2}})");
+	const auto child = put("own.unit.desc",
+		R"({"__type":"resave_unit","__parent":"memory://t/base.unit.desc","hp":7,"label":null,"tags":{"b":null,"c":3}})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.unit.desc");
+	BOOST_TEST(saved.at("hp").as_int64() == 7);
+	BOOST_REQUIRE(saved.contains("tags"));
+	BOOST_TEST((saved.at("tags") == json::parse(R"({"b":null,"c":3})")));
+	// Reset: the file says null, as without the key the parent's "parent" would come back.
+	BOOST_REQUIRE(saved.contains("label"));
+	BOOST_TEST(saved.at("label").is_null());
+	check_reads_back(child, saved, "own.unit.again.desc");
+}
+
+BOOST_FIXTURE_TEST_CASE(ALevelWithAParent_ResavesItsParentAndOnlyItsOwnFields, parent_fixture)
+{
+	put("base.level.desc", R"({"__type":"level_desc","name":"base","worlds":[{"__type":"world_desc"}]})");
+	const auto child = put("own.level.desc", R"({"__type":"level_desc","__parent":"memory://t/base.level.desc","name":"own"})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.level.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "name" }));
+	BOOST_TEST(saved.at("name").as_string() == "own");
+	check_reads_back(child, saved, "own.level.again.desc");
+}
+
+// Nothing of its own: only the header and __parent.
+BOOST_FIXTURE_TEST_CASE(AFileThatOnlyNamesItsParent_ResavesAsOnlyItsParent, parent_fixture)
+{
+	put("base.mat.desc", BASE_MATERIAL);
+	const auto child = put("same.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/base.mat.desc"})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.mat.desc");
+	BOOST_TEST(own_keys(saved).empty());
+	check_reads_back(child, saved, "same.mat.again.desc");
+}
+
+// A chain of three: the grandchild names its parent, not the root, and writes only what differs from its parent.
+BOOST_FIXTURE_TEST_CASE(AGrandchild_ResavesAgainstItsOwnParent, parent_fixture)
+{
+	put("base.mat.desc", BASE_MATERIAL);
+	put("mid.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/base.mat.desc","queue":"transparent"})");
+	const auto leaf = put("leaf.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/mid.mat.desc","defines":["LEAF"]})");
+
+	const json::object saved = resave(leaf);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/mid.mat.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "defines" }));
+	check_reads_back(leaf, saved, "leaf.mat.again.desc");
+	BOOST_TEST(loaded(leaf)->get_type() == "material_desc");
+	BOOST_TEST(ser(*loaded(leaf)).at("queue").as_string() == "transparent");
+}
+
+// The world adapter writes a world with a __parent the same way.
+BOOST_FIXTURE_TEST_CASE(AWorldWithAParent_ResavesThroughTheWorldAdapter, parent_fixture)
+{
+	const auto base = put("base.world.desc", R"({"__type":"world_desc","name":"w","systems":["a","b"]})");
+	const auto parent = loaded(base);
+	BOOST_REQUIRE(parent);
+	const auto tag = tag_of("own.world.desc");
+	const auto world = std::dynamic_pointer_cast<scn::world_desc>(descs->create_instance(scn::world_desc::__type, tag));
+	BOOST_REQUIRE(world);
+	parent->copy_to(*world);
+	world->set_parent(base);
+	world->set_systems({ "a", "c" });
+
+	const scn::worldwrap_adapter worlds(*rs, *descs);
+	const auto bytes = worlds.serialize(tag, world);
+	const json::object saved = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())).as_object();
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.world.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "systems" }));
+	BOOST_TEST((saved.at("systems") == json::parse(R"(["a","c"])")));
+}
+
+// The parent does not load (gone, renamed, broken): the file still needs it, so __parent stays, with every field written.
+BOOST_FIXTURE_TEST_CASE(AParentThatDoesNotLoad_KeepsTheParent_AndWritesEveryField, parent_fixture)
+{
+	const auto tag = tag_of("orphan.mat.desc");
+	const auto material = descs->create_instance("material_desc", tag);
+	BOOST_REQUIRE(material);
+	material->set_parent(tag_of("missing.mat.desc"));
+
+	const json::object saved = serialized_by_adapter(tag, material);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/missing.mat.desc");
+	BOOST_TEST((own_keys(saved) == own_keys(ser(*material))));
+}
+
+// The parent loads but no form with __parent reads back the same: the result is written whole, without __parent.
+BOOST_FIXTURE_TEST_CASE(NoFormThatReadsBack_WritesTheResultWhole_WithoutTheParent, parent_fixture)
+{
+	descs->register_desc<sticky_desc>(sticky_desc::__type);
+	const auto base = put("base.sticky.desc", R"({"__type":"resave_sticky_desc","value":3})");
+	const auto parent = loaded(base);
+	BOOST_REQUIRE(parent);
+	const auto tag = tag_of("own.sticky.desc");
+	const auto own = std::dynamic_pointer_cast<sticky_desc>(descs->create_instance(sticky_desc::__type, tag));
+	BOOST_REQUIRE(own);
+	parent->copy_to(*own);
+	own->set_parent(base);
+	own->value.reset();
+
+	const json::object saved = serialized_by_adapter(tag, own);
+	BOOST_TEST(!saved.contains("__parent"));
+	BOOST_TEST(!saved.contains("value"));
+	BOOST_TEST(saved.at("__type").as_string() == sticky_desc::__type);
+}
+
+// "Save what you see" (#812): the parent changed on disk after the child was read; the child saves the values it shows,
+// so what it took from the old parent is written as its own.
+BOOST_FIXTURE_TEST_CASE(AParentChangedAfterTheChildWasRead_TheChildSavesWhatItShows, parent_fixture)
+{
+	const auto base = put("base.mat.desc", BASE_MATERIAL);
+	const auto child = put("own.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/base.mat.desc","queue":"transparent"})");
+	const auto shown = loaded(child);
+	BOOST_REQUIRE(shown);
+
+	std::string changed{ BASE_MATERIAL };
+	const std::string from = "res://shaders/scene.vert";
+	changed.replace(changed.find(from), from.size(), "res://shaders/other.vert");
+	put("base.mat.desc", changed);
+	rs->signal_changed(base);
+	pump();
+	BOOST_REQUIRE(ser(*loaded(base)).at("shader_vertex").as_string() == "res://shaders/other.vert");
+
+	const json::object saved = serialized_by_adapter(child, shown);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.mat.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "shader_vertex", "queue" }));
+	BOOST_TEST(saved.at("shader_vertex").as_string() == "res://shaders/scene.vert");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

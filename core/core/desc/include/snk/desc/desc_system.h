@@ -198,6 +198,13 @@ namespace desc
 
 		std::shared_ptr<desc::desc_base> create_instance(std::string_view type_id, const res::tag& tag) const;
 
+		// The file form of a desc read on top of a parent (desc_base::get_parent): `body` (its serialize) becomes "__parent"
+		// and only what differs from the parent, so reading the file on top of the parent gives `desc` back (#812). When no
+		// such form reads back the same, `body` stays whole without "__parent"; when the parent does not load, `body` stays
+		// whole and keeps "__parent" (the file needs it to load). Both are logged. The parent is the one loaded now, also if it
+		// changed after `desc` was read: what `desc` shows is saved. Main thread: the parent is required synchronously.
+		void reduce_to_parent(const desc::desc_base& desc, json::object& body);
+
 		// resource_system::resolve_reference of the system this one loads through.
 		res::tag resolve_reference(const res::reference& ref) const;
 
