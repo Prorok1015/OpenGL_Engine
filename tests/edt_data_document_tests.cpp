@@ -97,6 +97,18 @@ constexpr const char* k_child = R"({"__type":"test.config","__guid":"guid-1","__
 
 }
 
+namespace edt {
+
+struct data_document_test_access
+{
+	static void record_change(data_document& document, const boost::json::object& before, const boost::json::object& after)
+	{
+		document.record_change(before, after);
+	}
+};
+
+}
+
 BOOST_FIXTURE_TEST_SUITE(EdtDataDocumentTests, document_fixture)
 
 BOOST_AUTO_TEST_CASE(Open_ShowsTheInheritedValuesUnderTheOwnOnes)
@@ -945,18 +957,6 @@ BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt
 }
 
 // Undo and redo (S56-5): one record per edit of the person, snapshots of `own`.
-namespace edt {
-
-struct data_document_test_access
-{
-	static void record_change(data_document& document, const json::object& before, const json::object& after)
-	{
-		document.record_change(before, after);
-	}
-};
-
-}
-
 namespace {
 
 bool set_speed(edt::data_document& document, double value)
