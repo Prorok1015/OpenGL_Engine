@@ -72,6 +72,12 @@ namespace
 		bool operator==(const file_stat&) const = default;
 	};
 
+	// The stamps a batch reports as a change of the file.
+	bool same_stamps(const edt::asset_record& a, const edt::asset_record& b)
+	{
+		return a.layer == b.layer && a.size == b.size && a.mtime == b.mtime && a.meta_size == b.meta_size && a.meta_mtime == b.meta_mtime;
+	}
+
 	std::int64_t now_ticks()
 	{
 		return static_cast<std::int64_t>(fs::file_time_type::clock::now().time_since_epoch().count());
@@ -533,24 +539,34 @@ void edt::asset_database::rebuild()
 			m_scan_job = 0;
 			if (!result.ok()) {
 				egLOG_WARN("assets", "the walk of the asset tree failed: {}", result.error);
-				after_walk(false);
+				after_walk(walk_end::failed);
 				return;
 			}
 			apply_scan(std::move(*result.value));
-			after_walk(true);
+			after_walk(walk_end::applied);
 		});
 }
 
-void edt::asset_database::after_walk(bool applied)
+void edt::asset_database::after_walk(walk_end end)
 {
-	// The walk listed a folder before or after these changes: applied again, they hold whatever it saw. Before the
-	// first walk was applied they wait on (apply_changes defers them again).
-	if (!m_deferred.empty()) {
+	if (end == walk_end::applied) {
+		m_walk_retried = false;
+	} else if (end == walk_end::cancelled && !m_walk_retried) {
+		// Once: a walk cancelled again (or one that fails) is not restarted in a loop. The deferred changes wait for it.
+		m_walk_retried = true;
+		rebuild();
+		return;
+	} else {
+		// The next batch or rebuild walks; until then the deferred changes are kept.
+		m_walk_again = true;
+	}
+	// The walk listed a folder before or after these changes: applied again, they hold whatever it saw. Without an
+	// applied walk they keep waiting.
+	if (m_walked_once && !m_deferred.empty()) {
 		const std::vector<res::file_change> pending = std::exchange(m_deferred, {});
 		apply_changes(pending);
 	}
-	// A walk that failed or was cancelled is not restarted against it: the next rebuild covers the folders.
-	if (std::exchange(m_walk_again, false) && applied) {
+	if (end == walk_end::applied && std::exchange(m_walk_again, false)) {
 		rebuild();
 	}
 }
@@ -563,7 +579,7 @@ void edt::asset_database::on_job_finished(std::uint64_t id, job_status status)
 	if (id != 0 && id == m_scan_job) {
 		m_scanning = false;
 		m_scan_job = 0;
-		after_walk(false);
+		after_walk(walk_end::cancelled);
 	}
 	if (id != 0 && id == m_save_job) {
 		m_save_job = 0;
@@ -595,6 +611,7 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	m_cached.clear();
 	m_records.clear();
 	m_by_id.clear();
+	m_by_folded.clear();
 	m_unhashed.clear();
 	for (asset_record& record : scan.records) {
 		std::string key = record.path.string();
@@ -626,29 +643,91 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	if (!same_records || !same_orphans || first_walk) {
 		++m_revision;
 	}
+	// What the walk changed is a batch too: a change it saw first is not seen again by the deferred batch replayed after
+	// it. Nothing was published before the first walk.
+	asset_batch batch;
+	if (!first_walk && !same_records) {
+		std::vector<std::string> came;
+		for (const auto& [key, record] : m_records) {
+			const auto old = previous.find(key);
+			if (old == previous.end()) {
+				came.push_back(key);
+			} else if (!same_stamps(old->second, record)) {
+				batch.changed.push_back(record.path);
+			}
+		}
+		std::vector<asset_record> gone;
+		for (auto& [key, record] : previous) {
+			if (!m_records.contains(key)) {
+				gone.push_back(std::move(record));
+			}
+		}
+		pair_moves(std::move(gone), came, batch);
+	}
 	hash_next();
-	save_when_idle();
+	// After every applied walk, not only when idle: a chain of walks would otherwise never save.
+	start_save();
+	if (m_on_batch && (!batch.moved.empty() || !batch.added.empty() || !batch.removed.empty() || !batch.changed.empty())) {
+		m_on_batch(batch);
+	}
+}
+
+void edt::asset_database::pair_moves(std::vector<asset_record> gone, const std::vector<std::string>& came, asset_batch& batch)
+{
+	// A move: what went away and what came with the same guid. The bytes moved too when the size and time did.
+	// Paired only within one batch (one poll of the watcher, about 0.5 s) or one walk: a move split over two is a removed
+	// and an added, so `moved` is not complete and S57-7 must not rely on it alone.
+	for (const std::string& key : came) {
+		asset_record& arrived = m_records.at(key);
+		const auto match = arrived.id
+			? std::ranges::find_if(gone, [&arrived](const asset_record& left) { return left.id == arrived.id; })
+			: gone.end();
+		if (match == gone.end()) {
+			batch.added.push_back(arrived.path);
+			continue;
+		}
+		if (arrived.content_hash.empty() && !match->content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
+			arrived.content_hash = match->content_hash;
+			arrived.desc_type = match->desc_type;
+			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
+			std::erase(m_unhashed, key);
+		}
+		batch.moved.emplace_back(match->path, arrived.path);
+		gone.erase(match);
+	}
+	for (const asset_record& left : gone) {
+		batch.removed.push_back(left.path);
+	}
 }
 
 void edt::asset_database::index_id(const asset_record& record)
 {
+	std::string key = record.path.string();
+	if (m_case_insensitive) {
+		m_by_folded.emplace(layer_merge_key(key, true), key);
+	}
 	if (record.id) {
-		m_by_id.emplace(*record.id, record.path.string());
+		m_by_id.emplace(*record.id, std::move(key));
 	}
 }
 
 void edt::asset_database::unindex_id(const asset_record& record)
 {
-	if (!record.id) {
-		return;
-	}
 	const std::string key = record.path.string();
-	const auto [first, last] = m_by_id.equal_range(*record.id);
-	for (auto it = first; it != last; ++it) {
-		if (it->second == key) {
-			m_by_id.erase(it);
-			return;
+	const auto erase_one = [&key](auto& index, const auto& by) {
+		const auto [first, last] = index.equal_range(by);
+		for (auto it = first; it != last; ++it) {
+			if (it->second == key) {
+				index.erase(it);
+				return;
+			}
 		}
+	};
+	if (m_case_insensitive) {
+		erase_one(m_by_folded, layer_merge_key(key, true));
+	}
+	if (record.id) {
+		erase_one(m_by_id, *record.id);
 	}
 }
 
@@ -799,7 +878,15 @@ std::vector<res::asset_id> edt::asset_database::duplicates() const
 
 void edt::asset_database::save_when_idle()
 {
-	if (!m_lock || !m_dirty || m_scanning || m_hash_job != 0 || !m_unhashed.empty()) {
+	if (m_scanning || m_hash_job != 0 || !m_unhashed.empty()) {
+		return;
+	}
+	start_save();
+}
+
+void edt::asset_database::start_save()
+{
+	if (!m_lock || !m_dirty) {
 		return;
 	}
 	if (m_save_job != 0) {
@@ -822,7 +909,7 @@ void edt::asset_database::save_when_idle()
 				return;
 			}
 			if (std::exchange(m_save_again, false)) {
-				save_when_idle();
+				start_save();
 			}
 		});
 }
@@ -1487,6 +1574,10 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		if (walk_again) {
 			m_walk_again = true;
 		}
+		// A walk that failed or was cancelled for good left the database behind: this batch walks again.
+		if (!m_scanning && m_walk_again && m_scan_number > 0) {
+			rebuild();
+		}
 		return {};
 	}
 
@@ -1500,14 +1591,6 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		std::string key = lookup.key_of(relative);
 		files.emplace(std::move(key), std::move(relative));
 	}
-	// The records by merge key of their path text, to find one under another letter case.
-	std::unordered_multimap<std::string, std::string> folded;
-	if (m_case_insensitive && !files.empty()) {
-		folded.reserve(m_records.size());
-		for (const auto& [key, record] : m_records) {
-			folded.emplace(lookup.key_of(key), key);
-		}
-	}
 
 	asset_batch batch;
 	std::vector<asset_record> gone;
@@ -1520,7 +1603,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		const std::string event_key = res::tag::make(relative).string();
 		std::vector<std::string> existing;
 		if (m_case_insensitive) {
-			const auto [first, last] = folded.equal_range(lookup.key_of(event_key));
+			const auto [first, last] = m_by_folded.equal_range(lookup.key_of(event_key));
 			for (auto it = first; it != last; ++it) {
 				if (m_records.contains(it->second)) {
 					existing.push_back(it->second);
@@ -1575,8 +1658,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		const std::string key = now->path.string();
 		const auto known = m_records.find(key);
 		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
-		const bool same = before && before->layer == now->layer && before->size == now->size && before->mtime == now->mtime
-			&& before->meta_size == now->meta_size && before->meta_mtime == now->meta_mtime;
+		const bool same = before && same_stamps(*before, *now);
 		if (!before) {
 			came.push_back(key);
 		} else if (!same) {
@@ -1597,30 +1679,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		m_records.insert_or_assign(key, std::move(*now));
 	}
 
-	// A move: what went away and what came with the same guid. The bytes moved too when the size and time did.
-	// Paired only within this batch (one poll of the watcher, about 0.5 s): a move split over two polls is a removed
-	// and an added, so `moved` is not complete and S57-7 must not rely on it alone.
-	for (const std::string& key : came) {
-		asset_record& arrived = m_records.at(key);
-		const auto match = arrived.id
-			? std::ranges::find_if(gone, [&arrived](const asset_record& left) { return left.id == arrived.id; })
-			: gone.end();
-		if (match == gone.end()) {
-			batch.added.push_back(arrived.path);
-			continue;
-		}
-		if (arrived.content_hash.empty() && !match->content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
-			arrived.content_hash = match->content_hash;
-			arrived.desc_type = match->desc_type;
-			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
-			std::erase(m_unhashed, key);
-		}
-		batch.moved.emplace_back(match->path, arrived.path);
-		gone.erase(match);
-	}
-	for (const asset_record& left : gone) {
-		batch.removed.push_back(left.path);
-	}
+	pair_moves(std::move(gone), came, batch);
 	std::ranges::sort(m_orphans, {}, [](const asset_orphan& orphan) { return orphan.meta_path.string(); });
 	if (records_changed) {
 		m_dirty = true;
@@ -1628,7 +1687,8 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	if (records_changed || m_orphans != orphans_before) {
 		++m_revision;
 	}
-	if (walk_again) {
+	// Also a walk left owing by one that failed or was cancelled for good.
+	if (walk_again || m_walk_again) {
 		rebuild();
 	}
 	hash_next();

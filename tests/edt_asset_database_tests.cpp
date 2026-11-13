@@ -843,6 +843,55 @@ BOOST_AUTO_TEST_CASE(a_batch_during_a_walk_is_applied_after_it)
 	BOOST_TEST(seen.front().removed.front().string() == "res://doomed.txt");
 }
 
+// Review #829: a change the walk saw before its batch was replayed is still reported, by the walk's own batch.
+BOOST_AUTO_TEST_CASE(a_change_the_walk_saw_first_is_reported)
+{
+	upper.write("kept.txt", "kept");
+	auto& assets = open();
+	std::vector<edt::asset_batch> seen;
+	assets.set_on_batch([&seen](const edt::asset_batch& batch) { seen.push_back(batch); });
+
+	upper.write("kept.txt", "kept, longer");
+	upper.write("new.txt", "new");
+	assets.rebuild();
+	BOOST_REQUIRE(tasks.run_one(ds::lane::io));
+	assets.apply_changes(std::vector<res::file_change>{ change("kept.txt", res::change_kind::modified),
+		change("new.txt", res::change_kind::created) });
+	test_util::pump(tasks);
+
+	const auto reported = [&seen](const auto& list_of, std::string_view path) {
+		return std::ranges::any_of(seen, [&](const edt::asset_batch& batch) {
+			return std::ranges::any_of(list_of(batch), [path](const res::tag& tag) { return tag.view() == "res://" + std::string{ path }; });
+		});
+	};
+	BOOST_TEST(reported([](const edt::asset_batch& b) -> const std::vector<res::tag>& { return b.changed; }, "kept.txt"));
+	BOOST_TEST(reported([](const edt::asset_batch& b) -> const std::vector<res::tag>& { return b.added; }, "new.txt"));
+}
+
+// Review #829: a cancelled first walk is started again once, and the batch that waited for it is applied.
+BOOST_AUTO_TEST_CASE(a_cancelled_first_walk_is_started_again)
+{
+	upper.write("a.txt", "a");
+	db = unopened();
+	int walks = 0;
+	const auto counting = events.job_started.subscribe([&walks](std::uint64_t, const std::string& label) {
+		if (label == "Scan assets") {
+			++walks;
+		}
+	});
+	db->rebuild();
+	upper.write("x.txt", "x");
+	db->apply_changes(std::vector<res::file_change>{ change("x.txt", res::change_kind::created) });
+	const auto walking = job_named("Scan assets");
+	BOOST_REQUIRE(walking.has_value());
+	BOOST_REQUIRE(jobs.cancel(*walking));
+	test_util::pump(tasks);
+	BOOST_TEST(walks == 2);
+	BOOST_TEST(!db->scanning());
+	BOOST_TEST(db->find(res::tag::make("x.txt")) != nullptr);
+	BOOST_TEST(db->find(res::tag::make("a.txt")) != nullptr);
+}
+
 // Review #829: a batch at startup, before the first walk was applied, does not make the walk forget the cache.
 BOOST_AUTO_TEST_CASE(an_early_batch_keeps_the_cached_hashes)
 {
@@ -869,6 +918,8 @@ BOOST_AUTO_TEST_CASE(a_rename_in_letter_case_keeps_one_record)
 	upper.write("a.png", "a");
 	upper.write("a.png.resource", meta_text(k_guid_a));
 	db = unopened();
+	// The injected mode folds names only; folders spelled differently across layers on a case-sensitive disk are not
+	// covered (a limitation of testing the Windows rules on Linux).
 	db->set_case_insensitive(true);
 	db->rebuild();
 	test_util::pump(tasks);
@@ -1118,19 +1169,19 @@ BOOST_AUTO_TEST_CASE(an_attached_database_follows_the_watcher)
 	test_util::pump(tasks);
 	BOOST_REQUIRE(assets.find(res::tag::make("a.txt")) != nullptr);
 
-	const auto pump_until = [this](const std::function<bool()>& done) {
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
-		while (!done() && std::chrono::steady_clock::now() < deadline) {
-			test_util::pump(tasks);
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
-		}
-		return done();
-	};
 	// Written beside and moved in: the watcher never sees it half written.
 	fs::rename(project.write("staging.tmp", "b"), content / "b.txt");
-	BOOST_TEST(pump_until([&assets] { return assets.find(res::tag::make("b.txt")) != nullptr; }));
 	fs::remove(content / "a.txt");
-	BOOST_TEST(pump_until([&assets] { return assets.find(res::tag::make("a.txt")) == nullptr; }));
+	const auto seen = [&assets] {
+		return assets.find(res::tag::make("b.txt")) != nullptr && assets.find(res::tag::make("a.txt")) == nullptr;
+	};
+	// The watcher polls on its own thread and resource_system has no call that polls now: one generous wait.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+	while (!seen() && std::chrono::steady_clock::now() < deadline) {
+		test_util::pump(tasks);
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	BOOST_TEST(seen());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

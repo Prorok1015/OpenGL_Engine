@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 #include <snk/platform/plt_file_lock.h>
 
@@ -203,7 +204,8 @@ namespace edt
 		// walk runs (or before the first one), the batch waits and is applied after the walk's result: the return is
 		// then empty and on_batch is called when it is applied.
 		asset_batch apply_changes(std::span<const res::file_change> changes);
-		// Called after each batch with what it did (S57-7 puts the resource_system's own handling after it).
+		// Called after each batch with what it did, and after each walk but the first with what it changed (S57-7 puts
+		// the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
 
 		const asset_record* find(const res::tag& path) const;
@@ -217,9 +219,14 @@ namespace edt
 
 	private:
 		void apply_scan(asset_scan scan);
-		// After a walk ended (applied, failed or cancelled): the batches that waited, then the walk asked for meanwhile.
-		void after_walk(bool applied);
+		enum class walk_end { applied, failed, cancelled };
+		// After a walk ended: the batches that waited, then the walk asked for meanwhile; a cancelled walk is started
+		// again once.
+		void after_walk(walk_end end);
+		// Pairs `gone` and `came` (keys of m_records) by guid into `batch` (moved, added, removed).
+		void pair_moves(std::vector<asset_record> gone, const std::vector<std::string>& came, asset_batch& batch);
 		void hash_next();
+		// m_by_id and, case insensitive, m_by_folded.
 		void index_id(const asset_record& record);
 		void unindex_id(const asset_record& record);
 		void on_job_finished(std::uint64_t id, job_status status);
@@ -229,6 +236,8 @@ namespace edt
 		std::optional<asset_record> look_up(const std::string& relative, asset_layer_lookup& lookup,
 			const std::function<const asset_record*(const std::string&)>& before_of);
 		void save_when_idle();
+		// Writes the cache in the background when something changed (a write already running: once more after it).
+		void start_save();
 		std::filesystem::path cache_file() const;
 		// The keys of the hashing job that ended without an answer for them go back into the queue.
 		void requeue_in_flight();
@@ -237,6 +246,8 @@ namespace edt
 		std::vector<std::filesystem::path> m_layers;
 		std::map<std::string, asset_record> m_records; // by path text
 		std::multimap<res::asset_id, std::string> m_by_id;
+		// Path text by its merge key, case insensitive only: finds a record under another letter case.
+		std::unordered_multimap<std::string, std::string> m_by_folded;
 		std::vector<asset_orphan> m_orphans;
 		std::vector<std::string> m_unhashed;
 		std::vector<std::string> m_in_flight;
@@ -247,6 +258,8 @@ namespace edt
 		bool m_walked_once = false;
 		// A folder changed during a walk: one more walk follows it.
 		bool m_walk_again = false;
+		// The last walk was cancelled and started again; cleared by an applied walk.
+		bool m_walk_retried = false;
 		// File changes that came during a walk (or before the first), applied after it.
 		std::vector<res::file_change> m_deferred;
 		bool m_case_insensitive = platform_case_insensitive;
