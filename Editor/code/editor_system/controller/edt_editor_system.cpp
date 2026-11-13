@@ -1,4 +1,5 @@
 #include "edt_editor_system.h"
+#include "edt_asset_database.h"
 #include "edt_begin_then_poll.h"
 #include <algorithm>
 #include <chrono>
@@ -23,6 +24,7 @@
 #include "edt_code_section.h"
 #include <snk/platform/plt_shell_open.h>
 #include "edt_prefab_editor_panel.h"
+#include "edt_data_document_host.h"
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
@@ -332,6 +334,7 @@ edt::editor_system::~editor_system()
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
 		// Jobs run the importer and exporter of this system: none may be left running when they are destroyed.
 		context->jobs().cancel_all_and_wait();
+		if (m_data_documents) m_data_documents->shutdown();
 		context->documents().shutdown();
 	}
 	if (m_prefab_panel) {
@@ -468,6 +471,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	asset_kind_hooks asset_hooks;
 	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
+		if (m_context->documents().preview() == &open) m_prefab_panel->set_open(true);
+	});
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
 		if (refused_during_play(m_play.get(), m_context->dialogs(), "Stop Play to add an asset to the scene.")) return;
 		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
@@ -478,7 +484,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	for (auto& kind : register_builtin_asset_kinds(m_context->asset_kinds(), std::move(asset_hooks))) m_registrations.push_back(std::move(kind));
 	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
-		m_context->asset_kinds().open(*m_context, res::tag::make(res_rel.generic_string()));
+		open_asset(res::tag::make(res_rel.generic_string()), false);
 	});
 
 	// Registration order is the render order and the View menu order.
@@ -582,6 +588,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
+	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty(); };
+	hooks.save_other_documents = [this] { return m_data_documents->save_all(); };
+	hooks.discard_other_documents = [this] {
+		for (const document_id id : m_data_documents->dirty()) m_data_documents->close(id);
+	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
 		if (begin_level_load(res::tag::make(relative.string()))) {
@@ -657,15 +668,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// #550: the agent's reads and writes of the desc files of res/, checked against the schemas first.
 	{
 		edt::desc_file_deps desc_files{ m_res, desc_system };
-		desc_files.top_layer = [this] { return m_res.get_resources_path(); };
-		desc_files.layers = [this] { return m_res.get_resource_layers(); };
-		desc_files.open_level_files = [this] {
-			std::vector<std::string> open;
-			for (const res::tag* tag : { &current_level_tag(), &current_editor_tag() }) {
-				if (!tag->view().empty()) open.emplace_back(tag->relative());
-			}
-			return open;
-		};
+		desc_file_layout layout = desc_layout();
+		desc_files.top_layer = std::move(layout.top_layer);
+		desc_files.layers = std::move(layout.layers);
+		desc_files.open_level_files = std::move(layout.open_level_files);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
@@ -803,6 +809,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_vcs->set_write_observer([this] {
 		if (m_repo_watcher) m_repo_watcher->begin_own_write();
 	});
+	if (data.has_value<prj::project_context>()) {
+		const prj::project_context& project = data.require<prj::project_context>();
+		m_assets = std::make_unique<asset_database>(m_context->jobs(), &m_context->events(), m_res.get_resource_layers(),
+			asset_cache_location{ project.root, project.cache_dir().lexically_relative(project.root) / "asset_db" });
+		m_assets->attach(m_res);
+		m_assets->rebuild();
+	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -1926,7 +1939,7 @@ void edt::editor_system::go_to(const desc_target& target)
 		return;
 	}
 	if (target.resource.empty()) return;
-	if (!m_context->asset_kinds().open(*m_context, res::tag{ target.resource })) {
+	if (!open_asset(res::tag{ target.resource }, true)) {
 		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
 	}
 }
@@ -1994,6 +2007,31 @@ void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
 	}
+}
+
+edt::desc_file_layout edt::editor_system::desc_layout()
+{
+	desc_file_layout layout;
+	layout.top_layer = [this] { return m_res.get_resources_path(); };
+	layout.layers = [this] { return m_res.get_resource_layers(); };
+	layout.open_level_files = [this] {
+		std::vector<std::string> open;
+		for (const res::tag* tag : { &current_level_tag(), &current_editor_tag() }) {
+			if (!tag->view().empty()) open.emplace_back(tag->relative());
+		}
+		return open;
+	};
+	return layout;
+}
+
+// ─── Data documents (EPIC-56, #793) ─────────────────────────────────────────
+
+bool edt::editor_system::open_asset(const res::tag& tag, bool quiet)
+{
+	if (m_context->asset_kinds().open(*m_context, tag)) return true;
+	if (!tag.relative().ends_with(".desc")) return false;
+	m_data_documents->open(tag, quiet);
+	return true;
 }
 
 bool edt::editor_system::person_is_editing() const

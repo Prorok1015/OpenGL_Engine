@@ -22,9 +22,13 @@ namespace edt
 	{
 		bool opened = false;
 		std::string error;
+		// The file is not meant to be a data document (the open level, a type without a schema or that is no document type, a
+		// file of a lower layer): nothing is wrong with it, so a double click is no reason for a warning window.
+		bool unsuitable = false;
 
-		static open_result ok() { return { true, {} }; }
-		static open_result failure(std::string message) { return { false, std::move(message) }; }
+		static open_result ok() { return { true, {}, false }; }
+		static open_result failure(std::string message) { return { false, std::move(message), false }; }
+		static open_result not_a_document(std::string message) { return { false, std::move(message), true }; }
 	};
 
 	// A desc file of a type with a schema and is_document (EPIC-56, #791) edited as data. The document keeps what the file
@@ -61,10 +65,25 @@ namespace edt
 		// unsaved edits, or the file is gone: save() refuses until the document is opened again. A clean document
 		// reads the new file by itself.
 		bool changed_on_disk() const { return m_changed_on_disk; }
+		// Reads the file again and drops the unsaved edits (the person's choice: the file changed on disk and they take
+		// its version). A failure (the file is gone, no longer a data document...) names the file and leaves the document as
+		// it was.
+		open_result reload();
+		// Writes the document over a file that changed on disk (the person's choice, never an agent's: nothing registers a
+		// command for it): the version on disk is taken as the base, then the same save() runs with every check (project's
+		// top layer, not the open level, validate_desc_tree, size). A refusal leaves the document as it was, still flagged.
+		save_result save_over();
+		// Moves when a version of the file other than the ones seen before is found on disk: a banner the person put off
+		// ("Later") comes back for the next outside change, not for the same one signalled again.
+		std::uint64_t disk_change_serial() const { return m_disk_changes; }
 		// Why the parents could not be read again after one of them changed (the last good ones stay shown); empty: none.
 		const std::string& chain_problem() const { return m_chain_problem; }
 
 		const std::string& type() const { return m_type; }
+		// The schema of the document's type (null when it is gone, e.g. the game layer that registered it was replaced).
+		const desc::type_schema* schema() const;
+		// The files the document inherits from, the nearest first (empty without __parent).
+		const std::vector<res::tag>& parents() const { return m_parents; }
 		const boost::json::object& own() const { return m_own; }
 		// The values the file inherits, header keys left out (empty without __parent).
 		const boost::json::object& inherited() const { return m_inherited; }
@@ -90,7 +109,6 @@ namespace edt
 			std::vector<res::tag> parents;
 		};
 
-		const desc::type_schema* schema() const;
 		open_result load(const res::tag& file, loaded& out) const;
 		open_result resolve_chain(const res::tag& file, const boost::json::object& own, const std::string& type,
 			boost::json::object& inherited, std::vector<res::tag>& parents) const;
@@ -100,6 +118,8 @@ namespace edt
 		void unwatch_files();
 		void on_changed(const res::tag& tag);
 		void announce() const;
+		save_result write(bool over);
+		void flag_changed(const std::string& disk_version);
 		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr) const;
 
 		editor_services& m_services;
@@ -115,6 +135,8 @@ namespace edt
 		std::uint64_t m_generation = 0;
 		bool m_open = false;
 		bool m_changed_on_disk = false;
+		std::string m_flagged_version;
+		std::uint64_t m_disk_changes = 0;
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
 		editor_events* m_events = nullptr;

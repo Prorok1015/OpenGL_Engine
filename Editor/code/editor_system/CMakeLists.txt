@@ -29,6 +29,7 @@ target_sources(snk_editor_api PRIVATE ${SE_EDT_API_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 snk_component_headers(snk_editor_api)
 target_include_directories(snk_editor_api PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/assets"
 	"${CMAKE_CURRENT_SOURCE_DIR}/core"
 	"${CMAKE_CURRENT_SOURCE_DIR}/input"
 	"${CMAKE_CURRENT_SOURCE_DIR}/panels"
@@ -43,6 +44,7 @@ if(SNK_ENGINE_SHARED)
 	endif()
 endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/assets"
 	"${CMAKE_CURRENT_SOURCE_DIR}/core"
 	"${CMAKE_CURRENT_SOURCE_DIR}/controller"
 	"${CMAKE_CURRENT_SOURCE_DIR}/panels"

@@ -69,6 +69,13 @@ namespace edt
 		std::string error;
 		bool top_layer = false;
 		bool in_open_level = false;
+		// The path passed every check that needs no file (a res:// desc inside the project, no link on the way), whether
+		// the file is there or not: `top_layer` and `in_open_level` are then known (a file that is nowhere is a new one in
+		// the top layer). `missing`: there is no such file in any layer.
+		bool located = false;
+		bool missing = false;
+		// code_version_of(bytes) when the bytes were read, whether or not they parse.
+		std::string version;
 	};
 	desc_file_read read_desc_file(res::resource_system& resources, const desc::desc_system& descriptions, const desc_file_layout& layout, const res::tag& tag);
 

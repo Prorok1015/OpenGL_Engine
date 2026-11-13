@@ -441,10 +441,26 @@ BOOST_FIXTURE_TEST_CASE(Builtin_PrefabSuffixOpensThePrefabDocument, builtin_kind
 	BOOST_CHECK((log == std::vector<std::string>{ "prefab:prefabs/tree.prefab.desc" }));
 }
 
+BOOST_FIXTURE_TEST_CASE(Builtin_OtherDescFilesHaveNoKindToOpen_SoAModulesDescKindIsNotBeaten, builtin_kinds_fixture)
+{
+	auto& kinds = context->asset_kinds();
+	for (const char* path : { "levels/a.desc", "materials/red.mat.desc" }) {
+		BOOST_CHECK(kinds.kind_for_open(path) == nullptr);
+		BOOST_REQUIRE(kinds.kind_for_drop(path) != nullptr);
+		BOOST_CHECK(kinds.kind_for_drop(path)->id == "desc");
+	}
+	std::vector<std::string> opened;
+	const auto module_kind = kinds.add({ .id = "ext_desc", .suffix = ".desc",
+		.open = [&opened](edt::editor_context&, const res::tag& tag) { opened.emplace_back(tag.relative()); } });
+	BOOST_CHECK(kinds.open(*context, res::tag::make("levels/a.desc")));
+	BOOST_CHECK((opened == std::vector<std::string>{ "levels/a.desc" }));
+	BOOST_CHECK(log.empty());
+}
+
 BOOST_FIXTURE_TEST_CASE(Builtin_OtherAssetsAreNotOpened, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	for (const char* path : { "levels/a.desc", "models/x.glb", "x.prefab", "x.prefab.desc.bak" }) {
+	for (const char* path : { "models/x.glb", "x.prefab", "x.prefab.desc.bak", "x.desc.bak" }) {
 		BOOST_TEST_CONTEXT(path) {
 			BOOST_CHECK(!kinds.open(*context, res::tag::make(path)));
 		}
