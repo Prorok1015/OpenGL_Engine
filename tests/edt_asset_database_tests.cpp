@@ -5,6 +5,9 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_mount_table.h>
+#include <snk/resource/res_system.h>
+#include <algorithm>
 #include <chrono>
 #include <boost/json.hpp>
 #include <filesystem>
@@ -14,6 +17,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -39,8 +43,17 @@ res::file_change change(std::string_view path, res::change_kind kind, std::strin
 	return out;
 }
 
+res::file_change folder_change(std::string_view path, res::change_kind kind)
+{
+	res::file_change out = change(path, kind);
+	out.is_directory = true;
+	return out;
+}
+
 constexpr std::string_view k_guid_a = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 constexpr std::string_view k_guid_b = "00000000-0000-4000-8000-000000000002";
+constexpr std::string_view k_guid_c = "00000000-0000-4000-8000-000000000003";
+constexpr std::string_view k_guid_d = "00000000-0000-4000-8000-000000000004";
 
 struct asset_db_fixture
 {
@@ -113,6 +126,29 @@ struct asset_db_fixture
 		while (db->scanning()) {
 			BOOST_REQUIRE(tasks.run_one(ds::lane::io) || tasks.drain_main(std::chrono::hours(1)) > 0);
 		}
+	}
+
+	std::unique_ptr<edt::asset_database> unopened()
+	{
+		return std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() });
+	}
+
+	// What a fresh database's full walk finds equals what `assets` holds (the times of the checks aside).
+	void expect_same_as_a_full_walk(const edt::asset_database& assets)
+	{
+		auto fresh = unopened();
+		fresh->rebuild();
+		test_util::pump(tasks);
+		BOOST_TEST(assets.records().size() == fresh->records().size());
+		for (const auto& [key, expected] : fresh->records()) {
+			BOOST_TEST_CONTEXT(key) {
+				const edt::asset_record* found = assets.find(expected.path);
+				BOOST_REQUIRE(found);
+				BOOST_TEST(found->same_as(expected));
+			}
+		}
+		BOOST_TEST((assets.orphans() == fresh->orphans()));
+		BOOST_TEST((assets.duplicates() == fresh->duplicates()));
 	}
 
 	std::optional<edt::job_service::job_id> job_named(std::string_view label) const
@@ -773,6 +809,328 @@ BOOST_AUTO_TEST_CASE(the_kind_of_asset_comes_from_the_suffix)
 	BOOST_TEST(edt::asset_type_of("m.gltf") == "model");
 	BOOST_TEST(edt::asset_type_of("s.frag") == "shader");
 	BOOST_TEST(edt::asset_type_of("readme.md") == "file");
+}
+
+// Review #829: a batch that comes while a walk runs is applied after the walk's result, which would replace it.
+BOOST_AUTO_TEST_CASE(a_batch_during_a_walk_is_applied_after_it)
+{
+	upper.write("kept.txt", "kept");
+	upper.write("doomed.txt", "doomed");
+	db = unopened();
+	std::vector<edt::asset_batch> seen;
+	db->set_on_batch([&seen](const edt::asset_batch& batch) { seen.push_back(batch); });
+	db->rebuild();
+	// The walk ran and listed the folder; its result waits on the main queue.
+	BOOST_REQUIRE(tasks.run_one(ds::lane::io));
+	BOOST_REQUIRE(db->scanning());
+
+	upper.write("born.txt", "born");
+	fs::remove(upper.path() / "doomed.txt");
+	const edt::asset_batch waiting = db->apply_changes(std::vector<res::file_change>{ change("born.txt", res::change_kind::created),
+		change("doomed.txt", res::change_kind::deleted) });
+	BOOST_TEST(waiting.added.empty());
+	BOOST_TEST(seen.empty());
+
+	test_util::pump(tasks);
+	BOOST_TEST(!db->scanning());
+	BOOST_TEST(db->find(res::tag::make("born.txt")) != nullptr);
+	BOOST_TEST(db->find(res::tag::make("doomed.txt")) == nullptr);
+	BOOST_TEST(db->find(res::tag::make("kept.txt")) != nullptr);
+	BOOST_REQUIRE(seen.size() == 1u);
+	BOOST_REQUIRE(seen.front().added.size() == 1u);
+	BOOST_TEST(seen.front().added.front().string() == "res://born.txt");
+	BOOST_REQUIRE(seen.front().removed.size() == 1u);
+	BOOST_TEST(seen.front().removed.front().string() == "res://doomed.txt");
+}
+
+// Review #829: a batch at startup, before the first walk was applied, does not make the walk forget the cache.
+BOOST_AUTO_TEST_CASE(an_early_batch_keeps_the_cached_hashes)
+{
+	write_aged("a.txt", "a");
+	write_aged("b.desc", R"({ "__type": "b_type" })");
+	cached().reset();
+
+	edt::asset_database second(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() },
+		edt::asset_cache_location{ cache.path(), "asset_db" });
+	second.rebuild();
+	write_aged("c.txt", "c");
+	second.apply_changes(std::vector<res::file_change>{ change("c.txt", res::change_kind::created) });
+	BOOST_TEST(second.records().empty());
+	test_util::pump(tasks);
+	BOOST_TEST(second.files_read() == 1u); // c.txt only
+	BOOST_REQUIRE(second.records().size() == 3u);
+	BOOST_TEST(!second.find(res::tag::make("c.txt"))->content_hash.empty());
+	BOOST_TEST((second.find(res::tag::make("b.desc"))->desc_type == std::optional<std::string>{ "b_type" }));
+}
+
+// Review #829: Windows rules (tested on any system): a rename in letter case is one file, not two with one guid.
+BOOST_AUTO_TEST_CASE(a_rename_in_letter_case_keeps_one_record)
+{
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	db = unopened();
+	db->set_case_insensitive(true);
+	db->rebuild();
+	test_util::pump(tasks);
+	BOOST_REQUIRE(db->find(res::tag::make("a.png")) != nullptr);
+
+	fs::rename(upper.path() / "a.png", upper.path() / "A.png");
+	db->apply_changes(std::vector<res::file_change>{ change("A.png", res::change_kind::renamed, "a.png") });
+	BOOST_TEST(db->records().size() == 1u);
+	BOOST_TEST(db->find(res::tag::make("a.png")) == nullptr);
+	BOOST_REQUIRE(record("A.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("A.png").id) == k_guid_a);
+	BOOST_TEST(db->duplicates().empty());
+	BOOST_TEST(db->orphans().empty());
+
+	// Reported as a deleted and a created, in either order.
+	fs::rename(upper.path() / "A.png", upper.path() / "a.png");
+	db->apply_changes(std::vector<res::file_change>{ change("a.png", res::change_kind::created), change("A.png", res::change_kind::deleted) });
+	BOOST_TEST(db->records().size() == 1u);
+	BOOST_TEST(db->find(res::tag::make("a.png")) != nullptr);
+	BOOST_TEST(db->duplicates().empty());
+	expect_same_as_a_full_walk(*db);
+}
+
+// Review #829: case insensitive, a .resource in another letter case than its file belongs to it, as in the walk; an edit
+// of it makes no record of the name it is spelled with.
+BOOST_AUTO_TEST_CASE(a_sidecar_spelled_in_another_case_makes_no_phantom_record)
+{
+	upper.write("b.png", "b");
+	upper.write("B.png.resource", meta_text(k_guid_b));
+	db = unopened();
+	db->set_case_insensitive(true);
+	db->rebuild();
+	test_util::pump(tasks);
+	BOOST_REQUIRE(record("b.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("b.png").id) == k_guid_b);
+
+	upper.write("B.png.resource", meta_text(k_guid_a) + "\n");
+	db->apply_changes(std::vector<res::file_change>{ change("B.png.resource", res::change_kind::modified) });
+	BOOST_TEST(db->records().size() == 1u);
+	BOOST_TEST(db->find(res::tag::make("B.png")) == nullptr);
+	BOOST_REQUIRE(record("b.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("b.png").id) == k_guid_a);
+	BOOST_TEST(db->orphans().empty());
+}
+
+// Review #829: a file changed while its hashing job read it is hashed again with its new bytes.
+BOOST_AUTO_TEST_CASE(a_file_changed_while_its_hash_is_read_is_hashed_again)
+{
+	upper.write("a.txt", "first");
+	db = unopened();
+	db->rebuild();
+	run_walk();
+	// The hashing job read "first"; its result waits on the main queue.
+	BOOST_REQUIRE(tasks.run_one(ds::lane::io));
+	upper.write("a.txt", "second, longer");
+	db->apply_changes(std::vector<res::file_change>{ change("a.txt", res::change_kind::modified) });
+	test_util::pump(tasks);
+
+	const edt::asset_content now = edt::read_asset_content(upper.path(), "a.txt", false, edt::asset_database::max_desc_bytes);
+	BOOST_REQUIRE(now.ok);
+	BOOST_TEST(record("a.txt").size == 14);
+	BOOST_TEST(record("a.txt").content_hash == now.content_hash);
+	BOOST_TEST(db->pending_hashes() == 0u);
+}
+
+// Review #829: folder events during a walk do not restart it; one more walk follows it.
+BOOST_AUTO_TEST_CASE(folder_events_during_a_walk_make_one_more_walk)
+{
+	upper.write("a.txt", "a");
+	db = unopened();
+	int walks = 0;
+	const auto counting = events.job_started.subscribe([&walks](std::uint64_t, const std::string& label) {
+		if (label == "Scan assets") {
+			++walks;
+		}
+	});
+	db->rebuild();
+	for (int i = 0; i < 3; ++i) {
+		db->apply_changes(std::vector<res::file_change>{ folder_change("sub", res::change_kind::created) });
+	}
+	BOOST_TEST(walks == 1);
+	test_util::pump(tasks);
+	BOOST_TEST(!db->scanning());
+	BOOST_TEST(walks == 2);
+}
+
+BOOST_AUTO_TEST_CASE(a_folder_event_walks_again)
+{
+	upper.write("a.txt", "a");
+	auto& assets = open();
+	upper.write("new_dir/x.txt", "x");
+	assets.apply_changes(std::vector<res::file_change>{ folder_change("new_dir", res::change_kind::created) });
+	BOOST_TEST(assets.scanning());
+	test_util::pump(tasks);
+	BOOST_TEST(assets.find(res::tag::make("new_dir/x.txt")) != nullptr);
+}
+
+// Review #829: what the walk skips (hidden folders) is not walked again or looked up for a batch.
+BOOST_AUTO_TEST_CASE(changes_below_hidden_folders_are_ignored)
+{
+	upper.write("a.txt", "a");
+	auto& assets = open();
+	const std::uint64_t revision = assets.revision();
+	upper.write(".git/index", "x");
+	upper.write(".hidden/x.txt", "x");
+	upper.write("shown/.cache/y.txt", "y");
+	assets.apply_changes(std::vector<res::file_change>{ folder_change(".git", res::change_kind::created),
+		change(".git/index", res::change_kind::modified), folder_change(".hidden/sub", res::change_kind::created),
+		change(".hidden/x.txt", res::change_kind::created), change("shown/.cache/y.txt", res::change_kind::created) });
+	BOOST_TEST(!assets.scanning());
+	BOOST_TEST(assets.revision() == revision);
+	BOOST_TEST(assets.records().size() == 1u);
+}
+
+// A file of the top layer covers the one below while it is there; the lower one shows again when it goes.
+BOOST_AUTO_TEST_CASE(a_top_file_shadows_the_lower_one_while_it_is_there)
+{
+	lower.write("s.txt", "lower");
+	auto& assets = open();
+	BOOST_TEST(record("s.txt").layer == 0u);
+
+	upper.write("s.txt", "upper!");
+	assets.apply_changes(std::vector<res::file_change>{ change("s.txt", res::change_kind::created) });
+	BOOST_TEST(record("s.txt").layer == 1u);
+	BOOST_TEST((record("s.txt").shadowed_layers == std::vector<std::size_t>{ 0u }));
+	BOOST_TEST(record("s.txt").size == 6);
+
+	fs::remove(upper.path() / "s.txt");
+	const edt::asset_batch batch = assets.apply_changes(std::vector<res::file_change>{ change("s.txt", res::change_kind::deleted) });
+	BOOST_TEST(batch.removed.empty());
+	BOOST_REQUIRE(batch.changed.size() == 1u);
+	BOOST_TEST(record("s.txt").layer == 0u);
+	BOOST_TEST(record("s.txt").shadowed_layers.empty());
+	BOOST_TEST(record("s.txt").size == 5);
+}
+
+// The walk lists nothing below max_depth folders; a batch makes no record there either.
+BOOST_AUTO_TEST_CASE(a_file_deeper_than_the_walk_goes_is_not_a_record)
+{
+	std::string deep;
+	for (int i = 0; i < edt::asset_database::max_depth; ++i) {
+		deep += "d/";
+	}
+	const std::string shallow = deep.substr(2) + "f.txt";
+	deep += "f.txt";
+	upper.write(shallow, "ok");
+	auto& assets = open();
+	BOOST_TEST(assets.find(res::tag::make(shallow)) != nullptr);
+
+	upper.write(deep, "deep");
+	assets.apply_changes(std::vector<res::file_change>{ change(deep, res::change_kind::created) });
+	BOOST_TEST(assets.find(res::tag::make(deep)) == nullptr);
+	expect_same_as_a_full_walk(assets);
+}
+
+#if !defined(_WIN32)
+// Review #829: a link in the top layer (a file, or a folder on the way) is skipped as the walk skips it: the lower
+// layer's file shows.
+BOOST_AUTO_TEST_CASE(a_link_in_the_top_layer_lets_the_lower_file_show)
+{
+	test_util::temp_dir outside("asset_db_outside");
+	const fs::path foreign = outside.write("tex/a.png", "foreign");
+	lower.write("tex/a.png", "lower");
+	lower.write("s.txt", "lower");
+	std::error_code ec;
+	fs::create_directory_symlink(outside.path() / "tex", upper.path() / "tex", ec);
+	BOOST_REQUIRE(!ec);
+	fs::create_symlink(foreign, upper.path() / "s.txt", ec);
+	BOOST_REQUIRE(!ec);
+	auto& assets = open();
+	BOOST_TEST(record("tex/a.png").layer == 0u);
+	BOOST_TEST(record("s.txt").layer == 0u);
+
+	lower.write("tex/a.png", "lower, changed");
+	lower.write("s.txt", "lower, changed");
+	assets.apply_changes(std::vector<res::file_change>{ change("tex/a.png", res::change_kind::modified),
+		change("s.txt", res::change_kind::modified) });
+	BOOST_TEST(record("tex/a.png").layer == 0u);
+	BOOST_TEST(record("tex/a.png").shadowed_layers.empty());
+	BOOST_TEST(record("tex/a.png").size == 14);
+	BOOST_TEST(record("s.txt").layer == 0u);
+	BOOST_TEST(record("s.txt").shadowed_layers.empty());
+	expect_same_as_a_full_walk(assets);
+}
+#endif
+
+// Review #829: batches of creates, edits, renames, deletes and moves leave what a full walk of the same layers finds.
+BOOST_AUTO_TEST_CASE(incremental_batches_match_a_full_walk)
+{
+	lower.write("s.txt", "lower s");
+	lower.write("dir/l.desc", R"({ "__type": "low" })");
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	upper.write("b.txt", "b");
+	upper.write("dir/c.desc", R"({ "__type": "c" })");
+	upper.write("dir/c.desc.resource", meta_text(k_guid_b));
+	auto& assets = open();
+
+	upper.write("n.png", "n");
+	upper.write("n.png.resource", meta_text(k_guid_c));
+	upper.write("b.txt", "b, longer");
+	assets.apply_changes(std::vector<res::file_change>{ change("n.png", res::change_kind::created),
+		change("n.png.resource", res::change_kind::created), change("b.txt", res::change_kind::modified) });
+
+	fs::rename(upper.path() / "a.png", upper.path() / "dir/a2.png");
+	fs::rename(upper.path() / "a.png.resource", upper.path() / "dir/a2.png.resource");
+	upper.write("s.txt", "upper s, covers");
+	const edt::asset_batch moved = assets.apply_changes(std::vector<res::file_change>{ change("a.png", res::change_kind::deleted),
+		change("a.png.resource", res::change_kind::deleted), change("dir/a2.png", res::change_kind::created),
+		change("dir/a2.png.resource", res::change_kind::created), change("s.txt", res::change_kind::created) });
+	BOOST_TEST(moved.moved.size() == 1u);
+
+	fs::remove(upper.path() / "dir/c.desc");
+	upper.write("b.txt.resource", meta_text(k_guid_d));
+	fs::remove(upper.path() / "n.png.resource");
+	upper.write("ghost.png.resource", meta_text(k_guid_c));
+	assets.apply_changes(std::vector<res::file_change>{ change("dir/c.desc", res::change_kind::deleted),
+		change("b.txt.resource", res::change_kind::created), change("n.png.resource", res::change_kind::deleted),
+		change("ghost.png.resource", res::change_kind::created) });
+
+	fs::rename(upper.path() / "b.txt", upper.path() / "b2.txt");
+	fs::rename(upper.path() / "b.txt.resource", upper.path() / "b2.txt.resource");
+	fs::remove(upper.path() / "s.txt");
+	assets.apply_changes(std::vector<res::file_change>{ change("b2.txt", res::change_kind::renamed, "b.txt"),
+		change("b2.txt.resource", res::change_kind::renamed, "b.txt.resource"), change("s.txt", res::change_kind::deleted) });
+	test_util::pump(tasks);
+
+	BOOST_TEST(record("s.txt").layer == 0u);
+	BOOST_TEST(assets.orphans().size() == 2u); // dir/c.desc.resource, ghost.png.resource
+	expect_same_as_a_full_walk(assets);
+}
+
+// The database follows res:// of a resource_system it is attached to.
+BOOST_AUTO_TEST_CASE(an_attached_database_follows_the_watcher)
+{
+	test_util::temp_dir project("asset_db_project");
+	const fs::path content = project.path() / "res";
+	const fs::path cache_dir = project.path() / ".cache";
+	fs::create_directories(content);
+	fs::create_directories(cache_dir / "memory");
+	project.write("res/a.txt", "a");
+	res::resource_system resources(tasks, res::resource_system::project_mount_table({}, { content }, cache_dir, cache_dir / "user_profile"));
+
+	edt::asset_database assets(jobs, &events, resources.get_resource_layers());
+	assets.attach(resources);
+	assets.rebuild();
+	test_util::pump(tasks);
+	BOOST_REQUIRE(assets.find(res::tag::make("a.txt")) != nullptr);
+
+	const auto pump_until = [this](const std::function<bool()>& done) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+		while (!done() && std::chrono::steady_clock::now() < deadline) {
+			test_util::pump(tasks);
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		}
+		return done();
+	};
+	// Written beside and moved in: the watcher never sees it half written.
+	fs::rename(project.write("staging.tmp", "b"), content / "b.txt");
+	BOOST_TEST(pump_until([&assets] { return assets.find(res::tag::make("b.txt")) != nullptr; }));
+	fs::remove(content / "a.txt");
+	BOOST_TEST(pump_until([&assets] { return assets.find(res::tag::make("a.txt")) == nullptr; }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

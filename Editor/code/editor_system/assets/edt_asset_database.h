@@ -28,6 +28,15 @@ namespace edt
 	class job_service;
 	// Orders the writes of the cache file (asset_database.cpp).
 	struct asset_cache_writer;
+	// What one batch of changes lists of the layers' folders (asset_database.cpp).
+	class asset_layer_lookup;
+
+	// Names that differ only in letter case are one name (Windows).
+#if defined(_WIN32)
+	inline constexpr bool platform_case_insensitive = true;
+#else
+	inline constexpr bool platform_case_insensitive = false;
+#endif
 
 	// One file of the resource tree as the asset database knows it (EPIC-57 section 4.3).
 	struct asset_record
@@ -119,13 +128,13 @@ namespace edt
 	std::string asset_type_of(std::string_view path);
 
 	// Walks `layers` (lowest first, as resource_system::get_resource_layers gives them) merged as the asset browser merges
-	// them (an upper layer shadows a name below, case folded on Windows), and reads every file's .resource. In every
-	// layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are skipped.
-	// `stopped` (may be empty) ends the walk early.
+	// them (an upper layer shadows a name below, case folded when `case_insensitive`), and reads every file's .resource. In
+	// every layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are
+	// skipped. `stopped` (may be empty) ends the walk early.
 	// `known` (may be null): records by path text, from the cache or the last walk; a file whose .resource has the size
 	// and time recorded there keeps the record's ID and flags without the .resource being read again.
 	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {},
-		const std::map<std::string, asset_record>* known = nullptr);
+		const std::map<std::string, asset_record>* known = nullptr, bool case_insensitive = platform_case_insensitive);
 
 	// Writes the cache file of `records` (the format load_cache reads) through prj::write_project_file. The error, nullopt on
 	// success.
@@ -146,6 +155,8 @@ namespace edt
 		static constexpr std::uint64_t max_desc_bytes = 4u * 1024u * 1024u;
 		static constexpr std::size_t hash_batch = 64;
 		static constexpr int max_depth = 64;
+		// Batches that arrive during a walk wait for it, up to this many changes; past it one more walk follows instead.
+		static constexpr std::size_t max_deferred_changes = 4096;
 		// A larger cache is not read (the walk then reads every file).
 		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
 		// A cache file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s).
@@ -166,6 +177,9 @@ namespace edt
 
 		// Walks the layers again; what is known stays until the walk's result arrives. A walk already running is cancelled.
 		void rebuild();
+		// Names merged with their letter case folded (default: the platform's). Set before the first rebuild(); for tests
+		// of the Windows rules on any system.
+		void set_case_insensitive(bool value) { m_case_insensitive = value; }
 		// A walk is running.
 		bool scanning() const { return m_scanning; }
 		// Files whose hash is not known yet (queued or running).
@@ -183,8 +197,11 @@ namespace edt
 		// Follows the changes below res:// of `resources` (resource_system::subscribe_changes) until the database goes.
 		void attach(res::resource_system& resources);
 		// Applies one batch of changes below res:// (main thread, as resource_system delivers them): every file or
-		// .resource named is looked up again in the layers. A file that went away and one that came carrying the same guid
-		// in their .resource are a move, whatever the watcher called them; a folder that came or went walks the tree again.
+		// .resource named is looked up again in the layers, as the walk would find it. A file that went away and one that
+		// came carrying the same guid in their .resource are a move, whatever the watcher called them; a folder that came
+		// or went walks the tree again (once more after a running walk). Changes below hidden folders are ignored. While a
+		// walk runs (or before the first one), the batch waits and is applied after the walk's result: the return is
+		// then empty and on_batch is called when it is applied.
 		asset_batch apply_changes(std::span<const res::file_change> changes);
 		// Called after each batch with what it did (S57-7 puts the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
@@ -200,13 +217,17 @@ namespace edt
 
 	private:
 		void apply_scan(asset_scan scan);
+		// After a walk ended (applied, failed or cancelled): the batches that waited, then the walk asked for meanwhile.
+		void after_walk(bool applied);
 		void hash_next();
 		void index_id(const asset_record& record);
+		void unindex_id(const asset_record& record);
 		void on_job_finished(std::uint64_t id, job_status status);
 		void load_cache();
-		// The record `relative` (res:// path text without the protocol) has now; none when no layer has the file.
-		std::optional<asset_record> look_up(const std::string& relative, const asset_record* before);
-		void reindex();
+		// The record the walk would make of `relative` (res:// path text without the protocol, any letter case when case
+		// insensitive) now; none when it would make none. `before_of` gives what is known of a path text (may be null).
+		std::optional<asset_record> look_up(const std::string& relative, asset_layer_lookup& lookup,
+			const std::function<const asset_record*(const std::string&)>& before_of);
 		void save_when_idle();
 		std::filesystem::path cache_file() const;
 		// The keys of the hashing job that ended without an answer for them go back into the queue.
@@ -222,6 +243,13 @@ namespace edt
 		std::uint64_t m_hash_job = 0;
 		std::uint64_t m_scan_job = 0;
 		bool m_scanning = false;
+		// A walk's result was applied: m_records is what the layers hold, not m_cached.
+		bool m_walked_once = false;
+		// A folder changed during a walk: one more walk follows it.
+		bool m_walk_again = false;
+		// File changes that came during a walk (or before the first), applied after it.
+		std::vector<res::file_change> m_deferred;
+		bool m_case_insensitive = platform_case_insensitive;
 		std::uint64_t m_scan_number = 0;
 		std::uint64_t m_revision = 0;
 		asset_cache_location m_cache;

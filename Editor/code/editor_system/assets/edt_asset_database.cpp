@@ -18,7 +18,6 @@
 #include <limits>
 #include <map>
 #include <mutex>
-#include <set>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -41,11 +40,6 @@ namespace fs = std::filesystem;
 namespace
 {
 	constexpr std::uint64_t k_meta_max_bytes = 64u * 1024u;
-#if defined(_WIN32)
-	constexpr bool k_case_insensitive = true;
-#else
-	constexpr bool k_case_insensitive = false;
-#endif
 
 	std::uint64_t fnv1a_64_update(std::uint64_t hash, std::span<const std::byte> bytes)
 	{
@@ -150,6 +144,7 @@ namespace
 		const std::vector<fs::path>& layers;
 		const std::function<bool()>& stopped;
 		std::vector<merged_file>& out;
+		bool case_insensitive = false;
 		bool depth_warned = false;
 	};
 
@@ -194,7 +189,7 @@ namespace
 				if (is_dir && name.starts_with('.')) {
 					continue;
 				}
-				slot& found = merged[edt::layer_merge_key(name, k_case_insensitive)];
+				slot& found = merged[edt::layer_merge_key(name, state.case_insensitive)];
 				const bool existed = !found.relative.empty();
 				if (existed) {
 					found.shadowed.push_back(found.layer);
@@ -287,14 +282,14 @@ std::string edt::asset_type_of(std::string_view path)
 }
 
 edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, const std::function<bool()>& stopped,
-	const std::map<std::string, asset_record>* known)
+	const std::map<std::string, asset_record>* known, bool case_insensitive)
 {
 	std::vector<merged_file> files;
 	std::vector<std::size_t> all_layers(layers.size());
 	for (std::size_t i = 0; i < layers.size(); ++i) {
 		all_layers[i] = i;
 	}
-	walk_state state{ layers, stopped, files, false };
+	walk_state state{ layers, stopped, files, case_insensitive, false };
 	walk(state, fs::path{}, all_layers, 0);
 
 	// Keyed by the file they belong to, as the merge keys names: "a.png.RESOURCE" belongs to "a.png" everywhere, and on
@@ -303,7 +298,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 	for (const merged_file& file : files) {
 		const std::string relative = fs_paths::generic_utf8_of(file.relative);
 		if (is_sidecar(relative)) {
-			metas.emplace(edt::layer_merge_key(std::string{ sidecar_owner(relative) }, k_case_insensitive), &file);
+			metas.emplace(edt::layer_merge_key(std::string{ sidecar_owner(relative) }, case_insensitive), &file);
 		}
 	}
 
@@ -332,7 +327,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		record.size = stat.size;
 		record.mtime = stat.mtime;
 		record.type = asset_type_of(relative);
-		const std::string meta_key = edt::layer_merge_key(relative, k_case_insensitive);
+		const std::string meta_key = edt::layer_merge_key(relative, case_insensitive);
 		if (const auto meta = metas.find(meta_key); meta != metas.end()) {
 			paired.insert(meta_key);
 			const file_stat meta_stat = stat_of(meta->second->physical);
@@ -514,9 +509,12 @@ edt::asset_database::~asset_database()
 
 void edt::asset_database::rebuild()
 {
-	if (m_scanning && m_scan_job != 0) {
-		m_jobs.cancel(m_scan_job);
+	// Cleared first: the cancelled walk's end is not taken for this one's.
+	if (const std::uint64_t running = std::exchange(m_scan_job, 0); m_scanning && running != 0) {
+		m_jobs.cancel(running);
 	}
+	// This walk sees every folder as it is now.
+	m_walk_again = false;
 	// A hashing job someone cancelled without the database seeing it (no events): its keys go back into the queue.
 	if (m_hash_job != 0 && !m_jobs.is_running(m_hash_job)) {
 		requeue_in_flight();
@@ -524,8 +522,8 @@ void edt::asset_database::rebuild()
 	const std::uint64_t number = ++m_scan_number;
 	m_scanning = true;
 	m_scan_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Scan assets", "assets", true }, m_lifetime,
-		[layers = m_layers, known = m_records.empty() ? m_cached : m_records](ds::task_context& ctx) {
-			return scan_asset_layers(layers, [&ctx] { return ctx.stop.stop_requested(); }, &known);
+		[layers = m_layers, known = m_walked_once ? m_records : m_cached, case_insensitive = m_case_insensitive](ds::task_context& ctx) {
+			return scan_asset_layers(layers, [&ctx] { return ctx.stop.stop_requested(); }, &known, case_insensitive);
 		},
 		[this, number](ds::task_result<asset_scan>& result) {
 			if (number != m_scan_number) {
@@ -535,10 +533,26 @@ void edt::asset_database::rebuild()
 			m_scan_job = 0;
 			if (!result.ok()) {
 				egLOG_WARN("assets", "the walk of the asset tree failed: {}", result.error);
+				after_walk(false);
 				return;
 			}
 			apply_scan(std::move(*result.value));
+			after_walk(true);
 		});
+}
+
+void edt::asset_database::after_walk(bool applied)
+{
+	// The walk listed a folder before or after these changes: applied again, they hold whatever it saw. Before the
+	// first walk was applied they wait on (apply_changes defers them again).
+	if (!m_deferred.empty()) {
+		const std::vector<res::file_change> pending = std::exchange(m_deferred, {});
+		apply_changes(pending);
+	}
+	// A walk that failed or was cancelled is not restarted against it: the next rebuild covers the folders.
+	if (std::exchange(m_walk_again, false) && applied) {
+		rebuild();
+	}
 }
 
 void edt::asset_database::on_job_finished(std::uint64_t id, job_status status)
@@ -549,6 +563,7 @@ void edt::asset_database::on_job_finished(std::uint64_t id, job_status status)
 	if (id != 0 && id == m_scan_job) {
 		m_scanning = false;
 		m_scan_job = 0;
+		after_walk(false);
 	}
 	if (id != 0 && id == m_save_job) {
 		m_save_job = 0;
@@ -574,8 +589,9 @@ void edt::asset_database::requeue_in_flight()
 void edt::asset_database::apply_scan(asset_scan scan)
 {
 	// The first walk starts from the cache; later ones from what the last one found.
-	const bool first_walk = m_revision == 0;
-	std::map<std::string, asset_record> previous = m_records.empty() ? std::move(m_cached) : std::move(m_records);
+	const bool first_walk = !m_walked_once;
+	m_walked_once = true;
+	std::map<std::string, asset_record> previous = first_walk ? std::move(m_cached) : std::move(m_records);
 	m_cached.clear();
 	m_records.clear();
 	m_by_id.clear();
@@ -621,6 +637,21 @@ void edt::asset_database::index_id(const asset_record& record)
 	}
 }
 
+void edt::asset_database::unindex_id(const asset_record& record)
+{
+	if (!record.id) {
+		return;
+	}
+	const std::string key = record.path.string();
+	const auto [first, last] = m_by_id.equal_range(*record.id);
+	for (auto it = first; it != last; ++it) {
+		if (it->second == key) {
+			m_by_id.erase(it);
+			return;
+		}
+	}
+}
+
 void edt::asset_database::hash_next()
 {
 	if (m_hash_job != 0 || m_unhashed.empty()) {
@@ -632,6 +663,9 @@ void edt::asset_database::hash_next()
 		fs::path root;
 		fs::path relative;
 		bool is_desc = false;
+		// The record's stamp when it was queued.
+		std::int64_t size = 0;
+		std::int64_t mtime = 0;
 	};
 	std::vector<item> batch;
 	while (!m_unhashed.empty() && batch.size() < hash_batch) {
@@ -645,12 +679,20 @@ void edt::asset_database::hash_next()
 		std::string_view relative = record.path.view();
 		relative.remove_prefix(relative.find("://") + 3);
 		m_in_flight.push_back(key);
-		batch.push_back(item{ std::move(key), m_layers[record.layer], fs_paths::path_from_utf8(relative), record.type == "desc" });
+		batch.push_back(item{ std::move(key), m_layers[record.layer], fs_paths::path_from_utf8(relative), record.type == "desc", record.size,
+			record.mtime });
 	}
 	if (batch.empty()) {
 		return;
 	}
-	using results = std::vector<std::pair<std::string, asset_content>>;
+	struct hashed
+	{
+		std::string key;
+		std::int64_t size = 0;
+		std::int64_t mtime = 0;
+		asset_content content;
+	};
+	using results = std::vector<hashed>;
 	m_hash_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Hash assets", "assets", true }, m_lifetime,
 		[batch = std::move(batch)](ds::task_context& ctx) {
 			results out;
@@ -659,31 +701,43 @@ void edt::asset_database::hash_next()
 				if (ctx.stop.stop_requested()) {
 					break;
 				}
-				out.emplace_back(entry.key, read_asset_content(entry.root, entry.relative, entry.is_desc, max_desc_bytes));
+				out.push_back(hashed{ entry.key, entry.size, entry.mtime, read_asset_content(entry.root, entry.relative, entry.is_desc, max_desc_bytes) });
 			}
 			return out;
 		},
 		[this](ds::task_result<results>& result) {
 			if (result.ok()) {
 				bool changed = false;
-				for (auto& [key, content] : *result.value) {
+				const auto queue_again = [this](const std::string& key) {
+					if (std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
+						m_unhashed.push_back(key);
+					}
+				};
+				for (auto& [key, queued_size, queued_mtime, content] : *result.value) {
 					std::erase(m_in_flight, key);
 					++m_files_read;
 					const auto found = m_records.find(key);
 					if (found == m_records.end()) {
 						continue;
 					}
+					// A batch or a walk gave the record a new stamp while it was read (it skipped the key in flight).
+					if (found->second.size != queued_size || found->second.mtime != queued_mtime) {
+						if (found->second.content_hash.empty()) {
+							queue_again(key);
+						}
+						continue;
+					}
 					if (!content.ok) {
 						egLOG_WARN("assets", "{}: {}", key, content.error);
 						continue;
 					}
-					// Changed since the walk: the next walk or batch of changes updates the record and hashes it again.
+					// Changed on the disk since the record: the next walk or batch of changes updates it and queues it again.
 					if (found->second.size != content.size || found->second.mtime != content.mtime) {
 						continue;
 					}
 					// Written while it was read, now as the record says: hashed again with the next batch.
 					if (!content.unchanged) {
-						m_unhashed.push_back(key);
+						queue_again(key);
 						continue;
 					}
 					found->second.content_hash = std::move(content.content_hash);
@@ -1067,7 +1121,8 @@ void edt::asset_database::save()
 
 namespace
 {
-	// The res:// path text of a tag without its protocol; none for a tag of another protocol.
+	// The res:// path text of a tag without its protocol; none for a tag of another protocol or a path the walk never
+	// makes (an empty name, "." or "..").
 	std::optional<std::string> relative_of(const res::tag& tag)
 	{
 		if (tag.protocol() != res::tag::default_protocol()) {
@@ -1075,70 +1130,240 @@ namespace
 		}
 		std::string_view text = tag.view();
 		text.remove_prefix(text.find("://") + 3);
+		if (text.empty()) {
+			return std::nullopt;
+		}
+		for (std::string_view rest = text;;) {
+			const std::size_t slash = rest.find('/');
+			const std::string_view name = rest.substr(0, slash);
+			if (name.empty() || name == "." || name == "..") {
+				return std::nullopt;
+			}
+			if (slash == std::string_view::npos) {
+				break;
+			}
+			rest.remove_prefix(slash + 1);
+		}
 		return std::string{ text };
 	}
 
-	enum class presence { missing, file, other };
-
-	// What `relative` is in one layer, every folder on the way checked as the walk checks entries: a link, a redirecting
-	// reparse point or a hidden folder on the way means the layer does not have it.
-	presence presence_in(const fs::path& layer, const std::string& relative)
+	// Below a folder the walk skips: a folder on the way, or the folder itself, whose name starts with '.'.
+	bool under_hidden_folder(std::string_view relative, bool is_directory)
 	{
-		fs::path at = layer;
-		const fs::path rel = fs_paths::path_from_utf8(relative);
-		std::size_t left = static_cast<std::size_t>(std::distance(rel.begin(), rel.end()));
-		for (const fs::path& part : rel) {
-			at /= part;
-			--left;
-			std::error_code ec;
-			const fs::directory_entry entry(at, ec);
-			if (ec || !entry.exists(ec)) {
-				return presence::missing;
+		while (true) {
+			const std::size_t slash = relative.find('/');
+			const bool last = slash == std::string_view::npos;
+			if ((!last || is_directory) && relative.starts_with('.')) {
+				return true;
 			}
-			if (redirects(entry)) {
-				return presence::other;
+			if (last) {
+				return false;
 			}
-			const bool is_dir = entry.is_directory(ec);
-			if (left > 0) {
-				if (!is_dir || fs_paths::utf8_of(part).starts_with('.')) {
-					return presence::other;
-				}
-				continue;
-			}
-			return entry.is_regular_file(ec) && !ec ? presence::file : presence::other;
+			relative.remove_prefix(slash + 1);
 		}
-		return presence::missing;
 	}
 
-	struct sidecar_hit
+	std::string joined(const std::string& folder, const std::string& name)
 	{
-		presence kind = presence::missing;
+		return folder.empty() ? name : folder + "/" + name;
+	}
+
+	// (folder, name) of a path text.
+	std::pair<std::string, std::string> split_last(const std::string& relative)
+	{
+		const std::size_t slash = relative.find_last_of('/');
+		if (slash == std::string::npos) {
+			return { std::string{}, relative };
+		}
+		return { relative.substr(0, slash), relative.substr(slash + 1) };
+	}
+}
+
+// The layers as walk() merges them, for one batch of changes: each folder of a layer is listed at most once.
+class edt::asset_layer_lookup
+{
+public:
+	// A folder of the merged tree: its path as the walk names it, and the layers (ascending) where it is a real folder,
+	// with its path in each.
+	struct folder
+	{
 		std::string relative;
+		std::vector<std::pair<std::size_t, std::string>> layers;
 	};
 
-	// The .resource of `relative` in one layer, in any letter case of the suffix (res::is_asset_meta_name), as the
-	// walk pairs them.
-	sidecar_hit sidecar_in(const fs::path& layer, const std::string& relative)
+	// One name of a merged folder, as walk() merges the entries of the layers into a slot.
+	struct slot
 	{
-		std::string exact = relative + std::string{ res::asset_meta_suffix };
-		if (const presence here = presence_in(layer, exact); here != presence::missing) {
-			return { here, std::move(exact) };
+		bool found = false;
+		bool is_dir = false;
+		std::size_t layer = 0;
+		// The name in the winning layer, and the path there.
+		std::string name;
+		std::string in_layer;
+		std::vector<std::size_t> shadowed;
+		std::vector<std::pair<std::size_t, std::string>> dir_layers;
+	};
+
+	asset_layer_lookup(const std::vector<fs::path>& layers, bool case_insensitive)
+		: m_layers(layers)
+		, m_case_insensitive(case_insensitive)
+	{
+	}
+
+	std::string key_of(const std::string& text) const { return edt::layer_merge_key(text, m_case_insensitive); }
+
+	// The merged folder `relative` ("" for the root); none when the walk does not enter it.
+	const std::optional<folder>& folder_at(const std::string& relative)
+	{
+		const std::string key = key_of(relative);
+		if (const auto known = m_folders.find(key); known != m_folders.end()) {
+			return known->second;
 		}
-		const fs::path rel = fs_paths::path_from_utf8(relative);
-		const std::string owner_key = edt::layer_merge_key(fs_paths::utf8_of(rel.filename()), k_case_insensitive);
-		const std::string parent = fs_paths::generic_utf8_of(rel.parent_path());
-		std::error_code ec;
-		for (auto it = fs::directory_iterator(layer / rel.parent_path(), ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {
-			const std::string name = fs_paths::utf8_of(it->path().filename());
-			if (!is_sidecar(name) || edt::layer_merge_key(std::string{ sidecar_owner(name) }, k_case_insensitive) != owner_key) {
+		std::optional<folder> made = resolve_folder(relative);
+		return m_folders.insert_or_assign(key, std::move(made)).first->second;
+	}
+
+	// The slot `name` (any letter case when case insensitive) of `in`: walk() skips what redirects and hidden folders,
+	// an upper entry wins, and only the layers where all of them are folders are entered below.
+	slot merge(const folder& in, const std::string& name)
+	{
+		slot out;
+		for (const auto& [layer, path] : in.layers) {
+			const std::optional<fs::directory_entry> entry = entry_of(layer, path, name);
+			if (!entry || redirects(*entry)) {
 				continue;
 			}
-			std::string found = parent.empty() ? name : parent + "/" + name;
-			return { presence_in(layer, found), std::move(found) };
+			std::error_code ec;
+			const bool is_dir = entry->is_directory(ec);
+			if (ec) {
+				continue;
+			}
+			std::string on_disk = fs_paths::utf8_of(entry->path().filename());
+			if (is_dir && on_disk.starts_with('.')) {
+				continue;
+			}
+			std::string child = joined(path, on_disk);
+			if (out.found) {
+				out.shadowed.push_back(out.layer);
+			}
+			if (is_dir && out.found && out.is_dir) {
+				out.dir_layers.emplace_back(layer, child);
+			} else if (is_dir) {
+				out.dir_layers = { { layer, child } };
+			} else {
+				out.dir_layers.clear();
+			}
+			out.found = true;
+			out.is_dir = is_dir;
+			out.layer = layer;
+			out.name = std::move(on_disk);
+			out.in_layer = std::move(child);
+		}
+		return out;
+	}
+
+	// The .resource the walk pairs with the file `name` of `in`, in any letter case of the suffix: of the sidecar slots
+	// that are files, the first by merge key (scan_asset_layers keeps the first it meets).
+	slot sidecar(const folder& in, const std::string& name)
+	{
+		const std::string owner = key_of(name);
+		std::map<std::string, std::string> names;
+		for (const auto& [layer, path] : in.layers) {
+			for (const listed& item : list(layer, path)) {
+				if (is_sidecar(item.name) && key_of(std::string{ sidecar_owner(item.name) }) == owner) {
+					names.emplace(item.key, item.name);
+				}
+			}
+		}
+		for (const auto& [key, sidecar_name] : names) {
+			slot found = merge(in, sidecar_name);
+			if (found.found && !found.is_dir) {
+				return found;
+			}
 		}
 		return {};
 	}
-}
+
+private:
+	struct listed
+	{
+		std::string name;
+		std::string key;
+		fs::directory_entry entry;
+	};
+
+	const std::vector<listed>& list(std::size_t layer, const std::string& path)
+	{
+		const auto [found, added] = m_listings.try_emplace(std::pair<std::size_t, std::string>{ layer, path });
+		if (!added) {
+			return found->second;
+		}
+		std::error_code ec;
+		fs::directory_iterator it(m_layers[layer] / fs_paths::path_from_utf8(path), fs::directory_options::skip_permission_denied, ec);
+		for (; !ec && it != fs::directory_iterator{}; it.increment(ec)) {
+			std::string name = fs_paths::utf8_of(it->path().filename());
+			std::string key = key_of(name);
+			found->second.push_back(listed{ std::move(name), std::move(key), *it });
+		}
+		return found->second;
+	}
+
+	// The entry of `name` in the folder `path` of `layer`; case insensitive: the one the folder lists under that key
+	// (the last, as the walk's slot keeps the last).
+	std::optional<fs::directory_entry> entry_of(std::size_t layer, const std::string& path, const std::string& name)
+	{
+		if (m_case_insensitive) {
+			const std::string key = key_of(name);
+			const fs::directory_entry* match = nullptr;
+			for (const listed& item : list(layer, path)) {
+				if (item.key == key) {
+					match = &item.entry;
+				}
+			}
+			if (!match) {
+				return std::nullopt;
+			}
+			return *match;
+		}
+		std::error_code ec;
+		fs::directory_entry entry(m_layers[layer] / fs_paths::path_from_utf8(joined(path, name)), ec);
+		if (ec || !entry.exists(ec) || ec) {
+			return std::nullopt;
+		}
+		return entry;
+	}
+
+	std::optional<folder> resolve_folder(const std::string& relative)
+	{
+		if (relative.empty()) {
+			folder root;
+			for (std::size_t layer = 0; layer < m_layers.size(); ++layer) {
+				root.layers.emplace_back(layer, std::string{});
+			}
+			return root;
+		}
+		// walk() lists nothing in a folder of max_depth names or more.
+		if (std::ranges::count(relative, '/') + 1 >= edt::asset_database::max_depth) {
+			return std::nullopt;
+		}
+		const auto [parent, name] = split_last(relative);
+		const std::optional<folder>& above = folder_at(parent);
+		if (!above) {
+			return std::nullopt;
+		}
+		slot found = merge(*above, name);
+		if (!found.found || !found.is_dir) {
+			return std::nullopt;
+		}
+		return folder{ joined(above->relative, found.name), std::move(found.dir_layers) };
+	}
+
+	const std::vector<fs::path>& m_layers;
+	bool m_case_insensitive = false;
+	// By merge key of the folder's path; std::map: folder_at hands out references while it adds.
+	std::map<std::string, std::optional<folder>> m_folders;
+	std::map<std::pair<std::size_t, std::string>, std::vector<listed>> m_listings;
+};
 
 void edt::asset_database::attach(res::resource_system& resources)
 {
@@ -1151,163 +1376,213 @@ void edt::asset_database::attach(res::resource_system& resources)
 	});
 }
 
-std::optional<edt::asset_record> edt::asset_database::look_up(const std::string& relative, const asset_record* before)
+std::optional<edt::asset_record> edt::asset_database::look_up(const std::string& relative, asset_layer_lookup& lookup,
+	const std::function<const asset_record*(const std::string&)>& before_of)
 {
-	std::optional<std::size_t> winner;
-	std::vector<std::size_t> shadowed;
-	for (std::size_t layer = m_layers.size(); layer-- > 0;) {
-		const presence here = presence_in(m_layers[layer], relative);
-		if (here == presence::missing) {
-			continue;
-		}
-		if (!winner) {
-			if (here != presence::file) {
-				return std::nullopt;
-			}
-			winner = layer;
-		} else {
-			shadowed.push_back(layer);
-		}
-	}
-	if (!winner) {
+	// The walk makes no record of a .resource, even of one named as another .resource's file.
+	if (is_sidecar(relative)) {
 		return std::nullopt;
 	}
-	std::ranges::reverse(shadowed);
-	const fs::path physical = m_layers[*winner] / fs_paths::path_from_utf8(relative);
+	const auto [parent, name] = split_last(relative);
+	const std::optional<asset_layer_lookup::folder>& folder = lookup.folder_at(parent);
+	if (!folder) {
+		return std::nullopt;
+	}
+	const asset_layer_lookup::slot file = lookup.merge(*folder, name);
+	if (!file.found || file.is_dir) {
+		return std::nullopt;
+	}
+	const std::string canonical = joined(folder->relative, file.name);
 	const std::int64_t checked_at = now_ticks();
-	const file_stat stat = stat_of(physical);
+	const file_stat stat = stat_of(m_layers[file.layer] / fs_paths::path_from_utf8(file.in_layer));
 	if (!stat.ok) {
 		return std::nullopt;
 	}
 	asset_record record;
 	record.content_checked_at = checked_at;
 	record.meta_checked_at = checked_at;
-	record.path = res::tag::make(relative);
-	record.layer = *winner;
-	record.shadowed_layers = std::move(shadowed);
+	record.path = res::tag::make(canonical);
+	record.layer = file.layer;
+	record.shadowed_layers = file.shadowed;
 	record.size = stat.size;
 	record.mtime = stat.mtime;
-	record.type = asset_type_of(relative);
+	record.type = asset_type_of(canonical);
+	const asset_record* before = before_of ? before_of(record.path.string()) : nullptr;
 	if (before && !before->content_hash.empty() && before->size == stat.size && before->mtime == stat.mtime) {
 		record.content_hash = before->content_hash;
 		record.desc_type = before->desc_type;
 		record.content_checked_at = std::min(record.content_checked_at, before->content_checked_at);
 	}
 
-	for (std::size_t layer = m_layers.size(); layer-- > 0;) {
-		const sidecar_hit sidecar = sidecar_in(m_layers[layer], relative);
-		const presence here = sidecar.kind;
-		const std::string& meta_relative = sidecar.relative;
-		if (here == presence::missing) {
-			continue;
-		}
-		if (here == presence::file) {
-			const file_stat meta_stat = stat_of(m_layers[layer] / fs_paths::path_from_utf8(meta_relative));
-			record.meta_size = meta_stat.size;
-			record.meta_mtime = meta_stat.mtime;
-			if (before && before->has_meta && before->meta_size == meta_stat.size && before->meta_mtime == meta_stat.mtime) {
-				record.has_meta = true;
-				record.id = before->id;
-				record.flags = before->flags;
-				record.meta_error = before->meta_error;
-				record.meta_checked_at = std::min(record.meta_checked_at, before->meta_checked_at);
-			} else {
-				++m_files_read;
-				const meta_read read = read_meta(m_layers[layer], fs_paths::path_from_utf8(meta_relative));
-				record.has_meta = read.present;
-				if (read.meta) {
-					record.id = read.meta->guid;
-					record.flags = read.meta->flags;
-				} else {
-					record.meta_error = read.error;
-				}
-			}
-		}
-		break;
+	const asset_layer_lookup::slot meta = lookup.sidecar(*folder, file.name);
+	if (!meta.found) {
+		return record;
+	}
+	const fs::path meta_relative = fs_paths::path_from_utf8(meta.in_layer);
+	const file_stat meta_stat = stat_of(m_layers[meta.layer] / meta_relative);
+	record.meta_size = meta_stat.size;
+	record.meta_mtime = meta_stat.mtime;
+	if (before && before->has_meta && before->meta_size == meta_stat.size && before->meta_mtime == meta_stat.mtime) {
+		record.has_meta = true;
+		record.id = before->id;
+		record.flags = before->flags;
+		record.meta_error = before->meta_error;
+		record.meta_checked_at = std::min(record.meta_checked_at, before->meta_checked_at);
+		return record;
+	}
+	++m_files_read;
+	const meta_read read = read_meta(m_layers[meta.layer], meta_relative);
+	record.has_meta = read.present;
+	if (read.meta) {
+		record.id = read.meta->guid;
+		record.flags = read.meta->flags;
+	} else {
+		record.meta_error = read.error;
 	}
 	return record;
 }
 
-void edt::asset_database::reindex()
-{
-	m_by_id.clear();
-	for (const auto& [key, record] : m_records) {
-		index_id(record);
-	}
-}
-
 edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_change> changes)
 {
-	asset_batch batch;
-	bool walk_again = false;
-	std::set<std::string> files;
-	const auto touch = [&files](const res::tag& tag) {
+	// The walk's result would replace what this batch finds (or, before the first walk, take it for what the cache
+	// knows): the batch waits for the result.
+	const bool defer = m_scanning || !m_walked_once;
+	const auto visible = [](const res::tag& tag, bool is_directory) -> std::optional<std::string> {
 		std::optional<std::string> relative = relative_of(tag);
-		if (!relative || relative->empty()) {
-			return;
+		if (!relative || under_hidden_folder(*relative, is_directory)) {
+			return std::nullopt;
 		}
-		if (is_sidecar(*relative)) {
-			relative->resize(sidecar_owner(*relative).size());
-		}
-		files.insert(std::move(*relative));
+		return relative;
 	};
+	bool walk_again = false;
+	std::vector<std::string> touched;
+	touched.reserve(changes.size());
 	for (const res::file_change& change : changes) {
+		std::optional<std::string> now = visible(change.tag, change.is_directory);
+		std::optional<std::string> was = change.kind == res::change_kind::renamed ? visible(change.old_tag, change.is_directory) : std::nullopt;
+		if (!now && !was) {
+			continue;
+		}
 		if (change.is_directory) {
 			walk_again = true;
 			continue;
 		}
-		touch(change.tag);
-		if (change.kind == res::change_kind::renamed) {
-			touch(change.old_tag);
+		if (defer) {
+			if (m_deferred.size() < max_deferred_changes) {
+				m_deferred.push_back(change);
+			} else {
+				m_deferred.clear();
+				m_walk_again = true;
+			}
+			continue;
+		}
+		if (now) {
+			touched.push_back(std::move(*now));
+		}
+		if (was) {
+			touched.push_back(std::move(*was));
+		}
+	}
+	if (defer) {
+		if (walk_again) {
+			m_walk_again = true;
+		}
+		return {};
+	}
+
+	asset_layer_lookup lookup(m_layers, m_case_insensitive);
+	// By merge key: on Windows "A.png" and "a.png" are one file.
+	std::map<std::string, std::string> files;
+	for (std::string& relative : touched) {
+		if (is_sidecar(relative)) {
+			relative.resize(sidecar_owner(relative).size());
+		}
+		std::string key = lookup.key_of(relative);
+		files.emplace(std::move(key), std::move(relative));
+	}
+	// The records by merge key of their path text, to find one under another letter case.
+	std::unordered_multimap<std::string, std::string> folded;
+	if (m_case_insensitive && !files.empty()) {
+		folded.reserve(m_records.size());
+		for (const auto& [key, record] : m_records) {
+			folded.emplace(lookup.key_of(key), key);
 		}
 	}
 
+	asset_batch batch;
 	std::vector<asset_record> gone;
 	std::vector<std::string> came;
 	const std::vector<asset_orphan> orphans_before = m_orphans;
 	bool records_changed = false;
-	for (const std::string& relative : files) {
-		const std::string key = res::tag::make(relative).string();
-		const auto known = m_records.find(key);
-		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
-		std::optional<asset_record> now = look_up(relative, before);
-		const std::string owner_key = edt::layer_merge_key(relative, k_case_insensitive);
-		std::erase_if(m_orphans, [&owner_key](const asset_orphan& orphan) {
-			const std::optional<std::string> meta = relative_of(orphan.meta_path);
-			return meta && is_sidecar(*meta) && edt::layer_merge_key(std::string{ sidecar_owner(*meta) }, k_case_insensitive) == owner_key;
-		});
-		if (!now) {
-			// The file is gone; a .resource left behind is an orphan.
-			for (std::size_t layer = m_layers.size(); layer-- > 0;) {
-				const sidecar_hit sidecar = sidecar_in(m_layers[layer], relative);
-				const std::string& meta_relative = sidecar.relative;
-				if (sidecar.kind == presence::file) {
-					asset_orphan orphan;
-					orphan.meta_path = res::tag::make(meta_relative);
-					++m_files_read;
-					const meta_read read = read_meta(m_layers[layer], fs_paths::path_from_utf8(meta_relative));
-					if (read.meta) {
-						orphan.id = read.meta->guid;
-					}
-					m_orphans.push_back(std::move(orphan));
-					break;
+	for (const auto& file : files) {
+		const std::string& owner_key = file.first;
+		const std::string& relative = file.second;
+		const std::string event_key = res::tag::make(relative).string();
+		std::vector<std::string> existing;
+		if (m_case_insensitive) {
+			const auto [first, last] = folded.equal_range(lookup.key_of(event_key));
+			for (auto it = first; it != last; ++it) {
+				if (m_records.contains(it->second)) {
+					existing.push_back(it->second);
 				}
 			}
-			if (before) {
-				gone.push_back(std::move(known->second));
-				m_records.erase(known);
-				records_changed = true;
+		} else if (m_records.contains(event_key)) {
+			existing.push_back(event_key);
+		}
+		std::optional<asset_record> now = look_up(relative, lookup, [this, &existing](const std::string& key) -> const asset_record* {
+			if (const auto found = m_records.find(key); found != m_records.end()) {
+				return &found->second;
 			}
+			// The same file under another letter case: its stamps decide what is carried over.
+			return existing.empty() ? nullptr : &m_records.at(existing.front());
+		});
+		// A record of the file under another letter case than the one on the disk now is gone.
+		for (const std::string& key : existing) {
+			if (now && key == now->path.string()) {
+				continue;
+			}
+			const auto old = m_records.find(key);
+			unindex_id(old->second);
+			gone.push_back(std::move(old->second));
+			m_records.erase(old);
+			records_changed = true;
+		}
+		std::erase_if(m_orphans, [&lookup, &owner_key](const asset_orphan& orphan) {
+			const std::optional<std::string> meta = relative_of(orphan.meta_path);
+			return meta && is_sidecar(*meta) && lookup.key_of(std::string{ sidecar_owner(*meta) }) == owner_key;
+		});
+		if (!now) {
+			// No file the walk would list; a .resource left behind is an orphan.
+			const auto [parent, name] = split_last(relative);
+			const std::optional<asset_layer_lookup::folder>& folder = lookup.folder_at(parent);
+			if (!folder) {
+				continue;
+			}
+			const asset_layer_lookup::slot meta = lookup.sidecar(*folder, name);
+			if (!meta.found) {
+				continue;
+			}
+			asset_orphan orphan;
+			orphan.meta_path = res::tag::make(joined(folder->relative, meta.name));
+			++m_files_read;
+			const meta_read read = read_meta(m_layers[meta.layer], fs_paths::path_from_utf8(meta.in_layer));
+			if (read.meta) {
+				orphan.id = read.meta->guid;
+			}
+			m_orphans.push_back(std::move(orphan));
 			continue;
 		}
-		const bool is_new = before == nullptr;
+		const std::string key = now->path.string();
+		const auto known = m_records.find(key);
+		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
 		const bool same = before && before->layer == now->layer && before->size == now->size && before->mtime == now->mtime
 			&& before->meta_size == now->meta_size && before->meta_mtime == now->meta_mtime;
-		if (is_new) {
+		if (!before) {
 			came.push_back(key);
 		} else if (!same) {
 			batch.changed.push_back(now->path);
 		}
+		// A key in flight is queued again when its job ends, as the record's stamp moved (hash_next).
 		if (now->content_hash.empty() && std::ranges::find(m_in_flight, key) == m_in_flight.end()
 			&& std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
 			m_unhashed.push_back(key);
@@ -1315,10 +1590,16 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		if (!before || !before->same_as(*now)) {
 			records_changed = true;
 		}
+		if (before) {
+			unindex_id(*before);
+		}
+		index_id(*now);
 		m_records.insert_or_assign(key, std::move(*now));
 	}
 
 	// A move: what went away and what came with the same guid. The bytes moved too when the size and time did.
+	// Paired only within this batch (one poll of the watcher, about 0.5 s): a move split over two polls is a removed
+	// and an added, so `moved` is not complete and S57-7 must not rely on it alone.
 	for (const std::string& key : came) {
 		asset_record& arrived = m_records.at(key);
 		const auto match = arrived.id
@@ -1328,7 +1609,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			batch.added.push_back(arrived.path);
 			continue;
 		}
-		if (arrived.content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
+		if (arrived.content_hash.empty() && !match->content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
 			arrived.content_hash = match->content_hash;
 			arrived.desc_type = match->desc_type;
 			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
@@ -1341,7 +1622,6 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		batch.removed.push_back(left.path);
 	}
 	std::ranges::sort(m_orphans, {}, [](const asset_orphan& orphan) { return orphan.meta_path.string(); });
-	reindex();
 	if (records_changed) {
 		m_dirty = true;
 	}
