@@ -178,6 +178,10 @@ namespace edt
 		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
 		// A cache file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s).
 		static constexpr std::chrono::seconds stamp_granularity{ 2 };
+		// A git index or HEAD written this recently means a git operation may still be writing files (#765).
+		static constexpr std::chrono::seconds git_quiet_time{ 5 };
+		// poll() looks at the files waiting for an ID at most this often.
+		static constexpr std::chrono::seconds poll_interval{ 1 };
 
 		// `events` (may be null) tells the database about a job someone cancelled (job.cancel): its work is queued again
 		// and goes on at the next rebuild. Without it a cancelled hashing job is only noticed by rebuild().
@@ -223,6 +227,19 @@ namespace edt
 		// Called after each batch with what it did, and after each walk but the first with what it changed (S57-7 puts
 		// the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
+
+		// New files get an ID at once (#765, EPIC-57 section 6.1): a file of the top layer without a .resource in any
+		// layer that a batch after the first walk reports as created gets <file>.resource with a new ID (a desc: the
+		// valid "__guid" of its root, when it has one). The editor's own write (file_change::self) gets it in that batch;
+		// a file from outside waits for its hash and gets none when an orphan had that hash (a move: "Link" in
+		// Problems), nor while a git operation runs. Files the first walk finds are left as they are (migration).
+		// `busy` (may be empty): the editor's own git operation is running.
+		void set_vcs_busy(std::function<bool()> busy) { m_vcs_busy = std::move(busy); }
+		// Looks at the files waiting for an ID again (a git operation may have ended); at most every poll_interval
+		// unless `force`. Cheap when none waits. Main thread, once per frame.
+		void poll(bool force = false);
+		// Files from outside waiting for an ID. For tests.
+		std::size_t pending_ids() const { return m_pending_ids.size(); }
 
 		const asset_record* find(const res::tag& path) const;
 		std::vector<const asset_record*> find(const res::asset_id& id) const;
@@ -290,6 +307,15 @@ namespace edt
 		std::filesystem::path cache_file() const;
 		// The keys of the hashing job that ended without an answer for them go back into the queue.
 		void requeue_in_flight();
+		// Writes the .resource of the record `key` with a new ID when it still has none in any layer (not a fix: no
+		// history).
+		void give_id(const std::string& key);
+		// Gives an ID to each file waiting for one that is ready; drops those that went or got a .resource.
+		void give_pending_ids();
+		// A git operation may be writing files: the editor's own, or one seen in the repository's git folder.
+		bool git_busy();
+		// The git folder of the repository holding the top layer (a worktree's ".git" file followed); empty when none.
+		const std::filesystem::path& git_dir();
 
 		job_service& m_jobs;
 		std::vector<std::filesystem::path> m_layers;
@@ -335,6 +361,14 @@ namespace edt
 		std::set<std::string> m_force_meta;
 		// By merge key of the .resource path text: last_hash for the orphan an undone link brings back (take_orphan_hash).
 		std::map<std::string, std::string> m_orphan_hashes;
+		// Records (by path text) from outside that wait for their hash or the end of a git operation to get an ID.
+		std::set<std::string> m_pending_ids;
+		std::function<bool()> m_vcs_busy;
+		std::filesystem::path m_git_dir;
+		bool m_git_searched = false;
+		// An ID is being written: the batch its refresh applies gives none itself.
+		bool m_giving_ids = false;
+		std::chrono::steady_clock::time_point m_last_poll{};
 		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};

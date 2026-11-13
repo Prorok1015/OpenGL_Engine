@@ -43,6 +43,14 @@ res::file_change change(std::string_view path, res::change_kind kind, std::strin
 	return out;
 }
 
+// A change the editor made itself (resource_system store/create_sync).
+res::file_change own_change(std::string_view path, res::change_kind kind)
+{
+	res::file_change out = change(path, kind);
+	out.self = true;
+	return out;
+}
+
 res::file_change folder_change(std::string_view path, res::change_kind kind)
 {
 	res::file_change out = change(path, kind);
@@ -1192,6 +1200,272 @@ BOOST_AUTO_TEST_CASE(an_attached_database_follows_the_watcher)
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
 	BOOST_TEST(seen());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// #765: a repository of its own (an empty ".git" folder above the layers), so what git does elsewhere never holds the
+// new IDs back.
+struct new_id_fixture
+{
+	new_id_fixture() : repo("asset_db_repo")
+	{
+		fs::create_directories(git());
+		fs::create_directories(lower());
+		fs::create_directories(upper());
+	}
+
+	fs::path git() const { return repo.path() / ".git"; }
+	fs::path lower() const { return repo.path() / "engine"; }
+	fs::path upper() const { return repo.path() / "project" / "res"; }
+
+	static fs::path write(const fs::path& layer, std::string_view relative, std::string_view text)
+	{
+		const fs::path path = layer / relative;
+		fs::create_directories(path.parent_path());
+		std::ofstream(path, std::ios::binary | std::ios::trunc) << text;
+		return path;
+	}
+
+	static std::string read(const fs::path& path)
+	{
+		std::ifstream in(path, std::ios::binary);
+		return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	edt::asset_database& open()
+	{
+		db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower(), upper() });
+		db->rebuild();
+		test_util::pump(tasks);
+		return *db;
+	}
+
+	void apply(res::file_change change)
+	{
+		db->apply_changes(std::vector<res::file_change>{ std::move(change) });
+	}
+
+	// The ID in <upper>/<relative>.resource; none when there is no readable one.
+	std::optional<res::asset_id> meta_id(std::string_view relative) const
+	{
+		const fs::path path = upper() / (std::string{ relative } + ".resource");
+		if (!fs::is_regular_file(path)) {
+			return std::nullopt;
+		}
+		const res::asset_meta_result parsed = res::read_asset_meta(read(path));
+		if (!parsed) {
+			return std::nullopt;
+		}
+		return parsed.meta->guid;
+	}
+
+	const edt::asset_record& record(std::string_view path) const
+	{
+		const edt::asset_record* found = db->find(res::tag::make(path));
+		BOOST_REQUIRE_MESSAGE(found, std::string{ path });
+		return *found;
+	}
+
+	static void age(const fs::path& path)
+	{
+		fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(1));
+	}
+
+	test_util::temp_dir repo;
+	ds::task_system tasks{ test_util::manual_tasks() };
+	edt::editor_events events;
+	edt::job_service jobs{ tasks, &events };
+	std::unique_ptr<edt::asset_database> db;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtAssetNewIds, new_id_fixture)
+
+BOOST_AUTO_TEST_CASE(an_own_new_file_gets_an_id_at_once_and_keeps_it)
+{
+	write(upper(), "kept.txt", "kept");
+	open();
+	write(upper(), "tex/new.png", "new");
+	apply(own_change("tex/new.png", res::change_kind::created));
+
+	const std::optional<res::asset_id> id = meta_id("tex/new.png");
+	BOOST_REQUIRE(id.has_value());
+	BOOST_TEST(!id->is_nil());
+	BOOST_TEST((record("tex/new.png").id == id));
+	BOOST_TEST(record("tex/new.png").has_meta);
+	const std::string sidecar = read(upper() / "tex/new.png.resource");
+
+	write(upper(), "tex/new.png", "new, written again");
+	apply(own_change("tex/new.png", res::change_kind::modified));
+	test_util::pump(tasks);
+	BOOST_TEST((record("tex/new.png").id == id));
+	BOOST_TEST(read(upper() / "tex/new.png.resource") == sidecar);
+	BOOST_TEST(!fs::exists(upper() / "kept.txt.resource"));
+}
+
+BOOST_AUTO_TEST_CASE(a_file_from_before_the_first_walk_gets_no_id)
+{
+	write(upper(), "old.png", "old");
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower(), upper() });
+	db->rebuild();
+	// Reported before the first walk was applied: the walk finds it, so it is left to migration.
+	write(upper(), "early.png", "early");
+	apply(own_change("early.png", res::change_kind::created));
+	test_util::pump(tasks);
+	BOOST_REQUIRE(db->find(res::tag::make("early.png")) != nullptr);
+
+	write(upper(), "old.png", "old, written again");
+	apply(own_change("old.png", res::change_kind::modified));
+	apply(change("old.png", res::change_kind::modified));
+	test_util::pump(tasks);
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "old.png.resource"));
+	BOOST_TEST(!fs::exists(upper() / "early.png.resource"));
+	BOOST_TEST(!record("old.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_new_desc_takes_the_guid_of_its_root)
+{
+	open();
+	write(upper(), "levels/a.desc", std::string{ R"({ "__type": "level_desc", "__guid": ")" } + std::string{ k_guid_b } + R"(" })");
+	apply(own_change("levels/a.desc", res::change_kind::created));
+	BOOST_REQUIRE(meta_id("levels/a.desc").has_value());
+	BOOST_TEST(res::to_text(*meta_id("levels/a.desc")) == k_guid_b);
+	BOOST_TEST((record("levels/a.desc").id == res::asset_id_from_text(k_guid_b)));
+
+	write(upper(), "levels/bad.desc", R"({ "__type": "level_desc", "__guid": "not an id" })");
+	apply(own_change("levels/bad.desc", res::change_kind::created));
+	write(upper(), "levels/nil.desc", R"({ "__guid": "00000000-0000-0000-0000-000000000000" })");
+	apply(own_change("levels/nil.desc", res::change_kind::created));
+	write(upper(), "levels/nested.desc", std::string{ R"({ "inner": { "__guid": ")" } + std::string{ k_guid_c } + R"(" } })");
+	apply(own_change("levels/nested.desc", res::change_kind::created));
+	for (const std::string_view path : { "levels/bad.desc", "levels/nil.desc", "levels/nested.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			const std::optional<res::asset_id> id = meta_id(path);
+			BOOST_REQUIRE(id.has_value());
+			BOOST_TEST(!id->is_nil());
+			BOOST_TEST((id != res::asset_id_from_text(k_guid_b)));
+			BOOST_TEST((id != res::asset_id_from_text(k_guid_c)));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_lower_file_or_one_with_a_resource_gets_nothing)
+{
+	open();
+	write(lower(), "below.png", "below");
+	apply(own_change("below.png", res::change_kind::created));
+	BOOST_TEST(!fs::exists(lower() / "below.png.resource"));
+	BOOST_TEST(!fs::exists(upper() / "below.png.resource"));
+	BOOST_TEST(!record("below.png").id.has_value());
+
+	write(upper(), "has.png", "has");
+	write(upper(), "has.png.resource", meta_text(k_guid_a));
+	apply(own_change("has.png", res::change_kind::created));
+	apply(own_change("has.png.resource", res::change_kind::created));
+	BOOST_TEST(read(upper() / "has.png.resource") == meta_text(k_guid_a));
+	BOOST_TEST((record("has.png").id == res::asset_id_from_text(k_guid_a)));
+
+	// A .resource only in a lower layer is the file's .resource too.
+	write(lower(), "shared.png.resource", meta_text(k_guid_b));
+	write(upper(), "shared.png", "shared");
+	apply(own_change("shared.png", res::change_kind::created));
+	BOOST_TEST(!fs::exists(upper() / "shared.png.resource"));
+	BOOST_TEST((record("shared.png").id == res::asset_id_from_text(k_guid_b)));
+}
+
+BOOST_AUTO_TEST_CASE(an_outside_new_file_gets_an_id_after_its_hash)
+{
+	open();
+	write(upper(), "ext.png", "external");
+	apply(change("ext.png", res::change_kind::created));
+	BOOST_TEST(!fs::exists(upper() / "ext.png.resource"));
+	BOOST_TEST(!record("ext.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	test_util::pump(tasks);
+	const std::optional<res::asset_id> id = meta_id("ext.png");
+	BOOST_REQUIRE(id.has_value());
+	BOOST_TEST((record("ext.png").id == id));
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(an_outside_file_with_the_content_of_an_orphan_is_left_for_link)
+{
+	write(upper(), "a.png", "same bytes");
+	write(upper(), "a.png.resource", meta_text(k_guid_a));
+	open();
+	fs::remove(upper() / "a.png");
+	apply(change("a.png", res::change_kind::deleted));
+	write(upper(), "b.png", "same bytes");
+	apply(change("b.png", res::change_kind::created));
+	test_util::pump(tasks);
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "b.png.resource"));
+	BOOST_TEST(!record("b.png").id.has_value());
+	BOOST_REQUIRE(db->orphans().size() == 1u);
+	BOOST_TEST(db->orphans().front().last_hash == record("b.png").content_hash);
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(an_own_git_operation_holds_the_id_back)
+{
+	bool busy = true;
+	open().set_vcs_busy([&busy] { return busy; });
+	write(upper(), "pulled.png", "pulled");
+	apply(change("pulled.png", res::change_kind::created));
+	test_util::pump(tasks);
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "pulled.png.resource"));
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	busy = false;
+	db->poll(true);
+	BOOST_TEST(meta_id("pulled.png").has_value());
+	BOOST_TEST(record("pulled.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_git_lock_or_a_fresh_index_holds_the_id_back)
+{
+	open();
+	write(git(), "index.lock", "");
+	write(upper(), "checked_out.png", "checked out");
+	apply(change("checked_out.png", res::change_kind::created));
+	test_util::pump(tasks);
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "checked_out.png.resource"));
+
+	fs::remove(git() / "index.lock");
+	write(git(), "index", "index");
+	write(git(), "HEAD", "ref: refs/heads/main\n");
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "checked_out.png.resource"));
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	age(git() / "index");
+	age(git() / "HEAD");
+	db->poll(true);
+	BOOST_TEST(meta_id("checked_out.png").has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_renamed_file_gets_no_id)
+{
+	write(upper(), "a.png", "a");
+	open();
+	fs::rename(upper() / "a.png", upper() / "b.png");
+	apply(change("b.png", res::change_kind::renamed, "a.png"));
+	test_util::pump(tasks);
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "b.png.resource"));
+	BOOST_TEST(!record("b.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

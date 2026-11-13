@@ -878,6 +878,7 @@ void edt::asset_database::hash_next()
 			requeue_in_flight();
 			hash_next();
 			save_when_idle();
+			give_pending_ids();
 		});
 }
 
@@ -1591,6 +1592,8 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	bool walk_again = false;
 	std::vector<std::string> touched;
 	touched.reserve(changes.size());
+	// Files (by merge key) reported as created: true when the editor wrote one of them itself.
+	std::map<std::string, bool> created;
 	for (const res::file_change& change : changes) {
 		std::optional<std::string> now = visible(change.tag, change.is_directory);
 		std::optional<std::string> was = change.kind == res::change_kind::renamed ? visible(change.old_tag, change.is_directory) : std::nullopt;
@@ -1603,7 +1606,12 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		}
 		if (defer) {
 			if (m_deferred.size() < max_deferred_changes) {
-				m_deferred.push_back(change);
+				res::file_change waiting = change;
+				// The first walk finds the file anyway: what it finds is left to migration and gets no ID here.
+				if (!m_walked_once && waiting.kind == res::change_kind::created) {
+					waiting.kind = res::change_kind::modified;
+				}
+				m_deferred.push_back(std::move(waiting));
 			} else {
 				m_deferred.clear();
 				m_walk_again = true;
@@ -1611,6 +1619,10 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			continue;
 		}
 		if (now) {
+			if (change.kind == res::change_kind::created && !is_sidecar(*now)) {
+				bool& own = created[layer_merge_key(*now, m_case_insensitive)];
+				own = own || change.self;
+			}
 			touched.push_back(std::move(*now));
 		}
 		if (was) {
@@ -1642,6 +1654,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	asset_batch batch;
 	std::vector<asset_record> gone;
 	std::vector<std::string> came;
+	std::vector<std::string> own_new;
 	const std::vector<asset_orphan> orphans_before = m_orphans;
 	bool records_changed = false;
 	for (const auto& file : files) {
@@ -1721,6 +1734,13 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			continue;
 		}
 		const std::string key = now->path.string();
+		if (const auto made = created.find(owner_key); made != created.end() && now->layer == top_layer() && !now->has_meta) {
+			if (made->second) {
+				own_new.push_back(key);
+			} else {
+				m_pending_ids.insert(key);
+			}
+		}
 		const auto known = m_records.find(key);
 		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
 		const bool same = before && same_stamps(*before, *now);
@@ -1760,6 +1780,12 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	save_when_idle();
 	if (m_on_batch) {
 		m_on_batch(batch);
+	}
+	if (!m_giving_ids) {
+		for (const std::string& key : own_new) {
+			give_id(key);
+		}
+		give_pending_ids();
 	}
 	return batch;
 }
@@ -2080,4 +2106,206 @@ edt::asset_fix_result edt::asset_database::new_id_for_copy(const res::tag& file)
 		});
 	refresh({ sidecar.in_layer });
 	return fix_done();
+}
+
+namespace
+{
+	// The "__guid" of a desc's root when it is a valid, non-nil asset ID: the ID its .resource gets (EPIC-57 section 8).
+	std::optional<res::asset_id> desc_guid(const fs::path& root, const std::string& relative)
+	{
+		const prj::project_file_text read = prj::read_project_file(root, fs_paths::path_from_utf8(relative), edt::asset_database::max_desc_bytes);
+		if (!read.exists || !read.error.empty()) {
+			return std::nullopt;
+		}
+		boost::system::error_code ec;
+		boost::json::parse_options options;
+		options.max_depth = 64;
+		const boost::json::value document = boost::json::parse(read.text, ec, {}, options);
+		if (ec || !document.is_object()) {
+			return std::nullopt;
+		}
+		const boost::json::value* guid = document.as_object().if_contains("__guid");
+		if (!guid || !guid->is_string()) {
+			return std::nullopt;
+		}
+		std::optional<res::asset_id> id = res::asset_id_from_text(std::string_view{ guid->get_string() });
+		if (!id || id->is_nil()) {
+			return std::nullopt;
+		}
+		return id;
+	}
+
+	// The git folder named by a worktree's ".git" file ("gitdir: <path>", relative to `folder`); empty when unreadable.
+	fs::path git_dir_of_file(const fs::path& folder)
+	{
+		platform::beneath::read_request request;
+		request.root = folder;
+		request.leaf = ".git";
+		request.max_bytes = 4096;
+		std::vector<std::byte> bytes;
+		if (platform::beneath::read_beneath(request, bytes).status != platform::beneath::read_status::ok) {
+			return {};
+		}
+		std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		constexpr std::string_view prefix = "gitdir:";
+		if (!text.starts_with(prefix)) {
+			return {};
+		}
+		text.remove_prefix(prefix.size());
+		const std::size_t first = text.find_first_not_of(" \t");
+		const std::size_t last = text.find_last_not_of(" \t\r\n");
+		if (first == std::string_view::npos || last == std::string_view::npos || last < first) {
+			return {};
+		}
+		const fs::path named = fs_paths::path_from_utf8(text.substr(first, last - first + 1));
+		return (named.is_absolute() ? named : folder / named).lexically_normal();
+	}
+}
+
+void edt::asset_database::poll(bool force)
+{
+	if (m_pending_ids.empty()) {
+		return;
+	}
+	const auto now = std::chrono::steady_clock::now();
+	if (!force && now - m_last_poll < poll_interval) {
+		return;
+	}
+	m_last_poll = now;
+	give_pending_ids();
+}
+
+void edt::asset_database::give_pending_ids()
+{
+	if (m_pending_ids.empty() || m_giving_ids || m_scanning || !m_walked_once) {
+		return;
+	}
+	std::optional<bool> busy;
+	std::vector<std::string> ready;
+	for (auto it = m_pending_ids.begin(); it != m_pending_ids.end();) {
+		const auto found = m_records.find(*it);
+		if (found == m_records.end() || found->second.layer != top_layer() || found->second.has_meta) {
+			it = m_pending_ids.erase(it);
+			continue;
+		}
+		const std::string& hash = found->second.content_hash;
+		if (hash.empty()) {
+			++it;
+			continue;
+		}
+		// The content of a file whose .resource stayed behind: a move, linked back by the person ("Link").
+		if (std::ranges::any_of(m_orphans, [&hash](const asset_orphan& orphan) { return orphan.last_hash == hash; })) {
+			it = m_pending_ids.erase(it);
+			continue;
+		}
+		if (!busy) {
+			busy = git_busy();
+		}
+		if (*busy) {
+			++it;
+			continue;
+		}
+		ready.push_back(*it);
+		it = m_pending_ids.erase(it);
+	}
+	for (const std::string& key : ready) {
+		give_id(key);
+	}
+}
+
+bool edt::asset_database::git_busy()
+{
+	if (m_vcs_busy && m_vcs_busy()) {
+		return true;
+	}
+	const fs::path& git = git_dir();
+	if (git.empty()) {
+		return false;
+	}
+	std::error_code ec;
+	if (fs::exists(git / "index.lock", ec)) {
+		return true;
+	}
+	const auto now = fs::file_time_type::clock::now();
+	for (const char* name : { "index", "HEAD" }) {
+		std::error_code time_ec;
+		const auto written = fs::last_write_time(git / name, time_ec);
+		if (time_ec) {
+			continue;
+		}
+		const auto age = now - written;
+		if (age < git_quiet_time && age > -git_quiet_time) {
+			return true;
+		}
+	}
+	return false;
+}
+
+const fs::path& edt::asset_database::git_dir()
+{
+	std::error_code ec;
+	if (!m_git_dir.empty() && !fs::is_directory(m_git_dir, ec)) {
+		m_git_dir.clear();
+		m_git_searched = false;
+	}
+	if (m_git_searched || m_layers.empty()) {
+		return m_git_dir;
+	}
+	m_git_searched = true;
+	for (fs::path folder = m_layers[top_layer()];; folder = folder.parent_path()) {
+		const fs::path dot = folder / ".git";
+		std::error_code kind_ec;
+		const fs::file_status status = fs::status(dot, kind_ec);
+		if (fs::is_directory(status)) {
+			m_git_dir = dot;
+			break;
+		}
+		if (fs::is_regular_file(status)) {
+			fs::path named = git_dir_of_file(folder);
+			if (!named.empty() && fs::is_directory(named, ec)) {
+				m_git_dir = std::move(named);
+			}
+			break;
+		}
+		if (!folder.has_relative_path() || folder.parent_path() == folder) {
+			break;
+		}
+	}
+	return m_git_dir;
+}
+
+void edt::asset_database::give_id(const std::string& key)
+{
+	const auto found = m_records.find(key);
+	if (found == m_records.end() || m_layers.empty() || found->second.layer != top_layer()) {
+		return;
+	}
+	const std::optional<std::string> relative = relative_of(found->second.path);
+	if (!relative) {
+		return;
+	}
+	asset_layer_lookup lookup(m_layers, m_case_insensitive);
+	const asset_layer_lookup::slot here = slot_of(lookup, *relative);
+	if (!here.found || here.is_dir || here.layer != top_layer() || sidecar_of(lookup, *relative).found) {
+		return;
+	}
+	const fs::path root = m_layers[top_layer()];
+	res::asset_meta meta;
+	std::optional<res::asset_id> guid;
+	if (found->second.type == "desc") {
+		guid = desc_guid(root, here.in_layer);
+	}
+	meta.guid = guid ? *guid : res::generate_asset_id();
+	const std::string meta_relative = here.in_layer + std::string{ res::asset_meta_suffix };
+	if (const std::string error = write_new_file(root, meta_relative, res::write_asset_meta(meta)); !error.empty()) {
+		// One written meanwhile (by a person, another editor or git) is the file's ID: nothing to do.
+		asset_layer_lookup again(m_layers, m_case_insensitive);
+		if (!sidecar_of(again, *relative).found) {
+			egLOG_WARN("assets", "the .resource of {} was not written: {}", key, error);
+			return;
+		}
+	}
+	const bool giving = std::exchange(m_giving_ids, true);
+	refresh({ meta_relative });
+	m_giving_ids = giving;
 }
