@@ -320,6 +320,10 @@ namespace desc
 				field.default_value = zero_default(field.kind);
 			}
 
+			if (field.optional && field.kind == field_kind::custom && field.default_value.is_null()) {
+				fail(where, "a custom field cannot be optional without a 'default': a null would have nothing to reset it to");
+			}
+
 			if (const json::value* range = find_value(object, "range")) {
 				if (!range->is_array() || range->as_array().size() < 2 || range->as_array().size() > 3) {
 					fail(where, "'range' must be [min, max] or [min, max, step]");

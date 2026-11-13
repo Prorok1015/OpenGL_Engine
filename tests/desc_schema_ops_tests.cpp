@@ -1695,24 +1695,41 @@ BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldResetsItWhateverTheParentSet_StdO
 			{ "name": "extra", "kind": "f32", "optional": true },
 			{ "name": "state", "kind": "enumeration", "ref_type": "ops_mode", "optional": true },
 			{ "name": "inner", "kind": "structure", "ref_type": "ops.inner", "optional": true },
-			{ "name": "tag", "kind": "res_tag", "optional": true }
+			{ "name": "tag", "kind": "res_tag", "optional": true },
+			{ "name": "ref", "kind": "node_ref", "optional": true },
+			{ "name": "target", "kind": "entity", "optional": true }
 		]
 	})").as_object(), &ds.schemas())));
 	const auto parent = spawn("ops.runtime_optional");
 	const auto child = spawn("ops.runtime_optional");
 	BOOST_REQUIRE(parent);
 	BOOST_REQUIRE(child);
-	parent->deserialize(ds, parse(R"({ "hp": 5.0, "extra": 3.0, "state": "automatic", "inner": { "scale": 9.0, "flag": true }, "tag": "res://a.png" })"));
+	parent->deserialize(ds, parse(R"({ "hp": 5.0, "extra": 3.0, "state": "automatic", "inner": { "scale": 9.0, "flag": true }, "tag": "res://a.png", "ref": "abc" })"));
 	parent->copy_to(*child);
 	BOOST_TEST(child->get("/hp").as_double() == 5.0);
 	BOOST_TEST(child->get("/inner/scale").as_double() == 9.0);
-	child->deserialize(ds, parse(R"({ "hp": null, "extra": null, "state": null, "inner": null, "tag": null })"));
+	BOOST_TEST(child->get("/ref").as_string() == "0000000000000abc");
+	child->deserialize(ds, parse(R"({ "hp": null, "extra": null, "state": null, "inner": null, "tag": null, "ref": null, "target": null })"));
 	BOOST_TEST(child->get("/hp").as_double() == 100.0);
 	BOOST_TEST(child->get("/extra").as_double() == 0.0);
 	BOOST_TEST(child->get("/state").as_string() == "off");
 	BOOST_TEST(child->get("/inner/scale").as_double() == 1.0);
 	BOOST_TEST(!child->get("/inner/flag").as_bool());
 	BOOST_TEST(child->get("/tag").as_string() == "");
+	BOOST_TEST(child->get("/ref").as_string() == "0000000000000000");
+	BOOST_TEST(child->get("/target").is_null());
+}
+
+BOOST_AUTO_TEST_CASE(ARuntimeCustomFieldCannotBeOptionalWithoutADefault)
+{
+	BOOST_CHECK_THROW(desc::parse_type_schema(json::parse(R"({
+		"name": "ops.bad_optional", "kind": "component",
+		"fields": [ { "name": "blob", "kind": "custom", "optional": true } ]
+	})").as_object()), std::runtime_error);
+	BOOST_CHECK_NO_THROW(desc::parse_type_schema(json::parse(R"({
+		"name": "ops.fine_optional", "kind": "component",
+		"fields": [ { "name": "blob", "kind": "custom", "optional": true, "default": { "a": 1 } } ]
+	})").as_object()));
 }
 
 BOOST_FIXTURE_TEST_CASE(ANullOverrideIsValidForEveryKindOfOptionalField, ops_fixture)

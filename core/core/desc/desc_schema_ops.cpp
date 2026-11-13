@@ -545,8 +545,8 @@ namespace desc
 			return out;
 		}
 
-		// What a field is set back to by a null in the file (field_schema::optional): its kind's empty value. Null: there is none (a
-		// custom value, an entity, a node reference), the field keeps what it has.
+		// What a field is set back to by a null in the file (field_schema::optional): its kind's empty value. Null: the null itself is
+		// the reset (an entity) or the field's default is (a custom value).
 		json::value zero_json(const field_ops& ops)
 		{
 			const auto zeros = [](std::size_t count, double last = 0.0) {
@@ -575,7 +575,9 @@ namespace desc
 			case field_kind::structure: return ops.nested ? defaults_object(*ops.nested) : json::value(json::object{});
 			case field_kind::map: return json::value(json::object{});
 			case field_kind::array: return json::value(json::array{});
-			case field_kind::node_ref:
+			case field_kind::node_ref: return json::value(std::string_view{ "0000000000000000" });
+			// An entity reads a null as "no entity" itself; a custom value has its own default (the codec's T{}), and a runtime
+			// schema does not take a custom field that is optional without one (parse_type_schema).
 			case field_kind::entity:
 			case field_kind::custom: break;
 			}
