@@ -91,7 +91,8 @@ std::string with_guid(const std::string& text, const json::value& guid)
 // The root __guid of a desc's text, "none" without one.
 std::string guid_in(const std::string& text)
 {
-	const json::value* guid = json::parse(text).as_object().if_contains("__guid");
+	const json::value root = json::parse(text);
+	const json::value* guid = root.as_object().if_contains("__guid");
 	return guid ? std::string(guid->as_string()) : std::string{ "none" };
 }
 
@@ -230,7 +231,8 @@ struct step_files_fixture : test_util::scene_env
 		BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 		BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 		BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
-		const json::value* kept = json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().if_contains("__guid");
+		const json::value saved = json::parse(read_text(copy.res() / "worlds/w_v1.desc"));
+		const json::value* kept = saved.as_object().if_contains("__guid");
 		BOOST_REQUIRE(kept != nullptr);
 		BOOST_TEST((*kept == guid), json::serialize(*kept));
 	}
@@ -345,7 +347,8 @@ BOOST_AUTO_TEST_CASE(AnEmptyGuid_StaysEmpty)
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
-	const json::value* guid = json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().if_contains("__guid");
+	const json::value saved = json::parse(read_text(copy.res() / "worlds/w_v1.desc"));
+	const json::value* guid = saved.as_object().if_contains("__guid");
 	BOOST_REQUIRE(guid != nullptr);
 	BOOST_TEST(guid->as_string() == "");
 }

@@ -115,7 +115,8 @@ BOOST_AUTO_TEST_CASE(TheFixture_MigratesToTheCurrentVersions_WithABackupAndARepo
 	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
 }
 
-// The form desc_resave writes, so `desc_resave --check` on a migrated project finds nothing to change (S6).
+// The form desc_resave writes, so `desc_resave --check` on a migrated project finds nothing to change (S6), but for
+// the __guid the engine's save makes for a desc without one: a migration makes none (#851).
 BOOST_AUTO_TEST_CASE(AMigratedFile_IsWhatTheEngineSaves)
 {
 	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
@@ -128,8 +129,12 @@ BOOST_AUTO_TEST_CASE(AMigratedFile_IsWhatTheEngineSaves)
 	const res::tag tag = res::tag::make("cameras/cam_v1.desc");
 	auto loaded = rs->require_sync<desc::desc_base>(tag).get_sync();
 	BOOST_REQUIRE(loaded);
-	const std::vector<std::byte> saved = adapter.serialize(tag, loaded);
-	BOOST_TEST(read_text(copy.res() / "cameras/cam_v1.desc") == std::string(reinterpret_cast<const char*>(saved.data()), saved.size()));
+	BOOST_REQUIRE(read_text(copy.root() / ".snk/migrations/test-migration/backup/res/cameras/cam_v1.desc").find("__guid") == std::string::npos);
+	const std::vector<std::byte> bytes = adapter.serialize(tag, loaded);
+	json::value saved = json::parse(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+	saved.as_object().erase("__guid");
+	const std::vector<std::byte> expected = descs->serialize_to_bytes(saved);
+	BOOST_TEST(read_text(copy.res() / "cameras/cam_v1.desc") == std::string(reinterpret_cast<const char*>(expected.data()), expected.size()));
 }
 
 BOOST_AUTO_TEST_CASE(ANewerOrBrokenFile_RefusesTheMigration_NothingIsWritten)

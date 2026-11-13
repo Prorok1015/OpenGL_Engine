@@ -164,7 +164,8 @@ BOOST_AUTO_TEST_CASE(ADescsGuid_IsItsId_ACopyGetsANewOne_BothAreReported)
 	BOOST_TEST(any_note(outcome.report, std::string("res/worlds/w_v1.desc: ID ") + std::string(k_guid) + " from its __guid"));
 	BOOST_TEST(any_note(outcome.report, std::string("res/worlds/w_v2.desc: its __guid ") + std::string(k_guid) + " is already the ID of res/worlds/w_v1.desc"));
 	for (const std::string_view world : { "worlds/w_v1.desc", "worlds/w_v2.desc" }) {
-		const json::value* guid = json::parse(read_text(copy.res() / world)).as_object().if_contains("__guid");
+		const json::value saved = json::parse(read_text(copy.res() / world));
+		const json::value* guid = saved.as_object().if_contains("__guid");
 		BOOST_REQUIRE(guid != nullptr);
 		BOOST_TEST(guid->as_string() == k_guid);
 	}
