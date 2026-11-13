@@ -298,8 +298,11 @@ namespace
 		json::array patch;
 		for (const json::value& item : target) {
 			const json::value* id = id_of(item);
-			const auto same = id ? std::ranges::find_if(base, [id](const json::value& was) { const json::value* other = id_of(was); return other && *other == *id; })
-				: base.end();
+			const auto same_id = [id](const json::value& was) {
+				const json::value* other = id_of(was);
+				return other && *other == *id;
+			};
+			const auto same = id ? std::ranges::find_if(base, same_id) : base.end();
 			if (same == base.end()) {
 				patch.push_back(item);
 			} else if (*same != item) {
@@ -346,20 +349,14 @@ namespace
 	}
 }
 
+// The parent is the one loaded now: if it changed on disk after this desc was read, the file says what this desc shows
+// against the new parent ("save what you see"), so a value it took from the old parent is written as its own.
 void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::object& body)
 {
 	const res::tag& parent_tag = desc.get_parent();
 	if (!parent_tag.is_valid() || desc.get_type().empty()) {
 		return;
 	}
-	const auto parent = m_res_system.require_sync<desc::desc_base>(parent_tag).get_sync();
-	if (!parent) {
-		egLOG_WARN("desc", "'{}': its '__parent' '{}' did not load; written whole, without '__parent'", desc.get_tag().view(), parent_tag.view());
-		return;
-	}
-	json::object inherited;
-	parent->serialize(inherited);
-
 	const auto file_form = [&](const json::object& own) {
 		json::object file;
 		for (const auto& member : body) {
@@ -367,10 +364,28 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 		}
 		file["__parent"] = json::value_from(parent_tag);
 		for (const auto& member : own) {
-			file.emplace(member.key(), member.value());
+			if (!is_header_key(member.key())) file.emplace(member.key(), member.value());
 		}
 		return file;
 	};
+	const auto parent = m_res_system.require_sync<desc::desc_base>(parent_tag).get_sync();
+	if (!parent) {
+		// The file still needs its parent to load: the link is kept, with every field written.
+		egLOG_WARN("desc", "'{}': its '__parent' '{}' did not load; written whole, '__parent' kept", desc.get_tag().view(), parent_tag.view());
+		body = file_form(body);
+		return;
+	}
+	// Compared as files are written: nested typed objects carry their __version in a file (stamp_tree) but not in serialize.
+	const auto stamped = [this](json::object object) {
+		stamp_tree(object);
+		return object;
+	};
+	const json::object inherited = [&] {
+		json::object out;
+		parent->serialize(out);
+		return stamped(std::move(out));
+	}();
+	const json::object target = stamped(body);
 	// The form is right only if loading it does what the adapter does - the parent copied in, the file read on top - and
 	// gives `body` again; each type reads its fields its own way, so that is checked rather than assumed.
 	const auto reads_back = [&](const json::object& file) {
@@ -382,7 +397,7 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 			probe->deserialize(*this, file);
 			json::object again;
 			probe->serialize(again);
-			return again == body;
+			return stamped(std::move(again)) == target;
 		} catch (const std::exception& e) {
 			egLOG_DEBUG("desc", "'{}': a form with '__parent' does not read back: {}", desc.get_tag().view(), e.what());
 			return false;
@@ -392,7 +407,7 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 	// The smallest form first: key by key, for map fields and prefab nodes that merge with the parent's. Then whole values,
 	// for a type that reads a field as a whole.
 	for (const bool nested : { true, false }) {
-		json::object file = file_form(merge_patch(inherited, body, nested));
+		json::object file = file_form(merge_patch(inherited, target, nested));
 		if (reads_back(file)) {
 			body = std::move(file);
 			return;

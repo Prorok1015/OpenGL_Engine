@@ -59,6 +59,26 @@ void edt::level_controller::unwatch_level()
 // ─── New / Save / Quick-save ─────────────────────────────────────────────────
 
 namespace {
+	// A level read on top of a parent is saved as its __parent and what differs from the parent (#812), as the desc
+	// adapter saves any other desc. The worlds the editor holds are the level as it is shown.
+	void keep_level_parent(desc::desc_system& descs, const res::tag& parent, const res::tag& tag, boost::json::object& level_json)
+	{
+		const auto level = descs.create_instance(scn::level_desc::__type, tag);
+		if (!level) return;
+		level->set_parent(parent);
+		boost::json::object file;
+		boost::json::object body;
+		for (auto& member : level_json) {
+			(member.key().starts_with("__") ? file : body).emplace(member.key(), std::move(member.value()));
+		}
+		descs.reduce_to_parent(*level, body);
+		for (auto& member : body) {
+			file.insert_or_assign(member.key(), std::move(member.value()));
+		}
+		descs.stamp_tree(file);
+		level_json = std::move(file);
+	}
+
 	// Tells the coordinator that the worlds were replaced, on every way out of the function.
 	struct notify_worlds_replaced
 	{
@@ -106,6 +126,7 @@ void edt::level_controller::new_level()
 
 	m_state.level_tag = res::tag{};
 	m_state.level_guid.clear();
+	m_state.level_parent = res::tag{};
 	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
 	m_state.active_world_idx = m_state.world_names.empty() ? -1 : 0;
@@ -151,6 +172,7 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 	if (ctx_mgr->load_level(m_state.editor_tag)) {
 		watch_level();
 		m_state.level_guid = level_res->get_guid();
+		m_state.level_parent = level_res->get_parent();
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
@@ -303,7 +325,10 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
 	const std::string guid = (same_file && !m_state.level_guid.empty()) ? m_state.level_guid : desc::generate_guid();
 
-	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
+	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
+	if (m_state.level_parent.is_valid()) {
+		keep_level_parent(*m_services.descs(), m_state.level_parent, res::tag::make(rel_path), level_json);
+	}
 
 	// Same writer as every other desc save, so level files are indented and diff well.
 	const auto bytes = m_services.descs()->serialize_to_bytes(boost::json::value{ level_json });

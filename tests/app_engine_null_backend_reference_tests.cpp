@@ -4,10 +4,9 @@
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_model.h>
 #include <cstddef>
-#include <boost/json.hpp>
-#include <cstddef>
 #include <string>
 #include <string_view>
+#include <boost/json.hpp>
 
 // #697 on the whole engine frame: a geometry tag a component holds goes to the renderer's geometry manager, which loads
 // it itself. A component anything wrote (a snapshot, a script, an agent) must not make it read user://.
