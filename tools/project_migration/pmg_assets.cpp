@@ -18,42 +18,52 @@ void prj::migration::project_assets::rebuild()
 	m_assets.clear();
 	m_orphans.clear();
 	m_problems.clear();
-	for (const fs::path& content_root : m_content_roots) {
-		const fs::path layer = (m_root / content_root).lexically_normal();
-		std::string prefix = fs_paths::generic_utf8_of(content_root.lexically_normal());
+
+	// Lowest first, as res:// stacks them: the first content root of project.snkproj is the highest layer.
+	std::vector<fs::path> layers;
+	std::vector<std::string> prefixes;
+	for (auto it = m_content_roots.rbegin(); it != m_content_roots.rend(); ++it) {
+		const fs::path layer = (m_root / *it).lexically_normal();
+		std::string prefix = fs_paths::generic_utf8_of(it->lexically_normal());
 		while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
 		prefix = prefix == "." || prefix.empty() ? std::string{} : prefix + "/";
-
 		std::error_code ec;
-		if (!fs::is_directory(fs::symlink_status(layer, ec))) {
-			if (fs::exists(fs::symlink_status(layer, ec))) m_problems.push_back(std::format("{}: the content root is not a folder, it is not walked", prefix));
+		const fs::file_status status = fs::symlink_status(layer, ec);
+		if (!fs::is_directory(status)) {
+			if (fs::exists(status)) m_problems.push_back(std::format("{}: the content root is not a folder, it is not walked", prefix));
 			continue;
 		}
+		layers.push_back(layer);
+		prefixes.push_back(std::move(prefix));
+	}
 
-		// One content root is one layer of the editor's asset database: the same walk, the same pairing.
-		const std::vector<fs::path> layers{ layer };
-		const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, {}, res::asset_names_case_insensitive);
-		const res::asset_walk_pairing pairing = res::pair_asset_metas(files, res::asset_names_case_insensitive);
-		for (std::size_t i = 0; i < files.size(); ++i) {
-			const std::string relative = fs_paths::generic_utf8_of(files[i].relative);
-			if (res::is_asset_meta_sidecar(relative)) continue;
-			indexed_asset asset{ prefix + relative, std::nullopt };
-			if (const std::optional<std::size_t> meta = pairing.meta_of[i]) {
-				const res::asset_meta_file read = res::read_asset_meta_file(layer, files[*meta].relative);
-				if (read.meta) {
-					asset.id = read.meta->guid;
-				} else if (read.present) {
-					m_problems.push_back(std::format("{}{}: {}", prefix, fs_paths::generic_utf8_of(files[*meta].relative), read.error));
-				}
+	const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, {}, res::asset_names_case_insensitive);
+	const res::asset_walk_pairing pairing = res::pair_asset_metas(files, res::asset_names_case_insensitive);
+	const auto entry_of = [&](const res::asset_walk_file& file) {
+		indexed_asset asset;
+		asset.res_path = fs_paths::generic_utf8_of(file.relative);
+		asset.path = prefixes[file.layer] + asset.res_path;
+		return asset;
+	};
+	for (std::size_t i = 0; i < files.size(); ++i) {
+		if (res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(files[i].relative))) continue;
+		indexed_asset asset = entry_of(files[i]);
+		if (const std::optional<std::size_t> meta = pairing.meta_of[i]) {
+			const res::asset_meta_file read = res::read_asset_meta_file(layers[files[*meta].layer], files[*meta].relative);
+			if (read.meta) {
+				asset.id = read.meta->guid;
+			} else if (read.present) {
+				m_problems.push_back(std::format("{}: {}", entry_of(files[*meta]).path, read.error));
 			}
-			m_assets.insert_or_assign(asset.path, std::move(asset));
 		}
-		for (const std::size_t orphan : pairing.orphans) {
-			const std::string path = prefix + fs_paths::generic_utf8_of(files[orphan].relative);
-			const res::asset_meta_file read = res::read_asset_meta_file(layer, files[orphan].relative);
-			m_orphans.insert_or_assign(path, read.meta ? std::optional<res::asset_id>(read.meta->guid) : std::nullopt);
-			m_problems.push_back(std::format("{}: a .resource without its file", path));
-		}
+		m_assets.insert_or_assign(asset.path, std::move(asset));
+	}
+	for (const std::size_t orphan : pairing.orphans) {
+		indexed_asset meta = entry_of(files[orphan]);
+		const res::asset_meta_file read = res::read_asset_meta_file(layers[files[orphan].layer], files[orphan].relative);
+		if (read.meta) meta.id = read.meta->guid;
+		m_problems.push_back(std::format("{}: a .resource without its file", meta.path));
+		m_orphans.insert_or_assign(meta.path, std::move(meta));
 	}
 }
 

@@ -123,7 +123,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 
 	asset_scan scan;
 	scan.records.reserve(files.size() - sidecars);
-	std::vector<bool> paired(files.size(), false);
+	std::vector<std::size_t> orphans = pairing.orphans;
 	for (std::size_t index = 0; index < files.size(); ++index) {
 		const res::asset_walk_file& file = files[index];
 		if (stopped && stopped()) {
@@ -136,6 +136,10 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		const std::int64_t checked_at = now_ticks();
 		const file_stat stat = stat_of(file.physical);
 		if (!stat.ok) {
+			// Gone since the walk: its .resource has no file now.
+			if (pairing.meta_of[index]) {
+				orphans.push_back(*pairing.meta_of[index]);
+			}
 			continue;
 		}
 		asset_record record;
@@ -148,7 +152,6 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		record.mtime = stat.mtime;
 		record.type = asset_type_of(relative);
 		if (const std::optional<std::size_t> meta_index = pairing.meta_of[index]) {
-			paired[*meta_index] = true;
 			const res::asset_walk_file& meta = files[*meta_index];
 			const file_stat meta_stat = stat_of(meta.physical);
 			record.meta_size = meta_stat.size;
@@ -183,12 +186,8 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		scan.records.push_back(std::move(record));
 	}
 
-	// A .resource whose file could not be looked at (gone since the walk) is an orphan too, as before.
-	for (std::size_t index = 0; index < files.size(); ++index) {
+	for (const std::size_t index : orphans) {
 		const res::asset_walk_file& file = files[index];
-		if (paired[index] || !res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(file.relative))) {
-			continue;
-		}
 		asset_orphan orphan;
 		orphan.meta_path = res::tag::make(fs_paths::generic_utf8_of(file.relative));
 		orphan.layer = file.layer;

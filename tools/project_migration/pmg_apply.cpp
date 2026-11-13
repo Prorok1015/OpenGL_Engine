@@ -388,28 +388,30 @@ namespace
 		// The text a planned file is migrated from: a pre step's write, else the original. None when a step deleted it.
 		std::optional<std::string> input_of(std::size_t index) const
 		{
-			const std::string& path = m_report.files[index].path;
-			if (m_removed.contains(path)) return std::nullopt;
-			if (const auto written = m_current.find(path); written != m_current.end()) return written->second;
+			const std::string key = key_of(m_report.files[index].path);
+			if (m_removed.contains(key)) return std::nullopt;
+			if (const auto written = m_current.find(key); written != m_current.end()) return written->second.text;
 			return m_originals[index];
 		}
 
 		// After a type migration wrote a file, a post step reads that.
-		void wrote(const std::string& path, std::string text) { m_current.insert_or_assign(path, std::move(text)); }
+		void wrote(const std::string& path, std::string text) { m_current.insert_or_assign(key_of(path), written_file{ path, std::move(text) }); }
 
 		std::string read(std::string_view path) override
 		{
 			const std::string relative = step_path(path);
-			if (m_removed.contains(relative)) throw std::runtime_error(std::format("{}: {} was deleted by this migration", m_step, relative));
-			if (const auto written = m_current.find(relative); written != m_current.end()) return written->second;
+			const std::string key = key_of(relative);
+			if (m_removed.contains(key)) throw std::runtime_error(std::format("{}: {} was deleted by this migration", m_step, relative));
+			if (const auto written = m_current.find(key); written != m_current.end()) return written->second.text;
 			return read_or_throw(m_context.root, relative);
 		}
 
 		bool exists(std::string_view path) override
 		{
 			const std::string relative = step_path(path);
-			if (m_removed.contains(relative)) return false;
-			if (m_current.contains(relative)) return true;
+			const std::string key = key_of(relative);
+			if (m_removed.contains(key)) return false;
+			if (m_current.contains(key)) return true;
 			const prj::project_file_text now = prj::read_project_file(m_context.root, fs_paths::path_from_utf8(relative), k_max_file_bytes);
 			if (!now.error.empty()) throw std::runtime_error(std::format("{}: {}: {}", m_step, relative, now.error));
 			return now.exists;
@@ -419,52 +421,48 @@ namespace
 		{
 			const std::string relative = step_path(path);
 			if (!exists(relative)) throw std::runtime_error(std::format("{}: {} is not there to be written (create makes a new file)", m_step, relative));
-			if (created_here(relative)) {
-				put(relative, text);
-				m_current.insert_or_assign(relative, std::string(text));
-				m_step_touched.insert(relative);
-				return;
-			}
-			applied_file& file = m_report.files[entry_for(relative)];
-			if (file.written_as.empty()) file.written_as = "step:" + m_step;
-			const std::string note = std::format("written by the project step {}", m_step);
-			if (std::ranges::find(file.notes, note) == file.notes.end()) file.notes.push_back(note);
-			file.hash_after = hash_of(text);
-			journal();
-			put(relative, text);
-			m_current.insert_or_assign(relative, std::string(text));
-			m_step_touched.insert(relative);
+			overwrite(relative, text);
 		}
 
 		void create(std::string_view path, std::string_view text) override
 		{
 			const std::string relative = step_path(path);
+			const std::string key = key_of(relative);
 			if (exists(relative)) throw std::runtime_error(std::format("{}: {} cannot be created: something is at its name", m_step, relative));
-			m_report.created_files.push_back(relative);
-			journal();
+			// A file this migration deleted: writing it again is a change of that file, which the rollback puts back from
+			// the backup; listed as created, the rollback would delete what it has just restored.
+			if (m_removed.contains(key)) {
+				m_removed.erase(key);
+				overwrite(relative, text);
+				return;
+			}
 			std::string error;
 			switch (create_new_file(m_context.root, relative, text, error)) {
 			case create_result::created: break;
 			case create_result::taken: throw std::runtime_error(std::format("{}: {} cannot be created: something is at its name", m_step, relative));
 			case create_result::failed: throw std::runtime_error(std::format("{}: {} cannot be created: {}", m_step, relative, error));
 			}
-			m_current.insert_or_assign(relative, std::string(text));
-			m_step_touched.insert(relative);
+			// After the file is there: a failure before it leaves nothing for a rollback to delete.
+			m_report.created_files.push_back(relative);
+			journal();
+			m_current.insert_or_assign(key, written_file{ relative, std::string(text) });
+			m_step_touched.insert(key);
 		}
 
 		void remove(std::string_view path) override
 		{
 			const std::string relative = step_path(path);
+			const std::string key = key_of(relative);
 			if (!exists(relative)) throw std::runtime_error(std::format("{}: {} is not there to be deleted", m_step, relative));
-			if (created_here(relative)) throw std::runtime_error(std::format("{}: {} was created by this migration and is not deleted by it", m_step, relative));
+			if (created_here(key)) throw std::runtime_error(std::format("{}: {} was created by this migration and is not deleted by it", m_step, relative));
 			applied_file& file = m_report.files[entry_for(relative)];
 			file.notes.push_back(std::format("deleted by the project step {}", m_step));
 			file.hash_after = std::string(k_removed);
 			journal();
-			if (auto error = remove_created(m_context.root, relative)) throw std::runtime_error(std::format("{}: {}", m_step, *error));
-			m_current.erase(relative);
-			m_removed.insert(relative);
-			m_step_touched.erase(relative);
+			if (auto error = remove_created(m_context.root, file.path)) throw std::runtime_error(std::format("{}: {}", m_step, *error));
+			m_current.erase(key);
+			m_removed.insert(key);
+			m_step_touched.erase(key);
 		}
 
 		const project_writer& writer() const { return m_write; }
@@ -621,9 +619,11 @@ namespace
 				m_report.project_steps.push_back(planned.id);
 			}
 			m_step.clear();
-			for (const std::string& path : m_step_touched) {
-				const std::string& text = m_current.at(path);
-				const auto found = std::ranges::find(m_report.files, path, &applied_file::path);
+			for (const std::string& key : m_step_touched) {
+				const written_file& written = m_current.at(key);
+				const std::string& path = written.path;
+				const std::string& text = written.text;
+				const auto found = std::ranges::find(m_report.files, key, [](const applied_file& file) { return key_of(file.path); });
 				const bool planned = found != m_report.files.end() && static_cast<std::size_t>(found - m_report.files.begin()) < planned_files;
 				if (phase == project_phase::pre && planned) continue;
 				applied_file probe;
@@ -634,24 +634,91 @@ namespace
 		}
 
 	private:
-		bool created_here(const std::string& path) const { return std::ranges::find(m_report.created_files, path) != m_report.created_files.end(); }
+		struct written_file
+		{
+			// As the migration spells it (the report's spelling when the file is in the report).
+			std::string path;
+			std::string text;
+		};
 
-		// A path a step may touch: plain, below a content root, not project.snkproj and not the migrations' own folder.
+		// Two spellings of one file share the key: on Windows names differ only in letter case, as res:// merges them.
+		static std::string key_of(std::string_view path) { return res::asset_name_key(path, res::asset_names_case_insensitive); }
+
+		bool created_here(const std::string& key) const
+		{
+			return std::ranges::any_of(m_report.created_files, [&key](const std::string& created) { return key_of(created) == key; });
+		}
+
+		// A step writes like a change of the asset tree: the path is rebuilt from its parts ("res//a.png" is
+		// "res/a.png"), lies below a content root, and has no name the asset walk skips (".snk/", ".git/", a temporary
+		// file); project.snkproj is the context's manifest; below a content root "." neither code/ nor build/, which
+		// the scan leaves out too. Names are compared by key, so another letter case passes none of these.
 		std::string step_path(std::string_view path) const
 		{
-			const std::string relative(path);
-			if (!is_plain_relative(relative)) throw std::runtime_error(std::format("{}: '{}' is not a relative path inside the project", m_step, relative));
-			if (relative == k_manifest_path) throw std::runtime_error(std::format("{}: project.snkproj is the context's manifest, not a file", m_step));
-			if (relative.starts_with(".snk/")) throw std::runtime_error(std::format("{}: '{}' is the project's own data", m_step, relative));
-			if (!tag_of(relative, m_content_roots)) throw std::runtime_error(std::format("{}: '{}' is not inside a content root", m_step, relative));
+			const std::string given(path);
+			if (!is_plain_relative(given)) throw std::runtime_error(std::format("{}: '{}' is not a relative path inside the project", m_step, given));
+			std::string relative;
+			std::vector<std::string> parts;
+			for (const fs::path& part : fs_paths::path_from_utf8(given)) {
+				const std::string name = fs_paths::utf8_of(part);
+				if (name.empty()) continue;
+				relative += (relative.empty() ? "" : "/") + name;
+				parts.push_back(name);
+			}
+			if (parts.empty()) throw std::runtime_error(std::format("{}: '{}' names no file", m_step, given));
+			for (std::size_t i = 0; i < parts.size(); ++i) {
+				if (res::is_skipped_asset_name(parts[i], i + 1 < parts.size())) {
+					throw std::runtime_error(std::format("{}: '{}' is no asset (the asset walk leaves '{}' out)", m_step, relative, parts[i]));
+				}
+			}
+			const std::string key = key_of(relative);
+			if (key == key_of(k_manifest_path)) throw std::runtime_error(std::format("{}: project.snkproj is the context's manifest, not a file", m_step));
+			bool inside = false;
+			for (const fs::path& root : m_content_roots) {
+				std::string prefix = fs_paths::generic_utf8_of(root.lexically_normal());
+				while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
+				if (prefix == "." || prefix.empty()) {
+					const std::string first = key_of(parts.front());
+					if (parts.size() > 1 && (first == "code" || first == "build")) {
+						throw std::runtime_error(std::format("{}: '{}' is the project's code or build output, not content", m_step, relative));
+					}
+					inside = true;
+				} else if (key.starts_with(key_of(prefix) + "/")) {
+					inside = true;
+				}
+			}
+			if (!inside) throw std::runtime_error(std::format("{}: '{}' is not inside a content root", m_step, relative));
 			return relative;
+		}
+
+		// A change of an existing file (or of one this migration deleted): its entry, backup and journal first.
+		void overwrite(const std::string& relative, std::string_view text)
+		{
+			const std::string key = key_of(relative);
+			if (created_here(key)) {
+				put(relative, text);
+				m_current.insert_or_assign(key, written_file{ relative, std::string(text) });
+				m_step_touched.insert(key);
+				return;
+			}
+			applied_file& file = m_report.files[entry_for(relative)];
+			if (file.written_as.empty()) file.written_as = "step:" + m_step;
+			const std::string note = std::format("written by the project step {}", m_step);
+			if (std::ranges::find(file.notes, note) == file.notes.end()) file.notes.push_back(note);
+			file.hash_after = hash_of(text);
+			journal();
+			put(file.path, text);
+			m_current.insert_or_assign(key, written_file{ file.path, std::string(text) });
+			m_step_touched.insert(key);
 		}
 
 		// The report's entry of `path`, made (and the original backed up) the first time a step changes a file that is
 		// not planned; it goes before project.snkproj, which stays last.
 		std::size_t entry_for(const std::string& path)
 		{
-			if (const auto found = std::ranges::find(m_report.files, path, &applied_file::path); found != m_report.files.end()) {
+			const std::string key = key_of(path);
+			const auto found = std::ranges::find(m_report.files, key, [](const applied_file& file) { return key_of(file.path); });
+			if (found != m_report.files.end()) {
 				return static_cast<std::size_t>(found - m_report.files.begin());
 			}
 			std::string original = read_or_throw(m_context.root, path);
@@ -691,8 +758,8 @@ namespace
 		project_assets m_assets;
 		// The step that runs, for the messages.
 		std::string m_step;
-		// What this migration wrote so far, by path; deleted files are only in m_removed.
-		std::map<std::string, std::string> m_current;
+		// By key_of: what this migration wrote so far; deleted files are only in m_removed.
+		std::map<std::string, written_file> m_current;
 		std::set<std::string> m_removed;
 		// What the steps of the phase that runs wrote or created, for the check after it.
 		std::set<std::string> m_step_touched;

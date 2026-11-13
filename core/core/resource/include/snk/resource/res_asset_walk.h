@@ -88,7 +88,7 @@ namespace res
 	{
 		// Parallel to the walk: for a file that is no .resource, the index of its .resource, if any.
 		std::vector<std::optional<std::size_t>> meta_of;
-		// Indices of the .resource files no file pairs with.
+		// Indices of every .resource no file pairs with, in the order of the walk.
 		std::vector<std::size_t> orphans;
 	};
 
