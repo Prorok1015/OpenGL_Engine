@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/project/prj_manifest.h>
+#include <snk/resource/res_asset_meta.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cctype>
@@ -221,13 +222,34 @@ namespace
 		if (root.is_object()) classify(file, root.as_object(), descs);
 	}
 
+	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes)
+	{
+		read_result read = read_file(path, max_bytes);
+		if (!read.error.empty()) {
+			set_invalid(file, std::move(read.error));
+			return;
+		}
+		const res::asset_meta_result meta = res::read_asset_meta(read.text);
+		if (meta) {
+			file.kind = file_class::current;
+			return;
+		}
+		const std::string where = meta.error.field_path.empty() ? std::string{} : std::format(" at '{}'", meta.error.field_path);
+		if (meta.error.kind == res::asset_meta_error_kind::newer_than_engine) {
+			file.kind = file_class::newer;
+			file.reason = std::format("written by a newer engine{}: {}", where, meta.error.message);
+		} else {
+			set_invalid(file, std::format("not a .resource{}: {}", where, meta.error.message));
+		}
+	}
+
 	bool is_hidden(const fs::path& name)
 	{
 		const std::string text = fs_paths::utf8_of(name);
 		return !text.empty() && text.front() == '.';
 	}
 
-	// Until the .resource format reads its own files (#755, #768): a sidecar is <name>.resource next to the asset.
+	// A sidecar is <name>.resource next to the asset (EPIC-57 4.2; the paths of sidecars are S57-6, #768).
 	bool has_sidecar(const fs::path& asset)
 	{
 		std::error_code ec;
@@ -275,8 +297,7 @@ namespace
 			if (extension == ".desc") {
 				scan_desc(file, path, descs, options.max_file_bytes);
 			} else if (extension == ".resource") {
-				// Read and versioned once the format exists (#755, EPIC-58 S4).
-				file.kind = file_class::current;
+				scan_sidecar(file, path, options.max_file_bytes);
 			} else {
 				file.kind = has_sidecar(path) ? file_class::current : file_class::missing_resource;
 			}
@@ -488,6 +509,22 @@ std::string_view prj::migration::to_string(file_class kind)
 	case file_class::missing_resource: return "missing_resource";
 	}
 	return "invalid";
+}
+
+prj::migration::scanned_file prj::migration::classify_desc(std::string path, std::string_view text, const desc::desc_system& game_layer)
+{
+	scanned_file file;
+	file.path = std::move(path);
+	boost::system::error_code error;
+	const json::value root = parse_desc_json(text, error);
+	if (error) {
+		set_invalid(file, std::format("not JSON: {}", error.message()));
+	} else if (!root.is_object()) {
+		set_invalid(file, "the root is not a JSON object");
+	} else {
+		classify(file, root.as_object(), game_layer);
+	}
+	return file;
 }
 
 std::size_t prj::migration::scan_result::count(file_class kind) const

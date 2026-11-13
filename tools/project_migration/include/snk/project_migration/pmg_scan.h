@@ -20,7 +20,8 @@ namespace prj::migration
 		// A type nobody registers in the game layer (a module that is not loaded): the file is left as it is.
 		unknown_type,
 		invalid,
-		// An asset file without its <name>.resource sidecar (EPIC-57 creates them).
+		// An asset file without its <name>.resource sidecar (EPIC-57 creates them). A sidecar itself is read with
+		// res::read_asset_meta: current, newer (written by a newer engine) or invalid.
 		missing_resource,
 	};
 
@@ -71,6 +72,9 @@ namespace prj::migration
 		std::size_t count(file_class kind) const;
 		const scanned_file* find(std::string_view path) const;
 	};
+
+	// The class of a desc file's text, as scan_project gives it (a file just written is checked with it). `path` is kept as given.
+	scanned_file classify_desc(std::string path, std::string_view text, const desc::desc_system& game_layer);
 
 	// Reads project.snkproj under `root` and every file of its content roots (not the engine's layer; hidden folders,
 	// links and other non-regular files are not followed). `game_layer` decides which types are known and their versions.

@@ -192,6 +192,8 @@ namespace {
 			return -1;
 		}
 #endif
+		// Not atomic: an entry made at the target between the look-up and renameat is replaced. Callers that rely on
+		// "never replaces" to take a name exclusively (a migration journal) are exclusive only where the flag works.
 		struct stat existing;
 		if (::fstatat(to_folder, to, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
 			errno = EEXIST;
