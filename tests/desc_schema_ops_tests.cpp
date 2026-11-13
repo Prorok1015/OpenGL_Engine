@@ -614,7 +614,7 @@ BOOST_AUTO_TEST_CASE(NeverWrittenKeyIsReadCopiedAndComparedButNotWritten)
 	BOOST_TEST(!desc::equal(ops_test::legacy::binding(), &value, &copy));
 }
 
-// #785: what a blob keeps of its input (string, array, res_tag fields) lives in the default resource, not in the input's:
+// #826: what a blob keeps of its input (string, array, res_tag fields) lives in the default resource, not in the input's:
 // a module may hand in JSON parsed with any resource of its own (its own Boost.JSON on MSVC), freed when it returns.
 BOOST_FIXTURE_TEST_CASE(BlobHandlesLiveInTheDefaultResource_NotInTheInputs, ops_fixture)
 {

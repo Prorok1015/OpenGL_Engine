@@ -453,7 +453,7 @@ namespace desc
 					return false;
 				}
 				// In the default resource: the input may live in a resource of the caller's (a module's arena, its own Boost.JSON)
-				// that is gone before the blob is (#785).
+				// that is gone before the blob is (#826).
 				json::value stored(in, json::storage_ptr{});
 				// A {guid, path} reference (#758): the field holds the tag, as a described res::tag field does.
 				const auto as_path = [&ctx](json::value& item) {
