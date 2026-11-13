@@ -244,9 +244,9 @@ BOOST_AUTO_TEST_CASE(AReportThatCannotBeWritten_IsCode2_UnlessTheMigrationFailed
 		if (!relative.generic_string().starts_with(".snk/") && ++content_writes == 3) return std::string{ "injected failure" };
 		return prj::write_project_file(root, relative, text);
 	};
-	with_failing_report = context();
-	with_failing_report.write_report = refuse_report;
-	BOOST_TEST(pmg::run_migrate(command, with_failing_report) == pmg::k_exit_rolled_back, printed);
+	pmg::command_context failing_too = context();
+	failing_too.write_report = refuse_report;
+	BOOST_TEST(pmg::run_migrate(command, failing_too) == pmg::k_exit_rolled_back, printed);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
