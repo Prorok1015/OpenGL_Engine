@@ -140,9 +140,24 @@ BOOST_AUTO_TEST_CASE(Parse_WrongTypes)
 	check_error(prj::parse_manifest(minimal_with("platforms", R"([""])")), "$.platforms[0]");
 }
 
+// #754: format 2 adds the stamp of a project migration; the parser knows its keys, struct manifest does not hold them.
+BOOST_AUTO_TEST_CASE(Parse_Format2_KnowsTheMigrationStamp_Format1StillReads)
+{
+	const auto stamped = prj::parse_manifest(
+		R"({ "format_version": 2, "name": "Mini", "engine_version": "0.2.0", "migrated_with": "0.2.0", "applied_steps": ["engine.manifest_format"] })");
+	BOOST_REQUIRE(stamped.data.has_value());
+	BOOST_TEST(stamped.warnings.empty());
+	BOOST_TEST(stamped.data->format_version == 2);
+	BOOST_TEST((prj::k_manifest_format_version == 2));
+
+	const auto old = prj::parse_manifest(k_minimal_manifest);
+	BOOST_REQUIRE(old.data.has_value());
+	BOOST_TEST(old.data->format_version == 1);
+}
+
 BOOST_AUTO_TEST_CASE(Parse_FormatVersionFromTheFutureIsRejected)
 {
-	const auto result = prj::parse_manifest(R"({ "format_version": 2, "name": "Mini", "engine_version": "0.2.0" })");
+	const auto result = prj::parse_manifest(R"({ "format_version": 3, "name": "Mini", "engine_version": "0.2.0" })");
 	check_error(result, "$.format_version");
 	BOOST_TEST(result.error->reason.find("newer") != std::string::npos);
 	check_error(prj::parse_manifest(R"({ "format_version": 0, "name": "Mini", "engine_version": "0.2.0" })"), "$.format_version");

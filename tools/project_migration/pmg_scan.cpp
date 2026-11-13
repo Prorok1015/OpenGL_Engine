@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_scan.h>
+#include <snk/project_migration/pmg_project_steps.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
@@ -110,11 +111,16 @@ namespace
 		return descs.is_registered(type) || descs.find_schema(type) != nullptr;
 	}
 
+	// What an importer keeps in a sidecar: neither the scan nor a step of resource_meta looks into it.
+	constexpr std::string_view k_sidecar_settings = "settings";
+
 	struct object_walker
 	{
 		const desc::desc_system& descs;
 		std::vector<prj::migration::typed_object>& objects;
 		std::string bad_version;
+		// The root of a .resource: its pseudo-type resource_meta is known there only (EPIC-58 3.4).
+		bool sidecar = false;
 
 		void value(const json::value& v, const std::string& pointer)
 		{
@@ -136,7 +142,7 @@ namespace
 				prj::migration::typed_object found;
 				found.pointer = pointer;
 				found.type = std::string{ type->as_string() };
-				found.known = is_known(descs, found.type);
+				found.known = is_known(descs, found.type) || (sidecar && pointer.empty() && found.type == res::asset_meta_type);
 				if (const auto version = version_of(obj)) {
 					found.version = *version;
 				} else if (bad_version.empty()) {
@@ -146,6 +152,7 @@ namespace
 				objects.push_back(std::move(found));
 			}
 			for (const auto& member : obj) {
+				if (sidecar && pointer.empty() && std::string_view(member.key()) == k_sidecar_settings) continue;
 				value(member.value(), std::format("{}/{}", pointer, escape_pointer_token(member.key())));
 			}
 		}
@@ -181,13 +188,13 @@ namespace
 	}
 
 	// The class of a desc file from its typed objects.
-	void classify(prj::migration::scanned_file& file, const json::object& root, const desc::desc_system& descs)
+	void classify(prj::migration::scanned_file& file, const json::object& root, const desc::desc_system& descs, bool sidecar = false)
 	{
 		file.kind = file_class::current;
 		file.reason.clear();
 		file.objects.clear();
 		file.unknown_types.clear();
-		object_walker walker{ descs, file.objects, {} };
+		object_walker walker{ descs, file.objects, {}, sidecar };
 		walker.object(root, "");
 		if (!walker.bad_version.empty()) {
 			set_invalid(file, std::move(walker.bad_version));
@@ -222,31 +229,108 @@ namespace
 		if (root.is_object()) classify(file, root.as_object(), descs);
 	}
 
-	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes)
+	std::string_view without_bom(std::string_view text)
+	{
+		return text.starts_with("\xEF\xBB\xBF") ? text.substr(3) : text;
+	}
+
+	// The sidecar's root object, or null with `file` invalid.
+	json::value parse_sidecar(prj::migration::scanned_file& file, std::string_view text)
+	{
+		boost::system::error_code error;
+		json::value root = parse_desc_json(without_bom(text), error);
+		if (error || !root.is_object()) {
+			set_invalid(file, error ? std::format("not a .resource: not JSON: {}", error.message()) : std::string{ "not a .resource: the root is not a JSON object" });
+			return {};
+		}
+		const json::value* type = root.as_object().if_contains("__type");
+		if (!type || !type->is_string() || type->as_string() != res::asset_meta_type) {
+			set_invalid(file, std::format("not a .resource: '__type' is not \"{}\"", res::asset_meta_type));
+			return {};
+		}
+		return root;
+	}
+
+	json::value read_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes, std::string& text)
 	{
 		read_result read = read_file(path, max_bytes);
 		if (!read.error.empty()) {
 			set_invalid(file, std::move(read.error));
+			return {};
+		}
+		text = std::move(read.text);
+		return parse_sidecar(file, text);
+	}
+
+	// res::read_asset_meta of an engine that reads `readable`. The reader takes asset_meta_version only; another
+	// `readable` is the test seam of scan_options::resource_meta_version: the sidecar at that version is read with
+	// the reader's rules, as the engine raised with its step would.
+	res::asset_meta_result read_meta_as(std::string_view text, std::int64_t readable)
+	{
+		if (readable == res::asset_meta_version) return res::read_asset_meta(text);
+		boost::system::error_code error;
+		json::value root = json::parse(without_bom(text), error);
+		if (error || !root.is_object()) return res::read_asset_meta(text);
+		json::object& object = root.as_object();
+		const json::value* version = object.if_contains("__version");
+		if (version && version->is_int64() && version->as_int64() == readable) object["__version"] = res::asset_meta_version;
+		else if (version && version->is_int64() && version->as_int64() > readable) object["__version"] = res::asset_meta_version + 1;
+		return res::read_asset_meta(json::serialize(root));
+	}
+
+	void classify_sidecar_root(prj::migration::scanned_file& file, const json::object& root, std::string_view text, const desc::desc_system& descs,
+		std::int64_t readable)
+	{
+		classify(file, root, descs, true);
+		if (file.kind == file_class::newer) {
+			file.reason = std::format("written by a newer engine: {}", file.reason);
 			return;
 		}
-		const res::asset_meta_result meta = res::read_asset_meta(read.text);
-		if (meta) {
-			file.kind = file_class::current;
-			return;
-		}
+		// Every sidecar the steps call current must be one the engine reads (a step that does not raise
+		// res::asset_meta_version would leave every migrated sidecar newer_than_engine to the asset database).
+		if (file.kind != file_class::current) return;
+		const res::asset_meta_result meta = read_meta_as(text, readable);
+		if (meta) return;
 		const std::string where = meta.error.field_path.empty() ? std::string{} : std::format(" at '{}'", meta.error.field_path);
 		if (meta.error.kind == res::asset_meta_error_kind::newer_than_engine) {
 			file.kind = file_class::newer;
-			file.reason = std::format("written by a newer engine{}: {}", where, meta.error.message);
+			file.reason = std::format("the engine does not read it{}: {}", where, meta.error.message);
 		} else {
 			set_invalid(file, std::format("not a .resource{}: {}", where, meta.error.message));
 		}
 	}
 
-	bool is_hidden(const fs::path& name)
+	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& path, const desc::desc_system& descs,
+		const prj::migration::scan_options& options)
 	{
-		const std::string text = fs_paths::utf8_of(name);
-		return !text.empty() && text.front() == '.';
+		std::string text;
+		const json::value root = read_sidecar(file, path, options.max_file_bytes, text);
+		if (root.is_object()) classify_sidecar_root(file, root.as_object(), text, descs, options.resource_meta_version);
+	}
+
+	// Under `value`, every key `from` becomes `to`.
+	void rename_keys(json::value& value, std::string_view from, std::string_view to)
+	{
+		if (value.is_object()) {
+			json::object& object = value.as_object();
+			if (auto found = object.find(from); found != object.end()) {
+				json::value moved = std::move(found->value());
+				object.erase(found);
+				object[to] = std::move(moved);
+			}
+			for (auto& member : object) rename_keys(member.value(), from, to);
+		} else if (value.is_array()) {
+			for (json::value& item : value.as_array()) rename_keys(item, from, to);
+		}
+	}
+
+	// The rule of the editor's asset database: a name res::is_ignored_asset_name rejects (a dot file or folder, a
+	// temporary or system file) is no content, and neither is the .resource of such a file.
+	bool is_skipped_name(std::string_view name, bool is_dir)
+	{
+		if (res::is_ignored_asset_name(name)) return true;
+		if (is_dir || !res::is_asset_meta_name(name) || name.size() <= res::asset_meta_suffix.size()) return false;
+		return res::is_ignored_asset_name(name.substr(0, name.size() - res::asset_meta_suffix.size()));
 	}
 
 	// A sidecar is <name>.resource next to the asset (EPIC-57 4.2; the paths of sidecars are S57-6, #768).
@@ -279,7 +363,7 @@ namespace
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
-			if (is_hidden(path.filename()) || (at_project_root && (name == "code" || name == "build"))) return;
+			if (is_skipped_name(name, fs::is_directory(status)) || (at_project_root && (name == "code" || name == "build"))) return;
 			if (at_project_root && name == "project.snkproj") return;
 			// Only a real folder is entered: a link or a junction to one is reported, never followed.
 			if (fs::is_directory(status)) {
@@ -297,7 +381,7 @@ namespace
 			if (extension == ".desc") {
 				scan_desc(file, path, descs, options.max_file_bytes);
 			} else if (extension == ".resource") {
-				scan_sidecar(file, path, options.max_file_bytes);
+				scan_sidecar(file, path, descs, options);
 			} else {
 				file.kind = has_sidecar(path) ? file_class::current : file_class::missing_resource;
 			}
@@ -372,6 +456,15 @@ namespace
 					state.kind = file_class::newer;
 					state.reason = std::format("format_version {} is newer than {}", format->as_int64(), prj::k_manifest_format_version);
 					return state;
+				}
+			}
+			// Hints only (EPIC-58 2): the scan of the files stays the truth, so a malformed one is ignored.
+			if (const auto* with = raw.as_object().if_contains("migrated_with"); with && with->is_string()) {
+				state.migrated_with = std::string(with->as_string());
+			}
+			if (const auto* steps = raw.as_object().if_contains("applied_steps"); steps && steps->is_array()) {
+				for (const json::value& step : steps->as_array()) {
+					if (step.is_string()) state.applied_steps.emplace_back(step.as_string());
 				}
 			}
 		}
@@ -511,6 +604,35 @@ std::string_view prj::migration::to_string(file_class kind)
 	return "invalid";
 }
 
+prj::migration::scanned_file prj::migration::classify_sidecar(std::string path, std::string_view text, const desc::desc_system& game_layer,
+	std::int64_t readable_version)
+{
+	scanned_file file;
+	file.path = std::move(path);
+	const json::value root = parse_sidecar(file, text);
+	if (root.is_object()) classify_sidecar_root(file, root.as_object(), text, game_layer, readable_version);
+	return file;
+}
+
+void prj::migration::migrate_sidecar(const desc::desc_system& game_layer, json::object& root, std::string_view file,
+	std::vector<desc::migration_warning>* warnings)
+{
+	constexpr std::string_view hidden = "\x1f__type";
+	const auto settings = [&root]() { return root.if_contains(k_sidecar_settings); };
+	if (json::value* own = settings()) rename_keys(*own, "__type", hidden);
+	try {
+		if (warnings) {
+			game_layer.migrate_tree(root, file, *warnings);
+		} else {
+			game_layer.migrate_tree(root, file);
+		}
+	} catch (...) {
+		if (json::value* own = settings()) rename_keys(*own, hidden, "__type");
+		throw;
+	}
+	if (json::value* own = settings()) rename_keys(*own, hidden, "__type");
+}
+
 prj::migration::scanned_file prj::migration::classify_desc(std::string path, std::string_view text, const desc::desc_system& game_layer)
 {
 	scanned_file file;
@@ -558,6 +680,11 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 {
 	migration_plan plan;
 	plan.scan = scan;
+	plan.resource_meta_version = options.scan.resource_meta_version;
+	if (const int steps_to = game_layer.current_version(res::asset_meta_type); steps_to != options.scan.resource_meta_version) {
+		plan.refused = std::format("the steps of {} lead to version {}, but the engine reads version {}: a step must raise "
+			"res::asset_meta_version with it", res::asset_meta_type, steps_to, options.scan.resource_meta_version);
+	}
 	for (scanned_file& file : plan.scan.files) {
 		if (file.kind != file_class::outdated) continue;
 
@@ -568,16 +695,29 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 			set_invalid(file, "changed since the scan: not a regular file any more");
 			continue;
 		}
-		const json::value before = read_desc(file, path, options.scan.max_file_bytes);
-		if (!before.is_object()) continue;
-		classify(file, before.as_object(), game_layer);
+		json::value before;
+		const bool sidecar = res::is_asset_meta_name(file.path);
+		if (sidecar) {
+			std::string text;
+			before = read_sidecar(file, path, options.scan.max_file_bytes, text);
+			if (!before.is_object()) continue;
+			classify_sidecar_root(file, before.as_object(), text, game_layer, options.scan.resource_meta_version);
+		} else {
+			before = read_desc(file, path, options.scan.max_file_bytes);
+			if (!before.is_object()) continue;
+			classify(file, before.as_object(), game_layer);
+		}
 		if (file.kind != file_class::outdated) continue;
 
 		file_plan planned;
 		planned.path = file.path;
 		json::value after = before;
 		try {
-			game_layer.migrate_tree(after.as_object(), file.path, planned.warnings);
+			if (sidecar) {
+				migrate_sidecar(game_layer, after.as_object(), file.path, &planned.warnings);
+			} else {
+				game_layer.migrate_tree(after.as_object(), file.path, planned.warnings);
+			}
 		} catch (const std::exception& e) {
 			set_invalid(file, e.what());
 			continue;
@@ -593,6 +733,15 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 		planned.diff = diff_of(before, after);
 		if (options.full_diff) planned.full_diff = line_diff(before, after);
 		plan.files.push_back(std::move(planned));
+	}
+
+	if (options.project_steps) {
+		for (const project_phase phase : { project_phase::pre, project_phase::post }) {
+			for (const project_step& step : options.project_steps->steps()) {
+				if (step.phase != phase || !step.needed(plan.scan)) continue;
+				plan.project_steps.push_back(planned_project_step{ step.id, std::string(to_string(phase)), step.summary });
+			}
+		}
 	}
 	return plan;
 }

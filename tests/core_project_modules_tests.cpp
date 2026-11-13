@@ -1,7 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_module_env.hpp"
 #include "test_temp_dir.hpp"
-#include <snk/application/app_loaded_module_apis.h>
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/core/core_project_modules.h>
@@ -271,18 +270,6 @@ app::modules::module_entry reload_v1_entry()
 app::modules::module_entry reload_v2_entry()
 {
 	return SNK_MODULE_ENTRY(reload_v2_);
-}
-
-std::uint32_t api_of_315() { return 0x0003'000Fu; }
-
-const snk_module_build_info* build_info_of_315()
-{
-	static const snk_module_build_info info = [] {
-		snk_module_build_info built = *reload_v2_entry().build_info();
-		built.api = 0x0003'000Fu;
-		return built;
-	}();
-	return &info;
 }
 
 app::modules::module_entry reload_failing_entry()
@@ -719,24 +706,6 @@ BOOST_AUTO_TEST_CASE(a_new_build_takes_the_place_of_the_running_one)
 	BOOST_TEST(registered("build2_desc"));
 	BOOST_TEST(!registered("build1_desc"));
 	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:reloaded" }), boost::test_tools::per_element());
-}
-
-BOOST_AUTO_TEST_CASE(a_reload_records_the_api_of_the_build_that_runs)
-{
-	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks).status == core::reload_status::reloaded));
-	BOOST_REQUIRE(root.has_value<app::modules::loaded_module_apis>());
-	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
-	const auto revision = root.require<app::modules::loaded_module_apis>().revision;
-	BOOST_REQUIRE((host.reload("reload_game", compiled(reload_v1_entry()), rollback_to(reload_v2_entry()), hooks).status == core::reload_status::reloaded));
-	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
-	BOOST_TEST(root.require<app::modules::loaded_module_apis>().revision > revision);
-
-	// A build of 3.15 no longer loads under 4.0 (#758), so the record keeps the running build's api.
-	auto older = reload_v2_entry();
-	older.api_version = &api_of_315;
-	older.build_info = &build_info_of_315;
-	BOOST_TEST((host.reload("reload_game", compiled(older), rollback_to(reload_v2_entry()), hooks).status == core::reload_status::refused));
-	BOOST_TEST(root.require<app::modules::loaded_module_apis>().api.at("reload_game") == SNK_MODULE_API_VERSION);
 }
 
 BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_one_is_not_touched)

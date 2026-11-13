@@ -9,6 +9,7 @@
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_system.h>
+#include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <format>
@@ -320,6 +321,49 @@ namespace {
 	using prefab_node = scn::prefab_desc::prefab_node;
 	using prefab_comp_node = scn::prefab_desc::prefab_comp_node;
 
+	// What the engine keeps of a node a module or the editor handed in (#827): copies of its records and edits were
+	// constructed in the caller's resource.
+	void keep_in_default_resource(prefab_node& node)
+	{
+		for (auto& [key, component] : node.components) {
+			ds::keep_in_default_resource(component.overrides);
+			for (auto& edit : component.edits) ds::keep_in_default_resource(edit.value);
+		}
+		for (auto& record : node.overrides) ds::keep_in_default_resource(record.value);
+		for (auto& child : node.children) keep_in_default_resource(child);
+	}
+
+	// Copies the JSON straight into the default resource, once. Lists every field of prefab_node: a new one goes here too.
+	prefab_node kept_copy(const prefab_node& node)
+	{
+		prefab_node copy;
+		copy.name = node.name;
+		copy.node_id = node.node_id;
+		copy.position = node.position;
+		copy.rotation = node.rotation;
+		copy.scale = node.scale;
+		copy.has_transform = node.has_transform;
+		for (const auto& [key, component] : node.components) {
+			prefab_comp_node& kept = copy.components[key];
+			kept.type_name = component.type_name;
+			kept.parent_desc = component.parent_desc;
+			kept.overrides = component.overrides; // assignment: into the default resource of `kept`
+			kept.edits.reserve(component.edits.size());
+			for (const auto& edit : component.edits) {
+				kept.edits.push_back({ edit.path, json::value(edit.value, json::storage_ptr{}) });
+			}
+		}
+		copy.overrides.reserve(node.overrides.size());
+		for (const auto& record : node.overrides) {
+			copy.overrides.push_back({ record.target, record.component, record.path, json::value(record.value, json::storage_ptr{}), record.op });
+		}
+		copy.children.reserve(node.children.size());
+		for (const auto& child : node.children) {
+			copy.children.push_back(kept_copy(child));
+		}
+		return copy;
+	}
+
 	template<class Event>
 	void emit_event(entt::registry& reg, entt::entity e)
 	{
@@ -406,7 +450,7 @@ namespace {
 			if (it == dst.components.end()) {
 				dst.components.emplace(key, std::move(comp));
 			} else if (!comp.overrides.empty()) {
-				it->second.edits.push_back({ "", comp.overrides });
+				it->second.edits.push_back({ "", json::value(json::object(comp.overrides, json::storage_ptr{})) });
 			}
 		}
 		dst.overrides.insert(dst.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
@@ -495,7 +539,7 @@ namespace {
 			egLOG_WARN("desc", "override: component '{}' can only be merged with an object at ''", record.component);
 			return;
 		}
-		it->second.edits.push_back({ record.path, record.value });
+		it->second.edits.push_back({ record.path, json::value(record.value, json::storage_ptr{}) });
 	}
 
 	// Applies the records to a tree that is already a private copy. A record that targets a node below an
@@ -683,7 +727,9 @@ json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cn
 bool scn::expand_instance(
 	const ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
 {
-	return materialize(assembler, node, out, source, 0);
+	if (!materialize(assembler, node, out, source, 0)) return false;
+	keep_in_default_resource(out);
+	return true;
 }
 
 void scn::reconcile(
@@ -708,7 +754,7 @@ void scn::reconcile(
 			if (!kept_by_game && (!node.has_transform || !reg.all_of<scn::local_transform>(live))) {
 				reg.emplace_or_replace<scn::local_transform>(live, placement);
 			}
-			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, node });
+			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, kept_copy(node) });
 			emit_event<scn::transform_updated>(reg, live);
 		}
 		content = &expanded;

@@ -15,6 +15,9 @@ namespace json = boost::json;
 namespace res
 {
 	inline constexpr std::int64_t asset_meta_version = 1;
+	// Also the pseudo-type under which project migration keeps the steps of a sidecar (EPIC-58 3.4); a step that
+	// raises the version raises asset_meta_version with it.
+	inline constexpr std::string_view asset_meta_type = "resource_meta";
 	inline constexpr std::string_view asset_meta_suffix = ".resource";
 
 	// A name or path ending in ".resource" in any letter case: one spelling rule for the editor and the database, so a

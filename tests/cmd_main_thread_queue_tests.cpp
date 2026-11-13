@@ -3,6 +3,7 @@
 #include <snk/command/cmd_main_thread_queue.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
+#include <boost/json/monotonic_resource.hpp>
 #include <chrono>
 #include <future>
 #include <memory>
@@ -376,6 +377,34 @@ BOOST_AUTO_TEST_CASE(Confirmation_TravelsAsAParameterOfItsOwn_NotInTheArguments)
 	auto presented = queue.call_now_or_post("test.guarded", boost::json::object{}, cmd::origin::agent("s1"), 0, ticket);
 	BOOST_TEST(presented.get().ok);
 	BOOST_TEST(runs == 1);
+}
+
+// #827: a posted call runs on a later frame; its arguments must not stay in the caller's resource (a module's arena).
+BOOST_AUTO_TEST_CASE(Post_KeepsTheArgumentsPastTheCallersResource)
+{
+	std::string seen;
+	bool in_default_resource = false;
+	cmd::command_desc desc;
+	desc.id = "test.keep_args";
+	desc.args_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]})");
+	desc.invoke = [&](const cmd::call& request) {
+		in_default_resource = request.args.storage().get() == boost::json::storage_ptr().get();
+		seen = std::string(request.args.at("text").as_string());
+		return cmd::result::success();
+	};
+	auto reg = commands.add(std::move(desc));
+
+	std::future<cmd::result> outcome;
+	{
+		boost::json::monotonic_resource arena;
+		outcome = queue.post("test.keep_args", boost::json::parse(R"({"text":"a text long enough to be allocated in the arena"})",
+			boost::json::storage_ptr(&arena)), cmd::origin::test());
+	}
+	BOOST_CHECK_EQUAL(drain(), 1u);
+	BOOST_REQUIRE(is_ready(outcome));
+	BOOST_CHECK(outcome.get().ok);
+	BOOST_CHECK(in_default_resource);
+	BOOST_CHECK_EQUAL(seen, "a text long enough to be allocated in the arena");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
