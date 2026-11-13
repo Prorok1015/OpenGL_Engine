@@ -23,6 +23,8 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 		std::error_code ec;
 		if (!fs::is_directory(dir, ec) || ec)
 			continue;
+		if (res::is_in_project_own_folder(relative_dir) && res::is_project_folder_layer(layers[i]))
+			continue;
 
 		const bool at_project_folder_root = relative_dir.empty() && res::is_project_folder_layer(layers[i]);
 		for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {

@@ -708,6 +708,7 @@ namespace {
 		for (std::size_t i = 0; i < layers.size() && !state.truncated; ++i) {
 			const fs::path dir = layers[i] / directory;
 			if (!is_under(layers[i], dir) || !plain_directory(layers[i], directory)) continue;
+			if (res::is_in_project_own_folder(directory) && res::is_project_folder_layer(layers[i])) continue;
 			const bool at_project_folder_root = directory.empty() && res::is_project_folder_layer(layers[i]);
 			std::error_code ec;
 			for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {

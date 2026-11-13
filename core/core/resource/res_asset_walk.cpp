@@ -143,6 +143,12 @@ bool res::is_project_folder_layer(const fs::path& layer)
 	return fs::is_regular_file(fs::symlink_status(layer / fs_paths::path_from_utf8(project_file_name), ec)) && !ec;
 }
 
+bool res::is_in_project_own_folder(const fs::path& relative_dir)
+{
+	const auto first = relative_dir.begin();
+	return first != relative_dir.end() && is_project_own_name(fs_paths::utf8_of(*first));
+}
+
 bool res::asset_entry_redirects(const fs::directory_entry& entry)
 {
 	std::error_code ec;

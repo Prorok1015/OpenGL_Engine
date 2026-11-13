@@ -153,6 +153,8 @@ BOOST_AUTO_TEST_CASE(TheProjectFolderLayer_HidesItsCodeBuildAndProjectFile)
 	BOOST_TEST((names(root) == std::vector<std::string>{ "code", "textures" }));
 	BOOST_REQUIRE(find(root, "code") != nullptr);
 	BOOST_TEST(find(root, "code")->layer == 0u);
+	// Entered from the base layer, code/ still shows nothing of the project's code.
+	BOOST_TEST((names(edt::list_merged_directory({ base.path(), project.path() }, "code")) == std::vector<std::string>{ "lib.txt" }));
 	BOOST_TEST((names(edt::list_merged_directory({ base.path(), project.path() }, "textures")) == std::vector<std::string>{ "build", "code" }));
 }
 

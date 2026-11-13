@@ -73,6 +73,10 @@ namespace res
 	// The layer's root holds project_file_name (a regular file, not a link).
 	SNK_API bool is_project_folder_layer(const std::filesystem::path& layer);
 
+	// `relative_dir` lies in a folder of is_project_own_name. A project folder layer adds nothing there, also when a lower
+	// layer has a folder of that name and a listing enters it from there.
+	SNK_API bool is_in_project_own_folder(const std::filesystem::path& relative_dir);
+
 	// What a walk neither lists nor enters: is_skipped_asset_name, and in the root of a layer that is the project folder
 	// (`at_project_folder_root`) the project's own names and their .resource. A skipped name shadows nothing below.
 	inline bool is_skipped_asset_entry(std::string_view name, bool is_dir, bool at_project_folder_root)
