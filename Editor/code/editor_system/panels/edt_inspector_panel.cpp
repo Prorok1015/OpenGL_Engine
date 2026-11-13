@@ -101,11 +101,15 @@ namespace edt
 	bool inspector_panel::render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema)
 	{
 		const desc::schema_registry& registry = descs()->schemas();
-		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
+		auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
 		}, m_map_state);
-		return schema_ui::edit_component(schema, registry, parent_json(key, comp), comp.overrides,
-			[&](boost::json::value& shown) { return schema_ui::draw_fields(schema, shown, ctx); });
+		const std::string parent_name = comp.parent_desc.is_valid() ? std::string{ comp.parent_desc.get_tag().view() } : std::string{};
+		return schema_ui::edit_component_marked(schema, registry, parent_json(key, comp), comp.overrides, parent_name, {},
+			[&](boost::json::value& shown, const schema_ui::field_origin& origin) {
+				ctx.origin = &origin;
+				return schema_ui::draw_fields(schema, shown, ctx);
+			});
 	}
 
 	bool inspector_panel::render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema)
