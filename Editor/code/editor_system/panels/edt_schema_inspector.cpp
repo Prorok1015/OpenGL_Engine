@@ -635,13 +635,6 @@ namespace
 		return out;
 	}
 
-	// The text the person is typing into the "new key" field of each map, kept between frames.
-	std::unordered_map<ImGuiID, std::string>& pending_new_keys()
-	{
-		static std::unordered_map<ImGuiID, std::string> keys;
-		return keys;
-	}
-
 	bool edit_map(const char* label, const desc::field_schema& field, const widget_spec& spec, json::value& value,
 		const std::string& pointer, const context& ctx, int depth)
 	{
@@ -652,6 +645,9 @@ namespace
 		if (!open) {
 			return false;
 		}
+		edt::schema_ui::map_edit_state scratch;
+		edt::schema_ui::map_edit_state& state = ctx.map_state ? *ctx.map_state : scratch;
+		const field_kind element_kind = field.element == field_kind::array || field.element == field_kind::map ? field_kind::custom : field.element;
 		bool changed = false;
 		std::vector<std::string> keys;
 		keys.reserve(entries.size());
@@ -663,19 +659,31 @@ namespace
 		const std::size_t shown = std::min(keys.size(), max_listed);
 		for (std::size_t i = 0; i < shown; ++i) {
 			const std::string& key = keys[i];
-			ImGui::PushID(static_cast<int>(i));
-			std::vector<char> buffer(std::max<std::size_t>(key.size() + 64, 128), '\0');
+			// By the key, not the row's place: a map that changes under the person (a parent read again, an undo) keeps each
+			// text field with its own key.
+			ImGui::PushID(key.c_str());
+			std::vector<char> buffer(std::max<std::size_t>(key.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
 			std::copy(key.begin(), key.end(), buffer.begin());
 			ImGui::SetNextItemWidth(140.0f);
 			const bool entered = ImGui::InputText("##key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+			const ImGuiID row = ImGui::GetItemID();
+			if (ImGui::IsItemActivated()) {
+				state.rename_errors.erase(row);
+			}
 			if ((entered || ImGui::IsItemDeactivatedAfterEdit()) && buffer.data() != key) {
 				rename = std::pair{ key, std::string(buffer.data()) };
+				if (const std::string problem = edt::schema_ui::map_key_problem(entries, rename->second); !problem.empty()) {
+					state.rename_errors[row] = problem;
+					rename.reset();
+				} else {
+					state.rename_errors.erase(row);
+				}
 			}
 			ImGui::SameLine();
 			desc::field_schema element;
 			element.name = key;
 			element.key = "/" + escaped_token(key);
-			element.kind = field.element == field_kind::array || field.element == field_kind::map ? field_kind::custom : field.element;
+			element.kind = element_kind;
 			element.ref_type = field.ref_type;
 			element.range = field.range;
 			element.color = field.color;
@@ -689,6 +697,11 @@ namespace
 			if (ImGui::SmallButton("x")) {
 				remove = key;
 			}
+			if (const auto refused = state.rename_errors.find(row); refused != state.rename_errors.end()) {
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+				ImGui::TextWrapped("%s", refused->second.c_str());
+				ImGui::PopStyleColor();
+			}
 			ImGui::PopID();
 		}
 		if (keys.size() > shown) {
@@ -699,28 +712,27 @@ namespace
 		}
 		if (rename && edt::schema_ui::rename_map_key(entries, rename->first, rename->second)) {
 			changed = true;
-		} else if (rename) {
-			ImGui::SetTooltip("%s", edt::schema_ui::map_key_problem(entries, rename->second).c_str());
 		}
 
-		std::string& fresh = pending_new_keys()[ImGui::GetID("new_key")];
-		std::vector<char> buffer(std::max<std::size_t>(fresh.size() + 64, 128), '\0');
+		std::string& fresh = state.new_keys[ImGui::GetID("new_key")];
+		std::vector<char> buffer(std::max<std::size_t>(fresh.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
 		std::copy(fresh.begin(), fresh.end(), buffer.begin());
 		ImGui::SetNextItemWidth(140.0f);
-		if (ImGui::InputTextWithHint("##new_key", "new key", buffer.data(), buffer.size())) {
+		const bool entered = ImGui::InputTextWithHint("##new_key", "new key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (ImGui::IsItemEdited() || entered) {
 			fresh = buffer.data();
 		}
 		ImGui::SameLine();
 		const std::string problem = edt::schema_ui::map_key_problem(entries, fresh);
-		ImGui::BeginDisabled(!problem.empty() || field.read_only);
-		if (ImGui::SmallButton("+ Add")) {
-			const field_kind element_kind = field.element == field_kind::array || field.element == field_kind::map ? field_kind::custom : field.element;
-			if (edt::schema_ui::add_map_key(entries, fresh, zero_of(element_kind, field.ref_type, ctx.registry, depth))) {
-				fresh.clear();
-				changed = true;
-			}
-		}
+		const bool can_add = problem.empty() && !field.read_only;
+		ImGui::BeginDisabled(!can_add);
+		const bool clicked = ImGui::SmallButton("+ Add");
 		ImGui::EndDisabled();
+		if ((clicked || entered) && can_add
+			&& edt::schema_ui::add_map_key(entries, fresh, zero_of(element_kind, field.ref_type, ctx.registry, depth))) {
+			fresh.clear();
+			changed = true;
+		}
 		if (!fresh.empty() && !problem.empty()) {
 			ImGui::SameLine();
 			ImGui::TextDisabled("%s", problem.c_str());

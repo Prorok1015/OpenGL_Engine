@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <unordered_map>
 #include <string>
 #include <string_view>
 
@@ -81,6 +82,20 @@ namespace edt::schema_ui
 	boost::json::value compose(const desc::type_schema& schema, const desc::schema_registry& registry,
 		std::initializer_list<const boost::json::object*> layers, bool fill_missing = true);
 
+	// What the map rows keep between frames: the text typed into a map's "new key" field, and why a rename was refused. The
+	// panel that draws owns it (an entity or a document of its own), and clears it when what is shown is another one.
+	struct map_edit_state
+	{
+		std::unordered_map<std::uint32_t, std::string> new_keys;
+		std::unordered_map<std::uint32_t, std::string> rename_errors;
+
+		void clear()
+		{
+			new_keys.clear();
+			rename_errors.clear();
+		}
+	};
+
 	struct context
 	{
 		const desc::schema_registry& registry;
@@ -88,6 +103,8 @@ namespace edt::schema_ui
 		std::function<bool(const std::string& label, boost::json::value& value)> draw_json;
 		// Called for every field that got a widget (tests): the field's pointer from the root and the widget.
 		std::function<void(std::string_view pointer, widget kind)> on_field;
+		// Null: a map row forgets what was typed at the end of the frame (a test, a one-shot view).
+		map_edit_state* map_state = nullptr;
 	};
 
 	// Draws the visible fields of `schema` for `object` (the whole component, or a nested structure) and edits it in

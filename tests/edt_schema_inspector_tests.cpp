@@ -15,6 +15,7 @@
 #include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -61,13 +62,35 @@ namespace
 	})";
 
 	// A map has no blob layout, so it comes from a C++ type: the schema is generated, not parsed.
+	enum class speed_value { slow, fast };
+	BOOST_DESCRIBE_ENUM(speed_value, slow, fast)
+
+	struct limits_value
+	{
+		float min = 0.0f;
+		float max = 1.0f;
+	};
+	BOOST_DESCRIBE_STRUCT(limits_value, (), (min, max))
+
 	struct weights_component
 	{
 		std::map<std::string, float> weights;
 		std::map<std::string, std::string> labels;
+		std::map<std::string, limits_value> zones;
+		std::map<std::string, speed_value> speeds;
+		std::optional<float> extra;
 	};
-	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels))
+	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels, zones, speeds, extra))
+}
 
+namespace desc
+{
+	template<>
+	inline constexpr auto field_attrs<weights_component> = attrs(f("zones").ref("edt.limits"), f("speeds").ref("edt_mode"));
+}
+
+namespace
+{
 	desc::type_schema weights_schema()
 	{
 		return desc::schema_generator<weights_component>::make("edt.weights", 1, desc::schema_kind::component);
@@ -755,6 +778,78 @@ BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_RemovesAnInheritedKeyWithANullAndAnOwnKeyW
 	after.at_pointer("/weights").as_object().emplace("a", 1.0);
 	ui::apply_edit(overrides, schema, registry, base, before, after);
 	BOOST_CHECK(overrides.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_RenamingAnInheritedKeyRemovesItAndAddsTheNewName)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "weights": { "a": 1.0, "b": 2.0 } })");
+	json::object overrides;
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
+
+	const json::value before = ui::compose(schema, registry, { &parent, &overrides });
+	json::value after = before;
+	BOOST_REQUIRE(ui::rename_map_key(after.at_pointer("/weights").as_object(), "a", "x"));
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": null, "x": 1.0 } })"));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_ARemovedKeyComesBackWithAnotherValueAsARecord)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "weights": { "a": 1.0, "b": 2.0 } })");
+	json::object overrides = parse(R"({ "weights": { "a": null } })");
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
+
+	const json::value before = ui::compose(schema, registry, { &parent, &overrides });
+	BOOST_CHECK(!before.at("weights").as_object().contains("a"));
+	json::value after = before;
+	after.at_pointer("/weights").as_object().emplace("a", 5.0);
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": 5.0 } })"));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_KeysWithASlashOrATildeStayOneKey)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	json::object overrides;
+	const json::value base = ui::compose(schema, registry, { }, false);
+	const json::value before = ui::compose(schema, registry, { &overrides });
+	json::value after = before;
+	BOOST_REQUIRE(ui::add_map_key(after.at_pointer("/weights").as_object(), "a/b", json::value(1.5)));
+	BOOST_REQUIRE(ui::add_map_key(after.at_pointer("/weights").as_object(), "x~y", json::value(2.5)));
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a/b": 1.5, "x~y": 2.5 } })"));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAnOptionalNobodyInherits_RemovesItsRecordWhenCleared)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	json::object overrides = parse(R"({ "extra": 1.0 })");
+	const json::value base = ui::compose(schema, registry, { }, false);
+	const json::value before = ui::compose(schema, registry, { &overrides });
+	json::value after = before;
+	after.as_object().erase("extra");
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	BOOST_CHECK(overrides.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Map_OfStructuresAndEnums_DrawsAGroupAndAComboPerKey)
+{
+	const desc::type_schema schema = weights_schema();
+	imgui_ctx imgui;
+	json::value value = ui::compose(schema, descs->schemas(), {});
+	value.as_object()["zones"] = parse(R"({ "z": { "min": 0.0, "max": 2.0 } })");
+	value.as_object()["speeds"] = parse(R"({ "m": "fast" })");
+	const drawn_list drawn = draw_twice(imgui, schema, descs->schemas(), value);
+	BOOST_CHECK(widget_at(drawn, "/zones") == ui::widget::map);
+	BOOST_CHECK(widget_at(drawn, "/zones/z") == ui::widget::group);
+	BOOST_CHECK(widget_at(drawn, "/zones/z/max") == ui::widget::real);
+	BOOST_CHECK(widget_at(drawn, "/speeds/m") == ui::widget::combo);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
