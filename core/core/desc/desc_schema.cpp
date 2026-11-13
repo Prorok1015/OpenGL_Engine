@@ -145,8 +145,8 @@ namespace desc
 				return json::value(std::move(identity));
 			}
 			case field_kind::string:
-			case field_kind::res_tag:
-			case field_kind::node_ref: return json::value(std::string_view{});
+			case field_kind::res_tag: return json::value(std::string_view{});
+			case field_kind::node_ref: return json::value(std::string_view{ "0000000000000000" });
 			case field_kind::array: return json::value(json::array{});
 			case field_kind::map: return json::value(json::object{});
 			default: return json::value();
