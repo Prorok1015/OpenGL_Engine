@@ -105,6 +105,18 @@ struct repo_fixture : test_util::scene_env
 		return require_loaded<desc::desc_base>(tag).get_sync();
 	}
 
+	// The adapter's read of saved bytes, with the "__parent" it names loaded first, as the resource system does.
+	std::shared_ptr<res::resource_entry> read_back(const res::tag& tag, const std::vector<std::byte>& bytes)
+	{
+		res::res_deps deps;
+		for (res::res_dep& dep : adapter.collect_dependencies(tag, bytes)) {
+			auto parent = load_desc(dep.target);
+			BOOST_REQUIRE(parent);
+			deps.add(std::move(dep), parent);
+		}
+		return adapter.deserialize(tag, bytes, deps);
+	}
+
 	static json::value parse(const std::vector<std::byte>& bytes)
 	{
 		return json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
@@ -158,7 +170,7 @@ BOOST_AUTO_TEST_CASE(SaveIsIdempotent)
 		auto loaded = load_desc(tag);
 		BOOST_REQUIRE(loaded);
 		const auto first = adapter.serialize(tag, loaded);
-		auto reloaded = adapter.deserialize(tag, first);
+		auto reloaded = read_back(tag, first);
 		BOOST_REQUIRE(reloaded);
 		BOOST_CHECK(parse(adapter.serialize(tag, reloaded)) == parse(first));
 	});

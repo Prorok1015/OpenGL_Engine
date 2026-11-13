@@ -12,6 +12,7 @@
 #include <iterator>
 #include <map>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -245,16 +246,14 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsParentAndOnlyItsOwnFields)
 	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::partial));
 
-	// The answer of #753 to "which types flatten": the engine form of both drops the root __parent (#812), so both are
-	// written as the migrated JSON.
+	// The engine form keeps the root __parent and only the file's own fields (#812), so both are written by the engine.
 	std::map<std::string, const pmg::applied_file*> written;
 	for (const auto& file : outcome.report.files) written[file.path] = &file;
 	for (const std::string path : { "res/derive/variant.prefab.desc", "res/derive/cam.desc" }) {
 		BOOST_TEST_INFO(path);
 		BOOST_REQUIRE((written[path] != nullptr));
-		BOOST_TEST(written[path]->written_as == "json");
-		BOOST_REQUIRE(written[path]->notes.size() == 1u);
-		BOOST_TEST(written[path]->notes[0].find("__parent") != std::string::npos);
+		BOOST_TEST(written[path]->written_as == "engine");
+		BOOST_TEST(written[path]->notes.empty());
 	}
 	const json::value variant = json::parse(read_text(copy.res() / "derive/variant.prefab.desc"));
 	BOOST_TEST(variant.at("__parent").as_string() == "res://derive/base.prefab.desc");
@@ -266,8 +265,8 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsParentAndOnlyItsOwnFields)
 	BOOST_TEST(!camera.as_object().contains("near_distance"));
 }
 
-// A type whose saved form drops __parent (a schema type) is written as the migrated JSON, and the report says so.
-BOOST_AUTO_TEST_CASE(ATypeThatDropsItsParent_IsWrittenAsMigratedJson)
+// A schema type with a __parent is written by the engine: its __parent, its own fields and what its migration added (#812).
+BOOST_AUTO_TEST_CASE(ASchemaTypeWithAParent_IsWrittenByTheEngine_WithItsOwnFields)
 {
 	descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "pmg_test_desc", "kind": "component",
 		"fields": [{ "name": "hp", "kind": "i32", "default": 0 }, { "name": "armor", "kind": "i32", "default": 0 }]})").as_object()));
@@ -279,15 +278,37 @@ BOOST_AUTO_TEST_CASE(ATypeThatDropsItsParent_IsWrittenAsMigratedJson)
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 	const auto file = std::ranges::find_if(outcome.report.files, [](const auto& f) { return f.path == "res/derive/unit.desc"; });
 	BOOST_REQUIRE(file != outcome.report.files.end());
-	BOOST_TEST(file->written_as == "json");
-	BOOST_REQUIRE(file->notes.size() == 1u);
-	BOOST_TEST(file->notes[0].find("__parent") != std::string::npos);
+	BOOST_TEST(file->written_as == "engine");
+	BOOST_TEST(file->notes.empty());
 	const json::value unit = json::parse(read_text(copy.res() / "derive/unit.desc"));
 	BOOST_TEST(unit.at("__parent").as_string() == "res://derive/base_unit.desc");
 	BOOST_TEST(unit.at("hp").as_int64() == 7);
 	// Its own fields and what its migration added, nothing of the parent's baked in.
 	BOOST_TEST(unit.at("armor").as_int64() == 1);
-	BOOST_TEST(unit.as_object().size() == 5u); // __type, __version, __parent, hp, armor
+	for (const auto& member : unit.as_object()) {
+		BOOST_TEST_INFO(std::string_view(member.key()));
+		BOOST_TEST((member.key().starts_with("__") || member.key() == "hp" || member.key() == "armor"));
+	}
+}
+
+// A value the migration gives the child that equals the parent's is the parent's: the engine form leaves it out (#812).
+BOOST_AUTO_TEST_CASE(AMigratedValueEqualToTheParents_IsNotWrittenIntoTheChild)
+{
+	descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "pmg_test_desc", "kind": "component",
+		"fields": [{ "name": "hp", "kind": "i32", "default": 0 }, { "name": "armor", "kind": "i32", "default": 0 }]})").as_object()));
+	descs->register_migration("pmg_test_desc", 1, "adds armor", [](json::object& obj, desc::migration_context&) { obj["armor"] = 1; });
+	write_text(copy.res() / "derive/base_unit.desc", R"({"__type":"pmg_test_desc","__version":2,"hp":5,"armor":1})");
+	write_text(copy.res() / "derive/unit.desc", R"({"__type":"pmg_test_desc","__parent":"res://derive/base_unit.desc","hp":7})");
+
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	const auto file = std::ranges::find_if(outcome.report.files, [](const auto& f) { return f.path == "res/derive/unit.desc"; });
+	BOOST_REQUIRE(file != outcome.report.files.end());
+	BOOST_TEST(file->written_as == "engine");
+	const json::value unit = json::parse(read_text(copy.res() / "derive/unit.desc"));
+	BOOST_TEST(unit.at("__parent").as_string() == "res://derive/base_unit.desc");
+	BOOST_TEST(unit.at("hp").as_int64() == 7);
+	BOOST_TEST(!unit.as_object().contains("armor"));
 }
 
 // A file the rollback cannot put back leaves the migration rollback_failed, which unfinished_migrations reports.

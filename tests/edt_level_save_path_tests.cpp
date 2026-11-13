@@ -188,4 +188,31 @@ BOOST_AUTO_TEST_CASE(SaveAs_RefusesALevelBehindALinkedFolder)
 	BOOST_TEST(!fs::exists(dir.path() / "outside" / "x.desc"));
 }
 
+// #812: a level read on top of a parent is saved, by Save and Save As, as its __parent and what differs from the parent.
+BOOST_AUTO_TEST_CASE(ALevelWithAParent_IsSavedWithItsParentAndOnlyItsOwnFields)
+{
+	dir.write("content/levels/base.desc", R"({"__type":"level_desc","name":"base","worlds":[]})");
+	dir.write("content/levels/child.desc", R"({"__type":"level_desc","__parent":"res://levels/base.desc","name":"child"})");
+	const auto child = res::tag::make("levels/child.desc");
+	state.editor_tag = child;
+	state.level_tag = child;
+	auto handle = rs->require_sync<scn::level_desc>(child);
+	pump();
+	BOOST_REQUIRE(handle.is_ready());
+	BOOST_REQUIRE(level_ctrl.finish_level_load(handle));
+	BOOST_TEST((state.level_parent == res::tag::make("levels/base.desc")));
+
+	state.commit("edit", edt::commit_mode::state_only);
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/saved.desc"));
+	const auto saved = boost::json::parse(read_file(content / "levels" / "saved.desc")).as_object();
+	BOOST_TEST(saved.at("__parent").as_string() == "res://levels/base.desc");
+	BOOST_TEST(saved.at("name").as_string() == "saved");
+	BOOST_TEST(!saved.contains("worlds"));
+
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	const auto again = boost::json::parse(read_file(content / "levels" / "saved.desc")).as_object();
+	BOOST_TEST(again.at("__parent").as_string() == "res://levels/base.desc");
+	BOOST_TEST(!again.contains("worlds"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

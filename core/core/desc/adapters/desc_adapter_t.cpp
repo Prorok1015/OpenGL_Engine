@@ -103,6 +103,7 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 			fail(::res::diagnostic_kind::missing_parent, "/__parent", std::format("failed to load '__parent' '{}'", parent_tag->view()));
 		}
 		parent->copy_to(*instance);
+		instance->set_parent(*parent_tag);
 	}
 
     instance->deserialize(m_desc_system, json_body);
@@ -121,6 +122,7 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
     auto desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
 	json::object body;
 	desc_res->serialize(body);
+	m_desc_system.reduce_to_parent(*desc_res, body);
 	// deserialize() requires __type. The instance knows what it was created as; a serialize() inherited from a base
 	// class may name its own type (a texture_2d_desc would come back as texture_desc).
 	if (!desc_res->get_type().empty() || !body.contains("__type")) {

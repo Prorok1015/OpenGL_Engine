@@ -47,6 +47,11 @@ namespace desc
 		const std::string& get_guid() const { return m_guid; }
 		void set_guid(std::string guid) { m_guid = std::move(guid); }
 
+		// The "__parent" this desc was read on top of; invalid: none. Saving writes it and only the fields that differ from
+		// the parent (#812). Like m_guid it names a file, so a copy starts without one.
+		const res::tag& get_parent() const { return m_parent; }
+		void set_parent(res::tag parent) { m_parent = std::move(parent); }
+
 	protected:
 		void set_type(const std::string_view type) { this->type = std::string{ type }; }
 
@@ -68,5 +73,6 @@ namespace desc
 		std::string type;
 		std::string m_guid;
 		desc_system* m_system = nullptr;
+		res::tag m_parent;
 	};
 }

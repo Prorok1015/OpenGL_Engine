@@ -1,10 +1,12 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
+#include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_model.h>
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <boost/json.hpp>
 
 // #697 on the whole engine frame: a geometry tag a component holds goes to the renderer's geometry manager, which loads
 // it itself. A component anything wrote (a snapshot, a script, an agent) must not make it read user://.
@@ -105,6 +107,23 @@ BOOST_AUTO_TEST_CASE(AGeometryTagOfAComponent_IsNotLoadedFromUser_ByTheFrame, * 
 	BOOST_TEST(run_frames(3) == 3);
 	test_util::pump(tasks);
 	BOOST_TEST(user.resolves == 0u);
+}
+
+// #812: a texture with a __parent saves its __parent and only what differs from the parent.
+BOOST_AUTO_TEST_CASE(ATexture2dWithAParent_ResavesItsParentAndOnlyItsOwnFields)
+{
+	load_desc("base.tex.desc", R"json({"__type":"texture_2d_desc","name":"base","data":"user://b.png"})json");
+	const auto child = load_desc("own.tex.desc", R"json({"__type":"texture_2d_desc","__parent":"memory://t/base.tex.desc","name":"own"})json");
+	BOOST_REQUIRE(child.is_ready());
+
+	core::desc::desc_adapter_t adapter(storage.require<res::resource_system>(), storage.require<desc::desc_system>());
+	const auto bytes = adapter.serialize(res::tag{ "memory://t/own.tex.desc" }, child.get_sync());
+	const auto saved = boost::json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())).as_object();
+	BOOST_TEST(saved.at("__type").as_string() == "texture_2d_desc");
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.tex.desc");
+	BOOST_TEST(saved.at("name").as_string() == "own");
+	BOOST_TEST(!saved.contains("header"));
+	BOOST_TEST(!saved.contains("data"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
