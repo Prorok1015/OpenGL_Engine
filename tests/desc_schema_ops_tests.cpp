@@ -1663,38 +1663,56 @@ BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNoWarning, ops_fixture)
 	BOOST_TEST(warnings == 0);
 }
 
-BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldGoesBackToItsDefault_StdOptionalAttributeAndRuntime, ops_fixture)
+// What the assembler does with a __parent: the parent's values are copied, then the child's data is read over them.
+BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldResetsItWhateverTheParentSet_StdOptionalAttributeAndRuntime, ops_fixture)
 {
 	// std::optional: nothing
-	ops_test::keyed typed;
-	typed.deserialize(ds, parse(R"({ "gain": 2.0 })"));
-	BOOST_REQUIRE(typed.gain.has_value());
-	typed.deserialize(ds, parse(R"({ "gain": null })"));
-	BOOST_TEST(!typed.gain.has_value());
+	ops_test::keyed typed_parent;
+	typed_parent.deserialize(ds, parse(R"({ "gain": 2.0 })"));
+	ops_test::keyed typed_child;
+	typed_parent.copy_to(typed_child);
+	BOOST_REQUIRE(typed_child.gain.has_value());
+	typed_child.deserialize(ds, parse(R"({ "gain": null })"));
+	BOOST_TEST(!typed_child.gain.has_value());
 
-	// field_attr::optional() on a plain member: the default of the schema
-	ops_test::attr_optional_desc plain;
-	plain.deserialize(ds, parse(R"({ "level": 3.0, "label": "set" })"));
-	BOOST_TEST(plain.level == 3.0f);
-	plain.deserialize(ds, parse(R"({ "level": null, "label": null })"));
-	BOOST_TEST(plain.level == 7.0f);
-	BOOST_TEST(plain.label == "x");
+	// field_attr::optional() on a plain member: the default of the schema, not the parent's value
+	ops_test::attr_optional_desc plain_parent;
+	plain_parent.deserialize(ds, parse(R"({ "level": 3.0, "label": "set" })"));
+	ops_test::attr_optional_desc plain_child;
+	plain_parent.copy_to(plain_child);
+	BOOST_TEST(plain_child.level == 3.0f);
+	plain_child.deserialize(ds, parse(R"({ "level": null, "label": null })"));
+	BOOST_TEST(plain_child.level == 7.0f);
+	BOOST_TEST(plain_child.label == "x");
 
-	// a runtime schema: the default when it has one, the empty value of the kind when it has none
+	// a runtime schema: the default when it has one, the empty value of the kind when it has none (enum: its first item,
+	// structure: its fields at their defaults, desc_ref: no reference)
+	register_health(ds);
 	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(json::parse(R"({
 		"name": "ops.runtime_optional", "kind": "component",
 		"fields": [
 			{ "name": "hp", "kind": "f32", "default": 100, "optional": true },
-			{ "name": "extra", "kind": "f32", "optional": true }
+			{ "name": "extra", "kind": "f32", "optional": true },
+			{ "name": "state", "kind": "enumeration", "ref_type": "ops_mode", "optional": true },
+			{ "name": "inner", "kind": "structure", "ref_type": "ops.inner", "optional": true },
+			{ "name": "tag", "kind": "res_tag", "optional": true }
 		]
-	})").as_object())));
-	const auto runtime = spawn("ops.runtime_optional");
-	BOOST_REQUIRE(runtime);
-	runtime->deserialize(ds, parse(R"({ "hp": 5.0, "extra": 3.0 })"));
-	BOOST_TEST(runtime->get("/hp").as_double() == 5.0);
-	runtime->deserialize(ds, parse(R"({ "hp": null, "extra": null })"));
-	BOOST_TEST(runtime->get("/hp").as_double() == 100.0);
-	BOOST_TEST(runtime->get("/extra").as_double() == 0.0);
+	})").as_object(), &ds.schemas())));
+	const auto parent = spawn("ops.runtime_optional");
+	const auto child = spawn("ops.runtime_optional");
+	BOOST_REQUIRE(parent);
+	BOOST_REQUIRE(child);
+	parent->deserialize(ds, parse(R"({ "hp": 5.0, "extra": 3.0, "state": "automatic", "inner": { "scale": 9.0, "flag": true }, "tag": "res://a.png" })"));
+	parent->copy_to(*child);
+	BOOST_TEST(child->get("/hp").as_double() == 5.0);
+	BOOST_TEST(child->get("/inner/scale").as_double() == 9.0);
+	child->deserialize(ds, parse(R"({ "hp": null, "extra": null, "state": null, "inner": null, "tag": null })"));
+	BOOST_TEST(child->get("/hp").as_double() == 100.0);
+	BOOST_TEST(child->get("/extra").as_double() == 0.0);
+	BOOST_TEST(child->get("/state").as_string() == "off");
+	BOOST_TEST(child->get("/inner/scale").as_double() == 1.0);
+	BOOST_TEST(!child->get("/inner/flag").as_bool());
+	BOOST_TEST(child->get("/tag").as_string() == "");
 }
 
 BOOST_FIXTURE_TEST_CASE(ANullOverrideIsValidForEveryKindOfOptionalField, ops_fixture)
