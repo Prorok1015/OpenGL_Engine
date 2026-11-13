@@ -78,6 +78,7 @@ edt::open_result edt::data_document::read_file(const res::tag& file, json::objec
 		checks->missing = read.missing;
 		checks->top_layer = read.top_layer;
 		checks->in_open_level = read.in_open_level;
+		checks->version = read.version;
 	}
 	if (!read.error.empty()) {
 		return open_result::failure(std::format("{} {}", where(file), read.error));
@@ -307,12 +308,14 @@ void edt::data_document::on_changed(const res::tag& tag)
 	if (tag == m_source) {
 		json::object on_disk;
 		std::string version;
-		const open_result read = read_file(m_source, on_disk, version);
+		desc_file_read seen;
+		const open_result read = read_file(m_source, on_disk, version, &seen);
 		if (read.opened && version == m_version) {
 			m_changed_on_disk = false;
 			return;
 		}
-		if (!read.opened) version = "unreadable";
+		// What the outside change is called when the file does not parse: its bytes, or "missing" when it is gone.
+		if (!read.opened) version = seen.missing ? std::string{ "missing" } : (seen.version.empty() ? std::string{ "unreadable" } : seen.version);
 		if (!is_dirty()) {
 			loaded state;
 			if (open_result reloaded = load(m_source, state); reloaded.opened) {
@@ -467,5 +470,6 @@ edt::save_result edt::data_document::write(bool over)
 	m_saved_own = m_own;
 	m_version = code_version_of(bytes);
 	m_changed_on_disk = false;
+	m_flagged_version.clear();
 	return save_result::ok();
 }

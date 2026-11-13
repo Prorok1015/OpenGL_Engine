@@ -167,6 +167,41 @@ namespace {
 			return false;
 		}
 
+		// The same question for a path no file has: it is the open level's own name or one of the names in its `worlds`, so a
+		// file written there would be the level's. Names are compared the way the file system does (without case on Windows
+		// and macOS). A level file that cannot be read or understood makes every name its own, as above.
+		bool names_open_level(const std::string& relative) const
+		{
+			if (!m_deps.open_level_files) return false;
+			const std::string wanted = name_key(relative);
+			for (const std::string& open : m_deps.open_level_files()) {
+				if (name_key(open) == wanted) return true;
+				const located_file level = locate(open);
+				if (!level.found) continue;
+				const read_result text = read_fresh(open, level);
+				if (!text.ok()) return true;
+				boost::system::error_code parse_error;
+				const json::value parsed = json::parse(text_of(text.bytes), parse_error);
+				if (parse_error || !parsed.is_object()) return true;
+				const json::value* worlds = parsed.as_object().if_contains("worlds");
+				if (!worlds || !worlds->is_array()) continue;
+				for (const json::value& world : worlds->as_array()) {
+					if (!world.is_string()) continue;
+					const edt::agent_level_path named = edt::check_agent_folder(view_of(world.as_string()));
+					if (named.ok() && name_key(named.path) == wanted) return true;
+				}
+			}
+			return false;
+		}
+
+		static std::string name_key(std::string name)
+		{
+#if defined(_WIN32) || defined(__APPLE__)
+			std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+			return name;
+		}
+
 		static res::tag tag_of(const std::string& relative)
 		{
 			return res::tag("res://" + relative);
@@ -661,10 +696,7 @@ edt::desc_file_read edt::read_desc_file(res::resource_system& resources, const d
 		out.missing = true;
 		// A new file lands in the top layer; it is the open level's only when it has the level's own name.
 		out.top_layer = true;
-		if (layout.open_level_files) {
-			const std::vector<std::string> open = layout.open_level_files();
-			out.in_open_level = std::ranges::find(open, named.path) != open.end();
-		}
+		out.in_open_level = files.names_open_level(named.path);
 		return out;
 	}
 	out.top_layer = files.is_top_layer(found);
@@ -676,5 +708,6 @@ edt::desc_file_read edt::read_desc_file(res::resource_system& resources, const d
 		return out;
 	}
 	out.bytes = std::move(read.bytes);
+	out.version = edt::code_version_of(out.bytes);
 	return out;
 }

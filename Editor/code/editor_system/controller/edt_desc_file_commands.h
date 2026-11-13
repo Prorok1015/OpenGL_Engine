@@ -74,6 +74,8 @@ namespace edt
 		// the top layer). `missing`: there is no such file in any layer.
 		bool located = false;
 		bool missing = false;
+		// code_version_of(bytes) when the bytes were read, whether or not they parse.
+		std::string version;
 	};
 	desc_file_read read_desc_file(res::resource_system& resources, const desc::desc_system& descriptions, const desc_file_layout& layout, const res::tag& tag);
 
