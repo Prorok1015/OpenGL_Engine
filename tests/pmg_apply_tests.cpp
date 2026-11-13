@@ -2,6 +2,7 @@
 #include "test_fixture_project.hpp"
 #include "test_scene_env.hpp"
 #include <snk/project_migration/pmg_apply.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
@@ -362,12 +363,12 @@ BOOST_AUTO_TEST_CASE(KeepRootGuid_TheEnginesSave_AddsNoGuid_AndKeepsTheFilesOne)
 	json::value none = saved_of("none");
 	BOOST_REQUIRE(none.as_object().contains("__guid"));
 	const json::value none_file = json::parse(read_text(copy.res() / "guid/none.desc"));
-	BOOST_TEST(pmg::keep_root_guid(none.as_object(), none_file.as_object()));
+	BOOST_TEST(desc::keep_root_guid(none.as_object(), none_file.as_object()));
 	BOOST_TEST(!none.as_object().contains("__guid"));
 
 	json::value kept = saved_of("kept");
 	const json::value kept_file = json::parse(read_text(copy.res() / "guid/kept.desc"));
-	BOOST_TEST(!pmg::keep_root_guid(kept.as_object(), kept_file.as_object()));
+	BOOST_TEST(!desc::keep_root_guid(kept.as_object(), kept_file.as_object()));
 	BOOST_TEST(kept.as_object().at("__guid").as_string() == guid);
 }
 

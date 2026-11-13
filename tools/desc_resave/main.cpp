@@ -11,7 +11,7 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
-#include <snk/project_migration/pmg_apply.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
@@ -156,7 +156,7 @@ int main(int argc, char** argv)
 		const json::value before = json::parse(as_text(original), before_error);
 		json::value after = json::parse(as_text(written), after_error);
 		if (!before_error && !after_error && before.is_object() && after.is_object()
-			&& prj::migration::keep_root_guid(after.as_object(), before.as_object())) {
+			&& desc::keep_root_guid(after.as_object(), before.as_object())) {
 			written = desc_sys.serialize_to_bytes(after);
 		}
 		if (written == original) {
