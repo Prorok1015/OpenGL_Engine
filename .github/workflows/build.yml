@@ -1062,7 +1062,8 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - env:
+      - name: Check the plan and the jobs it asked for
+        env:
           NEEDS: ${{ toJSON(needs) }}
         shell: bash
         run: |

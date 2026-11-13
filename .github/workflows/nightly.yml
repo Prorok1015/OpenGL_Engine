@@ -12,9 +12,6 @@ name: Nightly
 # night closes it.
 
 on:
-  # PROBE (#830): runs on this PR to show the report; removed in its own commit before the PR leaves draft.
-  pull_request:
-    types: [opened, synchronize, edited]
   schedule:
     # 23:37 UTC: off the hours GitHub's runners are busiest, and the night for the team (UTC+3).
     - cron: '37 23 * * *'
@@ -29,9 +26,8 @@ on:
         type: boolean
         default: false
 
-# PROBE (#830): its own group, so it never displaces a night waiting in the queue.
 concurrency:
-  group: nightly-${{ github.workflow }}${{ github.event_name == 'pull_request' && '-probe' || '' }}
+  group: nightly-${{ github.workflow }}
   cancel-in-progress: false
 
 permissions:
@@ -65,7 +61,7 @@ jobs:
             core.setOutput('sha', sha);
             // The run's own head_sha is the default branch's for a schedule: what a night checked is in the name of its
             // last job, "Checked <ref>@<sha>", which runs only when every job before it passed. Only nights count
-            // (schedule, by hand) on the same ref: never a probe, never a dispatch on another branch.
+            // (schedule, by hand) on the same ref: never a dispatch on another branch.
             let last = '';
             {
               const runs = await github.rest.actions.listWorkflowRuns({
@@ -79,9 +75,7 @@ jobs:
                 if (marker) { last = marker.name.slice(prefix.length); break; }
               }
             }
-            let run = force || last !== sha;
-            // PROBE (#830): on a PR only the probe and the report run.
-            if (context.eventName === 'pull_request') run = 'probe';
+            const run = force || last !== sha;
             if (!run) core.notice(`${sha} was already green: nothing to run`);
             core.setOutput('run', String(run));
             core.setOutput('last_green', last);
@@ -470,24 +464,11 @@ jobs:
     steps:
       - run: echo "every nightly job passed on ${{ needs.plan.outputs.sha }}"
 
-  # PROBE (#830): red while the PR's title holds PROBE_RED, else green (editing the title runs it again).
-  probe:
-    name: Probe (nightly report)
-    needs: plan
-    if: needs.plan.outputs.run == 'probe'
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          if [ "${{ contains(github.event.pull_request.title, 'PROBE_RED') }}" = "true" ]; then
-            echo "::error::probe: a red night"; exit 1
-          fi
-          echo "probe: a green night"
-
   # A red night opens an issue (bug, ci, P0) with the run and the commits since the last green night, or comments on the
   # one that is open; a green night closes it. A plan that did not succeed is a red night: nothing was checked.
   report:
     name: Report (nightly)
-    needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package, checked, probe]
+    needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package, checked]
     if: always() && (needs.plan.result != 'success' || needs.plan.outputs.run != 'false')
     runs-on: ubuntu-latest
     permissions:
