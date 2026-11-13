@@ -170,6 +170,10 @@ namespace desc
 	// fit ends it. Silent: nothing is logged, a hostile patch cannot flood the log; `pointer` is the full path of the member.
 	SNK_API override_failure check_override_object(const type_schema& schema, const json::object& patch, const json::object* current = nullptr, const schema_registry* resolve = nullptr);
 
+	// What the field (or list item) `failure.pointer` names expects, for a message: "a number (f32)", "an object of 'edt.limits'",
+	// "one of the values of 'edt_mode'", "a list". Empty for a failure that is valid or stale, or a pointer no schema explains.
+	SNK_API std::string override_expectation(const type_schema& schema, const override_failure& failure, const schema_registry* resolve = nullptr);
+
 	// Relative tolerance for float32 values (float32 holds ~7 digits); shared by diff and the editor's override edits.
 	inline constexpr double float_relative_tolerance = 1e-6;
 

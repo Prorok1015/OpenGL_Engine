@@ -682,6 +682,27 @@ namespace desc
 		override_failure check_members(const type_schema& schema, const std::string& root_prefix, const std::string& local,
 			const json::object& patch, const json::object* current, const schema_registry* resolve);
 
+		// The elements of a list of structures, each by the schema of its type: the failure names the element and the field in it
+		// ("/list/3/field"). An element that is no object is a bad value at its own index.
+		override_failure check_array_items(const type_schema& nested, const std::string& at, const json::array& items, const schema_registry* resolve)
+		{
+			for (std::size_t i = 0; i < items.size(); ++i) {
+				const std::string element_at = at + "/" + std::to_string(i);
+				if (!items[i].is_object()) {
+					return { override_status::bad_value, element_at };
+				}
+				if (auto failure = check_members(nested, element_at, {}, items[i].as_object(), nullptr, resolve); failure.status != override_status::valid) {
+					return failure;
+				}
+			}
+			return {};
+		}
+
+		const type_schema* items_schema(const field_schema& field, const schema_registry* resolve)
+		{
+			return field.kind == field_kind::array && field.element == field_kind::structure && resolve ? resolve->find(field.ref_type) : nullptr;
+		}
+
 		override_status check_override(const type_schema& schema, std::string_view pointer, const json::value& value, const schema_registry* resolve)
 		{
 			for (const auto& field : schema.fields) {
@@ -694,6 +715,11 @@ namespace desc
 					}
 					if (field.optional && value.is_null()) {
 						return override_status::valid;
+					}
+					if (value.is_array()) {
+						if (const type_schema* nested = items_schema(field, resolve)) {
+							return check_array_items(*nested, {}, value.as_array(), resolve).status;
+						}
 					}
 					if (field.kind == field_kind::map && field.element == field_kind::structure && value.is_object()) {
 						if (const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr) {
@@ -729,8 +755,13 @@ namespace desc
 					if (!json_array_index(tokens.front(), std::numeric_limits<std::size_t>::max() - 1, index)) {
 						return override_status::stale;
 					}
+					const type_schema* nested = items_schema(field, resolve);
 					if (tokens.size() > 1) {
-						return override_status::valid;
+						const std::size_t inner = rest.find('/', 1);
+						return nested && inner != std::string_view::npos ? check_override(*nested, rest.substr(inner), value, resolve) : override_status::valid;
+					}
+					if (nested) {
+						return value.is_object() ? check_members(*nested, {}, {}, value.as_object(), nullptr, resolve).status : override_status::bad_value;
 					}
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
@@ -786,6 +817,16 @@ namespace desc
 				const json::value* now = current ? current->if_contains(member.key()) : nullptr;
 				const json::object* now_object = now && now->is_object() ? &now->as_object() : nullptr;
 
+				if (member.value().is_array()) {
+					const field_schema* field = schema.find_field(here);
+					if (const type_schema* nested = field ? items_schema(*field, resolve) : nullptr) {
+						if (auto failure = check_array_items(*nested, root_prefix + here, member.value().as_array(), resolve); failure.status != override_status::valid) {
+							return failure;
+						}
+						continue;
+					}
+				}
+
 				if (member.value().is_object()) {
 					if (is_field_container(schema, here, resolve)) {
 						if (auto failure = check_members(schema, root_prefix, here, member.value().as_object(), now_object, resolve); failure.status != override_status::valid) {
@@ -813,6 +854,65 @@ namespace desc
 	override_failure check_override_object(const type_schema& schema, const json::object& patch, const json::object* current, const schema_registry* resolve)
 	{
 		return check_members(schema, {}, {}, patch, current, resolve);
+	}
+
+	namespace
+	{
+		std::string expectation_of(const field_schema& field)
+		{
+			switch (field.kind) {
+			case field_kind::structure: return field.ref_type.empty() ? std::string{ "an object" } : std::format("an object of '{}'", field.ref_type);
+			case field_kind::array: return "a list";
+			case field_kind::map: return "an object (key to value)";
+			case field_kind::enumeration: return field.ref_type.empty() ? std::string{ "an enumeration value" } : std::format("one of the values of '{}'", field.ref_type);
+			default: return std::format("a value of kind {}", to_string(field.kind));
+			}
+		}
+
+		std::string element_expectation_of(const field_schema& field)
+		{
+			if (field.element == field_kind::structure) {
+				return field.ref_type.empty() ? std::string{ "an object" } : std::format("an object of '{}'", field.ref_type);
+			}
+			if (field.element == field_kind::enumeration) {
+				return field.ref_type.empty() ? std::string{ "an enumeration value" } : std::format("one of the values of '{}'", field.ref_type);
+			}
+			return std::format("a value of kind {}", to_string(field.element));
+		}
+	}
+
+	std::string override_expectation(const type_schema& schema, const override_failure& failure, const schema_registry* resolve)
+	{
+		if (failure.status != override_status::bad_value) {
+			return {};
+		}
+		const type_schema* current = &schema;
+		std::string_view rest = failure.pointer;
+		for (int depth = 0; depth < 16 && current; ++depth) {
+			const field_schema* best = nullptr;
+			for (const auto& field : current->fields) {
+				if (field.key.empty() || !rest.starts_with(field.key)) continue;
+				if (rest.size() > field.key.size() && rest[field.key.size()] != '/') continue;
+				if (!best || field.key.size() > best->key.size()) best = &field;
+			}
+			if (!best) return {};
+			rest.remove_prefix(best->key.size());
+			if (rest.empty()) return expectation_of(*best);
+			const type_schema* nested = resolve && !best->ref_type.empty() ? resolve->find(best->ref_type) : nullptr;
+			if (best->kind == field_kind::structure) {
+				current = nested;
+				continue;
+			}
+			if (best->kind == field_kind::array || best->kind == field_kind::map) {
+				const std::size_t inner = rest.find('/', 1);
+				if (inner == std::string_view::npos) return element_expectation_of(*best);
+				rest.remove_prefix(inner);
+				current = best->element == field_kind::structure ? nested : nullptr;
+				continue;
+			}
+			return {};
+		}
+		return {};
 	}
 
 	bool json_equal(const json::value& a, const json::value& b, double tolerance)
