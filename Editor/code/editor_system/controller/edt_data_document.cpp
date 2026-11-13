@@ -4,6 +4,8 @@
 #include "edt_schema_inspector.h"
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_system.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
@@ -96,18 +98,15 @@ edt::open_result edt::data_document::read_file(const res::tag& file, json::objec
 	return open_result::ok();
 }
 
-edt::open_result edt::data_document::open(const res::tag& file)
+edt::open_result edt::data_document::load(const res::tag& file, loaded& out) const
 {
-	m_open = false;
 	desc::desc_system* descs = m_services.descs();
 	if (!descs) {
 		return open_result::failure("the project resources are not available");
 	}
 
-	json::object own;
-	std::string version;
 	desc_file_read checks;
-	if (open_result read = read_file(file, own, version, &checks); !read.opened) {
+	if (open_result read = read_file(file, out.own, out.version, &checks); !read.opened) {
 		return read;
 	}
 	if (!checks.top_layer) {
@@ -116,20 +115,26 @@ edt::open_result edt::data_document::open(const res::tag& file)
 	if (checks.in_open_level) {
 		return open_result::failure(std::format("{} belongs to the open level (its file or one of its worlds)", where(file)));
 	}
-	const json::value* type_field = own.if_contains("__type");
+	const json::value* type_field = out.own.if_contains("__type");
 	if (!type_field || !type_field->is_string()) {
 		return open_result::failure(std::format("{} /__type: missing or not a string", where(file)));
 	}
-	const std::string type{ type_field->as_string() };
-	const desc::type_schema* type_schema = descs->find_schema(type);
+	out.type = std::string{ type_field->as_string() };
+	const desc::type_schema* type_schema = descs->find_schema(out.type);
 	if (!type_schema) {
-		return open_result::failure(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), type));
+		return open_result::failure(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), out.type));
 	}
 	if (!type_schema->is_document) {
-		return open_result::failure(std::format("{} /__type: '{}' is not a data document type", where(file), type));
+		return open_result::failure(std::format("{} /__type: '{}' is not a data document type", where(file), out.type));
 	}
+	return resolve_chain(file, out.own, out.type, out.inherited, out.parents);
+}
 
+edt::open_result edt::data_document::resolve_chain(const res::tag& file, const json::object& own, const std::string& type,
+	json::object& inherited, std::vector<res::tag>& parents) const
+{
 	std::vector<json::object> chain;
+	parents.clear();
 	std::unordered_set<std::string> seen{ std::string{ file.view() } };
 	res::tag current_tag = file;
 	json::object current = own;
@@ -148,21 +153,22 @@ edt::open_result edt::data_document::open(const res::tag& file)
 		if (chain.size() >= k_max_chain) {
 			return open_result::failure(std::format("{} /__parent: the chain has more than {} parents", where(file), k_max_chain));
 		}
-		json::object loaded;
+		parents.push_back(*parent);
+		json::object loaded_parent;
 		std::string ignored;
-		if (open_result read = read_file(*parent, loaded, ignored); !read.opened) {
+		if (open_result read = read_file(*parent, loaded_parent, ignored); !read.opened) {
 			return open_result::failure(std::format("{} /__parent: {}", where(current_tag), read.error));
 		}
-		const json::value* parent_type = loaded.if_contains("__type");
+		const json::value* parent_type = loaded_parent.if_contains("__type");
 		if (!parent_type || !parent_type->is_string() || std::string_view{ parent_type->as_string() } != type) {
 			return open_result::failure(std::format("{} /__parent: '{}' is of another type than '{}'", where(current_tag), parent->view(), type));
 		}
 		current_tag = *parent;
-		current = loaded;
-		chain.push_back(std::move(loaded));
+		current = loaded_parent;
+		chain.push_back(std::move(loaded_parent));
 	}
 
-	json::object inherited;
+	inherited.clear();
 	for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
 		json::object layer;
 		for (const auto& member : *it) {
@@ -172,17 +178,145 @@ edt::open_result edt::data_document::open(const res::tag& file)
 		}
 		desc::json_deep_merge(inherited, layer);
 	}
+	return open_result::ok();
+}
 
+void edt::data_document::apply(const res::tag& file, loaded&& state)
+{
 	m_source = file;
 	m_title = std::string{ stem_of(file) };
-	m_type = type;
-	m_own = std::move(own);
+	m_type = std::move(state.type);
+	m_own = std::move(state.own);
 	m_saved_own = m_own;
-	m_inherited = std::move(inherited);
-	m_version = std::move(version);
+	m_inherited = std::move(state.inherited);
+	m_version = std::move(state.version);
+	m_parents = std::move(state.parents);
+	m_chain_problem.clear();
+	m_changed_on_disk = false;
 	++m_generation;
+	watch_files();
+}
+
+edt::open_result edt::data_document::open(const res::tag& file)
+{
+	m_open = false;
+	unwatch_files();
+	loaded state;
+	if (open_result result = load(file, state); !result.opened) {
+		return result;
+	}
+	apply(file, std::move(state));
 	m_open = true;
 	return open_result::ok();
+}
+
+edt::data_document::~data_document()
+{
+	unwatch_files();
+}
+
+void edt::data_document::watch_files()
+{
+	std::vector<res::tag> wanted{ m_source };
+	wanted.insert(wanted.end(), m_parents.begin(), m_parents.end());
+	sync_watches(wanted);
+}
+
+void edt::data_document::sync_watches(const std::vector<res::tag>& wanted)
+{
+	res::resource_system* resources = m_services.writable_resources();
+	if (m_watching != resources) {
+		unwatch_files();
+		m_watching = resources;
+	}
+	if (!m_watching) {
+		return;
+	}
+	// A watcher registered again would get a newer epoch than a signal that is still waiting for the main thread, and
+	// that signal would skip it: only what changed is (un)watched.
+	for (auto it = m_watched.begin(); it != m_watched.end();) {
+		if (std::ranges::find(wanted, *it) == wanted.end()) {
+			m_watching->unwatch(*it, this);
+			it = m_watched.erase(it);
+		} else {
+			++it;
+		}
+	}
+	for (const res::tag& tag : wanted) {
+		if (std::ranges::find(m_watched, tag) == m_watched.end()) {
+			m_watching->watch(tag, this, [this](const res::tag& changed) { on_changed(changed); });
+			m_watched.push_back(tag);
+		}
+	}
+}
+
+void edt::data_document::unwatch_files()
+{
+	if (m_watching) {
+		for (const res::tag& tag : m_watched) {
+			m_watching->unwatch(tag, this);
+		}
+	}
+	m_watched.clear();
+	m_watching = nullptr;
+}
+
+void edt::data_document::announce() const
+{
+	if (m_events) {
+		m_events->document_changed.emit(id(), m_generation);
+	}
+}
+
+void edt::data_document::on_changed(const res::tag& tag)
+{
+	if (!m_open) {
+		return;
+	}
+	if (tag == m_source) {
+		json::object on_disk;
+		std::string version;
+		const open_result read = read_file(m_source, on_disk, version);
+		if (read.opened && version == m_version) {
+			m_changed_on_disk = false;
+			return;
+		}
+		if (!is_dirty()) {
+			loaded state;
+			if (open_result reloaded = load(m_source, state); reloaded.opened) {
+				apply(m_source, std::move(state));
+				announce();
+				return;
+			}
+		}
+		m_changed_on_disk = true;
+		announce();
+		return;
+	}
+
+	json::object inherited;
+	std::vector<res::tag> parents;
+	if (open_result chain = resolve_chain(m_source, m_own, m_type, inherited, parents); !chain.opened) {
+		std::vector<res::tag> wanted{ m_source };
+		wanted.insert(wanted.end(), parents.begin(), parents.end());
+		sync_watches(wanted);
+		if (m_chain_problem != chain.error) {
+			m_chain_problem = std::move(chain.error);
+			egLOG_WARN("editor", "{} keeps its previous parents: {}", m_source.view(), m_chain_problem);
+			announce();
+		}
+		return;
+	}
+	const bool recovered = !m_chain_problem.empty();
+	m_chain_problem.clear();
+	if (!recovered && inherited == m_inherited && parents == m_parents) {
+		return;
+	}
+	m_inherited = std::move(inherited);
+	m_parents = std::move(parents);
+	watch_files();
+	++m_generation;
+	announce();
 }
 
 json::value edt::data_document::shown() const
@@ -242,6 +376,9 @@ edt::save_result edt::data_document::save()
 	}
 	if (!is_dirty()) {
 		return save_result::ok();
+	}
+	if (m_changed_on_disk) {
+		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 	desc::desc_system* descs = m_services.descs();
 	res::resource_system* reader = m_services.resources();
