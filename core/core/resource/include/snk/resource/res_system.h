@@ -13,6 +13,7 @@
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -162,20 +163,24 @@ namespace res
 		// dependency graph, transitively) right away. The watchers are called later on the main thread
 		// (task_system::drain_main), one task per signal: those registered before the signal and still registered by
 		// then, each tag of the batch once, parents before the resources that depend on them.
-		// With an asset index, a file with an ID is signalled under its ID; one that is gone (deleted, or renamed away)
-		// waits for the index's batch (apply_asset_batch): a rename keeps what was loaded.
+		// With an asset index, a file with an ID is signalled under its ID; one that is gone from disk (deleted, renamed
+		// away) waits for the index owner's batch (apply_asset_batch), so a rename keeps what was loaded.
 		void signal_changed(const res::tag& tag);
 
-		// The asset index (EPIC-57 section 5), root only, main thread: a file it gives an ID is cached, pinned, watched and
-		// reloaded under {ID, type}, so its tags of any spelling share one block and a rename keeps it; anything else stays
-		// keyed by its tag. Without one (Shipping until #46, tests) everything is keyed by tag, as before. Attached once
-		// the index can answer, detached (nullptr) before it goes: what waits for its batch is evicted then, and what was
-		// keyed by an ID stays so until released.
+		// The asset index (EPIC-57 section 5), root only, main thread. The first entry of a tag (a cached block, a pin, an
+		// alias, a dependency edge, a watcher) binds the tag to its key: {ID, type} when the index gives the file an ID, so
+		// the tag's spellings share one block and a rename keeps it, {tag, type} otherwise. Without an index (Shipping until
+		// #46, tests) everything is keyed by tag, as before. Setting another index (nullptr detaches it) evicts what waits
+		// for a batch and binds every tag anew: entries move to their new key, none is lost.
 		void set_asset_index(std::shared_ptr<const asset_index> index);
-		// Main thread, root only: the owner of the index has taken in a batch of file changes and updated the index.
-		// A file that is gone keeps its resource when `moved` names it (from, to) and the index gives `to` the same ID;
-		// everything else that waited for the batch is evicted now, as signal_changed would have done.
-		void apply_asset_batch(std::span<const std::pair<res::tag, res::tag>> moved);
+		// The number of the batch subscribe_changes listeners are being given now (main thread, inside a listener): the
+		// index owner passes the last one it has taken in to apply_asset_batch.
+		std::uint64_t delivering_batch() const;
+		// Main thread, root only: the index owner has taken in the batches up to `through` and updated the index. A file
+		// gone in one of them keeps its resource when `moved` names it (from, to) with the same ID, and its watchers and
+		// alias mappings follow it to `to`; anything else gone in them is evicted now, as signal_changed would have done
+		// (and forgotten, like erase(), when it went through remove() or rename()). Tags are then bound anew.
+		void apply_asset_batch(std::uint64_t through, std::span<const std::pair<res::tag, res::tag>> moved);
 		// Read-only: files gone from disk whose eviction waits for apply_asset_batch. For tests and diagnostics.
 		std::size_t waiting_for_index_count() const;
 
@@ -349,13 +354,50 @@ namespace res
 		};
 
 		void check_writable(const res::tag& tag) const;
-		// The key of `tag` in the cache, the pins, the aliases, the dependency graph and the watchers: its ID as the tag
-		// asset-id://<uuid> when the root's index gives it one, the tag itself otherwise. Loads use the requested tag.
-		res::tag node_of(const res::tag& tag) const;
 		std::shared_ptr<const asset_index> current_index() const;
-		// signal_changed() of a file with an ID (`node`) that is gone from disk: kept for apply_asset_batch.
-		bool wait_for_index(const res::tag& tag, const res::tag& node);
-		void evict_waiting(std::vector<res::tag> nodes);
+		// What `index` keys `tag` by: its ID as the tag asset-id://<uuid>, or the tag itself.
+		static res::tag index_node(const res::tag& tag, const asset_index* index);
+		// The key the entries of `tag` are under in this system: its binding, or what the index says now (nothing bound).
+		res::tag node_of(const res::tag& tag) const;
+		// The same with m_cache_mutex held.
+		res::tag node_locked(const res::tag& tag) const;
+		// m_cache_mutex held: entries sit under the tag itself (made before the index knew its file, or without an index),
+		// so it stays keyed by tag until rebind_all moves them.
+		bool keyed_by_tag_locked(const res::tag& tag) const;
+		// Read before m_cache_mutex is taken, so the index is not asked under it: the binding or the index's answer, and
+		// the rebind epoch it was read at.
+		struct node_candidate {
+			res::tag node;
+			std::uint64_t epoch = 0;
+		};
+		node_candidate candidate_node(const res::tag& tag) const;
+		// m_cache_mutex held (unique): the binding of `tag`, made from `candidate` (asked anew when a rebind came between).
+		res::tag bind_locked(const res::tag& tag, const node_candidate& candidate);
+		// A gone file with an ID (`node`): kept for apply_asset_batch unless the index changed since `generation` was read.
+		bool wait_for_index(const res::tag& tag, const res::tag& node, std::uint64_t generation, bool forget);
+		struct waiting_entry {
+			res::tag node;
+			// The batch its change came in (delivering_batch); 0 until that batch is delivered.
+			std::uint64_t batch = 0;
+			// Went through remove() or rename(): forgotten (forget_erased) unless it moved.
+			bool forget = false;
+		};
+		// After rebind_all (`remap`: its old key -> new key), so the watchers are told under the key they are under now.
+		void evict_waiting(std::vector<std::pair<res::tag, waiting_entry>> entries,
+			const std::unordered_map<res::tag, res::tag>& remap);
+		// apply_asset_batch: the watchers and alias mappings of `node` that name `from` name `to`, here and in the layers.
+		void follow_move(const res::tag& node, const res::tag& from, const res::tag& to);
+		// Root, main thread: every binding here and in the layers asked anew; entries whose key changed move to the new one.
+		// Returns the keys that moved (old -> new).
+		std::unordered_map<res::tag, res::tag> rebind_all();
+		// (tag, key) of every entry here and in the layers: the bindings, and each key that is a tag (bound to itself).
+		void collect_bindings(std::vector<std::pair<res::tag, res::tag>>& out);
+		void apply_rebind(const std::unordered_map<res::tag, res::tag>& fresh, const std::unordered_map<res::tag, res::tag>& remap);
+		// m_cache_mutex, m_alias_mutex and m_pinning_mutex held (unique): entries under an old key go under its new one.
+		void rekey_locked(const std::unordered_map<res::tag, res::tag>& remap);
+		// warmup / pin_resource: the block pinned (and cached: always, or in a layer when nothing live is) under the key the
+		// tag of `key` is bound to.
+		void pin_bound(const cache_key& key, std::shared_ptr<resource_handle> block, bool always_cache);
 		const resource_system& root() const;
 		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
@@ -422,23 +464,17 @@ namespace res
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// The tags of `protocol` cached here or in a layer, appended to `out` (may repeat).
 		void collect_cached_tags(std::string_view protocol, std::vector<res::tag>& out);
-		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
-		// In the .cpp: the block (its control block and vtable) is made by the engine, never by the code of a game module
-		// that requested it (#416).
-		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key);
-
-		void push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource);
-
-		void push_resource_to_strong_cache(const cache_key& key, std::shared_ptr<resource_handle> resource);
+		// Atomic find-or-insert under the key `tag` is bound to: concurrent requests for one asset share a single block,
+		// only the creator starts the load. In the .cpp: the block (its control block and vtable) is made by the engine,
+		// never by the code of a game module that requested it (#416).
+		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const res::tag& tag, ds::type_id type);
 
 		struct wait_graph;
 
 		// The pipeline: resolve -> collect_dependencies (compute) -> require each dependency, no waiting ->
 		// deserialize (compute) once all are ready. A block with no dependencies is one compute task.
-		// `node`: the key the block is cached under (node_of at request time), for its dependency edges.
-		void start_loading(const res::tag& tag, const res::tag& node, const std::shared_ptr<resource_handle>& block, adapter ad);
-		void collect_stage(const res::tag& tag, const res::tag& node, const std::shared_ptr<resource_handle>& block,
-			const data& raw, const adapter& ad);
+		void start_loading(const res::tag& tag, const std::shared_ptr<resource_handle>& block, adapter ad);
+		void collect_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad);
 		void deserialize_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad, const res_deps& deps);
 		// What a failed dependency means to its dependent (res_dep::failure_kind / json_path), for its diagnostic.
 		struct dependency_role {
@@ -548,12 +584,16 @@ namespace res
 			reload_callback callback;
 			std::uint64_t epoch = 0; // m_watch_epoch value at registration
 			bool keep_dependencies = false;
-			// What the owner watched, and what its callback gets: two spellings of one asset are two watchers.
-			res::tag tag;
+			// The file now: what the callback gets. Follows a rename (apply_asset_batch); unwatch finds the watcher by
+			// the tag it was registered with (its key), which the owner still holds.
+			res::tag current;
 		};
+		// (owner, the tag watched): two spellings of one asset are two watchers.
 		using watch_key = std::pair<void*, std::string>;
-		// node_of(tag) -> (owner, tag) -> watcher.
 		std::unordered_map<res::tag, std::map<watch_key, watcher>> m_watchers;
+		// tag -> the key its entries are under (node_of), guarded by m_cache_mutex. Set by the first entry, changed only by
+		// rebind_all on the main thread; a binding whose key has no entry left is dropped there.
+		std::unordered_map<res::tag, res::tag> m_bindings;
 
 		struct change_subscription {
 			std::uint64_t id = 0;
@@ -604,11 +644,15 @@ namespace res
 		std::uint64_t m_next_parked = 1;
 		std::mutex m_stop_mutex;
 		bool m_stopping = false;
-		// The root's asset index and the files with an ID that are gone and wait for its batch (path -> node).
+		// Root only. The index; its generation (set_asset_index) and the rebind epoch (set_asset_index, apply_asset_batch).
 		mutable std::shared_mutex m_index_mutex;
 		std::shared_ptr<const asset_index> m_index;
+		std::atomic<std::uint64_t> m_index_generation{ 0 };
+		std::atomic<std::uint64_t> m_rebind_epoch{ 0 };
+		// Root only: gone files with an ID, by tag, until apply_asset_batch decides; the batches delivered (main thread).
 		mutable std::mutex m_waiting_mutex;
-		std::unordered_map<res::tag, res::tag> m_waiting_for_index;
+		std::unordered_map<res::tag, waiting_entry> m_waiting_for_index;
+		std::uint64_t m_delivered_batches = 0;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
 	};

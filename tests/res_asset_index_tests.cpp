@@ -5,6 +5,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -73,9 +74,37 @@ private:
 	std::unordered_map<res::asset_id, res::tag> m_paths;
 };
 
-const res::asset_id k_a{ 0x6f1c0b5200004000ull, 0x8000000000000001ull };
-const res::asset_id k_b{ 0x6f1c0b5200004000ull, 0x8000000000000002ull };
+res::asset_id id_number(std::uint64_t n)
+{
+	return res::asset_id{ 0x6f1c0b5200004000ull, 0x8000000000000000ull + n };
+}
 
+const res::asset_id k_a = id_number(1);
+const res::asset_id k_b = id_number(2);
+
+using moves = std::vector<std::pair<res::tag, res::tag>>;
+
+// What a watcher was told, by tag.
+struct watch_log
+{
+	std::vector<std::string> told;
+
+	void watch(res::resource_system& rs, const res::tag& tag)
+	{
+		rs.watch(tag, this, [this](const res::tag& changed) { told.emplace_back(changed.view()); });
+	}
+};
+
+std::vector<std::string> names(std::initializer_list<res::tag> tags)
+{
+	std::vector<std::string> out;
+	for (const auto& tag : tags) {
+		out.emplace_back(tag.view());
+	}
+	return out;
+}
+
+// memory:// in RAM: what the index binds, without files that go away (no batches).
 struct index_fixture : test_util::ram_res_env
 {
 	index_fixture()
@@ -89,20 +118,50 @@ struct index_fixture : test_util::ram_res_env
 		return ptr ? ptr->str() : std::string{ "<failed>" };
 	}
 
-	// A file gone from disk as the watcher reports it: before the index has seen the batch.
-	void take_away(const res::tag& tag)
-	{
-		ram->files.erase(tag);
-		rs->signal_changed(tag);
-	}
-
 	std::shared_ptr<fake_index> index = std::make_shared<fake_index>();
 };
 
-// Counts what a watcher is told, by tag.
-struct watch_log
+// res:// on disk that reports its changes and allows remove/rename: the batches the index owner takes in.
+struct disk_fixture
 {
-	std::vector<std::string> told;
+	test_util::temp_dir dir{ "res_asset_index_disk" };
+	ds::task_system tasks{ test_util::manual_tasks() };
+	std::shared_ptr<fake_index> index = std::make_shared<fake_index>();
+	std::unique_ptr<res::resource_system> rs;
+
+	disk_fixture()
+	{
+		dir.write("res/a.txt", "A");
+		dir.write("res/c.txt", "C");
+		res::watch_options watch;
+		watch.report_changes = true;
+		rs = std::make_unique<res::resource_system>(tasks, res::mount_table{
+			res::mount{ res::tag::default_protocol(), { dir.path() / "res" }, res::mount_access::read_write,
+				res::write_policy::allow_all(), std::move(watch), true },
+		});
+		rs->set_asset_index(index);
+	}
+
+	~disk_fixture()
+	{
+		rs.reset();
+	}
+
+	static res::tag at(std::string_view name)
+	{
+		std::string path{ "res://" };
+		path.append(name);
+		return res::tag{ std::move(path) };
+	}
+
+	void pump() { test_util::pump(tasks); }
+
+	// The index owner took in every batch delivered so far.
+	void apply(const moves& moved)
+	{
+		rs->apply_asset_batch(rs->delivering_batch(), moved);
+		pump();
+	}
 };
 
 }
@@ -140,130 +199,6 @@ BOOST_FIXTURE_TEST_CASE(DuplicateCopyTheIndexLeavesOut_LoadsItsOwnContent, index
 	BOOST_TEST(text(copy) == "copy");
 }
 
-BOOST_FIXTURE_TEST_CASE(Rename_KeepsTheLoadedResourceAndItsWatcher, index_fixture)
-{
-	const res::tag a = put("a.txt", "A");
-	const res::tag b = tag_of("b.txt");
-	index->put(a, k_a);
-
-	const auto before = rs->require_sync<res::text_resource>(a);
-	watch_log log;
-	rs->watch(a, &log, [&log](const res::tag& changed) { log.told.emplace_back(changed.view()); });
-
-	// The watcher's order: the old file is gone, the new one is there, the index learns of it afterwards.
-	ram->files[b] = ram->files.at(a);
-	take_away(a);
-	rs->signal_changed(b);
-	BOOST_TEST(rs->waiting_for_index_count() == 1u);
-	index->move(a, b);
-	const std::pair<res::tag, res::tag> moved[] = { { a, b } };
-	rs->apply_asset_batch(moved);
-	pump();
-
-	BOOST_TEST(rs->waiting_for_index_count() == 0u);
-	BOOST_TEST(log.told.empty());
-	const auto after = rs->require_sync<res::text_resource>(b);
-	BOOST_TEST(after.get_control_block() == before.get_control_block());
-
-	// A later change of its content still reaches the watcher, under the tag it watched.
-	ram->files[b] = test_util::to_bytes("B");
-	rs->signal_changed(b);
-	pump();
-	BOOST_TEST((log.told == std::vector<std::string>{ std::string{ a.view() } }));
-	BOOST_TEST(text(b) == "B");
-
-	rs->unwatch(a, &log);
-	BOOST_TEST(rs->watched_tag_count() == 0u);
-}
-
-BOOST_FIXTURE_TEST_CASE(Rename_KeepsWhatAModuleLayerPinned, index_fixture)
-{
-	const res::tag a = put("a.txt", "A");
-	const res::tag b = tag_of("b.txt");
-	index->put(a, k_a);
-	{
-		res::resource_system layer(*rs);
-		layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
-		const auto pinned = layer.require_sync<res::text_resource>(a).get_control_block();
-
-		ram->files[b] = ram->files.at(a);
-		take_away(a);
-		index->move(a, b);
-		const std::pair<res::tag, res::tag> moved[] = { { a, b } };
-		rs->apply_asset_batch(moved);
-		pump();
-
-		BOOST_TEST(layer.pinned_count() == 1u);
-		const auto after = layer.require_sync<res::text_resource>(b);
-		BOOST_TEST(after.get_control_block() == pinned);
-		BOOST_TEST(after.get_sync()->str() == "pinned");
-		layer.unpin_resource(b);
-		BOOST_TEST(layer.pinned_count() == 0u);
-	}
-}
-
-BOOST_FIXTURE_TEST_CASE(DeleteOfAFileWithId_IsEvictedOnceTheBatchCame, index_fixture)
-{
-	const res::tag a = put("a.txt", "A");
-	index->put(a, k_a);
-	const auto held = rs->require_sync<res::text_resource>(a);
-	watch_log log;
-	rs->watch(a, &log, [&log](const res::tag& changed) { log.told.emplace_back(changed.view()); });
-
-	take_away(a);
-	pump();
-	BOOST_TEST(log.told.empty());
-	BOOST_TEST(rs->waiting_for_index_count() == 1u);
-
-	index->remove(a);
-	rs->apply_asset_batch({});
-	pump();
-	BOOST_TEST(rs->waiting_for_index_count() == 0u);
-	BOOST_TEST(log.told.size() == 1u);
-	rs->unwatch(a, &log);
-}
-
-BOOST_FIXTURE_TEST_CASE(WaitingForAMoveThatTheBatchDoesNotName_IsEvicted, index_fixture)
-{
-	const res::tag a = put("a.txt", "A");
-	const res::tag other = put("other.txt", "O");
-	index->put(a, k_a);
-	index->put(other, k_b);
-	const auto held = rs->require_sync<res::text_resource>(a);
-	watch_log log;
-	rs->watch(a, &log, [&log](const res::tag& changed) { log.told.emplace_back(changed.view()); });
-
-	take_away(a);
-	// A batch about another file decides what waits all the same: it is not kept beyond one batch.
-	const std::pair<res::tag, res::tag> moved[] = { { other, tag_of("elsewhere.txt") } };
-	rs->apply_asset_batch(moved);
-	pump();
-
-	BOOST_TEST(rs->waiting_for_index_count() == 0u);
-	BOOST_TEST(log.told.size() == 1u);
-	rs->unwatch(a, &log);
-}
-
-BOOST_FIXTURE_TEST_CASE(WaitingWithoutABatch_IsEvictedWhenTheIndexIsDetached, index_fixture)
-{
-	const res::tag a = put("a.txt", "A");
-	index->put(a, k_a);
-	const auto held = rs->require_sync<res::text_resource>(a);
-	watch_log log;
-	rs->watch(a, &log, [&log](const res::tag& changed) { log.told.emplace_back(changed.view()); });
-
-	take_away(a);
-	BOOST_TEST(rs->waiting_for_index_count() == 1u);
-	rs->set_asset_index(nullptr);
-	pump();
-
-	BOOST_TEST(rs->waiting_for_index_count() == 0u);
-	BOOST_TEST(log.told.size() == 1u);
-	// Detached, the watcher keyed by the ID is still found by its tag.
-	rs->unwatch(a, &log);
-	BOOST_TEST(rs->watched_tag_count() == 0u);
-}
-
 BOOST_FIXTURE_TEST_CASE(ContentChangeOfAFileWithId_EvictsAtOnce, index_fixture)
 {
 	const res::tag a = put("a.txt", "A");
@@ -293,49 +228,135 @@ BOOST_FIXTURE_TEST_CASE(WithoutIndex_EverythingIsKeyedByTag, test_util::ram_res_
 	const res::tag a = put("a.txt", "A");
 	const auto held = rs->require_sync<res::text_resource>(a);
 	watch_log log;
-	rs->watch(a, &log, [&log](const res::tag& changed) { log.told.emplace_back(changed.view()); });
+	log.watch(*rs, a);
 
 	ram->files.erase(a);
 	rs->signal_changed(a);
 	pump();
 
 	BOOST_TEST(rs->waiting_for_index_count() == 0u);
-	BOOST_TEST(log.told.size() == 1u);
+	BOOST_TEST(log.told == names({ a }));
 	BOOST_TEST(rs->resolve_reference(res::reference{ k_a, tag_of("p.txt") }) == tag_of("p.txt"));
 	rs->unwatch(a, &log);
 }
 
-BOOST_FIXTURE_TEST_CASE(RequestsFromThreads_WhileBatchesApply, index_fixture)
+BOOST_FIXTURE_TEST_CASE(GoneWithoutABatch_IsEvictedWhenTheIndexIsDetached, index_fixture)
 {
 	const res::tag a = put("a.txt", "A");
-	const res::tag b = tag_of("b.txt");
-	ram->files[b] = ram->files.at(a); // both stay readable: only the index moves the ID between them
 	index->put(a, k_a);
+	const auto held = rs->require_sync<res::text_resource>(a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	watch_log log;
+	log.watch(*rs, a);
 
-	constexpr int k_threads = 4;
-	constexpr int k_requests = 200;
+	ram->files.erase(a);
+	rs->signal_changed(a);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 1u);
+	BOOST_TEST(log.told.empty());
+
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(log.told == names({ a }));
+
+	// Detached, what was keyed by the ID is keyed by the tag: signals reach the watcher, unpin finds the pin.
+	rs->signal_changed(a);
+	pump();
+	BOOST_TEST(log.told == names({ a, a }));
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	rs->unwatch(a, &log);
+	BOOST_TEST(rs->watched_tag_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(PinnedBeforeTheFileHadAnId_IsFoundByItsTagAfterwards, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	// The file gets its .resource: the index owner's batch binds the tag to the ID, the entries move with it.
+	index->put(a, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+
+	BOOST_TEST(text(a) == "pinned");
+	rs->signal_changed(a);
+	pump();
+	BOOST_TEST(log.told == names({ a }));
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	rs->unwatch(a, &log);
+	BOOST_TEST(rs->watched_tag_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(AnotherIndex_MovesTheEntriesToItsKeys, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	auto other = std::make_shared<fake_index>();
+	other->put(a, k_b);
+	rs->set_asset_index(other);
+
+	BOOST_TEST(text(a) == "pinned");
+	rs->signal_changed(a);
+	pump();
+	BOOST_TEST(log.told == names({ a }));
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	rs->unwatch(a, &log);
+	BOOST_TEST(rs->watched_tag_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestsAndSignalsFromThreads_WhileBatchesApplyAndTheIndexChanges, index_fixture)
+{
+	constexpr int k_files = 4;
+	std::vector<res::tag> tags;
+	auto other = std::make_shared<fake_index>();
+	for (int i = 0; i < k_files; ++i) {
+		tags.push_back(put("f" + std::to_string(i) + ".txt", std::to_string(i)));
+		index->put(tags.back(), id_number(10 + i));
+		other->put(tags.back(), id_number(20 + i));
+	}
+
+	constexpr int k_requesters = 3;
+	constexpr int k_requests = 300;
 	std::atomic<bool> go{ false };
-	std::vector<std::vector<res::res_handle<res::text_resource>>> handles(k_threads);
+	std::vector<std::vector<std::pair<int, res::res_handle<res::text_resource>>>> handles(k_requesters);
 	std::vector<std::thread> threads;
-	for (int t = 0; t < k_threads; ++t) {
+	for (int t = 0; t < k_requesters; ++t) {
 		threads.emplace_back([&, t] {
 			while (!go.load()) {
 				std::this_thread::yield();
 			}
 			for (int i = 0; i < k_requests; ++i) {
-				handles[t].push_back(rs->require<res::text_resource>(i % 2 == 0 ? a : b));
+				const int file = (t + i) % k_files;
+				handles[t].emplace_back(file, rs->require<res::text_resource>(tags[file]));
 			}
 		});
 	}
+	threads.emplace_back([&] {
+		while (!go.load()) {
+			std::this_thread::yield();
+		}
+		for (int i = 0; i < k_requests; ++i) {
+			rs->signal_changed(tags[i % k_files]);
+		}
+	});
 
 	go = true;
-	res::tag at = a;
-	for (int i = 0; i < 50; ++i) {
-		const res::tag to = at == a ? b : a;
-		index->move(at, to);
-		const std::pair<res::tag, res::tag> moved[] = { { at, to } };
-		rs->apply_asset_batch(moved);
-		at = to;
+	for (int i = 0; i < 40; ++i) {
+		if (i == 20) {
+			rs->set_asset_index(other);
+		}
+		rs->apply_asset_batch(rs->delivering_batch(), {});
 	}
 	for (auto& thread : threads) {
 		thread.join();
@@ -343,12 +364,155 @@ BOOST_FIXTURE_TEST_CASE(RequestsFromThreads_WhileBatchesApply, index_fixture)
 	pump();
 
 	for (const auto& per_thread : handles) {
-		for (const auto& handle : per_thread) {
+		for (const auto& [file, handle] : per_thread) {
 			BOOST_REQUIRE(handle.is_ready());
-			BOOST_TEST(handle.get_sync()->str() == "A");
+			BOOST_TEST(handle.get_sync()->str() == std::to_string(file));
 		}
 	}
 	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(Rename_ThroughResourceSystem_KeepsTheLoadedPinnedAndWatched, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	const res::tag b = at("b.txt");
+	index->put(a, k_a);
+	const auto before = rs->require_sync<res::text_resource>(a);
+	watch_log log;
+	log.watch(*rs, a);
+	{
+		res::resource_system layer(*rs);
+		layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+		const auto pinned = layer.require_sync<res::text_resource>(a).get_control_block();
+
+		BOOST_REQUIRE(rs->rename(a, b));
+		// Nothing is forgotten before the batch says whether the file moved.
+		BOOST_TEST(rs->waiting_for_index_count() == 1u);
+		BOOST_TEST(layer.pinned_count() == 1u);
+		pump();
+		index->move(a, b);
+		apply({ { a, b } });
+
+		BOOST_TEST(rs->waiting_for_index_count() == 0u);
+		BOOST_TEST(log.told.empty());
+		BOOST_TEST(layer.pinned_count() == 1u);
+		BOOST_TEST(rs->require_sync<res::text_resource>(b).get_control_block() == before.get_control_block());
+		BOOST_TEST(layer.require_sync<res::text_resource>(b).get_control_block() == pinned);
+		layer.unpin_resource(b);
+		BOOST_TEST(layer.pinned_count() == 0u);
+	}
+
+	// The watcher follows the file: told about b, found by the tag it watched.
+	rs->signal_changed(b);
+	pump();
+	BOOST_TEST(log.told == names({ b }));
+	rs->unwatch(a, &log);
+	BOOST_TEST(rs->watched_tag_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(Remove_ThroughResourceSystem_IsForgottenOnceTheBatchCame, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	index->put(a, k_a);
+	const auto held = rs->require_sync<res::text_resource>(a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	BOOST_REQUIRE(rs->remove(a));
+	BOOST_TEST(rs->waiting_for_index_count() == 1u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	pump();
+	BOOST_TEST(log.told.empty());
+
+	index->remove(a);
+	apply({});
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(log.told == names({ a }));
+	rs->unwatch(a, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(RenameTheBatchDoesNotPair_IsEvictedAndForgotten, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	const res::tag b = at("b.txt");
+	index->put(a, k_a);
+	const auto held = rs->require_sync<res::text_resource>(a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	BOOST_REQUIRE(rs->rename(a, b));
+	pump();
+	// The owner saw a file go and another come without the same ID.
+	index->remove(a);
+	index->put(b, k_b);
+	apply({});
+
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(log.told == names({ a }));
+	rs->unwatch(a, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(TwoBatches_TheFirstDoesNotDecideTheSecond, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	const res::tag b = at("b.txt");
+	const res::tag c = at("c.txt");
+	const res::tag d = at("d.txt");
+	index->put(a, k_a);
+	index->put(c, k_b);
+	const auto held_a = rs->require_sync<res::text_resource>(a);
+	const auto held_c = rs->require_sync<res::text_resource>(c);
+	watch_log log;
+	log.watch(*rs, a);
+	log.watch(*rs, c);
+
+	BOOST_REQUIRE(rs->rename(a, b));
+	pump();
+	const std::uint64_t first = rs->delivering_batch();
+	BOOST_REQUIRE(rs->rename(c, d));
+	pump();
+	const std::uint64_t second = rs->delivering_batch();
+	BOOST_TEST(first < second);
+
+	// The owner has taken in the first batch only: the second's move is not decided by it.
+	index->move(a, b);
+	const moves first_moves{ { a, b } };
+	rs->apply_asset_batch(first, first_moves);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 1u);
+	BOOST_TEST(log.told.empty());
+
+	index->move(c, d);
+	const moves second_moves{ { c, d } };
+	rs->apply_asset_batch(second, second_moves);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(log.told.empty());
+	BOOST_TEST(rs->require_sync<res::text_resource>(b).get_control_block() == held_a.get_control_block());
+	BOOST_TEST(rs->require_sync<res::text_resource>(d).get_control_block() == held_c.get_control_block());
+	rs->unwatch(a, &log);
+	rs->unwatch(c, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(AliasTargetMoved_ResolvesToItsNewPath, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	const res::tag b = at("b.txt");
+	const res::tag original = at("o.txt");
+	index->put(a, k_a);
+	rs->register_alias(original, a);
+	BOOST_TEST(rs->resolve_alias(original) == a);
+
+	BOOST_REQUIRE(rs->rename(a, b));
+	pump();
+	index->move(a, b);
+	apply({ { a, b } });
+
+	BOOST_TEST(rs->resolve_alias(original) == b);
 }
 
 BOOST_AUTO_TEST_CASE(ProjectFileOverAnEngineAssetPath_WinsForAReferenceWithId)
@@ -357,12 +521,9 @@ BOOST_AUTO_TEST_CASE(ProjectFileOverAnEngineAssetPath_WinsForAReferenceWithId)
 	test_util::temp_dir dir{ "res_asset_index_layers" };
 	dir.write("engine/a.txt", "engine");
 	dir.write("project/res/a.txt", "project");
-	const fs::path memory = dir.path() / "project" / ".cache" / "memory";
-	fs::create_directories(memory);
 	ds::task_system tasks{ test_util::manual_tasks() };
 	res::resource_system sys(tasks, res::mount_table{
 		res::mount{ res::tag::default_protocol(), { dir.path() / "engine", dir.path() / "project" / "res" }, res::mount_access::read_write },
-		res::mount{ res::tag::memory, { memory }, res::mount_access::read_write },
 	});
 	const res::tag path{ "res://a.txt" };
 	auto index = std::make_shared<fake_index>();
@@ -372,7 +533,7 @@ BOOST_AUTO_TEST_CASE(ProjectFileOverAnEngineAssetPath_WinsForAReferenceWithId)
 	sys.set_asset_index(index);
 
 	for (const res::reference& reference : { res::reference{ k_a, path }, res::reference{ k_a, res::tag{} },
-			res::reference{ res::asset_id{ 1, 2 }, path } }) {
+			res::reference{ id_number(99), path } }) {
 		const res::tag resolved = sys.resolve_reference(reference);
 		BOOST_TEST(resolved == path);
 		const auto loaded = sys.require_sync<res::text_resource>(resolved).get_sync();
