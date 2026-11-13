@@ -11,7 +11,7 @@ namespace edt
 	{
 		std::string label;     // "game (test.config)": the file's name and its type
 		std::string path;      // res://config/game.desc
-		std::string parents;   // "res://a.desc, res://b.desc": what the file inherits from, nearest first; empty: nothing
+		std::string parents;   // the paths of what the file inherits from, nearest first, comma separated; empty: nothing
 		bool dirty = false;
 		bool can_save = false;
 		bool changed_on_disk = false;

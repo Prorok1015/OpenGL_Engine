@@ -307,8 +307,11 @@ void edt::file_menu::open_level()
 	options.start_path = m_hooks.resources_path;
 	options.extensions = { ".desc" };
 	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
-		// Opening a level has never asked about unsaved changes in the UI, so the click passes them on.
-		if (alive.lock()) invoke("file.open", json::object{ { "path", to_json_string(picked) }, { "discard_unsaved", true } });
+		if (!alive.lock()) return;
+		const auto open = [this, picked](bool) { invoke("file.open", json::object{ { "path", to_json_string(picked) }, { "discard_unsaved", true } }); };
+		// Opening a level has never asked about unsaved changes of the scene, so the click passes them on; a data document's are asked about.
+		if (m_hooks.other_documents_dirty && m_hooks.other_documents_dirty()) guard_unsaved(open);
+		else open(true);
 	});
 }
 
@@ -438,7 +441,9 @@ void edt::file_menu::register_actions()
 			if (auto busy = level_change_busy()) return *busy;
 			if (!restricted(request)) {
 				if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
-				if (anything_dirty()) discard_everything();
+				// Opening a level has always replaced the scene's unsaved changes (the menu asks nothing); a data document's are not
+				// lost without a question, the menu asks (open_level), and a caller that said discard drops them here.
+				if (m_hooks.discard_other_documents && m_hooks.other_documents_dirty && m_hooks.other_documents_dirty()) m_hooks.discard_other_documents();
 				m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
 				return action_result::success(json::object{ { "level_loading", true } });
 			}
