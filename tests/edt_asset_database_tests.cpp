@@ -147,7 +147,14 @@ struct asset_db_fixture
 				BOOST_TEST(found->same_as(expected));
 			}
 		}
-		BOOST_TEST((assets.orphans() == fresh->orphans()));
+		// last_hash is what this database saw of the file before it went: a fresh walk cannot know it.
+		const auto without_hash = [](std::vector<edt::asset_orphan> orphans) {
+			for (edt::asset_orphan& orphan : orphans) {
+				orphan.last_hash.clear();
+			}
+			return orphans;
+		};
+		BOOST_TEST((without_hash(assets.orphans()) == without_hash(fresh->orphans())));
 		BOOST_TEST((assets.duplicates() == fresh->duplicates()));
 	}
 
