@@ -1,7 +1,6 @@
 #include <snk/common/fs_paths.h>
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
-#include <snk/resource/res_asset_meta.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -71,7 +70,6 @@ namespace edt
 		const std::string search_lower = to_lower(m_search);
 
 		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
-			if (!src.is_dir && (res::is_asset_meta_name(src.name) || res::is_ignored_asset_name(src.name))) continue;
 			// Search filter (dirs always pass)
 			if (!search_lower.empty() && !src.is_dir) {
 				if (to_lower(src.name).find(search_lower) == std::string::npos)

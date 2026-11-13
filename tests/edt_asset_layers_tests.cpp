@@ -99,4 +99,23 @@ BOOST_AUTO_TEST_CASE(DirsOnlySkipsFiles)
 	BOOST_TEST((names(entries) == std::vector<std::string>{ "sub" }));
 }
 
+// #850: sidecars and temporary/system files are never listed as assets, whoever calls the helper.
+BOOST_AUTO_TEST_CASE(SidecarsAndIgnoredFilesAreNotListed)
+{
+	test_util::temp_dir base("asset_layers_base_hidden");
+	test_util::temp_dir top("asset_layers_top_hidden");
+	base.write("a.png", "a");
+	base.write("a.png.resource", "{}");
+	top.write("b.desc", "{}");
+	top.write("b.desc.RESOURCE", "{}");
+	top.write(".gitkeep", "");
+	top.write("Thumbs.db", "");
+	top.write("x.tmp", "");
+	top.write("y.tmp.png", "y");
+
+	const auto entries = edt::list_merged_directory({ base.path(), top.path() }, {});
+
+	BOOST_TEST((names(entries) == std::vector<std::string>{ "a.png", "b.desc", "y.tmp.png" }));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
