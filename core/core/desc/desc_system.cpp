@@ -2,6 +2,10 @@
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/resource/res_reference.h>
 #include <algorithm>
+#include <format>
+#include <limits>
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace
@@ -60,6 +64,76 @@ std::string desc::desc_system::migration_summary(std::string_view type, int from
 	if (step == steps->end()) return {};
 	const auto* described = step->second.target<described_step>();
 	return described ? described->summary : std::string{};
+}
+
+template<class RunStep>
+void desc::desc_system::migrate_object(json::object& obj, std::string_view context, const RunStep& run) const
+{
+	auto type_it = obj.find("__type");
+	if (type_it != obj.end() && type_it->value().is_string()) {
+		migrate_typed(obj, std::string{ type_it->value().as_string() }, context, run);
+	}
+	for (auto& member : obj) {
+		migrate_value(member.value(), context, run);
+	}
+}
+
+template<class RunStep>
+void desc::desc_system::migrate_value(json::value& value, std::string_view context, const RunStep& run) const
+{
+	if (value.is_object()) {
+		migrate_object(value.as_object(), context, run);
+	}
+	else if (value.is_array()) {
+		auto& arr = value.as_array();
+		// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
+		if (!arr.empty() && arr.front().is_number()) {
+			return;
+		}
+		for (auto& element : arr) {
+			migrate_value(element, context, run);
+		}
+	}
+}
+
+template<class RunStep>
+void desc::desc_system::migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const
+{
+	constexpr std::int64_t max_version = std::numeric_limits<int>::max();
+
+	std::int64_t parsed = 1;
+	if (auto ver_it = obj.find("__version"); ver_it != obj.end()) {
+		const json::value& raw = ver_it->value();
+		if (raw.is_int64()) {
+			parsed = raw.as_int64();
+		}
+		else if (raw.is_uint64()) {
+			parsed = raw.as_uint64() > static_cast<std::uint64_t>(max_version) ? max_version + 1 : static_cast<std::int64_t>(raw.as_uint64());
+		}
+		else {
+			throw std::runtime_error(std::format("{}: '{}' has a non-integer __version", context, type));
+		}
+		if (parsed < 1 || parsed > max_version) {
+			throw std::runtime_error(std::format("{}: '{}' has an invalid __version", context, type));
+		}
+	}
+
+	const int current = current_version(type);
+	const int version = static_cast<int>(parsed);
+	if (version > current) {
+		throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
+	}
+	if (version < current) {
+		const auto& steps = *find_migrations(type);
+		for (int from = version; from < current; ++from) {
+			auto step = steps.find(from);
+			if (step == steps.end()) {
+				throw std::runtime_error(std::format("{}: no migration for '{}' from version {}", context, type, from));
+			}
+			run(step->second, obj, type, from);
+		}
+	}
+	obj["__version"] = current;
 }
 
 void desc::desc_system::unregister_desc(std::string_view type_name)
@@ -257,75 +331,6 @@ bool desc::desc_system::add_desc_entry(std::string_view type_name, schema_kind k
 	return true;
 }
 
-template<class RunStep>
-void desc::desc_system::migrate_object(json::object& obj, std::string_view context, const RunStep& run) const
-{
-	auto type_it = obj.find("__type");
-	if (type_it != obj.end() && type_it->value().is_string()) {
-		migrate_typed(obj, std::string{ type_it->value().as_string() }, context, run);
-	}
-	for (auto& member : obj) {
-		migrate_value(member.value(), context, run);
-	}
-}
-
-template<class RunStep>
-void desc::desc_system::migrate_value(json::value& value, std::string_view context, const RunStep& run) const
-{
-	if (value.is_object()) {
-		migrate_object(value.as_object(), context, run);
-	}
-	else if (value.is_array()) {
-		auto& arr = value.as_array();
-		// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
-		if (!arr.empty() && arr.front().is_number()) {
-			return;
-		}
-		for (auto& element : arr) {
-			migrate_value(element, context, run);
-		}
-	}
-}
-
-template<class RunStep>
-void desc::desc_system::migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const
-{
-	constexpr std::int64_t max_version = std::numeric_limits<int>::max();
-
-	std::int64_t parsed = 1;
-	if (auto ver_it = obj.find("__version"); ver_it != obj.end()) {
-		const json::value& raw = ver_it->value();
-		if (raw.is_int64()) {
-			parsed = raw.as_int64();
-		}
-		else if (raw.is_uint64()) {
-			parsed = raw.as_uint64() > static_cast<std::uint64_t>(max_version) ? max_version + 1 : static_cast<std::int64_t>(raw.as_uint64());
-		}
-		else {
-			throw std::runtime_error(std::format("{}: '{}' has a non-integer __version", context, type));
-		}
-		if (parsed < 1 || parsed > max_version) {
-			throw std::runtime_error(std::format("{}: '{}' has an invalid __version", context, type));
-		}
-	}
-
-	const int current = current_version(type);
-	const int version = static_cast<int>(parsed);
-	if (version > current) {
-		throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
-	}
-	if (version < current) {
-		const auto& steps = *find_migrations(type);
-		for (int from = version; from < current; ++from) {
-			auto step = steps.find(from);
-			if (step == steps.end()) {
-				throw std::runtime_error(std::format("{}: no migration for '{}' from version {}", context, type, from));
-			}
-			run(step->second, obj, type, from);
-		}
-	}
-	obj["__version"] = current;
-}
 
 void desc::desc_system::migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const
 {
@@ -343,6 +348,8 @@ desc::desc_system::desc_system(res::resource_system& res_system_)
 	: m_res_system(res_system_)
 {
 }
+
+desc::desc_system::~desc_system() = default;
 
 desc::desc_system::desc_system(res::resource_system& res_system_, const desc_system* parent)
 	: m_res_system(res_system_)

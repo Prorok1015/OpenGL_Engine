@@ -90,7 +90,7 @@ namespace desc
 		// A layer over `parent` (MODULE_LAYER.md): factories, migrations, schemas and component names fall
 		// through to it; a type the parent knows cannot be registered or migrated here (logged, not asserted).
 		desc_system(res::resource_system& res_system, const desc_system* parent);
-		~desc_system() = default;
+		~desc_system();
 		desc_system(const desc_system&) = delete;
 		desc_system& operator=(const desc_system&) = delete;
 		desc_system(desc_system&&) = delete;
@@ -167,8 +167,8 @@ namespace desc
 		void register_migration(std::string_view type, int from_version, std::function<void(json::object&)> fn);
 
 		// The same step with a one-line summary (for the migration plan and report) and a context for warnings. Kept in
-		// the one registry above, so current_version, the duplicate check and modules built before it see it as any
-		// other step; migrate_tree without warnings runs it with warnings going to the log only.
+		// the one registry above, so current_version and the duplicate check see it as any other step; migrate_tree
+		// without a warning list runs it with warnings going to the log only.
 		void register_migration(std::string_view type, int from_version, std::string_view summary,
 			std::function<void(json::object&, migration_context&)> fn);
 
