@@ -437,7 +437,9 @@ namespace desc
 				if (!json_fits(ops.kind, ops.element, ops.enumeration.get(), in, ops.accepts_null)) {
 					return false;
 				}
-				json::value stored = in;
+				// In the default resource: the input may live in a resource of the caller's (a module's arena, its own Boost.JSON)
+				// that is gone before the blob is (#826).
+				json::value stored(in, json::storage_ptr{});
 				// A {guid, path} reference (#758): the field holds the tag, as a described res::tag field does.
 				const auto as_path = [&ctx](json::value& item) {
 					if (item.is_object()) item = json::value(reference_tag(item, ctx).value_or(res::tag{}).view());

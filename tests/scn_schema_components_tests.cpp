@@ -434,6 +434,28 @@ BOOST_AUTO_TEST_CASE(a_blob_of_another_size_is_not_read)
 	BOOST_TEST(!entry.write(*entry.schema, reg, entity, out));
 }
 
+// #785: the world keeps the engine's copy of a blob, its handles in the default resource, whatever resource the
+// caller's blob used (a module's own Boost.JSON on MSVC, an arena gone after the call).
+BOOST_AUTO_TEST_CASE(the_world_keeps_a_copy_of_the_blob_in_the_default_resource)
+{
+	entt::registry reg;
+	const entt::entity entity = reg.create();
+	const entt::id_type id = scn::schema_component_id("mod.arena");
+	{
+		boost::json::monotonic_resource arena;
+		desc::dyn_blob blob;
+		blob.bytes.resize(4);
+		blob.handles.emplace_back(boost::json::string("kept", boost::json::storage_ptr(&arena)));
+		scn::emplace_schema_component(reg, entity, id, blob);
+	}
+	const desc::dyn_blob* kept = scn::find_schema_component(std::as_const(reg), entity, id);
+	BOOST_REQUIRE(kept != nullptr);
+	BOOST_REQUIRE(kept->handles.size() == 1u);
+	BOOST_TEST((kept->handles[0].storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST(kept->handles[0].as_string() == "kept");
+	BOOST_TEST(kept->bytes.size() == 4u);
+}
+
 BOOST_AUTO_TEST_CASE(a_stray_pool_is_named_by_its_id)
 {
 	entt::registry reg;
