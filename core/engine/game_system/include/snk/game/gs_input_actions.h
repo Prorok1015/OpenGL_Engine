@@ -49,10 +49,6 @@ namespace gs
 		std::shared_ptr<const inp::action_map> project_map() const { return m_project; }
 		// True when map() has a gamepad button or axis binding.
 		bool has_gamepad_bindings() const { return m_has_gamepad_bindings; }
-		// After update(), each frame: a module built for an API minor before 3.16 reads bindings as keyboard or mouse only, and
-		// a visit over them of its own fails on a gamepad one. Warns once per map and set of such modules (the map is not
-		// filtered), naming them. Needs the versions the host keeps (app::modules::loaded_module_apis).
-		void warn_about_old_modules(const ds::app_data_storage& data);
 		// The "gamepad" setting of the desc (the defaults without one), shared by the bindings of a device.
 		inp::gamepad_config gamepad_config() const { return m_gamepad; }
 
@@ -94,8 +90,6 @@ namespace gs
 		std::string m_project_name{};
 		bool m_saved = true;
 		bool m_has_gamepad_bindings = false;
-		const inp::action_map* m_warned_map = nullptr;
-		std::uint64_t m_warned_revision = ~std::uint64_t{ 0 };
 		bool m_changed = false;
 		bool m_built = false;
 		bool m_reported = false;
