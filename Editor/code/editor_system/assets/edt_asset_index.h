@@ -32,8 +32,9 @@ namespace edt
 		std::optional<res::tag> path_of(const res::asset_id& id) const override;
 
 		// Main thread: takes the records of `assets` now; true when any answer changed. Of files that share an ID (a copy
-		// made with its .resource), the older one (then the first by path) holds it and the others answer none: they load
-		// as files of their own. Each such copy is warned about once per (ID, path).
+		// made with its .resource), the one holds_id_before puts first keeps it (EPIC-57 section 10: the lowest layer,
+		// then the oldest, then the smaller path, as in Problems) and the others answer none: they load as files of their
+		// own. Each such copy is warned about once per (ID, path).
 		bool refresh(const asset_database& assets);
 
 	private:

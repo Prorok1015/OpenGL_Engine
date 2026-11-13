@@ -49,10 +49,11 @@ struct project_fixture
 		fs::create_directories(cache_dir / "memory");
 	}
 
-	void make_system()
+	// `engine`: a lower layer under res/ (empty: none).
+	void make_system(const fs::path& engine = {})
 	{
 		resources = std::make_unique<res::resource_system>(tasks,
-			res::resource_system::project_mount_table({}, { content }, cache_dir, cache_dir / "user_profile"));
+			res::resource_system::project_mount_table(engine, { content }, cache_dir, cache_dir / "user_profile"));
 		assets = std::make_unique<edt::asset_database>(jobs, &events, resources->get_resource_layers());
 		assets->attach(*resources);
 	}
@@ -121,6 +122,26 @@ BOOST_AUTO_TEST_CASE(the_snapshot_answers_for_the_file_problems_names_the_origin
 	// Nothing changed: the same answers, and the copy is not warned about again.
 	BOOST_TEST(!snapshot.refresh(*assets));
 	BOOST_TEST(warnings == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(the_lower_layer_keeps_an_id_even_when_its_file_is_newer)
+{
+	// An engine asset and a project copy of it under another name: the engine's file is what others refer to.
+	project.write("engine/e.txt", "engine");
+	project.write("engine/e.txt.resource", meta_text(k_guid_a));
+	project.write("res/p.txt", "project");
+	project.write("res/p.txt.resource", meta_text(k_guid_a));
+	fs::last_write_time(content / "p.txt", fs::file_time_type::clock::now() - std::chrono::hours(2));
+	fs::last_write_time(project.path() / "engine" / "e.txt", fs::file_time_type::clock::now() - std::chrono::hours(1));
+	make_system(project.path() / "engine");
+	assets->rebuild();
+	pump();
+
+	edt::asset_index_snapshot snapshot;
+	snapshot.refresh(*assets);
+	BOOST_TEST((snapshot.path_of(id_a()) == std::optional{ res::tag{ "res://e.txt" } }));
+	BOOST_TEST((snapshot.id_of(res::tag{ "res://e.txt" }) == std::optional{ id_a() }));
+	BOOST_TEST(!snapshot.id_of(res::tag{ "res://p.txt" }));
 }
 
 BOOST_AUTO_TEST_CASE(the_snapshot_takes_spellings_as_the_database_merges_them)

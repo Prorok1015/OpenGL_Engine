@@ -98,6 +98,7 @@ void edt::asset_index_link::detach()
 	m_attached = false;
 	m_moves.clear();
 	m_attach_after = m_assets.walks_applied();
+	m_drops_seen = m_assets.changes_dropped();
 }
 
 bool edt::asset_index_link::follow_drops()
@@ -105,8 +106,15 @@ bool edt::asset_index_link::follow_drops()
 	if (m_attached && m_assets.changes_dropped() != m_drops_seen) {
 		detach();
 	}
-	if (!m_attached && m_assets.walks_applied() > m_attach_after && !m_assets.scanning()) {
-		attach();
+	if (!m_attached) {
+		// Dropped again while detached: the walk that would have caught up with the first drop is behind the second.
+		if (m_assets.changes_dropped() != m_drops_seen) {
+			m_drops_seen = m_assets.changes_dropped();
+			m_attach_after = m_assets.walks_applied();
+		}
+		if (m_assets.walks_applied() > m_attach_after && !m_assets.scanning()) {
+			attach();
+		}
 	}
 	return m_attached;
 }
