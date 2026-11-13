@@ -1,13 +1,14 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/desc/adapters/desc_adapter_t.h>
-#include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_schema_desc.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <sstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1259,6 +1260,18 @@ struct parent_fixture : roundtrip_fixture
 	core::desc::desc_adapter_t adapter{ *rs, *descs };
 };
 
+class resave_unit_desc : public desc::schema_desc<resave_unit_desc>
+{
+public:
+	static constexpr std::string_view __type = "resave_unit";
+
+	int hp = 0;
+	std::optional<std::string> label;
+	std::map<std::string, int> tags;
+
+	BOOST_DESCRIBE_CLASS(resave_unit_desc, (), (hp, label, tags), (), ())
+};
+
 // A desc whose file cannot take back a value of its parent (a null is ignored): no form with __parent reads back.
 struct sticky_desc : desc::desc_base
 {
@@ -1290,16 +1303,11 @@ BOOST_FIXTURE_TEST_CASE(AMaterialWithAParent_ResavesItsParentAndOnlyItsOwnFields
 	check_reads_back(child, saved, "own.mat.again.desc");
 }
 
-// A type of a module (a runtime schema): a map key the file removes from the parent's is a null, an optional field reset to
-// its default stays reset, and a map key both have the same is not written.
+// A type of a module (a described schema; a runtime schema cannot hold a map): a map key the file removes from the parent's is
+// a null, an optional field reset stays reset, and a map key both have the same is not written.
 BOOST_FIXTURE_TEST_CASE(ASchemaTypeWithAParent_ResavesMapRemovalsAndResetsAgainstTheParent, parent_fixture)
 {
-	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "resave_unit", "kind": "component",
-		"fields": [
-			{ "name": "hp", "kind": "i32", "default": 0 },
-			{ "name": "label", "kind": "string", "default": "none", "optional": true, "write": "if_not_default" },
-			{ "name": "tags", "kind": "map", "element": "i32" }
-		]})").as_object())));
+	descs->register_desc<resave_unit_desc>(resave_unit_desc::__type);
 	put("base.unit.desc", R"({"__type":"resave_unit","hp":5,"label":"parent","tags":{"a":1,"b":2}})");
 	const auto child = put("own.unit.desc",
 		R"({"__type":"resave_unit","__parent":"memory://t/base.unit.desc","hp":7,"label":null,"tags":{"b":null,"c":3}})");
@@ -1309,7 +1317,7 @@ BOOST_FIXTURE_TEST_CASE(ASchemaTypeWithAParent_ResavesMapRemovalsAndResetsAgains
 	BOOST_TEST(saved.at("hp").as_int64() == 7);
 	BOOST_REQUIRE(saved.contains("tags"));
 	BOOST_TEST((saved.at("tags") == json::parse(R"({"b":null,"c":3})")));
-	// Reset to its default, which is not written: the file says null, as without the key the parent's "parent" would come back.
+	// Reset: the file says null, as without the key the parent's "parent" would come back.
 	BOOST_REQUIRE(saved.contains("label"));
 	BOOST_TEST(saved.at("label").is_null());
 	check_reads_back(child, saved, "own.unit.again.desc");
