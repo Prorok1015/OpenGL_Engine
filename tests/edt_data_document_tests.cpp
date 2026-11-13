@@ -905,7 +905,12 @@ BOOST_AUTO_TEST_CASE(DiskChangeSerial_TellsAGoneFileFromOneThatCameBackBroken)
 
 BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt)
 {
-	ImGuiContext* context = ImGui::CreateContext();
+	struct imgui_context
+	{
+		imgui_context() : handle(ImGui::CreateContext()) {}
+		~imgui_context() { ImGui::DestroyContext(handle); }
+		ImGuiContext* handle;
+	} context;
 	ImGuiIO& io = ImGui::GetIO();
 	io.IniFilename = nullptr;
 	io.DisplaySize = ImVec2(800.f, 600.f);
@@ -937,8 +942,6 @@ BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt
 	frame();
 	BOOST_TEST(panel.map_state().new_keys.empty());
 	BOOST_TEST(panel.map_state().rename_errors.empty());
-
-	ImGui::DestroyContext(context);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
