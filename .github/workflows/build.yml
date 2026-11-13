@@ -1,4 +1,10 @@
 name: Build
+# A PR run carries the base SHA it was started on, first so a long title cannot cut it off: the plan's dedupe reads it from an earlier run's title, a snapshot,
+# where the run's pull_requests[] shows the PR as it is now.
+run-name: >-
+  ${{ github.event_name == 'pull_request'
+    && format('[base {0}] {1}', github.event.pull_request.base.sha, github.event.pull_request.title)
+    || github.event.head_commit.message || format('Build {0}', github.ref_name) }}
 
 # Every job configures through a preset from CMakePresets.json (ci-*), so CI and local builds share
 # one definition. The compiler cache (ccache on Linux, sccache on MSVC) and precompiled headers are
@@ -15,29 +21,29 @@ on:
       - '**/*.md'
   # By hand on aibranch or main (Actions > Build > Run workflow): the same jobs as a push.
   workflow_dispatch:
+  # No paths-ignore: Plan and CI summary are required checks, and a run that never starts would leave a PR of docs only
+  # waiting for them. The plan skips every build of such a PR instead.
   pull_request:
-    # ready_for_review: marking a draft PR ready starts the full run (see the tiers below).
+    # ready_for_review: marking a draft PR ready adds the shared-engine builds when the PR touches what they check (see plan).
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
 
-# Two tiers. FAST runs on every PR event, drafts included, and on pushes; FULL runs only on pushes
-# (and runs started by hand, which count as pushes everywhere below) and on PRs that are not drafts,
-# so a non-draft PR gets one complete run. Whole-job FULL jobs carry
-#   if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-# Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
-# `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
-# Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
-# Full adds: Windows MSVC Shared+PCH (#557), Linux GCC Shared (the project template's game module, #434), Linux TSan, SDK package (Linux),
-# Windows package (Release, Debug, check: the release archives, #223), Extract benchmark (#505: on a PR it only
-# builds, so a warning that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes
-# and by hand only). Every build uses the shared engine but Linux Clang Debug and the static SDK halves (#223).
+# What runs (#830; the `plan` job decides, see there):
+#   every PR event, drafts included, every push and by hand - the six fast jobs: Coverage (Linux GCC Debug, also runs
+#     the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual
+#     smoke. Marking a draft ready does not run them again on a head SHA where they all passed. A PR of docs/** and
+#     *.md only runs none of them: Plan and CI summary alone.
+#   a PR that is not a draft and touches a header, CMake or workflows, every push and by hand - also Windows MSVC
+#     Shared+PCH (#557) and Linux GCC Shared (the project template's game module, #434): the engine as a shared library.
+#     A draft and a PR that touches none of them no longer build Linux GCC Shared.
+#   CI summary - the last job: red when the plan or any job the plan asked for did not pass. Plan and CI summary are
+#     the required checks that guard against a run where everything was skipped.
+#   nightly.yml, on aibranch once a night and by hand - Linux TSan, the SDK packages (Linux, with and without assimp),
+#     the Windows package (#223) and the extract benchmark (#505).
+# Every build uses the shared engine but Linux Clang Debug (#223).
 
 # A newer push to a PR cancels its running run. A push run (aibranch, main) is never cancelled once it
-# runs, or frequent merges would leave the branch without a single complete run (#476): the benchmark
-# job runs only there. GitHub still keeps one waiting run per group, so a run that has not started yet
-# gives way to the newer push.
+# runs, or frequent merges would leave the branch without a single complete run (#476). GitHub still keeps one waiting
+# run per group, so a run that has not started yet gives way to the newer push.
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -46,8 +52,90 @@ permissions:
   contents: read
 
 jobs:
+  # Decides what this run builds (#830):
+  #   fast - the six jobs every PR runs. False for a PR that changes only docs/** and *.md (as push's paths-ignore), and
+  #          when a draft is marked ready for review and every one of them already
+  #          passed in one earlier Build run of this PR on this very head SHA and on the base SHA aibranch has now: a run
+  #          checks the merge of head and base, so a base that moved since then means running them again. The earlier
+  #          run's base is the "[base <sha>]" of its title (run-name); a run without one does not count.
+  #   abi  - Windows MSVC Shared+PCH and Linux GCC Shared, the builds of the engine as a shared library. On a PR that is
+  #          not a draft and touches any header (.h, .hpp, .inl: SNK_API headers live outside include/ too), CMake
+  #          (CMakeLists.txt, *.cmake, *.cmake.in, cmake/**, CMakePresets.json) or a workflow (.github/**); always on a
+  #          push and by hand. A PR whose file list is cut off at GitHub's 3000 files counts as touching them.
+  # The changed files are read here, not through `paths:` on the trigger, so the workflow always starts and a required
+  # check never waits for a run that does not come. The slow jobs (TSan, the packages, the benchmark) are nightly.yml.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      fast: ${{ steps.plan.outputs.fast }}
+      abi: ${{ steps.plan.outputs.abi }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+    steps:
+      - id: plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const FAST = ['Windows MSVC Debug', 'Linux Clang Debug', 'Linux ASan+UBSan', 'Linux GCC no Assimp',
+              'Coverage (Linux GCC Debug)', 'Editor visual smoke (Linux)'];
+            const ABI_PATHS = [/\.(h|hpp|inl)$/, /(^|\/)CMakeLists\.txt$/, /\.cmake(\.in)?$/, /^cmake\//, /^CMakePresets\.json$/,
+              /^\.github\//];
+            const LIST_FILES_LIMIT = 3000;
+            let fast = true;
+            let abi = true;
+            const DOCS_PATHS = [/^docs\//, /\.md$/];
+            if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+              const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
+              const cut_off = files.length >= LIST_FILES_LIMIT;
+              const docs_only = !cut_off && touched.length > 0 && touched.every(path => DOCS_PATHS.some(re => re.test(path)));
+              abi = !pr.draft && (cut_off || touched.some(path => ABI_PATHS.some(re => re.test(path))));
+              core.info(`${files.length} files changed; docs only: ${docs_only}; shared-engine builds: ${abi}`);
+              if (docs_only) {
+                fast = false;
+              } else if (context.payload.action === 'ready_for_review') {
+                // The live tip, not pr.base.sha: the payload's base SHA can lag behind the branch.
+                const { data: base } = await github.rest.repos.getBranch({ ...context.repo, branch: pr.base.ref });
+                const { data: self } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: context.runId });
+                const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                  ...context.repo, workflow_id: self.workflow_id, event: 'pull_request', head_sha: pr.head.sha, per_page: 100,
+                });
+                let green = null;
+                for (const run of runs) {
+                  if (run.id === context.runId) continue;
+                  const ofThisPr = (run.pull_requests || []).some(p => p.number === pr.number);
+                  const runBase = /^\[base ([0-9a-f]{40})\]/.exec(run.display_title || '');
+                  if (!ofThisPr || !runBase || runBase[1] !== base.commit.sha) continue;
+                  const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, { ...context.repo, run_id: run.id, per_page: 100 });
+                  if (FAST.every(name => jobs.some(j => j.name === name && j.conclusion === 'success'))) { green = run; break; }
+                }
+                fast = green === null;
+                core.info(green
+                  ? `the fast jobs passed on ${pr.head.sha} over base ${base.commit.sha} in ${green.html_url}: not running them again`
+                  : `no earlier run passed every fast job on ${pr.head.sha} over base ${base.commit.sha}: running them`);
+              }
+            }
+            const matrix = [];
+            if (fast) {
+              matrix.push({ name: 'Windows MSVC Debug', os: 'windows-2025', preset: 'ci-windows-msvc-debug' });
+              matrix.push({ name: 'Linux Clang Debug', os: 'ubuntu-latest', preset: 'ci-linux-clang-debug', targets: 'unit_tests game test_static_game_host' });
+            }
+            if (abi) {
+              matrix.push({ name: 'Windows MSVC Shared+PCH', os: 'windows-2025', preset: 'ci-windows-msvc-pch-debug' });
+            }
+            core.setOutput('fast', String(fast));
+            core.setOutput('abi', String(abi));
+            core.setOutput('build_matrix', JSON.stringify(matrix));
+
   build:
     name: ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.build_matrix != '[]'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -58,7 +146,7 @@ jobs:
       # Full adds Windows MSVC Shared+PCH (#557): the only Windows build that compiles through the precompiled header
       # (sccache cannot cache /Yu, so it is a cold build), with the shared engine where core/ exports IMGUI_API.
       matrix:
-        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-2025","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"},{"name":"Windows MSVC Shared+PCH","os":"windows-2025","preset":"ci-windows-msvc-pch-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-2025","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug","targets":"unit_tests game test_static_game_host"}]') }}
+        include: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -260,10 +348,11 @@ jobs:
           trap - EXIT
 
   # The shared engine (snk_engine, the default since #223) with the project template's game module built against the
-  # build tree SDK and loaded by the editor. Windows: the Windows package jobs below. FULL tier.
+  # build tree SDK and loaded by the editor. Windows: the Windows package in nightly.yml. Runs when plan says abi.
   shared:
     name: Linux GCC Shared
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: plan
+    if: needs.plan.outputs.abi == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -389,9 +478,11 @@ jobs:
 
   # SNK_WITH_ASSIMP=OFF (EPIC-41 US-41-7, #105): assimp is not configured, the model importer and the editor
   # model import are not compiled. Cheap (no assimp to build), so FAST tier: it is the only guard that keeps the option
-  # from rotting. The SDK checks (nothing of assimp installed or exported, the consumer still builds) run in the FULL tier.
+  # from rotting. The SDK checks (nothing of assimp installed or exported, the consumer still builds) are nightly.yml's.
   no-assimp:
     name: Linux GCC no Assimp
+    needs: plan
+    if: needs.plan.outputs.fast == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -399,7 +490,6 @@ jobs:
       CC: gcc-15
       CXX: g++-15
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
-      SDK_PREFIX: ${{ github.workspace }}/sdk-install-no-assimp
 
     steps:
       - uses: actions/checkout@v4
@@ -447,51 +537,20 @@ jobs:
         working-directory: build/ci-linux-no-assimp
         run: ./unit_tests --log_level=test_suite
 
-      - name: Build SDK targets
-        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: cmake --build build/ci-linux-no-assimp --target snk_sdk --parallel
-
-      - name: Install SDK
-        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: cmake --install build/ci-linux-no-assimp --prefix "${SDK_PREFIX}" --component snake_sdk
-
-      - name: Check the SDK has no assimp
-        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: |
-          if grep -rIil assimp "${SDK_PREFIX}/lib/cmake"; then
-            echo "::error::the package config mentions assimp"
-            exit 1
-          fi
-          if find "${SDK_PREFIX}/lib" -iname '*assimp*' | grep -q .; then
-            echo "::error::assimp was installed"
-            exit 1
-          fi
-
-      - name: Configure consumer
-        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: |
-          cmake -S tests/package_consumer -B build/consumer-no-assimp -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
-
-      - name: Build consumer
-        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: cmake --build build/consumer-no-assimp
-
-      - name: Run consumer
-        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-        run: build/consumer-no-assimp/package_consumer
-
   # Sanitizer builds (Linux only; project targets instrumented, third-party is not).
   # GCC is used because the Clang build is currently broken (see the Linux Clang Debug job).
   sanitizers:
     name: ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.fast == 'true'
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
-      # ASan+UBSan is FAST, TSan is FULL: the matrix is the fast or the full list (see the tiers above).
+      # TSan is nightly.yml's.
       matrix:
-        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false},{"name":"Linux TSan","preset":"ci-linux-tsan","experimental":false}]' || '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false}]') }}
+        include:
+          - { name: "Linux ASan+UBSan", preset: "ci-linux-asan", experimental: false }
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -556,6 +615,8 @@ jobs:
 
   coverage:
     name: Coverage (Linux GCC Debug)
+    needs: plan
+    if: needs.plan.outputs.fast == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -724,6 +785,8 @@ jobs:
   # shot does not depend on runner speed (the references are only comparable that way).
   editor-smoke:
     name: Editor visual smoke (Linux)
+    needs: plan
+    if: needs.plan.outputs.fast == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -993,219 +1056,38 @@ jobs:
           path: headless_out
           if-no-files-found: warn
 
-  # Report-only (RHI.md section 4, owner decision Q5): hosted runners are too noisy to gate on timings.
-  # Runs the extract benchmark (tests/app_engine_null_backend_bench.cpp) on the null backend in an
-  # optimized build, prints the table into the job summary and uploads the JSON. FULL tier. On a PR it
-  # only builds (#505): the optimized GCC build with -Werror sees warnings no other job does (#476), and
-  # a failing build fails the PR. On a push continue-on-error keeps a failure here from failing the
-  # workflow.
-  extract-bench:
-    name: Extract benchmark (Linux, report-only)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  # The required check besides Plan (#830): a job skipped by `if` counts as passed for branch protection, so a failed
+  # plan would otherwise leave nothing red. Skipped is accepted only where the plan decided to skip.
+  summary:
+    name: CI summary
+    needs: [plan, build, shared, no-assimp, sanitizers, coverage, editor-smoke]
+    if: always()
     runs-on: ubuntu-latest
-    continue-on-error: ${{ github.event_name != 'pull_request' }}
-
-    env:
-      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
-      BENCH_DIR: ${{ github.workspace }}/bench_out
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Linux packages
-        uses: ./.github/actions/apt-install
-        with:
-          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev jq
-
-      - name: Set up compiler cache
-        uses: ./.github/actions/compiler-cache
-        with:
-          key: cc-ci-linux-gcc-release
-
-      - name: Cache FetchContent (Boost)
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.FC_DIR }}
-          key: fc-ubuntu-latest-Release-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
-
-      - name: Boost tarball
-        uses: ./.github/actions/boost-tarball
-
-      - name: Configure
-        run: cmake --preset ci-linux-gcc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
-
-      - name: Build unit_tests
-        run: cmake --build build/ci-linux-gcc-release --target unit_tests --parallel
-
-      - name: Compiler cache statistics
-        if: always()
-        run: ccache -s
-
-      - name: Run extract benchmark
-        if: github.event_name != 'pull_request'
-        working-directory: build/ci-linux-gcc-release
+      - name: Check the plan and the jobs it asked for
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        shell: bash
         run: |
-          set -o pipefail
-          mkdir -p "$BENCH_DIR"
-          SNK_BENCH_JSON="$BENCH_DIR/bench_extract.json" ./unit_tests \
-            --run_test=AppEngineNullBackendBench/ExtractRenderDataOnHundredMeshes --log_level=message \
-            2>&1 | tee "$BENCH_DIR/bench_extract.log"
-
-      - name: Summary
-        if: always() && github.event_name != 'pull_request'
-        run: |
-          if [ -f "$BENCH_DIR/bench_extract.json" ]; then
-            tools/ci/bench_extract_summary.sh "$BENCH_DIR/bench_extract.json" | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "no bench_extract.json: the benchmark did not finish" | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload benchmark report
-        if: always() && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: extract-bench
-          path: bench_out
-          if-no-files-found: warn
-
-  # Installs the SDK (cmake --install, package `snake_sdk`) and builds tests/package_consumer
-  # against it with find_package: proves the export set is complete and self-contained (third-party
-  # libraries are bundled). The static and the shared engine go into one prefix, and the consumer links each. FULL tier.
-  sdk-package:
-    name: SDK package (Linux)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-
-    env:
-      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
-      CC: gcc-15
-      CXX: g++-15
-      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
-      SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
-      SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared
-      SDK_PREFIX: ${{ github.workspace }}/sdk-install
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Linux packages
-        uses: ./.github/actions/apt-install
-        with:
-          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
-
-      - name: Set up compiler cache
-        uses: ./.github/actions/compiler-cache
-        with:
-          key: cc-sdk-linux
-
-      - name: Cache FetchContent (Boost)
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.FC_DIR }}
-          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
-
-      - name: Boost tarball
-        uses: ./.github/actions/boost-tarball
-
-      # Both engines are built and installed twice: each into its own prefix (to check that they can share one), and
-      # both into SDK_PREFIX, static first, the way the release package is put together (#223).
-      - name: Configure (static)
-        run: cmake --preset ci-linux-static "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
-
-      # snk_sdk builds exactly the targets the install step copies.
-      - name: Build SDK targets (static)
-        run: cmake --build build/ci-linux-static --target snk_sdk --parallel
-
-      # Its own Boost build directory (the static tree's compiles Boost with other definitions); the sources are shared.
-      - name: Configure (shared)
-        run: |
-          cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}/ci-linux-gcc-debug" \
-            "-DFETCHCONTENT_SOURCE_DIR_BOOST=${FC_DIR}/boost-src"
-
-      - name: Build SDK targets (shared)
-        run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
-
-      - name: Compiler cache statistics
-        if: always()
-        run: ccache -s
-
-      - name: Install SDK (static, shared, both into one prefix)
-        run: |
-          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX_STATIC}" --component snake_sdk
-          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_SHARED}" --component snake_sdk
-          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX}" --component snake_sdk
-          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX}" --component snake_sdk
-          find "${SDK_PREFIX}/lib" -maxdepth 2 | sort
-
-      # The second install may only rewrite the headers and the package config, with the same content.
-      - name: Check the two engines share one prefix
-        run: tools/ci/check_sdk_merge.sh "${SDK_PREFIX_STATIC}" "${SDK_PREFIX_SHARED}"
-
-      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
-      - name: Check the installed headers
-        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
-
-      # The MCP server module is for the editor only: nothing of it in the installed SDK.
-      - name: Check the SDK has no MCP server module
-        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX}"
-
-      - name: Check the package does not point into the build or source tree
-        run: |
-          find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
-          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX}/lib/cmake"; then
-            echo "::error::installed package config references the workspace"
+          plan_result="$(jq -r '.plan.result' <<<"$NEEDS")"
+          if [ "$plan_result" != success ]; then
+            echo "::error::Plan: $plan_result"
             exit 1
           fi
-
-      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
-      - name: Check the package has no absolute paths
-        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
-
-      # The shared set exports the components usage-only: no archive next to snk_engine (#581).
-      - name: Check the shared set links no archive besides the engine
-        run: |
-          python3 tools/ci/check_sdk_shared_set.py --self-test
-          python3 tools/ci/check_sdk_shared_set.py "${SDK_PREFIX}"
-
-      - name: Build and run the consumer against each engine
-        run: |
-          for engine in static shared; do
-            cmake -S tests/package_consumer -B "build/consumer-${engine}" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-              "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" "-DSNK_CONSUMER_ENGINE=${engine}" -DSNK_CONSUMER_HEADER_CHECK=ON
-            cmake --build "build/consumer-${engine}"
-            "build/consumer-${engine}/package_consumer"
-          done
-
-      # The project template's shipping executable (#592): the module compiled into snk::game_host with the static
-      # engine of the prefix. Built only; tests/static_game is the run test.
-      - name: Build the project template's shipping executable against the prefix
-        run: |
-          proj="${RUNNER_TEMP}/template_shipping"
-          rm -rf "$proj"
-          cp -r Editor/data/templates/projects/empty "$proj"
-          export SNAKE_SDK_DIR="${SDK_PREFIX}/lib/cmake/snake_sdk"
-          (cd "$proj/code" && cmake --preset shipping && cmake --build --preset shipping)
-          ls -l "$proj/build/shipping"
-          exe="$proj/build/shipping/game"
-          test -x "$exe"
-          # No pipe into grep -q: under pipefail an early exit of the reader fails the writer, and the check would pass.
-          needed="$(readelf -d "$exe" | grep NEEDED)"
-          echo "$needed"
-          if [[ "$needed" == *snk_engine* ]]; then
-            echo "::error::the shipping executable needs the shared engine"
-            exit 1
-          fi
-
-  # The Windows release package (#223): Release and Debug legs build the static and the shared engine and pack the two
-  # archives, a check job unpacks them like a user (the consumer against both engines, the template's game module,
-  # dumpbin, editor.exe --headless from the unpacked folder). release.yml runs the same workflow. FULL tier.
-  windows-package:
-    name: Windows package
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: ./.github/workflows/windows-package.yml
-    with:
-      run-tests: true
+          fast="$(jq -r '.plan.outputs.fast' <<<"$NEEDS")"
+          abi="$(jq -r '.plan.outputs.abi' <<<"$NEEDS")"
+          matrix="$(jq -r '.plan.outputs.build_matrix' <<<"$NEEDS")"
+          status=0
+          check() {
+            local job="$1" expected="$2" result
+            result="$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")"
+            if [ "$expected" = run ] && [ "$result" = success ]; then echo "$job: success"; return; fi
+            if [ "$expected" = skip ] && [ "$result" = skipped ]; then echo "$job: skipped by the plan"; return; fi
+            echo "::error::$job: $result (the plan expected it to $expected)"
+            status=1
+          }
+          expect() { if [ "$1" = true ]; then echo run; else echo skip; fi; }
+          check build "$(expect "$([ "$matrix" != '[]' ] && echo true)")"
+          check shared "$(expect "$abi")"
+          for job in no-assimp sanitizers coverage editor-smoke; do check "$job" "$(expect "$fast")"; done
+          exit "$status"

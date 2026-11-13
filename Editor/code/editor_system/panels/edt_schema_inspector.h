@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <unordered_map>
 #include <string>
 #include <string_view>
 
@@ -26,6 +27,7 @@ namespace edt::schema_ui
 		asset,    // res_tag, desc_ref given as a tag: text field that takes a dropped asset
 		group,    // structure with a known nested schema
 		list,     // array
+		map,      // map: a row per key (rename, remove), "+ Add" asks for the key
 		label,    // node_ref, entity: shown, not edited
 		json,     // custom, or a value the schema cannot draw: the generic JSON editor
 	};
@@ -45,6 +47,20 @@ namespace edt::schema_ui
 	// The widget of one field from its kind and hints only. `enum_known`/`nested_known`: the enum_schema / the nested
 	// type_schema the field names is in the registry; without it the field falls back to the JSON editor.
 	widget_spec describe_widget(const desc::field_schema& field, bool enum_known, bool nested_known);
+
+	// The longest key a map row accepts.
+	inline constexpr std::size_t k_max_map_key = 256;
+
+	// Why `key` cannot be the name of a new or renamed entry of `entries`: it is empty, longer than k_max_map_key, or taken
+	// by another entry already. Empty when it can.
+	std::string map_key_problem(const boost::json::object& entries, std::string_view key);
+
+	// Adds the entry; false, and nothing changed, when map_key_problem names a problem.
+	bool add_map_key(boost::json::object& entries, std::string_view key, boost::json::value value);
+
+	// Gives the entry `from` the name `to`, keeping its place; false, and nothing changed, when there is no `from` or `to`
+	// is a problem. The same name is no change (true).
+	bool rename_map_key(boost::json::object& entries, std::string_view from, std::string_view to);
 
 	// "m_near_distance" -> "Near distance"
 	std::string display_label(const desc::field_schema& field);
@@ -66,6 +82,20 @@ namespace edt::schema_ui
 	boost::json::value compose(const desc::type_schema& schema, const desc::schema_registry& registry,
 		std::initializer_list<const boost::json::object*> layers, bool fill_missing = true);
 
+	// What the map rows keep between frames: the text typed into a map's "new key" field, and why a rename was refused. The
+	// panel that draws owns it (an entity or a document of its own), and clears it when what is shown is another one.
+	struct map_edit_state
+	{
+		std::unordered_map<std::uint32_t, std::string> new_keys;
+		std::unordered_map<std::uint32_t, std::string> rename_errors;
+
+		void clear()
+		{
+			new_keys.clear();
+			rename_errors.clear();
+		}
+	};
+
 	struct context
 	{
 		const desc::schema_registry& registry;
@@ -73,6 +103,8 @@ namespace edt::schema_ui
 		std::function<bool(const std::string& label, boost::json::value& value)> draw_json;
 		// Called for every field that got a widget (tests): the field's pointer from the root and the widget.
 		std::function<void(std::string_view pointer, widget kind)> on_field;
+		// Null: a map row forgets what was typed at the end of the frame (a test, a one-shot view).
+		map_edit_state* map_state = nullptr;
 	};
 
 	// Draws the visible fields of `schema` for `object` (the whole component, or a nested structure) and edits it in
