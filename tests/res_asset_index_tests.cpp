@@ -166,6 +166,34 @@ struct disk_fixture
 	}
 };
 
+// res:// on disk that allows remove/rename but whose watcher reports nothing: no batch, no poll, the test drives every
+// change.
+struct quiet_disk_fixture
+{
+	test_util::temp_dir dir{ "res_asset_index_quiet_disk" };
+	ds::task_system tasks{ test_util::manual_tasks() };
+	std::shared_ptr<fake_index> index = std::make_shared<fake_index>();
+	std::unique_ptr<res::resource_system> rs;
+
+	quiet_disk_fixture()
+	{
+		dir.write("res/a.txt", "A");
+		dir.write("res/c.txt", "C");
+		rs = std::make_unique<res::resource_system>(tasks, res::mount_table{
+			res::mount{ res::tag::default_protocol(), { dir.path() / "res" }, res::mount_access::read_write,
+				res::write_policy::allow_all(), res::watch_options{}, true },
+		});
+		rs->set_asset_index(index);
+	}
+
+	~quiet_disk_fixture()
+	{
+		rs.reset();
+	}
+
+	void pump() { test_util::pump(tasks); }
+};
+
 }
 
 BOOST_AUTO_TEST_SUITE(ResAssetIndexTests)
@@ -537,10 +565,10 @@ BOOST_FIXTURE_TEST_CASE(ABatchQueuedBeforeARename_DoesNotDecideIt, disk_fixture)
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
-BOOST_FIXTURE_TEST_CASE(FailedRemoveOrRenameOfAFileGoneFromDisk_KeepsItsWaitingEntry, disk_fixture)
+BOOST_FIXTURE_TEST_CASE(FailedRemoveOrRenameOfAFileGoneFromDisk_KeepsItsWaitingEntry, quiet_disk_fixture)
 {
-	const res::tag a = at("a.txt");
-	const res::tag c = at("c.txt");
+	const res::tag a{ "res://a.txt" };
+	const res::tag c{ "res://c.txt" };
 	index->put(a, k_a);
 	index->put(c, k_b);
 	const auto held_a = rs->require_sync<res::text_resource>(a);
@@ -558,17 +586,47 @@ BOOST_FIXTURE_TEST_CASE(FailedRemoveOrRenameOfAFileGoneFromDisk_KeepsItsWaitingE
 
 	// The editor removes or renames them meanwhile; the resolver refuses (no file), the entries stay.
 	BOOST_TEST(!rs->remove(a));
-	BOOST_TEST(!rs->rename(c, at("d.txt")));
+	BOOST_TEST(!rs->rename(c, res::tag{ "res://d.txt" }));
 	BOOST_TEST(rs->waiting_for_index_count() == 2u);
 
-	// Decided all the same: evicted once the index goes (the watcher's own poll may tell them once more).
+	// Decided all the same: evicted once the index goes.
 	rs->set_asset_index(nullptr);
 	pump();
 	BOOST_TEST(rs->waiting_for_index_count() == 0u);
-	BOOST_TEST(std::ranges::count(log.told, std::string{ a.view() }) >= 1);
-	BOOST_TEST(std::ranges::count(log.told, std::string{ c.view() }) >= 1);
+	BOOST_TEST(std::ranges::count(log.told, std::string{ a.view() }) == 1);
+	BOOST_TEST(std::ranges::count(log.told, std::string{ c.view() }) == 1);
 	rs->unwatch(a, &log);
 	rs->unwatch(c, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(AFailedRemoveAfterOneThatWasDone_DoesNotUndoIt, quiet_disk_fixture)
+{
+	const res::tag a{ "res://a.txt" };
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+
+	BOOST_REQUIRE(rs->remove(a));
+	BOOST_TEST(!rs->remove(a));
+	BOOST_TEST(rs->waiting_for_index_count() == 1u);
+
+	// The removal that was done still forgets the file.
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(AFailedRenameOfAFileOnDisk_LeavesNothingWaiting, quiet_disk_fixture)
+{
+	const res::tag a{ "res://a.txt" };
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+
+	// Never over an existing file: refused, the file stays where it is.
+	BOOST_TEST(!rs->rename(a, res::tag{ "res://c.txt" }));
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
 }
 
 BOOST_FIXTURE_TEST_CASE(RemovedAndMadeAgainBeforeTheBatch_KeepsItsPin, disk_fixture)

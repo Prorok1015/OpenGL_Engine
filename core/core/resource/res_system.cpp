@@ -1203,42 +1203,42 @@ bool res::resource_system::wait_for_index(const res::tag &tag, const res::tag &n
   if (generation != m_index_generation.load(std::memory_order_acquire)) {
     return false;
   }
-  auto [entry, inserted] = m_waiting_for_index.try_emplace(tag);
-  if (inserted) {
-    entry->second.token = ++m_next_waiting_token;
-  }
-  entry->second.node = node;
-  entry->second.forget = entry->second.forget || forget;
+  auto &entry = m_waiting_for_index[tag];
+  entry.node = node;
+  entry.forget = entry.forget || forget;
+  entry.confirmed = true;
   return true;
 }
 
-res::resource_system::expectation res::resource_system::expect_gone(const res::tag &tag, const res::tag &node,
-                                                                    std::uint64_t generation) {
+bool res::resource_system::expect_gone(const res::tag &tag, const res::tag &node, std::uint64_t generation) {
   std::lock_guard lock(m_waiting_mutex);
   if (generation != m_index_generation.load(std::memory_order_acquire)) {
-    return {};
+    return false;
   }
-  // Already gone from disk and waiting (perhaps numbered): kept as it is, the operation only marks it to be forgotten.
-  if (const auto waiting = m_waiting_for_index.find(tag); waiting != m_waiting_for_index.end()) {
-    const expectation kept{true, 0, waiting->second.forget};
-    waiting->second.forget = true;
-    return kept;
+  // A file already waiting (gone from disk, perhaps numbered) keeps its entry, node and number.
+  auto [entry, inserted] = m_waiting_for_index.try_emplace(tag);
+  if (inserted) {
+    entry->second.node = node;
   }
-  const std::uint64_t token = ++m_next_waiting_token;
-  m_waiting_for_index.emplace(tag, waiting_entry{node, 0, true, token});
-  return expectation{true, token, false};
+  ++entry->second.operations;
+  return true;
 }
 
-void res::resource_system::cancel_expected(const res::tag &tag, const expectation &expected) {
+void res::resource_system::finish_expected(const res::tag &tag, bool done) {
   std::lock_guard lock(m_waiting_mutex);
   const auto waiting = m_waiting_for_index.find(tag);
   if (waiting == m_waiting_for_index.end()) {
     return;
   }
-  if (expected.token == 0) {
-    waiting->second.forget = expected.had_forget;
-  } else if (waiting->second.token == expected.token) {
-    // Even when a batch has numbered it meanwhile (a mount that reports nothing): the operation did not happen.
+  auto &entry = waiting->second;
+  if (entry.operations > 0) {
+    --entry.operations;
+  }
+  if (done) {
+    entry.confirmed = true;
+    entry.forget = true;
+  } else if (entry.operations == 0 && !entry.confirmed) {
+    // Even when a batch has numbered it meanwhile (a mount that reports nothing): nothing went.
     m_waiting_for_index.erase(waiting);
   }
 }
@@ -1292,7 +1292,8 @@ void res::resource_system::evict_waiting(std::vector<std::pair<res::tag, waiting
                                          const std::unordered_map<res::tag, res::tag> &remap) {
   for (const auto &[tag, entry] : entries) {
     // Removed through this system and still gone: forgotten like erase(). Back on disk (removed and made again before
-    // the batch was decided), its pins and aliases stay.
+    // the batch was decided, or a lower root holds the same path and the tag now serves that file), its pins and
+    // aliases stay.
     if (entry.forget && !exists(tag)) {
       forget_erased(tag);
     }
@@ -1337,7 +1338,8 @@ void res::resource_system::apply_asset_batch(std::uint64_t through,
     // Only what came in a batch the owner has taken in: a later one may still pair its file with a new one.
     std::lock_guard lock(m_waiting_mutex);
     for (auto it = m_waiting_for_index.begin(); it != m_waiting_for_index.end();) {
-      if (it->second.batch != 0 && it->second.batch <= through) {
+      // An entry only an operation still running expects is decided once that operation is over.
+      if (it->second.batch != 0 && it->second.batch <= through && it->second.confirmed) {
         decided.emplace_back(it->first, std::move(it->second));
         it = m_waiting_for_index.erase(it);
       } else {
@@ -1733,15 +1735,15 @@ res::file_operation res::resource_system::remove(const res::tag &tag) {
   resource_system &base = root();
   const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
   const res::tag node = base.node_of(tag);
-  const expectation expected = node != tag ? base.expect_gone(tag, node, generation) : expectation{};
+  const bool waits = node != tag && base.expect_gone(tag, node, generation);
   auto result = found->second->remove(tag);
+  if (waits) {
+    base.finish_expected(tag, static_cast<bool>(result));
+  }
   if (!result) {
-    if (expected.waits) {
-      base.cancel_expected(tag, expected);
-    }
     return result;
   }
-  if (expected.waits) {
+  if (waits) {
     base.signal_changed_local(tag);
     return result;
   }
@@ -1767,15 +1769,15 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
   resource_system &base = root();
   const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
   const res::tag node = base.node_of(from);
-  const expectation expected = node != from ? base.expect_gone(from, node, generation) : expectation{};
+  const bool waits = node != from && base.expect_gone(from, node, generation);
   auto result = found->second->rename(from, to);
+  if (waits) {
+    base.finish_expected(from, static_cast<bool>(result));
+  }
   if (!result) {
-    if (expected.waits) {
-      base.cancel_expected(from, expected);
-    }
     return result;
   }
-  if (expected.waits) {
+  if (waits) {
     base.signal_changed_local(from);
     signal_changed(to);
     return result;
