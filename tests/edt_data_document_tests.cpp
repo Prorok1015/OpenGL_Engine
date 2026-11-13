@@ -1345,6 +1345,8 @@ BOOST_AUTO_TEST_CASE(ANewerParent_AndANewerNestedObject_RefuseTheOpenToo)
 	const edt::open_result nested_result = with_nested.open(nested);
 	BOOST_TEST(!nested_result.opened);
 	BOOST_TEST(nested_result.error.find("newer") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(AReset_TakesTheRecordsOut_InOneRecord_AndAnUndoPutsThemBack)
 {
 	put("parent.desc", k_parent);
