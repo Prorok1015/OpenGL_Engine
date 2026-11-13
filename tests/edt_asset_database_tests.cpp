@@ -214,6 +214,26 @@ BOOST_AUTO_TEST_CASE(duplicate_ids_and_orphans_are_found)
 	BOOST_TEST(res::to_text(*assets.orphans().front().id) == k_guid_b);
 }
 
+// One rule with res::is_asset_meta_name (#817): a sidecar in any letter case is a sidecar, not an asset, and belongs to
+// its file.
+BOOST_AUTO_TEST_CASE(a_sidecar_in_any_letter_case_is_a_sidecar)
+{
+	upper.write("A.PNG", "a");
+	upper.write("A.PNG.RESOURCE", meta_text(k_guid_a));
+	upper.write("b.png", "b");
+	upper.write("b.png.Resource", meta_text(k_guid_b));
+	auto& assets = open();
+
+	BOOST_TEST(assets.find(res::tag::make("A.PNG.RESOURCE")) == nullptr);
+	BOOST_TEST(assets.find(res::tag::make("b.png.Resource")) == nullptr);
+	BOOST_TEST(assets.records().size() == 2u);
+	BOOST_REQUIRE(record("A.PNG").id.has_value());
+	BOOST_TEST(res::to_text(*record("A.PNG").id) == k_guid_a);
+	BOOST_REQUIRE(record("b.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("b.png").id) == k_guid_b);
+	BOOST_TEST(assets.orphans().empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_bad_sidecar_leaves_the_file_without_id_and_says_why)
 {
 	upper.write("broken.png", "x");

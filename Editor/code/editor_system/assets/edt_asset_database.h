@@ -98,8 +98,6 @@ namespace edt
 		std::optional<std::string> desc_type;
 	};
 
-	inline constexpr std::string_view k_asset_meta_suffix = ".resource";
-
 	// The kind of asset of a path by its suffix (lowercase compare).
 	std::string asset_type_of(std::string_view path);
 
