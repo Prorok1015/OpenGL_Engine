@@ -129,6 +129,8 @@ namespace edt
 		bool unchanged = false;
 		std::string content_hash;
 		std::optional<std::string> desc_type;
+		// The string "__guid" of a desc's root, as written (not checked).
+		std::optional<std::string> root_guid;
 	};
 
 	// What one batch of file changes did to the database.
@@ -180,6 +182,12 @@ namespace edt
 		static constexpr std::chrono::seconds stamp_granularity{ 2 };
 		// A git index or HEAD written this recently means a git operation may still be writing files (#765).
 		static constexpr std::chrono::seconds git_quiet_time{ 5 };
+		// A file from outside written this recently may still be written, copied or moved: it waits for its ID.
+		static constexpr std::chrono::seconds new_file_quiet_time{ 5 };
+		// A file without ID that went away this recently and one of its size and time that comes are a move.
+		static constexpr std::chrono::seconds move_window{ 60 };
+		// A file waiting for its hash this long (it cannot be read) stops waiting for an ID.
+		static constexpr std::chrono::seconds pending_timeout{ 60 };
 		// poll() looks at the files waiting for an ID at most this often.
 		static constexpr std::chrono::seconds poll_interval{ 1 };
 
@@ -228,13 +236,17 @@ namespace edt
 		// the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
 
-		// New files get an ID at once (#765, EPIC-57 section 6.1): a file of the top layer without a .resource in any
-		// layer that a batch after the first walk reports as created gets <file>.resource with a new ID (a desc: the
-		// valid "__guid" of its root, when it has one). The editor's own write (file_change::self) gets it in that batch;
-		// a file from outside waits for its hash and gets none when an orphan had that hash (a move: "Link" in
-		// Problems), nor while a git operation runs. Files the first walk finds are left as they are (migration).
+		// New files get an ID (#765, EPIC-57 section 6.1): a file of the top layer without a .resource in any layer that
+		// a batch after the first walk reports as created, or a later walk adds, gets <file>.resource with a new ID (a
+		// desc: the valid "__guid" of its root, read by the hashing pass, unless another file has that ID). Not for OS
+		// litter or temporaries, nor for what matches a file without ID that went away (a move). The editor's own write
+		// (file_change::self) gets it in that batch (a desc once hashed); a file from outside waits for its hash and to
+		// be new_file_quiet_time old, and gets none when an orphan had that hash (a move: "Link" in Problems), nor while
+		// a git operation runs. Files the first walk finds are left as they are (migration).
 		// `busy` (may be empty): the editor's own git operation is running.
 		void set_vcs_busy(std::function<bool()> busy) { m_vcs_busy = std::move(busy); }
+		// The repository's git folder (index, HEAD), asked at every check (may be empty: no git folder is looked at).
+		void set_git_dir_provider(std::function<std::optional<std::filesystem::path>()> provider) { m_git_dir = std::move(provider); }
 		// Looks at the files waiting for an ID again (a git operation may have ended); at most every poll_interval
 		// unless `force`. Cheap when none waits. Main thread, once per frame.
 		void poll(bool force = false);
@@ -314,8 +326,11 @@ namespace edt
 		void give_pending_ids();
 		// A git operation may be writing files: the editor's own, or one seen in the repository's git folder.
 		bool git_busy();
-		// The git folder of the repository holding the top layer (a worktree's ".git" file followed); empty when none.
-		const std::filesystem::path& git_dir();
+		// The record `key` came after the first walk: it waits for an ID when it is a new file of the top layer.
+		void queue_new_file(const std::string& key, bool own);
+		// Records without ID that went away: what comes with their size and time is a move.
+		void remember_gone(const std::vector<asset_record>& gone);
+		bool matches_gone(const asset_record& record);
 
 		job_service& m_jobs;
 		std::vector<std::filesystem::path> m_layers;
@@ -361,11 +376,26 @@ namespace edt
 		std::set<std::string> m_force_meta;
 		// By merge key of the .resource path text: last_hash for the orphan an undone link brings back (take_orphan_hash).
 		std::map<std::string, std::string> m_orphan_hashes;
-		// Records (by path text) from outside that wait for their hash or the end of a git operation to get an ID.
-		std::set<std::string> m_pending_ids;
+		struct pending_id
+		{
+			std::chrono::steady_clock::time_point since;
+			// Written by the editor: no wait for the quiet time, an orphan or git.
+			bool own = false;
+		};
+		// Records (by path text) waiting for an ID: for their hash, quiet time or the end of a git operation.
+		std::map<std::string, pending_id> m_pending_ids;
+		// A waiting desc's root "__guid" from the hashing pass (none: it has no string one).
+		std::map<std::string, std::optional<std::string>> m_root_guids;
+		struct gone_file
+		{
+			std::int64_t size = 0;
+			std::int64_t mtime = 0;
+			std::string content_hash;
+			std::chrono::steady_clock::time_point at;
+		};
+		std::vector<gone_file> m_gone_without_id;
 		std::function<bool()> m_vcs_busy;
-		std::filesystem::path m_git_dir;
-		bool m_git_searched = false;
+		std::function<std::optional<std::filesystem::path>()> m_git_dir;
 		// An ID is being written: the batch its refresh applies gives none itself.
 		bool m_giving_ids = false;
 		std::chrono::steady_clock::time_point m_last_poll{};
