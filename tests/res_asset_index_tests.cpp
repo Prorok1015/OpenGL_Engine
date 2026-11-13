@@ -498,6 +498,42 @@ BOOST_FIXTURE_TEST_CASE(TwoBatches_TheFirstDoesNotDecideTheSecond, disk_fixture)
 	rs->unwatch(c, &log);
 }
 
+BOOST_AUTO_TEST_CASE(RemoveOnAMountThatReportsNothing_IsDecidedByTheNextBatch)
+{
+	// res:// reports no changes; memory:// does: its batch takes in the waiting removal all the same.
+	test_util::temp_dir dir{ "res_asset_index_quiet" };
+	dir.write("res/a.txt", "A");
+	fs::create_directories(dir.path() / "memory");
+	ds::task_system tasks{ test_util::manual_tasks() };
+	res::watch_options reporting;
+	reporting.report_changes = true;
+	res::resource_system sys(tasks, res::mount_table{
+		res::mount{ res::tag::default_protocol(), { dir.path() / "res" }, res::mount_access::read_write,
+			res::write_policy::allow_all(), res::watch_options{}, true },
+		res::mount{ res::tag::memory, { dir.path() / "memory" }, res::mount_access::read_write,
+			res::write_policy::allow_all(), std::move(reporting), false },
+	});
+	auto index = std::make_shared<fake_index>();
+	const res::tag a{ "res://a.txt" };
+	index->put(a, k_a);
+	sys.set_asset_index(index);
+	const auto held = sys.require_sync<res::text_resource>(a);
+	sys.pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+
+	BOOST_REQUIRE(sys.remove(a));
+	BOOST_TEST(sys.waiting_for_index_count() == 1u);
+	BOOST_REQUIRE(sys.store_sync(res::tag{ "memory://other.txt" }, test_util::to_bytes("x")));
+	test_util::pump(tasks);
+
+	index->remove(a);
+	sys.apply_asset_batch(sys.delivering_batch(), {});
+	test_util::pump(tasks);
+	BOOST_TEST(sys.waiting_for_index_count() == 0u);
+	BOOST_TEST(sys.pinned_count() == 0u);
+
+	sys.set_asset_index(nullptr);
+}
+
 BOOST_FIXTURE_TEST_CASE(AliasTargetMoved_ResolvesToItsNewPath, disk_fixture)
 {
 	const res::tag a = at("a.txt");

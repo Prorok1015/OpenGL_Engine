@@ -1693,22 +1693,12 @@ void res::resource_system::unsubscribe_changes(void *owner) {
 void res::resource_system::deliver_changes(const std::string &protocol, const std::vector<file_change> &batch) {
   const std::uint64_t number = ++m_delivered_batches;
   {
-    // A gone file that waits for the index belongs to this batch: decided once the index owner has taken it in.
+    // Every gone file still without a batch belongs to this one, named in it or not (a mount that reports no changes):
+    // decided once the index owner has taken it in, so nothing waits for a batch that never comes.
     std::lock_guard lock(m_waiting_mutex);
-    for (const auto &change : batch) {
-      if (change.is_directory) {
-        continue;
-      }
-      const res::tag *gone = change.kind == change_kind::deleted   ? &change.tag
-                             : change.kind == change_kind::renamed ? &change.old_tag
-                                                                   : nullptr;
-      if (!gone) {
-        continue;
-      }
-      if (const auto waiting = m_waiting_for_index.find(*gone);
-          waiting != m_waiting_for_index.end() && waiting->second.batch == 0) {
-        waiting->second.batch = number;
-        waiting->second.forget = waiting->second.forget || change.self;
+    for (auto &[tag, waiting] : m_waiting_for_index) {
+      if (waiting.batch == 0) {
+        waiting.batch = number;
       }
     }
   }

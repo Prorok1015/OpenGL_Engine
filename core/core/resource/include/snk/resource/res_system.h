@@ -377,7 +377,7 @@ namespace res
 		bool wait_for_index(const res::tag& tag, const res::tag& node, std::uint64_t generation, bool forget);
 		struct waiting_entry {
 			res::tag node;
-			// The batch its change came in (delivering_batch); 0 until that batch is delivered.
+			// The first batch delivered after it went (delivering_batch), whether or not that batch names its file; 0 until then.
 			std::uint64_t batch = 0;
 			// Went through remove() or rename(): forgotten (forget_erased) unless it moved.
 			bool forget = false;
