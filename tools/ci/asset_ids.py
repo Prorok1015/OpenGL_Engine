@@ -22,7 +22,9 @@ second run changes nothing.
 
 The walk is the editor's (edt::asset_database): hidden and ignored names (res::is_ignored_asset_name, ported below and
 checked against tests/data/asset_ignored_names.txt, which a C++ test checks too) are neither listed nor entered, links
-are not followed, and a folder that is a git submodule (a .git inside, or a path of .gitmodules) is left out.
+are not followed, and a folder that is a git submodule (a .git inside, or a path of .gitmodules) is left out. The
+project folder's own code/, build/ and project.snkproj (res::is_project_own_name) are not looked for: the trees given
+here are content folders, never a project folder.
 """
 import json
 import math

@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace desc { class desc_system; class schema_registry; struct type_schema; }
+namespace edt::schema_ui { struct field_origin; }
 namespace res { class resource_system; }
 
 namespace edt
@@ -97,6 +98,9 @@ namespace edt
 		// `draw` edits a copy of what is shown; what it changed goes into `own` as the pointers that differ from the base.
 		// True when `own` changed.
 		bool edit(const std::function<bool(boost::json::value& shown)>& draw);
+		// The same with where each value comes from (S56-7): `draw` puts the origin in its schema_ui::context for the marks
+		// of the fields, and a reset or an unset the person asks for goes into the same edit (one record of the history).
+		bool edit_marked(const std::function<bool(boost::json::value& shown, const schema_ui::field_origin& origin)>& draw);
 		// Puts a snapshot of `own` back (the history's undo and redo); the document is dirty when it differs from the saved
 		// one. False, and nothing changed, for a snapshot of another __type or __parent: what the document inherits would
 		// not follow it.
@@ -130,11 +134,12 @@ namespace edt
 			std::string type;
 			std::string version;
 			std::vector<res::tag> parents;
+			std::vector<boost::json::object> layers;
 		};
 
 		open_result load(const res::tag& file, loaded& out) const;
 		open_result resolve_chain(const res::tag& file, const boost::json::object& own, const std::string& type,
-			boost::json::object& inherited, std::vector<res::tag>& parents) const;
+			boost::json::object& inherited, std::vector<res::tag>& parents, std::vector<boost::json::object>& layers) const;
 		void apply(const res::tag& file, loaded&& state);
 		void watch_files();
 		void sync_watches(const std::vector<res::tag>& wanted);
@@ -165,6 +170,8 @@ namespace edt
 		std::uint64_t m_disk_changes = 0;
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
+		// What each parent file sets (header keys out), nearest first, in step with m_parents: where an inherited value comes from.
+		std::vector<boost::json::object> m_parent_layers;
 		editor_events* m_events = nullptr;
 		// The resource system the watchers are on (the base one, which outlives every document) and what is watched.
 		res::resource_system* m_watching = nullptr;

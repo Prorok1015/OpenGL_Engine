@@ -1177,6 +1177,8 @@ public:
 		: m_layers(layers)
 		, m_case_insensitive(case_insensitive)
 	{
+		m_project_folder.reserve(layers.size());
+		for (const fs::path& layer : layers) m_project_folder.push_back(res::is_project_folder_layer(layer));
 	}
 
 	std::string key_of(const std::string& text) const { return edt::layer_merge_key(text, m_case_insensitive); }
@@ -1208,7 +1210,7 @@ public:
 				continue;
 			}
 			std::string on_disk = fs_paths::utf8_of(entry->path().filename());
-			if (res::is_skipped_asset_name(on_disk, is_dir)) {
+			if (res::is_skipped_asset_entry(on_disk, is_dir, path.empty() && m_project_folder[layer])) {
 				continue;
 			}
 			std::string child = joined(path, on_disk);
@@ -1328,6 +1330,7 @@ private:
 	}
 
 	const std::vector<fs::path>& m_layers;
+	std::vector<bool> m_project_folder;
 	bool m_case_insensitive = false;
 	// By merge key of the folder's path; std::map: folder_at hands out references while it adds.
 	std::map<std::string, std::optional<folder>> m_folders;

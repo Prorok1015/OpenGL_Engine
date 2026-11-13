@@ -463,7 +463,7 @@ void expect_the_editors_view(const fs::path& root, const std::vector<fs::path>& 
 	const auto own = [project_root](const res::tag& tag) {
 		if (!project_root) return false;
 		const std::string path(tag.relative());
-		return pmg::is_project_own_name(std::string_view(path).substr(0, path.find('/')));
+		return res::is_project_own_name(std::string_view(path).substr(0, path.find('/')));
 	};
 	std::set<std::string> from_database;
 	for (const auto& [key, record] : database.records()) {

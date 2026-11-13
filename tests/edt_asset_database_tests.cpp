@@ -1202,6 +1202,40 @@ BOOST_AUTO_TEST_CASE(an_attached_database_follows_the_watcher)
 	BOOST_TEST(seen());
 }
 
+// #854: in the layer that is the project folder (it holds project.snkproj) the project's code, build output and project file
+// are no assets and shadow nothing below; the walk and a batch agree.
+BOOST_AUTO_TEST_CASE(the_project_folder_layer_hides_its_code_build_and_project_file)
+{
+	upper.write("project.snkproj", "{}");
+	upper.write("project.snkproj.resource", meta_text(k_guid_a));
+	upper.write("code/main.cpp", "x");
+	upper.write("build/out.bin", "x");
+	upper.write("textures/a.png", "x");
+	lower.write("code/lib.txt", "x");
+	auto& assets = open();
+	BOOST_TEST(assets.find(res::tag::make("textures/a.png")) != nullptr);
+	BOOST_TEST(assets.find(res::tag::make("code/lib.txt")) != nullptr);
+	BOOST_TEST(assets.find(res::tag::make("code/main.cpp")) == nullptr);
+	BOOST_TEST(assets.find(res::tag::make("build/out.bin")) == nullptr);
+	BOOST_TEST(assets.find(res::tag::make("project.snkproj")) == nullptr);
+	BOOST_TEST(assets.orphans().empty());
+
+	upper.write("code/other.cpp", "x");
+	const std::vector<res::file_change> batch{ change("code/other.cpp", res::change_kind::created) };
+	BOOST_TEST(assets.apply_changes(batch).added.empty());
+	expect_same_as_a_full_walk(assets);
+}
+
+// #854: a layer without project.snkproj is no project folder: its code/ and build/ hold assets like any folder.
+BOOST_AUTO_TEST_CASE(a_layer_without_a_project_file_lists_its_code_and_build_folders)
+{
+	upper.write("code/main.cpp", "x");
+	upper.write("build/out.bin", "x");
+	auto& assets = open();
+	BOOST_TEST(assets.find(res::tag::make("code/main.cpp")) != nullptr);
+	BOOST_TEST(assets.find(res::tag::make("build/out.bin")) != nullptr);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {

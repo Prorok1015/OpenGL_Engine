@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
+#include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
 #include "edt_data_document_view.h"
 #include <snk/desc/desc_schema.h>
@@ -30,7 +31,8 @@ constexpr const char* k_config_schema = R"({
 	"fields": [
 		{ "name": "speed", "kind": "f32", "default": 1.0 },
 		{ "name": "goals", "kind": "array", "element": "i32", "default": [1, 2] },
-		{ "name": "min", "key": "/limits/min", "kind": "f32", "default": 0.0 }
+		{ "name": "min", "key": "/limits/min", "kind": "f32", "default": 0.0 },
+		{ "name": "extra", "kind": "f32", "default": null, "optional": true }
 	]
 })";
 
@@ -1153,6 +1155,86 @@ BOOST_AUTO_TEST_CASE(SaveOver_KeepsTheHistory_AndMarksTheSavePoint)
 	BOOST_REQUIRE(document.undo());
 	BOOST_TEST((document.own() == original));
 	BOOST_TEST(document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AReset_TakesTheRecordsOut_InOneRecord_AndAnUndoPutsThemBack)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc",
+		R"({"__type":"test.config","__guid":"guid-1","__parent":"res://parent.desc","speed":3.0,"goals":[7],"limits":{"min":9.0}})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object before = document.own();
+
+	BOOST_REQUIRE(document.edit_marked([](json::value&, const edt::schema_ui::field_origin& origin) {
+		origin.requests.resets = { "/limits/min", "/speed" };
+		return false;
+	}));
+	BOOST_TEST(!document.own().contains("speed"));
+	BOOST_TEST(!document.own().contains("limits"));
+	BOOST_TEST((document.own().at("goals") == json::parse("[7]")));
+	BOOST_TEST(document.own().at("__guid").as_string() == "guid-1");
+	BOOST_TEST(document.shown().at_pointer("/speed").to_number<double>() == 2.0);
+	BOOST_TEST(document.shown().at_pointer("/limits/min").to_number<double>() == 5.0);
+
+	document.commit_pending();
+	BOOST_TEST(document.history().size() == 1u);
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == before));
+	BOOST_REQUIRE(document.redo());
+	BOOST_TEST(!document.own().contains("speed"));
+}
+
+BOOST_AUTO_TEST_CASE(AnUnset_OfAnInheritedOptional_WritesANull_OfAnOwnOne_TakesTheRecordOut_BothUndo)
+{
+	put("parent.desc", R"({"__type":"test.config","speed":2.0,"extra":2.5})");
+	const res::tag inheriting = put("inheriting.desc", R"({"__type":"test.config","__guid":"g1","__parent":"res://parent.desc"})");
+	const res::tag own_value = put("own.desc", R"({"__type":"test.config","__guid":"g2","extra":1.5})");
+	const auto unset_extra = [](json::value& shown, const edt::schema_ui::field_origin&) {
+		return edt::schema_ui::apply_unsets(shown, { "/extra" });
+	};
+
+	edt::data_document inheriting_doc = make();
+	BOOST_REQUIRE(inheriting_doc.open(inheriting).opened);
+	const json::object inheriting_before = inheriting_doc.own();
+	BOOST_REQUIRE(inheriting_doc.edit_marked(unset_extra));
+	BOOST_TEST(inheriting_doc.own().at("extra").is_null());
+	BOOST_TEST(!inheriting_doc.shown().as_object().contains("extra"));
+	inheriting_doc.commit_pending();
+	BOOST_TEST(inheriting_doc.history().size() == 1u);
+	BOOST_REQUIRE(inheriting_doc.undo());
+	BOOST_TEST((inheriting_doc.own() == inheriting_before));
+
+	edt::data_document own_doc = make();
+	BOOST_REQUIRE(own_doc.open(own_value).opened);
+	const json::object own_before = own_doc.own();
+	BOOST_REQUIRE(own_doc.edit_marked(unset_extra));
+	BOOST_TEST(!own_doc.own().contains("extra"));
+	own_doc.commit_pending();
+	BOOST_REQUIRE(own_doc.undo());
+	BOOST_TEST((own_doc.own() == own_before));
+}
+
+BOOST_AUTO_TEST_CASE(TheSourceOfAnInheritedValue_IsTheLevelOfTheChainThatSetsIt)
+{
+	put("a.desc", R"({"__type":"test.config","speed":2.0,"extra":1.0})");
+	put("b.desc", R"({"__type":"test.config","__parent":"res://a.desc","goals":[1]})");
+	const res::tag c = put("c.desc", R"({"__type":"test.config","__parent":"res://b.desc","extra":4.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(c).opened);
+
+	std::vector<std::string> texts;
+	document.edit_marked([&](json::value&, const edt::schema_ui::field_origin& origin) {
+		for (const char* pointer : { "/speed", "/goals", "/extra", "/limits/min" }) {
+			texts.push_back(edt::schema_ui::source_text(origin, pointer));
+		}
+		return false;
+	});
+	BOOST_REQUIRE(texts.size() == 4u);
+	BOOST_CHECK_EQUAL(texts[0], "inherited from res://a.desc");
+	BOOST_CHECK_EQUAL(texts[1], "inherited from res://b.desc");
+	BOOST_CHECK_EQUAL(texts[2], "set here");
+	BOOST_CHECK_EQUAL(texts[3], "schema default");
 }
 
 BOOST_AUTO_TEST_CASE(ARecordTheDocumentCannotTakeBack_IsRefused_DroppedAndNothingIsAnnounced)

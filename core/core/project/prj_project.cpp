@@ -140,7 +140,8 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		if (!is_inside(root, content_root)) {
 			return std::format("content root '{}' leads outside the project", fs_paths::generic_utf8_of(dir));
 		}
-		// One file would be reachable under two tags, and a store through the outer root would land in the inner one.
+		// One file would be reachable under two tags, and a store through the outer root would land in the inner one. The
+		// manifest already refuses roots whose paths overlap (#856); here a link may join two that do not.
 		for (const auto& other : roots) {
 			if (is_inside(other, content_root) || is_inside(content_root, other)) {
 				return std::format("content roots '{}' and '{}' overlap", fs_paths::generic_utf8_of(other), fs_paths::generic_utf8_of(content_root));
