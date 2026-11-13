@@ -2129,7 +2129,7 @@ edt::asset_fix_result edt::asset_database::new_id_for_copy(const res::tag& file)
 
 void edt::asset_database::remember_gone(const std::vector<asset_record>& gone)
 {
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = steady_now();
 	for (const asset_record& record : gone) {
 		if (!record.id && record.size > 0) {
 			m_gone_without_id.push_back(gone_file{ record.size, record.mtime, record.content_hash, now });
@@ -2139,7 +2139,7 @@ void edt::asset_database::remember_gone(const std::vector<asset_record>& gone)
 
 bool edt::asset_database::matches_gone(const asset_record& record)
 {
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = steady_now();
 	std::erase_if(m_gone_without_id, [now](const gone_file& gone) { return now - gone.at > move_window; });
 	// An empty file says nothing of where it came from.
 	if (record.size == 0) {
@@ -2164,7 +2164,7 @@ void edt::asset_database::queue_new_file(const std::string& key, bool own)
 	if (record.layer != top_layer() || record.has_meta || res::is_ignored_asset_name(record.path.view().substr(record.path.view().find_last_of('/') + 1)) || matches_gone(record)) {
 		return;
 	}
-	const auto [entry, added] = m_pending_ids.try_emplace(key, pending_id{ std::chrono::steady_clock::now(), own });
+	const auto [entry, added] = m_pending_ids.try_emplace(key, pending_id{ steady_now(), own });
 	if (!added) {
 		entry->second.own = entry->second.own || own;
 	}
@@ -2175,7 +2175,7 @@ void edt::asset_database::poll(bool force)
 	if (m_pending_ids.empty()) {
 		return;
 	}
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = steady_now();
 	if (!force && now - m_last_poll < poll_interval) {
 		return;
 	}
@@ -2188,7 +2188,7 @@ void edt::asset_database::give_pending_ids()
 	if (m_pending_ids.empty() || m_giving_ids || m_scanning || !m_walked_once) {
 		return;
 	}
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = steady_now();
 	std::optional<bool> busy;
 	std::vector<std::string> ready;
 	bool rehash = false;

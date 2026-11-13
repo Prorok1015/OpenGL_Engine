@@ -1668,6 +1668,35 @@ BOOST_AUTO_TEST_CASE(files_of_a_new_folder_get_ids_after_the_walk)
 	BOOST_TEST(db->pending_ids() == 0u);
 }
 
+// A file whose hash never comes stops waiting after pending_timeout; a gone file stops passing for a move after
+// move_window.
+BOOST_AUTO_TEST_CASE(waiting_ends_and_moves_are_forgotten_with_time)
+{
+	auto now = std::chrono::steady_clock::now();
+	open().set_clock_for_tests([&now] { return now; });
+	write_aged(upper(), "stuck.png", "stuck");
+	apply(change("stuck.png", res::change_kind::created));
+	// The hashing job is never run.
+	BOOST_TEST(db->pending_ids() == 1u);
+	db->poll();
+	BOOST_TEST(db->pending_ids() == 1u);
+	now += edt::asset_database::pending_timeout + edt::asset_database::poll_interval + std::chrono::seconds(1);
+	db->poll();
+	BOOST_TEST(db->pending_ids() == 0u);
+	test_util::pump(tasks);
+	BOOST_TEST(!fs::exists(upper() / "stuck.png.resource"));
+
+	write_aged(upper(), "a.txt", "moved bytes");
+	apply(own_change("a.txt", res::change_kind::modified));
+	test_util::pump(tasks);
+	fs::rename(upper() / "a.txt", upper() / "b.txt");
+	apply(change("a.txt", res::change_kind::deleted));
+	now += edt::asset_database::move_window + std::chrono::seconds(1);
+	apply(change("b.txt", res::change_kind::created));
+	settle();
+	BOOST_TEST(meta_id("b.txt").has_value());
+}
+
 #if !defined(_WIN32)
 BOOST_AUTO_TEST_CASE(files_under_a_linked_folder_get_no_id)
 {

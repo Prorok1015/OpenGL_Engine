@@ -252,6 +252,8 @@ namespace edt
 		void poll(bool force = false);
 		// Files from outside waiting for an ID. For tests.
 		std::size_t pending_ids() const { return m_pending_ids.size(); }
+		// Tests only: the steady time the database reads (poll throttle, move_window, pending_timeout).
+		void set_clock_for_tests(std::function<std::chrono::steady_clock::time_point()> clock) { m_clock = std::move(clock); }
 
 		const asset_record* find(const res::tag& path) const;
 		std::vector<const asset_record*> find(const res::asset_id& id) const;
@@ -331,6 +333,7 @@ namespace edt
 		// Records without ID that went away: what comes with their size and time is a move.
 		void remember_gone(const std::vector<asset_record>& gone);
 		bool matches_gone(const asset_record& record);
+		std::chrono::steady_clock::time_point steady_now() const { return m_clock ? m_clock() : std::chrono::steady_clock::now(); }
 
 		job_service& m_jobs;
 		std::vector<std::filesystem::path> m_layers;
@@ -399,6 +402,7 @@ namespace edt
 		// An ID is being written: the batch its refresh applies gives none itself.
 		bool m_giving_ids = false;
 		std::chrono::steady_clock::time_point m_last_poll{};
+		std::function<std::chrono::steady_clock::time_point()> m_clock;
 		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};
