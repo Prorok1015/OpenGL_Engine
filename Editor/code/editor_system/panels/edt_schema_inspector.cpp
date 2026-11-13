@@ -51,6 +51,11 @@ namespace
 			if (!slot) {
 				continue;
 			}
+			// A null for an optional field is "not set" (the field is back to its default): shown as absent, with its "Set".
+			if (field.optional && slot->is_null()) {
+				desc::json_pointer_remove(object, field.key);
+				continue;
+			}
 			if (field.kind == field_kind::map && slot->is_object()) {
 				json::object& entries = slot->as_object();
 				for (auto it = entries.begin(); it != entries.end();) {

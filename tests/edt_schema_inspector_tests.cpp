@@ -852,4 +852,13 @@ BOOST_AUTO_TEST_CASE(Map_OfStructuresAndEnums_DrawsAGroupAndAComboPerKey)
 	BOOST_CHECK(widget_at(drawn, "/speeds/m") == ui::widget::combo);
 }
 
+BOOST_AUTO_TEST_CASE(Compose_ShowsAnOptionalFieldAnOverrideNulledAsNotSet)
+{
+	const desc::type_schema schema = weights_schema();
+	const json::object parent = parse(R"({ "extra": 2.0 })");
+	const json::object overrides = parse(R"({ "extra": null })");
+	const json::value shown = ui::compose(schema, descs->schemas(), { &parent, &overrides });
+	BOOST_CHECK(!shown.as_object().contains("extra"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
