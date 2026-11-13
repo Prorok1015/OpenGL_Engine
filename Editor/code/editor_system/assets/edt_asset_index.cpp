@@ -40,11 +40,8 @@ bool edt::asset_index_snapshot::refresh(const asset_database& assets)
 			continue;
 		}
 		const auto [held, inserted] = holders.try_emplace(*record.id, &record);
-		if (!inserted) {
-			const asset_record& other = *held->second;
-			if (record.mtime < other.mtime || (record.mtime == other.mtime && record.path.view() < other.path.view())) {
-				held->second = &record;
-			}
+		if (!inserted && holds_id_before(record, *held->second)) {
+			held->second = &record;
 		}
 	}
 	for (const auto& [key, record] : assets.records()) {
@@ -89,35 +86,68 @@ void edt::asset_index_link::attach()
 {
 	m_index->refresh(m_assets);
 	m_revision = m_assets.revision();
+	m_drops_seen = m_assets.changes_dropped();
 	m_resources.set_asset_index(m_index);
 	m_attached = true;
 }
 
+void edt::asset_index_link::detach()
+{
+	// What waits for a batch is evicted now (set_asset_index), entries move back to their tags.
+	m_resources.set_asset_index(nullptr);
+	m_attached = false;
+	m_moves.clear();
+	m_attach_after = m_assets.walks_applied();
+}
+
+bool edt::asset_index_link::follow_drops()
+{
+	if (m_attached && m_assets.changes_dropped() != m_drops_seen) {
+		detach();
+	}
+	if (!m_attached && m_assets.walks_applied() > m_attach_after && !m_assets.scanning()) {
+		attach();
+	}
+	return m_attached;
+}
+
+void edt::asset_index_link::apply(std::span<const std::pair<res::tag, res::tag>> moved)
+{
+	const std::uint64_t through = m_assets.applied_through();
+	std::vector<std::pair<res::tag, res::tag>> all(moved.begin(), moved.end());
+	for (const handed_move& earlier : m_moves) {
+		all.push_back(earlier.move);
+	}
+	m_resources.apply_asset_batch(through, all);
+	// A batch with a higher number than an earlier move's has decided its file (or it no longer waits).
+	std::erase_if(m_moves, [through](const handed_move& earlier) { return earlier.through < through; });
+	for (const auto& move : moved) {
+		m_moves.push_back(handed_move{ move, through });
+	}
+}
+
 void edt::asset_index_link::poll()
 {
-	if (!m_attached) {
-		if (m_assets.walked_once() && !m_assets.scanning()) {
-			attach();
-		}
+	if (!follow_drops()) {
 		return;
 	}
 	// A walk that changed only orphans, a fix of a .resource: the records may change without a batch's moves.
 	if (m_assets.revision() != m_revision) {
 		m_revision = m_assets.revision();
 		if (m_index->refresh(m_assets)) {
-			m_resources.apply_asset_batch(m_assets.applied_through(), {});
+			apply({});
 		}
 	}
 }
 
 void edt::asset_index_link::on_batch(const asset_batch& batch)
 {
-	if (!m_attached) {
-		// No index yet, so nothing waits for this batch: the index starts from what the database holds now.
-		attach();
+	const bool was_attached = m_attached;
+	if (!follow_drops() || !was_attached) {
+		// Attached just now (or not yet): nothing waited for this batch, the index starts from what the database holds.
 		return;
 	}
 	m_index->refresh(m_assets);
 	m_revision = m_assets.revision();
-	m_resources.apply_asset_batch(m_assets.applied_through(), batch.moved);
+	apply(batch.moved);
 }

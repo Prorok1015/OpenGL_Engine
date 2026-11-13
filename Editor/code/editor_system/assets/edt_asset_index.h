@@ -7,9 +7,11 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace res
 {
@@ -55,7 +57,8 @@ namespace edt
 
 	// Keeps resource_system's asset index in step with the asset database: attached once the database has walked the
 	// tree, refreshed and handed on (apply_asset_batch) after every batch the database takes in, detached when the link
-	// goes. Main thread.
+	// goes. Detached too when the database dropped changes waiting behind a walk (they could not decide anything), and
+	// attached again after the next walk. Main thread.
 	class asset_index_link
 	{
 	public:
@@ -71,12 +74,28 @@ namespace edt
 
 	private:
 		void attach();
+		void detach();
+		// Detaches when the database dropped changes since the link last looked; true when attached afterwards.
+		bool follow_drops();
+		void apply(std::span<const std::pair<res::tag, res::tag>> moved);
 		void on_batch(const asset_batch& batch);
+
+		// A move handed on with `through`: a walk pairs a move of a batch it went ahead of, whose files wait for a later
+		// number. Handed on again with every later batch until one with a higher number has decided them.
+		struct handed_move
+		{
+			std::pair<res::tag, res::tag> move;
+			std::uint64_t through = 0;
+		};
 
 		asset_database& m_assets;
 		res::resource_system& m_resources;
 		std::shared_ptr<asset_index_snapshot> m_index = std::make_shared<asset_index_snapshot>();
 		bool m_attached = false;
 		std::uint64_t m_revision = 0;
+		std::vector<handed_move> m_moves;
+		std::uint64_t m_drops_seen = 0;
+		// Attached only after more walks than this have been applied.
+		std::uint64_t m_attach_after = 0;
 	};
 }

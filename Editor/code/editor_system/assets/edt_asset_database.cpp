@@ -17,6 +17,7 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <tuple>
 #include <map>
 #include <mutex>
 #include <random>
@@ -83,6 +84,11 @@ namespace
 		return out;
 	}
 
+}
+
+bool edt::holds_id_before(const asset_record& a, const asset_record& b)
+{
+	return std::tie(a.layer, a.mtime, a.path.string()) < std::tie(b.layer, b.mtime, b.path.string());
 }
 
 std::string edt::asset_type_of(std::string_view path)
@@ -381,6 +387,11 @@ void edt::asset_database::after_walk(walk_end end)
 {
 	if (end == walk_end::applied) {
 		m_walk_retried = false;
+		++m_walks_applied;
+		// Nothing waits behind it: every batch received so far is in what the walk found.
+		if (m_deferred.empty()) {
+			m_applied_through = m_received_through;
+		}
 	} else if (end == walk_end::cancelled && !m_walk_retried) {
 		// Once: a walk cancelled again (or one that fails) is not restarted in a loop. The deferred changes wait for it.
 		m_walk_retried = true;
@@ -1431,7 +1442,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			continue;
 		}
 		if (defer) {
-			if (m_deferred.size() < max_deferred_changes) {
+			if (m_deferred.size() < m_max_deferred) {
 				res::file_change waiting = change;
 				// The first walk finds the file anyway: what it finds is left to migration and gets no ID here.
 				if (!m_walked_once && waiting.kind == res::change_kind::created) {
@@ -1441,6 +1452,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			} else {
 				m_deferred.clear();
 				m_walk_again = true;
+				++m_changes_dropped;
 			}
 			continue;
 		}
