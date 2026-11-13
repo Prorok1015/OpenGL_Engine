@@ -855,6 +855,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_assets = std::make_unique<asset_database>(m_context->jobs(), &m_context->events(), m_res.get_resource_layers(),
 			asset_cache_location{ project.root, project.cache_dir().lexically_relative(project.root) / "asset_db" });
 		m_assets->attach(m_res);
+		m_assets->set_vcs_busy([this] { return m_vcs && m_vcs->running_writes() > 0; });
+		m_assets->set_git_dir_provider([this]() -> std::optional<std::filesystem::path> {
+			return m_vcs ? m_vcs->cached_state().git_dir : std::nullopt;
+		});
 		m_assets->rebuild();
 		m_asset_problems = std::make_unique<asset_problem_publisher>();
 	}
@@ -1183,6 +1187,8 @@ void edt::editor_system::tick_asset_problems()
 	if (!m_assets || !m_asset_problems || !m_context) {
 		return;
 	}
+	// New files waiting for an ID: a git operation that held them back may have ended (#765).
+	m_assets->poll();
 	m_asset_problems->publish(m_context->problems(), *m_assets);
 }
 
