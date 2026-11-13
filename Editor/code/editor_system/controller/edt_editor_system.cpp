@@ -1344,6 +1344,8 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	});
 	// Bindings two actions share are Problems (source "input"), whether or not the panel is open.
 	editor_layer->set_frame_hook([this, &data] {
+		// Before the shortcuts of the frame: Ctrl+Z goes to the document of the window the person is in.
+		if (m_data_documents) m_data_documents->follow_focus();
 		if (!m_context || !data.has_value<gs::input_actions>()) return;
 		const auto& actions = data.require<gs::input_actions>();
 		if (actions.revision() == m_input_problems_revision) return;

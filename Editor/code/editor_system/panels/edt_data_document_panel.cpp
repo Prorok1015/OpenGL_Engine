@@ -14,12 +14,13 @@ namespace
 	constexpr ImVec4 k_error{ 1.0f, 0.4f, 0.4f, 1.0f };
 }
 
-edt::data_document_panel::data_document_panel(data_document& document, editor_services& services, document_id id)
+edt::data_document_panel::data_document_panel(data_document& document, editor_services& services, document_id id, bool quiet)
 	: panel_base(data_document_panel_id(id), data_document_window_title(document, id))
 	, m_document(document)
 	, m_services(services)
 	, m_id(id)
 {
+	if (quiet) m_flags |= ImGuiWindowFlags_NoFocusOnAppearing;
 }
 
 void edt::data_document_panel::on_before_begin()
@@ -33,6 +34,7 @@ void edt::data_document_panel::on_before_begin()
 
 void edt::data_document_panel::on_hidden()
 {
+	m_document.commit_pending();
 	// Collapsed or behind another tab the window is still open: only a closed one asks for its document to go. The editor
 	// opens the window again when it keeps the document (unsaved changes), so this is not asked every frame.
 	if (!is_open() && m_on_close) {
@@ -111,4 +113,8 @@ void edt::data_document_panel::on_render()
 		}
 	}
 	ImGui::EndChild();
+	// One record for what a drag or a typed value did, taken once the widget is let go.
+	if (!ImGui::IsAnyItemActive()) {
+		m_document.commit_pending();
+	}
 }

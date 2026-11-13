@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -53,6 +54,13 @@ namespace edt
 		// The windows and the subscription go before the documents do.
 		void shutdown();
 
+		// The one place that decides which document is active: the window that has the focus (ImGui's navigation window)
+		// when it changed. A data window gives its document, the prefab editor window the preview's, a service window (the
+		// dockspace host that holds the main menu bar, a popup, a tooltip, a modal, anything that takes no navigation focus,
+		// a `##` name) or none changes nothing, any other window (viewport, hierarchy, inspector...) gives the scene. Windows
+		// whose focus moved on record what they have not recorded yet. Called once per frame, with the frame's windows known.
+		void follow_focus();
+
 	private:
 		struct window
 		{
@@ -62,6 +70,7 @@ namespace edt
 		};
 
 		void focus(document& open);
+		void commit_pending_except(std::string_view focused_window);
 		bool reload_now(document_id id);
 		bool overwrite_now(document_id id);
 		// Reload / Overwrite / Cancel for a file that changed on disk; `done(true)` after a reload or an overwrite that
@@ -70,6 +79,8 @@ namespace edt
 		bool in_conflict(document_id id) const;
 		void show_error(document_id id, const std::string& text);
 
+		// The root window that had the navigation focus at the last follow_focus (ImGuiID; 0: none).
+		unsigned int m_focused_window = 0;
 		editor_context& m_context;
 		editor_services& m_services;
 		std::function<desc_file_layout()> m_layout;

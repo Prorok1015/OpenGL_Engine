@@ -344,6 +344,89 @@ BOOST_AUTO_TEST_CASE(a_rollback_stops_where_the_change_says_something_is_in_the_
 	BOOST_TEST(journal.empty());
 }
 
+BOOST_AUTO_TEST_CASE(a_dropped_undo_record_keeps_the_save_point_only_when_the_save_was_on_it)
+{
+	history.record("P", cmd::origin::ui(), change("P"));
+	history.record("R", cmd::origin::ui(), change("R"));
+	history.mark_saved();
+	BOOST_REQUIRE(history.is_at_save_point());
+
+	// Saved on R, the document refuses to undo R and stays as R made it: that still is the saved state.
+	BOOST_REQUIRE(history.discard_next_undo());
+	BOOST_TEST(history.size() == 1u);
+	BOOST_TEST(history.is_at_save_point());
+
+	history.record("R2", cmd::origin::ui(), change("R2"));
+	history.undo();
+	history.mark_saved();
+	history.redo();
+	// Saved on P, R2 is refused and dropped: the document is not what was saved.
+	BOOST_REQUIRE(history.discard_next_undo());
+	BOOST_TEST(history.size() == 1u);
+	BOOST_TEST(!history.is_at_save_point());
+
+	history.clear();
+	history.mark_saved();
+	history.record("only", cmd::origin::ui(), change("only"));
+	BOOST_REQUIRE(history.discard_next_undo());
+	BOOST_TEST(!history.is_at_save_point());
+}
+
+BOOST_AUTO_TEST_CASE(discarding_from_an_empty_history_does_nothing)
+{
+	BOOST_TEST(!history.discard_next_undo());
+	BOOST_TEST(!history.discard_next_redo());
+	history.record("P", cmd::origin::ui(), change("P"));
+	BOOST_TEST(!history.discard_next_redo());
+	history.undo();
+	BOOST_TEST(!history.discard_next_undo());
+	BOOST_TEST(history.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(a_dropped_undo_record_leaves_a_save_point_on_another_record_where_it_is)
+{
+	history.record("old", cmd::origin::ui(), change("old"));
+	history.mark_saved();
+	history.record("P", cmd::origin::ui(), change("P"));
+	history.record("R", cmd::origin::ui(), change("R"));
+	BOOST_REQUIRE(history.discard_next_undo());
+	BOOST_TEST(history.size() == 2u);
+	BOOST_TEST(!history.is_at_save_point());
+	history.undo();
+	BOOST_TEST(history.is_at_save_point());
+
+	history.clear();
+	history.record("saved", cmd::origin::ui(), change("saved"));
+	history.record("R", cmd::origin::ui(), change("R"));
+	history.mark_saved();
+	history.undo();
+	history.undo();
+	history.redo();
+	BOOST_REQUIRE(history.discard_next_undo());
+	BOOST_TEST(history.can_redo());
+	history.redo();
+	BOOST_TEST(history.is_at_save_point());
+}
+
+BOOST_AUTO_TEST_CASE(a_dropped_redo_record_loses_its_save_point)
+{
+	history.record("P", cmd::origin::ui(), change("P"));
+	history.record("R", cmd::origin::ui(), change("R"));
+	history.mark_saved();
+	history.undo();
+	BOOST_REQUIRE(history.discard_next_redo());
+	BOOST_TEST(history.size() == 1u);
+	BOOST_TEST(!history.can_redo());
+	BOOST_TEST(!history.is_at_save_point());
+
+	history.mark_saved();
+	history.record("Q", cmd::origin::ui(), change("Q"));
+	history.undo();
+	BOOST_REQUIRE(history.is_at_save_point());
+	BOOST_REQUIRE(history.discard_next_redo());
+	BOOST_TEST(history.is_at_save_point());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(edt_scene_history_tests, scene_fixture)

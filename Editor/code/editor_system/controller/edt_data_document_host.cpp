@@ -6,6 +6,8 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_panel_registry.h>
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <algorithm>
 #include <format>
 #include <optional>
@@ -42,6 +44,49 @@ void edt::data_document_host::focus(document& open)
 	if (m_focus_other) m_focus_other(open);
 }
 
+void edt::data_document_host::commit_pending_except(std::string_view focused_window)
+{
+	for (auto& entry : m_windows) {
+		if (entry.second.panel->get_title() != focused_window) entry.second.data->commit_pending();
+	}
+}
+
+void edt::data_document_host::follow_focus()
+{
+	const ImGuiContext* imgui = ImGui::GetCurrentContext();
+	if (imgui == nullptr) return;
+	const ImGuiWindow* focused = imgui->NavWindow != nullptr ? imgui->NavWindow->RootWindow : nullptr;
+	const unsigned int id = focused != nullptr ? focused->ID : 0u;
+	if (id == m_focused_window) return;
+	m_focused_window = id;
+	if (focused == nullptr) return;
+
+	// An edit in the middle of a drag is recorded before another window takes over: it must not be folded into an edit made there.
+	const std::string_view name = focused->Name;
+	commit_pending_except(name);
+
+	// The main menu bar lives in a window of the dockspace host: a click on a menu moves the focus there, and closing the menu
+	// leaves it there. None of these is a window the person works in, so the document they came from stays active.
+	constexpr ImGuiWindowFlags service = ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip
+		| ImGuiWindowFlags_ChildMenu | ImGuiWindowFlags_Modal;
+	if ((focused->Flags & service) != 0 || name.starts_with("##")) return;
+
+	document_manager& manager = m_context.documents();
+	const auto data_window = std::find_if(m_windows.begin(), m_windows.end(),
+		[name](const auto& entry) { return entry.second.panel->get_title() == name; });
+	if (data_window != m_windows.end()) {
+		manager.set_active(data_window->first);
+		return;
+	}
+	const std::vector<panel_info> panels = m_context.panels().panels();
+	const auto taken = std::find_if(panels.begin(), panels.end(), [name](const panel_info& panel) { return panel.title == name; });
+	if (taken != panels.end() && taken->id == "prefab_editor" && manager.preview() != nullptr) {
+		manager.set_active(manager.preview()->id());
+		return;
+	}
+	manager.set_active(manager.scene().id());
+}
+
 void edt::data_document_host::open(const res::tag& tag, bool quiet)
 {
 	document_manager& documents = m_context.documents();
@@ -61,7 +106,8 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	}
 	data_document& data = *created;
 	const document_id id = documents.adopt(std::move(created)).id();
-	auto panel = std::make_shared<data_document_panel>(data, m_services, id);
+	if (!quiet) documents.set_active(id);
+	auto panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
 	panel->set_on_close([this, id] { request_close(id); });
 	panel->set_on_save([this, id] { request_save(id); });
 	panel->set_on_reload([this, id] { request_reload(id); });
