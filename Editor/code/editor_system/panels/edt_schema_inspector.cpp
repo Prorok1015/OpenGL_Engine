@@ -125,8 +125,9 @@ namespace
 	{
 		json::value out(json::object{});
 		for (const auto& field : schema.fields) {
-			// An optional field is "not set" until it has a value, unless a missing value reads as its default (#861).
-			if (field.optional && (field.nullable || field.default_value.is_null())) {
+			// What a missing value reads as is shown (#861); only a std::optional member with no initializer reads it as
+			// nullopt, "not set".
+			if (field.optional && field.nullable && field.default_value.is_null()) {
 				continue;
 			}
 			json::value value = field.default_value;
@@ -1020,8 +1021,27 @@ json::value edt::schema_ui::zero_value(const desc::field_schema& field, const de
 
 json::value edt::schema_ui::null_reads_as(const desc::field_schema& field, const desc::schema_registry& registry)
 {
-	if (field.nullable) {
+	// As the read does (desc_schema_ops.cpp, desc_describe_ops.h): nullopt, an empty entity, or the empty value of a field
+	// that writes null for empty, before any default.
+	if (field.nullable || field.kind == field_kind::entity) {
 		return json::value();
+	}
+	if (field.write == desc::write_policy::null_if_empty) {
+		switch (field.kind) {
+		case field_kind::res_tag:
+		case field_kind::string:
+		case field_kind::desc_ref: return json::string();
+		case field_kind::array: return json::array();
+		case field_kind::enumeration: {
+			// the combo shows the enum's null_value from the null itself
+			const desc::enum_schema* enumeration = field.ref_type.empty() ? nullptr : registry.find_enum(field.ref_type);
+			if (enumeration && enumeration->null_value) {
+				return json::value();
+			}
+			break;
+		}
+		default: break;
+		}
 	}
 	return field.default_value.is_null() ? zero_value(field, registry) : field.default_value;
 }

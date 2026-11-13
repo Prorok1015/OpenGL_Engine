@@ -50,7 +50,8 @@ namespace gs
 		// its two warning fields, so the members after them move (#782).
 		// 7: inp::action_binding is a {kind, code, threshold} struct, not a variant (#783).
 		// 8: desc_base gains the tag of its parent and joins the list (#812); the list now sees its size.
-		// 9: field_schema gains `nullable` in the padding after its flags, unseen by its size; it joins the list (#861).
+		// 9: field_schema gains `nullable` in the padding after its flags, unseen by its size; it and type_schema, which
+		// module code builds too, join the list (#861).
 		inline constexpr std::uint64_t layout_revision = 9;
 
 		template<class... Types>
@@ -76,9 +77,9 @@ namespace gs
 			// require<T> builds the handle the module keeps (in components the engine reads), make_dep<T> the dependency.
 			// The handle's members do not depend on T.
 			core::res::res_resource_block, core::res::res_handle<int>, res::res_dep,
-			// component_catalog::add<T> builds the entry, desc::bind_described<T> the schema binding, its field ops and the
-			// fields of its schema (described_schema<T>).
-			scn::component_entry, desc::schema_binding, desc::field_ops, desc::field_schema,
+			// component_catalog::add<T> builds the entry, desc::bind_described<T> the schema binding, its field ops and its
+			// schema with the fields (described_schema<T>).
+			scn::component_entry, desc::schema_binding, desc::field_ops, desc::type_schema, desc::field_schema,
 			// A module reads a component without a C++ type through find_schema_component and may build one to hand to
 			// emplace_schema_component (a const reference: the world keeps the engine's copy, #785).
 			desc::dyn_blob,

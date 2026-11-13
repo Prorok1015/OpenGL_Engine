@@ -335,10 +335,10 @@ BOOST_AUTO_TEST_CASE(Draw_ShowsTheFieldsOfTheSchema)
 	BOOST_CHECK(widget_at(drawn, "/ids/0") == ui::widget::integer);
 	BOOST_CHECK(widget_at(drawn, "/ids/1") == ui::widget::integer);
 
-	// editor_hidden is not drawn; an optional field without a value is shown as not set
+	// editor_hidden is not drawn; a data-defined optional without a value shows the zero the read gives it (#861)
 	BOOST_CHECK(!was_drawn(drawn, "/secret"));
-	BOOST_CHECK(widget_at(drawn, "/extra") == ui::widget::label);
-	BOOST_CHECK(desc::json_pointer_get(value, "/extra") == nullptr);
+	BOOST_CHECK(widget_at(drawn, "/extra") == ui::widget::real);
+	BOOST_TEST(number_at(value, "/extra") == 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(Draw_FollowsTheHintsOfTheSchema)
@@ -385,7 +385,7 @@ BOOST_AUTO_TEST_CASE(Compose_LayersTheDefaultsParentAndOverrides)
 	BOOST_TEST(number_at(value, "/limits/min") == 0.0); // a default under a partly set structure
 	BOOST_TEST(number_at(value, "/gain") == 0.5);       // a default nobody set
 	BOOST_TEST(std::string(desc::json_pointer_get(value, "/label")->as_string()) == "own");
-	BOOST_CHECK(desc::json_pointer_get(value, "/extra") == nullptr); // optional: no value until set
+	BOOST_TEST(number_at(value, "/extra") == 0.0); // a data-defined optional nobody set: what the read gives (#861)
 }
 
 BOOST_AUTO_TEST_CASE(Compose_ReadsALegacyKeyThroughTheAlias)
@@ -1165,9 +1165,45 @@ BOOST_AUTO_TEST_CASE(Unset_ChangesTheValueOnlyAwayFromWhatANullReads_AndANullSho
 	BOOST_CHECK(desc::json_pointer_get(shown, "/level")->to_number<double>() == 5.0);
 	BOOST_CHECK(desc::json_pointer_get(shown, "/bonus") == nullptr);
 
+	// a missing value shows what the read gives: the default, the initializer of a std::optional too
 	const json::value plain = ui::compose(schema, registry, {});
 	BOOST_REQUIRE(desc::json_pointer_get(plain, "/level") != nullptr);
 	BOOST_CHECK(desc::json_pointer_get(plain, "/level")->to_number<double>() == 5.0);
+	BOOST_REQUIRE(desc::json_pointer_get(plain, "/bonus") != nullptr);
+	BOOST_CHECK(desc::json_pointer_get(plain, "/bonus")->to_number<double>() == 2.0);
+}
+
+// #861: a field that writes null for empty reads a null as its empty value and an entity as none, not as a default.
+BOOST_AUTO_TEST_CASE(NullReadsAs_TheEmptyValueOfANullIfEmptyField_AndNoEntity_AndAMissingValueShowsAsANullDoes)
+{
+	auto& registry = descs->schemas();
+	const desc::type_schema schema = desc::parse_type_schema(parse(R"({
+		"name": "edt.dd_null", "kind": "component",
+		"fields": [
+			{ "name": "icon", "kind": "res_tag", "default": "res://a.png", "optional": true, "write": "null_if_empty" },
+			{ "name": "target", "kind": "entity", "optional": true },
+			{ "name": "hp", "kind": "f32", "optional": true }
+		]
+	})"));
+	BOOST_REQUIRE(schema.find_field("/icon") && schema.find_field("/target") && schema.find_field("/hp"));
+	const desc::field_schema& icon = *schema.find_field("/icon");
+	BOOST_CHECK(ui::null_reads_as(icon, registry) == json::value(json::string()));
+	BOOST_CHECK(ui::null_reads_as(*schema.find_field("/target"), registry).is_null());
+	BOOST_CHECK(ui::unset_changes_value(icon, json::value("res://a.png"), registry));
+
+	// Unset of the default tag: the null reads as the empty tag, not the default, so it is written and shown empty
+	json::object own;
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, own, {}, {},
+		[](json::value& shown, const ui::field_origin&) { return ui::apply_unsets(shown, { "/icon" }); }));
+	BOOST_CHECK(own == parse(R"({ "icon": null })"));
+	const json::value shown = ui::compose(schema, registry, { &own });
+	BOOST_REQUIRE(desc::json_pointer_get(shown, "/icon") != nullptr);
+	BOOST_CHECK(desc::json_pointer_get(shown, "/icon")->as_string().empty());
+
+	// a data-defined optional without a default: a null and a missing value both show the zero the read gives
+	const json::object nulled = parse(R"({ "hp": null })");
+	BOOST_TEST(number_at(ui::compose(schema, registry, { &nulled }), "/hp") == 0.0);
+	BOOST_TEST(number_at(ui::compose(schema, registry, {}), "/hp") == 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(TheMarksMenu_UnsetOfAValueANullWouldReadAnyway_ChangesNothing)
