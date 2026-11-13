@@ -887,27 +887,47 @@ std::string_view prj::migration::to_string(migration_status status)
 	return "in_progress";
 }
 
+std::string prj::migration::plan_refusal(const migration_plan& plan)
+{
+	const manifest_state& manifest = plan.scan.manifest;
+	if (manifest.kind == file_class::newer || manifest.kind == file_class::invalid) {
+		return std::format("project.snkproj: {} {}", to_string(manifest.kind), manifest.reason);
+	}
+	if (!plan.force) {
+		for (const scanned_file& file : plan.scan.files) {
+			if (file.kind == file_class::invalid) return std::format("{}: {} {} (--force leaves it as it is)", file.path, to_string(file.kind), file.reason);
+		}
+	}
+	return plan.refused;
+}
+
+std::vector<prj::migration::skipped_file> prj::migration::skipped_by(const migration_plan& plan)
+{
+	std::vector<skipped_file> skipped;
+	for (const scanned_file& file : plan.scan.files) {
+		const bool left = file.kind == file_class::unknown_type || file.kind == file_class::newer
+			|| (file.kind == file_class::invalid && plan.force);
+		if (left) skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
+	}
+	return skipped;
+}
+
+std::string prj::migration::report_text(const migration_report& report)
+{
+	return report_markdown(report);
+}
+
 prj::migration::apply_outcome prj::migration::apply_migration(const migration_plan& plan, const apply_context& context)
 {
 	apply_outcome outcome;
 	migration_report& report = outcome.report;
 
 	const manifest_state& manifest = plan.scan.manifest;
-	if (manifest.kind == file_class::newer || manifest.kind == file_class::invalid) {
-		outcome.refused = std::format("project.snkproj: {} {}", to_string(manifest.kind), manifest.reason);
+	if (std::string why = plan_refusal(plan); !why.empty()) {
+		outcome.refused = std::move(why);
 		return outcome;
 	}
-	for (const scanned_file& file : plan.scan.files) {
-		if (file.kind == file_class::newer || file.kind == file_class::invalid) {
-			outcome.refused = std::format("{}: {} {}", file.path, to_string(file.kind), file.reason);
-			return outcome;
-		}
-		if (file.kind == file_class::unknown_type) report.skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
-	}
-	if (!plan.refused.empty()) {
-		outcome.refused = plan.refused;
-		return outcome;
-	}
+	report.skipped = skipped_by(plan);
 	if (const int steps_to = context.descs.current_version(res::asset_meta_type); steps_to != plan.resource_meta_version) {
 		outcome.refused = std::format("the steps of {} lead to version {}, but the engine reads version {}", res::asset_meta_type, steps_to,
 			plan.resource_meta_version);

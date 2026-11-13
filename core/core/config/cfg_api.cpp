@@ -241,7 +241,15 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 			"Missing or broken: every agent request is denied")
 		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
 			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
-			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)");
+			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)")
+		("migrate", "editor only, with --headless: migrate the project's data to this engine and exit (EPIC-58). Exit code: "
+			"0 done or nothing to do, 1 a migration is needed (--dry-run), 2 refused, 4 files left as they are (unknown type, "
+			"newer, or invalid with --force), 5 failed and rolled back, 6 failed and the rollback did not finish")
+		("dry-run", "with --migrate: print the plan, write nothing")
+		("force", "with --migrate: leave invalid files as they are instead of refusing the migration")
+		("report", po::value<std::string>(), "with --migrate: also write the report (or the plan) to this file, outside the project")
+		("migrate-rollback", po::value<std::string>(), "editor only, with --headless: put the project back as it was before "
+			"migration <id> (.snk/migrations/<id>) and exit");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
@@ -293,6 +301,35 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
 			set_registered("editor/game_level", level);
 		}
+	}
+	const bool migrate = vm.count("migrate") > 0;
+	const bool rollback = vm.count("migrate-rollback") > 0;
+	if (!migrate && (vm.count("dry-run") || vm.count("force") || vm.count("report"))) {
+		throw std::invalid_argument("--dry-run, --force and --report go with --migrate");
+	}
+	if (migrate && rollback) {
+		throw std::invalid_argument("--migrate and --migrate-rollback are separate runs");
+	}
+	if (migrate || rollback) {
+		if (!vm.count("headless")) {
+			throw std::invalid_argument("--migrate and --migrate-rollback run with --headless (from the editor's window: S8 of EPIC-58)");
+		}
+		if (vm.count("mcp-stdio") || vm.count("game")) {
+			throw std::invalid_argument("--migrate and --migrate-rollback take neither --mcp-stdio nor --game");
+		}
+		set_registered("migration/command", migrate ? "migrate" : "rollback");
+		if (rollback) set_registered("migration/rollback_id", vm["migrate-rollback"].as<std::string>());
+		if (vm.count("dry-run")) set_registered("migration/dry_run", "true");
+		if (vm.count("force")) set_registered("migration/force", "true");
+		if (vm.count("report")) set_registered("migration/report", vm["report"].as<std::string>());
+		// A migration is how a project of an older engine is brought to this one. It writes into the project only
+		// through its own writer: no log file, no .cache or user folders (mounted read-only, as a shipped game is),
+		// and nothing reloads under it.
+		set_registered("project/allow_engine_version_mismatch", "true");
+		set_registered("logger/file", "");
+		set_registered("res/read_only_project", "true");
+		set_registered("res/watch_files", "false");
+		set_registered("scene/hot_reload", "false");
 	}
 	if (vm.count("headless")) {
 		set_registered("editor/headless", "true");

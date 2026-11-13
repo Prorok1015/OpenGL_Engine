@@ -15,9 +15,45 @@
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
+#include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_command.h>
+#include <snk/resource/res_system.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/scn_scene_layer.h>
+#include <snk/desc/desc_system.h>
 #include <string>
 #include <string_view>
 #include <utility>
+
+namespace
+{
+	// Set by --migrate / --migrate-rollback (cfg_api.cpp, EPIC-58 S6).
+	CFG_VAR_DEF_STRING(cfg_migration_command, "migration/command", "");
+	CFG_VAR_DEF_STRING(cfg_migration_rollback_id, "migration/rollback_id", "");
+	CFG_VAR_DEF_BOOL(cfg_migration_dry_run, "migration/dry_run", false);
+	CFG_VAR_DEF_BOOL(cfg_migration_force, "migration/force", false);
+	CFG_VAR_DEF_STRING(cfg_migration_report, "migration/report", "");
+
+	// With the game layer of the project's module: its types decide what is unknown and what is outdated.
+	int run_migration_command(ds::app_data_storage& storage)
+	{
+		const auto& project = storage.require<prj::project_context>();
+		scn::scene_layer* layer = storage.require<scn::context_manager>().game_layer();
+		desc::desc_system& descs = layer ? layer->descs() : storage.require<desc::desc_system>();
+		res::resource_system& resources = layer ? layer->resources() : storage.require<res::resource_system>();
+		prj::migration::project_step_registry steps;
+		prj::migration::register_project_steps(steps);
+		const prj::migration::command_context context{ project.root, descs, resources, &steps, {}, {}, {}, {} };
+		if (*cfg_migration_command == "rollback") {
+			return prj::migration::run_migrate_rollback(*cfg_migration_rollback_id, context);
+		}
+		prj::migration::migrate_command command;
+		command.dry_run = cfg_migration_dry_run;
+		command.force = cfg_migration_force;
+		command.report = fs_paths::path_from_utf8(*cfg_migration_report);
+		return prj::migration::run_migrate(command, context);
+	}
+}
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
@@ -101,10 +137,15 @@ int main(int argc, char* argv[])
 		app_storage.construct<platform::protocol_stdout>(protocol_fd);
 	}
 
+	// A migration runs without the editor: nothing of it starts, so nothing of it writes into the project (S6).
+	const bool migration = !cfg_migration_command->empty();
+
 	app::modules::module_loader module_loader;
 	module_loader.add_module(std::make_unique<core::core_module>());
 	module_loader.add_module(std::make_unique<engine::engine_module>());
-	module_loader.add_module(std::make_unique<editor::editor_module>());
+	if (!migration) {
+		module_loader.add_module(std::make_unique<editor::editor_module>());
+	}
 
 	// Exception perimeter: nothing may escape main(). initialize_all_services rolls back
 	// the modules it already initialized if one throws, so shutdown below only runs
@@ -117,7 +158,7 @@ int main(int argc, char* argv[])
 		initialized = true;
 		// After the host's own modules: initialize_all_services must not see the loader grow.
 		core::project_modules_options project_modules;
-		project_modules.with_editor_modules = true;
+		project_modules.with_editor_modules = !migration;
 		// A game.dll built against other layouts of the engine's types is refused, not loaded (#614).
 		project_modules.layout_key = gs::engine_module_layout_key();
 		project_modules.check_editor_module = [](const app::modules::module_entry& entry) {
@@ -129,29 +170,33 @@ int main(int argc, char* argv[])
 		// In the storage, so the editor can reload a module from a new build (#435).
 		auto& project_host = app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules));
 		project_host.load_all();
-		// After `game`: a game_editor registers into the editor on top of it (#588).
-		project_host.load_editor_modules();
-		// The run folders of model decoders whose editor crashed (#647).
-		try {
-			edt::decode_runner::remove_stale_folders();
-		} catch (const std::exception& e) {
-			egLOG_WARN("app", "cleanup of the folders of ended model decoders failed: {}", e.what());
-		}
+		if (migration) {
+			result = run_migration_command(app_storage);
+		} else {
+			// After `game`: a game_editor registers into the editor on top of it (#588).
+			project_host.load_editor_modules();
+			// The run folders of model decoders whose editor crashed (#647).
+			try {
+				edt::decode_runner::remove_stale_folders();
+			} catch (const std::exception& e) {
+				egLOG_WARN("app", "cleanup of the folders of ended model decoders failed: {}", e.what());
+			}
 
-		app::application editor;
-		result = editor.run(app_storage);
-		// Read before shutdown, which removes it.
-		if (app_storage.has_value<prj::held_project>()) {
-			const auto& held = app_storage.require<prj::held_project>();
-			if (const int code = prj::exit_code_for(held); code != 0) {
-				if (held.answer == prj::held_project::decision::no_project) {
-					egLOG_ERROR("app", "no project: '{}' was not opened (engine {}) and this run needs a project",
-						held.name, prj::to_string(held.engine));
-				} else {
-					egLOG_ERROR("app", "project '{}' was not opened: its engine version {} does not match this editor",
-						held.name, prj::to_string(held.engine));
+			app::application editor;
+			result = editor.run(app_storage);
+			// Read before shutdown, which removes it.
+			if (app_storage.has_value<prj::held_project>()) {
+				const auto& held = app_storage.require<prj::held_project>();
+				if (const int code = prj::exit_code_for(held); code != 0) {
+					if (held.answer == prj::held_project::decision::no_project) {
+						egLOG_ERROR("app", "no project: '{}' was not opened (engine {}) and this run needs a project",
+							held.name, prj::to_string(held.engine));
+					} else {
+						egLOG_ERROR("app", "project '{}' was not opened: its engine version {} does not match this editor",
+							held.name, prj::to_string(held.engine));
+					}
+					result = code;
 				}
-				result = code;
 			}
 		}
 	} catch (const prj::engine_version_error& e) {

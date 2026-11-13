@@ -58,7 +58,8 @@ struct apply_fixture : test_util::scene_env
 {
 	apply_fixture()
 	{
-		// The fixture without its newer and broken files, which a migration refuses (S6 adds --force).
+		// The fixture without its newer and broken files: a migration leaves the newer one (partial) and refuses the
+		// broken one without --force (S6, pmg_command_tests).
 		fs::remove(copy.res() / "newer.desc");
 		fs::remove(copy.res() / "broken.desc");
 		mount(copy.res());
