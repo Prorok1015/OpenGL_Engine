@@ -12,6 +12,23 @@ namespace desc
 	{
 	}
 
+	dynamic_desc::~dynamic_desc() = default;
+
+	const type_schema& dynamic_desc::schema() const
+	{
+		return *m_binding->schema;
+	}
+
+	const schema_binding& dynamic_desc::binding() const
+	{
+		return *m_binding;
+	}
+
+	const dyn_blob& dynamic_desc::blob() const
+	{
+		return m_blob;
+	}
+
 	void dynamic_desc::copy_to(desc_base& other) const
 	{
 		if (auto* typed = dynamic_cast<dynamic_desc*>(&other)) {
