@@ -73,6 +73,12 @@ namespace edt::schema_ui
 	// A value of `kind` that is "nothing yet" (0, "", [0,0,0], first enum item, ...); null for custom and entity.
 	boost::json::value zero_value(const desc::field_schema& field, const desc::schema_registry& registry);
 
+	// What a null of the optional `field` reads as (#861): the null itself when it is a value of the field
+	// (field_schema::nullable), else the schema's default, or the zero of its kind.
+	boost::json::value null_reads_as(const desc::field_schema& field, const desc::schema_registry& registry);
+	// Unset of a present optional field makes a difference: `shown` is not what a null would read as.
+	bool unset_changes_value(const desc::field_schema& field, const boost::json::value& shown, const desc::schema_registry& registry);
+
 	// Every non-optional field at its default, under its key. A field with no default gets a zero to show unless
 	// `fill_missing` is false: the base of an edit is built that way, so a value typed into such a field is never
 	// taken for "back to what is inherited" and always written.

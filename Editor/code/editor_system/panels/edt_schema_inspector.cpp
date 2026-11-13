@@ -52,9 +52,15 @@ namespace
 			if (!slot) {
 				continue;
 			}
-			// A null for an optional field is "not set" (the field is back to its default): shown as absent, with its "Set".
+			// A null for an optional field is "not set": shown as absent, with its "Set", where the null is a value of the field;
+			// elsewhere the read puts the default (or the zero of the kind) in its place, and that is what is shown (#861).
 			if (field.optional && slot->is_null()) {
-				desc::json_pointer_remove(object, field.key);
+				json::value read = edt::schema_ui::null_reads_as(field, registry);
+				if (read.is_null()) {
+					desc::json_pointer_remove(object, field.key);
+				} else {
+					*slot = std::move(read);
+				}
 				continue;
 			}
 			if (field.kind == field_kind::map && slot->is_object()) {
@@ -119,7 +125,8 @@ namespace
 	{
 		json::value out(json::object{});
 		for (const auto& field : schema.fields) {
-			if (field.optional) {
+			// An optional field is "not set" until it has a value, unless a missing value reads as its default (#861).
+			if (field.optional && (field.nullable || field.default_value.is_null())) {
 				continue;
 			}
 			json::value value = field.default_value;
@@ -340,7 +347,7 @@ namespace
 	// The mark in front of a field (S56-7): a star when the own data sets it, a quiet dot otherwise, the source in its tooltip.
 	// A click opens its menu: Reset takes the record out (the field is inherited or default again), Unset (a field that
 	// can be absent, now present) takes the value out; the person's choice is queued in the origin and applied with the edit.
-	void draw_origin_mark(const context& ctx, const desc::field_schema& field, const std::string& pointer, bool present)
+	void draw_origin_mark(const context& ctx, const desc::field_schema& field, const std::string& pointer, const json::value* shown)
 	{
 		const edt::schema_ui::field_origin* origin = ctx.origin;
 		if (!origin) {
@@ -356,12 +363,14 @@ namespace
 		const bool here = edt::schema_ui::set_here(*origin, pointer);
 		// A read-only field is the code's: there is nothing to take out of the file or to take away.
 		const bool can_reset = here && !field.read_only;
-		const bool can_unset = field.optional && present && !field.read_only;
+		const bool offers_unset = field.optional && shown && !field.read_only;
+		// Where a null reads as the default, Unset of a value that is the default already would only write that null.
+		const bool can_unset = offers_unset && edt::schema_ui::unset_changes_value(field, *shown, ctx.registry);
 		if (here) {
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.45f, 0.75f, 1.0f, 1.0f });
 		}
 		bool clicked = false;
-		if (can_reset || can_unset) {
+		if (can_reset || offers_unset) {
 			clicked = ImGui::SmallButton(here ? "*##mark" : ".##mark");
 		} else {
 			ImGui::TextDisabled("%s", here ? "*" : ".");
@@ -386,13 +395,14 @@ namespace
 					ImGui::SetTooltip("Take the value set here out: the parent's value, or the schema's default, comes back.");
 				}
 			}
-			if (can_unset) {
-				if (ImGui::MenuItem("Unset")) {
+			if (offers_unset) {
+				if (ImGui::MenuItem("Unset", nullptr, false, can_unset)) {
 					origin->requests.unsets.push_back(pointer);
 				}
 				report(pointer + "#unset");
-				if (ImGui::IsItemHovered()) {
-					ImGui::SetTooltip("Make the field empty here, even when the parent sets a value.");
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+					ImGui::SetTooltip("%s", can_unset ? "Make the field empty here, even when the parent sets a value."
+						: "Here an empty value reads as the schema's default, which the field has already: Unset changes nothing.");
 				}
 			}
 			ImGui::EndPopup();
@@ -418,7 +428,7 @@ namespace
 			} else {
 				// Only optional fields (and custom ones without a default) can be missing: they are shown as not set.
 				const std::string label = edt::schema_ui::display_label(field);
-				draw_origin_mark(ctx, field, pointer, false);
+				draw_origin_mark(ctx, field, pointer, nullptr);
 				ImGui::TextDisabled("%s: (not set)", label.c_str());
 				if (ctx.on_field) {
 					ctx.on_field(pointer, widget::label);
@@ -857,7 +867,7 @@ namespace
 
 		const std::string label = edt::schema_ui::display_label(field);
 		bool changed = false;
-		draw_origin_mark(ctx, field, pointer, true);
+		draw_origin_mark(ctx, field, pointer, &value);
 		if (spec.disabled) {
 			ImGui::BeginDisabled();
 		}
@@ -1008,6 +1018,23 @@ json::value edt::schema_ui::zero_value(const desc::field_schema& field, const de
 	return zero_of(field.kind, field.ref_type, registry, 0);
 }
 
+json::value edt::schema_ui::null_reads_as(const desc::field_schema& field, const desc::schema_registry& registry)
+{
+	if (field.nullable) {
+		return json::value();
+	}
+	return field.default_value.is_null() ? zero_value(field, registry) : field.default_value;
+}
+
+bool edt::schema_ui::unset_changes_value(const desc::field_schema& field, const json::value& shown, const desc::schema_registry& registry)
+{
+	if (!field.optional) {
+		return false;
+	}
+	const json::value read = null_reads_as(field, registry);
+	return read.is_null() ? !shown.is_null() : !same_value(read, shown);
+}
+
 json::value edt::schema_ui::defaults_json(const desc::type_schema& schema, const desc::schema_registry& registry, bool fill_missing)
 {
 	return defaults_impl(schema, registry, 0, fill_missing);
@@ -1134,11 +1161,14 @@ std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type
 	for (const auto& change : changes) {
 		const json::value* inherited = desc::json_pointer_get(base, change.pointer);
 		// A null is a removal: of a key the parent has (kept as the record), or of one that is only here (no record at all) -
-		// unless the field has a default of its own: without the record the read gives that, not the removal.
+		// unless the null is a value of the field and it has a default of its own: without the record the read gives that,
+		// not the null. Where a null reads as the default anyway, a record of it would change nothing (#861).
 		const desc::field_schema* field = field_at(schema, registry, change.pointer);
-		const bool has_default = field && !field->default_value.is_null();
-		const bool removes_own = change.value.is_null() && (!inherited || inherited->is_null()) && !has_default;
-		if (removes_own || (inherited && same_value(*inherited, change.value))) {
+		const bool null_is_kept = field && field->nullable && !field->default_value.is_null();
+		const bool removes_own = change.value.is_null() && (!inherited || inherited->is_null()) && !null_is_kept;
+		const bool null_reads_default = change.value.is_null() && field && field->optional && !field->nullable;
+		const json::value read = null_reads_default ? null_reads_as(*field, registry) : change.value;
+		if (removes_own || (inherited && same_value(*inherited, read))) {
 			if (desc::json_pointer_remove(holder, change.pointer)) {
 				prune_empty_parents(holder, change.pointer);
 			}
