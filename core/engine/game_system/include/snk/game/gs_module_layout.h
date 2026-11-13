@@ -41,8 +41,9 @@ namespace gs
 		}
 
 		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
-		// type modules read inline. 1: world_context's accessors out of line (#802).
-		inline constexpr std::uint64_t layout_revision = 1;
+		// type modules read inline. 1: world_context's accessors out of line (#802). 4: field_kind::map and std::optional in
+		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before.
+		inline constexpr std::uint64_t layout_revision = 4;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
