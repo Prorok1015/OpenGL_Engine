@@ -31,8 +31,6 @@ namespace fs = std::filesystem;
 
 namespace
 {
-	constexpr std::uint64_t res::asset_meta_max_bytes = 64u * 1024u;
-
 	std::uint64_t fnv1a_64_update(std::uint64_t hash, std::span<const std::byte> bytes)
 	{
 		for (const std::byte b : bytes) {
