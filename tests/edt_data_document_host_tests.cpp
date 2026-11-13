@@ -359,8 +359,9 @@ void register_rename(desc::desc_system& descs)
 {
 	descs.register_migration("test.config", 1, "velocity is now speed", [](json::object& object, desc::migration_context&) {
 		if (const auto found = object.find("velocity"); found != object.end()) {
-			object["speed"] = found->value();
-			object.erase("velocity");
+			json::value moved = found->value(); // the insert below may reallocate: the iterator and its value go first
+			object.erase(found);
+			object["speed"] = std::move(moved);
 		}
 	});
 }
