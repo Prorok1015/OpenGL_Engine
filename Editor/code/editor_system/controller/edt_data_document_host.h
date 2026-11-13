@@ -77,6 +77,9 @@ namespace edt
 		// worked, `done(false)` after Cancel or a failure (empty `done`: nothing follows).
 		void ask_conflict(document_id id, std::function<void(bool resolved)> done);
 		bool in_conflict(document_id id) const;
+		// A migrated file is written in its new version only after a yes (S56-6): `over` is the overwrite of a file that changed on
+		// disk. `done(true)` after it was written, `done(false)` after Cancel or a refusal (empty `done`: nothing follows).
+		void ask_version(document_id id, bool over, std::function<void(bool saved)> done);
 		void show_error(document_id id, const std::string& text);
 
 		// The root window that had the navigation focus at the last follow_focus (ImGuiID; 0: none).

@@ -2,6 +2,7 @@
 #include "edt_data_document.h"
 #include "edt_data_document_panel.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
@@ -110,6 +111,7 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	auto panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
 	panel->set_on_close([this, id] { request_close(id); });
 	panel->set_on_save([this, id] { request_save(id); });
+	panel->set_has_project_migration([this] { return m_context.actions().contains("project.migrate"); });
 	panel->set_on_reload([this, id] { request_reload(id); });
 	panel->set_on_overwrite([this, id] { request_overwrite(id); });
 	registration registered = m_context.panels().add({
@@ -138,6 +140,12 @@ void edt::data_document_host::request_close(document_id id)
 				if (in_conflict(id)) {
 					ask_conflict(id, [this, id](bool resolved) {
 						if (resolved) close(id);
+					});
+					return;
+				}
+				if (const auto window = m_windows.find(id); window != m_windows.end() && window->second.data->needs_version_confirmation()) {
+					ask_version(id, false, [this, id](bool saved_now) {
+						if (saved_now) close(id);
 					});
 					return;
 				}
@@ -175,7 +183,45 @@ void edt::data_document_host::request_save(document_id id)
 		ask_conflict(id, {});
 		return;
 	}
+	if (found->second.data->needs_version_confirmation()) {
+		ask_version(id, false, {});
+		return;
+	}
 	show_error(id, saved.error);
+}
+
+void edt::data_document_host::ask_version(document_id id, bool over, std::function<void(bool saved)> done)
+{
+	const auto found = m_windows.find(id);
+	if (found == m_windows.end()) return;
+	const data_document& data = *found->second.data;
+	const std::string target = std::format("version {}", data.current_version());
+	m_context.dialogs().choose(std::format("Save as {}", target),
+		std::format("'{}' is of version {}; saving writes {}. An older editor or branch may not read the new file.",
+			data.title(), data.file_version(), target),
+		{ std::format("Save {}", target), "Cancel" },
+		[this, id, over, done = std::move(done), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
+			if (!alive.lock()) return;
+			bool saved = false;
+			if (choice && *choice == 0) {
+				const auto window = m_windows.find(id);
+				if (window != m_windows.end()) {
+					data_document& target_document = *window->second.data;
+					target_document.confirm_version_write();
+					const save_result result = over ? target_document.save_over() : target_document.save();
+					if (result.saved) {
+						window->second.panel->set_error({});
+						saved = true;
+					} else if (in_conflict(id)) {
+						ask_conflict(id, done);
+						return;
+					} else {
+						show_error(id, result.error);
+					}
+				}
+			}
+			if (done) done(saved);
+		});
 }
 
 void edt::data_document_host::ask_conflict(document_id id, std::function<void(bool resolved)> done)
@@ -212,6 +258,10 @@ bool edt::data_document_host::overwrite_now(document_id id)
 	const auto found = m_windows.find(id);
 	if (found == m_windows.end()) return false;
 	if (const save_result saved = found->second.data->save_over(); !saved.saved) {
+		if (found->second.data->needs_version_confirmation()) {
+			ask_version(id, true, {});
+			return false;
+		}
 		show_error(id, saved.error);
 		return false;
 	}
@@ -272,6 +322,10 @@ bool edt::data_document_host::save_all()
 		if (const save_result saved = open->save(); !saved.saved) {
 			if (in_conflict(id)) {
 				ask_conflict(id, {});
+				return false;
+			}
+			if (const auto window = m_windows.find(id); window != m_windows.end() && window->second.data->needs_version_confirmation()) {
+				ask_version(id, false, {});
 				return false;
 			}
 			egLOG_WARN("editor", "{}", saved.error);

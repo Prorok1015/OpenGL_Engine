@@ -83,6 +83,18 @@ namespace edt
 		const std::string& chain_problem() const { return m_chain_problem; }
 
 		const std::string& type() const { return m_type; }
+		// Versions (S56-6): the file was opened as it was written (`file_version`, the root's __version, none = 1) and migrated
+		// in memory to the engine's (`current_version` of its type). The file is not touched until a save; a file newer than the
+		// engine is not opened at all. `migrated()` holds until a save writes the new version.
+		int file_version() const { return m_file_version; }
+		int current_version() const { return m_current_version; }
+		bool migrated() const { return m_open && m_file_version < m_current_version; }
+		// What the steps of the migration warned about, one line each ("<type> v1 -> v2: <message>").
+		const std::vector<std::string>& migration_notes() const { return m_migration_notes; }
+		// Writing the new version of a migrated file asks first: until the person said yes (confirm_version_write) a save,
+		// the clean ones too, is refused and says why. A save that wrote, and a reload, start over.
+		bool needs_version_confirmation() const { return migrated() && !m_version_confirmed; }
+		void confirm_version_write() { m_version_confirmed = true; }
 		// The schema of the document's type (null when it is gone, e.g. the game layer that registered it was replaced).
 		const desc::type_schema* schema() const;
 		// The files the document inherits from, the nearest first (empty without __parent).
@@ -130,6 +142,9 @@ namespace edt
 			std::string type;
 			std::string version;
 			std::vector<res::tag> parents;
+			int file_version = 1;
+			int current_version = 1;
+			std::vector<std::string> notes;
 		};
 
 		open_result load(const res::tag& file, loaded& out) const;
@@ -143,7 +158,8 @@ namespace edt
 		void announce() const;
 		save_result write(bool over);
 		void flag_changed(const std::string& disk_version);
-		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr) const;
+		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr,
+			loaded* migration = nullptr) const;
 
 		editor_services& m_services;
 		desc_file_layout m_files;
@@ -165,6 +181,10 @@ namespace edt
 		std::uint64_t m_disk_changes = 0;
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
+		int m_file_version = 1;
+		int m_current_version = 1;
+		std::vector<std::string> m_migration_notes;
+		bool m_version_confirmed = false;
 		editor_events* m_events = nullptr;
 		// The resource system the watchers are on (the base one, which outlives every document) and what is watched.
 		res::resource_system* m_watching = nullptr;
