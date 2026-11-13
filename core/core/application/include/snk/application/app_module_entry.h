@@ -103,6 +103,8 @@
 // pin_resource, push_resource_to_*cache, find_cached, resolve_alias) is behind exports, so its layout is the engine's;
 // res_handle caches its type check (#632); ecs::detail::channel_slot gains pending() and context_set::pending_mail counts
 // the mail in flight (#668); scene_layer holds desc_system by pointer. A module of 3.x is refused: rebuild it.
+// Window of 4.0, still 4.0: #802 world_context's accessors are exports (its fields are reordered; layout_revision 1 in
+// gs_module_layout.h refuses a module built before).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

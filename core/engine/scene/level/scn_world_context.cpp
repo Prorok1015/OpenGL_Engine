@@ -234,3 +234,133 @@ void scn::world_context::apply_commands(entt::registry& state, const entt::meta_
 		sandbox->clear();
 	}
 }
+
+entt::registry& scn::world_context::state()
+{
+	return m_state;
+}
+
+entt::registry const& scn::world_context::state() const
+{
+	return m_state;
+}
+
+uint32_t scn::world_context::get_id() const
+{
+	return m_id;
+}
+
+const std::string_view scn::world_context::get_name() const
+{
+	return m_name;
+}
+
+scn::context_kind scn::world_context::kind() const
+{
+	return m_kind;
+}
+
+void scn::world_context::set_kind(context_kind kind)
+{
+	m_kind = kind;
+}
+
+bool scn::world_context::extract() const
+{
+	return m_extract;
+}
+
+void scn::world_context::set_extract(bool extract)
+{
+	m_extract = extract;
+}
+
+int scn::world_context::input_layer() const
+{
+	return m_input_layer;
+}
+
+void scn::world_context::set_input_layer(int layer)
+{
+	m_input_layer = layer;
+}
+
+uint32_t scn::world_context::desc_index() const
+{
+	return m_desc_index;
+}
+
+void scn::world_context::set_desc_index(uint32_t index)
+{
+	m_desc_index = index;
+}
+
+const std::optional<scn::input_stack_desc>& scn::world_context::input_stack() const
+{
+	return m_input_stack;
+}
+
+void scn::world_context::set_input_stack(std::optional<input_stack_desc> stack)
+{
+	m_input_stack = std::move(stack);
+}
+
+void scn::world_context::set_systems(std::vector<std::string> systems)
+{
+	m_systems = std::move(systems);
+}
+
+const std::optional<std::vector<std::string>>& scn::world_context::systems() const
+{
+	return m_systems;
+}
+
+const ecs::system_plan* scn::world_context::plan() const
+{
+	return m_plan ? &*m_plan : nullptr;
+}
+
+void scn::world_context::apply_commands()
+{
+	apply_commands(m_state, m_meta, m_catalog);
+}
+
+void scn::world_context::set_meta(const entt::meta_ctx* meta)
+{
+	m_meta = meta;
+}
+
+void scn::world_context::set_catalog(const component_catalog* catalog)
+{
+	m_catalog = catalog;
+}
+
+int scn::world_context::fixed_steps() const
+{
+	return m_fixed_steps;
+}
+
+void scn::world_context::set_mode(ecs::run_mode mode)
+{
+	m_mode = mode;
+}
+
+const ecs::fixed_stepper& scn::world_context::stepper() const
+{
+	return m_stepper;
+}
+
+ecs::run_mode scn::world_context::mode() const
+{
+	return m_mode;
+}
+
+float scn::world_context::time_scale() const
+{
+	return m_time_scale;
+}
+
+void scn::world_context::set_time_scale(float scale)
+{
+	m_time_scale = scale;
+}
