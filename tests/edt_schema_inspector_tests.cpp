@@ -920,7 +920,7 @@ BOOST_AUTO_TEST_CASE(Reset_TakesTheRecordOut_WhateverTheFieldsDefaultIs_AndTheEm
 	json::object overrides = parse(R"({ "weights": { "a": 5.0, "b": 6.0 }, "bonus": 3.0, "zones": { "z": { "max": 2.0 } } })");
 
 	// a key of a map, then an optional with an initializer (the record goes, no null is left), then a group's only record
-	BOOST_CHECK(ui::edit_component_marked(schema, registry, &parent, overrides, "res://p.desc",
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, &parent, overrides, "res://p.desc", {},
 		[](json::value&, const ui::field_origin& origin) {
 			origin.requests.resets = { "/weights/a", "/bonus", "/zones/z/max" };
 			return false;
@@ -928,7 +928,7 @@ BOOST_AUTO_TEST_CASE(Reset_TakesTheRecordOut_WhateverTheFieldsDefaultIs_AndTheEm
 	BOOST_CHECK(overrides == parse(R"({ "weights": { "b": 6.0 } })"));
 
 	// nothing to take out: no change
-	BOOST_CHECK(!ui::edit_component_marked(schema, registry, &parent, overrides, {},
+	BOOST_CHECK(!ui::edit_component_marked(schema, registry, &parent, overrides, {}, {},
 		[](json::value&, const ui::field_origin& origin) {
 			origin.requests.resets = { "/weights/a" };
 			return false;
@@ -945,16 +945,130 @@ BOOST_AUTO_TEST_CASE(Unset_OfAnInheritedOptional_WritesANull_OfAnOwnOne_TakesThe
 
 	const json::object parent = parse(R"({ "extra": 2.0 })");
 	json::object inheriting;
-	BOOST_CHECK(ui::edit_component_marked(schema, registry, &parent, inheriting, {}, unset("/extra")));
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, &parent, inheriting, {}, {}, unset("/extra")));
 	BOOST_CHECK(inheriting == parse(R"({ "extra": null })"));
 
 	json::object own = parse(R"({ "extra": 1.0 })");
-	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, own, {}, unset("/extra")));
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, own, {}, {}, unset("/extra")));
 	BOOST_CHECK(own.empty());
 
 	json::object initialised = parse(R"({ "bonus": 3.0 })");
-	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, initialised, {}, unset("/bonus")));
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, initialised, {}, {}, unset("/bonus")));
 	BOOST_CHECK(initialised == parse(R"({ "bonus": null })"));
+}
+
+namespace
+{
+	// An edit of a component over a headless ImGui window with the marks drawn, driven by a real mouse.
+	struct mark_driver
+	{
+		mark_driver(const desc::type_schema& schema, const desc::schema_registry& registry, json::object parent, json::object overrides)
+			: schema(schema), registry(registry), parent(std::move(parent)), overrides(std::move(overrides)) {}
+
+		void frames(int count)
+		{
+			for (int i = 0; i < count; ++i) {
+				imgui.frame([&] {
+					ImGui::Begin("schema_test");
+					ui::context ctx{ registry, {}, {} };
+					ctx.on_target = [this](std::string_view target, float x, float y) { targets[std::string(target)] = ImVec2(x, y); };
+					ui::edit_component_marked(schema, registry, &parent, overrides, "res://p.desc", {},
+						[&](json::value& shown, const ui::field_origin& origin) {
+							ctx.origin = &origin;
+							return ui::draw_fields(schema, shown, ctx);
+						});
+					ImGui::End();
+				});
+			}
+		}
+
+		void click(const std::string& target)
+		{
+			const ImVec2 at = targets.at(target);
+			ImGuiIO& io = ImGui::GetIO();
+			io.AddMousePosEvent(at.x, at.y);
+			frames(2);
+			io.AddMouseButtonEvent(0, true);
+			frames(2);
+			io.AddMouseButtonEvent(0, false);
+			frames(2);
+		}
+
+		imgui_ctx imgui;
+		const desc::type_schema& schema;
+		const desc::schema_registry& registry;
+		json::object parent;
+		json::object overrides;
+		std::map<std::string, ImVec2> targets;
+	};
+}
+
+BOOST_AUTO_TEST_CASE(TheMarksMenu_Reset_TakesTheRecordOutOfTheOwnData)
+{
+	const desc::type_schema schema = weights_schema();
+	mark_driver driver(schema, descs->schemas(), parse(R"({ "weights": { "a": 1.0 }, "extra": 2.0 })"),
+		parse(R"({ "weights": { "a": 5.0 }, "extra": 1.5 })"));
+	driver.frames(3);
+	driver.click("/weights/a#mark");
+	driver.frames(2);
+	driver.click("/weights/a#reset");
+	BOOST_CHECK(driver.overrides == parse(R"({ "extra": 1.5 })"));
+}
+
+BOOST_AUTO_TEST_CASE(TheMarksMenu_Unset_WritesANullOverAnInheritedValue)
+{
+	const desc::type_schema schema = weights_schema();
+	mark_driver driver(schema, descs->schemas(), parse(R"({ "weights": { "a": 1.0 }, "extra": 2.0 })"),
+		parse(R"({ "weights": { "a": 5.0 }, "extra": 1.5 })"));
+	driver.frames(3);
+	driver.click("/extra#mark");
+	driver.frames(2);
+	driver.click("/extra#unset");
+	BOOST_CHECK(driver.overrides == parse(R"({ "weights": { "a": 5.0 }, "extra": null })"));
+}
+
+BOOST_AUTO_TEST_CASE(TheMarkOfAReadOnlyField_OffersNeitherResetNorUnset)
+{
+	mark_driver driver(widget_schema(), descs->schemas(), {}, parse(R"({ "serial": 9 })"));
+	driver.frames(3);
+	driver.click("/serial#mark");
+	driver.frames(2);
+	BOOST_CHECK(!driver.targets.contains("/serial#reset"));
+	BOOST_CHECK(!driver.targets.contains("/serial#unset"));
+	BOOST_CHECK(driver.overrides == parse(R"({ "serial": 9 })"));
+}
+
+BOOST_AUTO_TEST_CASE(Reset_OfMapKeysWithASlashOrATilde_TakesOnlyThatKeyOut)
+{
+	const desc::type_schema schema = weights_schema();
+	json::object overrides = parse(R"({ "weights": { "a/b": 1.0, "c~d": 2.0, "e": 3.0 } })");
+	const ui::field_origin origin = origin_of({}, overrides);
+	BOOST_CHECK(ui::set_here(origin, "/weights/a~1b"));
+	BOOST_CHECK(ui::set_here(origin, "/weights/c~0d"));
+	BOOST_CHECK(!ui::set_here(origin, "/weights/a"));
+	BOOST_CHECK_EQUAL(ui::apply_resets(overrides, schema, { "/weights/a~1b", "/weights/c~0d" }), 2u);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "e": 3.0 } })"));
+}
+
+BOOST_AUTO_TEST_CASE(Unset_OfAnOptionalWithAnInitializerInsideAStructure_KeepsTheNullRecord)
+{
+	auto& registry = descs->schemas();
+	descs->register_schema(desc::parse_type_schema(parse(R"({
+		"name": "edt.inner_opt", "kind": "struct",
+		"fields": [ { "name": "x", "kind": "f32", "default": 1.0, "optional": true } ]
+	})")));
+	descs->register_schema(desc::parse_type_schema(parse(R"({
+		"name": "edt.outer", "kind": "component",
+		"fields": [ { "name": "s", "kind": "structure", "ref_type": "edt.inner_opt" } ]
+	})"), &registry));
+	const desc::type_schema* outer = descs->find_schema("edt.outer");
+	BOOST_REQUIRE(outer != nullptr);
+
+	// without the record the read gives the initializer, so the unset must stay written
+	json::object overrides = parse(R"({ "s": { "x": 3.0 } })");
+	BOOST_CHECK(ui::edit_component_marked(*outer, registry, nullptr, overrides, {}, {},
+		[](json::value& shown, const ui::field_origin&) { return ui::apply_unsets(shown, { "/s/x" }); }));
+	BOOST_CHECK(overrides == parse(R"({ "s": { "x": null } })"));
 }
 
 BOOST_AUTO_TEST_CASE(Draw_WithAnOrigin_DrawsEveryFieldAndAnUnsetAsksForNothingByItself)

@@ -311,6 +311,30 @@ namespace
 		}
 	}
 
+	// The field a JSON pointer from the root names, through the structures it passes (a nested field's key is relative to its
+	// structure): what its initializer says decides whether a removal still has to be written.
+	const desc::field_schema* field_at(const desc::type_schema& schema, const desc::schema_registry& registry, std::string_view pointer,
+		std::string_view prefix = {}, int depth = 0)
+	{
+		if (depth > max_depth) {
+			return nullptr;
+		}
+		for (const auto& field : schema.fields) {
+			const std::string full = std::string(prefix) + field.key;
+			if (full == pointer) {
+				return &field;
+			}
+			if (pointer.size() > full.size() && pointer.starts_with(full) && pointer[full.size()] == '/') {
+				if (const desc::type_schema* nested = nested_of(field, registry)) {
+					if (const desc::field_schema* found = field_at(*nested, registry, pointer, full, depth + 1)) {
+						return found;
+					}
+				}
+			}
+		}
+		return nullptr;
+	}
+
 	bool draw_field(const desc::field_schema& field, json::value& value, const std::string& pointer, const context& ctx, int depth);
 
 	// The mark in front of a field (S56-7): a star when the own data sets it, a quiet dot otherwise, the source in its tooltip.
@@ -322,20 +346,30 @@ namespace
 		if (!origin) {
 			return;
 		}
+		const auto report = [&ctx](const std::string& target) {
+			if (ctx.on_target) {
+				const ImVec2 min = ImGui::GetItemRectMin();
+				const ImVec2 max = ImGui::GetItemRectMax();
+				ctx.on_target(target, (min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+			}
+		};
 		const bool here = edt::schema_ui::set_here(*origin, pointer);
+		// A read-only field is the code's: there is nothing to take out of the file or to take away.
+		const bool can_reset = here && !field.read_only;
 		const bool can_unset = field.optional && present && !field.read_only;
 		if (here) {
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.45f, 0.75f, 1.0f, 1.0f });
 		}
 		bool clicked = false;
-		if (here || can_unset) {
+		if (can_reset || can_unset) {
 			clicked = ImGui::SmallButton(here ? "*##mark" : ".##mark");
 		} else {
-			ImGui::TextDisabled(".");
+			ImGui::TextDisabled("%s", here ? "*" : ".");
 		}
 		if (here) {
 			ImGui::PopStyleColor();
 		}
+		report(pointer + "#mark");
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 			ImGui::SetTooltip("%s", edt::schema_ui::source_text(*origin, pointer).c_str());
 		}
@@ -343,11 +377,23 @@ namespace
 			ImGui::OpenPopup("mark_menu");
 		}
 		if (ImGui::BeginPopup("mark_menu")) {
-			if (here && ImGui::MenuItem("Reset to inherited")) {
-				origin->requests.resets.push_back(pointer);
+			if (can_reset) {
+				if (ImGui::MenuItem("Reset to inherited")) {
+					origin->requests.resets.push_back(pointer);
+				}
+				report(pointer + "#reset");
+				if (ImGui::IsItemHovered()) {
+					ImGui::SetTooltip("Take the value set here out: the parent's value, or the schema's default, comes back.");
+				}
 			}
-			if (can_unset && ImGui::MenuItem("Unset")) {
-				origin->requests.unsets.push_back(pointer);
+			if (can_unset) {
+				if (ImGui::MenuItem("Unset")) {
+					origin->requests.unsets.push_back(pointer);
+				}
+				report(pointer + "#unset");
+				if (ImGui::IsItemHovered()) {
+					ImGui::SetTooltip("Make the field empty here, even when the parent sets a value.");
+				}
 			}
 			ImGui::EndPopup();
 		}
@@ -1016,8 +1062,18 @@ std::string edt::schema_ui::source_text(const field_origin& origin, std::string_
 {
 	switch (source_of(origin, pointer)) {
 	case value_source::set_here: return "set here";
-	case value_source::inherited:
-		return origin.inherited_from.empty() ? std::string{ "inherited" } : "inherited from " + origin.inherited_from;
+	case value_source::inherited: {
+		// The level that really sets the value: the nearest one that has it.
+		std::string name = origin.inherited_from;
+		for (const origin_layer& layer : origin.layers) {
+			const json::value* held = desc::json_pointer_get(layer.data, pointer);
+			if (held && !held->is_null()) {
+				name = layer.name;
+				break;
+			}
+		}
+		return name.empty() ? std::string{ "inherited" } : "inherited from " + name;
+	}
 	case value_source::schema_default: break;
 	}
 	return "schema default";
@@ -1079,8 +1135,8 @@ std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type
 		const json::value* inherited = desc::json_pointer_get(base, change.pointer);
 		// A null is a removal: of a key the parent has (kept as the record), or of one that is only here (no record at all) -
 		// unless the field has a default of its own: without the record the read gives that, not the removal.
-		const auto field = std::ranges::find(schema.fields, change.pointer, &desc::field_schema::key);
-		const bool has_default = field != schema.fields.end() && !field->default_value.is_null();
+		const desc::field_schema* field = field_at(schema, registry, change.pointer);
+		const bool has_default = field && !field->default_value.is_null();
 		const bool removes_own = change.value.is_null() && (!inherited || inherited->is_null()) && !has_default;
 		if (removes_own || (inherited && same_value(*inherited, change.value))) {
 			if (desc::json_pointer_remove(holder, change.pointer)) {
@@ -1118,7 +1174,7 @@ bool edt::schema_ui::edit_component(const desc::type_schema& schema, const desc:
 }
 
 bool edt::schema_ui::edit_component_marked(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
-	boost::json::object& overrides, std::string inherited_from,
+	boost::json::object& overrides, std::string inherited_from, const std::vector<parent_layer>& layers,
 	const std::function<bool(boost::json::value& shown, const field_origin& origin)>& draw)
 {
 	const boost::json::value base = compose(schema, registry, { parent }, false);
@@ -1129,6 +1185,9 @@ bool edt::schema_ui::edit_component_marked(const desc::type_schema& schema, cons
 	origin.has_parent = parent != nullptr;
 	if (parent) origin.parent = *parent;
 	origin.inherited_from = std::move(inherited_from);
+	for (const parent_layer& layer : layers) {
+		origin.layers.push_back({ layer.name, layer.data ? boost::json::value(*layer.data) : boost::json::value() });
+	}
 	const bool drawn = draw(after, origin);
 	const std::size_t written = drawn ? apply_edit(overrides, schema, registry, base, before, after) : 0;
 	const std::size_t reset = apply_resets(overrides, schema, origin.requests.resets);

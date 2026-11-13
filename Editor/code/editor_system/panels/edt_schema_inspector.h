@@ -106,14 +106,29 @@ namespace edt::schema_ui
 		std::vector<std::string> unsets;
 	};
 
+	// One parent of a chain (a document's __parent files), nearest first: its name and what it sets.
+	struct parent_layer
+	{
+		std::string name;
+		const boost::json::object* data = nullptr;
+	};
+
+	struct origin_layer
+	{
+		std::string name;
+		boost::json::value data;
+	};
+
 	// Where the values of a component or a document come from (S56-7): its own data (the pointers it sets), the parent's
-	// data, and the name of the parent for the hint. Copies, taken once per edit: the draw never sees the live objects.
+	// data merged, each level of the chain (so a hint names the level that really sets a value, not the nearest parent) and
+	// the name of the parent for a source that has no levels. Copies, taken once per edit: the draw never sees the live objects.
 	struct field_origin
 	{
 		boost::json::value own;
 		boost::json::value parent;
 		bool has_parent = false;
 		std::string inherited_from;
+		std::vector<origin_layer> layers;
 		mutable edit_requests requests;
 	};
 
@@ -144,6 +159,9 @@ namespace edt::schema_ui
 		std::function<void(std::string_view pointer, widget kind)> on_field;
 		// Null: a map row forgets what was typed at the end of the frame (a test, a one-shot view).
 		map_edit_state* map_state = nullptr;
+		// Called for the mark of a field and for the items of its menu while it is open (tests): what it is
+		// ("<pointer>#mark", "<pointer>#reset", "<pointer>#unset") and the centre of its rectangle on the screen.
+		std::function<void(std::string_view target, float x, float y)> on_target;
 		// Not null: every field gets its mark (set here / inherited) and the menu of it (Reset, Unset). Null: no marks.
 		const field_origin* origin = nullptr;
 	};
@@ -169,6 +187,6 @@ namespace edt::schema_ui
 	// for at them (a reset, an unset) is applied with the edit: one edit, one record of the history. `inherited_from`: the
 	// parent's name for the hint (empty: "inherited").
 	bool edit_component_marked(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
-		boost::json::object& overrides, std::string inherited_from,
+		boost::json::object& overrides, std::string inherited_from, const std::vector<parent_layer>& layers,
 		const std::function<bool(boost::json::value& shown, const field_origin& origin)>& draw);
 }

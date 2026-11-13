@@ -199,11 +199,11 @@ edt::open_result edt::data_document::load(const res::tag& file, loaded& out) con
 	if (!type_schema->is_document) {
 		return open_result::not_a_document(std::format("{} /__type: '{}' is not a data document type", where(file), out.type));
 	}
-	return resolve_chain(file, out.own, out.type, out.inherited, out.parents);
+	return resolve_chain(file, out.own, out.type, out.inherited, out.parents, out.layers);
 }
 
 edt::open_result edt::data_document::resolve_chain(const res::tag& file, const json::object& own, const std::string& type,
-	json::object& inherited, std::vector<res::tag>& parents) const
+	json::object& inherited, std::vector<res::tag>& parents, std::vector<json::object>& layers) const
 {
 	std::vector<json::object> chain;
 	parents.clear();
@@ -240,15 +240,19 @@ edt::open_result edt::data_document::resolve_chain(const res::tag& file, const j
 		chain.push_back(std::move(loaded_parent));
 	}
 
-	inherited.clear();
-	for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+	layers.clear();
+	for (const json::object& file_data : chain) {
 		json::object layer;
-		for (const auto& member : *it) {
+		for (const auto& member : file_data) {
 			if (!member.key().starts_with("__")) {
 				layer.insert_or_assign(member.key(), member.value());
 			}
 		}
-		desc::json_deep_merge(inherited, layer);
+		layers.push_back(std::move(layer));
+	}
+	inherited.clear();
+	for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+		desc::json_deep_merge(inherited, *it);
 	}
 	return open_result::ok();
 }
@@ -266,6 +270,7 @@ void edt::data_document::apply(const res::tag& file, loaded&& state)
 	m_inherited = std::move(state.inherited);
 	m_version = std::move(state.version);
 	m_parents = std::move(state.parents);
+	m_parent_layers = std::move(state.layers);
 	m_chain_problem.clear();
 	m_changed_on_disk = false;
 	m_flagged_version.clear();
@@ -403,7 +408,8 @@ void edt::data_document::on_changed(const res::tag& tag)
 
 	json::object inherited;
 	std::vector<res::tag> parents;
-	if (open_result chain = resolve_chain(m_source, m_own, m_type, inherited, parents); !chain.opened) {
+	std::vector<json::object> layers;
+	if (open_result chain = resolve_chain(m_source, m_own, m_type, inherited, parents, layers); !chain.opened) {
 		std::vector<res::tag> wanted{ m_source };
 		wanted.insert(wanted.end(), parents.begin(), parents.end());
 		sync_watches(wanted);
@@ -416,11 +422,12 @@ void edt::data_document::on_changed(const res::tag& tag)
 	}
 	const bool recovered = !m_chain_problem.empty();
 	m_chain_problem.clear();
-	if (!recovered && inherited == m_inherited && parents == m_parents) {
+	if (!recovered && inherited == m_inherited && parents == m_parents && layers == m_parent_layers) {
 		return;
 	}
 	m_inherited = std::move(inherited);
 	m_parents = std::move(parents);
+	m_parent_layers = std::move(layers);
 	watch_files();
 	++m_generation;
 	announce();
@@ -467,8 +474,12 @@ bool edt::data_document::edit_marked(const std::function<bool(json::value&, cons
 	if (!m_open || !type_schema || !descs) {
 		return false;
 	}
-	const std::string parent = m_parents.empty() ? std::string{} : std::string{ m_parents.front().view() };
-	if (!schema_ui::edit_component_marked(*type_schema, descs->schemas(), &m_inherited, m_own, parent, draw)) {
+	std::vector<schema_ui::parent_layer> layers;
+	layers.reserve(m_parent_layers.size());
+	for (std::size_t i = 0; i < m_parent_layers.size() && i < m_parents.size(); ++i) {
+		layers.push_back({ std::string{ m_parents[i].view() }, &m_parent_layers[i] });
+	}
+	if (!schema_ui::edit_component_marked(*type_schema, descs->schemas(), &m_inherited, m_own, std::string{}, layers, draw)) {
 		return false;
 	}
 	++m_generation;

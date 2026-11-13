@@ -134,11 +134,12 @@ namespace edt
 			std::string type;
 			std::string version;
 			std::vector<res::tag> parents;
+			std::vector<boost::json::object> layers;
 		};
 
 		open_result load(const res::tag& file, loaded& out) const;
 		open_result resolve_chain(const res::tag& file, const boost::json::object& own, const std::string& type,
-			boost::json::object& inherited, std::vector<res::tag>& parents) const;
+			boost::json::object& inherited, std::vector<res::tag>& parents, std::vector<boost::json::object>& layers) const;
 		void apply(const res::tag& file, loaded&& state);
 		void watch_files();
 		void sync_watches(const std::vector<res::tag>& wanted);
@@ -169,6 +170,8 @@ namespace edt
 		std::uint64_t m_disk_changes = 0;
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
+		// What each parent file sets (header keys out), nearest first, in step with m_parents: where an inherited value comes from.
+		std::vector<boost::json::object> m_parent_layers;
 		editor_events* m_events = nullptr;
 		// The resource system the watchers are on (the base one, which outlives every document) and what is watched.
 		res::resource_system* m_watching = nullptr;

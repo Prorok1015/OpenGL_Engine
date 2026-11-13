@@ -1212,6 +1212,28 @@ BOOST_AUTO_TEST_CASE(AnUnset_OfAnInheritedOptional_WritesANull_OfAnOwnOne_TakesT
 	BOOST_TEST((own_doc.own() == own_before));
 }
 
+BOOST_AUTO_TEST_CASE(TheSourceOfAnInheritedValue_IsTheLevelOfTheChainThatSetsIt)
+{
+	put("a.desc", R"({"__type":"test.config","speed":2.0,"extra":1.0})");
+	put("b.desc", R"({"__type":"test.config","__parent":"res://a.desc","goals":[1]})");
+	const res::tag c = put("c.desc", R"({"__type":"test.config","__parent":"res://b.desc","extra":4.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(c).opened);
+
+	std::vector<std::string> texts;
+	document.edit_marked([&](json::value&, const edt::schema_ui::field_origin& origin) {
+		for (const char* pointer : { "/speed", "/goals", "/extra", "/limits/min" }) {
+			texts.push_back(edt::schema_ui::source_text(origin, pointer));
+		}
+		return false;
+	});
+	BOOST_REQUIRE(texts.size() == 4u);
+	BOOST_CHECK_EQUAL(texts[0], "inherited from res://a.desc");
+	BOOST_CHECK_EQUAL(texts[1], "inherited from res://b.desc");
+	BOOST_CHECK_EQUAL(texts[2], "set here");
+	BOOST_CHECK_EQUAL(texts[3], "schema default");
+}
+
 BOOST_AUTO_TEST_CASE(ARecordTheDocumentCannotTakeBack_IsRefused_DroppedAndNothingIsAnnounced)
 {
 	put("parent.desc", k_parent);
