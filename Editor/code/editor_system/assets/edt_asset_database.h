@@ -70,8 +70,19 @@ namespace edt
 	{
 		res::tag meta_path;
 		std::optional<res::asset_id> id;
+		// Index into the layers (lowest first) of the layer that holds the .resource.
+		std::size_t layer = 0;
+		// The content hash of the file the .resource belonged to, when the database knew it; empty otherwise.
+		std::string last_hash;
 
 		bool operator==(const asset_orphan&) const = default;
+	};
+
+	// What a fix of the asset database (or its undo) came to: `error` says why it did not happen.
+	struct asset_fix_result
+	{
+		bool ok = false;
+		std::string error;
 	};
 
 	// Where the database keeps its cache: <root>/<relative>, every folder below the root and the files reached without
@@ -197,8 +208,38 @@ namespace edt
 		const std::vector<asset_orphan>& orphans() const { return m_orphans; }
 		// Grows whenever anything the database holds changed.
 		std::uint64_t revision() const { return m_revision; }
+		const std::vector<std::filesystem::path>& layers() const { return m_layers; }
+		// The project's own layer (the highest): the only one the fixes below write to.
+		std::size_t top_layer() const { return m_layers.empty() ? 0 : m_layers.size() - 1; }
+
+		// Fixes for the person (Problems, S57-4), never for an agent. Each one is applied to the database at once (as a
+		// batch of changes, so set_on_batch hears of it) and can be undone through the short history below.
+		// Writes <file>.resource with a new ID for a file of the top layer that has no .resource in any layer; never
+		// replaces one.
+		asset_fix_result create_meta(const res::tag& file);
+		// Renames the orphan .resource `meta` to <file>.resource, both in the top layer (an orphan of a lower layer is
+		// refused); never replaces one.
+		asset_fix_result link_orphan(const res::tag& meta, const res::tag& file);
+		// Gives the .resource of `file` (in the top layer) a new ID, keeping everything else it holds.
+		asset_fix_result new_id_for_copy(const res::tag& file);
+
+		static constexpr std::size_t max_history = 32;
+		// The label of the fix undo_last() would take back; none when there is nothing to undo.
+		std::optional<std::string> next_undo_label() const;
+		// Takes back the last fix and forgets it. Refused (and forgotten) when its file changed since the fix.
+		asset_fix_result undo_last();
 
 	private:
+		struct history_entry
+		{
+			std::string label;
+			std::function<asset_fix_result()> undo;
+		};
+
+		void push_history(std::string label, std::function<asset_fix_result()> undo);
+		// Looks up the files (res:// path text without the protocol; a .resource stands for its file) again now, their
+		// .resource read again whatever its stamp says.
+		void refresh(const std::vector<std::string>& relatives);
 		void apply_scan(asset_scan scan);
 		void hash_next();
 		void index_id(const asset_record& record);
@@ -239,6 +280,7 @@ namespace edt
 		std::size_t m_files_read = 0;
 		res::resource_system* m_resources = nullptr;
 		std::function<void(const asset_batch&)> m_on_batch;
+		std::vector<history_entry> m_history;
 		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};

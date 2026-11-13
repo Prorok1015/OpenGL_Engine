@@ -1,5 +1,6 @@
 #include "edt_editor_system.h"
 #include "edt_asset_database.h"
+#include "edt_asset_problems.h"
 #include "edt_begin_then_poll.h"
 #include <algorithm>
 #include <chrono>
@@ -519,6 +520,31 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_problems_panel = std::make_shared<problems_panel>(m_context->problems(), data.has_value<prj::project_context>()
 		? data.require<prj::project_context>().root : std::filesystem::path{});
 	m_problems_panel->set_on_activate([this](const std::string& source, const problem& item) { go_to_problem(source, item); });
+	// The asset fixes are the person's own: no command, so no agent reaches them.
+	m_problems_panel->set_actions([this](const std::string& source, const problem& item) {
+		std::vector<std::pair<std::string, std::function<void()>>> out;
+		if (source != asset_problem_publisher::source || !m_assets || !m_asset_problems) {
+			return out;
+		}
+		for (problem_action& action : m_asset_problems->actions_of(item, *m_assets)) {
+			out.emplace_back(action.label, [label = action.label, run = std::move(action.run)] {
+				if (const asset_fix_result result = run(); !result.ok) {
+					egLOG_WARN("assets", "{}: {}", label, result.error);
+				}
+			});
+		}
+		return out;
+	});
+	m_problems_panel->set_undo(
+		[this]() -> std::optional<std::string> { return m_assets ? m_assets->next_undo_label() : std::nullopt; },
+		[this] {
+			if (!m_assets) {
+				return;
+			}
+			if (const asset_fix_result result = m_assets->undo_last(); !result.ok) {
+				egLOG_ERROR("assets", "{}", result.error);
+			}
+		});
 	add_panel(m_problems_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
@@ -639,7 +665,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		})json"),
 		.enabled = [this] { return m_loading_level; },
 		.category = cmd::agent_category::scene_edit }));
-	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); })) {
+	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_assets ? m_assets->next_undo_label() : std::nullopt; };
+	const auto asset_undo = [this] {
+		if (!m_assets) {
+			return false;
+		}
+		const asset_fix_result result = m_assets->undo_last();
+		if (!result.ok) {
+			egLOG_ERROR("assets", "{}", result.error);
+		}
+		return result.ok;
+	};
+	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
+			asset_undo_label, asset_undo)) {
 		m_registrations.push_back(std::move(action));
 	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
@@ -810,6 +848,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			asset_cache_location{ project.root, project.cache_dir().lexically_relative(project.root) / "asset_db" });
 		m_assets->attach(m_res);
 		m_assets->rebuild();
+		m_asset_problems = std::make_unique<asset_problem_publisher>();
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
@@ -1129,6 +1168,14 @@ void edt::editor_system::tick_repository_watcher()
 	const edt::vcs::repository_changes changes = m_repo_watcher->tick();
 	if (changes.refs) m_context->events().repository_changed.emit(repository_change::refs);
 	if (changes.index) m_context->events().repository_changed.emit(repository_change::index);
+}
+
+void edt::editor_system::tick_asset_problems()
+{
+	if (!m_assets || !m_asset_problems || !m_context) {
+		return;
+	}
+	m_asset_problems->publish(m_context->problems(), *m_assets);
 }
 
 void edt::editor_system::stop_live_build()
@@ -1881,6 +1928,16 @@ void edt::editor_system::go_to_problem(const std::string& source, const problem&
 	}
 	if (source == play_preflight_publisher::source) {
 		if (const auto target = m_play_preflight.target_of(item)) go_to(*target);
+		return;
+	}
+	if (source == asset_problem_publisher::source) {
+		const std::optional<std::string> file = m_asset_problems ? m_asset_problems->file_of(item) : std::nullopt;
+		if (!file) {
+			return;
+		}
+		desc_target target;
+		target.resource = *file;
+		go_to(target);
 		return;
 	}
 	if (source == world_problem_publisher::source) {

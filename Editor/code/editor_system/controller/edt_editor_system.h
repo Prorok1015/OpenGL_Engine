@@ -42,6 +42,7 @@ namespace cmd  { class command_registry; }
 
 namespace edt {
 	class asset_database;
+	class asset_problem_publisher;
 	class agent_server;
 	class agent_access;
 	class agent_policy_model;
@@ -118,6 +119,8 @@ namespace edt {
 		// The repository watcher's frame (#485): the `editor_vcs` frame stage. Re-arms it when a probe changed the
 		// service's cached state (never probes itself) and raises editor_events::repository_changed.
 		void tick_repository_watcher();
+		// The source "assets" of Problems follows the asset database: the `editor_assets` frame stage.
+		void tick_asset_problems();
 		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
 		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
 		bool person_is_editing() const;
@@ -354,6 +357,8 @@ namespace edt {
 		desc_problem_publisher m_desc_problems;
 		// The source "play" (#597): the last check before Play.
 		play_preflight_publisher m_play_preflight;
+		// The source "assets" (S57-4): what the asset database finds, with its fixes for the person.
+		std::unique_ptr<asset_problem_publisher> m_asset_problems;
 		// The prefab preview whose diagnostics the scope "prefab" holds; closing it clears them.
 		document_id m_desc_prefab_document{};
 		std::vector<connection> m_world_problem_connections;

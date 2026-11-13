@@ -1,6 +1,7 @@
 #include "edt_problems_panel.h"
 #include <imgui.h>
 #include <format>
+#include <functional>
 #include <optional>
 #include <utility>
 
@@ -151,10 +152,22 @@ void edt::problems_panel::on_render()
 		const std::string label = std::format("{} ({})###problems_filter_{}", labels[i], m_counts[i], i);
 		if (ImGui::Checkbox(label.c_str(), &m_shown[i])) filter();
 	}
+	// Run after the frame's drawing: an undo changes the problems the rows were built from.
+	std::function<void()> chosen;
+	if (const std::optional<std::string> undo = m_undo_label && m_undo ? m_undo_label() : std::nullopt) {
+		ImGui::SameLine();
+		const std::string label = std::format("Undo: {}###problems_undo", *undo);
+		if (ImGui::SmallButton(label.c_str())) {
+			chosen = m_undo;
+		}
+	}
 	ImGui::Separator();
 
 	if (m_rows.empty()) {
 		ImGui::TextDisabled("No problems");
+		if (chosen) {
+			chosen();
+		}
 		return;
 	}
 
@@ -188,6 +201,19 @@ void edt::problems_panel::on_render()
 					&& (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)));
 				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.tooltip.c_str());
 				if (ImGui::BeginPopupContextItem("##problem_menu")) {
+					if (m_actions) {
+						auto actions = m_actions(entry.source, entry.item);
+						for (std::size_t i = 0; i < actions.size(); ++i) {
+							ImGui::PushID(static_cast<int>(i));
+							if (ImGui::MenuItem(actions[i].first.c_str())) {
+								chosen = std::move(actions[i].second);
+							}
+							ImGui::PopID();
+						}
+						if (!actions.empty()) {
+							ImGui::Separator();
+						}
+					}
 					if (m_on_activate && ImGui::MenuItem("Go to")) activate = true;
 					if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(problem_copy_text(entry.item).c_str());
 					ImGui::EndPopup();
@@ -215,7 +241,10 @@ void edt::problems_panel::on_render()
 	}
 	if (activated) {
 		// A copy: going to a row may change the problems the rows were built from.
-		const row chosen = m_rows[*activated];
-		m_on_activate(chosen.source, chosen.item);
+		const row picked = m_rows[*activated];
+		m_on_activate(picked.source, picked.item);
+	}
+	if (chosen) {
+		chosen();
 	}
 }

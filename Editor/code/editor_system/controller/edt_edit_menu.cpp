@@ -48,7 +48,8 @@ namespace {
 }
 
 std::vector<edt::registration> edt::register_edit_actions(
-	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active)
+	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active,
+	std::function<std::optional<std::string>()> fallback_undo_label, std::function<bool()> fallback_undo)
 {
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
@@ -57,18 +58,40 @@ std::vector<edt::registration> edt::register_edit_actions(
 	std::vector<registration> out;
 
 	out.push_back(actions.add({ .id = "edit.undo", .label = "Undo", .menu_path = "Edit", .shortcut = "Ctrl+Z",
-		.dynamic_label = [active] {
+		.dynamic_label = [active, fallback_undo_label] {
 			const document* doc = active();
+			if ((!doc || !doc->next_undo_entry()) && fallback_undo_label) {
+				if (const std::optional<std::string> label = fallback_undo_label()) {
+					return "Undo " + *label;
+				}
+			}
 			return menu_text("Undo", doc ? doc->next_undo_entry() : std::nullopt);
 		},
 		.yields_to_text_input = true,
-		.execute = [active](const json::value&) {
+		.execute = [active, fallback_undo_label, fallback_undo](const json::value&) {
 			document* doc = active();
+			if ((!doc || !doc->next_undo_entry()) && fallback_undo) {
+				const std::optional<std::string> label = fallback_undo_label ? fallback_undo_label() : std::nullopt;
+				const bool undone = label && fallback_undo();
+				json::object out{ { "applied", undone } };
+				if (undone) {
+					out["label"] = *label;
+				}
+				return action_result::success(std::move(out));
+			}
 			const auto entry = doc ? doc->next_undo_entry() : std::nullopt;
 			return action_result::success(applied(doc && doc->undo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_undo_entry().has_value(); } }));
+		.enabled = [active, idle, fallback_undo_label, has_fallback = static_cast<bool>(fallback_undo)] {
+			if (!idle()) {
+				return false;
+			}
+			if (const document* doc = active(); doc && doc->next_undo_entry()) {
+				return !doc->edits_locked();
+			}
+			return has_fallback && fallback_undo_label && fallback_undo_label().has_value();
+		} }));
 
 	out.push_back(actions.add({ .id = "edit.redo", .label = "Redo", .menu_path = "Edit", .shortcut = "Ctrl+Y",
 		.dynamic_label = [active] {

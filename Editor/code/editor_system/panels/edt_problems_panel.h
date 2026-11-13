@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace edt
@@ -22,16 +24,24 @@ namespace edt
 	// The editor's problems (problem_list) as a table: severity, file:line, message; the notes are in the row's
 	// tooltip so that every row is one line high and the table clips. Counts per severity in the header double as
 	// filters; a row's context menu copies it. With an activate callback a double click, Enter or "Go to" on a row
-	// hands it over with its source.
+	// hands it over with its source. A row's fixes (set_actions) head its context menu; set_undo shows "Undo: <label>"
+	// beside the filters while there is something to undo.
 	class problems_panel : public panel_base
 	{
 	public:
 		using activate_fn = std::function<void(const std::string& source, const problem& item)>;
+		using actions_fn = std::function<std::vector<std::pair<std::string, std::function<void()>>>(const std::string& source, const problem& item)>;
 
 		// `problems` must outlive the panel. `project_root` (empty: none) shortens the paths that lie under it.
 		problems_panel(const problem_list& problems, std::filesystem::path project_root);
 
 		void set_on_activate(activate_fn on_activate) { m_on_activate = std::move(on_activate); }
+		void set_actions(actions_fn actions) { m_actions = std::move(actions); }
+		void set_undo(std::function<std::optional<std::string>()> label, std::function<void()> run)
+		{
+			m_undo_label = std::move(label);
+			m_undo = std::move(run);
+		}
 
 	protected:
 		void on_render() override;
@@ -58,5 +68,8 @@ namespace edt
 		std::array<bool, 3> m_shown{ true, true, true };
 		std::uint64_t m_generation = 0;
 		activate_fn m_on_activate;
+		actions_fn m_actions;
+		std::function<std::optional<std::string>()> m_undo_label;
+		std::function<void()> m_undo;
 	};
 }

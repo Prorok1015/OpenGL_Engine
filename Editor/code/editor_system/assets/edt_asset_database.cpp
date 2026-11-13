@@ -18,6 +18,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <random>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -372,6 +373,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		}
 		asset_orphan orphan;
 		orphan.meta_path = res::tag::make(fs_paths::generic_utf8_of(file->relative));
+		orphan.layer = file->layer;
 		++scan.meta_reads;
 		const meta_read read = read_meta(layers[file->layer], file->relative);
 		if (read.meta) {
@@ -601,6 +603,14 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	}
 	const bool same_records = std::ranges::equal(previous, m_records,
 		[](const auto& a, const auto& b) { return a.first == b.first && a.second.same_as(b.second); });
+	for (asset_orphan& orphan : scan.orphans) {
+		const std::string_view meta = orphan.meta_path.relative();
+		if (const auto owner = previous.find(res::tag::make(sidecar_owner(meta)).string()); owner != previous.end()) {
+			orphan.last_hash = owner->second.content_hash;
+		} else if (const auto known = std::ranges::find(m_orphans, orphan.meta_path, &asset_orphan::meta_path); known != m_orphans.end()) {
+			orphan.last_hash = known->last_hash;
+		}
+	}
 	const bool same_orphans = scan.orphans == m_orphans;
 	m_orphans = std::move(scan.orphans);
 	m_files_read += scan.meta_reads;
@@ -1272,9 +1282,15 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		const asset_record* before = known == m_records.end() ? nullptr : &known->second;
 		std::optional<asset_record> now = look_up(relative, before);
 		const std::string owner_key = edt::layer_merge_key(relative, k_case_insensitive);
-		std::erase_if(m_orphans, [&owner_key](const asset_orphan& orphan) {
+		std::string last_hash;
+		std::erase_if(m_orphans, [&owner_key, &last_hash](const asset_orphan& orphan) {
 			const std::optional<std::string> meta = relative_of(orphan.meta_path);
-			return meta && is_sidecar(*meta) && edt::layer_merge_key(std::string{ sidecar_owner(*meta) }, k_case_insensitive) == owner_key;
+			const bool owned = meta && is_sidecar(*meta)
+				&& edt::layer_merge_key(std::string{ sidecar_owner(*meta) }, k_case_insensitive) == owner_key;
+			if (owned && last_hash.empty()) {
+				last_hash = orphan.last_hash;
+			}
+			return owned;
 		});
 		if (!now) {
 			// The file is gone; a .resource left behind is an orphan.
@@ -1284,11 +1300,13 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 				if (sidecar.kind == presence::file) {
 					asset_orphan orphan;
 					orphan.meta_path = res::tag::make(meta_relative);
+					orphan.layer = layer;
 					++m_files_read;
 					const meta_read read = read_meta(m_layers[layer], fs_paths::path_from_utf8(meta_relative));
 					if (read.meta) {
 						orphan.id = read.meta->guid;
 					}
+					orphan.last_hash = before && !before->content_hash.empty() ? before->content_hash : last_hash;
 					m_orphans.push_back(std::move(orphan));
 					break;
 				}
@@ -1357,4 +1375,261 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		m_on_batch(batch);
 	}
 	return batch;
+}
+
+namespace
+{
+	edt::asset_fix_result refused(std::string why)
+	{
+		return edt::asset_fix_result{ false, std::move(why) };
+	}
+
+	edt::asset_fix_result done()
+	{
+		return edt::asset_fix_result{ true, {} };
+	}
+
+	fs::path temp_leaf_for(const fs::path& leaf)
+	{
+		std::random_device random;
+		fs::path out{ "." };
+		out += leaf;
+		out += std::format(".{:08x}.tmp", random());
+		return out;
+	}
+
+	// A new file below `root`: an entry already at the name is an error and stays.
+	std::string write_new_file(const fs::path& root, const std::string& relative, std::string_view text)
+	{
+		const fs::path path = fs_paths::path_from_utf8(relative);
+		platform::beneath::pinned_root pinned{ root };
+		platform::beneath::write_request request;
+		request.folder = path.parent_path();
+		request.leaf = path.filename();
+		request.tmp_leaf = temp_leaf_for(request.leaf);
+		request.data = std::as_bytes(std::span<const char>(text.data(), text.size()));
+		request.replace = false;
+		request.tmp_path = root / request.folder / request.tmp_leaf;
+		return platform::beneath::write_beneath(pinned, request);
+	}
+
+	// Never replaces: an existing target is an error.
+	std::string rename_file(const fs::path& root, const std::string& from, const std::string& to)
+	{
+		const fs::path source = fs_paths::path_from_utf8(from);
+		const fs::path target = fs_paths::path_from_utf8(to);
+		platform::beneath::pinned_root pinned{ root };
+		platform::beneath::rename_request request;
+		request.from_folder = source.parent_path();
+		request.from_leaf = source.filename();
+		request.to_folder = target.parent_path();
+		request.to_leaf = target.filename();
+		return platform::beneath::rename_beneath(pinned, request);
+	}
+
+	// The text of `relative` below `root` when it is still exactly `expected`; else why not.
+	std::optional<std::string> unchanged_since(const fs::path& root, const std::string& relative, const std::string& expected)
+	{
+		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(relative), k_meta_max_bytes);
+		const std::string shown = res::tag::make(relative).string();
+		if (!now.error.empty()) {
+			return now.error;
+		}
+		if (!now.exists) {
+			return std::format("{} is gone", shown);
+		}
+		if (now.text != expected) {
+			return std::format("{} changed since; it is left as it is", shown);
+		}
+		return std::nullopt;
+	}
+}
+
+std::optional<std::string> edt::asset_database::next_undo_label() const
+{
+	if (m_history.empty()) {
+		return std::nullopt;
+	}
+	return m_history.back().label;
+}
+
+void edt::asset_database::push_history(std::string label, std::function<asset_fix_result()> undo)
+{
+	if (m_history.size() >= max_history) {
+		m_history.erase(m_history.begin());
+	}
+	m_history.push_back(history_entry{ std::move(label), std::move(undo) });
+	++m_revision;
+}
+
+edt::asset_fix_result edt::asset_database::undo_last()
+{
+	if (m_history.empty()) {
+		return refused("there is nothing to undo");
+	}
+	history_entry entry = std::move(m_history.back());
+	m_history.pop_back();
+	++m_revision;
+	asset_fix_result result = entry.undo();
+	if (!result.ok) {
+		result.error = std::format("'{}' was not undone: {}", entry.label, result.error);
+	}
+	return result;
+}
+
+void edt::asset_database::refresh(const std::vector<std::string>& relatives)
+{
+	std::vector<res::file_change> changes;
+	changes.reserve(relatives.size());
+	for (const std::string& relative : relatives) {
+		const std::string owner = is_sidecar(relative) ? std::string{ sidecar_owner(relative) } : relative;
+		if (const auto known = m_records.find(res::tag::make(owner).string()); known != m_records.end()) {
+			// A .resource rewritten within one tick of a coarse clock keeps its size and time: it is read again anyway.
+			known->second.meta_size = -1;
+		}
+		res::file_change change;
+		change.tag = res::tag::make(relative);
+		change.kind = res::change_kind::modified;
+		change.self = true;
+		changes.push_back(std::move(change));
+	}
+	apply_changes(changes);
+}
+
+edt::asset_fix_result edt::asset_database::create_meta(const res::tag& file)
+{
+	const std::optional<std::string> relative = relative_of(file);
+	const asset_record* record = find(file);
+	if (!relative || !record || m_layers.empty()) {
+		return refused(std::format("{} is not a file the asset database knows", file.view()));
+	}
+	if (record->layer != top_layer()) {
+		return refused(std::format("{} is not a file of the project's own folder", file.view()));
+	}
+	for (const fs::path& layer : m_layers) {
+		if (sidecar_in(layer, *relative).kind != presence::missing) {
+			return refused(std::format("{} has a .resource already", file.view()));
+		}
+	}
+	res::asset_meta meta;
+	meta.guid = res::generate_asset_id();
+	const std::string text = res::write_asset_meta(meta);
+	const fs::path root = m_layers[top_layer()];
+	const std::string meta_relative = *relative + std::string{ res::asset_meta_suffix };
+	if (const std::string error = write_new_file(root, meta_relative, text); !error.empty()) {
+		return refused(std::format("the .resource of {} was not written: {}", file.view(), error));
+	}
+	push_history(std::format("Create .resource for {}", file.view()), [this, root, meta_relative, text]() -> asset_fix_result {
+		if (const std::optional<std::string> why = unchanged_since(root, meta_relative, text)) {
+			return refused(*why);
+		}
+		const fs::path path = fs_paths::path_from_utf8(meta_relative);
+		platform::beneath::pinned_root pinned{ root };
+		if (const std::string error = platform::beneath::remove_beneath(pinned, path.parent_path(), path.filename(), true); !error.empty()) {
+			return refused(error);
+		}
+		refresh({ meta_relative });
+		return done();
+	});
+	refresh({ meta_relative });
+	return done();
+}
+
+edt::asset_fix_result edt::asset_database::link_orphan(const res::tag& meta, const res::tag& file)
+{
+	const std::optional<std::string> meta_relative = relative_of(meta);
+	const std::optional<std::string> relative = relative_of(file);
+	const auto orphan = std::ranges::find(m_orphans, meta, &asset_orphan::meta_path);
+	if (!meta_relative || !relative || orphan == m_orphans.end() || m_layers.empty()) {
+		return refused(std::format("{} is not a .resource without its file", meta.view()));
+	}
+	if (orphan->layer != top_layer()) {
+		return refused(std::format("{} is not in the project's own folder", meta.view()));
+	}
+	const asset_record* record = find(file);
+	if (!record || record->layer != top_layer()) {
+		return refused(std::format("{} is not a file of the project's own folder", file.view()));
+	}
+	const fs::path root = m_layers[top_layer()];
+	if (presence_in(root, *meta_relative) != presence::file) {
+		return refused(std::format("{} is not in the project's own folder", meta.view()));
+	}
+	for (const fs::path& layer : m_layers) {
+		if (sidecar_in(layer, *relative).kind != presence::missing) {
+			return refused(std::format("{} has a .resource already", file.view()));
+		}
+	}
+	const std::string target = *relative + std::string{ res::asset_meta_suffix };
+	const std::string last_hash = orphan->last_hash;
+	if (const std::string error = rename_file(root, *meta_relative, target); !error.empty()) {
+		return refused(std::format("{} was not moved to {}: {}", meta.view(), file.view(), error));
+	}
+	push_history(std::format("Link {} to {}", meta.view(), file.view()),
+		[this, root, from = *meta_relative, target, last_hash, meta]() -> asset_fix_result {
+			if (presence_in(root, target) != presence::file) {
+				return refused(std::format("{} is gone", res::tag::make(target).view()));
+			}
+			if (presence_in(root, from) != presence::missing) {
+				return refused(std::format("{} is taken again", meta.view()));
+			}
+			if (const std::string error = rename_file(root, target, from); !error.empty()) {
+				return refused(error);
+			}
+			refresh({ target, from });
+			// Its file is still gone: the orphan gets back the hash it was linked by.
+			if (const auto back = std::ranges::find(m_orphans, meta, &asset_orphan::meta_path);
+				back != m_orphans.end() && back->last_hash.empty()) {
+				back->last_hash = last_hash;
+				++m_revision;
+			}
+			return done();
+		});
+	refresh({ *meta_relative, target });
+	return done();
+}
+
+edt::asset_fix_result edt::asset_database::new_id_for_copy(const res::tag& file)
+{
+	const std::optional<std::string> relative = relative_of(file);
+	const asset_record* record = find(file);
+	if (!relative || !record || m_layers.empty()) {
+		return refused(std::format("{} is not a file the asset database knows", file.view()));
+	}
+	if (record->layer != top_layer()) {
+		return refused(std::format("{} is not a file of the project's own folder", file.view()));
+	}
+	const fs::path root = m_layers[top_layer()];
+	const sidecar_hit sidecar = sidecar_in(root, *relative);
+	if (sidecar.kind != presence::file) {
+		return refused(std::format("the .resource of {} is not in the project's own folder", file.view()));
+	}
+	const prj::project_file_text before = prj::read_project_file(root, fs_paths::path_from_utf8(sidecar.relative), k_meta_max_bytes);
+	if (!before.error.empty()) {
+		return refused(before.error);
+	}
+	if (!before.exists) {
+		return refused(std::format("the .resource of {} is gone", file.view()));
+	}
+	res::asset_meta_result read = res::read_asset_meta(before.text);
+	if (!read) {
+		return refused(std::format("the .resource of {} cannot be read: {}", file.view(), read.error.message));
+	}
+	read.meta->guid = res::generate_asset_id();
+	const std::string text = res::write_asset_meta(*read.meta);
+	if (const std::optional<std::string> error = prj::write_project_file(root, fs_paths::path_from_utf8(sidecar.relative), text)) {
+		return refused(*error);
+	}
+	push_history(std::format("New ID for {}", file.view()),
+		[this, root, meta_relative = sidecar.relative, text, old = before.text]() -> asset_fix_result {
+			if (const std::optional<std::string> why = unchanged_since(root, meta_relative, text)) {
+				return refused(*why);
+			}
+			if (const std::optional<std::string> error = prj::write_project_file(root, fs_paths::path_from_utf8(meta_relative), old)) {
+				return refused(*error);
+			}
+			refresh({ meta_relative });
+			return done();
+		});
+	refresh({ sidecar.relative });
+	return done();
 }
