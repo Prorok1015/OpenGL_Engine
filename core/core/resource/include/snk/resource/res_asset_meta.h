@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,6 +15,20 @@ namespace json = boost::json;
 namespace res
 {
 	inline constexpr std::int64_t asset_meta_version = 1;
+	inline constexpr std::string_view asset_meta_suffix = ".resource";
+
+	// A name or path ending in ".resource" in any letter case: one spelling rule for the editor and the database, so a
+	// sidecar renamed on Windows is still recognized everywhere.
+	inline bool is_asset_meta_name(std::string_view name)
+	{
+		if (name.size() < asset_meta_suffix.size()) return false;
+		const std::string_view tail = name.substr(name.size() - asset_meta_suffix.size());
+		for (std::size_t i = 0; i < tail.size(); ++i) {
+			const char c = tail[i] >= 'A' && tail[i] <= 'Z' ? static_cast<char>(tail[i] - 'A' + 'a') : tail[i];
+			if (c != asset_meta_suffix[i]) return false;
+		}
+		return true;
+	}
 
 	struct asset_meta
 	{

@@ -788,6 +788,20 @@ BOOST_AUTO_TEST_CASE(AssetQuery_ADirectoryMayCarryTheResPrefix)
 	BOOST_TEST(names_of_tags(call("asset.query", R"({"directory":"res://"})")).size() == 4u);
 }
 
+BOOST_AUTO_TEST_CASE(AssetQuery_HidesTheResourceSidecars_InAnyLetterCase)
+{
+	for (const fs::path& sidecar : { disk.layers[0] / "a.txt.resource", disk.layers[1] / "models" / "ship.glb.RESOURCE",
+		disk.layers[1] / "lonely.resource" }) {
+		std::ofstream(sidecar, std::ios::binary) << "{}";
+	}
+
+	const auto result = call("asset.query");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((names_of_tags(result) == std::vector<std::string>{
+		"res://a.txt", "res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
+	BOOST_TEST(names_of_tags(call("asset.query", R"({"glob":"*.resource"})")).empty());
+}
+
 BOOST_AUTO_TEST_CASE(AssetQuery_SkipsLinksAndNamesThatAreNotUtf8)
 {
 	std::error_code ec;
