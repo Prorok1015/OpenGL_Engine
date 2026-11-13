@@ -820,6 +820,18 @@ BOOST_AUTO_TEST_CASE(AssetQuery_SkipsHiddenFoldersAndTheProjectsOwnNames)
 		"res://a.txt", "res://build/kept.txt", "res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
 }
 
+// #854: a layer without project.snkproj is no project folder: its code/ and build/ hold assets like any folder.
+BOOST_AUTO_TEST_CASE(AssetQuery_ListsCodeAndBuildOfALayerWithoutAProjectFile)
+{
+	temp_layers::put(disk.layers[1] / "code" / "main.cpp", "x");
+	temp_layers::put(disk.layers[1] / "build" / "out.bin", "x");
+
+	const auto result = call("asset.query");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((names_of_tags(result) == std::vector<std::string>{ "res://a.txt", "res://build/out.bin", "res://code/main.cpp",
+		"res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
+}
+
 BOOST_AUTO_TEST_CASE(AssetQuery_SkipsLinksAndNamesThatAreNotUtf8)
 {
 	std::error_code ec;

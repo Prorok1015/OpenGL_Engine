@@ -299,6 +299,24 @@ BOOST_AUTO_TEST_CASE(Create_FromATemplateWithALinkedFolderInside_LeavesTheLinkTa
 }
 #endif
 
+// #854: with a content root "." the template's folder is content, but its code/, build/ and manifest are not.
+BOOST_AUTO_TEST_CASE(Create_FromATemplateWhoseContentRootIsItsFolder_GivesNoIdsToItsCodeBuildOrManifest)
+{
+	test_util::temp_dir dir("edt_template_ids_root_dot");
+	dir.write("tpl/project.snkproj", R"({"format_version": 1, "name": "Template", "engine_version": "0.0.0", "content_roots": ["."]})");
+	dir.write("tpl/textures/a.png", "x");
+	dir.write("tpl/code/main.cpp", "int main() {}");
+	dir.write("tpl/build/out.bin", "x");
+
+	const auto created = create_with_fresh_ids(dir.path() / "tpl", dir.path() / "game");
+
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+	BOOST_TEST(!sidecar_id(dir.path() / "game" / "textures" / "a.png").is_nil());
+	BOOST_TEST(!fs::exists(dir.path() / "game" / "code" / "main.cpp.resource"));
+	BOOST_TEST(!fs::exists(dir.path() / "game" / "build" / "out.bin.resource"));
+	BOOST_TEST(!fs::exists(dir.path() / "game" / "project.snkproj.resource"));
+}
+
 BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_GivesItsDescsSidecars)
 {
 	test_util::temp_dir dir("edt_template_ids_shipped");

@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include "edt_asset_layers.h"
+#include <snk/resource/res_asset_walk.h>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -166,6 +167,30 @@ BOOST_AUTO_TEST_CASE(ALayerWithoutAProjectFile_ListsCodeAndBuildLikeAnyFolder)
 	top.write("build/out.bin", "x");
 
 	BOOST_TEST((names(edt::list_merged_directory({ top.path() }, {})) == std::vector<std::string>{ "build", "code" }));
+}
+
+// #854: the project's own names follow the letter case of asset names. Where it does not count (Windows) the project's
+// BUILD/ is hidden, and Code/ entered from the base layer is the project's code/ there, so it adds nothing of its own.
+BOOST_AUTO_TEST_CASE(TheProjectsOwnNames_FollowTheLetterCaseOfAssetNames)
+{
+	BOOST_TEST(res::is_project_own_name("code"));
+	BOOST_TEST(res::is_project_own_name("Code") == res::asset_names_case_insensitive);
+	BOOST_TEST(res::is_project_own_name("BUILD") == res::asset_names_case_insensitive);
+	BOOST_TEST(res::is_project_own_name("Project.SnkProj") == res::asset_names_case_insensitive);
+	BOOST_TEST(res::is_in_project_own_folder("Code/sub") == res::asset_names_case_insensitive);
+
+	test_util::temp_dir base("asset_layers_base_case");
+	test_util::temp_dir project("asset_layers_project_case");
+	base.write("Code/lib.txt", "x");
+	project.write("project.snkproj", "{}");
+	project.write("code/main.cpp", "x");
+	project.write("BUILD/out.bin", "x");
+
+	const std::vector<std::string> expected_root = res::asset_names_case_insensitive
+		? std::vector<std::string>{ "Code" }
+		: std::vector<std::string>{ "BUILD", "Code" };
+	BOOST_TEST(names(edt::list_merged_directory({ base.path(), project.path() }, {})) == expected_root, boost::test_tools::per_element());
+	BOOST_TEST((names(edt::list_merged_directory({ base.path(), project.path() }, "Code")) == std::vector<std::string>{ "lib.txt" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

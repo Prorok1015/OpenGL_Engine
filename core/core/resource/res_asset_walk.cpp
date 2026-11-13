@@ -2,6 +2,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_beneath.h>
+#include <snk/project/prj_manifest.h>
 #include <cstddef>
 #include <map>
 #include <string>
@@ -137,10 +138,16 @@ res::asset_walk_pairing res::pair_asset_metas(const std::vector<asset_walk_file>
 	return out;
 }
 
+bool res::is_project_own_name(std::string_view name)
+{
+	const std::string key = asset_name_key(name, asset_names_case_insensitive);
+	return key == "code" || key == "build" || key == asset_name_key(prj::k_manifest_file_name, asset_names_case_insensitive);
+}
+
 bool res::is_project_folder_layer(const fs::path& layer)
 {
 	std::error_code ec;
-	return fs::is_regular_file(fs::symlink_status(layer / fs_paths::path_from_utf8(project_file_name), ec)) && !ec;
+	return fs::is_regular_file(fs::symlink_status(layer / fs_paths::path_from_utf8(prj::k_manifest_file_name), ec)) && !ec;
 }
 
 bool res::is_in_project_own_folder(const fs::path& relative_dir)

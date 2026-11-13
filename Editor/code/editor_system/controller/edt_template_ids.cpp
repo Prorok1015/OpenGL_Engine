@@ -17,6 +17,7 @@
 #include <snk/project/prj_manifest.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_pretty_json.h>
 #include <snk/resource/res_reference.h>
 
@@ -195,6 +196,8 @@ std::string edt::give_template_fresh_ids(const fs::path& project_root)
 		if (!fs::is_directory(fs::symlink_status(folder, ec))) {
 			continue;
 		}
+		// The asset walk's rule: a content root "." is the template's folder, whose code/, build/ and manifest are no content.
+		const bool project_folder = res::is_project_folder_layer(folder);
 		fs::recursive_directory_iterator it(folder, fs::directory_options::none, ec);
 		for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
 			const fs::path relative = it->path().lexically_relative(project_root);
@@ -204,13 +207,14 @@ std::string edt::give_template_fresh_ids(const fs::path& project_root)
 				return std::format("cannot read '{}': {}", utf8_of(relative), status_ec.message());
 			}
 			const std::string name = name_of(relative);
-			if (fs::is_directory(status)) {
-				if (name.starts_with('.')) {
+			const bool is_dir = fs::is_directory(status);
+			if (res::is_skipped_asset_entry(name, is_dir, project_folder && it.depth() == 0)) {
+				if (is_dir) {
 					it.disable_recursion_pending();
 				}
 				continue;
 			}
-			if (!fs::is_regular_file(status) || res::is_ignored_asset_name(name)) {
+			if (is_dir || !fs::is_regular_file(status)) {
 				continue;
 			}
 			(res::is_asset_meta_name(name) ? sidecars : files).insert(relative);

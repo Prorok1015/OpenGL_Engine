@@ -60,17 +60,11 @@ namespace res
 		return !is_dir && is_asset_meta_sidecar(name) && is_ignored_asset_name(asset_meta_owner(name));
 	}
 
-	// The project file: a layer that holds it in its root is the project folder itself (a content root ".").
-	inline constexpr std::string_view project_file_name = "project.snkproj";
-
 	// A name directly in the project folder that is no content even when the folder is a content root ".": the project's
-	// code, its build output and project.snkproj.
-	inline bool is_project_own_name(std::string_view name)
-	{
-		return name == "code" || name == "build" || name == project_file_name;
-	}
+	// code, its build output and its manifest (prj::k_manifest_file_name), in any letter case where asset names have none.
+	SNK_API bool is_project_own_name(std::string_view name);
 
-	// The layer's root holds project_file_name (a regular file, not a link).
+	// The layer's root holds the project manifest (a regular file, not a link): the layer is the project folder itself.
 	SNK_API bool is_project_folder_layer(const std::filesystem::path& layer);
 
 	// `relative_dir` lies in a folder of is_project_own_name. A project folder layer adds nothing there, also when a lower
