@@ -646,6 +646,7 @@ namespace desc
 					}
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
+				case field_kind::map:
 				case field_kind::custom:
 					return override_status::valid;
 				case field_kind::vec2:
@@ -807,6 +808,13 @@ namespace desc
 			}
 			return std::ranges::all_of(value.as_array(), [&](const json::value& item) {
 				return json_fits(element, field_kind::boolean, enumeration, item);
+			});
+		case field_kind::map:
+			if (!value.is_object()) {
+				return false;
+			}
+			return std::ranges::all_of(value.as_object(), [&](const auto& item) {
+				return item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value());
 			});
 		case field_kind::custom: return true;
 		}

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
+#include <unordered_map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -49,6 +51,21 @@ namespace ops_test {
 		glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
 
 		BOOST_DESCRIBE_CLASS(widget, (), (position, label, state, ids, nested, fov, texture, count, rotation), (), ())
+	};
+
+	class keyed : public desc::schema_desc<keyed, desc::schema_kind::component>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.keyed";
+
+		std::map<std::string, int> counts;
+		std::unordered_map<std::string, std::string> names;
+		std::map<std::string, inner> parts;
+		std::optional<float> gain;
+		std::optional<std::string> note;
+		std::optional<mode> preferred;
+
+		BOOST_DESCRIBE_CLASS(keyed, (), (counts, names, parts, gain, note, preferred), (), ())
 	};
 
 	// Write policies for the keys a legacy format needs: an explicit null for "nothing", a key that is read but never written.
@@ -1280,6 +1297,111 @@ BOOST_AUTO_TEST_CASE(TheJsonSchemaOfADocumentCarriesTheMarker)
 	const json::object document = desc::to_json_schema(*fx.ds.find_schema("ops.sibling"), fx.ds.schemas());
 	BOOST_TEST(document.contains("x-document"));
 	BOOST_TEST(!desc::to_json_schema(*fx.ds.find_schema("ops.target"), fx.ds.schemas()).contains("x-document"));
+}
+
+BOOST_FIXTURE_TEST_CASE(MapsAndOptionalsGetTheirOwnKinds, ops_fixture)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const auto kind_of = [&](std::string_view key) {
+		const auto found = std::ranges::find(schema.fields, key, &desc::field_schema::key);
+		BOOST_REQUIRE(found != schema.fields.end());
+		return *found;
+	};
+	BOOST_TEST((kind_of("counts").kind == desc::field_kind::map));
+	BOOST_TEST((kind_of("counts").element == desc::field_kind::i32));
+	BOOST_TEST((kind_of("names").element == desc::field_kind::string));
+	BOOST_TEST((kind_of("parts").element == desc::field_kind::structure));
+	BOOST_TEST((kind_of("gain").kind == desc::field_kind::f32));
+	BOOST_TEST(kind_of("gain").optional);
+	BOOST_TEST((kind_of("note").kind == desc::field_kind::string));
+	BOOST_TEST((kind_of("preferred").kind == desc::field_kind::enumeration));
+	BOOST_TEST(!kind_of("counts").optional);
+}
+
+BOOST_FIXTURE_TEST_CASE(AMapWritesSortedKeysAndReadsThemBack, ops_fixture)
+{
+	ops_test::keyed source;
+	source.counts = { { "zeta", 3 }, { "alpha", 1 }, { "mid", 2 } };
+	source.names = { { "b", "two" }, { "a", "one" } };
+	source.parts["p"].scale = 4.0f;
+
+	const json::object written = serialized(source);
+	std::vector<std::string> keys;
+	for (const auto& member : written.at("counts").as_object()) {
+		keys.emplace_back(member.key());
+	}
+	BOOST_TEST((keys == std::vector<std::string>{ "alpha", "mid", "zeta" }), boost::test_tools::per_element());
+	BOOST_TEST(written.at("names").as_object().at("a").as_string() == "one");
+
+	ops_test::keyed copy;
+	copy.deserialize(ds, written);
+	BOOST_CHECK((copy.counts == source.counts));
+	BOOST_CHECK((copy.names == source.names));
+	BOOST_TEST(copy.parts.at("p").scale == 4.0f);
+	BOOST_TEST(desc::equal(ops_test::keyed::binding(), &source, &copy));
+	BOOST_CHECK(json::value(serialized(copy)) == json::value(written));
+}
+
+BOOST_FIXTURE_TEST_CASE(AMapKeyWithANullValueIsLeftOutAndABadValueFailsTheField, ops_fixture)
+{
+	ops_test::keyed value;
+	value.deserialize(ds, parse(R"({ "counts": { "a": 1, "b": null } })"));
+	BOOST_TEST(value.counts.size() == 1u);
+	BOOST_TEST(value.counts.at("a") == 1);
+
+	ops_test::keyed other;
+	other.counts = { { "keep", 9 } };
+	other.deserialize(ds, parse(R"({ "counts": { "a": "text" } })"));
+	BOOST_TEST(other.counts.at("keep") == 9);
+}
+
+BOOST_FIXTURE_TEST_CASE(AnEmptyOptionalWritesNothingAndANullReadsItEmpty, ops_fixture)
+{
+	ops_test::keyed value;
+	const json::object empty = serialized(value);
+	BOOST_TEST(!empty.contains("gain"));
+	BOOST_TEST(!empty.contains("note"));
+	BOOST_TEST(!empty.contains("preferred"));
+
+	value.gain = 0.0f;
+	value.note = "";
+	value.preferred = ops_test::mode::off;
+	const json::object set = serialized(value);
+	BOOST_TEST(set.at("gain").as_double() == 0.0);
+	BOOST_TEST(set.at("note").as_string() == "");
+	BOOST_TEST(set.at("preferred").as_string() == "OFF");
+
+	ops_test::keyed copy;
+	copy.deserialize(ds, set);
+	BOOST_TEST(copy.gain.has_value());
+	BOOST_TEST(copy.note.has_value());
+	BOOST_TEST(copy.preferred.has_value());
+
+	copy.deserialize(ds, parse(R"({ "gain": null })"));
+	BOOST_TEST(!copy.gain.has_value());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheJsonSchemaOfAMapIsAnObjectOfItsElements, ops_fixture)
+{
+	ds.register_desc<ops_test::keyed>("ops.keyed");
+	const json::object generated = desc::to_json_schema(*ds.find_schema("ops.keyed"), ds.schemas());
+	const json::object& counts = generated.at("properties").as_object().at("counts").as_object();
+	BOOST_TEST(counts.at("type").as_string() == "object");
+	BOOST_TEST(counts.at("additionalProperties").as_object().at("type").as_string() == "integer");
+}
+
+BOOST_FIXTURE_TEST_CASE(AMapFitsWhenEveryNonNullValueFitsItsElement, ops_fixture)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts", json::parse(R"({ "a": 1, "b": null })") }) == desc::override_status::valid));
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts", json::parse(R"({ "a": "x" })") }) == desc::override_status::bad_value));
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts", json::parse("[1]") }) == desc::override_status::bad_value));
+}
+
+BOOST_AUTO_TEST_CASE(AMapCannotLiveInASchemaWithoutACppType)
+{
+	auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	BOOST_CHECK_THROW(desc::compute_layout(schema), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
