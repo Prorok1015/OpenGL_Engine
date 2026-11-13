@@ -678,7 +678,6 @@ namespace desc
 					}
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
-				case field_kind::map:
 				case field_kind::map: {
 					std::vector<std::string> tokens;
 					if (!json_pointer_tokens(rest, tokens) || tokens.empty() || tokens.front().empty()) {
