@@ -26,6 +26,7 @@ namespace edt::schema_ui
 		asset,    // res_tag, desc_ref given as a tag: text field that takes a dropped asset
 		group,    // structure with a known nested schema
 		list,     // array
+		map,      // map: a row per key (rename, remove), "+ Add" asks for the key
 		label,    // node_ref, entity: shown, not edited
 		json,     // custom, or a value the schema cannot draw: the generic JSON editor
 	};
@@ -45,6 +46,20 @@ namespace edt::schema_ui
 	// The widget of one field from its kind and hints only. `enum_known`/`nested_known`: the enum_schema / the nested
 	// type_schema the field names is in the registry; without it the field falls back to the JSON editor.
 	widget_spec describe_widget(const desc::field_schema& field, bool enum_known, bool nested_known);
+
+	// The longest key a map row accepts.
+	inline constexpr std::size_t k_max_map_key = 256;
+
+	// Why `key` cannot be the name of a new or renamed entry of `entries`: it is empty, longer than k_max_map_key, or taken
+	// by another entry already. Empty when it can.
+	std::string map_key_problem(const boost::json::object& entries, std::string_view key);
+
+	// Adds the entry; false, and nothing changed, when map_key_problem names a problem.
+	bool add_map_key(boost::json::object& entries, std::string_view key, boost::json::value value);
+
+	// Gives the entry `from` the name `to`, keeping its place; false, and nothing changed, when there is no `from` or `to`
+	// is a problem. The same name is no change (true).
+	bool rename_map_key(boost::json::object& entries, std::string_view from, std::string_view to);
 
 	// "m_near_distance" -> "Near distance"
 	std::string display_label(const desc::field_schema& field);
