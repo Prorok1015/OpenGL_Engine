@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_schema_inspector.h"
 #include <snk/editor/edt_panel_base.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <functional>
@@ -69,6 +70,8 @@ namespace edt
 		// Schema UI over a full effective component of an instance node; the edit lands in `scratch.overrides`.
 		bool render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema);
 
+		// The text of the map rows (new keys, refused renames) of the node shown; cleared with the selection.
+		schema_ui::map_edit_state      m_map_state;
 		scn::prefab_desc::prefab_node* m_selected_node  = nullptr;
 		bool                           m_readonly       = false;
 		scn::prefab_desc::prefab_node* m_owner          = nullptr;

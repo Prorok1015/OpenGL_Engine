@@ -43,6 +43,14 @@ res::file_change change(std::string_view path, res::change_kind kind, std::strin
 	return out;
 }
 
+// A change the editor made itself (resource_system store/create_sync).
+res::file_change own_change(std::string_view path, res::change_kind kind)
+{
+	res::file_change out = change(path, kind);
+	out.self = true;
+	return out;
+}
+
 res::file_change folder_change(std::string_view path, res::change_kind kind)
 {
 	res::file_change out = change(path, kind);
@@ -1193,5 +1201,518 @@ BOOST_AUTO_TEST_CASE(an_attached_database_follows_the_watcher)
 	}
 	BOOST_TEST(seen());
 }
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// #765: the layers in a folder of their own, with a git folder the tests hand to the database when they need one.
+struct new_id_fixture
+{
+	new_id_fixture() : repo("asset_db_repo")
+	{
+		fs::create_directories(git());
+		fs::create_directories(lower());
+		fs::create_directories(upper());
+	}
+
+	fs::path git() const { return repo.path() / ".git"; }
+	fs::path lower() const { return repo.path() / "engine"; }
+	fs::path upper() const { return repo.path() / "project" / "res"; }
+
+	static fs::path write(const fs::path& layer, std::string_view relative, std::string_view text)
+	{
+		const fs::path path = layer / relative;
+		fs::create_directories(path.parent_path());
+		std::ofstream(path, std::ios::binary | std::ios::trunc) << text;
+		return path;
+	}
+
+	// Older than new_file_quiet_time: a file from outside that is done being written.
+	static fs::path write_aged(const fs::path& layer, std::string_view relative, std::string_view text)
+	{
+		const fs::path path = write(layer, relative, text);
+		age(path);
+		return path;
+	}
+
+	static std::string read(const fs::path& path)
+	{
+		std::ifstream in(path, std::ios::binary);
+		return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	static void age(const fs::path& path)
+	{
+		fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(1));
+	}
+
+	edt::asset_database& open()
+	{
+		db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower(), upper() });
+		db->rebuild();
+		test_util::pump(tasks);
+		return *db;
+	}
+
+	void apply(res::file_change change)
+	{
+		db->apply_changes(std::vector<res::file_change>{ std::move(change) });
+	}
+
+	// Pumps the work and looks at the waiting files once more.
+	void settle()
+	{
+		test_util::pump(tasks);
+		db->poll(true);
+	}
+
+	// The ID in <upper>/<relative>.resource; none when there is no readable one.
+	std::optional<res::asset_id> meta_id(std::string_view relative) const
+	{
+		const fs::path path = upper() / (std::string{ relative } + ".resource");
+		if (!fs::is_regular_file(path)) {
+			return std::nullopt;
+		}
+		const res::asset_meta_result parsed = res::read_asset_meta(read(path));
+		if (!parsed) {
+			return std::nullopt;
+		}
+		return parsed.meta->guid;
+	}
+
+	const edt::asset_record& record(std::string_view path) const
+	{
+		const edt::asset_record* found = db->find(res::tag::make(path));
+		BOOST_REQUIRE_MESSAGE(found, std::string{ path });
+		return *found;
+	}
+
+	static std::string desc_with_guid(std::string_view guid)
+	{
+		return std::string{ R"({ "__type": "level_desc", "__guid": ")" } + std::string{ guid } + R"(" })";
+	}
+
+	test_util::temp_dir repo;
+	ds::task_system tasks{ test_util::manual_tasks() };
+	edt::editor_events events;
+	edt::job_service jobs{ tasks, &events };
+	std::unique_ptr<edt::asset_database> db;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtAssetNewIds, new_id_fixture)
+
+BOOST_AUTO_TEST_CASE(an_own_new_file_gets_an_id_at_once_and_keeps_it)
+{
+	write(upper(), "kept.txt", "kept");
+	open();
+	write(upper(), "tex/new.png", "new");
+	apply(own_change("tex/new.png", res::change_kind::created));
+
+	const std::optional<res::asset_id> id = meta_id("tex/new.png");
+	BOOST_REQUIRE(id.has_value());
+	BOOST_TEST(!id->is_nil());
+	BOOST_TEST((record("tex/new.png").id == id));
+	BOOST_TEST(record("tex/new.png").has_meta);
+	const std::string sidecar = read(upper() / "tex/new.png.resource");
+
+	write(upper(), "tex/new.png", "new, written again");
+	apply(own_change("tex/new.png", res::change_kind::modified));
+	settle();
+	BOOST_TEST((record("tex/new.png").id == id));
+	BOOST_TEST(read(upper() / "tex/new.png.resource") == sidecar);
+	BOOST_TEST(!fs::exists(upper() / "kept.txt.resource"));
+}
+
+BOOST_AUTO_TEST_CASE(a_file_from_before_the_first_walk_gets_no_id)
+{
+	write_aged(upper(), "old.png", "old");
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower(), upper() });
+	db->rebuild();
+	// Reported before the first walk was applied: the walk finds it, so it is left to migration.
+	write_aged(upper(), "early.png", "early");
+	apply(own_change("early.png", res::change_kind::created));
+	test_util::pump(tasks);
+	BOOST_REQUIRE(db->find(res::tag::make("early.png")) != nullptr);
+
+	write_aged(upper(), "old.png", "old, written again");
+	apply(own_change("old.png", res::change_kind::modified));
+	apply(change("old.png", res::change_kind::modified));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "old.png.resource"));
+	BOOST_TEST(!fs::exists(upper() / "early.png.resource"));
+	BOOST_TEST(!record("old.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_new_desc_takes_the_guid_of_its_root)
+{
+	open();
+	write(upper(), "levels/a.desc", desc_with_guid(k_guid_b));
+	apply(own_change("levels/a.desc", res::change_kind::created));
+	// The root is read by the hashing pass, off the main thread.
+	BOOST_TEST(!meta_id("levels/a.desc").has_value());
+	settle();
+	BOOST_REQUIRE(meta_id("levels/a.desc").has_value());
+	BOOST_TEST(res::to_text(*meta_id("levels/a.desc")) == k_guid_b);
+	BOOST_TEST((record("levels/a.desc").id == res::asset_id_from_text(k_guid_b)));
+
+	write(upper(), "levels/bad.desc", R"({ "__type": "level_desc", "__guid": "not an id" })");
+	apply(own_change("levels/bad.desc", res::change_kind::created));
+	write(upper(), "levels/nil.desc", R"({ "__guid": "00000000-0000-0000-0000-000000000000" })");
+	apply(own_change("levels/nil.desc", res::change_kind::created));
+	write(upper(), "levels/nested.desc", std::string{ R"({ "inner": { "__guid": ")" } + std::string{ k_guid_c } + R"(" } })");
+	apply(own_change("levels/nested.desc", res::change_kind::created));
+	settle();
+	for (const std::string_view path : { "levels/bad.desc", "levels/nil.desc", "levels/nested.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			const std::optional<res::asset_id> id = meta_id(path);
+			BOOST_REQUIRE(id.has_value());
+			BOOST_TEST(!id->is_nil());
+			BOOST_TEST((id != res::asset_id_from_text(k_guid_b)));
+			BOOST_TEST((id != res::asset_id_from_text(k_guid_c)));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_copied_desc_does_not_take_the_guid_in_use)
+{
+	open();
+	write(upper(), "levels/a.desc", desc_with_guid(k_guid_b));
+	apply(own_change("levels/a.desc", res::change_kind::created));
+	settle();
+	BOOST_REQUIRE((meta_id("levels/a.desc") == res::asset_id_from_text(k_guid_b)));
+
+	write(upper(), "levels/copy.desc", desc_with_guid(k_guid_b));
+	apply(own_change("levels/copy.desc", res::change_kind::created));
+	settle();
+	const std::optional<res::asset_id> copy = meta_id("levels/copy.desc");
+	BOOST_REQUIRE(copy.has_value());
+	BOOST_TEST((copy != res::asset_id_from_text(k_guid_b)));
+	BOOST_TEST(db->duplicates().empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_lower_file_or_one_with_a_resource_gets_nothing)
+{
+	open();
+	write(lower(), "below.png", "below");
+	apply(own_change("below.png", res::change_kind::created));
+	BOOST_TEST(!fs::exists(lower() / "below.png.resource"));
+	BOOST_TEST(!fs::exists(upper() / "below.png.resource"));
+	BOOST_TEST(!record("below.png").id.has_value());
+
+	write(upper(), "has.png", "has");
+	write(upper(), "has.png.resource", meta_text(k_guid_a));
+	apply(own_change("has.png", res::change_kind::created));
+	apply(own_change("has.png.resource", res::change_kind::created));
+	BOOST_TEST(read(upper() / "has.png.resource") == meta_text(k_guid_a));
+	BOOST_TEST((record("has.png").id == res::asset_id_from_text(k_guid_a)));
+
+	// A .resource only in a lower layer is the file's .resource too.
+	write(lower(), "shared.png.resource", meta_text(k_guid_b));
+	write(upper(), "shared.png", "shared");
+	apply(own_change("shared.png", res::change_kind::created));
+	BOOST_TEST(!fs::exists(upper() / "shared.png.resource"));
+	BOOST_TEST((record("shared.png").id == res::asset_id_from_text(k_guid_b)));
+}
+
+BOOST_AUTO_TEST_CASE(an_outside_new_file_gets_an_id_after_its_hash)
+{
+	open();
+	write_aged(upper(), "ext.png", "external");
+	apply(change("ext.png", res::change_kind::created));
+	BOOST_TEST(!fs::exists(upper() / "ext.png.resource"));
+	BOOST_TEST(!record("ext.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	test_util::pump(tasks);
+	const std::optional<res::asset_id> id = meta_id("ext.png");
+	BOOST_REQUIRE(id.has_value());
+	BOOST_TEST((record("ext.png").id == id));
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(an_outside_file_waits_until_it_is_quiet)
+{
+	open();
+	write(upper(), "fresh.png", "fresh");
+	apply(change("fresh.png", res::change_kind::created));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "fresh.png.resource"));
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	age(upper() / "fresh.png");
+	apply(change("fresh.png", res::change_kind::modified));
+	settle();
+	BOOST_TEST(meta_id("fresh.png").has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+// res::is_ignored_asset_name: one rule for the walk, the batches and the new IDs.
+BOOST_AUTO_TEST_CASE(ignored_names_are_no_records_and_get_no_id)
+{
+	const std::vector<std::string_view> ignored{ ".gitkeep", ".DS_Store", "Thumbs.db", "~$x.docx", "a.tmp", "b~" };
+	write_aged(upper(), "before/.gitkeep", "");
+	write_aged(upper(), "before/Thumbs.db", "thumbs");
+	write_aged(upper(), "before/a.tmp.resource", meta_text(k_guid_a));
+	open();
+	BOOST_TEST(db->records().empty());
+	BOOST_TEST(db->orphans().empty());
+
+	for (const std::string_view name : ignored) {
+		write_aged(upper(), name, "junk");
+		apply(own_change(name, res::change_kind::created));
+		apply(change(name, res::change_kind::modified));
+	}
+	write_aged(upper(), "a.tmp.png", "an asset");
+	write_aged(upper(), "x.tmpl", "an asset too");
+	apply(own_change("a.tmp.png", res::change_kind::created));
+	apply(change("x.tmpl", res::change_kind::created));
+	settle();
+	for (const std::string_view name : ignored) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(db->find(res::tag::make(name)) == nullptr);
+			BOOST_TEST(!fs::exists(upper() / (std::string{ name } + ".resource")));
+		}
+	}
+	BOOST_TEST(meta_id("a.tmp.png").has_value());
+	BOOST_TEST(meta_id("x.tmpl").has_value());
+	BOOST_TEST(db->records().size() == 2u);
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(an_outside_file_with_the_content_of_an_orphan_is_left_for_link)
+{
+	write(upper(), "a.png", "same bytes");
+	write(upper(), "a.png.resource", meta_text(k_guid_a));
+	open();
+	fs::remove(upper() / "a.png");
+	apply(change("a.png", res::change_kind::deleted));
+	write_aged(upper(), "b.png", "same bytes");
+	apply(change("b.png", res::change_kind::created));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "b.png.resource"));
+	BOOST_TEST(!record("b.png").id.has_value());
+	BOOST_REQUIRE(db->orphans().size() == 1u);
+	BOOST_TEST(db->orphans().front().last_hash == record("b.png").content_hash);
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+// An orphan whose content is unknown, or an empty file, says nothing of a move.
+BOOST_AUTO_TEST_CASE(an_orphan_without_hash_or_an_empty_file_does_not_block)
+{
+	write(upper(), "lost.png.resource", meta_text(k_guid_a));
+	write(upper(), "empty.png", "");
+	write(upper(), "empty.png.resource", meta_text(k_guid_b));
+	open();
+	BOOST_REQUIRE(db->orphans().size() == 1u);
+	BOOST_REQUIRE(db->orphans().front().last_hash.empty());
+	fs::remove(upper() / "empty.png");
+	apply(change("empty.png", res::change_kind::deleted));
+	BOOST_REQUIRE(db->orphans().size() == 2u);
+
+	write_aged(upper(), "new.png", "new");
+	write_aged(upper(), "also_empty.png", "");
+	db->apply_changes(std::vector<res::file_change>{ change("new.png", res::change_kind::created),
+		change("also_empty.png", res::change_kind::created) });
+	settle();
+	BOOST_TEST(meta_id("new.png").has_value());
+	BOOST_TEST(meta_id("also_empty.png").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(a_resource_that_appears_while_waiting_is_kept)
+{
+	open();
+	write_aged(upper(), "ext.png", "external");
+	apply(change("ext.png", res::change_kind::created));
+	// Written beside it with no event yet.
+	write(upper(), "ext.png.resource", meta_text(k_guid_a));
+	settle();
+	BOOST_TEST(read(upper() / "ext.png.resource") == meta_text(k_guid_a));
+	BOOST_TEST((record("ext.png").id == res::asset_id_from_text(k_guid_a)));
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(an_own_git_operation_holds_the_id_back)
+{
+	bool busy = true;
+	open().set_vcs_busy([&busy] { return busy; });
+	write_aged(upper(), "pulled.png", "pulled");
+	apply(change("pulled.png", res::change_kind::created));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "pulled.png.resource"));
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	busy = false;
+	db->poll(true);
+	BOOST_TEST(meta_id("pulled.png").has_value());
+	BOOST_TEST(record("pulled.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_git_lock_or_a_fresh_index_holds_the_id_back)
+{
+	open().set_git_dir_provider([this]() -> std::optional<fs::path> { return git(); });
+	write(git(), "index.lock", "");
+	write_aged(upper(), "checked_out.png", "checked out");
+	apply(change("checked_out.png", res::change_kind::created));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "checked_out.png.resource"));
+
+	fs::remove(git() / "index.lock");
+	write(git(), "index", "index");
+	write(git(), "HEAD", "ref: refs/heads/main\n");
+	db->poll(true);
+	BOOST_TEST(!fs::exists(upper() / "checked_out.png.resource"));
+	BOOST_TEST(db->pending_ids() == 1u);
+
+	age(git() / "index");
+	age(git() / "HEAD");
+	db->poll(true);
+	BOOST_TEST(meta_id("checked_out.png").has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+// git init during the session: the git folder is asked for at every check.
+BOOST_AUTO_TEST_CASE(a_git_folder_that_comes_later_is_used)
+{
+	std::optional<fs::path> provided;
+	open().set_git_dir_provider([&provided] { return provided; });
+	write(git(), "index.lock", "");
+	write_aged(upper(), "first.png", "first");
+	apply(change("first.png", res::change_kind::created));
+	settle();
+	BOOST_TEST(meta_id("first.png").has_value());
+
+	provided = git();
+	write_aged(upper(), "second.png", "second");
+	apply(change("second.png", res::change_kind::created));
+	settle();
+	BOOST_TEST(!meta_id("second.png").has_value());
+
+	fs::remove(git() / "index.lock");
+	db->poll(true);
+	BOOST_TEST(meta_id("second.png").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(a_renamed_file_gets_no_id)
+{
+	write(upper(), "a.png", "a");
+	open();
+	fs::rename(upper() / "a.png", upper() / "b.png");
+	apply(change("b.png", res::change_kind::renamed, "a.png"));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "b.png.resource"));
+	BOOST_TEST(!record("b.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+// A move seen as a deleted and a created in two polls, in either order.
+BOOST_AUTO_TEST_CASE(a_move_split_over_two_polls_gets_no_id)
+{
+	write_aged(upper(), "a.txt", "a");
+	write_aged(upper(), "c.txt", "c, longer");
+	open();
+	fs::rename(upper() / "a.txt", upper() / "b.txt");
+	apply(change("a.txt", res::change_kind::deleted));
+	apply(change("b.txt", res::change_kind::created));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "b.txt.resource"));
+
+	fs::rename(upper() / "c.txt", upper() / "d.txt");
+	apply(change("d.txt", res::change_kind::created));
+	apply(change("c.txt", res::change_kind::deleted));
+	settle();
+	BOOST_TEST(!fs::exists(upper() / "d.txt.resource"));
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_renamed_folder_gives_its_files_no_ids)
+{
+	write_aged(upper(), "old/x.png", "x");
+	write_aged(upper(), "old/y.txt", "y, longer");
+	open();
+	fs::rename(upper() / "old", upper() / "new");
+	db->apply_changes(std::vector<res::file_change>{ folder_change("old", res::change_kind::deleted),
+		folder_change("new", res::change_kind::created) });
+	settle();
+	BOOST_REQUIRE(db->find(res::tag::make("new/x.png")) != nullptr);
+	BOOST_TEST(!fs::exists(upper() / "new/x.png.resource"));
+	BOOST_TEST(!fs::exists(upper() / "new/y.txt.resource"));
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(files_of_a_new_folder_get_ids_after_the_walk)
+{
+	write(upper(), "a.png", "same bytes");
+	write(upper(), "a.png.resource", meta_text(k_guid_a));
+	open();
+	fs::remove(upper() / "a.png");
+	apply(change("a.png", res::change_kind::deleted));
+	BOOST_REQUIRE(db->orphans().size() == 1u);
+
+	write_aged(upper(), "drop/one.png", "one");
+	write_aged(upper(), "drop/two.txt", "two");
+	write_aged(upper(), "drop/moved.png", "same bytes");
+	apply(folder_change("drop", res::change_kind::created));
+	BOOST_TEST(db->scanning());
+	settle();
+	BOOST_TEST(meta_id("drop/one.png").has_value());
+	BOOST_TEST(meta_id("drop/two.txt").has_value());
+	BOOST_TEST(record("drop/one.png").id.has_value());
+	BOOST_TEST(record("drop/two.txt").id.has_value());
+	BOOST_TEST(!fs::exists(upper() / "drop/moved.png.resource"));
+	BOOST_TEST(!record("drop/moved.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
+// A file whose hash never comes stops waiting after pending_timeout; a gone file stops passing for a move after
+// move_window.
+BOOST_AUTO_TEST_CASE(waiting_ends_and_moves_are_forgotten_with_time)
+{
+	auto now = std::chrono::steady_clock::now();
+	open().set_clock_for_tests([&now] { return now; });
+	write_aged(upper(), "stuck.png", "stuck");
+	apply(change("stuck.png", res::change_kind::created));
+	// The hashing job is never run.
+	BOOST_TEST(db->pending_ids() == 1u);
+	db->poll();
+	BOOST_TEST(db->pending_ids() == 1u);
+	now += edt::asset_database::pending_timeout + edt::asset_database::poll_interval + std::chrono::seconds(1);
+	db->poll();
+	BOOST_TEST(db->pending_ids() == 0u);
+	test_util::pump(tasks);
+	BOOST_TEST(!fs::exists(upper() / "stuck.png.resource"));
+
+	write_aged(upper(), "a.txt", "moved bytes");
+	apply(own_change("a.txt", res::change_kind::modified));
+	test_util::pump(tasks);
+	fs::rename(upper() / "a.txt", upper() / "b.txt");
+	apply(change("a.txt", res::change_kind::deleted));
+	now += edt::asset_database::move_window + std::chrono::seconds(1);
+	apply(change("b.txt", res::change_kind::created));
+	settle();
+	BOOST_TEST(meta_id("b.txt").has_value());
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(files_under_a_linked_folder_get_no_id)
+{
+	test_util::temp_dir outside("asset_db_repo_outside");
+	write_aged(outside.path(), "f.png", "foreign");
+	open();
+	std::error_code ec;
+	fs::create_directory_symlink(outside.path(), upper() / "linked", ec);
+	BOOST_REQUIRE(!ec);
+	db->apply_changes(std::vector<res::file_change>{ folder_change("linked", res::change_kind::created),
+		change("linked/f.png", res::change_kind::created) });
+	settle();
+	BOOST_TEST(db->find(res::tag::make("linked/f.png")) == nullptr);
+	BOOST_TEST(!fs::exists(outside.path() / "f.png.resource"));
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

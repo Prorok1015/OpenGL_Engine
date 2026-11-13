@@ -91,7 +91,7 @@ private:
             egLOG_ERROR("ecs", "system '{}' not registered: the name belongs to the parent context", name);
             return false;
         }
-        const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make), std::move(access) });
+        const bool added = m_registry.add(name, std::move(desc), run, std::move(make), std::move(access));
         ASSERT_MSG(added, "ecs system already registered in the factory!");
         return added;
     }
