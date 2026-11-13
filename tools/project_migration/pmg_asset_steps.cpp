@@ -1,6 +1,7 @@
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <format>
@@ -35,32 +36,23 @@ namespace
 	std::optional<res::asset_id> guid_of(project_step_files& files, const std::string& path)
 	{
 		if (!is_desc_path(path)) return std::nullopt;
-		boost::system::error_code error;
-		const json::value root = json::parse(files.read(path), error);
-		if (error || !root.is_object()) return std::nullopt;
-		const json::value* guid = root.as_object().if_contains("__guid");
-		if (!guid || !guid->is_string()) return std::nullopt;
-		std::optional<res::asset_id> id = res::asset_id_from_text(std::string_view(guid->as_string()));
-		if (!id || id->is_nil()) return std::nullopt;
-		return id;
+		return desc_root_guid(files.read(path));
 	}
 
 	void ids_apply(project_step_context& context)
 	{
-		// Who holds an ID already: the listed files and the orphans, then what this step gives out.
+		// Who holds an ID already: every .resource on the disk, in a content root a higher one covers too, then what
+		// this step gives out. Named by the file the .resource belongs to.
 		std::map<res::asset_id, std::string> holders;
-		for (const auto& [path, asset] : context.assets.assets()) {
-			if (asset.id) holders.emplace(*asset.id, path);
-		}
-		for (const auto& [path, orphan] : context.assets.orphans()) {
-			if (orphan.id) holders.emplace(*orphan.id, path);
+		for (const scanned_file& file : context.scan.files) {
+			if (!res::is_asset_meta_sidecar(file.path)) continue;
+			const res::asset_meta_result meta = res::read_asset_meta(context.files.read(file.path));
+			if (meta) holders.emplace(meta.meta->guid, std::string(res::asset_meta_owner(file.path)));
 		}
 
 		std::size_t created = 0;
 		for (const scanned_file& file : context.scan.files) {
 			if (file.has_resource || file.kind == file_class::invalid) continue;
-			// A .resource of another letter case, or in another content root, already pairs with the file.
-			if (const auto known = context.assets.assets().find(file.path); known != context.assets.assets().end() && known->second.has_meta) continue;
 
 			res::asset_meta meta;
 			if (const std::optional<res::asset_id> guid = guid_of(context.files, file.path)) {
@@ -81,6 +73,19 @@ namespace
 		}
 		context.warn(std::format("{} .resource files created", created));
 	}
+}
+
+std::optional<res::asset_id> prj::migration::desc_root_guid(std::string_view text)
+{
+	if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
+	boost::system::error_code error;
+	const json::value root = json::parse(text, error);
+	if (error || !root.is_object()) return std::nullopt;
+	const json::value* guid = root.as_object().if_contains("__guid");
+	if (!guid || !guid->is_string()) return std::nullopt;
+	std::optional<res::asset_id> id = res::asset_id_from_text(std::string_view(guid->as_string()));
+	if (!id || id->is_nil()) return std::nullopt;
+	return id;
 }
 
 void prj::migration::register_asset_project_steps(project_step_registry& registry)

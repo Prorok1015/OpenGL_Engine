@@ -1,5 +1,6 @@
 #include <snk/project_migration/pmg_scan.h>
 #include <snk/project_migration/pmg_project_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
@@ -348,8 +349,7 @@ namespace
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
-			if (res::is_skipped_asset_name(name, fs::is_directory(status)) || (at_project_root && (name == "code" || name == "build"))) return;
-			if (at_project_root && name == "project.snkproj") return;
+			if (res::is_skipped_asset_name(name, fs::is_directory(status)) || (at_project_root && prj::migration::is_project_own_name(name))) return;
 			// Only a real folder is entered: a link or a junction to one is reported, never followed.
 			if (fs::is_directory(status)) {
 				folder(path);
@@ -667,6 +667,23 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		scan_root(result, project, normalized(project / content_root), game_layer, options);
 	}
 	std::ranges::sort(result.files, {}, &scanned_file::path);
+
+	// What the editor lists has a .resource when the editor pairs one with it, in any content root (a file of a higher
+	// root may take its .resource from a lower one); a file it does not list, one a higher root covers, by its own
+	// folder. assets.ids decides by this alone, so its plan and what it does agree.
+	project_assets assets(project, manifest->content_roots);
+	assets.rebuild();
+	for (scanned_file& file : result.files) {
+		if (res::is_asset_meta_sidecar(file.path)) continue;
+		const auto listed = assets.assets().find(file.path);
+		if (listed == assets.assets().end()) continue;
+		file.has_resource = listed->second.has_meta;
+		if (file.kind == file_class::current || file.kind == file_class::missing_resource) {
+			if (lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) != ".desc") {
+				file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
+			}
+		}
+	}
 	return result;
 }
 

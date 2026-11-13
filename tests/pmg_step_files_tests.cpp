@@ -325,6 +325,19 @@ BOOST_AUTO_TEST_CASE(AGuidAPreStepTookAway_DoesNotComeBack)
 		== descs->current_version("world_desc"));
 }
 
+// An empty __guid is a __guid the file had: it stays as it was, the engine's save makes no new one in its place.
+BOOST_AUTO_TEST_CASE(AnEmptyGuid_StaysEmpty)
+{
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), ""));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
+	const json::value* guid = json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().if_contains("__guid");
+	BOOST_REQUIRE(guid != nullptr);
+	BOOST_TEST(guid->as_string() == "");
+}
+
 BOOST_AUTO_TEST_CASE(WhatAStepMayNotTouch_IsRefused_AndChangesNothing)
 {
 	const auto before = content_of(copy.root());
@@ -417,15 +430,27 @@ void expect_the_editors_view(const fs::path& root, const std::vector<fs::path>& 
 
 	std::set<std::string> from_index;
 	for (const auto& [path, asset] : assets.assets()) from_index.insert(res::tag::make(asset.res_path).string() + " " + id_text(asset.id));
+	// The editor walks a content root "." whole; the index leaves out the project's code, build output and manifest,
+	// as the scan does.
+	const bool project_root = content_roots.size() == 1 && content_roots.front() == ".";
+	const auto own = [project_root](const res::tag& tag) {
+		if (!project_root) return false;
+		const std::string path(tag.relative());
+		return pmg::is_project_own_name(std::string_view(path).substr(0, path.find('/')));
+	};
 	std::set<std::string> from_database;
-	for (const auto& [key, record] : database.records()) from_database.insert(record.path.string() + " " + id_text(record.id));
+	for (const auto& [key, record] : database.records()) {
+		if (!own(record.path)) from_database.insert(record.path.string() + " " + id_text(record.id));
+	}
 	BOOST_TEST((from_index == from_database));
 	BOOST_TEST(!from_index.empty());
 
 	std::set<std::string> index_orphans;
 	for (const auto& [path, meta] : assets.orphans()) index_orphans.insert(res::tag::make(meta.res_path).string() + " " + id_text(meta.id));
 	std::set<std::string> database_orphans;
-	for (const edt::asset_orphan& orphan : database.orphans()) database_orphans.insert(orphan.meta_path.string() + " " + id_text(orphan.id));
+	for (const edt::asset_orphan& orphan : database.orphans()) {
+		if (!own(orphan.meta_path)) database_orphans.insert(orphan.meta_path.string() + " " + id_text(orphan.id));
+	}
 	BOOST_TEST((index_orphans == database_orphans));
 }
 
@@ -482,9 +507,16 @@ BOOST_AUTO_TEST_CASE(TwoContentRoots_AreStackedAsTheEditorStacksThem)
 
 BOOST_AUTO_TEST_CASE(TheProjectFolderAsItsContentRoot_IsWalkedAsTheEditorWalksIt)
 {
+	write_text(copy.root() / "code/game.png", "x");
+	write_text(copy.root() / "build/out.png", "x");
+	write_text(copy.root() / "build/lost.png.resource", new_meta_text());
 	expect_the_editors_view(copy.root(), { "." });
 	pmg::project_assets assets(copy.root(), { "." });
 	assets.rebuild();
+	BOOST_TEST(!assets.assets().contains("code/game.png"));
+	BOOST_TEST(!assets.assets().contains("build/out.png"));
+	BOOST_TEST(!assets.assets().contains("project.snkproj"));
+	BOOST_TEST(!assets.orphans().contains("build/lost.png.resource"));
 	BOOST_TEST(assets.assets().contains(std::string(k_plain)));
 	BOOST_TEST(assets.assets().at(std::string(k_plain)).res_path == "res/textures/plain.png");
 }

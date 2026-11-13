@@ -247,4 +247,65 @@ BOOST_AUTO_TEST_CASE(ACoveredFileOfALowerRoot_GetsAResourceToo)
 	BOOST_TEST(plan().empty());
 }
 
+// The blocker of the review: a file of the higher root takes its .resource from the lower root, as the editor pairs
+// them. The plan does not ask for a .resource the step would not make, and one run leaves nothing to do.
+BOOST_AUTO_TEST_CASE(AFileWhoseResourceIsInALowerRoot_NeedsNone)
+{
+	json::object manifest = json::parse(read_text(copy.root() / "project.snkproj")).as_object();
+	manifest["content_roots"] = json::array{ "res", "base" };
+	write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+	write_text(copy.root() / "base/textures/a.png", "lower");
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text(k_guid);
+	write_text(copy.root() / "base/textures/a.png.resource", res::write_asset_meta(meta));
+	write_text(copy.res() / "textures/a.png", "higher");
+
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	BOOST_REQUIRE(scan.find("res/textures/a.png") != nullptr);
+	BOOST_TEST(scan.find("res/textures/a.png")->has_resource);
+
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
+	BOOST_TEST(!fs::exists(copy.res() / "textures/a.png.resource"));
+	BOOST_TEST(plan().empty());
+}
+
+// The ID of a .resource that a higher root covers is still on the disk: a __guid equal to it is not given again.
+BOOST_AUTO_TEST_CASE(AGuidACoveredResourceHolds_GivesANewId)
+{
+	json::object manifest = json::parse(read_text(copy.root() / "project.snkproj")).as_object();
+	manifest["content_roots"] = json::array{ "res", "base" };
+	write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+	res::asset_meta lower;
+	lower.guid = *res::asset_id_from_text(k_guid);
+	write_text(copy.root() / "base/textures/s.png", "lower");
+	write_text(copy.root() / "base/textures/s.png.resource", res::write_asset_meta(lower));
+	res::asset_meta higher;
+	higher.guid = res::generate_asset_id();
+	write_text(copy.res() / "textures/s.png", "higher");
+	write_text(copy.res() / "textures/s.png.resource", res::write_asset_meta(higher));
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
+
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
+	BOOST_TEST(id_in(copy.res() / "worlds/w_v1.desc.resource") != k_guid);
+	BOOST_TEST(any_note(outcome.report, "is already the ID of base/textures/s.png"));
+}
+
+// The rule of the ID in a desc is the one tools/ci/asset_ids.py (#768) has: a BOM is skipped. (A desc with a BOM is not
+// one the engine loads, so the scan calls it invalid and a migration refuses the project before this step runs.)
+BOOST_AUTO_TEST_CASE(TheGuidOfADesc_IsReadAsTheRepositoryToolReadsIt)
+{
+	const std::string desc = std::string(R"({"__type": "camera_desc", "__guid": ")") + std::string(k_guid) + "\"}";
+	BOOST_TEST(res::to_text(*pmg::desc_root_guid(desc)) == k_guid);
+	BOOST_TEST(res::to_text(*pmg::desc_root_guid("\xEF\xBB\xBF" + desc)) == k_guid);
+	BOOST_TEST(!pmg::desc_root_guid(R"({"__guid": ""})").has_value());
+	BOOST_TEST(!pmg::desc_root_guid(R"({"__guid": "00000000-0000-0000-0000-000000000000"})").has_value());
+	BOOST_TEST(!pmg::desc_root_guid(R"({"__guid": 7})").has_value());
+	BOOST_TEST(!pmg::desc_root_guid("[]").has_value());
+	BOOST_TEST(!pmg::desc_root_guid("not json").has_value());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

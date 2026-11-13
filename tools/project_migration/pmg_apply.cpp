@@ -18,6 +18,7 @@
 #include <exception>
 #include <format>
 #include <map>
+#include <optional>
 #include <random>
 #include <span>
 #include <stdexcept>
@@ -353,6 +354,21 @@ namespace
 		return {};
 	}
 
+	// Puts the root __guid of a saved desc back to what the file had: the same value in its place, or none. Whether
+	// anything changed.
+	bool restore_guid(json::object& saved, const std::optional<json::value>& before)
+	{
+		json::value* now = saved.if_contains("__guid");
+		if (!before) return now && saved.erase("__guid") > 0;
+		if (now) {
+			if (*now == *before) return false;
+			*now = *before;
+			return true;
+		}
+		saved["__guid"] = *before;
+		return true;
+	}
+
 	bool is_desc_path(std::string_view path)
 	{
 		constexpr std::string_view suffix = ".desc";
@@ -511,9 +527,13 @@ namespace
 				file.written_as = "json";
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
-			// The engine's save makes a __guid for a res:// desc that has none (desc_adapter_t::serialize); a migration
-			// writes the one the file had, or none (#851): the ID of a file is its .resource's (EPIC-57 4.2).
-			const bool had_guid = migrated.is_object() && migrated.as_object().contains("__guid");
+			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
+			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
+			// .resource's (EPIC-57 4.2).
+			std::optional<json::value> guid_before;
+			if (migrated.is_object()) {
+				if (const json::value* guid = migrated.as_object().if_contains("__guid")) guid_before = *guid;
+			}
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
 
@@ -527,7 +547,7 @@ namespace
 					why_json = lost_parent(migrated, &written, {});
 					if (why_json.empty()) {
 						file.written_as = "engine";
-						if (!had_guid && written.is_object() && written.as_object().erase("__guid") > 0) {
+						if (written.is_object() && restore_guid(written.as_object(), guid_before)) {
 							return text_of(m_context.descs.serialize_to_bytes(written));
 						}
 						return saved;

@@ -39,6 +39,12 @@ void prj::migration::project_assets::rebuild()
 
 	const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, {}, res::asset_names_case_insensitive);
 	const res::asset_walk_pairing pairing = res::pair_asset_metas(files, res::asset_names_case_insensitive);
+	// Below a content root "." (no prefix): what the scan leaves out of the project folder.
+	const auto project_own = [&](const res::asset_walk_file& file) {
+		if (!prefixes[file.layer].empty()) return false;
+		const auto first = file.relative.begin();
+		return first != file.relative.end() && is_project_own_name(fs_paths::utf8_of(*first));
+	};
 	const auto entry_of = [&](const res::asset_walk_file& file) {
 		indexed_asset asset;
 		asset.res_path = fs_paths::generic_utf8_of(file.relative);
@@ -46,7 +52,7 @@ void prj::migration::project_assets::rebuild()
 		return asset;
 	};
 	for (std::size_t i = 0; i < files.size(); ++i) {
-		if (res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(files[i].relative))) continue;
+		if (project_own(files[i]) || res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(files[i].relative))) continue;
 		indexed_asset asset = entry_of(files[i]);
 		if (const std::optional<std::size_t> meta = pairing.meta_of[i]) {
 			asset.has_meta = true;
@@ -60,6 +66,7 @@ void prj::migration::project_assets::rebuild()
 		m_assets.insert_or_assign(asset.path, std::move(asset));
 	}
 	for (const std::size_t orphan : pairing.orphans) {
+		if (project_own(files[orphan])) continue;
 		indexed_asset meta = entry_of(files[orphan]);
 		const res::asset_meta_file read = res::read_asset_meta_file(layers[files[orphan].layer], files[orphan].relative);
 		if (read.meta) meta.id = read.meta->guid;
