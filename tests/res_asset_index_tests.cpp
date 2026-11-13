@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -496,6 +497,43 @@ BOOST_FIXTURE_TEST_CASE(TwoBatches_TheFirstDoesNotDecideTheSecond, disk_fixture)
 	BOOST_TEST(rs->require_sync<res::text_resource>(d).get_control_block() == held_c.get_control_block());
 	rs->unwatch(a, &log);
 	rs->unwatch(c, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(ABatchQueuedBeforeARename_DoesNotDecideIt, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	const res::tag b = at("b.txt");
+	index->put(a, k_a);
+	const auto held = rs->require_sync<res::text_resource>(a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	std::vector<std::uint64_t> numbers;
+	int owner = 0;
+	rs->subscribe_changes(res::tag::default_protocol(), &owner,
+		[&](std::span<const res::file_change>) { numbers.push_back(rs->delivering_batch()); });
+
+	// Another file's batch is made and waits in the main queue when the rename comes.
+	BOOST_REQUIRE(rs->store_sync(at("other.txt"), test_util::to_bytes("x")));
+	BOOST_REQUIRE(rs->rename(a, b));
+	pump();
+	BOOST_REQUIRE(numbers.size() == 2u);
+
+	// The owner has taken in the other file's batch only.
+	rs->apply_asset_batch(numbers[0], {});
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 1u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+
+	index->move(a, b);
+	const moves moved{ { a, b } };
+	rs->apply_asset_batch(numbers[1], moved);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(rs->require_sync<res::text_resource>(b).get_sync()->str() == "pinned");
+
+	rs->unsubscribe_changes(&owner);
+	rs->unpin_resource(b);
+	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(RemoveOnAMountThatReportsNothing_IsDecidedByTheNextBatch)

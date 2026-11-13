@@ -26,6 +26,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <utility>
@@ -174,7 +175,8 @@ namespace res
 		// for a batch and binds every tag anew: entries move to their new key, none is lost.
 		void set_asset_index(std::shared_ptr<const asset_index> index);
 		// The number of the batch subscribe_changes listeners are being given now (main thread, inside a listener): the
-		// index owner passes the last one it has taken in to apply_asset_batch.
+		// index owner passes the last one it has taken in to apply_asset_batch. Batches are numbered as the watcher makes
+		// them, so a number names the changes that batch holds, whenever it is delivered.
 		std::uint64_t delivering_batch() const;
 		// Main thread, root only: the index owner has taken in the batches up to `through` and updated the index. A file
 		// gone in one of them keeps its resource when `moved` names it (from, to) with the same ID, and its watchers and
@@ -375,9 +377,19 @@ namespace res
 		res::tag bind_locked(const res::tag& tag, const node_candidate& candidate);
 		// A gone file with an ID (`node`): kept for apply_asset_batch unless the index changed since `generation` was read.
 		bool wait_for_index(const res::tag& tag, const res::tag& node, std::uint64_t generation, bool forget);
+		// remove() / rename(): registered before the operation, so the batch the operation makes takes it in; dropped
+		// again when the operation fails.
+		bool expect_gone(const res::tag& tag, const res::tag& node, std::uint64_t generation);
+		void cancel_expected(const res::tag& tag);
+		// On the watcher's thread, as a batch is made: its number, given to the waiting files it names, and to the
+		// waiting files of mounts that report nothing.
+		std::uint64_t number_batch(const std::vector<file_change>& batch);
+		// alias -> its key, read before m_cache_mutex is taken (the index is not asked under it).
+		std::unordered_map<res::tag, res::tag> alias_value_nodes() const;
 		struct waiting_entry {
 			res::tag node;
-			// The first batch delivered after it went (delivering_batch), whether or not that batch names its file; 0 until then.
+			// The batch made with its change (number_batch); on a mount that reports nothing, the first batch made after it
+			// went. 0 until then.
 			std::uint64_t batch = 0;
 			// Went through remove() or rename(): forgotten (forget_erased) unless it moved.
 			bool forget = false;
@@ -601,7 +613,7 @@ namespace res
 			void* owner = nullptr;
 			changes_listener listener;
 		};
-		void deliver_changes(const std::string& protocol, const std::vector<file_change>& batch);
+		void deliver_changes(const std::string& protocol, const std::vector<file_change>& batch, std::uint64_t number);
 		std::mutex m_changes_mutex;
 		std::vector<change_subscription> m_change_subscriptions;
 		std::uint64_t m_next_subscription = 0;
@@ -652,7 +664,11 @@ namespace res
 		// Root only: gone files with an ID, by tag, until apply_asset_batch decides; the batches delivered (main thread).
 		mutable std::mutex m_waiting_mutex;
 		std::unordered_map<res::tag, waiting_entry> m_waiting_for_index;
-		std::uint64_t m_delivered_batches = 0;
+		// Guarded by m_waiting_mutex: the batches made, and the protocols whose mount reports changes.
+		std::uint64_t m_created_batches = 0;
+		std::unordered_set<std::string> m_reporting_protocols;
+		// Main thread: the number of the batch being (or last) delivered.
+		std::uint64_t m_delivering_batch = 0;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
 	};
