@@ -311,7 +311,7 @@ BOOST_AUTO_TEST_CASE(AFailingStep_RollsBackWhatTheStepsBeforeItDid)
 // the one the file had, or none.
 BOOST_AUTO_TEST_CASE(AMigratedDesc_KeepsItsGuid_AndGetsNoneItDidNotHave)
 {
-	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_new_guid));
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), json::string(k_new_guid)));
 	BOOST_REQUIRE(read_text(copy.res() / "worlds/w_v2.desc").find("__guid") == std::string::npos);
 	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
@@ -326,7 +326,7 @@ BOOST_AUTO_TEST_CASE(AMigratedDesc_KeepsItsGuid_AndGetsNoneItDidNotHave)
 // follows must not bring a new one back.
 BOOST_AUTO_TEST_CASE(AGuidAPreStepTookAway_DoesNotComeBack)
 {
-	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_new_guid));
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), json::string(k_new_guid)));
 	registry.add(test_step("test.drop_guid", pmg::project_phase::pre, pre_drops_the_guid));
 	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
