@@ -1455,6 +1455,31 @@ BOOST_AUTO_TEST_CASE(a_git_lock_or_a_fresh_index_holds_the_id_back)
 	BOOST_TEST(db->pending_ids() == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(files_of_a_new_folder_get_ids_after_the_walk)
+{
+	write(upper(), "a.png", "same bytes");
+	write(upper(), "a.png.resource", meta_text(k_guid_a));
+	open();
+	fs::remove(upper() / "a.png");
+	apply(change("a.png", res::change_kind::deleted));
+	BOOST_REQUIRE(db->orphans().size() == 1u);
+
+	write(upper(), "drop/one.png", "one");
+	write(upper(), "drop/two.txt", "two");
+	write(upper(), "drop/moved.png", "same bytes");
+	apply(folder_change("drop", res::change_kind::created));
+	BOOST_TEST(db->scanning());
+	test_util::pump(tasks);
+	db->poll(true);
+	BOOST_TEST(meta_id("drop/one.png").has_value());
+	BOOST_TEST(meta_id("drop/two.txt").has_value());
+	BOOST_TEST(record("drop/one.png").id.has_value());
+	BOOST_TEST(record("drop/two.txt").id.has_value());
+	BOOST_TEST(!fs::exists(upper() / "drop/moved.png.resource"));
+	BOOST_TEST(!record("drop/moved.png").id.has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(a_renamed_file_gets_no_id)
 {
 	write(upper(), "a.png", "a");

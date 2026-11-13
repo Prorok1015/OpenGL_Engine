@@ -704,6 +704,13 @@ void edt::asset_database::apply_scan(asset_scan scan)
 			}
 		}
 		pair_moves(std::move(gone), came, batch);
+		// A file that came with a later walk (a new folder) is a new file from outside; a move keeps its .resource.
+		for (const res::tag& path : batch.added) {
+			const auto added = m_records.find(path.string());
+			if (added != m_records.end() && added->second.layer == top_layer() && !added->second.has_meta) {
+				m_pending_ids.insert(added->first);
+			}
+		}
 	}
 	hash_next();
 	// After every applied walk, not only when idle: a chain of walks would otherwise never save.
