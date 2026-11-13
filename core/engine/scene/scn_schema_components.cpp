@@ -78,12 +78,21 @@ namespace
 		return true;
 	}
 
+	desc::dyn_blob& place(entt::registry& reg, entt::entity entity, entt::id_type id, desc::dyn_blob&& blob)
+	{
+		pool_type& pool = reg.storage<desc::dyn_blob>(id);
+		if (pool.contains(entity)) {
+			return pool.get(entity) = std::move(blob);
+		}
+		return pool.emplace(entity, std::move(blob));
+	}
+
 	bool read(const desc::schema_binding& schema, entt::registry& reg, entt::entity entity, const json::object& in, const desc::read_context& ctx)
 	{
 		desc::dyn_blob blob = desc::make_blob(schema);
 		desc::dyn_ref ref{ &blob, 0 };
 		desc::deserialize(schema, &ref, in, ctx);
-		scn::emplace_schema_component(reg, entity, scn::schema_component_id(schema.schema->name), std::move(blob));
+		place(reg, entity, scn::schema_component_id(schema.schema->name), std::move(blob));
 		return desc::check_override_object(*schema.schema, in).status == desc::override_status::valid;
 	}
 
@@ -120,13 +129,15 @@ const desc::dyn_blob* scn::find_schema_component(const entt::registry& reg, entt
 	return pool && pool->contains(entity) ? &pool->get(entity) : nullptr;
 }
 
-desc::dyn_blob& scn::emplace_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id, desc::dyn_blob blob)
+desc::dyn_blob& scn::emplace_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id, const desc::dyn_blob& blob)
 {
-	pool_type& pool = reg.storage<desc::dyn_blob>(id);
-	if (pool.contains(entity)) {
-		return pool.get(entity) = std::move(blob);
+	desc::dyn_blob copy;
+	copy.bytes = blob.bytes;
+	copy.handles.reserve(blob.handles.size());
+	for (const json::value& handle : blob.handles) {
+		copy.handles.emplace_back(handle, json::storage_ptr{});
 	}
-	return pool.emplace(entity, std::move(blob));
+	return place(reg, entity, id, std::move(copy));
 }
 
 bool scn::is_schema_component(const component_entry& entry)

@@ -57,8 +57,9 @@ namespace gs
 	constexpr std::uint64_t module_layout_key() noexcept
 	{
 		return detail::layout_of<
-			// register_system builds the entry, its access list and the registry's map node in module code.
-			ecs::system_desc, ecs::system_instance, ecs::system_entry, ecs::access_entry,
+			// register_system builds the parts of an entry in module code: the desc, the access list and the instance its
+			// factory makes. The entry and the registry's map node are the engine's (system_registry::add, #785).
+			ecs::system_desc, ecs::system_instance, ecs::access_entry,
 			// bus_type_impl<T> makes the slot of an event type of the module; writers and readers are its system
 			// arguments. Their members do not depend on T, so <int> stands for every T.
 			ecs::detail::bus_slot_impl<int>, ecs::event_writer<int>, ecs::event_reader<int>,
@@ -68,6 +69,9 @@ namespace gs
 			core::res::res_resource_block, core::res::res_handle<int>, res::res_dep,
 			// component_catalog::add<T> builds the entry, desc::bind_described<T> the schema binding and its field ops.
 			scn::component_entry, desc::schema_binding, desc::field_ops,
+			// A module reads a component without a C++ type through find_schema_component and may build one to hand to
+			// emplace_schema_component (a const reference: the world keeps the engine's copy, #785).
+			desc::dyn_blob,
 			// module_context::subscribe/observe build the filter, the slot and the connection the engine keeps.
 			scn::event_filter, scn::observer_slot, ecs::connection,
 			// module_context::run takes the task's description from module code.

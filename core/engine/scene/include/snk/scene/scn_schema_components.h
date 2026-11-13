@@ -24,8 +24,10 @@ namespace scn
 	// The blob `entity` holds in the pool `id`; null when it holds none.
 	SNK_API desc::dyn_blob* find_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id);
 	SNK_API const desc::dyn_blob* find_schema_component(const entt::registry& reg, entt::entity entity, entt::id_type id);
-	// Places `blob` as the component `id` of `entity`, replacing the one it has.
-	SNK_API desc::dyn_blob& emplace_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id, desc::dyn_blob blob);
+	// Places a copy of `blob` as the component `id` of `entity`, replacing the one it has. The copy is the engine's, its
+	// handles in the default resource: a blob never crosses into the engine by value, so what a module built (with its own
+	// Boost.JSON on MSVC) is not what the world keeps (#785).
+	SNK_API desc::dyn_blob& emplace_schema_component(entt::registry& reg, entt::entity entity, entt::id_type id, const desc::dyn_blob& blob);
 
 	// Whether the entry is a component without a C++ type (component_catalog::add_schema_component).
 	SNK_API bool is_schema_component(const component_entry& entry);
