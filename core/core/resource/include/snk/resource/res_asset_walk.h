@@ -60,6 +60,28 @@ namespace res
 		return !is_dir && is_asset_meta_sidecar(name) && is_ignored_asset_name(asset_meta_owner(name));
 	}
 
+	// The project file: a layer that holds it in its root is the project folder itself (a content root ".").
+	inline constexpr std::string_view project_file_name = "project.snkproj";
+
+	// A name directly in the project folder that is no content even when the folder is a content root ".": the project's
+	// code, its build output and project.snkproj.
+	inline bool is_project_own_name(std::string_view name)
+	{
+		return name == "code" || name == "build" || name == project_file_name;
+	}
+
+	// The layer's root holds project_file_name (a regular file, not a link).
+	SNK_API bool is_project_folder_layer(const std::filesystem::path& layer);
+
+	// What a walk neither lists nor enters: is_skipped_asset_name, and in the root of a layer that is the project folder
+	// (`at_project_folder_root`) the project's own names and their .resource. A skipped name shadows nothing below.
+	inline bool is_skipped_asset_entry(std::string_view name, bool is_dir, bool at_project_folder_root)
+	{
+		if (is_skipped_asset_name(name, is_dir)) return true;
+		if (!at_project_folder_root) return false;
+		return is_project_own_name(name) || (!is_dir && is_asset_meta_sidecar(name) && is_project_own_name(asset_meta_owner(name)));
+	}
+
 	// An entry a walk neither lists nor enters: a link, or on Windows a junction or any reparse point other than one a
 	// file system filter keeps in place (a OneDrive placeholder is the file itself). An entry that cannot be inspected
 	// redirects too (a warning names it).
@@ -77,7 +99,7 @@ namespace res
 	};
 
 	// Every file of the layers merged by asset_name_key, .resource files included, by the rules above: links and
-	// redirecting reparse points and skipped names are neither listed nor entered, nothing deeper than
+	// redirecting reparse points and skipped entries (is_skipped_asset_entry) are neither listed nor entered, nothing deeper than
 	// asset_walk_max_depth (one warning). Stops (returning what it has) as soon as `stopped` (may be empty) says so.
 	SNK_API std::vector<asset_walk_file> walk_asset_layers(const std::vector<std::filesystem::path>& layers,
 		const std::function<bool()>& stopped, bool case_insensitive);

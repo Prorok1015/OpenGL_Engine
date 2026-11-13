@@ -29,6 +29,8 @@ namespace
 		const std::vector<fs::path>& layers;
 		const std::function<bool()>& stopped;
 		std::vector<res::asset_walk_file>& out;
+		// Per layer: res::is_project_folder_layer.
+		std::vector<bool> project_folder;
 		bool case_insensitive = false;
 		bool depth_warned = false;
 	};
@@ -65,7 +67,7 @@ namespace
 				const bool is_dir = entry.is_directory(kind_ec);
 				if (kind_ec) continue;
 				const std::string name = fs_paths::utf8_of(entry.path().filename());
-				if (res::is_skipped_asset_name(name, is_dir)) continue;
+				if (res::is_skipped_asset_entry(name, is_dir, relative_dir.empty() && state.project_folder[layer])) continue;
 				slot& found = merged[res::asset_name_key(name, state.case_insensitive)];
 				const bool existed = !found.relative.empty();
 				if (existed) found.shadowed.push_back(found.layer);
@@ -99,7 +101,9 @@ std::vector<res::asset_walk_file> res::walk_asset_layers(const std::vector<fs::p
 	std::vector<asset_walk_file> files;
 	std::vector<std::size_t> all_layers(layers.size());
 	for (std::size_t i = 0; i < layers.size(); ++i) all_layers[i] = i;
-	walk_state state{ layers, stopped, files, case_insensitive, false };
+	walk_state state{ layers, stopped, files, {}, case_insensitive, false };
+	state.project_folder.reserve(layers.size());
+	for (const fs::path& layer : layers) state.project_folder.push_back(is_project_folder_layer(layer));
 	walk(state, fs::path{}, all_layers, 0);
 	return files;
 }
@@ -131,6 +135,12 @@ res::asset_walk_pairing res::pair_asset_metas(const std::vector<asset_walk_file>
 		if (!paired[index]) out.orphans.push_back(index);
 	}
 	return out;
+}
+
+bool res::is_project_folder_layer(const fs::path& layer)
+{
+	std::error_code ec;
+	return fs::is_regular_file(fs::symlink_status(layer / fs_paths::path_from_utf8(project_file_name), ec)) && !ec;
 }
 
 bool res::asset_entry_redirects(const fs::directory_entry& entry)

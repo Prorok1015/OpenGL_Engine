@@ -24,7 +24,10 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 		if (!fs::is_directory(dir, ec) || ec)
 			continue;
 
+		const bool at_project_folder_root = relative_dir.empty() && res::is_project_folder_layer(layers[i]);
 		for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {
+			// What the asset walk does not enter is not shown either (#854): the browser lists what the asset database knows.
+			if (res::asset_entry_redirects(*it)) continue;
 			std::error_code ec2;
 			const bool is_dir = it->is_directory(ec2);
 			if (ec2 || (dirs_only && !is_dir)) continue;
@@ -32,8 +35,8 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 			layer_entry e;
 			e.path = it->path();
 			e.name = fs_paths::utf8_of(e.path.filename());
-			// A .resource sidecar or a file the asset walk skips is not an asset; left out before the merge so it shadows nothing.
-			if (!is_dir && (res::is_skipped_asset_name(e.name, false) || res::is_asset_meta_sidecar(e.name))) {
+			// A .resource sidecar or an entry the asset walk skips is not an asset; left out before the merge so it shadows nothing.
+			if (res::is_skipped_asset_entry(e.name, is_dir, at_project_folder_root) || (!is_dir && res::is_asset_meta_sidecar(e.name))) {
 				continue;
 			}
 			e.relative = relative_dir / e.path.filename();

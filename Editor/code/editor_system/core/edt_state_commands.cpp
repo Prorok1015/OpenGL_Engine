@@ -9,7 +9,7 @@
 #include <snk/desc/desc_json_schema.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_system.h>
-#include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include "edt_asset_layers.h"
@@ -708,6 +708,7 @@ namespace {
 		for (std::size_t i = 0; i < layers.size() && !state.truncated; ++i) {
 			const fs::path dir = layers[i] / directory;
 			if (!is_under(layers[i], dir) || !plain_directory(layers[i], directory)) continue;
+			const bool at_project_folder_root = directory.empty() && res::is_project_folder_layer(layers[i]);
 			std::error_code ec;
 			for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {
 				if (state.scanned >= max_asset_scan) {
@@ -722,9 +723,9 @@ namespace {
 				// Links, devices and sockets are not assets (and a link could lead out of the layer).
 				if (!is_dir && status.type() != fs::file_type::regular) continue;
 				std::string name = it->path().filename().string();
-				// A .resource sidecar (EPIC-57) belongs to its file and is not an asset of its own; dot, temporary and system
-				// files are no assets either (res::is_ignored_asset_name, the asset database's rule).
-				if (!is_dir && (res::is_asset_meta_name(name) || res::is_ignored_asset_name(name))) continue;
+				// The asset walk's rule (#854): it neither lists nor enters a skipped entry (hidden, temporary, system, the
+				// project's own code/build/project.snkproj in the project folder); a .resource belongs to its file.
+				if (res::is_skipped_asset_entry(name, is_dir, at_project_folder_root) || (!is_dir && res::is_asset_meta_sidecar(name))) continue;
 				if (!valid_utf8(name)) {
 					++state.bad_names;
 					continue;
