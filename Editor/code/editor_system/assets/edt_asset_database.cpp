@@ -1329,7 +1329,8 @@ void edt::asset_database::attach(res::resource_system& resources)
 		m_resources->unsubscribe_changes(this);
 	}
 	m_resources = &resources;
-	resources.subscribe_changes(res::tag::default_protocol(), this, [this](std::span<const res::file_change> changes) {
+	resources.subscribe_changes(res::tag::default_protocol(), this, [this, &resources](std::span<const res::file_change> changes) {
+		m_received_through = resources.delivering_batch();
 		apply_changes(changes);
 	});
 }
@@ -1603,6 +1604,9 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	}
 	hash_next();
 	save_when_idle();
+	// Applied, not waiting behind a walk: every batch received so far is in the records (an earlier one that waited was
+	// applied after the walk, before this one).
+	m_applied_through = m_received_through;
 	if (m_on_batch) {
 		m_on_batch(batch);
 	}

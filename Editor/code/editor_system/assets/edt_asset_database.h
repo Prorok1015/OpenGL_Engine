@@ -206,8 +206,11 @@ namespace edt
 		// Names merged with their letter case folded (default: the platform's). Set before the first rebuild(); for tests
 		// of the Windows rules on any system.
 		void set_case_insensitive(bool value) { m_case_insensitive = value; }
+		bool case_insensitive() const { return m_case_insensitive; }
 		// A walk is running.
 		bool scanning() const { return m_scanning; }
+		// The first walk has given its result: the records are the tree's, not only the cache's.
+		bool walked_once() const { return m_walked_once; }
 		// Files whose hash is not known yet (queued or running).
 		std::size_t pending_hashes() const;
 		// This database holds the lock of the cache and writes it.
@@ -232,6 +235,9 @@ namespace edt
 		// Called after each batch with what it did, and after each walk but the first with what it changed (S57-7 puts
 		// the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
+		// The number (resource_system::delivering_batch) of the last batch from attach()'s resource_system the records hold:
+		// a batch that waits behind a walk counts once it is applied after it. For resource_system::apply_asset_batch.
+		std::uint64_t applied_through() const { return m_applied_through; }
 
 		// New files get an ID (#765, EPIC-57 section 6.1): a file of the top layer without a .resource in any layer that
 		// a batch after the first walk reports as created, or a later walk adds, gets <file>.resource with a new ID (a
@@ -346,6 +352,9 @@ namespace edt
 		bool m_scanning = false;
 		// A walk's result was applied: m_records is what the layers hold, not m_cached.
 		bool m_walked_once = false;
+		// The last batch received from attach()'s resource_system, and the last one applied (applied_through).
+		std::uint64_t m_received_through = 0;
+		std::uint64_t m_applied_through = 0;
 		// A folder changed during a walk: one more walk follows it.
 		bool m_walk_again = false;
 		// The last walk was cancelled and started again; cleared by an applied walk.
