@@ -1335,7 +1335,7 @@ BOOST_FIXTURE_TEST_CASE(MapsAndOptionalsGetTheirOwnKinds, ops_fixture)
 {
 	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
 	const auto kind_of = [&](std::string_view key) {
-		const auto found = std::ranges::find(schema.fields, key, &desc::field_schema::key);
+		const auto found = std::ranges::find(schema.fields, key, &desc::field_schema::name);
 		BOOST_REQUIRE(found != schema.fields.end());
 		return *found;
 	};
@@ -1401,7 +1401,7 @@ BOOST_FIXTURE_TEST_CASE(AnEmptyOptionalWritesNothingAndANullReadsItEmpty, ops_fi
 	const json::object set = serialized(value);
 	BOOST_TEST(set.at("gain").as_double() == 0.0);
 	BOOST_TEST(set.at("note").as_string() == "");
-	BOOST_TEST(set.at("preferred").as_string() == "OFF");
+	BOOST_TEST(set.at("preferred").as_string() == "off");
 
 	ops_test::keyed copy;
 	copy.deserialize(ds, set);
@@ -1477,7 +1477,7 @@ BOOST_FIXTURE_TEST_CASE(AnOptionalStructureIsItsValueOrNothing, ops_fixture)
 BOOST_AUTO_TEST_CASE(AnOptionalOfATypeWithACodecStaysCustom)
 {
 	const auto schema = desc::schema_generator<ops_test::optional_holder>::make("ops.optional_holder", 1, desc::schema_kind::component);
-	const auto boxed = std::ranges::find(schema.fields, "boxed", &desc::field_schema::key);
+	const auto boxed = std::ranges::find(schema.fields, "boxed", &desc::field_schema::name);
 	BOOST_REQUIRE(boxed != schema.fields.end());
 	BOOST_TEST((boxed->kind == desc::field_kind::custom));
 }
