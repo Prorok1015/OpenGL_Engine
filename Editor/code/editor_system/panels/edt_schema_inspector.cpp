@@ -75,6 +75,7 @@ namespace
 			return json::value(json::object());
 		}
 		case field_kind::array: return json::value(json::array());
+		case field_kind::map: return json::value(json::object());
 		case field_kind::entity:
 		case field_kind::custom: break;
 		}
@@ -682,6 +683,7 @@ edt::schema_ui::widget_spec edt::schema_ui::describe_widget(const desc::field_sc
 	case field_kind::entity: spec.kind = widget::label; break;
 	case field_kind::structure: spec.kind = nested_known ? widget::group : widget::json; break;
 	case field_kind::array: spec.kind = widget::list; break;
+	case field_kind::map:
 	case field_kind::custom: spec.kind = widget::json; break;
 	}
 

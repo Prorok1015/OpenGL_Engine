@@ -176,3 +176,15 @@ namespace scn {
 		std::unordered_map<std::string, spawner_pair> m_spawners;
 	};
 }
+
+namespace desc {
+	// Declared with the type, not in the file that describes component_tracker: a translation unit that generated a schema
+	// for it without this specialization would read the map as a field_kind::map, and the two would disagree on the bytes.
+	template<>
+	struct SNK_API json_codec<std::unordered_map<std::string, scn::tracked_component_info>>
+	{
+		using map = std::unordered_map<std::string, scn::tracked_component_info>;
+		static boost::json::value to_json(const map& tracked);
+		static bool from_json(map& tracked, const boost::json::value& in);
+	};
+}

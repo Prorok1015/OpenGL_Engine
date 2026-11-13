@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -38,6 +39,9 @@ namespace desc
 		vec2, vec3, vec4, quat, color,
 		string, enumeration, res_tag, desc_ref, node_ref, entity,
 		structure, array, custom,
+		// A JSON object with string keys, every value of the kind `element` (not a container): std::map and
+		// std::unordered_map of std::string. Appended after custom, so the kinds before it keep their values.
+		map,
 	};
 
 	// always: written as is. if_valid: skipped when empty (null, "", []). if_not_default: skipped when equal to the
@@ -76,7 +80,7 @@ namespace desc
 		std::string name;
 		std::string key;
 		field_kind kind = field_kind::boolean;
-		field_kind element = field_kind::boolean; // meaningful for field_kind::array only
+		field_kind element = field_kind::boolean; // meaningful for field_kind::array and field_kind::map only
 		std::string ref_type; // enum_schema / type_schema name for enumeration, structure, desc_ref
 		json::value default_value;
 		std::optional<field_range> range;
@@ -255,8 +259,64 @@ namespace desc
 	template<typename T>
 	concept is_entity_handle = requires { sizeof(entity_traits<T>); };
 
+	// Supplies a JSON codec to custom-kind fields of a C++ type (desc_schema_ops.h): a type that has one stays a custom
+	// field, also when it is a map or an optional the deduction would otherwise describe.
+	template<typename T>
+	struct json_codec;
+
+	template<typename T>
+	concept has_json_codec = requires { sizeof(json_codec<T>); };
+
 	namespace detail
 	{
+		template<typename T>
+		struct optional_traits
+		{
+			static constexpr bool value = false;
+		};
+
+		template<typename U>
+		struct optional_traits<std::optional<U>>
+		{
+			static constexpr bool value = true;
+			using value_type = U;
+		};
+
+		template<typename T>
+		struct unwrap_optional
+		{
+			using type = T;
+		};
+
+		template<typename U>
+		struct unwrap_optional<std::optional<U>>
+		{
+			using type = U;
+		};
+
+		template<typename T>
+		using unwrap_optional_t = typename unwrap_optional<T>::type;
+
+		template<typename T>
+		struct string_map_traits
+		{
+			static constexpr bool value = false;
+		};
+
+		template<typename V, typename C, typename A>
+		struct string_map_traits<std::map<std::string, V, C, A>>
+		{
+			static constexpr bool value = true;
+			using mapped_type = V;
+		};
+
+		template<typename V, typename H, typename E, typename A>
+		struct string_map_traits<std::unordered_map<std::string, V, H, E, A>>
+		{
+			static constexpr bool value = true;
+			using mapped_type = V;
+		};
+
 		template<typename T>
 		struct sequence_traits
 		{
@@ -310,6 +370,23 @@ namespace desc
 				return field_kind::string;
 			} else if constexpr (std::is_same_v<T, res::tag>) {
 				return field_kind::res_tag;
+			} else if constexpr (optional_traits<T>::value) {
+				// A field of the kind of its value that is there or not (field_schema::optional); an optional with a codec
+				// of its own, or an optional of an optional, is custom.
+				using inner = std::remove_cvref_t<typename optional_traits<T>::value_type>;
+				if constexpr (has_json_codec<T> || optional_traits<inner>::value) {
+					return field_kind::custom;
+				} else {
+					return deduce_kind<inner>();
+				}
+			} else if constexpr (string_map_traits<T>::value) {
+				// The codec of the map itself wins (component_tracker::tracked_components): it reads and writes only a custom field.
+				if constexpr (has_json_codec<T>) {
+					return field_kind::custom;
+				} else {
+					constexpr field_kind element = deduce_kind<std::remove_cvref_t<typename string_map_traits<T>::mapped_type>>();
+					return (element == field_kind::array || element == field_kind::map) ? field_kind::custom : field_kind::map;
+				}
 			} else if constexpr (sequence_traits<T>::value) {
 				return field_kind::array;
 			} else if constexpr (is_described<T>) {
@@ -328,9 +405,12 @@ namespace desc
 	template<typename T>
 	constexpr field_kind element_kind_of() noexcept
 	{
-		using traits = detail::sequence_traits<std::remove_cvref_t<T>>;
+		using plain = detail::unwrap_optional_t<std::remove_cvref_t<T>>;
+		using traits = detail::sequence_traits<plain>;
 		if constexpr (traits::value) {
 			return kind_of<typename traits::element>;
+		} else if constexpr (detail::string_map_traits<plain>::value && kind_of<plain> == field_kind::map) {
+			return kind_of<typename detail::string_map_traits<plain>::mapped_type>;
 		} else {
 			return field_kind::boolean;
 		}

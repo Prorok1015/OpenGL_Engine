@@ -16,7 +16,7 @@ namespace desc
 			"bool", "i32", "u32", "i64", "u64", "f32", "f64",
 			"vec2", "vec3", "vec4", "quat", "color",
 			"string", "enumeration", "res_tag", "desc_ref", "node_ref", "entity",
-			"structure", "array", "custom",
+			"structure", "array", "custom", "map",
 		};
 		constexpr std::string_view write_policy_names[] = { "always", "if_valid", "if_not_default", "null_if_empty", "never" };
 		constexpr std::string_view schema_kind_names[] = { "desc", "component", "struct" };
@@ -148,6 +148,7 @@ namespace desc
 			case field_kind::res_tag:
 			case field_kind::node_ref: return json::value(std::string_view{});
 			case field_kind::array: return json::value(json::array{});
+			case field_kind::map: return json::value(json::object{});
 			default: return json::value();
 			}
 		}
@@ -244,6 +245,16 @@ namespace desc
 				}
 				return json::value(std::move(result));
 			}
+			case field_kind::map: {
+				if (!value.is_object()) {
+					fail(path, "default must be an object");
+				}
+				json::object result;
+				for (const auto& member : value.as_object()) {
+					result.emplace(member.key(), normalize_default(element, field_kind::boolean, member.value(), path));
+				}
+				return json::value(std::move(result));
+			}
 			default:
 				return value;
 			}
@@ -278,17 +289,20 @@ namespace desc
 			field.kind = *kind;
 
 			const json::value* element = find_value(object, "element");
-			if (field.kind == field_kind::array) {
+			if (field.kind == field_kind::array || field.kind == field_kind::map) {
 				if (!element || !element->is_string()) {
-					fail(where, "an array field needs a string 'element' kind");
+					fail(where, std::format("{} field needs a string 'element' kind", field.kind == field_kind::map ? "a map" : "an array"));
 				}
 				const auto element_kind = field_kind_from_string(element->as_string());
 				if (!element_kind) {
 					fail(where, std::format("unknown element kind '{}'", std::string_view{ element->as_string() }));
 				}
 				field.element = *element_kind;
+				if (field.kind == field_kind::map && (field.element == field_kind::array || field.element == field_kind::map)) {
+					fail(where, "the values of a map are not containers: 'element' must not be array or map");
+				}
 			} else if (element) {
-				fail(where, "'element' is only valid for array fields");
+				fail(where, "'element' is only valid for array and map fields");
 			}
 
 			field.ref_type = read_string(object, "ref_type", where, false);
@@ -497,6 +511,9 @@ namespace desc
 		std::uint32_t offset = 0;
 		std::uint32_t alignment = 1;
 		for (auto& field : schema.fields) {
+			if (field.kind == field_kind::map) {
+				throw std::runtime_error(std::format("schema '{}': map field '{}' cannot be in a schema without a C++ type: it has no blob layout, describe the type in C++ (std::map<std::string, T>)", schema.name, field.name));
+			}
 			blob_layout layout = layout_of(field.kind);
 			if (field.kind == field_kind::structure) {
 				const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr;
@@ -662,6 +679,8 @@ namespace desc
 			}
 			case field_kind::structure:
 				return structure_problem(field.ref_type);
+			case field_kind::map:
+				return std::format("field '{}' is a map, which a document does not take yet: the parents' keys are merged one by one, and the diff and the override checks of a map come with #790", where);
 			case field_kind::array:
 				if (field.element == field_kind::custom) {
 					return std::format("field '{}' is a list of custom values, so the schema does not describe its elements", where);

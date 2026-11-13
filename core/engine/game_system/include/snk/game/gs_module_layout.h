@@ -43,8 +43,9 @@ namespace gs
 		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
 		// type modules read inline. 1: world_context's accessors out of line (#802). 2: desc_system, schema_registry and
 		// dynamic_desc touch their members only out of line (#786). 3: the sandbox's components move into the world by
-		// engine code through the module's ecs::sandbox_emplace<T> (#784, #738).
-		inline constexpr std::uint64_t layout_revision = 3;
+		// engine code through the module's ecs::sandbox_emplace<T> (#784, #738). 4: field_kind::map and std::optional in
+		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before.
+		inline constexpr std::uint64_t layout_revision = 4;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
