@@ -161,7 +161,7 @@ namespace edt::schema_ui
 		map_edit_state* map_state = nullptr;
 		// Called for the mark of a field and for the items of its menu while it is open (tests): what it is
 		// ("<pointer>#mark", "<pointer>#reset", "<pointer>#unset") and the centre of its rectangle on the screen.
-		std::function<void(std::string_view target, float x, float y)> on_target;
+		std::function<void(std::string_view target, float x, float y)> on_target = nullptr;
 		// Not null: every field gets its mark (set here / inherited) and the menu of it (Reset, Unset). Null: no marks.
 		const field_origin* origin = nullptr;
 	};
