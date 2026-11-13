@@ -945,10 +945,6 @@ BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt
 }
 
 // Undo and redo (S56-5): one record per edit of the person, snapshots of `own`.
-namespace {
-
-}
-
 namespace edt {
 
 struct data_document_test_access
