@@ -4,6 +4,7 @@
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -533,6 +534,59 @@ BOOST_FIXTURE_TEST_CASE(ABatchQueuedBeforeARename_DoesNotDecideIt, disk_fixture)
 
 	rs->unsubscribe_changes(&owner);
 	rs->unpin_resource(b);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(FailedRemoveOrRenameOfAFileGoneFromDisk_KeepsItsWaitingEntry, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	const res::tag c = at("c.txt");
+	index->put(a, k_a);
+	index->put(c, k_b);
+	const auto held_a = rs->require_sync<res::text_resource>(a);
+	const auto held_c = rs->require_sync<res::text_resource>(c);
+	watch_log log;
+	log.watch(*rs, a);
+	log.watch(*rs, c);
+
+	// Deleted outside the editor; the watcher's signal registers both before their batch is decided.
+	fs::remove(dir.path() / "res" / "a.txt");
+	fs::remove(dir.path() / "res" / "c.txt");
+	rs->signal_changed(a);
+	rs->signal_changed(c);
+	BOOST_TEST(rs->waiting_for_index_count() == 2u);
+
+	// The editor removes or renames them meanwhile; the resolver refuses (no file), the entries stay.
+	BOOST_TEST(!rs->remove(a));
+	BOOST_TEST(!rs->rename(c, at("d.txt")));
+	BOOST_TEST(rs->waiting_for_index_count() == 2u);
+
+	// Decided all the same: evicted once the index goes (the watcher's own poll may tell them once more).
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(std::ranges::count(log.told, std::string{ a.view() }) >= 1);
+	BOOST_TEST(std::ranges::count(log.told, std::string{ c.view() }) >= 1);
+	rs->unwatch(a, &log);
+	rs->unwatch(c, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(RemovedAndMadeAgainBeforeTheBatch_KeepsItsPin, disk_fixture)
+{
+	const res::tag a = at("a.txt");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+
+	BOOST_REQUIRE(rs->remove(a));
+	BOOST_REQUIRE(rs->store_sync(a, test_util::to_bytes("again")));
+	BOOST_TEST(rs->waiting_for_index_count() == 1u);
+
+	// The index changes before any batch is decided: the file is there again, so it is not forgotten.
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->waiting_for_index_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 

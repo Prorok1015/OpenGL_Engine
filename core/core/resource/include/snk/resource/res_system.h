@@ -377,12 +377,20 @@ namespace res
 		res::tag bind_locked(const res::tag& tag, const node_candidate& candidate);
 		// A gone file with an ID (`node`): kept for apply_asset_batch unless the index changed since `generation` was read.
 		bool wait_for_index(const res::tag& tag, const res::tag& node, std::uint64_t generation, bool forget);
-		// remove() / rename(): registered before the operation, so the batch the operation makes takes it in; dropped
-		// again when the operation fails.
-		bool expect_gone(const res::tag& tag, const res::tag& node, std::uint64_t generation);
-		void cancel_expected(const res::tag& tag);
-		// On the watcher's thread, as a batch is made: its number, given to the waiting files it names, and to the
-		// waiting files of mounts that report nothing.
+		// remove() / rename(): registered before the operation, so the batch the operation makes takes it in. A file
+		// already waiting keeps its entry (and number) and is only marked to be forgotten; when the operation fails,
+		// only an entry this call made is dropped (by its token), and a kept one gets its mark back.
+		struct expectation {
+			bool waits = false;
+			std::uint64_t token = 0; // the entry this call made; 0 when it kept one
+			bool had_forget = false;
+		};
+		expectation expect_gone(const res::tag& tag, const res::tag& node, std::uint64_t generation);
+		void cancel_expected(const res::tag& tag, const expectation& expected);
+		// On the watcher's thread, as a batch is made (under m_batch_order_mutex, with its post to the main queue): its
+		// number, given to the waiting files it names, and to the waiting files of mounts that report nothing. On a mount
+		// that reports changes, a file no batch names (gone and back within one poll, a name the watcher skips) waits until
+		// set_asset_index.
 		std::uint64_t number_batch(const std::vector<file_change>& batch);
 		// alias -> its key, read before m_cache_mutex is taken (the index is not asked under it).
 		std::unordered_map<res::tag, res::tag> alias_value_nodes() const;
@@ -391,8 +399,10 @@ namespace res
 			// The batch made with its change (number_batch); on a mount that reports nothing, the first batch made after it
 			// went. 0 until then.
 			std::uint64_t batch = 0;
-			// Went through remove() or rename(): forgotten (forget_erased) unless it moved.
+			// Went through remove() or rename(): forgotten (forget_erased) unless it moved or is on disk again.
 			bool forget = false;
+			// Which registration made it (expect_gone, cancel_expected).
+			std::uint64_t token = 0;
 		};
 		// After rebind_all (`remap`: its old key -> new key), so the watchers are told under the key they are under now.
 		void evict_waiting(std::vector<std::pair<res::tag, waiting_entry>> entries,
@@ -666,6 +676,10 @@ namespace res
 		std::unordered_map<res::tag, waiting_entry> m_waiting_for_index;
 		// Guarded by m_waiting_mutex: the batches made, and the protocols whose mount reports changes.
 		std::uint64_t m_created_batches = 0;
+		std::uint64_t m_next_waiting_token = 0;
+		// A batch is numbered and queued for the main thread under it: the queue holds batches in the order of their
+		// numbers, so apply_asset_batch(n) never decides a file whose batch, numbered below n, is not delivered yet.
+		std::mutex m_batch_order_mutex;
 		std::unordered_set<std::string> m_reporting_protocols;
 		// Main thread: the number of the batch being (or last) delivered.
 		std::uint64_t m_delivering_batch = 0;
