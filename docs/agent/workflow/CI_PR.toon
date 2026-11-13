@@ -45,12 +45,14 @@ Since CI is the first compiler, write code that survives every configuration on 
 [PROJECT_NOTES]
 This project:
 - Integration branch and current wave: see `docs/agent/handoff/PHASE0-STATUS.md`
-- CI matrix: `.github/workflows/build.yml` — Linux GCC (Coverage job, which also runs the GL-only-in-driver and desc byte-stability gates)/Clang (the one static-engine build, #223)/ASan/TSan/shared, Windows MSVC Debug, Linux GCC no Assimp, SDK package (Linux), Windows package (Release, Debug, check: the release archives, #223), extract benchmark (pushes only), editor visual smoke; every build but Linux Clang Debug uses the shared engine
-- CI tiers: a DRAFT PR runs the fast tier only, 6 checks: Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp (SNK_WITH_ASSIMP=OFF), Editor visual smoke (the other jobs show as skipped or do not appear)
+- CI (#830): `.github/workflows/build.yml` on PRs and pushes, `.github/workflows/nightly.yml` once a night on aibranch; every build but Linux Clang Debug (the one static-engine build, #223) uses the shared engine
+- Every PR event, drafts included: the 6 fast checks — Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp (SNK_WITH_ASSIMP=OFF), Editor visual smoke — after the `Plan` job, which decides what runs
 - The Coverage job is blocking (it is the only GCC Debug unit-test run and carries the GL-only and desc byte-stability gates); only its report generation and upload steps are non-blocking
-- Marking the PR ready for review (`ready_for_review`) and every push to the integration branch run the full tier: the fast checks (Linux GCC no Assimp then also installs the SDK and builds the consumer against it) plus Linux GCC Shared, Linux TSan, SDK package (Linux), Windows package / Windows package (Release), Windows package (Debug), Windows package check
-- `ready_for_review` starts the full run only if the PR head already contains the tiered workflow; for an older branch, merge the integration branch into it first (a real merge, never an empty commit)
-- Merge only after a complete green run on the non-draft head: green draft checks are not enough, mark the PR ready and wait for the full run; a new push to a non-draft PR re-runs everything
+- Marking the PR ready (`ready_for_review`) does not re-run the fast checks when all six already passed on the same head SHA (they show as skipped and stay green); any new push runs them again
+- A non-draft PR that touches `**/include/**`, `CMakeLists.txt`, `cmake/**`, `CMakePresets.json` or `.github/**` also runs Windows MSVC Shared+PCH and Linux GCC Shared (the engine as a shared library: exports, ABI); every push to aibranch/main runs them too
+- Nightly (`nightly.yml`, 23:37 UTC, or Actions > Nightly > Run workflow): Linux TSan, SDK package (Linux), SDK package (Linux, no Assimp), Windows package (Release, Debug, check), Extract benchmark (report-only); a night with no new commit since the last green one runs nothing
+- Red night: the `Report (nightly)` job opens the issue "Nightly CI red" (labels bug, ci, P0) with the run and the commits since the last green night, or comments on the open one; the next green night closes it. A red night comes before new work: find the commit, fix it in a PR with `closes #<issue>`
+- Merge after a green run on the non-draft head: green draft checks plus whatever ready_for_review added
 - Screenshot gate: the visual smoke job fails when a reference diff exceeds the limit (`tools/headless/check_smoke.sh`); reference PNGs change only with the owner's decision
 - MSVC builds without PCH and without `/utf-8`
 - Since #223 the fast tier builds the shared engine (Windows MSVC Debug, Coverage, ASan, ...): a free function or class in a public engine header that tests or the editor call needs `SNK_API`, otherwise the shared link fails; Linux Clang Debug is the static build

@@ -1,0 +1,515 @@
+name: Nightly
+
+# The jobs too slow for every pull request (#830): Linux TSan, the SDK packages (Linux, with and without assimp),
+# the Windows release package and the extract benchmark. They run on aibranch once a night and by hand
+# (Actions > Nightly > Run workflow). build.yml keeps the six fast jobs on every PR and the two shared-engine builds
+# on PRs that touch public headers, CMake or workflows.
+#
+# A schedule fires only from the workflow file on the default branch, so every job checks out aibranch's head itself.
+# A red night opens an issue (labels bug, ci, P0) or comments on the open one; the next green night closes it.
+
+on:
+  schedule:
+    # 23:37 UTC: off the hours GitHub's runners are busiest, and the night for the team (UTC+3).
+    - cron: '37 23 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or SHA to check (default aibranch)
+        type: string
+        default: aibranch
+      force:
+        description: Run even when the last green night was on the same SHA
+        type: boolean
+        default: false
+
+concurrency:
+  group: nightly-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # What to check: aibranch's head (or the SHA given by hand). A night with no new commit since the last green night
+  # runs nothing.
+  plan:
+    name: Plan (nightly)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      run: ${{ steps.plan.outputs.run }}
+      last_green: ${{ steps.plan.outputs.last_green }}
+    steps:
+      - id: plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const inputs = context.payload.inputs || {};
+            const ref = inputs.ref || 'aibranch';
+            const force = String(inputs.force) === 'true';
+            const { data: commit } = await github.rest.repos.getCommit({ ...context.repo, ref });
+            const sha = commit.sha;
+            core.setOutput('sha', sha);
+            // The run's own head_sha is the default branch's for a schedule: the SHA a night checked is in the name of its
+            // last job, "Checked <sha>", which runs only when every job before it passed.
+            let last = '';
+            {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                ...context.repo, workflow_id: 'nightly.yml', status: 'success', per_page: 20,
+              });
+              for (const r of runs.data.workflow_runs) {
+                if (r.id === context.runId) continue;
+                const { data } = await github.rest.actions.listJobsForWorkflowRun({ ...context.repo, run_id: r.id });
+                const marker = data.jobs.find(j => j.name.startsWith('Checked ') && j.conclusion === 'success');
+                if (marker) { last = marker.name.slice('Checked '.length); break; }
+              }
+            }
+            const run = force || last !== sha;
+            if (!run) core.notice(`${sha} was already green: nothing to run`);
+            core.setOutput('run', String(run));
+            core.setOutput('last_green', last);
+
+  tsan:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      # ASan+UBSan is FAST, TSan is FULL: the matrix is the fast or the full list (see the tiers above).
+      matrix:
+        include:
+          - { name: "Linux TSan", preset: "ci-linux-tsan", experimental: false }
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          submodules: recursive
+
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-${{ matrix.preset }}
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build unit_tests
+        run: cmake --build build/${{ matrix.preset }} --target unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Run unit tests under sanitizer
+        # TSan runs the null-backend scene tests ~10x slower (about 30-60 s each) and the whole run took 23 of the former
+        # 25 minutes, so a runner 10% slower timed out (#524); the limit only guards against hangs.
+        timeout-minutes: 40
+        working-directory: build/${{ matrix.preset }}
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/sanitizers/lsan.supp:print_suppressions=0
+          TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1 suppressions=${{ github.workspace }}/.github/sanitizers/tsan.supp
+        run: |
+          set -o pipefail
+          ./unit_tests --log_level=test_suite --color_output=no 2>&1 | tee unit_tests.log
+
+      # Where the budget goes: also after a failure or a timeout (the log holds the suites that finished).
+      - name: Slowest test suites
+        if: always()
+        working-directory: build/${{ matrix.preset }}
+        run: |
+          [ -f unit_tests.log ] || exit 0
+          sed -nE 's/.*Leaving test suite "([^"]+)"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p' unit_tests.log \
+            | awk '$1 != "Master" { t = $2; if ($3 == "us") t /= 1e6; else if ($3 == "ms") t /= 1e3; printf "%9.1f s  %s\n", t, $1 }' \
+            | sort -rn | head -n 10
+
+  no-assimp-sdk:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: SDK package (Linux, no Assimp)
+    runs-on: ubuntu-latest
+
+    env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install-no-assimp
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          submodules: recursive
+
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-no-assimp
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
+      - name: Configure
+        run: cmake --preset ci-linux-no-assimp "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Check assimp is not part of the build
+        run: |
+          if grep -q '^ASSIMP_' build/ci-linux-no-assimp/CMakeCache.txt; then
+            echo "::error::assimp was configured although SNK_WITH_ASSIMP=OFF"
+            exit 1
+          fi
+
+      - name: Build editor and unit_tests
+        run: cmake --build build/ci-linux-no-assimp --target editor unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Run unit tests
+        timeout-minutes: 10
+        working-directory: build/ci-linux-no-assimp
+        run: ./unit_tests --log_level=test_suite
+
+      - name: Build SDK targets
+        run: cmake --build build/ci-linux-no-assimp --target snk_sdk --parallel
+
+      - name: Install SDK
+        run: cmake --install build/ci-linux-no-assimp --prefix "${SDK_PREFIX}" --component snake_sdk
+
+      - name: Check the SDK has no assimp
+        run: |
+          if grep -rIil assimp "${SDK_PREFIX}/lib/cmake"; then
+            echo "::error::the package config mentions assimp"
+            exit 1
+          fi
+          if find "${SDK_PREFIX}/lib" -iname '*assimp*' | grep -q .; then
+            echo "::error::assimp was installed"
+            exit 1
+          fi
+
+      - name: Configure consumer
+        run: |
+          cmake -S tests/package_consumer -B build/consumer-no-assimp -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
+
+      - name: Build consumer
+        run: cmake --build build/consumer-no-assimp
+
+      - name: Run consumer
+        run: build/consumer-no-assimp/package_consumer
+
+  extract-bench:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: Extract benchmark (Linux, report-only)
+    runs-on: ubuntu-latest
+    # Report-only: a slow runner must not turn the night red; a build failure still shows in the job.
+    continue-on-error: true
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      BENCH_DIR: ${{ github.workspace }}/bench_out
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          submodules: recursive
+
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev jq
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-gcc-release
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Release-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
+      - name: Configure
+        run: cmake --preset ci-linux-gcc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build unit_tests
+        run: cmake --build build/ci-linux-gcc-release --target unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Run extract benchmark
+        working-directory: build/ci-linux-gcc-release
+        run: |
+          set -o pipefail
+          mkdir -p "$BENCH_DIR"
+          SNK_BENCH_JSON="$BENCH_DIR/bench_extract.json" ./unit_tests \
+            --run_test=AppEngineNullBackendBench/ExtractRenderDataOnHundredMeshes --log_level=message \
+            2>&1 | tee "$BENCH_DIR/bench_extract.log"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$BENCH_DIR/bench_extract.json" ]; then
+            tools/ci/bench_extract_summary.sh "$BENCH_DIR/bench_extract.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no bench_extract.json: the benchmark did not finish" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extract-bench
+          path: bench_out
+          if-no-files-found: warn
+
+  sdk-package:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: SDK package (Linux)
+    runs-on: ubuntu-latest
+
+    env:
+      # Configures without a preset (the package consumer, the project template) take the same pinned GCC (#585).
+      CC: gcc-15
+      CXX: g++-15
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
+      SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          submodules: recursive
+
+      - name: Install Linux packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-sdk-linux
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Boost tarball
+        uses: ./.github/actions/boost-tarball
+
+      # Both engines are built and installed twice: each into its own prefix (to check that they can share one), and
+      # both into SDK_PREFIX, static first, the way the release package is put together (#223).
+      - name: Configure (static)
+        run: cmake --preset ci-linux-static "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      # snk_sdk builds exactly the targets the install step copies.
+      - name: Build SDK targets (static)
+        run: cmake --build build/ci-linux-static --target snk_sdk --parallel
+
+      # Its own Boost build directory (the static tree's compiles Boost with other definitions); the sources are shared.
+      - name: Configure (shared)
+        run: |
+          cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}/ci-linux-gcc-debug" \
+            "-DFETCHCONTENT_SOURCE_DIR_BOOST=${FC_DIR}/boost-src"
+
+      - name: Build SDK targets (shared)
+        run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Install SDK (static, shared, both into one prefix)
+        run: |
+          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX_STATIC}" --component snake_sdk
+          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_SHARED}" --component snake_sdk
+          cmake --install build/ci-linux-static --prefix "${SDK_PREFIX}" --component snake_sdk
+          cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX}" --component snake_sdk
+          find "${SDK_PREFIX}/lib" -maxdepth 2 | sort
+
+      # The second install may only rewrite the headers and the package config, with the same content.
+      - name: Check the two engines share one prefix
+        run: tools/ci/check_sdk_merge.sh "${SDK_PREFIX_STATIC}" "${SDK_PREFIX_SHARED}"
+
+      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
+      - name: Check the installed headers
+        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
+
+      # The MCP server module is for the editor only: nothing of it in the installed SDK.
+      - name: Check the SDK has no MCP server module
+        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX}"
+
+      - name: Check the package does not point into the build or source tree
+        run: |
+          find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
+          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX}/lib/cmake"; then
+            echo "::error::installed package config references the workspace"
+            exit 1
+          fi
+
+      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
+      - name: Check the package has no absolute paths
+        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
+
+      # The shared set exports the components usage-only: no archive next to snk_engine (#581).
+      - name: Check the shared set links no archive besides the engine
+        run: |
+          python3 tools/ci/check_sdk_shared_set.py --self-test
+          python3 tools/ci/check_sdk_shared_set.py "${SDK_PREFIX}"
+
+      - name: Build and run the consumer against each engine
+        run: |
+          for engine in static shared; do
+            cmake -S tests/package_consumer -B "build/consumer-${engine}" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+              "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" "-DSNK_CONSUMER_ENGINE=${engine}" -DSNK_CONSUMER_HEADER_CHECK=ON
+            cmake --build "build/consumer-${engine}"
+            "build/consumer-${engine}/package_consumer"
+          done
+
+      # The project template's shipping executable (#592): the module compiled into snk::game_host with the static
+      # engine of the prefix. Built only; tests/static_game is the run test.
+      - name: Build the project template's shipping executable against the prefix
+        run: |
+          proj="${RUNNER_TEMP}/template_shipping"
+          rm -rf "$proj"
+          cp -r Editor/data/templates/projects/empty "$proj"
+          export SNAKE_SDK_DIR="${SDK_PREFIX}/lib/cmake/snake_sdk"
+          (cd "$proj/code" && cmake --preset shipping && cmake --build --preset shipping)
+          ls -l "$proj/build/shipping"
+          exe="$proj/build/shipping/game"
+          test -x "$exe"
+          # No pipe into grep -q: under pipefail an early exit of the reader fails the writer, and the check would pass.
+          needed="$(readelf -d "$exe" | grep NEEDED)"
+          echo "$needed"
+          if [[ "$needed" == *snk_engine* ]]; then
+            echo "::error::the shipping executable needs the shared engine"
+            exit 1
+          fi
+
+  # The Windows release package (#223): Release and Debug legs and the check job, as release.yml builds it.
+  windows-package:
+    name: Windows package
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      run-tests: true
+
+  # Runs only when every job above passed: its name records the SHA this night checked (see plan).
+  checked:
+    name: Checked ${{ needs.plan.outputs.sha }}
+    needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package]
+    if: needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "every nightly job passed on ${{ needs.plan.outputs.sha }}"
+
+  # A red night opens an issue (bug, ci, P0) with the run and the commits since the last green night, or comments on the
+  # one that is open; a green night closes it.
+  report:
+    name: Report (nightly)
+    needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package, checked]
+    if: always() && needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          LAST_GREEN: ${{ needs.plan.outputs.last_green }}
+        with:
+          script: |
+            const title = 'Nightly CI red';
+            const needs = JSON.parse(process.env.NEEDS);
+            const failed = Object.entries(needs)
+              .filter(([name, job]) => name !== 'plan' && name !== 'checked' && job.result !== 'success' && job.result !== 'skipped')
+              .map(([name, job]) => `${name}: ${job.result}`);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const open = (await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', labels: 'ci,bug', per_page: 100,
+            })).filter(i => !i.pull_request && i.title.startsWith(title));
+            const sha = process.env.SHA;
+            if (failed.length === 0) {
+              for (const issue of open) {
+                await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body: `Green again on ${sha}: ${runUrl}` });
+                await github.rest.issues.update({ ...context.repo, issue_number: issue.number, state: 'closed', state_reason: 'completed' });
+              }
+              return;
+            }
+            let commits = '';
+            const last = process.env.LAST_GREEN;
+            if (last && last !== sha) {
+              const { data } = await github.rest.repos.compareCommitsWithBasehead({ ...context.repo, basehead: `${last}...${sha}` });
+              commits = data.commits.map(c => `- ${c.sha.slice(0, 8)} ${c.commit.message.split('\n')[0]}`).join('\n');
+            }
+            const body = [
+              `Run: ${runUrl}`,
+              `Checked: ${sha}`,
+              '',
+              'Failed jobs:',
+              ...failed.map(f => `- ${f}`),
+              '',
+              last ? `Commits since the last green night (${last.slice(0, 8)}):` : 'No green night recorded yet.',
+              commits || (last ? '(none: the same SHA)' : ''),
+            ].join('\n');
+            if (open.length > 0) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: open[0].number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title: `${title} (${sha.slice(0, 8)})`, labels: ['bug', 'ci', 'P0'], body });
+            }
