@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <cstdint>
 #include <fstream>
+#include <boost/json.hpp>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,23 @@ BOOST_AUTO_TEST_CASE(WhatIsWritten_ReadsBackTheSame)
 	user.set("Jump", {});
 	const inp::user_bindings back = gs::parse_user_bindings(gs::write_user_bindings(user));
 	BOOST_TEST((back.overrides() == user.overrides()));
+}
+
+BOOST_AUTO_TEST_CASE(AThresholdOfAGamepadBinding_IsWrittenAndRead)
+{
+	inp::user_bindings user;
+	user.set("Aim", { inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.35f }, inp::action_binding{ inp::GAMEPAD_BUTTONS::A }, KB::Q });
+	const inp::user_bindings back = gs::parse_user_bindings(gs::write_user_bindings(user));
+	BOOST_REQUIRE_EQUAL(back.overrides().at("Aim").size(), 3u);
+	BOOST_TEST(back.overrides().at("Aim")[0].threshold() == 0.35f);
+	BOOST_TEST(back.overrides().at("Aim")[1].threshold() == 0.0f);
+	BOOST_TEST((back.overrides() == user.overrides()));
+	const std::string text = gs::write_user_bindings(user);
+	const auto written = boost::json::parse(text);
+	const auto& first = written.at("actions").as_array().at(0).at("bindings").as_array().at(0).as_object();
+	BOOST_TEST_INFO("file: " << text);
+	// Boost.JSON prints 0.35 as 3.5E-1: the number is what counts, and a float widened to a double is 6e-9 away from it.
+	BOOST_CHECK_SMALL(first.at("threshold").to_number<double>() - 0.35, 1e-12);
 }
 
 BOOST_AUTO_TEST_CASE(ABindingThatIsWrong_IsSkippedAndTheRestLoads)
