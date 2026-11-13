@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/desc/desc_system.h>
 #include <snk/project/prj_version.h>
+#include <snk/resource/res_asset_meta.h>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -20,8 +21,8 @@ namespace prj::migration
 		// A type nobody registers in the game layer (a module that is not loaded): the file is left as it is.
 		unknown_type,
 		invalid,
-		// An asset file without its <name>.resource sidecar (EPIC-57 creates them). A sidecar itself is read with
-		// res::read_asset_meta: current, newer (written by a newer engine) or invalid.
+		// An asset file without its <name>.resource sidecar (EPIC-57 creates them). A sidecar itself is classified as a
+		// desc of the pseudo-type resource_meta (classify_sidecar).
 		missing_resource,
 	};
 
@@ -56,12 +57,18 @@ namespace prj::migration
 		std::optional<prj::version_match> engine;
 		file_class kind = file_class::current;
 		std::string reason;
+		// What the last migration wrote (EPIC-58 2): the engine it ran with and every project step that ever ran.
+		std::string migrated_with;
+		std::vector<std::string> applied_steps;
 	};
 
 	struct scan_options
 	{
 		// A file larger than this is invalid and is not read.
 		std::uintmax_t max_file_bytes = std::uintmax_t{ 64 } << 20;
+		// The .resource version the engine reads. Only a test sets another one: it stands for an engine whose
+		// res::asset_meta_version was raised with the step under test.
+		std::int64_t resource_meta_version = res::asset_meta_version;
 	};
 
 	struct scan_result
@@ -75,6 +82,17 @@ namespace prj::migration
 
 	// The class of a desc file's text, as scan_project gives it (a file just written is checked with it). `path` is kept as given.
 	scanned_file classify_desc(std::string path, std::string_view text, const desc::desc_system& game_layer);
+
+	// A .resource sidecar as a desc of the pseudo-type resource_meta, known at its root only: its steps are the game
+	// layer's migrations of "resource_meta" (EPIC-58 3.4), and what is under "settings" belongs to the importer. A
+	// sidecar at the steps' current version must also read with res::read_asset_meta of an engine reading
+	// `readable_version`; one the engine does not read is newer.
+	scanned_file classify_sidecar(std::string path, std::string_view text, const desc::desc_system& game_layer,
+		std::int64_t readable_version = res::asset_meta_version);
+
+	// The steps of resource_meta on a sidecar's root; typed objects under "settings" are neither migrated nor stamped.
+	void migrate_sidecar(const desc::desc_system& game_layer, json::object& root, std::string_view file,
+		std::vector<desc::migration_warning>* warnings = nullptr);
 
 	// Reads project.snkproj under `root` and every file of its content roots (not the engine's layer; hidden folders,
 	// links and other non-regular files are not followed). `game_layer` decides which types are known and their versions.
@@ -107,10 +125,21 @@ namespace prj::migration
 		std::optional<std::string> full_diff;
 	};
 
+	class project_step_registry;
+
 	struct plan_options
 	{
 		bool full_diff = false;
 		scan_options scan;
+		// The project steps to plan (pmg_project_steps.h); none without it.
+		const project_step_registry* project_steps = nullptr;
+	};
+
+	struct planned_project_step
+	{
+		std::string id;
+		std::string phase;
+		std::string summary;
 	};
 
 	struct migration_plan
@@ -120,11 +149,23 @@ namespace prj::migration
 		std::vector<file_plan> files;
 		// Every step the plan runs, over the whole project.
 		std::vector<step_use> steps;
+		// The project steps whose `needed` holds, pre ones first, each phase in the order of the registry.
+		std::vector<planned_project_step> project_steps;
+		// Why apply_migration refuses the plan; empty when it may run.
+		std::string refused;
+		// scan_options::resource_meta_version of the plan: what apply checks a migrated sidecar against.
+		std::int64_t resource_meta_version = res::asset_meta_version;
 
-		bool empty() const { return files.empty(); }
+		// An older engine_version keeps the version dialog.
+		bool manifest_outdated() const { return scan.manifest.kind == file_class::outdated; }
+		// Only a migration that leaves no file of an unloaded module behind writes this engine's engine_version: a
+		// partial one keeps the old one, so the dialog still asks (EPIC-58 4.1).
+		bool completes() const { return scan.count(file_class::unknown_type) == 0; }
+		// "Nothing to do": no file, no project step, and no engine_version to bring to this engine.
+		bool empty() const { return files.empty() && project_steps.empty() && !(manifest_outdated() && completes()); }
 	};
 
-	// Migrates every outdated file of `scan` in memory with `game_layer`. Writes nothing.
+	// Migrates every outdated file of `scan` in memory with `game_layer` and lists the project steps it needs. Writes nothing.
 	migration_plan plan_migration(const std::filesystem::path& root, const scan_result& scan, const desc::desc_system& game_layer,
 		const plan_options& options = {});
 }

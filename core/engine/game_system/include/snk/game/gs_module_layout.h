@@ -44,8 +44,10 @@ namespace gs
 		// type modules read inline. 1: world_context's accessors out of line (#802). 2: desc_system, schema_registry and
 		// dynamic_desc touch their members only out of line (#786). 3: the sandbox's components move into the world by
 		// engine code through the module's ecs::sandbox_emplace<T> (#784, #738). 4: field_kind::map and std::optional in
-		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before.
-		inline constexpr std::uint64_t layout_revision = 5;
+		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before. 5: system_registry
+		// is all exports and the world keeps the engine's copy of a component's default (#785, #826). 6: gs::input_actions loses
+		// its two warning fields, so the members after them move (#782).
+		inline constexpr std::uint64_t layout_revision = 6;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept

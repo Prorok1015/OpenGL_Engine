@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -178,6 +179,61 @@ BOOST_AUTO_TEST_CASE(Create_InsideTheTemplate_IsRefusedAndLeavesItAsItWas)
 	BOOST_TEST(entries_in(dir.path() / "tpl") == before);
 	BOOST_TEST(!fs::exists(dir.path() / "tpl" / "game"));
 	BOOST_TEST(!fs::exists(dir.path() / "tpl" / "res" / "game"));
+}
+
+// #765: the editor's hook runs on the copied, stamped project before it is moved into place.
+BOOST_AUTO_TEST_CASE(Create_WithAPrepareHook_RunsItOnTheStagingFolderBeforeTheMove)
+{
+	test_util::temp_dir dir("prj_create_prepare");
+	const fs::path target = dir.path() / "game";
+	fs::path seen;
+	bool target_existed = true;
+	std::string stamped;
+
+	const auto created = prj::create_project(k_empty_template, target, "Prepared", [&](const fs::path& staging) {
+		seen = staging;
+		target_existed = fs::exists(target);
+		stamped = read_text(staging / "project.snkproj");
+		std::ofstream marker(staging / "marker.txt", std::ios::binary);
+		marker << "prepared";
+		return std::string{};
+	});
+
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+	BOOST_TEST(!seen.empty());
+	BOOST_TEST((seen != target));
+	BOOST_TEST((seen.parent_path() == target.parent_path()));
+	BOOST_TEST(!target_existed);
+	BOOST_TEST(stamped.find("\"Prepared\"") != std::string::npos);
+	BOOST_TEST(read_text(target / "marker.txt") == "prepared");
+	BOOST_TEST(!fs::exists(seen));
+	BOOST_TEST(entries_in(dir.path()) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Create_WhenThePrepareHookFails_ReportsItAndLeavesNothing)
+{
+	test_util::temp_dir dir("prj_create_prepare_fails");
+	fs::create_directories(dir.path() / "picked");
+
+	const auto failing = [](const fs::path& staging) {
+		std::ofstream half_done(staging / "half_done.txt", std::ios::binary);
+		half_done << "x";
+		return std::string{ "the hook refused" };
+	};
+	const auto throwing = [](const fs::path&) -> std::string { throw std::runtime_error("the hook threw"); };
+
+	for (const char* target : { "game", "picked" }) {
+		BOOST_TEST_INFO("target: " << target);
+		const auto created = prj::create_project(k_empty_template, dir.path() / target, "Game", failing);
+		BOOST_TEST(created.error == "the hook refused");
+		BOOST_TEST(created.manifest_file.empty());
+		const auto thrown = prj::create_project(k_empty_template, dir.path() / target, "Game", throwing);
+		BOOST_TEST(thrown.error.find("the hook threw") != std::string::npos);
+		BOOST_TEST(thrown.manifest_file.empty());
+	}
+	BOOST_TEST(!fs::exists(dir.path() / "game"));
+	BOOST_TEST(fs::is_empty(dir.path() / "picked")); // the folder the user picked stays as it was
+	BOOST_TEST(entries_in(dir.path()) == 1u); // no staging folder left
 }
 
 BOOST_AUTO_TEST_SUITE_END()

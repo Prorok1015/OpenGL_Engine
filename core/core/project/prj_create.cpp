@@ -2,6 +2,7 @@
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project/prj_version.h>
+#include <exception>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -74,7 +75,8 @@ namespace
 	}
 }
 
-prj::create_result prj::create_project(const fs::path& template_dir, const fs::path& requested_dir, std::string_view name)
+prj::create_result prj::create_project(const fs::path& template_dir, const fs::path& requested_dir, std::string_view name,
+	const prepare_project& prepare)
 {
 	create_result result;
 	std::error_code ec;
@@ -139,6 +141,17 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 	}
 	if (auto problem = stamp_manifest(staging / k_manifest_file_name, name)) {
 		return fail(std::move(*problem));
+	}
+	if (prepare) {
+		std::string problem;
+		try {
+			problem = prepare(staging);
+		} catch (const std::exception& error) {
+			problem = std::format("cannot prepare the new project: {}", error.what());
+		}
+		if (!problem.empty()) {
+			return fail(std::move(problem));
+		}
 	}
 	if (fs::exists(status)) {
 		fs::remove(target_dir, ec); // the empty folder the user picked

@@ -93,13 +93,21 @@ void edt::data_document_panel::on_render()
 		if (!schema || !descs) {
 			ImGui::TextDisabled("The type of this document is not registered any more.");
 		} else {
-			const schema_ui::context context{ descs->schemas(),
+			// Keys typed or refused for the content shown before are of no use to the content shown now; the window's own
+			// edits move the generation too, and are taken in below.
+			if (m_document.generation() != m_state_generation) {
+				m_map_state.clear();
+				m_state_generation = m_document.generation();
+			}
+			schema_ui::context context{ descs->schemas(),
 				[](const std::string& label, boost::json::value& value) {
 					ImGui::TextDisabled("%s: %s", label.c_str(), boost::json::serialize(value).c_str());
 					return false;
 				},
 				{} };
+			context.map_state = &m_map_state;
 			m_document.edit([&](boost::json::value& shown) { return schema_ui::draw_fields(*schema, shown, context); });
+			m_state_generation = m_document.generation();
 		}
 	}
 	ImGui::EndChild();

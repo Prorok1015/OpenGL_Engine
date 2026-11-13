@@ -309,7 +309,6 @@ namespace app::modules {
 			std::string_view name() const { return m_module->name(); }
 			std::string describe() const { return m_source->describe(); }
 			// The api version the module was built against; 0 when its entry has none.
-			std::uint32_t api_version() const { return m_source->entry().api_version ? m_source->entry().api_version() : 0u; }
 
 		private:
 			friend class module_loader;
