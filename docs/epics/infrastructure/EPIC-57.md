@@ -216,6 +216,7 @@ S57-2 поднимает версию до 4.0 и **открывает окно 
 - Редактор открывает проект без миграции: всё работает по путям, Problems показывает «нет ID».
 - Повторный запуск шагов ничего не меняет.
 - Деревья репозитория (`core/res`, `projects/sandbox`, `tests/static_game`) получают `.resource` один раз отдельной story (S57-6), ID фиксированы и попадают в SDK.
+  Сделано (#768): `tools/ci/asset_ids.py` — `--write <деревья>` создаёт недостающие `.resource` (desc берёт корневой `__guid`, остальные — новый UUID; существующие не трогает, повторный запуск ничего не меняет), `--check` (CI, job без сборки) требует `.resource` у каждого файла `core/res`, `projects/sandbox/res`, `tests/static_game/project/res` в байтах `res::write_asset_meta`, без сирот и повторов ID. Обход — как у базы ассетов редактора (скрытые и `res::is_ignored_asset_name`, ссылки, сабмодуль `samples` пропускаются); таблица игнорируемых имён `tests/data/asset_ignored_names.txt` общая для `--self-test` и `tests/res_repo_layout_tests.cpp`, тот же тест проверяет и сами `.resource`.
 
 ## 9. Развилки — решены
 

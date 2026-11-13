@@ -32,6 +32,10 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 			layer_entry e;
 			e.path = it->path();
 			e.name = fs_paths::utf8_of(e.path.filename());
+			// A .resource sidecar or a file the asset walk skips is not an asset; left out before the merge so it shadows nothing.
+			if (!is_dir && (res::is_skipped_asset_name(e.name, false) || res::is_asset_meta_sidecar(e.name))) {
+				continue;
+			}
 			e.relative = relative_dir / e.path.filename();
 			e.is_dir = is_dir;
 			e.layer = i;
