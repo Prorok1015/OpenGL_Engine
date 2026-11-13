@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <cstdint>
 #include <fstream>
+#include <boost/json.hpp>
 #include <string>
 #include <vector>
 
@@ -53,8 +54,10 @@ BOOST_AUTO_TEST_CASE(AThresholdOfAGamepadBinding_IsWrittenAndRead)
 	BOOST_TEST(back.overrides().at("Aim")[1].threshold() == 0.0f);
 	BOOST_TEST((back.overrides() == user.overrides()));
 	const std::string text = gs::write_user_bindings(user);
-	BOOST_TEST(text.find("\"threshold\":0.35") != std::string::npos);
-	BOOST_TEST(text.find("0.3499") == std::string::npos);
+	const auto written = boost::json::parse(text);
+	const auto& first = written.at("actions").as_array().at(0).at("bindings").as_array().at(0).as_object();
+	BOOST_TEST_INFO("file: " << text);
+	BOOST_TEST(boost::json::serialize(first.at("threshold")) == "0.35");
 }
 
 BOOST_AUTO_TEST_CASE(ABindingThatIsWrong_IsSkippedAndTheRestLoads)
