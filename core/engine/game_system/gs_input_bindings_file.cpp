@@ -45,10 +45,15 @@ namespace
 		}
 	}
 
-	// The float as its shortest text read back as a double (0.35f writes 0.35, not 0.3499999940395355).
+	// The float as its shortest text read back as a double (0.35f writes 0.35, not 0.3499999940395355). The default parse of
+	// Boost.JSON is fast, not exact: 0.35 may come out one step off, so the exact one is asked for.
 	json::value threshold_json(float value)
 	{
-		return json::parse(std::format("{}", value));
+		json::error_code ec;
+		json::parse_options options;
+		options.numbers = json::number_precision::precise;
+		json::value number = json::parse(std::format("{}", value), ec, {}, options);
+		return ec ? json::value(static_cast<double>(value)) : number;
 	}
 
 	void parse_binding(const json::value& item, std::vector<inp::action_binding>& out, std::string_view where)
