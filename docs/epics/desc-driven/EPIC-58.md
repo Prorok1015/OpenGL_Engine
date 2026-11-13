@@ -123,6 +123,8 @@
 
 **Ограничение.** `register_migration` inline и пишет прямо в `m_migrations` (`desc_system.h:412`). Каждый модуль держит копию этого кода, поэтому сменить тип `m_migrations` или сделать старую сигнатуру обёрткой нельзя: модуль, собранный раньше, писал бы в член другой раскладки.
 
+> **С 4.0 (#786) ограничения нет.** Писатели и читатели `desc_system` — `register_migration`, `current_version`, `migrate_tree`, `register_schema`, фабрики и т. д. — вынесены в `desc_system.cpp`. В заголовке не осталось кода, который трогает `m_migrations`, `m_schemas` или `factory_map`; то же у `schema_registry` и `dynamic_desc`, включая конструкторы и деструкторы. Тип реестра теперь можно менять в минорной версии, если не меняется `sizeof(desc_system)`: `scene_layer` держит его по значению (#751).
+
 **Решение** (ведущая сессия, ревью #748):
 
 - `m_migrations` и старая `register_migration` **не трогаются**.

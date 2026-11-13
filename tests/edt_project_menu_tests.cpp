@@ -53,6 +53,13 @@ namespace {
 			hooks.quick_save = [] { return true; };
 			hooks.save_level_as = [](const std::string&) { return true; };
 			hooks.discard_changes = [this] { dirty = false; discarded = true; };
+			hooks.other_documents_dirty = [this] { return other_dirty; };
+			hooks.save_other_documents = [this] {
+				++other_saves;
+				if (other_save_ok) other_dirty = false;
+				return other_save_ok;
+			};
+			hooks.discard_other_documents = [this] { other_dirty = false; other_discarded = true; };
 			hooks.load_level = [](const fs::path&) {};
 			hooks.exit = [this] { ++exits; };
 			hooks.open_project = [this](const fs::path& manifest, bool allow) -> std::optional<std::string> {
@@ -87,6 +94,10 @@ namespace {
 		std::unique_ptr<edt::file_menu> menu;
 		bool dirty = false;
 		bool discarded = false;
+		bool other_dirty = false;
+		bool other_save_ok = true;
+		bool other_discarded = false;
+		int other_saves = 0;
 		int exits = 0;
 		std::vector<fs::path> started;
 		bool allowed_mismatch = false;
@@ -149,6 +160,60 @@ BOOST_AUTO_TEST_CASE(OpenProject_WithUnsavedChanges_NeedsTheirFate)
 	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game", R"(,"discard_unsaved":true)")).ok);
 	BOOST_TEST(discarded);
 	BOOST_TEST(exits == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Exit_WithAnUnsavedDataDocument_AsksAndSavesItBeforeExiting)
+{
+	other_dirty = true;
+	menu->exit();
+	BOOST_REQUIRE(dialogs.list().size() == 1u);
+	BOOST_TEST(exits == 0);
+
+	BOOST_TEST(dialogs.answer(dialogs.list().front().id, json::object{ { "choice", "save" } }).ok);
+	BOOST_TEST(other_saves == 1);
+	BOOST_TEST(!other_dirty);
+	BOOST_TEST(exits == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Exit_WhenADataDocumentCannotBeSaved_StaysOpen)
+{
+	other_dirty = true;
+	other_save_ok = false;
+	menu->exit();
+	BOOST_REQUIRE(dialogs.list().size() == 1u);
+
+	dialogs.answer(dialogs.list().front().id, json::object{ { "choice", "save" } });
+	BOOST_TEST(other_saves == 1);
+	BOOST_TEST(other_dirty);
+	BOOST_TEST(exits == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Exit_Discard_DropsTheDataDocumentsToo_AndCancelKeepsEverything)
+{
+	other_dirty = true;
+	menu->exit();
+	BOOST_REQUIRE(dialogs.list().size() == 1u);
+	dialogs.answer(dialogs.list().front().id, json::object{ { "choice", "cancel" } });
+	BOOST_TEST(other_dirty);
+	BOOST_TEST(!other_discarded);
+	BOOST_TEST(exits == 0);
+
+	menu->exit();
+	BOOST_REQUIRE(dialogs.list().size() == 1u);
+	dialogs.answer(dialogs.list().front().id, json::object{ { "choice", "discard" } });
+	BOOST_TEST(other_discarded);
+	BOOST_TEST(other_saves == 0);
+	BOOST_TEST(exits == 1);
+}
+
+BOOST_AUTO_TEST_CASE(OpenProject_WithOnlyADataDocumentUnsaved_NeedsItsFate)
+{
+	make_project("game");
+	other_dirty = true;
+
+	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game")).code == "needs_input");
+	BOOST_TEST(started.empty());
+	BOOST_TEST(other_dirty);
 }
 
 BOOST_AUTO_TEST_CASE(OpenProject_PassesTheMismatchFlagOn)

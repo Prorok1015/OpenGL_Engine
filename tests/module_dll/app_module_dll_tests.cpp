@@ -9,6 +9,8 @@
 #include <snk/platform/plt_process.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_command_buffer.hpp>
+#include <snk/ecs/ecs_component.h>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
@@ -336,6 +338,40 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
 }
 
+// #738, #784: a C++ component of the module spawned through the sandbox reaches the world by the engine's code and the
+// module's adapter; its entity field names the world entity, and the module's on_construct observer sees that id already.
+BOOST_AUTO_TEST_CASE(a_module_component_from_the_sandbox_names_world_entities_when_it_is_placed)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", DLL_LEVEL)));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	// Observers hear nothing in Edit.
+	contexts().level_set().set_mode(ecs::run_mode::play);
+	entt::registry& reg = world->state();
+
+	auto& sandbox = reg.ctx().contains<ecs::entity_spawner>() ? reg.ctx().get<ecs::entity_spawner>() : reg.ctx().emplace<ecs::entity_spawner>();
+	const auto target = sandbox.create();
+	const auto holder = sandbox.create();
+	sandbox.emplace<dll_game::dll_link>(holder, dll_game::dll_link{ ecs::to_main(target), 5 });
+	scn::world_context::apply_commands(reg, &layer->meta());
+	// What the observer queued through the changer.
+	scn::world_context::apply_commands(reg, &layer->meta());
+
+	const auto view = reg.view<const dll_game::dll_link>();
+	BOOST_REQUIRE(view.size() == 1u);
+	const entt::entity moved = view.front();
+	const dll_game::dll_link& link = view.get<const dll_game::dll_link>(moved);
+	BOOST_TEST(link.value == 5);
+	BOOST_TEST(reg.valid(link.target));
+	BOOST_TEST((link.target != moved));
+	BOOST_REQUIRE(reg.all_of<dll_game::dll_link_seen>(moved));
+	BOOST_TEST((reg.get<dll_game::dll_link_seen>(moved).target == link.target));
+}
+
 // #789: the types a module marks as data documents, from its own code (register_document<T>) and through the export of
 // module_context (mark_document), are documents of the module's layer for the host and go with the module.
 BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with_it)
@@ -358,6 +394,37 @@ BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with
 	auto* after = contexts().game_layer();
 	BOOST_REQUIRE(after != nullptr);
 	BOOST_TEST(after->descs().document_types().empty());
+}
+
+// #786: migrations a module registers are written by the engine's code (register_migration is out of line since 4.0), are
+// run by its migrate_tree with their summaries and warnings, and go with the module.
+BOOST_AUTO_TEST_CASE(a_module_registers_migrations_through_the_engine)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	const desc::desc_system& descs = layer->descs();
+	BOOST_TEST(descs.current_version(dll_game::migrated_type) == 3);
+	BOOST_TEST(descs.migration_summary(dll_game::migrated_type, 2) == "renames old to new");
+
+	boost::json::object file{ { "__type", std::string{ dll_game::migrated_type } }, { "old", 5 } };
+	std::vector<desc::migration_warning> warnings;
+	descs.migrate_tree(file, "dll.desc", warnings);
+	BOOST_TEST(file.at("__version").as_int64() == 3);
+	BOOST_TEST(file.at("migrated_by").as_string() == "dll");
+	BOOST_TEST(file.at("new").as_int64() == 5);
+	BOOST_TEST(!file.contains("old"));
+	BOOST_TEST(warnings.empty());
+
+	boost::json::object without_old{ { "__type", std::string{ dll_game::migrated_type } } };
+	descs.migrate_tree(without_old, "dll2.desc", warnings);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0].file == "dll2.desc");
+
+	loader.unload(dll_game::module_name, root);
+	auto* after = contexts().game_layer();
+	BOOST_REQUIRE(after != nullptr);
+	BOOST_TEST(after->descs().current_version(dll_game::migrated_type) == 1);
 }
 
 // #758: the module's inline readers (desc_ref and res_tag fields, compiled in the module) read a reference written as
