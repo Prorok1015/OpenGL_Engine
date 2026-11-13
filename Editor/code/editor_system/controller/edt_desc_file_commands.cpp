@@ -655,17 +655,26 @@ edt::desc_file_read edt::read_desc_file(res::resource_system& resources, const d
 		out.error = found.error;
 		return out;
 	}
+	out.located = true;
 	if (!found.found) {
 		out.error = std::format("no file '{}'", tag.view());
+		out.missing = true;
+		// A new file lands in the top layer; it is the open level's only when it has the level's own name.
+		out.top_layer = true;
+		if (layout.open_level_files) {
+			const std::vector<std::string> open = layout.open_level_files();
+			out.in_open_level = std::ranges::find(open, named.path) != open.end();
+		}
 		return out;
 	}
+	out.top_layer = files.is_top_layer(found);
+	out.in_open_level = files.belongs_to_open_level(found);
 	desc_files::read_result read = files.read_fresh(named.path, found);
 	if (!read.ok()) {
+		out.located = false;
 		out.error = std::move(read.error);
 		return out;
 	}
 	out.bytes = std::move(read.bytes);
-	out.top_layer = files.is_top_layer(found);
-	out.in_open_level = files.belongs_to_open_level(found);
 	return out;
 }

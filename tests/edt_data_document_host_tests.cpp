@@ -305,4 +305,41 @@ BOOST_AUTO_TEST_CASE(TheBannersOverwrite_AlwaysAsks_AndCancelWritesNothing)
 	BOOST_TEST(open.is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(ClosePrompt_Save_OfAFileThatChangedOnDisk_AsksAgain_OverwriteClosesCancelKeepsTheWindow)
+{
+	edt::document& open = open_config();
+	const edt::document_id id = open.id();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	host->request_close(id);
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().list().front().kind == "choice");
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
+	BOOST_TEST(open_documents() == 2u);
+	BOOST_TEST(host->owns(id));
+
+	host->request_close(id);
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+	BOOST_TEST(open_documents() == 1u);
+	BOOST_TEST(read_text("config.desc").find("5.0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_OfAFileThatChangedOnDisk_AsksAndDoesNotLetTheExitGoOn)
+{
+	edt::document& open = open_config();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	BOOST_TEST(!host->save_all());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().list().front().kind == "choice");
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
+	BOOST_TEST(open.is_dirty());
+	BOOST_TEST(read_text("config.desc").find("4.0") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

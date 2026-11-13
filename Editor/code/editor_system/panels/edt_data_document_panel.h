@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_document.h>
 #include <snk/editor/edt_panel_base.h>
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -43,7 +44,9 @@ namespace edt
 		std::function<void()> m_on_save;
 		std::function<void()> m_on_reload;
 		std::function<void()> m_on_overwrite;
-		bool m_banner_dismissed = false;
+		// The outside change the person put off with Later (data_document::disk_change_serial); a newer one shows the banner again.
+		std::uint64_t m_dismissed_serial = 0;
+		bool m_dismissed = false;
 		std::string m_error;
 		bool m_focus = false;
 	};

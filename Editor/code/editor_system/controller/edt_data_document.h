@@ -73,6 +73,9 @@ namespace edt
 		// command for it): the version on disk is taken as the base, then the same save() runs with every check (project's
 		// top layer, not the open level, validate_desc_tree, size). A refusal leaves the document as it was, still flagged.
 		save_result save_over();
+		// Moves when a version of the file other than the ones seen before is found on disk: a banner the person put off
+		// ("Later") comes back for the next outside change, not for the same one signalled again.
+		std::uint64_t disk_change_serial() const { return m_disk_changes; }
 		// Why the parents could not be read again after one of them changed (the last good ones stay shown); empty: none.
 		const std::string& chain_problem() const { return m_chain_problem; }
 
@@ -115,6 +118,8 @@ namespace edt
 		void unwatch_files();
 		void on_changed(const res::tag& tag);
 		void announce() const;
+		save_result write(bool over);
+		void flag_changed(const std::string& disk_version);
 		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr) const;
 
 		editor_services& m_services;
@@ -130,6 +135,8 @@ namespace edt
 		std::uint64_t m_generation = 0;
 		bool m_open = false;
 		bool m_changed_on_disk = false;
+		std::string m_flagged_version;
+		std::uint64_t m_disk_changes = 0;
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
 		editor_events* m_events = nullptr;

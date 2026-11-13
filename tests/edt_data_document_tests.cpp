@@ -743,4 +743,116 @@ BOOST_AUTO_TEST_CASE(ASaveThatFindsAnotherVersionOnDisk_FlagsTheDocumentBeforeTh
 	BOOST_TEST(document.changed_on_disk());
 }
 
+BOOST_AUTO_TEST_CASE(SaveOver_OfACleanDocument_StillWrites_WhenTheFileBecameSomethingElse)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	put("config.desc", R"({"__type":"test.plain","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+	BOOST_TEST(!document.reload().opened);
+
+	const edt::save_result saved = document.save_over();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	BOOST_TEST(parsed("config.desc").at("__type").as_string() == "test.config");
+	BOOST_TEST(!document.changed_on_disk());
+	// the version of what was written is the base now: the next save finds nothing foreign
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 5.0;
+		return true;
+	}));
+	BOOST_TEST(document.save().saved);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 5.0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_CreatesAFileThatIsGone_AndWritesOverOneThatNoLongerParses)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+
+	fs::remove(res_root / "config.desc");
+	BOOST_TEST(!document.save().saved);
+	BOOST_REQUIRE_MESSAGE(document.save_over().saved, "a gone file is created again");
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
+
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 8.0;
+		return true;
+	}));
+	put("config.desc", "{ not json");
+	BOOST_TEST(!document.save().saved);
+	BOOST_REQUIRE_MESSAGE(document.save_over().saved, "a file that does not parse is replaced");
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 8.0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveOver_OfAGoneFile_StillRefusesTheOpenLevelsName)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	fs::remove(res_root / "config.desc");
+	open_level = { "config.desc" };
+
+	BOOST_TEST(!document.save_over().saved);
+	BOOST_TEST(!fs::exists(res_root / "config.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(TheOwnWriteOfASaveOver_IsNoChangeOnDisk)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_REQUIRE(document.changed_on_disk());
+
+	BOOST_REQUIRE(document.save_over().saved);
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(!document.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(DiskChangeSerial_MovesForANewOutsideVersionOnly)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const std::uint64_t start = document.disk_change_serial();
+
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	rs->signal_changed(file);
+	pump();
+	const std::uint64_t first = document.disk_change_serial();
+	BOOST_TEST(first == start + 1);
+
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == first);
+
+	put("config.desc", R"({"__type":"test.config","speed":6.0})");
+	rs->signal_changed(file);
+	pump();
+	BOOST_TEST(document.disk_change_serial() == first + 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

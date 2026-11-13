@@ -37,7 +37,8 @@ namespace edt
 		void request_close(document_id id);
 		void close(document_id id);
 		// The window's Save. A file that changed on disk is a question, not an error: reload it (the edits are lost),
-		// overwrite it with this version, or cancel. Any other refusal is said in the window and the log.
+		// overwrite it with this version, or cancel. Any other refusal is said in the window and the log. The save of the
+		// close prompt asks the same, and Cancel keeps the window open.
 		void request_save(document_id id);
 		// The banner's buttons: Reload asks first when there are unsaved edits (they are lost), Overwrite always asks.
 		void request_reload(document_id id);
@@ -45,7 +46,9 @@ namespace edt
 		bool owns(document_id id) const { return m_windows.contains(id); }
 
 		std::vector<document_id> dirty() const;
-		// Saves every dirty one; the first that cannot be saved is told to the person and stops it (false).
+		// Saves every dirty one; the first that cannot be saved is told to the person and stops it (false). A file that
+		// changed on disk is asked about (Reload / Overwrite / Cancel) and stops it too: whatever is answered, the person
+		// exits again (the answer comes later, the exit does not wait for it).
 		bool save_all();
 		// The windows and the subscription go before the documents do.
 		void shutdown();
@@ -59,9 +62,12 @@ namespace edt
 		};
 
 		void focus(document& open);
-		void reload_now(document_id id);
-		void overwrite_now(document_id id);
-		void ask_conflict(document_id id);
+		bool reload_now(document_id id);
+		bool overwrite_now(document_id id);
+		// Reload / Overwrite / Cancel for a file that changed on disk; `done(true)` after a reload or an overwrite that
+		// worked, `done(false)` after Cancel or a failure (empty `done`: nothing follows).
+		void ask_conflict(document_id id, std::function<void(bool resolved)> done);
+		bool in_conflict(document_id id) const;
 		void show_error(document_id id, const std::string& text);
 
 		editor_context& m_context;

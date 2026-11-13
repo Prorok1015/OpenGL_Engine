@@ -89,6 +89,12 @@ void edt::data_document_host::request_close(document_id id)
 		if (!still_open || choice == unsaved_choice::cancel) return;
 		if (choice == unsaved_choice::save) {
 			if (const save_result saved = still_open->save(); !saved.saved) {
+				if (in_conflict(id)) {
+					ask_conflict(id, [this, id](bool resolved) {
+						if (resolved) close(id);
+					});
+					return;
+				}
 				egLOG_WARN("editor", "{}", saved.error);
 				m_context.dialogs().message(message_level::error, std::format("'{}' was not saved and stays open:\n{}", still_open->title(), saved.error));
 				return;
@@ -104,6 +110,12 @@ void edt::data_document_host::show_error(document_id id, const std::string& text
 	if (const auto found = m_windows.find(id); found != m_windows.end()) found->second.panel->set_error(text);
 }
 
+bool edt::data_document_host::in_conflict(document_id id) const
+{
+	const auto found = m_windows.find(id);
+	return found != m_windows.end() && found->second.data->changed_on_disk();
+}
+
 void edt::data_document_host::request_save(document_id id)
 {
 	const auto found = m_windows.find(id);
@@ -114,13 +126,13 @@ void edt::data_document_host::request_save(document_id id)
 		return;
 	}
 	if (found->second.data->changed_on_disk()) {
-		ask_conflict(id);
+		ask_conflict(id, {});
 		return;
 	}
 	show_error(id, saved.error);
 }
 
-void edt::data_document_host::ask_conflict(document_id id)
+void edt::data_document_host::ask_conflict(document_id id, std::function<void(bool resolved)> done)
 {
 	const auto found = m_windows.find(id);
 	if (found == m_windows.end()) return;
@@ -128,33 +140,37 @@ void edt::data_document_host::ask_conflict(document_id id)
 		std::format("'{}' was changed on disk since you opened it.\n\nReload reads the file again and drops your unsaved changes. "
 			"Overwrite replaces the file with your version.", found->second.data->title()),
 		{ "Reload (drop my changes)", "Overwrite the file", "Cancel" },
-		[this, id, alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
-			if (!alive.lock() || !choice) return;
-			if (*choice == 0) reload_now(id);
-			else if (*choice == 1) overwrite_now(id);
+		[this, id, done = std::move(done), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
+			if (!alive.lock()) return;
+			bool resolved = false;
+			if (choice && *choice == 0) resolved = reload_now(id);
+			else if (choice && *choice == 1) resolved = overwrite_now(id);
+			if (done) done(resolved);
 		});
 }
 
-void edt::data_document_host::reload_now(document_id id)
+bool edt::data_document_host::reload_now(document_id id)
 {
 	const auto found = m_windows.find(id);
-	if (found == m_windows.end()) return;
+	if (found == m_windows.end()) return false;
 	if (const open_result reloaded = found->second.data->reload(); !reloaded.opened) {
 		show_error(id, reloaded.error);
-		return;
+		return false;
 	}
 	found->second.panel->set_error({});
+	return true;
 }
 
-void edt::data_document_host::overwrite_now(document_id id)
+bool edt::data_document_host::overwrite_now(document_id id)
 {
 	const auto found = m_windows.find(id);
-	if (found == m_windows.end()) return;
+	if (found == m_windows.end()) return false;
 	if (const save_result saved = found->second.data->save_over(); !saved.saved) {
 		show_error(id, saved.error);
-		return;
+		return false;
 	}
 	found->second.panel->set_error({});
+	return true;
 }
 
 void edt::data_document_host::request_reload(document_id id)
@@ -208,6 +224,10 @@ bool edt::data_document_host::save_all()
 		document* open = m_context.documents().find(id);
 		if (!open) continue;
 		if (const save_result saved = open->save(); !saved.saved) {
+			if (in_conflict(id)) {
+				ask_conflict(id, {});
+				return false;
+			}
 			egLOG_WARN("editor", "{}", saved.error);
 			m_context.dialogs().message(message_level::error, std::format("'{}' was not saved and stays open:\n{}", open->title(), saved.error));
 			return false;

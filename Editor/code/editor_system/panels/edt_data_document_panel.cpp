@@ -51,8 +51,8 @@ void edt::data_document_panel::on_render()
 		ImGui::TextColored(k_warning, "A parent could not be read, the last good values are shown: %s", status.chain_problem.c_str());
 	}
 	if (!status.changed_on_disk) {
-		m_banner_dismissed = false;
-	} else if (!m_banner_dismissed) {
+		m_dismissed = false;
+	} else if (!m_dismissed || m_dismissed_serial != m_document.disk_change_serial()) {
 		ImGui::TextColored(k_warning, "The file changed on disk since it was opened.");
 		if (m_on_reload && m_on_overwrite) {
 			ImGui::SameLine();
@@ -60,7 +60,10 @@ void edt::data_document_panel::on_render()
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Overwrite")) m_on_overwrite();
 			ImGui::SameLine();
-			if (ImGui::SmallButton("Later")) m_banner_dismissed = true;
+			if (ImGui::SmallButton("Later")) {
+				m_dismissed = true;
+				m_dismissed_serial = m_document.disk_change_serial();
+			}
 		}
 	}
 
