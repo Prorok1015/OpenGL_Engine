@@ -383,7 +383,7 @@ BOOST_AUTO_TEST_CASE(TheActiveDocumentFollowsTheFocusOfTwoDataWindows_InEitherRe
 	BOOST_REQUIRE(b != nullptr);
 	edt::document_manager& documents = context->documents();
 
-	const auto frame = [](edt::panel_base* one, edt::panel_base* two) {
+	const auto frame = [this](edt::panel_base* one, edt::panel_base* two) {
 		ImGui::NewFrame();
 		one->render();
 		two->render();
