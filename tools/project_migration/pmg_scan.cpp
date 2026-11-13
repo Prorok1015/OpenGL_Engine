@@ -349,7 +349,7 @@ namespace
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
-			if (res::is_skipped_asset_name(name, fs::is_directory(status)) || (at_project_root && prj::migration::is_project_own_name(name))) return;
+			if (res::is_skipped_asset_entry(name, fs::is_directory(status), at_project_root)) return;
 			// Only a real folder is entered: a link or a junction to one is reported, never followed.
 			if (fs::is_directory(status)) {
 				folder(path);
@@ -429,7 +429,7 @@ namespace
 	prj::migration::manifest_state scan_manifest(const fs::path& root, std::optional<prj::manifest>& manifest)
 	{
 		prj::migration::manifest_state state;
-		const fs::path path = root / "project.snkproj";
+		const fs::path path = root / fs_paths::path_from_utf8(prj::k_manifest_file_name);
 		read_result read = read_file(path, std::uintmax_t{ 1 } << 20);
 		if (!read.error.empty()) {
 			state.kind = file_class::invalid;

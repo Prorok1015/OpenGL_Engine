@@ -723,8 +723,7 @@ namespace
 				std::string prefix = fs_paths::generic_utf8_of(root.lexically_normal());
 				while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
 				if (prefix == "." || prefix.empty()) {
-					const std::string first = key_of(parts.front());
-					if (parts.size() > 1 && (first == "code" || first == "build")) {
+					if (parts.size() > 1 && res::is_project_own_name(parts.front())) {
 						throw std::runtime_error(std::format("{}: '{}' is the project's code or build output, not content", m_step, relative));
 					}
 					inside = true;

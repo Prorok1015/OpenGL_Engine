@@ -1,6 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include "edt_asset_layers.h"
+#include <snk/resource/res_asset_walk.h>
+#include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
 
 // The merged res:// directory view of the asset browser (no ImGui).
 
@@ -116,6 +121,76 @@ BOOST_AUTO_TEST_CASE(SidecarsAndIgnoredFilesAreNotListed)
 	const auto entries = edt::list_merged_directory({ base.path(), top.path() }, {});
 
 	BOOST_TEST((names(entries) == std::vector<std::string>{ "a.png", "b.desc", "y.tmp.png" }));
+}
+
+// #854: the browser lists what the asset walk enters: no hidden folder, no link to a folder.
+BOOST_AUTO_TEST_CASE(HiddenAndLinkedFoldersAreNotListed)
+{
+	test_util::temp_dir top("asset_layers_hidden_dirs");
+	top.write(".git/config", "x");
+	top.write(".idea/workspace.xml", "x");
+	top.write("shown/a.png", "a");
+	std::error_code ec;
+	std::filesystem::create_directory_symlink(top.path() / "shown", top.path() / "linked", ec);
+
+	BOOST_TEST((names(edt::list_merged_directory({ top.path() }, {})) == std::vector<std::string>{ "shown" }));
+	BOOST_TEST((names(edt::list_merged_directory({ top.path() }, {}, true)) == std::vector<std::string>{ "shown" }));
+}
+
+// #854: in the layer that is the project folder (it holds project.snkproj) its code/, build/ and project.snkproj are no
+// assets and shadow nothing below; deeper down the same names are ordinary folders.
+BOOST_AUTO_TEST_CASE(TheProjectFolderLayer_HidesItsCodeBuildAndProjectFile)
+{
+	test_util::temp_dir base("asset_layers_base_project");
+	test_util::temp_dir project("asset_layers_project_root");
+	base.write("code/lib.txt", "x");
+	project.write("project.snkproj", "{}");
+	project.write("code/main.cpp", "x");
+	project.write("build/out.bin", "x");
+	project.write("textures/code/a.png", "x");
+	project.write("textures/build/b.png", "x");
+
+	const auto root = edt::list_merged_directory({ base.path(), project.path() }, {});
+	BOOST_TEST((names(root) == std::vector<std::string>{ "code", "textures" }));
+	BOOST_REQUIRE(find(root, "code") != nullptr);
+	BOOST_TEST(find(root, "code")->layer == 0u);
+	// Entered from the base layer, code/ still shows nothing of the project's code.
+	BOOST_TEST((names(edt::list_merged_directory({ base.path(), project.path() }, "code")) == std::vector<std::string>{ "lib.txt" }));
+	BOOST_TEST((names(edt::list_merged_directory({ base.path(), project.path() }, "textures")) == std::vector<std::string>{ "build", "code" }));
+}
+
+// #854: a layer without project.snkproj is no project folder: its code/ and build/ are listed as any folder.
+BOOST_AUTO_TEST_CASE(ALayerWithoutAProjectFile_ListsCodeAndBuildLikeAnyFolder)
+{
+	test_util::temp_dir top("asset_layers_no_project");
+	top.write("code/main.cpp", "x");
+	top.write("build/out.bin", "x");
+
+	BOOST_TEST((names(edt::list_merged_directory({ top.path() }, {})) == std::vector<std::string>{ "build", "code" }));
+}
+
+// #854: the project's own names follow the letter case of asset names. Where it does not count (Windows) the project's
+// BUILD/ is hidden, and Code/ entered from the base layer is the project's code/ there, so it adds nothing of its own.
+BOOST_AUTO_TEST_CASE(TheProjectsOwnNames_FollowTheLetterCaseOfAssetNames)
+{
+	BOOST_TEST(res::is_project_own_name("code"));
+	BOOST_TEST(res::is_project_own_name("Code") == res::asset_names_case_insensitive);
+	BOOST_TEST(res::is_project_own_name("BUILD") == res::asset_names_case_insensitive);
+	BOOST_TEST(res::is_project_own_name("Project.SnkProj") == res::asset_names_case_insensitive);
+	BOOST_TEST(res::is_in_project_own_folder("Code/sub") == res::asset_names_case_insensitive);
+
+	test_util::temp_dir base("asset_layers_base_case");
+	test_util::temp_dir project("asset_layers_project_case");
+	base.write("Code/lib.txt", "x");
+	project.write("project.snkproj", "{}");
+	project.write("code/main.cpp", "x");
+	project.write("BUILD/out.bin", "x");
+
+	const std::vector<std::string> expected_root = res::asset_names_case_insensitive
+		? std::vector<std::string>{ "Code" }
+		: std::vector<std::string>{ "BUILD", "Code" };
+	BOOST_TEST(names(edt::list_merged_directory({ base.path(), project.path() }, {})) == expected_root, boost::test_tools::per_element());
+	BOOST_TEST((names(edt::list_merged_directory({ base.path(), project.path() }, "Code")) == std::vector<std::string>{ "lib.txt" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
