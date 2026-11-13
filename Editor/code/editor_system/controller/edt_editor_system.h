@@ -2,6 +2,7 @@
 #include "edt_world_problems.h"
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
+#include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
 #include <snk/command/cmd_types.h>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
 #include "edt_scene_document.h"
@@ -56,6 +58,7 @@ namespace edt {
 	class live_mode;
 	class editor_context;
 	class editor_layer;
+	class data_document_host;
 	class model_importer;
 	class process_decoder;
 	class asset_exporter;
@@ -236,6 +239,13 @@ namespace edt {
 		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
 		void close_prefab_editor();
+
+		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
+		desc_file_layout desc_layout();
+		// The kinds of the asset registry first (a module's `.desc` kind, the prefab editor), then any `.desc` as a data
+		// document. `quiet`: a problem or a link, not a double click: a file that is no data document is a log line, no window.
+		bool open_asset(const res::tag& tag, bool quiet);
+		std::unique_ptr<data_document_host> m_data_documents;
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;

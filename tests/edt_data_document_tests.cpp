@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
+#include "edt_data_document_view.h"
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
@@ -596,6 +597,47 @@ BOOST_AUTO_TEST_CASE(AFlaggedChangeOnDisk_BlocksTheSaveEvenIfTheFileIsBackAsItWa
 	BOOST_TEST(!saved.saved);
 	BOOST_TEST(saved.error.find("changed on disk") != std::string::npos);
 	BOOST_TEST(text_of("config.desc") == original);
+}
+
+BOOST_AUTO_TEST_CASE(TheWindowStatus_NamesTheFileItsParentsAndWhatIsWrongWithIt)
+{
+	const res::tag parent = put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	edt::data_document_status status = edt::status_of(document);
+	BOOST_TEST(status.label == "child (test.config)");
+	BOOST_TEST(status.path == "res://child.desc");
+	BOOST_TEST(status.parents == "res://parent.desc");
+	BOOST_TEST(!status.dirty);
+	BOOST_TEST(status.can_save);
+	BOOST_TEST(!status.changed_on_disk);
+	BOOST_TEST(status.chain_problem.empty());
+
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 5.0;
+		return true;
+	}));
+	BOOST_TEST(edt::status_of(document).dirty);
+
+	put("parent.desc", R"({"__type":"test.plain"})");
+	rs->signal_changed(parent);
+	pump();
+	status = edt::status_of(document);
+	BOOST_TEST(!status.chain_problem.empty());
+	BOOST_TEST(status.parents == "res://parent.desc");
+}
+
+BOOST_AUTO_TEST_CASE(TheWindowTitle_KeepsItsIdentityWhateverTheLabelSays)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+
+	BOOST_TEST(edt::data_document_panel_id(7) == "data_doc:7");
+	BOOST_TEST(edt::data_document_window_title(document, 7) == "child (test.config)###data_doc:7");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
