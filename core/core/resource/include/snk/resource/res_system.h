@@ -4,6 +4,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/res_tag_keyed_map.hpp>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
@@ -14,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <memory>
 #include <optional>
@@ -160,7 +162,22 @@ namespace res
 		// dependency graph, transitively) right away. The watchers are called later on the main thread
 		// (task_system::drain_main), one task per signal: those registered before the signal and still registered by
 		// then, each tag of the batch once, parents before the resources that depend on them.
+		// With an asset index, a file with an ID is signalled under its ID; one that is gone (deleted, or renamed away)
+		// waits for the index's batch (apply_asset_batch): a rename keeps what was loaded.
 		void signal_changed(const res::tag& tag);
+
+		// The asset index (EPIC-57 section 5), root only, main thread: a file it gives an ID is cached, pinned, watched and
+		// reloaded under {ID, type}, so its tags of any spelling share one block and a rename keeps it; anything else stays
+		// keyed by its tag. Without one (Shipping until #46, tests) everything is keyed by tag, as before. Attached once
+		// the index can answer, detached (nullptr) before it goes: what waits for its batch is evicted then, and what was
+		// keyed by an ID stays so until released.
+		void set_asset_index(std::shared_ptr<const asset_index> index);
+		// Main thread, root only: the owner of the index has taken in a batch of file changes and updated the index.
+		// A file that is gone keeps its resource when `moved` names it (from, to) and the index gives `to` the same ID;
+		// everything else that waited for the batch is evicted now, as signal_changed would have done.
+		void apply_asset_batch(std::span<const std::pair<res::tag, res::tag>> moved);
+		// Read-only: files gone from disk whose eviction waits for apply_asset_batch. For tests and diagnostics.
+		std::size_t waiting_for_index_count() const;
 
 		// Read-only: cached resources of this system (a layer: of the layer only) that someone still references, pinned
 		// ones included. For tests and diagnostics.
@@ -229,8 +246,9 @@ namespace res
 
 		data fetch_data(const tag& tag) const;
 
-		// The tag a reference read from a file loads. Until the asset index (S57-7) the guid is not looked up: the path
-		// is the tag, and a reference with a guid but no path resolves to the empty tag, with a warning.
+		// The tag a reference read from a file loads: the file that holds its guid now, by the asset index; otherwise its
+		// path. The layers resolve the tag as for any request, so a project file over an engine asset's path wins for a
+		// reference with an ID too (R28). A guid the index does not know and no path give the empty tag, with a warning.
 		tag resolve_reference(const reference& ref) const;
 
 		template<class RESOURCE>
@@ -331,6 +349,13 @@ namespace res
 		};
 
 		void check_writable(const res::tag& tag) const;
+		// The key of `tag` in the cache, the pins, the aliases, the dependency graph and the watchers: its ID as the tag
+		// asset-id://<uuid> when the root's index gives it one, the tag itself otherwise. Loads use the requested tag.
+		res::tag node_of(const res::tag& tag) const;
+		std::shared_ptr<const asset_index> current_index() const;
+		// signal_changed() of a file with an ID (`node`) that is gone from disk: kept for apply_asset_batch.
+		bool wait_for_index(const res::tag& tag, const res::tag& node);
+		void evict_waiting(std::vector<res::tag> nodes);
 		const resource_system& root() const;
 		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
@@ -374,7 +399,7 @@ namespace res
 
 		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
-		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
+		void deliver_to_watchers(const res::tag& node, std::uint64_t signal_epoch);
 		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
 		// lands in between still reaches `dependent`. A load that was evicted meanwhile (`block` is no longer cached
 		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
@@ -410,8 +435,10 @@ namespace res
 
 		// The pipeline: resolve -> collect_dependencies (compute) -> require each dependency, no waiting ->
 		// deserialize (compute) once all are ready. A block with no dependencies is one compute task.
-		void start_loading(const res::tag& tag, const std::shared_ptr<resource_handle>& block, adapter ad);
-		void collect_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad);
+		// `node`: the key the block is cached under (node_of at request time), for its dependency edges.
+		void start_loading(const res::tag& tag, const res::tag& node, const std::shared_ptr<resource_handle>& block, adapter ad);
+		void collect_stage(const res::tag& tag, const res::tag& node, const std::shared_ptr<resource_handle>& block,
+			const data& raw, const adapter& ad);
 		void deserialize_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad, const res_deps& deps);
 		// What a failed dependency means to its dependent (res_dep::failure_kind / json_path), for its diagnostic.
 		struct dependency_role {
@@ -521,8 +548,12 @@ namespace res
 			reload_callback callback;
 			std::uint64_t epoch = 0; // m_watch_epoch value at registration
 			bool keep_dependencies = false;
+			// What the owner watched, and what its callback gets: two spellings of one asset are two watchers.
+			res::tag tag;
 		};
-		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
+		using watch_key = std::pair<void*, std::string>;
+		// node_of(tag) -> (owner, tag) -> watcher.
+		std::unordered_map<res::tag, std::map<watch_key, watcher>> m_watchers;
 
 		struct change_subscription {
 			std::uint64_t id = 0;
@@ -573,6 +604,11 @@ namespace res
 		std::uint64_t m_next_parked = 1;
 		std::mutex m_stop_mutex;
 		bool m_stopping = false;
+		// The root's asset index and the files with an ID that are gone and wait for its batch (path -> node).
+		mutable std::shared_mutex m_index_mutex;
+		std::shared_ptr<const asset_index> m_index;
+		mutable std::mutex m_waiting_mutex;
+		std::unordered_map<res::tag, res::tag> m_waiting_for_index;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
 	};
