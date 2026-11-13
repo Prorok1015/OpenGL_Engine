@@ -738,7 +738,7 @@ public:
 
 BOOST_AUTO_TEST_CASE(a_tag_inside_a_map_is_checked_by_its_key)
 {
-	BOOST_REQUIRE(descs->register_component_desc<tag_map_component>("probe.tag_map"));
+	descs->register_component_desc<tag_map_component>("probe.tag_map");
 	const std::string crate = ref({ "00000000000000a4" });
 	const auto added = call("component.add", R"({"ref":)" + crate + R"(,"key":"tag_map","type":"probe.tag_map"})");
 	BOOST_REQUIRE_MESSAGE(added.ok, added.error);

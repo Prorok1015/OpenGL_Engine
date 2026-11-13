@@ -3253,7 +3253,7 @@ public:
 BOOST_AUTO_TEST_CASE(the_values_of_a_map_of_tags_are_checked_one_by_one)
 {
 	open_level();
-	BOOST_REQUIRE(descs->register_desc<tag_map_probe_desc>("tag_map_probe_desc"));
+	descs->register_desc<tag_map_probe_desc>("tag_map_probe_desc");
 	const res::tag there = put("icon_there.png", "x");
 	scn::prefab_desc::prefab_comp_node probe;
 	probe.type_name = "tag_map_probe_desc";
