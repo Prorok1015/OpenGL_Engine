@@ -325,6 +325,9 @@ BOOST_AUTO_TEST_CASE(AFileOfAnOlderVersion_IsMigratedInMemoryAndWrittenInTheCurr
 		shown.as_object()["speed"] = 5.0;
 		return true;
 	}));
+	// the new version of a migrated file is written only after a yes (S56-6)
+	BOOST_TEST(!document.save().saved);
+	document.confirm_version_write();
 	BOOST_REQUIRE(document.save().saved);
 	const json::object saved = parsed("old.desc");
 	BOOST_TEST(saved.at("__version").to_number<int>() == 2);

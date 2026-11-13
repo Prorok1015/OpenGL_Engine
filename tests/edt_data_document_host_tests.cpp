@@ -390,7 +390,7 @@ BOOST_AUTO_TEST_CASE(ASaveOfAnOutdatedFile_AsksFirst_EvenWhenClean_AndWritesTheN
 	host->request_save(id);
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
-	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
 
 	host->request_save(id);
 	BOOST_TEST(context->dialogs().list().empty()); // written: nothing to ask any more
@@ -414,7 +414,7 @@ BOOST_AUTO_TEST_CASE(ASaveOfAnOutdatedFileThatChangedOnDisk_AsksAboutTheConflict
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
-	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
 }
 
 BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFile_Save_AsksTheVersion_AndClosesOnYes)
@@ -432,7 +432,7 @@ BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFile_Save_AsksTheVersion_AndClosesOnYe
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
-	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
 	BOOST_TEST(open_documents() == before - 1u);
 }
 
@@ -455,7 +455,7 @@ BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFileChangedOnDisk_Overwrite_ThenTheVer
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
-	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
 	BOOST_TEST(open_documents() == before - 1u);
 }
 
@@ -471,7 +471,7 @@ BOOST_AUTO_TEST_CASE(SaveAll_WithADirtyOutdatedFile_AsksTheVersion_AndTheNextOne
 	BOOST_TEST(!host->save_all());
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
-	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
 	BOOST_TEST(host->save_all());
 }
 
