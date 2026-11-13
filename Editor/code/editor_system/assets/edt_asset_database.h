@@ -2,6 +2,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_file_change.h>
 #include <snk/resource/res_tag.h>
 #include <chrono>
@@ -34,11 +35,7 @@ namespace edt
 	class asset_layer_lookup;
 
 	// Names that differ only in letter case are one name (Windows).
-#if defined(_WIN32)
-	inline constexpr bool platform_case_insensitive = true;
-#else
-	inline constexpr bool platform_case_insensitive = false;
-#endif
+	inline constexpr bool platform_case_insensitive = res::asset_names_case_insensitive;
 
 	// One file of the resource tree as the asset database knows it (EPIC-57 section 4.3).
 	struct asset_record
@@ -173,7 +170,7 @@ namespace edt
 	public:
 		static constexpr std::uint64_t max_desc_bytes = 4u * 1024u * 1024u;
 		static constexpr std::size_t hash_batch = 64;
-		static constexpr int max_depth = 64;
+		static constexpr int max_depth = res::asset_walk_max_depth;
 		// Batches that arrive during a walk wait for it, up to this many changes; past it one more walk follows instead.
 		static constexpr std::size_t max_deferred_changes = 4096;
 		// A larger cache is not read (the walk then reads every file).
