@@ -1,4 +1,4 @@
-# The Windows release package (#223), built and checked the same way for pull requests (build.yml) and
+# The Windows release package (#223), built and checked the same way every night (nightly.yml, #830) and for
 # releases (release.yml): one leg per configuration builds the static and the shared engine and packs
 # Snake-<ver>-windows-x64.zip (Release: the editor, the SDK with both engines, PDBs, the MSVC runtime) or
 # Snake-<ver>-windows-x64-debug.zip (the Debug engine, unpacked over the main archive); a check job
@@ -16,6 +16,10 @@ on:
         description: Also build and run unit_tests with the shared Release engine
         type: boolean
         default: false
+      ref:
+        description: What to check out (the nightly run checks aibranch from the default branch's workflow); empty for the event's own ref
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -38,6 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
 
       # The engine of the package is built with the oldest MSVC it supports (#219): toolset 14.44 (_MSC_VER 1944),
@@ -180,6 +185,8 @@ jobs:
     steps:
       # The consumer and the project template come from the sources; the engine only from the archives.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       # No toolset pin here on purpose (#219): the consumer and the project template are built with the image's newest
       # MSVC, newer than the package's 14.44, the way a user with a current Visual Studio builds a game module.
