@@ -648,14 +648,27 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	}
 	const bool same_records = std::ranges::equal(previous, m_records,
 		[](const auto& a, const auto& b) { return a.first == b.first && a.second.same_as(b.second); });
+	// By merge key, as the walk pairs names: on Windows "A.png.resource" was the .resource of "a.png".
+	std::unordered_map<std::string, const asset_record*> previous_by_key;
+	std::unordered_map<std::string, const asset_orphan*> orphans_by_key;
+	if (!scan.orphans.empty()) {
+		for (const auto& [key, record] : previous) {
+			previous_by_key.emplace(layer_merge_key(key, m_case_insensitive), &record);
+		}
+		for (const asset_orphan& known : m_orphans) {
+			orphans_by_key.emplace(layer_merge_key(known.meta_path.string(), m_case_insensitive), &known);
+		}
+	}
 	for (asset_orphan& orphan : scan.orphans) {
 		const std::string_view meta = orphan.meta_path.relative();
-		if (const auto owner = previous.find(res::tag::make(sidecar_owner(meta)).string()); owner != previous.end()) {
-			orphan.last_hash = owner->second.content_hash;
+		const std::string owner_key = layer_merge_key(res::tag::make(sidecar_owner(meta)).string(), m_case_insensitive);
+		if (const auto owner = previous_by_key.find(owner_key); owner != previous_by_key.end()) {
+			orphan.last_hash = owner->second->content_hash;
 		}
 		if (orphan.last_hash.empty()) {
-			if (const auto known = std::ranges::find(m_orphans, orphan.meta_path, &asset_orphan::meta_path); known != m_orphans.end()) {
-				orphan.last_hash = known->last_hash;
+			const auto known = orphans_by_key.find(layer_merge_key(orphan.meta_path.string(), m_case_insensitive));
+			if (known != orphans_by_key.end()) {
+				orphan.last_hash = known->second->last_hash;
 			}
 		}
 		if (orphan.last_hash.empty()) {
@@ -1904,7 +1917,7 @@ void edt::asset_database::refresh(const std::vector<std::string>& relatives)
 
 std::string edt::asset_database::take_orphan_hash(const res::tag& meta_path)
 {
-	const auto found = m_orphan_hashes.find(meta_path.string());
+	const auto found = m_orphan_hashes.find(layer_merge_key(meta_path.string(), m_case_insensitive));
 	if (found == m_orphan_hashes.end()) {
 		return {};
 	}
@@ -1973,8 +1986,19 @@ edt::asset_fix_result edt::asset_database::link_orphan(const res::tag& meta, con
 	if (sidecar_of(lookup, *relative).found) {
 		return fix_refused(std::format("{} has a .resource already", file.view()));
 	}
-	const std::string target = here.in_layer + std::string{ res::asset_meta_suffix };
+	// The ID goes back only to the one file with the content the orphan's file had, as the row offered it.
 	const std::string last_hash = orphan->last_hash;
+	if (last_hash.empty() || record->content_hash != last_hash) {
+		return fix_refused(std::format("{} does not hold what the file of {} held", file.view(), meta.view()));
+	}
+	const std::size_t top = top_layer();
+	const auto same_content = std::ranges::count_if(m_records, [&last_hash, top](const auto& item) {
+		return item.second.layer == top && !item.second.has_meta && item.second.content_hash == last_hash;
+	});
+	if (same_content != 1) {
+		return fix_refused(std::format("more than one file of the project holds what the file of {} held", meta.view()));
+	}
+	const std::string target = here.in_layer + std::string{ res::asset_meta_suffix };
 	const fs::path root = m_layers[top_layer()];
 	if (const std::string error = rename_file(root, from.in_layer, target); !error.empty()) {
 		return fix_refused(std::format("{} was not moved to {}: {}", meta.view(), file.view(), error));
@@ -2002,7 +2026,7 @@ edt::asset_fix_result edt::asset_database::link_orphan(const res::tag& meta, con
 			}
 			// Its file is still gone: the orphan gets back the hash it was linked by, now or when a deferred batch makes it.
 			if (!last_hash.empty()) {
-				m_orphan_hashes.insert_or_assign(meta.string(), last_hash);
+				m_orphan_hashes.insert_or_assign(layer_merge_key(meta.string(), m_case_insensitive), last_hash);
 			}
 			refresh({ target, from });
 			return fix_done();

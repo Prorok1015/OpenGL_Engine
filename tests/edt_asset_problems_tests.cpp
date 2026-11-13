@@ -9,12 +9,15 @@
 #include <snk/resource/res_asset_meta.h>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 // The source "assets" of Problems (S57-4): its rows, its fixes and their undo.
@@ -277,6 +280,28 @@ BOOST_AUTO_TEST_CASE(an_orphan_of_a_lower_layer_offers_no_link)
 	BOOST_TEST(!fs::exists(upper.path() / "b.png.resource"));
 }
 
+BOOST_AUTO_TEST_CASE(an_orphan_whose_content_two_files_hold_offers_no_link)
+{
+	upper.write("a.png", "same bytes");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	open();
+	fs::remove(upper.path() / "a.png");
+	db->apply_changes(std::vector<res::file_change>{ change("a.png", res::change_kind::deleted) });
+	upper.write("b.png", "same bytes");
+	upper.write("c.png", "same bytes");
+	db->apply_changes(std::vector<res::file_change>{ change("b.png", res::change_kind::created), change("c.png", res::change_kind::created) });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(record("b.png").content_hash == record("c.png").content_hash);
+	BOOST_REQUIRE_EQUAL(db->orphans().size(), 1u);
+	BOOST_REQUIRE(db->orphans()[0].last_hash == record("b.png").content_hash);
+
+	const auto orphan = row("asset.orphan", "a.png.resource");
+	BOOST_REQUIRE(orphan);
+	BOOST_TEST(publisher.actions_of(*orphan, *db).empty());
+	BOOST_TEST(!db->link_orphan(res::tag::make("a.png.resource"), res::tag::make("b.png")).ok);
+	BOOST_TEST(fs::is_regular_file(upper.path() / "a.png.resource"));
+}
+
 BOOST_AUTO_TEST_CASE(an_orphan_without_a_known_hash_offers_no_link)
 {
 	upper.write("lost.png.resource", meta_text(k_guid_a));
@@ -335,16 +360,35 @@ BOOST_AUTO_TEST_CASE(with_equal_times_the_larger_path_is_the_copy)
 	BOOST_TEST(duplicates[0].file == res_path("b.png"));
 }
 
-BOOST_AUTO_TEST_CASE(a_copy_in_a_lower_layer_offers_no_new_id)
+BOOST_AUTO_TEST_CASE(the_lower_layer_holds_the_original_even_when_newer)
 {
 	set_time(upper.write("one.png", "one"), std::chrono::hours(2));
 	upper.write("one.png.resource", meta_text(k_guid_b));
 	set_time(lower.write("two.png", "two"), std::chrono::hours(1));
 	lower.write("two.png.resource", meta_text(k_guid_b));
 	open();
-	const auto copy = row("asset.duplicate_id", "two.png");
+	BOOST_TEST(!row("asset.duplicate_id", "two.png"));
+	const auto copy = row("asset.duplicate_id", "one.png");
 	BOOST_REQUIRE(copy);
-	BOOST_TEST(publisher.actions_of(*copy, *db).empty());
+	BOOST_TEST((copy->severity == edt::problem_severity::error));
+	BOOST_TEST(copy->message.find(res_path("two.png")) != std::string::npos);
+	const auto actions = publisher.actions_of(*copy, *db);
+	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
+	BOOST_TEST(actions[0].label == "New ID for this copy");
+}
+
+BOOST_AUTO_TEST_CASE(a_duplicate_wholly_below_the_project_is_a_warning_without_a_fix)
+{
+	set_time(lower.write("one.png", "one"), std::chrono::hours(2));
+	lower.write("one.png.resource", meta_text(k_guid_b));
+	set_time(lower.write("two.png", "two"), std::chrono::hours(1));
+	lower.write("two.png.resource", meta_text(k_guid_b));
+	open();
+	const auto duplicates = rows_of("asset.duplicate_id");
+	BOOST_REQUIRE_EQUAL(duplicates.size(), 1u);
+	BOOST_TEST(duplicates[0].file == res_path("two.png"));
+	BOOST_TEST((duplicates[0].severity == edt::problem_severity::warning));
+	BOOST_TEST(publisher.actions_of(duplicates[0], *db).empty());
 }
 
 BOOST_AUTO_TEST_CASE(a_copy_whose_resource_comes_from_a_lower_layer_offers_no_new_id)
@@ -409,6 +453,119 @@ BOOST_AUTO_TEST_CASE(a_fix_during_a_walk_shows_once_the_walk_ends)
 	test_util::pump(tasks);
 	BOOST_TEST(db->duplicates().size() == 1u);
 }
+
+BOOST_AUTO_TEST_CASE(the_history_keeps_the_last_32_actions)
+{
+	constexpr std::size_t count = edt::asset_database::max_history + 1;
+	for (std::size_t i = 0; i < count; ++i) {
+		upper.write(std::format("f{:02}.png", i), std::format("file {}", i));
+	}
+	open();
+	for (std::size_t i = 0; i < count; ++i) {
+		BOOST_REQUIRE(db->create_meta(res::tag::make(std::format("f{:02}.png", i))).ok);
+	}
+	std::size_t undone = 0;
+	while (db->next_undo_label()) {
+		BOOST_REQUIRE(db->undo_last().ok);
+		++undone;
+	}
+	BOOST_TEST(undone == edt::asset_database::max_history);
+	// The oldest action is gone from the history: its .resource stays.
+	BOOST_TEST(fs::is_regular_file(upper.path() / "f00.png.resource"));
+	BOOST_TEST(!fs::exists(upper.path() / "f01.png.resource"));
+	BOOST_TEST(!db->undo_last().ok);
+}
+
+BOOST_AUTO_TEST_CASE(an_undo_that_cannot_read_stays_in_the_history)
+{
+	upper.write("plain.png", "plain");
+	open();
+	BOOST_REQUIRE(db->create_meta(res::tag::make("plain.png")).ok);
+	const fs::path meta = upper.path() / "plain.png.resource";
+	const std::string written = read_text(meta);
+	// A folder at the name cannot be read: not a change of the file, so the undo is kept to be tried again.
+	fs::remove(meta);
+	fs::create_directory(meta);
+
+	const edt::asset_fix_result failed = db->undo_last();
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(failed.keep);
+	BOOST_TEST(db->next_undo_label().has_value());
+
+	fs::remove(meta);
+	upper.write("plain.png.resource", written);
+	const edt::asset_fix_result undone = db->undo_last();
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(!fs::exists(meta));
+}
+
+#if !defined(_WIN32)
+namespace {
+// Takes the write permission off a folder for the scope; false when it still takes a file (run as root).
+struct read_only_folder
+{
+	explicit read_only_folder(fs::path folder) : path(std::move(folder))
+	{
+		fs::permissions(path, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write, fs::perm_options::remove);
+	}
+	~read_only_folder()
+	{
+		std::error_code ec;
+		fs::permissions(path, fs::perms::owner_write, fs::perm_options::add, ec);
+	}
+	bool holds() const
+	{
+		const fs::path probe = path / "probe.tmp";
+		const bool made = static_cast<bool>(std::ofstream(probe));
+		std::error_code ec;
+		fs::remove(probe, ec);
+		return !made;
+	}
+	fs::path path;
+};
+}
+
+BOOST_AUTO_TEST_CASE(an_undo_that_cannot_write_or_rename_stays_in_the_history)
+{
+	set_time(upper.write("sub/one.png", "one"), std::chrono::hours(2));
+	upper.write("sub/one.png.resource", meta_text(k_guid_b));
+	set_time(upper.write("sub/two.png", "two"), std::chrono::hours(1));
+	upper.write("sub/two.png.resource", meta_text(k_guid_b));
+	upper.write("sub/a.png", "same bytes");
+	upper.write("sub/a.png.resource", meta_text(k_guid_a));
+	open();
+	BOOST_REQUIRE(db->new_id_for_copy(res::tag::make("sub/two.png")).ok);
+	{
+		read_only_folder guard(upper.path() / "sub");
+		if (!guard.holds()) {
+			BOOST_TEST_MESSAGE("the folder stays writable (root?): the write failure is not tested");
+			return;
+		}
+		const edt::asset_fix_result failed = db->undo_last();
+		BOOST_TEST(!failed.ok);
+		BOOST_TEST(failed.keep);
+		BOOST_TEST(db->next_undo_label().has_value());
+	}
+	BOOST_REQUIRE(db->undo_last().ok);
+	BOOST_TEST(db->duplicates().size() == 1u);
+
+	fs::remove(upper.path() / "sub/a.png");
+	db->apply_changes(std::vector<res::file_change>{ change("sub/a.png", res::change_kind::deleted) });
+	upper.write("sub/b.png", "same bytes");
+	db->apply_changes(std::vector<res::file_change>{ change("sub/b.png", res::change_kind::created) });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(db->link_orphan(res::tag::make("sub/a.png.resource"), res::tag::make("sub/b.png")).ok);
+	{
+		read_only_folder guard(upper.path() / "sub");
+		const edt::asset_fix_result failed = db->undo_last();
+		BOOST_TEST(!failed.ok);
+		BOOST_TEST(failed.keep);
+		BOOST_TEST(fs::is_regular_file(upper.path() / "sub/b.png.resource"));
+	}
+	BOOST_REQUIRE(db->undo_last().ok);
+	BOOST_TEST(fs::is_regular_file(upper.path() / "sub/a.png.resource"));
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(undo_is_refused_when_the_file_changed_since)
 {

@@ -525,6 +525,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_problems_panel = std::make_shared<problems_panel>(m_context->problems(), data.has_value<prj::project_context>()
 		? data.require<prj::project_context>().root : std::filesystem::path{});
 	m_problems_panel->set_on_activate([this](const std::string& source, const problem& item) { go_to_problem(source, item); });
+	// The idle gate of Edit > Undo (register_edit_actions): no dialog waiting, no gesture in progress.
+	const auto problems_idle = [this] { return m_context->dialogs().pending() == 0 && !ImGui::IsAnyItemActive(); };
 	// The asset fixes are the person's own: no command, so no agent reaches them.
 	m_problems_panel->set_actions([this](const std::string& source, const problem& item) {
 		std::vector<std::pair<std::string, std::function<void()>>> out;
@@ -539,7 +541,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			});
 		}
 		return out;
-	});
+	}, problems_idle);
 	m_problems_panel->set_undo(
 		[this]() -> std::optional<std::string> { return m_assets ? m_assets->next_undo_label() : std::nullopt; },
 		[this] {
@@ -550,8 +552,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				egLOG_ERROR("assets", "{}", result.error);
 			}
 		},
-		// The idle gate of Edit > Undo (register_edit_actions): no dialog waiting, no gesture in progress.
-		[this] { return m_context->dialogs().pending() == 0 && !ImGui::IsAnyItemActive(); });
+		problems_idle);
 	add_panel(m_problems_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });

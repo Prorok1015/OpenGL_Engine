@@ -98,7 +98,8 @@ std::vector<edt::registration> edt::register_edit_actions(
 		.result_schema = applied_schema(),
 		.enabled = [redo_target, idle] { return idle() && redo_target() && !redo_target()->edits_locked() && redo_target()->next_redo_entry().has_value(); } }));
 
-	// The asset fixes of Problems (S57-4) are undone only on purpose, never by Ctrl+Z: no shortcut, not for agents.
+	// The asset fixes of Problems (S57-4) are undone only on purpose, never by Ctrl+Z: no shortcut; the person's own, so
+	// no policy file hands it to an agent.
 	if (asset_undo_label && asset_undo) {
 		out.push_back(actions.add({ .id = "edit.undo_asset_action", .label = "Undo Asset Action", .menu_path = "Edit",
 			.dynamic_label = [asset_undo_label] {
@@ -115,7 +116,8 @@ std::vector<edt::registration> edt::register_edit_actions(
 				return action_result::success(std::move(out));
 			},
 			.result_schema = applied_schema(),
-			.enabled = [idle, asset_undo_label] { return idle() && asset_undo_label().has_value(); } }));
+			.enabled = [idle, asset_undo_label] { return idle() && asset_undo_label().has_value(); },
+			.category = cmd::agent_category::not_for_agents }));
 	}
 
 	// The person has looked at what the agent did: no more "changed by agent" marks. Not for agents themselves.

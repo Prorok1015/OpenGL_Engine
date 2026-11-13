@@ -258,6 +258,12 @@ BOOST_FIXTURE_TEST_CASE(undo_asset_action_takes_back_the_last_asset_action, asse
 	BOOST_TEST(undone == 1);
 	BOOST_TEST(!own.is_enabled("edit.undo_asset_action"));
 	BOOST_TEST(own_label("edit.undo_asset_action") == "Undo Asset Action");
+	const auto* command = own.find("edit.undo_asset_action");
+	BOOST_REQUIRE(command);
+	BOOST_TEST((command->category == cmd::agent_category::not_for_agents));
+	edt::policy_layer allowed;
+	allowed.commands["edit.undo_asset_action"] = cmd::policy_mode::allow;
+	BOOST_TEST((edt::effective_mode(*command, allowed, {}).mode == cmd::policy_mode::deny));
 	// The document's history is its own.
 	rename("b");
 	BOOST_TEST(!own.is_enabled("edit.undo_asset_action"));

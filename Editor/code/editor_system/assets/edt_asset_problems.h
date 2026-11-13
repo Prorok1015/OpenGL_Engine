@@ -18,8 +18,9 @@ namespace edt
 
 	// The source "assets" of Problems (S57-4): what the asset database finds wrong with the files of res://. Rows:
 	// asset.no_id (a file of the project's own layer without a .resource), asset.bad_meta (a .resource that cannot be
-	// read), asset.orphan (a .resource without its file), asset.duplicate_id (an error on each copy: of the files with
-	// one ID the oldest by mtime, then the smaller path, is the original). Main thread only.
+	// read), asset.orphan (a .resource without its file), asset.duplicate_id (on each copy: of the files with one ID
+	// the one of the lowest layer, then the oldest by mtime, then the smaller path, is the original; an error, or a
+	// warning without a fix when no holder is in the project's own layer). Main thread only.
 	class asset_problem_publisher
 	{
 	public:

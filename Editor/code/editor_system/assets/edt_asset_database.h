@@ -333,7 +333,7 @@ namespace edt
 		// Records (by path text) whose .resource the next look-up reads whatever its stamp: a fix rewrote it, possibly
 		// within one tick of a coarse clock.
 		std::set<std::string> m_force_meta;
-		// By .resource path text: last_hash for the orphan an undone link brings back (take_orphan_hash).
+		// By merge key of the .resource path text: last_hash for the orphan an undone link brings back (take_orphan_hash).
 		std::map<std::string, std::string> m_orphan_hashes;
 		connection m_job_finished;
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };

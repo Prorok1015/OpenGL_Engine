@@ -36,7 +36,12 @@ namespace edt
 		problems_panel(const problem_list& problems, std::filesystem::path project_root);
 
 		void set_on_activate(activate_fn on_activate) { m_on_activate = std::move(on_activate); }
-		void set_actions(actions_fn actions) { m_actions = std::move(actions); }
+		// `enabled` (null: always) greys the fixes out, as set_undo's does the button.
+		void set_actions(actions_fn actions, std::function<bool()> enabled = {})
+		{
+			m_actions = std::move(actions);
+			m_actions_enabled = std::move(enabled);
+		}
 		// `enabled` (null: always) greys the button out, e.g. while a dialog waits or an edit is in progress.
 		void set_undo(std::function<std::optional<std::string>()> label, std::function<void()> run, std::function<bool()> enabled = {})
 		{
@@ -51,6 +56,8 @@ namespace edt
 	private:
 		struct row
 		{
+			// source, file, line, column, code, message and which of equal rows: the ImGui ID of the row.
+			std::string id;
 			std::string source;
 			problem item;
 			std::string location;
@@ -59,6 +66,8 @@ namespace edt
 
 		void refresh();
 		void filter();
+		// The context menu of m_menu_row, outside the table: `chosen` gets a fix, `activated` the row for "Go to".
+		void draw_row_menu(std::function<void()>& chosen, std::optional<std::size_t>& activated);
 
 		const problem_list& m_problems;
 		std::filesystem::path m_root;
@@ -74,5 +83,11 @@ namespace edt
 		std::function<std::optional<std::string>()> m_undo_label;
 		std::function<void()> m_undo;
 		std::function<bool()> m_undo_enabled;
+		std::function<bool()> m_actions_enabled;
+		// The row whose context menu is open, as it was when it opened.
+		row m_menu_row;
+		// A fix or the Undo button was held down in the last frame (it is then the active item the gates refuse).
+		bool m_menu_held = false;
+		bool m_undo_held = false;
 	};
 }
