@@ -15,6 +15,7 @@
 #include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -61,13 +62,36 @@ namespace
 	})";
 
 	// A map has no blob layout, so it comes from a C++ type: the schema is generated, not parsed.
+	enum class speed_value { slow, fast };
+	BOOST_DESCRIBE_ENUM(speed_value, slow, fast)
+
+	struct limits_value
+	{
+		float min = 0.0f;
+		float max = 1.0f;
+	};
+	BOOST_DESCRIBE_STRUCT(limits_value, (), (min, max))
+
 	struct weights_component
 	{
 		std::map<std::string, float> weights;
 		std::map<std::string, std::string> labels;
+		std::map<std::string, limits_value> zones;
+		std::map<std::string, speed_value> speeds;
+		std::optional<float> extra;
+		std::optional<float> bonus = 2.0f;
 	};
-	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels))
+	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels, zones, speeds, extra, bonus))
+}
 
+namespace desc
+{
+	template<>
+	inline constexpr auto field_attrs<weights_component> = attrs(f("zones").ref("edt.limits"), f("speeds").ref("edt_mode"));
+}
+
+namespace
+{
 	desc::type_schema weights_schema()
 	{
 		return desc::schema_generator<weights_component>::make("edt.weights", 1, desc::schema_kind::component);
@@ -710,14 +734,14 @@ BOOST_AUTO_TEST_CASE(ApplyEdit_ClearingAnOptionalThatHasAnInitializer_KeepsTheNu
 {
 	const desc::type_schema schema = weights_schema();
 	const auto& registry = descs->schemas();
-	json::object overrides = parse(R"({ "boost": 3.0 })");
+	json::object overrides = parse(R"({ "bonus": 3.0 })");
 	const json::value base = ui::compose(schema, registry, { }, false);
 	const json::value before = ui::compose(schema, registry, { &overrides });
 	json::value after = before;
-	after.as_object().erase("boost");
+	after.as_object().erase("bonus");
 	ui::apply_edit(overrides, schema, registry, base, before, after);
 	// without the record the read gives the initializer (2.0): the clear must stay written
-	BOOST_CHECK(overrides == parse(R"({ "boost": null })"));
+	BOOST_CHECK(overrides == parse(R"({ "bonus": null })"));
 }
 
 BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMapWithAnEmptyKey_WritesNothing)

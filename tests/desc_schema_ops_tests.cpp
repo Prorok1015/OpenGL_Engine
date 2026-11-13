@@ -1559,7 +1559,7 @@ BOOST_AUTO_TEST_CASE(AnOverrideOnAMapKeyIsCheckedAgainstTheElement)
 	BOOST_TEST((check("/counts/a", "5") == desc::override_status::valid));
 	BOOST_TEST((check("/counts/a", "null") == desc::override_status::valid));
 	BOOST_TEST((check("/counts/a", "\"text\"") == desc::override_status::bad_value));
-	BOOST_TEST((check("/counts/", "5") == desc::override_status::stale));
+	BOOST_TEST((check("/counts/", "5") == desc::override_status::bad_value));
 }
 
 BOOST_AUTO_TEST_CASE(TheJsonSchemaOfAnOptionalAllowsNull)
@@ -1707,14 +1707,14 @@ BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldResetsItWhateverTheParentSet_StdO
 	parent->deserialize(ds, parse(R"({ "hp": 5.0, "extra": 3.0, "state": "automatic", "inner": { "scale": 9.0, "flag": true }, "tag": "res://a.png", "ref": "abc" })"));
 	parent->copy_to(*child);
 	BOOST_TEST(child->get("/hp").as_double() == 5.0);
-	BOOST_TEST(child->get("/inner/scale").as_double() == 9.0);
+	BOOST_TEST(child->get("/inner").at("scale").as_double() == 9.0);
 	BOOST_TEST(child->get("/ref").as_string() == "0000000000000abc");
 	child->deserialize(ds, parse(R"({ "hp": null, "extra": null, "state": null, "inner": null, "tag": null, "ref": null, "target": null })"));
 	BOOST_TEST(child->get("/hp").as_double() == 100.0);
 	BOOST_TEST(child->get("/extra").as_double() == 0.0);
 	BOOST_TEST(child->get("/state").as_string() == "off");
-	BOOST_TEST(child->get("/inner/scale").as_double() == 1.0);
-	BOOST_TEST(!child->get("/inner/flag").as_bool());
+	BOOST_TEST(child->get("/inner").at("scale").as_double() == 1.0);
+	BOOST_TEST(!child->get("/inner").at("flag").as_bool());
 	BOOST_TEST(child->get("/tag").as_string() == "");
 	BOOST_TEST(child->get("/ref").as_string() == "0000000000000000");
 	BOOST_TEST(child->get("/target").is_null());
