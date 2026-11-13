@@ -424,7 +424,8 @@ namespace desc
 		// A map described as a field_kind::map (no json_codec of its own): an object, a value per key by the ops of the
 		// element. Written by key, so an unordered_map has one text. Read by key too, like every object that overrides a
 		// parent's (json_deep_merge in the editor's documents and override records): the keys of the file are put into
-		// what the map holds, and a null value removes the key. A value that does not fit leaves the field as it was.
+		// what the map holds, and a null value removes the key. A key the member initializer puts there comes back at every
+		// load: only a null in the file removes it. A value that does not fit leaves the field as it was.
 		template<typename M>
 			requires (detail::string_map_traits<M>::value && kind_of<M> == field_kind::map)
 		struct value_ops<M>

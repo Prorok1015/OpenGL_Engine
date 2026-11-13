@@ -57,6 +57,7 @@ namespace ops_test {
 	{
 	public:
 		static constexpr std::string_view __type = "ops.keyed";
+		using base_type = desc::desc_base;
 
 		std::map<std::string, int> counts;
 		std::unordered_map<std::string, std::string> names;
@@ -1444,6 +1445,18 @@ BOOST_FIXTURE_TEST_CASE(AMapReadAfterItsParentMergesByKeyAndANullRemovesAKey, op
 
 	value.deserialize(ds, parse(R"({ "counts": { "a": null, "b": 5 } })"));
 	BOOST_CHECK((value.counts == std::map<std::string, int>{ { "b", 5 }, { "c", 3 } }));
+}
+
+BOOST_FIXTURE_TEST_CASE(AMapLoadedThroughParentMergesByKeyAndANullRemovesAKey, ref_fixture)
+{
+	ds.register_desc<ops_test::keyed>("ops.keyed");
+	const res::tag parent = put("map_parent.desc", R"({ "__type": "ops.keyed", "counts": { "a": 1, "c": 3 } })");
+	const res::tag child = put("map_child.desc",
+		("{ \"__type\": \"ops.keyed\", \"__parent\": \"" + parent.string() + "\", \"counts\": { \"b\": 2, \"c\": null } }").c_str());
+
+	const auto loaded = rs->require_sync<ops_test::keyed>(child).get_sync();
+	BOOST_REQUIRE(loaded);
+	BOOST_CHECK((loaded->counts == std::map<std::string, int>{ { "a", 1 }, { "b", 2 } }));
 }
 
 BOOST_FIXTURE_TEST_CASE(AnOptionalStructureIsItsValueOrNothing, ops_fixture)
