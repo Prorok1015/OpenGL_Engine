@@ -31,8 +31,37 @@ void edt::data_document_panel::on_before_begin()
 	}
 }
 
+void edt::data_document_panel::follow_focus()
+{
+	// A menu or a dialog over the window takes the focus from it for a moment without the person leaving the document.
+	if (ImGui::IsPopupOpen(static_cast<const char*>(nullptr), ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+		return;
+	}
+	const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+	if (focused == m_focused) {
+		return;
+	}
+	if (focused) {
+		m_focused = true;
+		if (m_on_focus) m_on_focus();
+	} else {
+		lose_focus();
+	}
+}
+
+// An edit in the middle of a drag is recorded before another window takes over: it must not be folded into an edit made there.
+void edt::data_document_panel::lose_focus()
+{
+	m_focused = false;
+	m_document.commit_pending();
+	if (m_on_blur) m_on_blur();
+}
+
 void edt::data_document_panel::on_hidden()
 {
+	if (m_focused) {
+		lose_focus();
+	}
 	// Collapsed or behind another tab the window is still open: only a closed one asks for its document to go. The editor
 	// opens the window again when it keeps the document (unsaved changes), so this is not asked every frame.
 	if (!is_open() && m_on_close) {
@@ -42,6 +71,7 @@ void edt::data_document_panel::on_hidden()
 
 void edt::data_document_panel::on_render()
 {
+	follow_focus();
 	const data_document_status status = status_of(m_document);
 	ImGui::TextDisabled("%s", status.path.c_str());
 	if (!status.parents.empty()) {
@@ -111,4 +141,8 @@ void edt::data_document_panel::on_render()
 		}
 	}
 	ImGui::EndChild();
+	// One record for what a drag or a typed value did, taken once the widget is let go.
+	if (!ImGui::IsAnyItemActive()) {
+		m_document.commit_pending();
+	}
 }

@@ -413,7 +413,7 @@ BOOST_AUTO_TEST_CASE(EditUndo_FollowsTheActiveDocument)
 	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");
 }
 
-BOOST_AUTO_TEST_CASE(EditUndo_AWindowWithoutHistoryLeavesUndoAndRedoToTheScene)
+BOOST_AUTO_TEST_CASE(EditUndo_AWindowWithoutHistoryHasNothingToUndo_TheSceneIsNotUndoneBehindIt)
 {
 	scn::world_desc world;
 	scn::prefab_desc::prefab_node node;
@@ -431,6 +431,12 @@ BOOST_AUTO_TEST_CASE(EditUndo_AWindowWithoutHistoryLeavesUndoAndRedoToTheScene)
 
 	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
 	BOOST_REQUIRE(documents.active() == &data);
+	BOOST_TEST(!actions.is_enabled("edit.undo"));
+	BOOST_TEST(!actions.is_enabled("edit.redo"));
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "b");
+
+	// The window gives the focus back (the editor makes the scene active): Undo is the scene's again.
+	documents.set_active(scene.id());
 	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
 	BOOST_REQUIRE(actions.invoke("edit.undo", boost::json::object{}).ok);
 	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");

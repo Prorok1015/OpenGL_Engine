@@ -1,11 +1,13 @@
 #pragma once
 #include "edt_desc_file_commands.h"
 #include <snk/editor/edt_document.h>
+#include <snk/editor/edt_document_history.h>
 #include <snk/resource/res_tag.h>
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -94,10 +96,25 @@ namespace edt
 		// `draw` edits a copy of what is shown; what it changed goes into `own` as the pointers that differ from the base.
 		// True when `own` changed.
 		bool edit(const std::function<bool(boost::json::value& shown)>& draw);
-		// Puts a snapshot of `own` back (undo and redo, S56-5); the document is dirty when it differs from the saved one.
-		// False, and nothing changed, for a snapshot of another __type or __parent: what the document inherits would
+		// Puts a snapshot of `own` back (the history's undo and redo); the document is dirty when it differs from the saved
+		// one. False, and nothing changed, for a snapshot of another __type or __parent: what the document inherits would
 		// not follow it.
 		bool restore_own(boost::json::object own);
+
+		// Undo history (S56-5): the snapshots of `own` before and after each edit, one record per edit of the person. An edit
+		// is applied at once, and recorded when the window says no widget is active any more (commit_pending), so dragging
+		// a value is one record. next_undo_entry/undo/redo, save, a reload and the loss of the window's focus all commit what
+		// is pending first: an edit in the middle of a drag is neither lost nor folded into the next one. A load of the file
+		// (open, reload, a clean document reading an outside change) is a boundary: the history starts again.
+		bool undo() override;
+		bool redo() override;
+		std::optional<history_entry> next_undo_entry() const override;
+		std::optional<history_entry> next_redo_entry() const override;
+		// Writes the edits made since the last record as one record; nothing when there are none.
+		void commit_pending();
+		// `own` differs from the last record (an edit the history has not taken yet).
+		bool has_pending_edit() const { return m_open && !(m_own == m_committed_own); }
+		const document_history& history() const { return m_history; }
 
 	private:
 		struct loaded
@@ -129,6 +146,9 @@ namespace edt
 		std::string m_type;
 		boost::json::object m_own;
 		boost::json::object m_saved_own;
+		// `own` as of the last history record (or the load): what the next record's `before` is.
+		boost::json::object m_committed_own;
+		document_history m_history;
 		boost::json::object m_inherited;
 		// code_version_of the bytes `own` was read from or last written as: a save refuses a file that is not this.
 		std::string m_version;

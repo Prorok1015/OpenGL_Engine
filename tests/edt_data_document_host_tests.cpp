@@ -4,6 +4,7 @@
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
 #include "edt_data_document_host.h"
+#include "edt_data_document_panel.h"
 #include "edt_scene_document.h"
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
@@ -11,6 +12,7 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_services.h>
+#include <snk/editor/edt_panel_base.h>
 #include <snk/editor/edt_panel_registry.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/gui/gui_system.h>
@@ -20,6 +22,8 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <boost/json.hpp>
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -343,6 +347,138 @@ BOOST_AUTO_TEST_CASE(SaveAll_OfAFileThatChangedOnDisk_AsksAndDoesNotLetTheExitGo
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
 	BOOST_TEST(open.is_dirty());
 	BOOST_TEST(read_text("config.desc").find("4.0") != std::string::npos);
+}
+
+// The active document follows the focus of the data windows (S56-5): Edit > Undo acts on the window the person works in.
+namespace {
+
+struct imgui_context
+{
+	imgui_context() : handle(ImGui::CreateContext())
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.DisplaySize = ImVec2(800.f, 600.f);
+		unsigned char* pixels = nullptr;
+		int width = 0;
+		int height = 0;
+		io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+	}
+	~imgui_context() { ImGui::DestroyContext(handle); }
+	ImGuiContext* handle;
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(TheActiveDocumentFollowsTheFocusOfTwoDataWindows_InEitherRenderOrder)
+{
+	imgui_context imgui;
+	edt::document& first = open_config("a.desc");
+	edt::document& second = open_config("b.desc");
+	edt::panel_base* a = context->panels().find(edt::data_document_panel_id(first.id()));
+	edt::panel_base* b = context->panels().find(edt::data_document_panel_id(second.id()));
+	BOOST_REQUIRE(a != nullptr);
+	BOOST_REQUIRE(b != nullptr);
+	edt::document_manager& documents = context->documents();
+
+	const auto frame = [](edt::panel_base* one, edt::panel_base* two) {
+		ImGui::NewFrame();
+		one->render();
+		two->render();
+		ImGui::EndFrame();
+	};
+	const auto focus = [](edt::panel_base* panel) { ImGui::SetWindowFocus(panel->get_title().c_str()); };
+	frame(a, b);
+	frame(a, b);
+
+	focus(a);
+	frame(a, b);
+	BOOST_TEST(documents.active() == &first);
+
+	// The window that loses the focus is drawn first, the one that gets it second: the second has the last word.
+	focus(b);
+	frame(a, b);
+	BOOST_TEST(documents.active() == &second);
+
+	// The window that gets the focus is drawn first: the one that loses it must not take the activity away again.
+	focus(a);
+	frame(a, b);
+	BOOST_TEST(documents.active() == &first);
+	focus(b);
+	frame(b, a);
+	BOOST_TEST(documents.active() == &second);
+	focus(a);
+	frame(a, b);
+	BOOST_TEST(documents.active() == &first);
+}
+
+BOOST_AUTO_TEST_CASE(AnotherWindowTakingTheFocus_GivesTheSceneTheActivityBack)
+{
+	imgui_context imgui;
+	edt::document& data = open_config();
+	edt::panel_base* panel = context->panels().find(edt::data_document_panel_id(data.id()));
+	BOOST_REQUIRE(panel != nullptr);
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		panel->render();
+		if (ImGui::Begin("viewport")) {
+		}
+		ImGui::End();
+		ImGui::EndFrame();
+	};
+	frame();
+	frame();
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frame();
+	BOOST_REQUIRE(context->documents().active() == &data);
+
+	ImGui::SetWindowFocus("viewport");
+	frame();
+	BOOST_TEST(context->documents().active() == &context->documents().scene());
+}
+
+BOOST_AUTO_TEST_CASE(AnEditInTheMiddleOfADrag_IsRecordedWhenAnotherWindowTakesTheFocus)
+{
+	imgui_context imgui;
+	edt::document& first = open_config("a.desc");
+	edt::document& second = open_config("b.desc");
+	auto& data = static_cast<edt::data_document&>(first);
+	edt::panel_base* a = context->panels().find(edt::data_document_panel_id(first.id()));
+	edt::panel_base* b = context->panels().find(edt::data_document_panel_id(second.id()));
+	BOOST_REQUIRE(a != nullptr);
+	BOOST_REQUIRE(b != nullptr);
+
+	// A widget is held (a drag): the windows draw as usual, none of them takes the pending edit.
+	const auto frame = [&](bool held) {
+		ImGui::NewFrame();
+		if (held) {
+			ImGuiContext& g = *ImGui::GetCurrentContext();
+			ImGui::SetActiveID(42, g.CurrentWindow);
+		}
+		a->render();
+		b->render();
+		ImGui::EndFrame();
+	};
+	frame(false);
+	frame(false);
+	ImGui::SetWindowFocus(a->get_title().c_str());
+	frame(false);
+	BOOST_REQUIRE(context->documents().active() == &first);
+
+	BOOST_REQUIRE(data.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 7.0;
+		return true;
+	}));
+	frame(true);
+	BOOST_TEST(data.has_pending_edit());
+	BOOST_TEST(data.history().size() == 0u);
+
+	ImGui::SetWindowFocus(b->get_title().c_str());
+	frame(true);
+	BOOST_TEST(!data.has_pending_edit());
+	BOOST_TEST(data.history().size() == 1u);
+	BOOST_TEST(context->documents().active() == &second);
+	BOOST_TEST(static_cast<edt::data_document&>(second).history().size() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

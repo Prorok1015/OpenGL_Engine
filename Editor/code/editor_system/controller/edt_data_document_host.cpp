@@ -66,6 +66,14 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	panel->set_on_save([this, id] { request_save(id); });
 	panel->set_on_reload([this, id] { request_reload(id); });
 	panel->set_on_overwrite([this, id] { request_overwrite(id); });
+	panel->set_on_focus([this, id] { m_context.documents().set_active(id); });
+	panel->set_on_blur([this, id] {
+		document_manager& manager = m_context.documents();
+		const document* active = manager.active();
+		if (active && active->id() == id) {
+			manager.set_active(manager.scene().id());
+		}
+	});
 	registration registered = m_context.panels().add({
 		.id = panel->get_id(), .title = panel->get_title(), .slot = dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = panel });

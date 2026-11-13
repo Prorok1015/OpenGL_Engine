@@ -26,6 +26,10 @@ namespace edt
 		void set_on_save(std::function<void()> on_save) { m_on_save = std::move(on_save); }
 		void set_on_reload(std::function<void()> on_reload) { m_on_reload = std::move(on_reload); }
 		void set_on_overwrite(std::function<void()> on_overwrite) { m_on_overwrite = std::move(on_overwrite); }
+		// The window got the focus (its document is the one Edit > Undo acts on) or lost it to another window. A menu or a
+		// dialog open over the window is neither: the focus returns to it, or the person went elsewhere once they close.
+		void set_on_focus(std::function<void()> on_focus) { m_on_focus = std::move(on_focus); }
+		void set_on_blur(std::function<void()> on_blur) { m_on_blur = std::move(on_blur); }
 		// The message under the Save button (what the last save said); empty clears it.
 		void set_error(std::string error) { m_error = std::move(error); }
 		// The window comes to the front at its next frame.
@@ -41,6 +45,9 @@ namespace edt
 		void on_hidden() override;
 
 	private:
+		void follow_focus();
+		void lose_focus();
+
 		data_document& m_document;
 		editor_services& m_services;
 		document_id m_id;
@@ -48,6 +55,9 @@ namespace edt
 		std::function<void()> m_on_save;
 		std::function<void()> m_on_reload;
 		std::function<void()> m_on_overwrite;
+		std::function<void()> m_on_focus;
+		std::function<void()> m_on_blur;
+		bool m_focused = false;
 		// The outside change the person put off with Later (data_document::disk_change_serial); a newer one shows the banner again.
 		std::uint64_t m_dismissed_serial = 0;
 		bool m_dismissed = false;

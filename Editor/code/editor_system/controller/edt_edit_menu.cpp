@@ -54,16 +54,11 @@ std::vector<edt::registration> edt::register_edit_actions(
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
 	};
-	// A data window is the active document after it opens and has no history yet: it leaves Ctrl+Z to the scene. The
-	// read-only prefab preview does not: while it is active there is nothing to undo.
-	const auto undo_target = [&documents]() -> document* {
-		document* current = documents.active();
-		return current && (current->next_undo_entry() || current == documents.preview()) ? current : &documents.scene();
-	};
-	const auto redo_target = [&documents]() -> document* {
-		document* current = documents.active();
-		return current && (current->next_redo_entry() || current == documents.preview()) ? current : &documents.scene();
-	};
+	// The active document follows the focus of the windows: a data window that has it is the one Undo and Redo act on (its
+	// own history), the scene otherwise. The read-only prefab preview has nothing to undo, so the items are off there.
+	const auto undo_target = [&documents]() -> document* { return documents.active(); };
+	const auto redo_target = [&documents]() -> document* { return documents.active(); };
+	// A data document has no agent changes (an agent writes the file with desc.write): Accept is the scene's.
 	const auto accept_target = [&documents]() -> document* {
 		document* current = documents.active();
 		return current && current->has_agent_changes() ? current : &documents.scene();
