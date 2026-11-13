@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
+#include "edt_data_document_panel.h"
 #include "edt_data_document_view.h"
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
@@ -9,6 +10,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
+#include <imgui.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -899,6 +901,44 @@ BOOST_AUTO_TEST_CASE(DiskChangeSerial_TellsAGoneFileFromOneThatCameBackBroken)
 	rs->signal_changed(file);
 	pump();
 	BOOST_TEST(document.disk_change_serial() == start + 3);
+}
+
+BOOST_AUTO_TEST_CASE(TheWindowKeepsItsOwnMapState_UntilTheDocumentChangesUnderIt)
+{
+	ImGuiContext* context = ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	io.DisplaySize = ImVec2(800.f, 600.f);
+	unsigned char* pixels = nullptr;
+	int width = 0;
+	int height = 0;
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+	const res::tag file = put("map_state.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(file);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	edt::data_document_panel panel(document, services, 3);
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		panel.render();
+		ImGui::EndFrame();
+	};
+
+	frame();
+	panel.map_state().new_keys[7] = "typed";
+	panel.map_state().rename_errors[7] = "refused";
+	frame();
+	BOOST_TEST(panel.map_state().new_keys.size() == 1u);
+	BOOST_TEST(panel.map_state().rename_errors.size() == 1u);
+
+	put("map_state.desc", R"({"__type":"test.config","speed":5.0})");
+	BOOST_REQUIRE(document.reload().opened);
+	frame();
+	BOOST_TEST(panel.map_state().new_keys.empty());
+	BOOST_TEST(panel.map_state().rename_errors.empty());
+
+	ImGui::DestroyContext(context);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
