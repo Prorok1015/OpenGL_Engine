@@ -125,6 +125,22 @@ BOOST_AUTO_TEST_CASE(AGamepadBinding_IsNotHeldByAMouseButtonOfTheSameValue)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(AKeyOutOfRange_IsNeverDownReachedOrArmed_AndThrowsNothing)
+{
+	const auto odd = static_cast<KB>(250);
+	auto map = std::make_shared<inp::action_map>();
+	map->add("Odd", { odd });
+	ref = inp::action_map_ref{ map };
+	use_reach = true;
+	reach.reach.resize(1);
+	reach.reach[0].keys.set();
+	reach.reach[0].armed_keys.set();
+	BOOST_CHECK_NO_THROW(frame());
+	BOOST_CHECK_NO_THROW(frame());
+	BOOST_TEST(!state.held(0));
+	BOOST_TEST(edge_free(0));
+}
+
 BOOST_AUTO_TEST_CASE(AnyBindingHoldsTheAction)
 {
 	frame();

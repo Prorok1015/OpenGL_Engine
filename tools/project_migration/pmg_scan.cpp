@@ -5,6 +5,7 @@
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cctype>
@@ -324,15 +325,6 @@ namespace
 		}
 	}
 
-	// The rule of the editor's asset database: a name res::is_ignored_asset_name rejects (a dot file or folder, a
-	// temporary or system file) is no content, and neither is the .resource of such a file.
-	bool is_skipped_name(std::string_view name, bool is_dir)
-	{
-		if (res::is_ignored_asset_name(name)) return true;
-		if (is_dir || !res::is_asset_meta_name(name) || name.size() <= res::asset_meta_suffix.size()) return false;
-		return res::is_ignored_asset_name(name.substr(0, name.size() - res::asset_meta_suffix.size()));
-	}
-
 	// A sidecar is <name>.resource next to the asset (EPIC-57 4.2; the paths of sidecars are S57-6, #768).
 	bool has_sidecar(const fs::path& asset)
 	{
@@ -363,7 +355,7 @@ namespace
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
-			if (is_skipped_name(name, fs::is_directory(status)) || (at_project_root && (name == "code" || name == "build"))) return;
+			if (res::is_skipped_asset_name(name, fs::is_directory(status)) || (at_project_root && (name == "code" || name == "build"))) return;
 			if (at_project_root && name == "project.snkproj") return;
 			// Only a real folder is entered: a link or a junction to one is reported, never followed.
 			if (fs::is_directory(status)) {

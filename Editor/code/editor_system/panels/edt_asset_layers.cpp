@@ -1,19 +1,14 @@
 #include "edt_asset_layers.h"
 #include <snk/common/fs_paths.h>
-#include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <algorithm>
-#include <cctype>
 #include <map>
 
 namespace fs = std::filesystem;
 
 std::string edt::layer_merge_key(const std::string& name, bool case_insensitive)
 {
-	std::string key = name;
-	if (case_insensitive) {
-		for (char& ch : key) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-	}
-	return key;
+	return res::asset_name_key(name, case_insensitive);
 }
 
 std::vector<edt::layer_entry> edt::list_merged_directory(
@@ -21,11 +16,7 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 	const fs::path& relative_dir,
 	bool dirs_only)
 {
-#ifdef _WIN32
-	constexpr bool case_insensitive = true;
-#else
-	constexpr bool case_insensitive = false;
-#endif
+	constexpr bool case_insensitive = res::asset_names_case_insensitive;
 	std::map<std::string, layer_entry> merged;
 	for (size_t i = 0; i < layers.size(); ++i) {
 		const fs::path dir = layers[i] / relative_dir;
@@ -41,8 +32,8 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 			layer_entry e;
 			e.path = it->path();
 			e.name = fs_paths::utf8_of(e.path.filename());
-			// A .resource sidecar or a temporary/system file is not an asset; left out before the merge so it shadows nothing.
-			if (!is_dir && (res::is_asset_meta_name(e.name) || res::is_ignored_asset_name(e.name))) {
+			// A .resource sidecar or a file the asset walk skips is not an asset; left out before the merge so it shadows nothing.
+			if (!is_dir && (res::is_skipped_asset_name(e.name, false) || res::is_asset_meta_sidecar(e.name))) {
 				continue;
 			}
 			e.relative = relative_dir / e.path.filename();

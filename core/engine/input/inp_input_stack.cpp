@@ -78,9 +78,9 @@ namespace
 			declared_action declared;
 			declared.id = id;
 			for (const inp::action_binding& binding : action.bindings) {
-				if (const auto* key = std::get_if<KEYBOARD_BUTTONS>(&binding)) {
-					declared.keys.set(static_cast<std::size_t>(*key));
-				} else if (const auto* button = std::get_if<inp::MOUSE_BUTTONS>(&binding)) {
+				if (const auto key = binding.key()) {
+					if (static_cast<std::size_t>(*key) < declared.keys.size()) declared.keys.set(static_cast<std::size_t>(*key));
+				} else if (const auto button = binding.mouse_button()) {
 					declared.mouse = true;
 					if (static_cast<std::size_t>(*button) < inp::mouse_count) declared.buttons.set(static_cast<std::size_t>(*button));
 				}

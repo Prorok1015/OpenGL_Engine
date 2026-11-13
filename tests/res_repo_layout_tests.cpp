@@ -3,6 +3,7 @@
 #include "test_temp_dir.hpp"
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
 #include <cctype>
@@ -90,11 +91,6 @@ bool looks_like_a_test_file(const std::string& segment)
 	return name == "block.png" || name == "milla.bmp" || name == "window.png";
 }
 
-bool is_sidecar_name(std::string_view name)
-{
-	return name.size() > res::asset_meta_suffix.size() && res::is_asset_meta_name(name);
-}
-
 // Files below `root` (the samples submodule aside) with a test-like name in the path that are not allowed fixtures.
 std::vector<std::string> stray_test_files(const fs::path& root, const std::set<std::string>& allowed)
 {
@@ -105,9 +101,7 @@ std::vector<std::string> stray_test_files(const fs::path& root, const std::set<s
 		if (*rel.begin() == "samples") continue;
 		const std::string generic = rel.generic_string();
 		// The .resource of an allowed fixture is its ID (#768), allowed with it.
-		const std::string owner = is_sidecar_name(rel.filename().string())
-			? generic.substr(0, generic.size() - res::asset_meta_suffix.size())
-			: generic;
+		const std::string owner{ res::is_asset_meta_sidecar(generic) ? res::asset_meta_owner(generic) : generic };
 		const bool test_like = std::ranges::any_of(rel, [](const fs::path& part) { return looks_like_a_test_file(part.string()); });
 		if (test_like && !allowed.contains(owner)) {
 			found.push_back(generic);
@@ -154,7 +148,7 @@ tree_files walk_tree(const fs::path& root)
 		}
 		const fs::path rel = it->path().lexically_relative(root);
 		if (it->is_directory()) {
-			if (res::is_ignored_asset_name(name) || fs::exists(it->path() / ".git") || rel == "samples") {
+			if (res::is_skipped_asset_name(name, true) || fs::exists(it->path() / ".git") || rel == "samples") {
 				it.disable_recursion_pending();
 			}
 			continue;
@@ -162,13 +156,10 @@ tree_files walk_tree(const fs::path& root)
 		if (!it->is_regular_file()) {
 			continue;
 		}
-		if (is_sidecar_name(name)) {
-			if (!res::is_ignored_asset_name(std::string_view{ name }.substr(0, name.size() - res::asset_meta_suffix.size()))) {
-				out.sidecars.push_back(rel);
-			}
-		} else if (!res::is_ignored_asset_name(name)) {
-			out.assets.push_back(rel);
+		if (res::is_skipped_asset_name(name, false)) {
+			continue;
 		}
+		(res::is_asset_meta_sidecar(name) ? out.sidecars : out.assets).push_back(rel);
 	}
 	std::ranges::sort(out.assets);
 	std::ranges::sort(out.sidecars);
@@ -336,7 +327,7 @@ BOOST_AUTO_TEST_CASE(EveryFileOfTheRepositoryTrees_HasItsResourceInTheEngineForm
 			const auto asset = assets.find(owner);
 			BOOST_TEST((asset != assets.end()), where << ": no file next to it");
 
-			const auto bytes = res::read_regular_file_capped(root / sidecar, 64 * 1024);
+			const auto bytes = res::read_regular_file_capped(root / sidecar, res::asset_meta_max_bytes);
 			if (!bytes) {
 				BOOST_ERROR(where << ": not readable, or more than 64 KiB");
 				continue;

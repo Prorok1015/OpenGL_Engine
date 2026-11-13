@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <limits>
 #include <snk/input/inp_actions.h>
 #include <snk/input/inp_input_stack.h>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -63,6 +64,48 @@ BOOST_AUTO_TEST_CASE(ADirectedAxisKnowsItsDeviceAxisAndItsDirection)
 	BOOST_TEST(inp::gamepad_axis_direction(inp::GAMEPAD_AXES::RIGHT_TRIGGER) == 1);
 }
 
+BOOST_AUTO_TEST_CASE(ABindingKeepsItsKindCodeAndThreshold)
+{
+	const inp::action_binding key = inp::KEYBOARD_BUTTONS::SPACE;
+	BOOST_TEST((key.kind() == inp::binding_kind::keyboard));
+	BOOST_TEST((key.key() == inp::KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!key.mouse_button().has_value());
+	BOOST_TEST(!key.is_gamepad());
+	BOOST_TEST(key.threshold() == 0.0f);
+
+	const inp::action_binding trigger{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.4f };
+	BOOST_TEST((trigger.kind() == inp::binding_kind::gamepad_axis));
+	BOOST_TEST((trigger.gamepad_axis() == inp::GAMEPAD_AXES::RIGHT_TRIGGER));
+	BOOST_TEST(trigger.is_gamepad());
+	BOOST_TEST(trigger.threshold() == 0.4f);
+	BOOST_TEST((trigger != inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER }));
+	BOOST_TEST((inp::action_binding{ inp::MOUSE_BUTTONS::LEFT } != inp::action_binding{ inp::KEYBOARD_BUTTONS::SPACE }));
+}
+
+BOOST_AUTO_TEST_CASE(ADefaultBindingIsNoKey_AndAThresholdOutOfRangeOrNaNIsTheDevices)
+{
+	const inp::action_binding none;
+	BOOST_TEST((none.kind() == inp::binding_kind::none));
+	BOOST_TEST(!none.key().has_value());
+	BOOST_TEST(!none.is_gamepad());
+	BOOST_TEST((none != inp::action_binding{ inp::KEYBOARD_BUTTONS::A }));
+
+	BOOST_TEST((inp::action_binding{ inp::GAMEPAD_AXES::LEFT_X_POS, 1.5f }.threshold() == 0.0f));
+	BOOST_TEST((inp::action_binding{ inp::GAMEPAD_AXES::LEFT_X_POS, -0.1f }.threshold() == 0.0f));
+	BOOST_TEST((inp::action_binding{ inp::GAMEPAD_AXES::LEFT_X_POS, std::numeric_limits<float>::quiet_NaN() }.threshold() == 0.0f));
+	BOOST_TEST((inp::action_binding{ inp::GAMEPAD_AXES::LEFT_X_POS, 1.0f }.threshold() == 1.0f));
+}
+
+BOOST_AUTO_TEST_CASE(TheSameInputWithAnotherThreshold_IsTheSameInputButNotTheSameValue)
+{
+	const inp::action_binding loose{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.3f };
+	const inp::action_binding device{ inp::GAMEPAD_AXES::RIGHT_TRIGGER };
+	BOOST_TEST(loose.same_input(device));
+	BOOST_TEST((loose != device));
+	BOOST_TEST(!loose.same_input(inp::action_binding{ inp::GAMEPAD_AXES::LEFT_TRIGGER }));
+	BOOST_TEST(!inp::action_binding{ inp::GAMEPAD_BUTTONS::A }.same_input(inp::action_binding{ inp::GAMEPAD_AXES::LEFT_X_NEG }));
+}
+
 BOOST_AUTO_TEST_CASE(ABracedListOfBindingsAndAnEmptyOneAreAdded)
 {
 	inp::action_map map;
@@ -105,7 +148,7 @@ BOOST_AUTO_TEST_CASE(AnActionMapKeepsTheOrderAndRefusesEmptyOrRepeatedNames)
 	const auto* fire = map.find(map.id("Fire"));
 	BOOST_REQUIRE(fire);
 	BOOST_TEST(fire->bindings.size() == 2u);
-	BOOST_TEST(std::holds_alternative<inp::MOUSE_BUTTONS>(fire->bindings[0]));
+	BOOST_TEST(fire->bindings[0].mouse_button().has_value());
 	BOOST_TEST(!map.find(inp::invalid_action));
 }
 

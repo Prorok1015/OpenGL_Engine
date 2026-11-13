@@ -95,7 +95,7 @@ void gs::input_actions::rebuild_effective()
 	m_has_gamepad_bindings = false;
 	for (const inp::action& action : m_map->actions()) {
 		for (const inp::action_binding& binding : action.bindings) {
-			if (std::holds_alternative<inp::GAMEPAD_BUTTONS>(binding) || std::holds_alternative<inp::GAMEPAD_AXES>(binding)) m_has_gamepad_bindings = true;
+			if (binding.is_gamepad()) m_has_gamepad_bindings = true;
 		}
 	}
 	// A file, an edit of the desc or a rebind that allowed it can leave one binding on two actions. Said once per rebuild, and

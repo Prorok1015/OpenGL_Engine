@@ -114,6 +114,8 @@
 // refused at load, and one built in the window that imports them fails to load on the unresolved symbol.
 // #782: app::modules::loaded_module_apis, prepared_module::api_version and gs::input_actions::warn_about_old_modules are gone;
 // gs::input_actions loses m_warned_map and m_warned_revision, so its later members move (layout_revision 6).
+// #783: inp::action_binding is a struct {kind, code, threshold} (in the layout key), inp::action_map::actions()/size() are exports
+// (layout_revision 7). Pad bindings take an optional threshold in actions.desc.
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
