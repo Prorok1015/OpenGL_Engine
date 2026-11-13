@@ -112,6 +112,9 @@ namespace edt
 		std::optional<history_entry> next_redo_entry() const override;
 		// Writes the edits made since the last record as one record; nothing when there are none.
 		void commit_pending();
+		// Records the step from `before` to `after` (what commit_pending does with the pending edit). The history's own door:
+		// the tests use it to record a snapshot the document cannot take back.
+		void record_change(const boost::json::object& before, const boost::json::object& after);
 		// `own` differs from the last record (an edit the history has not taken yet).
 		bool has_pending_edit() const { return m_open && !(m_own == m_committed_own); }
 		const document_history& history() const { return m_history; }

@@ -5,6 +5,7 @@
 #include "edt_data_document.h"
 #include "edt_data_document_host.h"
 #include "edt_data_document_panel.h"
+#include "edt_data_document_view.h"
 #include "edt_scene_document.h"
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
@@ -435,6 +436,152 @@ BOOST_AUTO_TEST_CASE(AnotherWindowTakingTheFocus_GivesTheSceneTheActivityBack)
 	ImGui::SetWindowFocus("viewport");
 	frame();
 	BOOST_TEST(context->documents().active() == &context->documents().scene());
+}
+
+namespace {
+
+// The main menu bar as the editor has it: a window of the dockspace host that takes no navigation focus, with Edit > Undo.
+struct menu_bar_host
+{
+	explicit menu_bar_host(edt::document_manager& documents) : documents(documents) {}
+
+	void draw()
+	{
+		ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
+		ImGui::SetNextWindowSize(ImVec2(800.f, 600.f));
+		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+			| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_MenuBar;
+		ImGui::Begin("##dockspace_host", nullptr, flags);
+		if (ImGui::BeginMenuBar()) {
+			const bool open = ImGui::BeginMenu("Edit");
+			edit_center = rect_center();
+			if (open) {
+				if (ImGui::MenuItem("Undo")) {
+					++undo_clicks;
+					if (edt::document* active = documents.active()) {
+						if (active->undo()) ++undone;
+					}
+				}
+				undo_center = rect_center();
+				ImGui::EndMenu();
+			}
+			ImGui::EndMenuBar();
+		}
+		ImGui::End();
+	}
+
+	static ImVec2 rect_center()
+	{
+		const ImVec2 min = ImGui::GetItemRectMin();
+		const ImVec2 max = ImGui::GetItemRectMax();
+		return ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+	}
+
+	edt::document_manager& documents;
+	ImVec2 edit_center{ 0.f, 0.f };
+	ImVec2 undo_center{ 0.f, 0.f };
+	int undo_clicks = 0;
+	int undone = 0;
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(EditUndoClickedWithTheMouse_TwiceInARow_UndoesTheDataDocumentBothTimes)
+{
+	imgui_context imgui;
+	edt::document& open = open_config();
+	auto& data = static_cast<edt::data_document&>(open);
+	edt::panel_base* panel = context->panels().find(edt::data_document_panel_id(open.id()));
+	BOOST_REQUIRE(panel != nullptr);
+	edt::document_manager& documents = context->documents();
+	menu_bar_host menu(documents);
+	ImGuiIO& io = ImGui::GetIO();
+
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		menu.draw();
+		panel->render();
+		ImGui::EndFrame();
+	};
+	const auto frames = [&](int count) {
+		for (int i = 0; i < count; ++i) frame();
+	};
+	const auto click = [&](ImVec2 at) {
+		io.AddMousePosEvent(at.x, at.y);
+		frames(2);
+		io.AddMouseButtonEvent(0, true);
+		frames(2);
+		io.AddMouseButtonEvent(0, false);
+		frames(2);
+	};
+
+	frames(3);
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frames(3);
+	BOOST_REQUIRE(documents.active() == &open);
+
+	const double original = data.own().at("speed").to_number<double>();
+	for (const double value : { 6.0, 7.0 }) {
+		BOOST_REQUIRE(data.edit([value](json::value& shown) {
+			shown.as_object()["speed"] = value;
+			return true;
+		}));
+		data.commit_pending();
+	}
+	BOOST_REQUIRE(data.history().size() == 2u);
+
+	for (int round = 1; round <= 2; ++round) {
+		BOOST_TEST_CONTEXT("undo " << round) {
+			click(menu.edit_center);
+			BOOST_REQUIRE_MESSAGE(menu.undo_center.y > menu.edit_center.y, "the Edit menu did not open under the mouse click");
+			click(menu.undo_center);
+			frames(3);
+			BOOST_TEST(menu.undo_clicks == round);
+			BOOST_TEST(menu.undone == round);
+			BOOST_TEST(documents.active() == &open);
+		}
+	}
+	BOOST_TEST(data.own().at("speed").to_number<double>() == original);
+	BOOST_TEST(documents.scene().next_undo_entry().has_value() == false);
+}
+
+BOOST_AUTO_TEST_CASE(AWindowTheFocusGoesToThatIsNoPlaceToWork_LeavesTheActiveDocumentAlone)
+{
+	imgui_context imgui;
+	edt::document& data = open_config();
+	edt::panel_base* panel = context->panels().find(edt::data_document_panel_id(data.id()));
+	BOOST_REQUIRE(panel != nullptr);
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		panel->render();
+		if (ImGui::Begin("##service")) {
+		}
+		ImGui::End();
+		ImGui::EndFrame();
+	};
+	frame();
+	frame();
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frame();
+	BOOST_REQUIRE(context->documents().active() == &data);
+
+	ImGui::SetWindowFocus("##service");
+	frame();
+	frame();
+	BOOST_TEST(context->documents().active() == &data);
+}
+
+BOOST_AUTO_TEST_CASE(AQuietOpen_LeavesTheActiveDocumentAlone_ALoudOneMakesTheNewDocumentActive)
+{
+	edt::document_manager& documents = context->documents();
+	const edt::document_id scene_id = documents.scene().id();
+	const res::tag quiet = put("quiet.desc", R"({"__type":"test.config","speed":2.0})");
+	host->open(quiet, true);
+	BOOST_REQUIRE(documents.find_by_source(quiet) != nullptr);
+	BOOST_TEST(documents.active()->id() == scene_id);
+
+	edt::document& loud = open_config("loud.desc");
+	BOOST_TEST(documents.active() == &loud);
 }
 
 BOOST_AUTO_TEST_CASE(AnEditInTheMiddleOfADrag_IsRecordedWhenAnotherWindowTakesTheFocus)

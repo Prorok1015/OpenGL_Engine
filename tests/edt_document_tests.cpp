@@ -430,6 +430,7 @@ BOOST_AUTO_TEST_CASE(EditUndo_AWindowWithoutHistoryHasNothingToUndo_TheSceneIsNo
 	auto registered = edt::register_edit_actions(actions, documents, dialogs, {});
 
 	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
+	documents.set_active(data.id());
 	BOOST_REQUIRE(documents.active() == &data);
 	BOOST_TEST(!actions.is_enabled("edit.undo"));
 	BOOST_TEST(!actions.is_enabled("edit.redo"));
@@ -524,18 +525,17 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_ChoosesTheBuiltInPreview_EvenWhenAModulePreviewH
 	BOOST_CHECK_NO_THROW(edt::open_prefab(documents, ui_prefab));
 }
 
-BOOST_AUTO_TEST_CASE(Adopt_GivesTheDocumentAnIdAnnouncesItAndMakesItActive)
+BOOST_AUTO_TEST_CASE(Adopt_GivesTheDocumentAnIdAnnouncesItAndLeavesTheActiveDocumentAlone)
 {
 	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
 
 	BOOST_TEST(data.id() != 0u);
 	BOOST_TEST(data.id() != scene.id());
 	BOOST_TEST(documents.find(data.id()) == &data);
-	BOOST_TEST(documents.active() == &data);
+	BOOST_TEST(documents.active() == &scene);
 	BOOST_TEST(static_cast<adopted_document&>(data).events() == &events);
 	BOOST_TEST(count_documents() == 2u);
-	BOOST_TEST((log == std::vector<std::string>{
-		"opened:" + std::to_string(data.id()), "activated:" + std::to_string(data.id()) }));
+	BOOST_TEST((log == std::vector<std::string>{ "opened:" + std::to_string(data.id()) }));
 }
 
 BOOST_AUTO_TEST_CASE(FindBySource_ComparesThePathNotItsSpelling)
@@ -574,6 +574,7 @@ BOOST_AUTO_TEST_CASE(TwoAdoptedDocuments_AreOpenAtOnceAndCloseIndependently)
 	auto& second = documents.adopt(std::make_unique<adopted_document>("second", &destroyed));
 	const edt::document_id first_id = first.id();
 	const edt::document_id second_id = second.id();
+	documents.set_active(second_id);
 	BOOST_TEST(first_id != second_id);
 	BOOST_TEST(count_documents() == 3u);
 

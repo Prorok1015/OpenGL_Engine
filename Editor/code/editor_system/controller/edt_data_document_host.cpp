@@ -42,6 +42,24 @@ void edt::data_document_host::focus(document& open)
 	if (m_focus_other) m_focus_other(open);
 }
 
+void edt::data_document_host::give_activity_to_window(document_id id, std::string_view taken_by)
+{
+	if (taken_by.empty()) return;
+	document_manager& manager = m_context.documents();
+	const document* active = manager.active();
+	if (!active || active->id() != id) return;
+	const bool another_data_window = std::any_of(m_windows.begin(), m_windows.end(),
+		[taken_by](const auto& entry) { return entry.second.panel->get_title() == taken_by; });
+	if (another_data_window) return;
+	const std::vector<panel_info> panels = m_context.panels().panels();
+	const auto taken = std::find_if(panels.begin(), panels.end(), [taken_by](const panel_info& panel) { return panel.title == taken_by; });
+	if (taken != panels.end() && taken->id == "prefab_editor" && manager.preview() != nullptr) {
+		manager.set_active(manager.preview()->id());
+		return;
+	}
+	manager.set_active(manager.scene().id());
+}
+
 void edt::data_document_host::open(const res::tag& tag, bool quiet)
 {
 	document_manager& documents = m_context.documents();
@@ -61,19 +79,14 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	}
 	data_document& data = *created;
 	const document_id id = documents.adopt(std::move(created)).id();
+	if (!quiet) documents.set_active(id);
 	auto panel = std::make_shared<data_document_panel>(data, m_services, id);
 	panel->set_on_close([this, id] { request_close(id); });
 	panel->set_on_save([this, id] { request_save(id); });
 	panel->set_on_reload([this, id] { request_reload(id); });
 	panel->set_on_overwrite([this, id] { request_overwrite(id); });
 	panel->set_on_focus([this, id] { m_context.documents().set_active(id); });
-	panel->set_on_blur([this, id] {
-		document_manager& manager = m_context.documents();
-		const document* active = manager.active();
-		if (active && active->id() == id) {
-			manager.set_active(manager.scene().id());
-		}
-	});
+	panel->set_on_blur([this, id](std::string_view taken_by) { give_activity_to_window(id, taken_by); });
 	registration registered = m_context.panels().add({
 		.id = panel->get_id(), .title = panel->get_title(), .slot = dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = panel });

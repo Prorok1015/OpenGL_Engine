@@ -1143,6 +1143,45 @@ BOOST_AUTO_TEST_CASE(SaveOver_KeepsTheHistory_AndMarksTheSavePoint)
 	BOOST_TEST(document.is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(ARecordTheDocumentCannotTakeBack_IsRefused_DroppedAndNothingIsAnnounced)
+{
+	put("parent.desc", k_parent);
+	const res::tag child = put("child.desc", k_child);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	const json::object before_edit = document.own();
+	BOOST_REQUIRE(set_speed(document, 7.0));
+	document.commit_pending();
+	const json::object edited = document.own();
+
+	for (const char* key : { "__parent", "__type" }) {
+		BOOST_TEST_CONTEXT(key) {
+			json::object foreign = before_edit;
+			foreign[key] = "res://somewhere/else";
+			document.record_change(foreign, edited);
+			const std::size_t records = document.history().size();
+			const std::uint64_t generation = document.generation();
+
+			BOOST_TEST(!document.undo());
+			BOOST_TEST((document.own() == edited));
+			BOOST_TEST(document.generation() == generation);
+			BOOST_TEST(document.history().size() == records - 1u);
+		}
+	}
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST((document.own() == before_edit));
+
+	json::object foreign = edited;
+	foreign["__parent"] = "res://somewhere/else";
+	document.record_change(before_edit, foreign);
+	BOOST_REQUIRE(document.undo());
+	const std::uint64_t generation = document.generation();
+	BOOST_TEST(!document.redo());
+	BOOST_TEST((document.own() == before_edit));
+	BOOST_TEST(document.generation() == generation);
+	BOOST_TEST(!document.history().next_redo());
+}
+
 BOOST_AUTO_TEST_CASE(ADataDocumentHasNoAgentChangesAndIsNeverLocked)
 {
 	put("parent.desc", k_parent);

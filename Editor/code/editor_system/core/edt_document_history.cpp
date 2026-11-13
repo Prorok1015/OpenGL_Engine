@@ -1,5 +1,6 @@
 #include <snk/editor/edt_document_history.h>
 #include <algorithm>
+#include <cstddef>
 #include <utility>
 
 void edt::document_history::set_limit(std::size_t limit)
@@ -94,6 +95,31 @@ bool edt::document_history::redo()
 		change->redo();
 	}
 	++m_position;
+	return true;
+}
+
+bool edt::document_history::discard_next_undo()
+{
+	if (!can_undo()) {
+		return false;
+	}
+	if (m_saved && *m_saved == m_records[m_position - 1].id) {
+		m_saved.reset();
+	}
+	m_records.erase(m_records.begin() + static_cast<std::ptrdiff_t>(m_position - 1));
+	--m_position;
+	return true;
+}
+
+bool edt::document_history::discard_next_redo()
+{
+	if (!can_redo()) {
+		return false;
+	}
+	if (m_saved && *m_saved == m_records[m_position].id) {
+		m_saved.reset();
+	}
+	m_records.erase(m_records.begin() + static_cast<std::ptrdiff_t>(m_position));
 	return true;
 }
 

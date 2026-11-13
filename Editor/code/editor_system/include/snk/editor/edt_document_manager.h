@@ -62,7 +62,8 @@ namespace edt
 		// The adopted documents are not a member: editor_context holds this class by value, so its size is part of the
 		// module ABI (the services after it are read by a module's inline code); they are kept by the .cpp, per manager.
 		// A document of the editor's own (a data document, EPIC-56): it gets its id, hears `document_changed` through
-		// bind_events, is announced (document_opened) and becomes the active one. The manager keeps it until close().
+		// bind_events and is announced (document_opened). It does not become the active one: whoever shows it in a window the person
+		// works in says so (set_active), a quiet open leaves the active document alone. The manager keeps it until close().
 		document& adopt(std::unique_ptr<document> adopted);
 		// The open document whose source() is `source` (the scene's level file, the preview's asset, a data document's
 		// file), null when there is none: opening a file that is open already moves the focus instead of making a second one.

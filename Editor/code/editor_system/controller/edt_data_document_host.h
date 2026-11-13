@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -62,6 +63,9 @@ namespace edt
 		};
 
 		void focus(document& open);
+		// The data window `id` lost the focus to the window named `taken_by` (empty: a service window): the activity goes to the
+		// document of that window (the prefab preview) or to the scene, unless it has gone elsewhere already.
+		void give_activity_to_window(document_id id, std::string_view taken_by);
 		bool reload_now(document_id id);
 		bool overwrite_now(document_id id);
 		// Reload / Overwrite / Cancel for a file that changed on disk; `done(true)` after a reload or an overwrite that

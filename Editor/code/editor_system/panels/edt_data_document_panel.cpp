@@ -7,11 +7,25 @@
 #include <snk/editor/edt_editor_services.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 namespace
 {
 	constexpr ImVec4 k_warning{ 1.0f, 0.8f, 0.3f, 1.0f };
 	constexpr ImVec4 k_error{ 1.0f, 0.4f, 0.4f, 1.0f };
+
+	// The main menu bar lives in a window of the dockspace host: a click on a menu moves the focus there, and closing the
+	// menu leaves it there. None of these is a window the person works in, so the document they came from stays active.
+	std::string_view window_taking_focus()
+	{
+		const ImGuiWindow* taken = ImGui::GetCurrentContext()->NavWindow;
+		if (taken == nullptr) return {};
+		taken = taken->RootWindow;
+		constexpr ImGuiWindowFlags service = ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip
+			| ImGuiWindowFlags_ChildMenu | ImGuiWindowFlags_Modal;
+		if ((taken->Flags & service) != 0 || (taken->Name[0] == '#' && taken->Name[1] == '#')) return {};
+		return taken->Name;
+	}
 }
 
 edt::data_document_panel::data_document_panel(data_document& document, editor_services& services, document_id id)
@@ -54,7 +68,7 @@ void edt::data_document_panel::lose_focus()
 {
 	m_focused = false;
 	m_document.commit_pending();
-	if (m_on_blur) m_on_blur();
+	if (m_on_blur) m_on_blur(window_taking_focus());
 }
 
 void edt::data_document_panel::on_hidden()

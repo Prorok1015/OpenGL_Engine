@@ -91,6 +91,9 @@ namespace
 
 	// What one edit of the person did to `own`: put back by restore_own, in either direction. The __guid of the file is
 	// not an edit: a save may add it, and an undo must not take it away again.
+	// Thrown out of a change the document cannot take back (a snapshot of another __type or __parent): the history has not moved.
+	struct restore_refused {};
+
 	class data_change final : public edt::history_change
 	{
 	public:
@@ -107,7 +110,9 @@ namespace
 			if (const json::value* guid = m_document.own().if_contains("__guid")) {
 				snapshot["__guid"] = *guid;
 			}
-			m_document.restore_own(std::move(snapshot));
+			if (!m_document.restore_own(std::move(snapshot))) {
+				throw restore_refused{};
+			}
 		}
 
 		edt::data_document& m_document;
@@ -476,17 +481,31 @@ void edt::data_document::commit_pending()
 	if (!has_pending_edit()) {
 		return;
 	}
-	std::vector<std::string> pointers;
-	collect_changes({}, m_committed_own, m_own, pointers);
-	std::string label = edit_label(pointers);
-	m_history.record(std::move(label), cmd::origin::ui(), std::make_unique<data_change>(*this, m_committed_own, m_own, std::move(pointers)));
+	record_change(m_committed_own, m_own);
 	m_committed_own = m_own;
+}
+
+void edt::data_document::record_change(const json::object& before, const json::object& after)
+{
+	std::vector<std::string> pointers;
+	collect_changes({}, before, after, pointers);
+	std::string label = edit_label(pointers);
+	m_history.record(std::move(label), cmd::origin::ui(), std::make_unique<data_change>(*this, before, after, std::move(pointers)));
 }
 
 bool edt::data_document::undo()
 {
 	commit_pending();
-	if (!m_open || !m_history.undo()) {
+	if (!m_open) {
+		return false;
+	}
+	try {
+		if (!m_history.undo()) {
+			return false;
+		}
+	} catch (const restore_refused&) {
+		m_history.discard_next_undo();
+		egLOG_WARN("editor", "{}: an undo was refused (the __type or __parent is not the one it was recorded for), the record is dropped", m_source.view());
 		return false;
 	}
 	m_committed_own = m_own;
@@ -497,7 +516,16 @@ bool edt::data_document::undo()
 bool edt::data_document::redo()
 {
 	commit_pending();
-	if (!m_open || !m_history.redo()) {
+	if (!m_open) {
+		return false;
+	}
+	try {
+		if (!m_history.redo()) {
+			return false;
+		}
+	} catch (const restore_refused&) {
+		m_history.discard_next_redo();
+		egLOG_WARN("editor", "{}: a redo was refused (the __type or __parent is not the one it was recorded for), the record is dropped", m_source.view());
 		return false;
 	}
 	m_committed_own = m_own;

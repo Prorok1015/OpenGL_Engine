@@ -99,6 +99,10 @@ namespace edt
 		// The edits of the record are undone in reverse order (redone in order); false when there was nothing.
 		bool undo();
 		bool redo();
+		// Drops the record undo (redo) would apply without applying it: its change cannot be applied any more (the document
+		// refused it). False when there is no such record.
+		bool discard_next_undo();
+		bool discard_next_redo();
 
 		// Forgets every record and every open group: a boundary (a level loaded, the world list changed).
 		void clear();
