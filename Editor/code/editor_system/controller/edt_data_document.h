@@ -88,11 +88,15 @@ namespace edt
 		// engine is not opened at all. `migrated()` holds until a save writes the new version.
 		int file_version() const { return m_file_version; }
 		int current_version() const { return m_current_version; }
-		bool migrated() const { return m_open && m_file_version < m_current_version; }
+		// The file's root is older than the engine's version of its type, or an object typed inside it is (the root is current
+		// and a nested desc is not): either way a save writes other bytes than the file has.
+		bool migrated() const { return m_open && (m_file_version < m_current_version || m_nested_outdated); }
+		bool nested_outdated() const { return m_nested_outdated; }
 		// What the steps of the migration warned about, one line each ("<type> v1 -> v2: <message>").
 		const std::vector<std::string>& migration_notes() const { return m_migration_notes; }
 		// Writing the new version of a migrated file asks first: until the person said yes (confirm_version_write) a save,
-		// the clean ones too, is refused and says why. A save that wrote, and a reload, start over.
+		// the clean ones too, is refused and says why. The yes is for one save: a save that fails, or that wrote, and a reload,
+		// start over.
 		bool needs_version_confirmation() const { return migrated() && !m_version_confirmed; }
 		void confirm_version_write() { m_version_confirmed = true; }
 		// The schema of the document's type (null when it is gone, e.g. the game layer that registered it was replaced).
@@ -144,6 +148,7 @@ namespace edt
 			std::vector<res::tag> parents;
 			int file_version = 1;
 			int current_version = 1;
+			bool nested_outdated = false;
 			std::vector<std::string> notes;
 		};
 
@@ -157,6 +162,7 @@ namespace edt
 		void on_changed(const res::tag& tag);
 		void announce() const;
 		save_result write(bool over);
+		save_result write_checked(bool over);
 		void flag_changed(const std::string& disk_version);
 		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr,
 			loaded* migration = nullptr) const;
@@ -181,6 +187,7 @@ namespace edt
 		std::uint64_t m_disk_changes = 0;
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
+		bool m_nested_outdated = false;
 		int m_file_version = 1;
 		int m_current_version = 1;
 		std::vector<std::string> m_migration_notes;

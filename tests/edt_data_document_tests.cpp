@@ -1250,6 +1250,57 @@ BOOST_AUTO_TEST_CASE(TheMigrationIsNoEdit_NothingIsRecorded_AndASaveLeavesTheHis
 	BOOST_TEST(document.save().saved);
 }
 
+BOOST_AUTO_TEST_CASE(TheYesOfTheVersionQuestion_IsForOneSave_AFailedSaveAsksAgain)
+{
+	register_rename(*descs);
+	const res::tag file = put("old.desc", k_old_file);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+
+	document.confirm_version_write();
+	BOOST_TEST(!document.needs_version_confirmation());
+	put("old.desc", R"({"__type":"test.config","velocity":9.0})");
+	BOOST_TEST(!document.save().saved); // the file changed on disk: nothing is written
+	BOOST_TEST(document.needs_version_confirmation());
+}
+
+BOOST_AUTO_TEST_CASE(ANestedObjectOfAnOlderVersion_MakesTheDocumentMigrated_EvenWhenTheRootIsCurrent)
+{
+	register_rename(*descs);
+	descs->register_migration("test.plain", 1, [](json::object&) {});
+	const res::tag outdated = put("nested_old.desc", R"({"__type":"test.config","__version":2,"inner":{"__type":"test.plain"}})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(outdated).opened);
+	BOOST_TEST(document.file_version() == 2);
+	BOOST_TEST(document.migrated());
+	BOOST_TEST(document.nested_outdated());
+	BOOST_TEST(document.needs_version_confirmation());
+	BOOST_TEST(edt::status_of(document).migration_note.find("Outdated data") != std::string::npos);
+
+	const res::tag current = put("nested_current.desc", R"({"__type":"test.config","__version":2,"inner":{"__type":"test.plain","__version":2}})");
+	edt::data_document up_to_date = make();
+	BOOST_REQUIRE(up_to_date.open(current).opened);
+	BOOST_TEST(!up_to_date.migrated());
+}
+
+BOOST_AUTO_TEST_CASE(AnOutdatedParent_UnderACurrentChild_IsMigratedForTheViewAndNeverWritten)
+{
+	register_rename(*descs);
+	const res::tag parent = put("old_parent.desc", k_old_file);
+	const res::tag child = put("new_child.desc", R"({"__type":"test.config","__version":2,"__parent":"res://old_parent.desc"})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	BOOST_TEST(!document.migrated());
+	BOOST_TEST(document.shown().at_pointer("/speed").to_number<double>() == 4.0);
+
+	BOOST_REQUIRE(set_speed(document, 6.0));
+	BOOST_TEST(document.save().saved);
+	BOOST_TEST(text_of("old_parent.desc") == k_old_file);
+	BOOST_TEST(!parsed("new_child.desc").contains("velocity"));
+	BOOST_TEST(parsed("new_child.desc").at("speed").to_number<double>() == 6.0);
+	(void)parent;
+}
+
 BOOST_AUTO_TEST_CASE(AFileOfTheCurrentVersion_IsNotMigrated_AndSavesWithoutAQuestion)
 {
 	const res::tag file = put("current.desc", R"({"__type":"test.config","speed":2.0})");

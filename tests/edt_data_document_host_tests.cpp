@@ -416,6 +416,64 @@ BOOST_AUTO_TEST_CASE(ASaveOfAnOutdatedFileThatChangedOnDisk_AsksAboutTheConflict
 	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFile_Save_AsksTheVersion_AndClosesOnYes)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	make_dirty(*open);
+	const std::size_t before = open_documents();
+
+	host->request_close(open->id());
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(open_documents() == before - 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFileChangedOnDisk_Overwrite_ThenTheVersion_ClosesTheWindow)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	make_dirty(*open);
+	const std::size_t before = open_documents();
+	put("old.desc", R"({"__type":"test.config","velocity":9.0})");
+
+	host->request_close(open->id());
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("changed on disk") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok); // Overwrite
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(open_documents() == before - 1u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_WithADirtyOutdatedFile_AsksTheVersion_AndTheNextOneGoesThrough)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	make_dirty(*open);
+
+	BOOST_TEST(!host->save_all());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(read_text("old.desc").find("\"__version\": 2") != std::string::npos);
+	BOOST_TEST(host->save_all());
+}
+
 BOOST_AUTO_TEST_CASE(OpeningANewerFile_IsAMessage_NoWindow)
 {
 	const res::tag tag = put("newer.desc", R"({"__type":"test.config","__version":9,"speed":1.0})");

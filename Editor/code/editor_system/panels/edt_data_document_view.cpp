@@ -2,10 +2,17 @@
 #include "edt_data_document.h"
 #include <format>
 
-std::string edt::migration_note_text(int file_version, int current_version, bool project_migration)
+std::string edt::migration_note_text(int file_version, int current_version, bool nested_outdated, bool project_migration)
 {
-	std::string text = std::format("Outdated file: v{} -> v{}. Opened migrated in memory; the file is not changed until you save, and saving writes v{}.",
-		file_version, current_version, current_version);
+	std::string text;
+	if (file_version < current_version) {
+		text = std::format("Outdated file: v{} -> v{}. Opened migrated in memory; the file is not changed until you save, and saving writes v{}.",
+			file_version, current_version, current_version);
+	} else {
+		text = nested_outdated
+			? "Outdated data: objects of older versions inside this file were migrated in memory; the file is not changed until you save, and saving writes their current versions."
+			: "Opened migrated in memory.";
+	}
 	if (project_migration) {
 		text += " Project > Migrate Project brings the whole project up to date.";
 	}
@@ -24,7 +31,7 @@ edt::data_document_status edt::status_of(const data_document& document, bool pro
 	out.dirty = document.is_dirty();
 	out.migrated = document.migrated();
 	if (out.migrated) {
-		out.migration_note = migration_note_text(document.file_version(), document.current_version(), project_migration);
+		out.migration_note = migration_note_text(document.file_version(), document.current_version(), document.nested_outdated(), project_migration);
 		for (const std::string& note : document.migration_notes()) {
 			if (!out.migration_details.empty()) out.migration_details += '\n';
 			out.migration_details += note;

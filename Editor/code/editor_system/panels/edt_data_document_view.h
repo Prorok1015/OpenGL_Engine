@@ -24,7 +24,8 @@ namespace edt
 
 	// "Outdated file: v1 -> v2. Opened migrated in memory; the file is not changed until you save, and saving writes v2." With
 	// `project_migration` (the editor has a project migration to point to) the badge names it too.
-	std::string migration_note_text(int file_version, int current_version, bool project_migration);
+	// `nested_outdated`: the root is current and only objects typed inside the file are older.
+	std::string migration_note_text(int file_version, int current_version, bool nested_outdated, bool project_migration);
 
 	// `project_migration`: Project > Migrate Project exists (UI of #761); until then the badge does not point to it.
 	data_document_status status_of(const data_document& document, bool project_migration = false);
