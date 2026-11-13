@@ -226,7 +226,7 @@ bool edt::file_menu::invoke_or_report(std::string_view action_id, json::value ar
 
 std::optional<edt::dialog_service::dialog_id> edt::file_menu::guard_unsaved(std::function<void(bool discard)> action)
 {
-	if (!m_hooks.is_dirty()) {
+	if (!anything_dirty()) {
 		action(false);
 		return std::nullopt;
 	}
@@ -235,10 +235,29 @@ std::optional<edt::dialog_service::dialog_id> edt::file_menu::guard_unsaved(std:
 	});
 }
 
+bool edt::file_menu::anything_dirty() const
+{
+	return m_hooks.is_dirty() || (m_hooks.other_documents_dirty && m_hooks.other_documents_dirty());
+}
+
+void edt::file_menu::discard_everything()
+{
+	if (m_hooks.is_dirty()) m_hooks.discard_changes();
+	if (m_hooks.discard_other_documents) m_hooks.discard_other_documents();
+}
+
 void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::function<void(bool discard)>& action)
 {
 	switch (choice) {
 	case unsaved_choice::save:
+		// A failed write must not continue into New/Exit either: the changes would be lost.
+		if (m_hooks.save_other_documents && m_hooks.other_documents_dirty && m_hooks.other_documents_dirty() && !m_hooks.save_other_documents()) {
+			return;
+		}
+		if (!m_hooks.is_dirty()) {
+			action(true);
+			return;
+		}
 		if (!m_hooks.has_scene()) {
 			egLOG("Editor/Save", "No scene loaded - nothing to save.");
 			return;
@@ -339,7 +358,7 @@ edt::action_result edt::file_menu::switch_to_project(const std::filesystem::path
 	if (!opened.context) return action_result::failure("failed", opened.error);
 	if (auto error = m_hooks.open_project(opened.context->manifest_file, allow_engine_version_mismatch))
 		return action_result::failure("failed", *error);
-	if (m_hooks.is_dirty()) m_hooks.discard_changes();
+	if (anything_dirty()) discard_everything();
 	m_hooks.exit();
 	return action_result::success(json::object{ { "manifest", to_json_string(opened.context->manifest_file) } });
 }
@@ -397,8 +416,8 @@ void edt::file_menu::register_actions()
 	add({ .id = "file.new", .label = "New Level", .menu_path = "File",
 		.execute = [this, level_change_busy](const json::value& args) {
 			if (auto busy = level_change_busy()) return *busy;
-			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
-			if (m_hooks.is_dirty()) m_hooks.discard_changes();
+			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+			if (anything_dirty()) discard_everything();
 			m_hooks.new_level();
 			return action_result::success();
 		},
@@ -417,7 +436,7 @@ void edt::file_menu::register_actions()
 			const json::value& args = request.args;
 			if (auto busy = level_change_busy()) return *busy;
 			if (!restricted(request)) {
-				if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+				if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 				m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
 				return action_result::success(json::object{ { "level_loading", true } });
 			}
@@ -431,7 +450,7 @@ void edt::file_menu::register_actions()
 			case level_file_state::unsafe: return action_result::failure(cmd::codes::invalid_args, "'" + named.path + "' is not a plain file inside the project");
 			case level_file_state::file: break;
 			}
-			if (m_hooks.is_dirty()) return action_result::failure("needs_input", AGENT_UNSAVED_MESSAGE);
+			if (anything_dirty()) return action_result::failure("needs_input", AGENT_UNSAVED_MESSAGE);
 			if (!m_hooks.load_level_tag) return action_result::failure("failed", "opening a level by its path is not available");
 			if (const std::optional<std::string> refused = m_hooks.load_level_tag(named.path)) {
 				return action_result::failure(cmd::codes::invalid_args, *refused);
@@ -555,7 +574,7 @@ void edt::file_menu::register_actions()
 	add({ .id = "file.new_project", .label = "New Project...", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
 			if (!m_hooks.create_project || !m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
-			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			const auto folder = from_json_string(args.as_object().at("path").as_string()).lexically_normal();
 			const auto base = folder.has_filename() ? folder.filename() : folder.parent_path().filename();
 			const json::value* name = args.as_object().if_contains("name");
@@ -570,7 +589,7 @@ void edt::file_menu::register_actions()
 	add({ .id = "file.open_project", .label = "Open Project...", .menu_path = "File",
 		.execute = [this](const json::value& args) {
 			if (!m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
-			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			return switch_to_project(from_json_string(args.as_object().at("path").as_string()), flag(args, "allow_engine_version_mismatch"));
 		},
 		.args_schema = open_project_schema(),
@@ -586,7 +605,7 @@ void edt::file_menu::register_actions()
 				to_json_string(manifest.parent_path())),
 			.menu_path = "File", .separator_before = i == 0,
 			.execute = [this, manifest](const json::value& args) {
-				if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+				if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 				return switch_to_project(manifest, false);
 			},
 			.args_schema = discard_schema(),
@@ -606,8 +625,8 @@ void edt::file_menu::register_actions()
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
-			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
-			if (m_hooks.is_dirty()) m_hooks.discard_changes();
+			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+			if (anything_dirty()) discard_everything();
 			m_hooks.exit();
 			return action_result::success();
 		},

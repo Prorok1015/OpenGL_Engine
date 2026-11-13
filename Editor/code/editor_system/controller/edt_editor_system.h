@@ -57,7 +57,7 @@ namespace edt {
 	class live_mode;
 	class editor_context;
 	class editor_layer;
-	class data_document_panel;
+	class data_document_host;
 	class model_importer;
 	class process_decoder;
 	class asset_exporter;
@@ -237,20 +237,12 @@ namespace edt {
 		void open_prefab_for_edit(const res::tag& tag);
 		void close_prefab_editor();
 
-		// Data documents (EPIC-56, #793): the document is owned by the document_manager (adopt), its window by the
-		// panel registry (the registration here); the window goes first, it holds the document.
-		struct data_window
-		{
-			std::shared_ptr<data_document_panel> panel;
-			registration window;
-		};
+		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();
-		void open_data_document(const res::tag& tag);
-		void focus_document(document& open);
-		void request_close_data_document(document_id id);
-		void close_data_document(document_id id);
-		std::unordered_map<document_id, data_window> m_data_windows;
-		connection m_data_window_closed;
+		// The kinds of the asset registry first (a module's `.desc` kind, the prefab editor), then any `.desc` as a data
+		// document. `quiet`: a problem or a link, not a double click: a file that is no data document is a log line, no window.
+		bool open_asset(const res::tag& tag, bool quiet);
+		std::unique_ptr<data_document_host> m_data_documents;
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;

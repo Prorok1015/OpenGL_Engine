@@ -413,6 +413,32 @@ BOOST_AUTO_TEST_CASE(EditUndo_FollowsTheActiveDocument)
 	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");
 }
 
+BOOST_AUTO_TEST_CASE(EditUndo_AWindowWithoutHistoryLeavesUndoAndRedoToTheScene)
+{
+	scn::world_desc world;
+	scn::prefab_desc::prefab_node node;
+	node.node_id = 10;
+	node.name = "a";
+	world.get_root().children.push_back(node);
+	scene.world_descs.push_back(std::move(world));
+	scene.reset_history();
+	scene.world_descs[0].get_root().children[0].name = "b";
+	scene.commit("Rename node");
+
+	edt::action_registry actions;
+	edt::dialog_service dialogs;
+	auto registered = edt::register_edit_actions(actions, documents, dialogs, {});
+
+	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
+	BOOST_REQUIRE(documents.active() == &data);
+	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
+	BOOST_REQUIRE(actions.invoke("edit.undo", boost::json::object{}).ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");
+	BOOST_REQUIRE(actions.is_enabled("edit.redo"));
+	BOOST_REQUIRE(actions.invoke("edit.redo", boost::json::object{}).ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "b");
+}
+
 BOOST_AUTO_TEST_CASE(SceneSave_GoesThroughTheHandlersOfTheEditor)
 {
 	BOOST_TEST(!scene.can_save());
@@ -504,6 +530,35 @@ BOOST_AUTO_TEST_CASE(Adopt_GivesTheDocumentAnIdAnnouncesItAndMakesItActive)
 	BOOST_TEST(count_documents() == 2u);
 	BOOST_TEST((log == std::vector<std::string>{
 		"opened:" + std::to_string(data.id()), "activated:" + std::to_string(data.id()) }));
+}
+
+BOOST_AUTO_TEST_CASE(FindBySource_ComparesThePathNotItsSpelling)
+{
+	auto& data = documents.adopt(std::make_unique<adopted_document>("config/game"));
+	for (const char* spelling : { "res://config/game.desc", "res://config/./game.desc", "res://config//game.desc",
+		"res://config/sub/../game.desc", "res://config\\game.desc" }) {
+		BOOST_TEST_CONTEXT(spelling) {
+			BOOST_TEST(documents.find_by_source(res::tag{ spelling }) == &data);
+		}
+	}
+	BOOST_TEST(documents.find_by_source(res::tag{ "res://config/other.desc" }) == nullptr);
+	BOOST_TEST(documents.find_by_source(res::tag{ "memory://config/game.desc" }) == nullptr);
+	BOOST_TEST(documents.find_by_source(res::tag{}) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ForEach_VisitsEveryDocumentEvenWhenTheVisitorClosesTheOneItIsGiven)
+{
+	documents.adopt(std::make_unique<adopted_document>("a"));
+	documents.adopt(std::make_unique<adopted_document>("b"));
+	documents.adopt(std::make_unique<adopted_document>("c"));
+
+	std::vector<std::string> visited;
+	documents.for_each([&](edt::document& visiting) {
+		visited.emplace_back(visiting.title());
+		if (visiting.kind() == "adopted") documents.close(visiting.id());
+	});
+	BOOST_TEST((visited == std::vector<std::string>{ scene.title(), "a", "b", "c" }), boost::test_tools::per_element());
+	BOOST_TEST(count_documents() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(TwoAdoptedDocuments_AreOpenAtOnceAndCloseIndependently)

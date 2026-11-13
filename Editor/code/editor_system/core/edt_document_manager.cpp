@@ -5,9 +5,51 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <cctype>
+#include <map>
+#include <string>
 
 namespace {
 constexpr const char* k_preview_problem_source = "preview";
+
+using adopted_list = std::vector<std::unique_ptr<edt::document>>;
+
+std::map<const edt::document_manager*, adopted_list>& adopted_lists()
+{
+	static std::map<const edt::document_manager*, adopted_list> lists;
+	return lists;
+}
+
+adopted_list& adopted_of(const edt::document_manager* manager)
+{
+	return adopted_lists()[manager];
+}
+
+std::string source_key(const res::tag& source)
+{
+	std::string protocol{ source.protocol() };
+	std::string rest{ source.relative() };
+	std::vector<std::string> parts;
+	std::size_t start = 0;
+	while (start <= rest.size()) {
+		std::size_t end = rest.find('/', start);
+		if (end == std::string::npos) end = rest.size();
+		std::string part = rest.substr(start, end - start);
+		start = end + 1;
+		if (part.empty() || part == ".") continue;
+		if (part == "..") {
+			if (!parts.empty()) parts.pop_back();
+			continue;
+		}
+		parts.push_back(std::move(part));
+	}
+	std::string key = protocol + "://";
+	for (const std::string& part : parts) key += part + "/";
+#ifdef _WIN32
+	std::ranges::transform(key, key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+	return key;
+}
 }
 
 edt::document_manager::document_manager(document& scene, editor_events& events)
@@ -19,7 +61,10 @@ edt::document_manager::document_manager(document& scene, editor_events& events)
 	m_active = m_scene->id();
 }
 
-edt::document_manager::~document_manager() = default;
+edt::document_manager::~document_manager()
+{
+	adopted_lists().erase(this);
+}
 
 void edt::document_manager::set_preview_kinds(asset_kind_registry& kinds, editor_services& services, problem_list* problems)
 {
@@ -45,7 +90,7 @@ void edt::document_manager::shutdown()
 {
 	if (!m_scene) return;
 	if (m_open_preview) close(m_open_preview->id());
-	while (!m_adopted.empty()) close(m_adopted.back()->id());
+	while (!adopted_of(this).empty()) close(adopted_of(this).back()->id());
 	m_scene->bind_events(nullptr);
 	m_scene = nullptr;
 	m_active = 0;
@@ -60,8 +105,8 @@ edt::document* edt::document_manager::find(document_id id)
 {
 	if (m_scene && id == m_scene->id()) return m_scene;
 	if (m_open_preview && m_open_preview->is_open() && m_open_preview->id() == id) return m_open_preview;
-	const auto kept = std::find_if(m_adopted.begin(), m_adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
-	return kept != m_adopted.end() ? kept->get() : nullptr;
+	const auto kept = std::find_if(adopted_of(this).begin(), adopted_of(this).end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	return kept != adopted_of(this).end() ? kept->get() : nullptr;
 }
 
 void edt::document_manager::set_active(document_id id)
@@ -119,7 +164,7 @@ edt::document& edt::document_manager::adopt(std::unique_ptr<document> adopted)
 	document& kept = *adopted;
 	kept.assign_id(m_next_id++);
 	kept.bind_events(&m_events);
-	m_adopted.push_back(std::move(adopted));
+	adopted_of(this).push_back(std::move(adopted));
 	m_events.document_opened.emit(kept.id());
 	set_active(kept.id());
 	return kept;
@@ -127,9 +172,11 @@ edt::document& edt::document_manager::adopt(std::unique_ptr<document> adopted)
 
 edt::document* edt::document_manager::find_by_source(const res::tag& source)
 {
+	if (!source.is_valid()) return nullptr;
+	const std::string wanted = source_key(source);
 	document* found = nullptr;
 	for_each([&](document& candidate) {
-		if (!found && candidate.source() == source) found = &candidate;
+		if (!found && candidate.source().is_valid() && source_key(candidate.source()) == wanted) found = &candidate;
 	});
 	return found;
 }
@@ -145,11 +192,11 @@ void edt::document_manager::close(document_id id)
 		egLOG_WARN("Editor/Documents", "The scene document cannot be closed");
 		return;
 	}
-	const auto adopted = std::find_if(m_adopted.begin(), m_adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
-	if (adopted != m_adopted.end()) {
+	const auto adopted = std::find_if(adopted_of(this).begin(), adopted_of(this).end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	if (adopted != adopted_of(this).end()) {
 		// Out of the list before anything is announced, and destroyed after: a listener may still read the closing document.
 		std::unique_ptr<document> closing = std::move(*adopted);
-		m_adopted.erase(adopted);
+		adopted_of(this).erase(adopted);
 		closing->bind_events(nullptr);
 		if (m_active == id) {
 			m_active = m_scene ? m_scene->id() : 0;
@@ -198,8 +245,13 @@ void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 
 void edt::document_manager::for_each(const std::function<void(document&)>& fn)
 {
+	std::vector<document_id> adopted_ids;
+	adopted_ids.reserve(adopted_of(this).size());
+	for (const auto& kept : adopted_of(this)) adopted_ids.push_back(kept->id());
+
 	if (m_scene) fn(*m_scene);
 	if (preview()) fn(*m_open_preview);
-	// By index: a visitor may close a document.
-	for (std::size_t i = 0; i < m_adopted.size(); ++i) fn(*m_adopted[i]);
+	for (const document_id id : adopted_ids) {
+		if (document* still_open = find(id)) fn(*still_open);
+	}
 }

@@ -425,7 +425,6 @@ struct builtin_kinds_fixture : context_fixture
 	{
 		edt::asset_kind_hooks hooks;
 		hooks.open_prefab = [this](const res::tag& tag) { log.push_back("prefab:" + std::string(tag.relative())); };
-		hooks.open_data_document = [this](const res::tag& tag) { log.push_back("data:" + std::string(tag.relative())); };
 		hooks.add_desc_to_scene = [this](const res::tag& tag) { log.push_back("add:" + std::string(tag.relative())); };
 		registrations = edt::register_builtin_asset_kinds(context->asset_kinds(), std::move(hooks));
 	}
@@ -437,20 +436,25 @@ struct builtin_kinds_fixture : context_fixture
 BOOST_FIXTURE_TEST_CASE(Builtin_PrefabSuffixOpensThePrefabDocument, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "data_document", "desc" }));
+	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "desc" }));
 	BOOST_CHECK(kinds.open(*context, res::tag::make("prefabs/tree.prefab.desc")));
 	BOOST_CHECK((log == std::vector<std::string>{ "prefab:prefabs/tree.prefab.desc" }));
 }
 
-BOOST_FIXTURE_TEST_CASE(Builtin_OtherDescFilesOpenAsDataDocuments, builtin_kinds_fixture)
+BOOST_FIXTURE_TEST_CASE(Builtin_OtherDescFilesHaveNoKindToOpen_SoAModulesDescKindIsNotBeaten, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	for (const char* path : { "levels/a.desc", "config/game.desc", "materials/red.mat.desc" }) {
-		BOOST_TEST_CONTEXT(path) {
-			BOOST_CHECK(kinds.open(*context, res::tag::make(path)));
-		}
+	for (const char* path : { "levels/a.desc", "materials/red.mat.desc" }) {
+		BOOST_CHECK(kinds.kind_for_open(path) == nullptr);
+		BOOST_REQUIRE(kinds.kind_for_drop(path) != nullptr);
+		BOOST_CHECK(kinds.kind_for_drop(path)->id == "desc");
 	}
-	BOOST_CHECK((log == std::vector<std::string>{ "data:levels/a.desc", "data:config/game.desc", "data:materials/red.mat.desc" }));
+	std::vector<std::string> opened;
+	const auto module_kind = kinds.add({ .id = "ext_desc", .suffix = ".desc",
+		.open = [&opened](edt::editor_context&, const res::tag& tag) { opened.emplace_back(tag.relative()); } });
+	BOOST_CHECK(kinds.open(*context, res::tag::make("levels/a.desc")));
+	BOOST_CHECK((opened == std::vector<std::string>{ "levels/a.desc" }));
+	BOOST_CHECK(log.empty());
 }
 
 BOOST_FIXTURE_TEST_CASE(Builtin_OtherAssetsAreNotOpened, builtin_kinds_fixture)
