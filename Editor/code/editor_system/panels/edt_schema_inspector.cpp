@@ -1,4 +1,5 @@
 #include "edt_schema_inspector.h"
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/resource/res_tag.h>
@@ -763,6 +764,14 @@ bool edt::schema_ui::draw_fields(const desc::type_schema& schema, json::value& o
 std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type_schema& schema, const desc::schema_registry& registry,
 	const json::value& base, const json::value& before, const json::value& after)
 {
+	// A map has no key without a name: the read would throw the whole map away, so nothing of this edit is written.
+	for (const auto& field : schema.fields) {
+		const json::value* held = field.kind == field_kind::map ? desc::json_pointer_get(after, field.key) : nullptr;
+		if (held && held->is_object() && held->as_object().contains("")) {
+			egLOG_WARN("editor", "the map '{}' has a key with no name: the edit is not written", field.name);
+			return 0;
+		}
+	}
 	const std::vector<desc::json_change> changes = desc::diff(schema, before, after, &registry);
 	if (changes.empty()) {
 		return 0;
@@ -770,8 +779,11 @@ std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type
 	json::value holder(overrides); // a copy: `overrides` stays intact if anything below throws
 	for (const auto& change : changes) {
 		const json::value* inherited = desc::json_pointer_get(base, change.pointer);
-		// A null is a removal: of a key the parent has (kept as the record), or of one that is only here (no record at all).
-		const bool removes_own = change.value.is_null() && (!inherited || inherited->is_null());
+		// A null is a removal: of a key the parent has (kept as the record), or of one that is only here (no record at all) -
+		// unless the field has a default of its own: without the record the read gives that, not the removal.
+		const auto field = std::ranges::find(schema.fields, change.pointer, &desc::field_schema::key);
+		const bool has_default = field != schema.fields.end() && !field->default_value.is_null();
+		const bool removes_own = change.value.is_null() && (!inherited || inherited->is_null()) && !has_default;
 		if (removes_own || (inherited && same_value(*inherited, change.value))) {
 			if (desc::json_pointer_remove(holder, change.pointer)) {
 				prune_empty_parents(holder, change.pointer);
