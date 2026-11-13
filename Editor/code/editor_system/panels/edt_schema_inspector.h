@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // The inspector UI generated from a desc::type_schema (DESC_SCHEMA.md 2.5): every field gets the widget its kind and
 // hints ask for, and what the user changes is written back as the JSON pointers that differ, nothing else.
@@ -96,6 +97,59 @@ namespace edt::schema_ui
 		}
 	};
 
+	// What the person asked for at the marks of the fields in one frame (the "set here" mark's menu). An unset is applied to
+	// the shown value by draw_fields (the edit then goes through apply_edit like any other); a reset removes the record from
+	// the own data after apply_edit (apply_resets), whatever the field's default is.
+	struct edit_requests
+	{
+		std::vector<std::string> resets;
+		std::vector<std::string> unsets;
+	};
+
+	// One parent of a chain (a document's __parent files), nearest first: its name and what it sets.
+	struct parent_layer
+	{
+		std::string name;
+		const boost::json::object* data = nullptr;
+	};
+
+	struct origin_layer
+	{
+		std::string name;
+		boost::json::value data;
+	};
+
+	// Where the values of a component or a document come from (S56-7): its own data (the pointers it sets), the parent's
+	// data merged, each level of the chain (so a hint names the level that really sets a value, not the nearest parent) and
+	// the name of the parent for a source that has no levels. Copies, taken once per edit: the draw never sees the live objects.
+	struct field_origin
+	{
+		boost::json::value own;
+		boost::json::value parent;
+		bool has_parent = false;
+		std::string inherited_from;
+		std::vector<origin_layer> layers;
+		mutable edit_requests requests;
+	};
+
+	enum class value_source : std::uint8_t
+	{
+		set_here,       // the own data has the pointer (a null record included: "not set here" over an inherited value)
+		inherited,      // the parent has a value
+		schema_default, // neither: what the schema says
+	};
+
+	// The pointer, or anything under it, is in the own data.
+	bool set_here(const field_origin& origin, std::string_view pointer);
+	value_source source_of(const field_origin& origin, std::string_view pointer);
+	// "set here" / "inherited from <parent>" / "schema default".
+	std::string source_text(const field_origin& origin, std::string_view pointer);
+	// Takes the pointers out of the shown value (an optional field becomes "not set"); true when something was there.
+	bool apply_unsets(boost::json::value& shown, const std::vector<std::string>& pointers);
+	// Takes the records out of the own data, with the field's legacy aliases and the objects that become empty: the fields
+	// are inherited again (or default). Returns how many records went.
+	std::size_t apply_resets(boost::json::object& own, const desc::type_schema& schema, const std::vector<std::string>& pointers);
+
 	struct context
 	{
 		const desc::schema_registry& registry;
@@ -105,6 +159,11 @@ namespace edt::schema_ui
 		std::function<void(std::string_view pointer, widget kind)> on_field;
 		// Null: a map row forgets what was typed at the end of the frame (a test, a one-shot view).
 		map_edit_state* map_state = nullptr;
+		// Called for the mark of a field and for the items of its menu while it is open (tests): what it is
+		// ("<pointer>#mark", "<pointer>#reset", "<pointer>#unset") and the centre of its rectangle on the screen.
+		std::function<void(std::string_view target, float x, float y)> on_target = nullptr;
+		// Not null: every field gets its mark (set here / inherited) and the menu of it (Reset, Unset). Null: no marks.
+		const field_origin* origin = nullptr;
 	};
 
 	// Draws the visible fields of `schema` for `object` (the whole component, or a nested structure) and edits it in
@@ -123,4 +182,11 @@ namespace edt::schema_ui
 	// parent into `overrides`. True when the overrides changed.
 	bool edit_component(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
 		boost::json::object& overrides, const std::function<bool(boost::json::value& shown)>& draw);
+
+	// The same with the origin of the values: `draw` puts `origin` in its context, gets the marks, and what the person asked
+	// for at them (a reset, an unset) is applied with the edit: one edit, one record of the history. `inherited_from`: the
+	// parent's name for the hint (empty: "inherited").
+	bool edit_component_marked(const desc::type_schema& schema, const desc::schema_registry& registry, const boost::json::object* parent,
+		boost::json::object& overrides, std::string inherited_from, const std::vector<parent_layer>& layers,
+		const std::function<bool(boost::json::value& shown, const field_origin& origin)>& draw);
 }
