@@ -1744,9 +1744,10 @@ BOOST_AUTO_TEST_CASE(OverrideExpectation_NamesWhatTheFieldWants)
 		const auto failure = desc::check_override_object(schema, json::parse(patch).as_object(), nullptr, &registry);
 		return desc::override_expectation(schema, failure, &registry);
 	};
-	BOOST_TEST(expectation(R"({"parts":{"p":{"scale":"wide"}}})").empty() == false);
-	BOOST_TEST(expectation(R"({"parts":{"p":5}})") == "an object of 'ops.inner'");
-	BOOST_TEST(expectation(R"({"counts":{"a":"x"}})") == "a value of kind i32");
+	// a map is reported as a whole: what it wants is an object of its values
+	BOOST_TEST(expectation(R"({"parts":{"p":{"scale":"wide"}}})") == "an object (key to value)");
+	BOOST_TEST(expectation(R"({"counts":{"a":"x"}})") == "an object (key to value)");
+	BOOST_TEST(expectation(R"({"gain":"x"})") == "a value of kind f32");
 	// a stale pointer and a valid object name nothing
 	BOOST_TEST(expectation(R"({"parts":{"p":{"gone":1}}})").empty());
 	BOOST_TEST(expectation(R"({"counts":{"a":1}})").empty());
