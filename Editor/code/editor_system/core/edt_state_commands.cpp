@@ -722,8 +722,9 @@ namespace {
 				// Links, devices and sockets are not assets (and a link could lead out of the layer).
 				if (!is_dir && status.type() != fs::file_type::regular) continue;
 				std::string name = it->path().filename().string();
-				// A .resource sidecar (EPIC-57) belongs to its file and is not an asset of its own.
-				if (!is_dir && res::is_asset_meta_name(name)) continue;
+				// A .resource sidecar (EPIC-57) belongs to its file and is not an asset of its own; dot, temporary and system
+				// files are no assets either (res::is_ignored_asset_name, the asset database's rule).
+				if (!is_dir && (res::is_asset_meta_name(name) || res::is_ignored_asset_name(name))) continue;
 				if (!valid_utf8(name)) {
 					++state.bad_names;
 					continue;

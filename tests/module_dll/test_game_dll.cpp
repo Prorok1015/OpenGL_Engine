@@ -22,6 +22,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/scene/scn_schema_components.h>
 
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
@@ -32,6 +33,7 @@
 #include <system_error>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // A game module as its own shared library, the way a game.dll is built (#220 PR-7): it registers into the layer
@@ -55,6 +57,19 @@ void request_once(entt::registry& reg, std::string_view level)
 }
 
 void dll_menu(entt::registry& reg) { request_once(reg, dll_game::round_tag); }
+
+void dll_arena_blob(entt::registry& reg)
+{
+	const entt::id_type id = scn::schema_component_id(dll_game::arena_blob_name);
+	if (std::as_const(reg).storage<desc::dyn_blob>(id)) {
+		return;
+	}
+	boost::json::monotonic_resource arena;
+	desc::dyn_blob blob;
+	blob.bytes.resize(4);
+	blob.handles.emplace_back(boost::json::string(dll_game::arena_blob_text, boost::json::storage_ptr(&arena)));
+	scn::emplace_schema_component(reg, reg.create(), id, blob);
+}
 
 void dll_round(entt::registry& reg)
 {
@@ -267,6 +282,7 @@ private:
 		layer.systems().register_system<&dll_snake::run, dll_snake>(std::string{ dll_game::snake_system_name }, {});
 		layer.systems().register_system<&dll_menu>(std::string{ dll_game::menu_system_name });
 		layer.systems().register_system<&dll_round>(std::string{ dll_game::round_system_name });
+		layer.systems().register_system<&dll_arena_blob>(std::string{ dll_game::arena_blob_system_name });
 		layer.systems().register_system<&dll_result>(std::string{ dll_game::result_system_name });
 		g_rounds = &data.construct<dll_rounds>();
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
