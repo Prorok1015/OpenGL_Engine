@@ -196,7 +196,7 @@ std::string edt::give_template_fresh_ids(const fs::path& project_root)
 		if (!fs::is_directory(fs::symlink_status(folder, ec))) {
 			continue;
 		}
-		// The asset walk's rule: a content root "." is the template's folder, whose code/, build/ and manifest are no content.
+		// The asset walk's rule: in a content root that holds the manifest, code/, build/ and the manifest are no content.
 		const bool project_folder = res::is_project_folder_layer(folder);
 		fs::recursive_directory_iterator it(folder, fs::directory_options::none, ec);
 		for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
