@@ -36,6 +36,7 @@
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
 #include "edt_file_menu.h"
+#include "edt_template_ids.h"
 #include "edt_agent_model_import.h"
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
@@ -655,7 +656,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.open_project = start_editor_on;
 	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
 	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
-		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name);
+		// The template ships without .resource sidecars: each new project gets ids of its own (#765).
+		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name,
+			[](const std::filesystem::path& staging) { return edt::give_template_fresh_ids(staging); });
 	};
 	// Next to the open project, else where the editor was started.
 	hooks.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
