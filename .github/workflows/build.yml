@@ -1,10 +1,4 @@
 name: Build
-# A PR run carries the base SHA it was started on, first so a long title cannot cut it off: the plan's dedupe reads it from an earlier run's title, a snapshot,
-# where the run's pull_requests[] shows the PR as it is now.
-run-name: >-
-  ${{ github.event_name == 'pull_request'
-    && format('[base {0}] {1}', github.event.pull_request.base.sha, github.event.pull_request.title)
-    || github.event.head_commit.message || format('Build {0}', github.ref_name) }}
 
 # Every job configures through a preset from CMakePresets.json (ci-*), so CI and local builds share
 # one definition. The compiler cache (ccache on Linux, sccache on MSVC) and precompiled headers are
@@ -55,9 +49,13 @@ jobs:
   # Decides what this run builds (#830):
   #   fast - the six jobs every PR runs. False for a PR that changes only docs/** and *.md (as push's paths-ignore), and
   #          when a draft is marked ready for review and every one of them already
-  #          passed in one earlier Build run of this PR on this very head SHA and on the base SHA aibranch has now: a run
-  #          checks the merge of head and base, so a base that moved since then means running them again. The earlier
-  #          run's base is the "[base <sha>]" of its title (run-name); a run without one does not count.
+  #          passed in one earlier Build run of this PR on this very head SHA and on the base this run builds: the same
+  #          merge commit again. The earlier run's base is the name of its "Base <sha>" job (#836); a run without one
+  #          does not count. Keeping the base fresh is not this check's job: the lead's check before the merge
+  #          (merge-tree, overlapping files) and merging aibranch into the PR when code overlaps do that.
+  #   base - the base the run checks: the first parent of the merge commit GitHub built for the PR. Not
+  #          pull_request.base.sha, which GitHub refreshes only on a push to the PR. Both can lag behind the branch:
+  #          GitHub does not rebuild the merge commit on ready_for_review.
   #   abi  - Windows MSVC Shared+PCH and Linux GCC Shared, the builds of the engine as a shared library. On a PR that is
   #          not a draft and touches any header (.h, .hpp, .inl: SNK_API headers live outside include/ too), CMake
   #          (CMakeLists.txt, *.cmake, *.cmake.in, cmake/**, CMakePresets.json) or a workflow (.github/**); always on a
@@ -75,6 +73,7 @@ jobs:
       fast: ${{ steps.plan.outputs.fast }}
       abi: ${{ steps.plan.outputs.abi }}
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      base: ${{ steps.plan.outputs.base }}
     steps:
       - id: plan
         uses: actions/github-script@v7
@@ -90,6 +89,9 @@ jobs:
             const DOCS_PATHS = [/^docs\//, /\.md$/];
             if (context.eventName === 'pull_request') {
               const pr = context.payload.pull_request;
+              const { data: merge } = await github.rest.repos.getCommit({ ...context.repo, ref: context.sha });
+              const base = merge.parents[0].sha;
+              core.setOutput('base', base);
               const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
               const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
               const cut_off = files.length >= LIST_FILES_LIMIT;
@@ -99,8 +101,6 @@ jobs:
               if (docs_only) {
                 fast = false;
               } else if (context.payload.action === 'ready_for_review') {
-                // The live tip, not pr.base.sha: the payload's base SHA can lag behind the branch.
-                const { data: base } = await github.rest.repos.getBranch({ ...context.repo, branch: pr.base.ref });
                 const { data: self } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: context.runId });
                 const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
                   ...context.repo, workflow_id: self.workflow_id, event: 'pull_request', head_sha: pr.head.sha, per_page: 100,
@@ -108,16 +108,16 @@ jobs:
                 let green = null;
                 for (const run of runs) {
                   if (run.id === context.runId) continue;
-                  const ofThisPr = (run.pull_requests || []).some(p => p.number === pr.number);
-                  const runBase = /^\[base ([0-9a-f]{40})\]/.exec(run.display_title || '');
-                  if (!ofThisPr || !runBase || runBase[1] !== base.commit.sha) continue;
+                  if (!(run.pull_requests || []).some(p => p.number === pr.number)) continue;
                   const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, { ...context.repo, run_id: run.id, per_page: 100 });
+                  const runBase = jobs.map(j => /^Base ([0-9a-f]{40})$/.exec(j.name)).find(Boolean);
+                  if (!runBase || runBase[1] !== base) continue;
                   if (FAST.every(name => jobs.some(j => j.name === name && j.conclusion === 'success'))) { green = run; break; }
                 }
                 fast = green === null;
                 core.info(green
-                  ? `the fast jobs passed on ${pr.head.sha} over base ${base.commit.sha} in ${green.html_url}: not running them again`
-                  : `no earlier run passed every fast job on ${pr.head.sha} over base ${base.commit.sha}: running them`);
+                  ? `the fast jobs passed on ${pr.head.sha} over base ${base} in ${green.html_url}: not running them again`
+                  : `no earlier run passed every fast job on ${pr.head.sha} over base ${base}: running them`);
               }
             }
             const matrix = [];
@@ -131,6 +131,17 @@ jobs:
             core.setOutput('fast', String(fast));
             core.setOutput('abi', String(abi));
             core.setOutput('build_matrix', JSON.stringify(matrix));
+
+  # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
+  base-marker:
+    name: Base ${{ needs.plan.outputs.base }}
+    needs: plan
+    if: needs.plan.outputs.base != ''
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          BASE: ${{ needs.plan.outputs.base }}
+        run: echo "this run checks the PR merged onto $BASE"
 
   build:
     name: ${{ matrix.name }}
