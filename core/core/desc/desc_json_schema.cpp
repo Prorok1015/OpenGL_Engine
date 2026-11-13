@@ -133,6 +133,12 @@ namespace {
 		if (!field.default_value.is_null()) {
 			out["default"] = field.default_value;
 		}
+		// An optional field may be given null (no value: the parent's, or the default, is not taken).
+		if (field.optional) {
+			if (const auto* type = out.if_contains("type"); type && type->is_string()) {
+				out["type"] = boost::json::array{ *type, "null" };
+			}
+		}
 		if (!field.tooltip.empty()) {
 			out["description"] = boost::json::string(field.tooltip);
 		}

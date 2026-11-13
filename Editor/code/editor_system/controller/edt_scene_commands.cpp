@@ -118,6 +118,17 @@ namespace {
 		std::string why;
 	};
 
+	std::string pointer_escaped(std::string_view key)
+	{
+		std::string out;
+		for (const char c : key) {
+			if (c == '~') out += "~0";
+			else if (c == '/') out += "~1";
+			else out += c;
+		}
+		return out;
+	}
+
 	std::optional<reference_issue> under(std::optional<reference_issue> issue, std::string_view step)
 	{
 		if (issue) issue->path = issue->path.empty() ? std::string(step) : std::format("{}/{}", step, issue->path);
@@ -211,6 +222,18 @@ namespace {
 		if (is_tag_kind(field.kind)) return reference_of(descs, value, merged, owner_protocol, depth);
 		if (field.kind == desc::field_kind::structure) return structure_references(descs, field, value, merged, owner_protocol, depth);
 		if (field.kind == desc::field_kind::custom) return tags_in(value, owner_protocol);
+		if (field.kind == desc::field_kind::map) {
+			const json::object* entries = value.if_object();
+			if (!entries) return std::nullopt;
+			for (const auto& entry : *entries) {
+				std::optional<reference_issue> issue;
+				if (is_tag_kind(field.element)) issue = reference_of(descs, entry.value(), nullptr, owner_protocol, depth);
+				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, field, entry.value(), nullptr, owner_protocol, depth);
+				else if (field.element == desc::field_kind::custom) issue = tags_in(entry.value(), owner_protocol);
+				if (issue) return under(std::move(issue), pointer_escaped(entry.key()));
+			}
+			return std::nullopt;
+		}
 		const json::array* items = value.if_array();
 		if (field.kind != desc::field_kind::array || !items) return std::nullopt;
 		for (std::size_t i = 0; i < items->size(); ++i) {

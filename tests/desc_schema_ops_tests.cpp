@@ -85,6 +85,17 @@ namespace ops_test {
 		BOOST_DESCRIBE_CLASS(optional_holder, (), (part, boxed), (), ())
 	};
 
+	class settings_doc : public desc::schema_desc<settings_doc>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.settings_doc";
+
+		std::map<std::string, int> limits;
+		std::optional<float> gain;
+
+		BOOST_DESCRIBE_CLASS(settings_doc, (), (limits, gain), (), ())
+	};
+
 	// Write policies for the keys a legacy format needs: an explicit null for "nothing", a key that is read but never written.
 	enum class queue { none, opaque, mix };
 	BOOST_DESCRIBE_ENUM(queue, none, opaque, mix)
@@ -147,7 +158,7 @@ namespace ops_test {
 		static constexpr std::string_view __type = "ops.table_doc";
 
 		int hp = 4;
-		std::map<std::string, int> table;
+		std::map<std::string, std::vector<int>> table;
 
 		BOOST_DESCRIBE_CLASS(table_doc, (), (hp, table), (), ())
 	};
@@ -1236,7 +1247,7 @@ BOOST_AUTO_TEST_CASE(ADocumentMayHaveACustomFieldWithACodec_NotOneWithout)
 	BOOST_TEST(!fx.ds.register_document<ops_test::table_doc>("ops.table_doc"));
 	BOOST_CHECK_MESSAGE(fx.ds.is_registered("ops.table_doc"), "a refused type stays an ordinary desc");
 	BOOST_TEST(!fx.ds.find_schema("ops.table_doc")->is_document);
-	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.table_doc"), "a map is not taken by a document yet");
+	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.table_doc"), "a map of lists has no schema kind, so a document has nothing to say about it");
 }
 
 BOOST_AUTO_TEST_CASE(ACustomFieldInAStructureOrAListRefusesTheDocument)
@@ -1487,6 +1498,74 @@ BOOST_AUTO_TEST_CASE(ANullOverrideFitsAnOptionalField)
 	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
 	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/gain", json::value() }) == desc::override_status::valid));
 	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts", json::value() }) == desc::override_status::bad_value));
+}
+
+BOOST_AUTO_TEST_CASE(ADocumentMayHaveAMapAndAnOptional)
+{
+	ops_fixture fx;
+	BOOST_TEST(fx.ds.register_document<ops_test::settings_doc>("ops.settings_doc"));
+	BOOST_TEST(fx.ds.find_schema("ops.settings_doc")->is_document);
+}
+
+BOOST_AUTO_TEST_CASE(DiffOfAMapIsPerKeyAndARemovedKeyIsANull)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const json::value base = json::parse(R"({ "counts": { "a": 1, "b": 2, "gone": 9 } })");
+	const json::value edited = json::parse(R"({ "counts": { "a": 1, "b": 3, "c": 4 } })");
+
+	const auto changes = desc::diff(schema, base, edited);
+	BOOST_REQUIRE_EQUAL(changes.size(), 3u);
+	BOOST_TEST(changes[0].pointer == "/counts/b");
+	BOOST_TEST(changes[0].value.as_int64() == 3);
+	BOOST_TEST(changes[1].pointer == "/counts/c");
+	BOOST_TEST(changes[2].pointer == "/counts/gone");
+	BOOST_TEST(changes[2].value.is_null());
+}
+
+BOOST_AUTO_TEST_CASE(DiffOfAnOptionalThatWasClearedIsANull)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const auto changes = desc::diff(schema, json::parse(R"({ "gain": 0.5 })"), json::parse("{}"));
+	BOOST_REQUIRE_EQUAL(changes.size(), 1u);
+	BOOST_TEST(changes[0].pointer == "/gain");
+	BOOST_TEST(changes[0].value.is_null());
+	BOOST_TEST(desc::diff(schema, json::parse("{}"), json::parse("{}")).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnOverrideOnAMapKeyIsCheckedAgainstTheElement)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const auto check = [&](std::string_view pointer, const char* value) {
+		return desc::validate_override(schema, desc::json_change{ std::string(pointer), json::parse(value) });
+	};
+	BOOST_TEST((check("/counts/a", "5") == desc::override_status::valid));
+	BOOST_TEST((check("/counts/a", "null") == desc::override_status::valid));
+	BOOST_TEST((check("/counts/a", "\"text\"") == desc::override_status::bad_value));
+	BOOST_TEST((check("/counts/", "5") == desc::override_status::stale));
+}
+
+BOOST_AUTO_TEST_CASE(TheJsonSchemaOfAnOptionalAllowsNull)
+{
+	ops_fixture fx;
+	fx.ds.register_desc<ops_test::keyed>("ops.keyed");
+	const json::object generated = desc::to_json_schema(*fx.ds.find_schema("ops.keyed"), fx.ds.schemas());
+	const json::value& type = generated.at("properties").as_object().at("gain").as_object().at("type");
+	BOOST_REQUIRE(type.is_array());
+	BOOST_TEST(type.as_array().size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AnOptionalOfATypeWithACodecIsListedAmongTheCodecFields)
+{
+	const auto fields = desc::schema_generator<ops_test::optional_holder>::codec_fields();
+	BOOST_CHECK(std::ranges::find(fields, std::string_view{ "boxed" }) != fields.end());
+}
+
+BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNotABadValue, ops_fixture)
+{
+	ops_test::keyed value;
+	value.gain = 2.0f;
+	value.deserialize(ds, parse(R"({ "gain": null })"));
+	BOOST_TEST(!value.gain.has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

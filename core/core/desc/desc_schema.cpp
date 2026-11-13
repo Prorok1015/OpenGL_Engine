@@ -666,10 +666,9 @@ namespace desc
 			case field_kind::structure:
 				return structure_problem(field.ref_type);
 			case field_kind::map:
-				return std::format("field '{}' is a map, which a document does not take yet: the parents' keys are merged one by one, and the diff and the override checks of a map come with #790", where);
 			case field_kind::array:
 				if (field.element == field_kind::custom) {
-					return std::format("field '{}' is a list of custom values, so the schema does not describe its elements", where);
+					return std::format("field '{}' is a {} of custom values, so the schema does not describe its elements", where, field.kind == field_kind::map ? "map" : "list");
 				}
 				if (field.element == field_kind::structure) {
 					return structure_problem(field.ref_type);

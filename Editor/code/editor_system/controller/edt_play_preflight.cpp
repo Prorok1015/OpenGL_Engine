@@ -63,7 +63,7 @@ namespace {
 	// A field the schema says holds a tag (or a list of them): its value is a reference, whatever it looks like.
 	bool is_tag_field(const desc::field_schema& field)
 	{
-		return is_tag_kind(field.kind) || (field.kind == desc::field_kind::array && is_tag_kind(field.element));
+		return is_tag_kind(field.kind) || ((field.kind == desc::field_kind::array || field.kind == desc::field_kind::map) && is_tag_kind(field.element));
 	}
 
 	struct walker
@@ -114,6 +114,16 @@ namespace {
 			}
 		}
 
+		// The values of a map of tags, by key.
+		void check_tag_map(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
+		{
+			const auto* entries = value.if_object();
+			if (!entries) return;
+			for (const auto& entry : *entries) {
+				check_tags(entry.value(), path, json_path + "/" + pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+			}
+		}
+
 		// A field of no known type may hold any text (a label, a web address): only a string naming one of the engine's
 		// protocols is taken for a reference, and what is wrong with it (the rule of #697, a file that is not there) is a
 		// warning; another scheme (https://) is left alone.
@@ -149,7 +159,8 @@ namespace {
 				const std::string at = json_path + "/" + pointer_token(key);
 				const desc::field_schema* field = schema ? schema->find_field(key) : nullptr;
 				if (!field && schema) field = schema->find_field("/" + std::string(key));
-				if (field && is_tag_field(*field)) check_tags(member.value(), path, at);
+				if (field && field->kind == desc::field_kind::map && is_tag_field(*field)) check_tag_map(member.value(), path, at);
+				else if (field && is_tag_field(*field)) check_tags(member.value(), path, at);
 				else check_loose(member.value(), path, at);
 			}
 		}

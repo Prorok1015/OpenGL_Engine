@@ -500,7 +500,8 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 							// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
 							const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
 								|| field.kind == desc::field_kind::custom
-								|| (field.kind == desc::field_kind::array && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
+								|| ((field.kind == desc::field_kind::array || field.kind == desc::field_kind::map)
+									&& (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
 							if (!tag_field || (field.kind == desc::field_kind::custom && holds_plain_text(type, field.key))) continue;
 							const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
 							const json::value* held = patch.if_contains(key);

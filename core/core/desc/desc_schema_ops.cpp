@@ -535,7 +535,7 @@ namespace desc
 
 		std::shared_ptr<const enum_schema> resolve_enum(const field_schema& field, const schema_registry& resolve)
 		{
-			const bool wants_enum = field.kind == field_kind::enumeration || (field.kind == field_kind::array && field.element == field_kind::enumeration);
+			const bool wants_enum = field.kind == field_kind::enumeration || ((field.kind == field_kind::array || field.kind == field_kind::map) && field.element == field_kind::enumeration);
 			if (!wants_enum || field.ref_type.empty()) {
 				return nullptr;
 			}
@@ -576,16 +576,45 @@ namespace desc
 			}
 		}
 
+		// A map is compared by key: a key that is new or changed is a record of its own, a key that is gone is a null one
+		// (the value read of a null removes the key, so the override takes it out of what the parent holds).
+		void diff_map(const std::string& pointer, const field_schema& field, const json::object& before, const json::object& after,
+			std::vector<json_change>& out)
+		{
+			const double tolerance = tolerance_for(field.element, field.element);
+			for (const auto& member : after) {
+				const std::string key_pointer = pointer + "/" + escape_token(member.key());
+				const json::value* was = before.if_contains(member.key());
+				if (!was || !json_equal(*was, member.value(), tolerance)) {
+					out.push_back({ key_pointer, member.value() });
+				}
+			}
+			for (const auto& member : before) {
+				if (!after.contains(member.key())) {
+					out.push_back({ pointer + "/" + escape_token(member.key()), json::value() });
+				}
+			}
+		}
+
 		void diff_fields(const std::string& prefix, const type_schema& schema, const json::value& base, const json::value& edited,
 			const schema_registry* resolve, std::vector<json_change>& out)
 		{
 			for (const auto& field : schema.fields) {
 				const json::value* after = json_pointer_get(edited, field.key);
-				if (!after) {
-					continue;
-				}
 				const json::value* before = json_pointer_get(base, field.key);
 				const std::string pointer = prefix + field.key;
+				if (!after) {
+					// An optional that was there and is not any more is an override too: its absence in the record would
+					// read as "unchanged" and the parent's value would come back.
+					if (field.optional && before && !before->is_null()) {
+						out.push_back({ pointer, json::value() });
+					}
+					continue;
+				}
+				if (field.kind == field_kind::map && before && before->is_object() && after->is_object()) {
+					diff_map(pointer, field, before->as_object(), after->as_object(), out);
+					continue;
+				}
 				if (field.kind == field_kind::structure && before && before->is_object() && after->is_object()) {
 					const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr;
 					if (nested) {
@@ -650,6 +679,19 @@ namespace desc
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
 				case field_kind::map:
+				case field_kind::map: {
+					std::vector<std::string> tokens;
+					if (!json_pointer_tokens(rest, tokens) || tokens.empty() || tokens.front().empty()) {
+						return override_status::stale;
+					}
+					if (tokens.size() > 1) {
+						return override_status::valid;
+					}
+					if (value.is_null()) {
+						return override_status::valid;
+					}
+					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
+				}
 				case field_kind::custom:
 					return override_status::valid;
 				case field_kind::vec2:
@@ -1009,7 +1051,8 @@ namespace desc
 			}
 			read_context field_ctx = ctx;
 			field_ctx.field_pointer = field.key;
-			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx)) {
+			// A null for an optional field is "not set": a std::optional resets, any other keeps what it has. Not a bad value.
+			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx) && !(field.optional && value->is_null())) {
 				egLOG_WARN(log_category, "'{}': value of '{}' does not fit {}, keeping the current one", binding.schema->name, field.key, to_string(field.kind));
 				// The load goes on with the current value: a warning of the resource being loaded, if any (#595). The key is
 				// already a JSON pointer ("/diffuse", "/uniforms/albedo").
