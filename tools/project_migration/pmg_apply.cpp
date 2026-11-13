@@ -7,6 +7,7 @@
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project/prj_version.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -29,6 +30,7 @@ namespace
 
 	constexpr std::uint64_t k_max_file_bytes = std::uint64_t{ 64 } << 20;
 	constexpr std::string_view k_migrations_dir = ".snk/migrations";
+	constexpr std::string_view k_manifest_path = prj::k_manifest_file_name;
 
 	std::string hash_of(std::string_view bytes)
 	{
@@ -100,11 +102,17 @@ namespace
 		}
 		json::array created;
 		for (const std::string& path : report.created_files) created.push_back(json::string(path));
+		json::array project_steps;
+		for (const std::string& id : report.project_steps) project_steps.push_back(json::string(id));
+		json::array project_notes;
+		for (const std::string& note : report.project_notes) project_notes.push_back(json::string(note));
 		json::object out{ { "id", report.id }, { "created", report.created }, { "engine_before", report.engine_before },
 			{ "engine_after", report.engine_after }, { "status", std::string(to_string(report.status)) }, { "backup", report.backup } };
 		out["files"] = std::move(files);
 		out["skipped"] = std::move(skipped);
 		out["created_files"] = std::move(created);
+		out["project_steps"] = std::move(project_steps);
+		out["project_notes"] = std::move(project_notes);
 		if (!report.error.empty()) out["error"] = report.error;
 		return out;
 	}
@@ -127,6 +135,11 @@ namespace
 				}
 				for (const std::string& note : file.notes) md += std::format("- `{}`: {}\n", file.path, note);
 			}
+		}
+		if (!report.project_steps.empty() || !report.project_notes.empty()) {
+			md += "\n## Project\n\n";
+			for (const std::string& id : report.project_steps) md += std::format("- step `{}`\n", id);
+			for (const std::string& note : report.project_notes) md += std::format("- {}\n", note);
 		}
 		md += "\n## Files\n\n";
 		for (const applied_file& file : report.files) {
@@ -382,9 +395,16 @@ namespace
 		// migrated JSON instead when the engine cannot load it or its saved form would lose a __parent.
 		std::string form_of(applied_file& file, const std::string& original)
 		{
-			json::value migrated = json::parse(original, {}, parse_options());
+			const bool sidecar = res::is_asset_meta_name(file.path);
+			const std::string_view text = sidecar && original.starts_with("\xEF\xBB\xBF") ? std::string_view(original).substr(3) : std::string_view(original);
+			json::value migrated = json::parse(text, {}, parse_options());
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
+			// A sidecar is no desc the engine loads: its steps are all there is to it (EPIC-58 3.4).
+			if (sidecar) {
+				file.written_as = "json";
+				return text_of(m_context.descs.serialize_to_bytes(migrated));
+			}
 
 			std::string why_json;
 			if (const std::optional<res::tag> tag = tag_of(file.path, m_content_roots); !tag) {
@@ -415,7 +435,8 @@ namespace
 		{
 			const std::string on_disk = read_or_throw(m_context.root, file.path);
 			if (on_disk != written) throw std::runtime_error(std::format("{}: the file on the disk is not what was written", file.path));
-			const scanned_file again = classify_desc(file.path, on_disk, m_context.descs);
+			const scanned_file again = res::is_asset_meta_name(file.path) ? classify_sidecar(file.path, on_disk, m_context.descs)
+				: classify_desc(file.path, on_disk, m_context.descs);
 			if (again.kind != file_class::current) {
 				throw std::runtime_error(std::format("{}: still {} after the migration {}", file.path, to_string(again.kind), again.reason));
 			}
@@ -426,6 +447,52 @@ namespace
 				load_from(*tag, on_disk);
 			} catch (const std::exception& e) {
 				throw std::runtime_error(std::format("{}: does not load after the migration: {}", file.path, e.what()));
+			}
+		}
+
+		// project.snkproj after the project steps, stamped: the engine that migrated it, which also ends the version
+		// dialog, and every project step that ever ran on it (EPIC-58 2, 4.1).
+		std::string manifest_form(applied_file& file, json::object& manifest) const
+		{
+			const std::string engine = prj::to_string(prj::current_engine_version());
+			manifest["engine_version"] = engine;
+			manifest["migrated_with"] = engine;
+			json::array applied;
+			if (const json::value* before = manifest.if_contains("applied_steps"); before && before->is_array()) {
+				for (const json::value& id : before->as_array()) {
+					if (id.is_string()) applied.push_back(id);
+				}
+			}
+			for (const std::string& id : m_report.project_steps) {
+				if (std::ranges::find(applied, json::value(id)) == applied.end()) applied.push_back(json::string(id));
+			}
+			manifest["applied_steps"] = std::move(applied);
+			file.written_as = "manifest";
+			return prj::to_indented_json(manifest);
+		}
+
+		void check_manifest(const applied_file& file, std::string_view written) const
+		{
+			const std::string on_disk = read_or_throw(m_context.root, file.path);
+			if (on_disk != written) throw std::runtime_error(std::format("{}: the file on the disk is not what was written", file.path));
+			const prj::manifest_result parsed = prj::parse_manifest(on_disk);
+			if (!parsed.data) {
+				throw std::runtime_error(std::format("{}: does not read after the migration: {}", file.path,
+					parsed.error ? prj::to_string(*parsed.error) : std::string{ "unknown error" }));
+			}
+			if (prj::compare_engine_versions(parsed.data->engine, prj::current_engine_version()) != prj::version_match::exact) {
+				throw std::runtime_error(std::format("{}: engine_version is {} after the migration", file.path, prj::to_string(parsed.data->engine)));
+			}
+		}
+
+		void run_project_steps(const migration_plan& plan, std::string_view phase, json::object& manifest)
+		{
+			for (const planned_project_step& planned : plan.project_steps) {
+				if (planned.phase != phase) continue;
+				const project_step* step = m_context.project_steps->find(planned.id);
+				project_step_context step_context{ m_context.root, plan.scan, manifest, m_report.project_notes };
+				step->apply(step_context);
+				m_report.project_steps.push_back(planned.id);
 			}
 		}
 
@@ -504,6 +571,12 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		}
 		if (file.kind == file_class::unknown_type) report.skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
 	}
+	for (const planned_project_step& step : plan.project_steps) {
+		if (!context.project_steps || !context.project_steps->find(step.id)) {
+			outcome.refused = std::format("project step '{}' is not registered", step.id);
+			return outcome;
+		}
+	}
 	report.created = utc_now();
 	report.engine_before = manifest.engine_version;
 	report.engine_after = prj::to_string(prj::current_engine_version());
@@ -531,6 +604,12 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 			file.hash_before = hash_of(originals.back());
 			report.files.push_back(std::move(file));
 		}
+		// Last: it is written after the post steps, and is in the backup and the journal as any other file.
+		applied_file manifest_file;
+		manifest_file.path = std::string(k_manifest_path);
+		originals.push_back(read_or_throw(context.root, manifest_file.path));
+		manifest_file.hash_before = hash_of(originals.back());
+		report.files.push_back(std::move(manifest_file));
 	} catch (const std::exception& e) {
 		outcome.refused = e.what();
 		report.files.clear();
@@ -566,7 +645,12 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 				apply.write(report.backup + "/" + report.files[i].path, originals[i]);
 			}
 			watch.pause();
-			for (std::size_t i = 0; i < report.files.size(); ++i) {
+			const std::size_t manifest_index = report.files.size() - 1;
+			json::value manifest_json = json::parse(originals[manifest_index], {}, parse_options());
+			if (!manifest_json.is_object()) throw std::runtime_error("project.snkproj: the root is not a JSON object");
+
+			apply.run_project_steps(plan, to_string(project_phase::pre), manifest_json.as_object());
+			for (std::size_t i = 0; i < manifest_index; ++i) {
 				applied_file& file = report.files[i];
 				const std::string text = apply.form_of(file, originals[i]);
 				file.hash_after = hash_of(text);
@@ -574,6 +658,14 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 				apply.write(file.path, text);
 				apply.check(file, text);
 			}
+			apply.run_project_steps(plan, to_string(project_phase::post), manifest_json.as_object());
+
+			applied_file& manifest_file = report.files[manifest_index];
+			const std::string text = apply.manifest_form(manifest_file, manifest_json.as_object());
+			manifest_file.hash_after = hash_of(text);
+			apply.journal();
+			apply.write(manifest_file.path, text);
+			apply.check_manifest(manifest_file, text);
 			report.status = report.skipped.empty() ? migration_status::ok : migration_status::partial;
 		} catch (const std::exception& e) {
 			report.error = e.what();

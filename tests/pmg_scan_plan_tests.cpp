@@ -103,6 +103,8 @@ BOOST_AUTO_TEST_CASE(EveryClassOfTheFixture_IsFound)
 	BOOST_TEST(!scan.find("res/newer.desc")->reason.empty());
 	BOOST_TEST((kind_of(scan, "res/broken.desc") == pmg::file_class::invalid));
 	BOOST_TEST((kind_of(scan, "res/textures/plain.png") == pmg::file_class::missing_resource));
+	BOOST_TEST((kind_of(scan, "res/textures/with_meta.png") == pmg::file_class::current));
+	BOOST_TEST((kind_of(scan, "res/textures/with_meta.png.resource") == pmg::file_class::current));
 	BOOST_TEST((scan.find("README.md") == nullptr)); // not under a content root
 
 	const auto& camera = scan.find("res/cameras/cam_v1.desc")->objects;

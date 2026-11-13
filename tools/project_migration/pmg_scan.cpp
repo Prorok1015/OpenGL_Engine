@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_scan.h>
+#include <snk/project_migration/pmg_project_steps.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
@@ -105,9 +106,10 @@ namespace
 		return static_cast<int>(parsed);
 	}
 
+	// resource_meta is no desc type, but its version and steps live in the same registry (EPIC-58 3.4).
 	bool is_known(const desc::desc_system& descs, std::string_view type)
 	{
-		return descs.is_registered(type) || descs.find_schema(type) != nullptr;
+		return descs.is_registered(type) || descs.find_schema(type) != nullptr || type == res::asset_meta_type;
 	}
 
 	struct object_walker
@@ -222,25 +224,59 @@ namespace
 		if (root.is_object()) classify(file, root.as_object(), descs);
 	}
 
-	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes)
+	std::string_view without_bom(std::string_view text)
+	{
+		return text.starts_with("\xEF\xBB\xBF") ? text.substr(3) : text;
+	}
+
+	// The sidecar's root object, or null with `file` invalid.
+	json::value parse_sidecar(prj::migration::scanned_file& file, std::string_view text)
+	{
+		boost::system::error_code error;
+		json::value root = parse_desc_json(without_bom(text), error);
+		if (error || !root.is_object()) {
+			set_invalid(file, error ? std::format("not a .resource: not JSON: {}", error.message()) : std::string{ "not a .resource: the root is not a JSON object" });
+			return {};
+		}
+		const json::value* type = root.as_object().if_contains("__type");
+		if (!type || !type->is_string() || type->as_string() != res::asset_meta_type) {
+			set_invalid(file, std::format("not a .resource: '__type' is not \"{}\"", res::asset_meta_type));
+			return {};
+		}
+		return root;
+	}
+
+	json::value read_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes, std::string& text)
 	{
 		read_result read = read_file(path, max_bytes);
 		if (!read.error.empty()) {
 			set_invalid(file, std::move(read.error));
+			return {};
+		}
+		text = std::move(read.text);
+		return parse_sidecar(file, text);
+	}
+
+	void classify_sidecar_root(prj::migration::scanned_file& file, const json::object& root, std::string_view text, const desc::desc_system& descs)
+	{
+		classify(file, root, descs);
+		if (file.kind == file_class::newer) {
+			file.reason = std::format("written by a newer engine: {}", file.reason);
 			return;
 		}
-		const res::asset_meta_result meta = res::read_asset_meta(read.text);
-		if (meta) {
-			file.kind = file_class::current;
-			return;
-		}
-		const std::string where = meta.error.field_path.empty() ? std::string{} : std::format(" at '{}'", meta.error.field_path);
-		if (meta.error.kind == res::asset_meta_error_kind::newer_than_engine) {
-			file.kind = file_class::newer;
-			file.reason = std::format("written by a newer engine{}: {}", where, meta.error.message);
-		} else {
+		if (file.kind != file_class::current || version_of(root) != std::optional<int>{ static_cast<int>(res::asset_meta_version) }) return;
+		const res::asset_meta_result meta = res::read_asset_meta(text);
+		if (!meta) {
+			const std::string where = meta.error.field_path.empty() ? std::string{} : std::format(" at '{}'", meta.error.field_path);
 			set_invalid(file, std::format("not a .resource{}: {}", where, meta.error.message));
 		}
+	}
+
+	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& path, const desc::desc_system& descs, std::uintmax_t max_bytes)
+	{
+		std::string text;
+		const json::value root = read_sidecar(file, path, max_bytes, text);
+		if (root.is_object()) classify_sidecar_root(file, root.as_object(), text, descs);
 	}
 
 	bool is_hidden(const fs::path& name)
@@ -297,7 +333,7 @@ namespace
 			if (extension == ".desc") {
 				scan_desc(file, path, descs, options.max_file_bytes);
 			} else if (extension == ".resource") {
-				scan_sidecar(file, path, options.max_file_bytes);
+				scan_sidecar(file, path, descs, options.max_file_bytes);
 			} else {
 				file.kind = has_sidecar(path) ? file_class::current : file_class::missing_resource;
 			}
@@ -372,6 +408,15 @@ namespace
 					state.kind = file_class::newer;
 					state.reason = std::format("format_version {} is newer than {}", format->as_int64(), prj::k_manifest_format_version);
 					return state;
+				}
+			}
+			// Hints only (EPIC-58 2): the scan of the files stays the truth, so a malformed one is ignored.
+			if (const auto* with = raw.as_object().if_contains("migrated_with"); with && with->is_string()) {
+				state.migrated_with = std::string(with->as_string());
+			}
+			if (const auto* steps = raw.as_object().if_contains("applied_steps"); steps && steps->is_array()) {
+				for (const json::value& step : steps->as_array()) {
+					if (step.is_string()) state.applied_steps.emplace_back(step.as_string());
 				}
 			}
 		}
@@ -511,6 +556,15 @@ std::string_view prj::migration::to_string(file_class kind)
 	return "invalid";
 }
 
+prj::migration::scanned_file prj::migration::classify_sidecar(std::string path, std::string_view text, const desc::desc_system& game_layer)
+{
+	scanned_file file;
+	file.path = std::move(path);
+	const json::value root = parse_sidecar(file, text);
+	if (root.is_object()) classify_sidecar_root(file, root.as_object(), text, game_layer);
+	return file;
+}
+
 prj::migration::scanned_file prj::migration::classify_desc(std::string path, std::string_view text, const desc::desc_system& game_layer)
 {
 	scanned_file file;
@@ -568,9 +622,17 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 			set_invalid(file, "changed since the scan: not a regular file any more");
 			continue;
 		}
-		const json::value before = read_desc(file, path, options.scan.max_file_bytes);
-		if (!before.is_object()) continue;
-		classify(file, before.as_object(), game_layer);
+		json::value before;
+		if (res::is_asset_meta_name(file.path)) {
+			std::string text;
+			before = read_sidecar(file, path, options.scan.max_file_bytes, text);
+			if (!before.is_object()) continue;
+			classify_sidecar_root(file, before.as_object(), text, game_layer);
+		} else {
+			before = read_desc(file, path, options.scan.max_file_bytes);
+			if (!before.is_object()) continue;
+			classify(file, before.as_object(), game_layer);
+		}
 		if (file.kind != file_class::outdated) continue;
 
 		file_plan planned;
@@ -593,6 +655,15 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 		planned.diff = diff_of(before, after);
 		if (options.full_diff) planned.full_diff = line_diff(before, after);
 		plan.files.push_back(std::move(planned));
+	}
+
+	if (options.project_steps) {
+		for (const project_phase phase : { project_phase::pre, project_phase::post }) {
+			for (const project_step& step : options.project_steps->steps()) {
+				if (step.phase != phase || !step.needed(plan.scan)) continue;
+				plan.project_steps.push_back(planned_project_step{ step.id, std::string(to_string(phase)), step.summary });
+			}
+		}
 	}
 	return plan;
 }
