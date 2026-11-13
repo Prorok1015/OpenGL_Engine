@@ -85,7 +85,7 @@ namespace
 	bool has_entity_fields(const entt::meta_type& type)
 	{
 		for (auto&& [id, data] : type.data()) {
-			const entt::type_info& field = data.type().info();
+			const entt::type_info field = data.type().info();
 			if (field == entt::type_id<entt::entity>() || field == entt::type_id<ecs::sandbox_entity>()) {
 				return true;
 			}
@@ -98,7 +98,7 @@ namespace
 	void remap_entity_fields(const entt::meta_type& type, entt::meta_any& handle, const entt::continuous_loader& loader)
 	{
 		for (auto&& [id, data] : type.data()) {
-			const entt::type_info& field = data.type().info();
+			const entt::type_info field = data.type().info();
 			if (field == entt::type_id<entt::entity>()) {
 				const entt::meta_any value = data.get(handle);
 				if (const auto* raw = value.try_cast<entt::entity>()) {
