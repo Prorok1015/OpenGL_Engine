@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
+#include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_signal.hpp>
@@ -44,8 +45,9 @@ namespace gs
 		// type modules read inline. 1: world_context's accessors out of line (#802). 2: desc_system, schema_registry and
 		// dynamic_desc touch their members only out of line (#786). 3: the sandbox's components move into the world by
 		// engine code through the module's ecs::sandbox_emplace<T> (#784, #738). 4: field_kind::map and std::optional in
-		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before.
-		inline constexpr std::uint64_t layout_revision = 5;
+		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before. 6: desc_base gains the
+		// tag of its parent (#812).
+		inline constexpr std::uint64_t layout_revision = 6;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
@@ -75,6 +77,8 @@ namespace gs
 			// A module reads a component without a C++ type through find_schema_component and may build one to hand to
 			// emplace_schema_component (a const reference: the world keeps the engine's copy, #785).
 			desc::dyn_blob,
+			// A module's desc types derive from desc_base (schema_desc<T>) and are created by its factories.
+			desc::desc_base,
 			// module_context::subscribe/observe build the filter, the slot and the connection the engine keeps.
 			scn::event_filter, scn::observer_slot, ecs::connection,
 			// module_context::run takes the task's description from module code.

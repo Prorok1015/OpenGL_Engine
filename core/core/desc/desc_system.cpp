@@ -1,11 +1,15 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/resource/res_reference.h>
+#include <snk/resource/res_tag_json.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace
@@ -271,6 +275,131 @@ void desc::desc_system::stamp_tree(json::object& obj) const
 	json::value wrapper = std::move(obj);
 	stamp_tree(wrapper);
 	obj = std::move(wrapper.as_object());
+}
+
+namespace
+{
+	bool is_header_key(std::string_view key)
+	{
+		return key.starts_with("__");
+	}
+
+	const json::value* id_of(const json::value& item)
+	{
+		return item.is_object() ? item.as_object().if_contains("__id") : nullptr;
+	}
+
+	json::object merge_patch(const json::object& base, const json::object& target, bool nested, bool top = true);
+
+	// Nodes of a prefab pair with the parent's by "__id" (v2): a node equal to the parent's is left out, a changed one keeps
+	// only its "__id" and its changes. A parent's node this one lacks cannot be said here: reads_back refuses such a form.
+	json::array patch_by_id(const json::array& base, const json::array& target)
+	{
+		json::array patch;
+		for (const json::value& item : target) {
+			const json::value* id = id_of(item);
+			const auto same = id ? std::ranges::find_if(base, [id](const json::value& was) { const json::value* other = id_of(was); return other && *other == *id; })
+				: base.end();
+			if (same == base.end()) {
+				patch.push_back(item);
+			} else if (*same != item) {
+				json::object changed;
+				changed["__id"] = *id;
+				for (auto& member : merge_patch(same->as_object(), item.as_object(), true, false)) {
+					if (member.key() != "__id") changed.emplace(member.key(), std::move(member.value()));
+				}
+				patch.push_back(std::move(changed));
+			}
+		}
+		return patch;
+	}
+
+	bool keyed_by_id(const json::array& items)
+	{
+		return !items.empty() && std::ranges::all_of(items, [](const json::value& item) { return id_of(item) != nullptr; });
+	}
+
+	// What `target` changes of `base`, as a merge patch: a key `target` lacks is null (#821/#823: null removes a map key and
+	// resets an optional field). `nested`: objects on both sides are patched key by key (map fields), arrays of nodes by
+	// "__id"; otherwise, and for an inline desc (it has a "__type"), a changed value is written whole. The file's own header
+	// keys are not compared.
+	json::object merge_patch(const json::object& base, const json::object& target, bool nested, bool top)
+	{
+		json::object patch;
+		for (const auto& member : target) {
+			if (top && is_header_key(member.key())) continue;
+			const json::value* was = base.if_contains(member.key());
+			if (was && *was == member.value()) continue;
+			const json::value& now = member.value();
+			if (nested && was && was->is_object() && now.is_object() && !now.as_object().contains("__type")) {
+				patch[member.key()] = merge_patch(was->as_object(), now.as_object(), true, false);
+			} else if (nested && was && was->is_array() && now.is_array() && keyed_by_id(was->as_array()) && keyed_by_id(now.as_array())) {
+				patch[member.key()] = patch_by_id(was->as_array(), now.as_array());
+			} else {
+				patch[member.key()] = now;
+			}
+		}
+		for (const auto& member : base) {
+			if ((!top || !is_header_key(member.key())) && !target.contains(member.key())) patch[member.key()] = nullptr;
+		}
+		return patch;
+	}
+}
+
+void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::object& body)
+{
+	const res::tag& parent_tag = desc.get_parent();
+	if (!parent_tag.is_valid() || desc.get_type().empty()) {
+		return;
+	}
+	const auto parent = m_res_system.require_sync<desc::desc_base>(parent_tag).get_sync();
+	if (!parent) {
+		egLOG_WARN("desc", "'{}': its '__parent' '{}' did not load; written whole, without '__parent'", desc.get_tag().view(), parent_tag.view());
+		return;
+	}
+	json::object inherited;
+	parent->serialize(inherited);
+
+	const auto file_form = [&](const json::object& own) {
+		json::object file;
+		for (const auto& member : body) {
+			if (is_header_key(member.key())) file.emplace(member.key(), member.value());
+		}
+		file["__parent"] = json::value_from(parent_tag);
+		for (const auto& member : own) {
+			file.emplace(member.key(), member.value());
+		}
+		return file;
+	};
+	// The form is right only if loading it does what the adapter does - the parent copied in, the file read on top - and
+	// gives `body` again; each type reads its fields its own way, so that is checked rather than assumed.
+	const auto reads_back = [&](const json::object& file) {
+		try {
+			const auto probe = create_instance(desc.get_type(), desc.get_tag());
+			if (!probe) return false;
+			parent->copy_to(*probe);
+			probe->set_parent(parent_tag);
+			probe->deserialize(*this, file);
+			json::object again;
+			probe->serialize(again);
+			return again == body;
+		} catch (const std::exception& e) {
+			egLOG_DEBUG("desc", "'{}': a form with '__parent' does not read back: {}", desc.get_tag().view(), e.what());
+			return false;
+		}
+	};
+
+	// The smallest form first: key by key, for map fields and prefab nodes that merge with the parent's. Then whole values,
+	// for a type that reads a field as a whole.
+	for (const bool nested : { true, false }) {
+		json::object file = file_form(merge_patch(inherited, body, nested));
+		if (reads_back(file)) {
+			body = std::move(file);
+			return;
+		}
+	}
+	egLOG_WARN("desc", "'{}': no form with '__parent' '{}' reads back the same; written whole, without '__parent'",
+		desc.get_tag().view(), parent_tag.view());
 }
 
 std::shared_ptr<desc::desc_base> desc::desc_system::create_instance(std::string_view type_id, const res::tag& tag) const

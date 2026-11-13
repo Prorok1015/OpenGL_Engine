@@ -84,6 +84,7 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
                     "world desc '" + std::string{ tag.view() } + "': failed to load '__parent' '" + std::string{ parent_tag.view() } + "'");
             }
             parent_desc->copy_to(*instance);
+            instance->set_parent(parent_tag);
         }
     }
 
@@ -97,6 +98,7 @@ std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, c
     const auto& desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
     json::object body;
     desc_res->serialize(body);
+    m_desc_system.reduce_to_parent(*desc_res, body);
     m_desc_system.stamp_tree(body);
     return m_desc_system.serialize_to_bytes(json::value{ std::move(body) });
 }

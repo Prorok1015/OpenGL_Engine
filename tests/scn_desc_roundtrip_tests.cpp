@@ -1,10 +1,16 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_schema.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <sstream>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -1196,6 +1202,114 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
 	BOOST_REQUIRE(mode->fallback);
 	BOOST_TEST(*mode->fallback == static_cast<std::int64_t>(rnd::driver::RENDER_MODE::TRIANGLE));
 	BOOST_TEST(mode->items.size() == 5u);
+}
+
+// ---------------------------------------------------------------- a file with a __parent resaves as one (#812)
+
+namespace {
+
+constexpr const char* BASE_MATERIAL = R"({"__type":"material_desc","defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert",
+	"shader_fragment":"res://shaders/scene.frag","shader_geometry":null,"queue":"opaque",
+	"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})";
+
+struct parent_fixture : roundtrip_fixture
+{
+	std::shared_ptr<desc::desc_base> loaded(const res::tag& tag)
+	{
+		auto handle = rs->require_sync<desc::desc_base>(tag);
+		pump();
+		return handle.get_sync();
+	}
+
+	// What desc_resave writes for the file at `tag`.
+	json::object resave(const res::tag& tag)
+	{
+		const auto desc = loaded(tag);
+		BOOST_REQUIRE(desc);
+		const auto bytes = adapter.serialize(tag, desc);
+		return json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())).as_object();
+	}
+
+	// The keys of `saved` besides the header ("__type", "__version", "__guid", "__parent").
+	static std::vector<std::string> own_keys(const json::object& saved)
+	{
+		std::vector<std::string> keys;
+		for (const auto& member : saved) {
+			if (!member.key().starts_with("__")) keys.emplace_back(member.key());
+		}
+		return keys;
+	}
+
+	// Read again on top of its parent, the saved file is the desc it was saved from.
+	void check_reads_back(const res::tag& tag, const json::object& saved, std::string_view again_name)
+	{
+		const auto again = loaded(put(again_name, json::serialize(saved)));
+		BOOST_REQUIRE(again);
+		BOOST_TEST(json::value(ser(*again)) == json::value(ser(*loaded(tag))));
+	}
+
+	core::desc::desc_adapter_t adapter{ *rs, *descs };
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AMaterialWithAParent_ResavesItsParentAndOnlyItsOwnFields, parent_fixture)
+{
+	put("base.mat.desc", BASE_MATERIAL);
+	const auto child = put("own.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/base.mat.desc","queue":"transparent"})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.mat.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "queue" }));
+	BOOST_TEST(saved.at("queue").as_string() == "transparent");
+	check_reads_back(child, saved, "own.mat.again.desc");
+}
+
+// A type of a module (a runtime schema): a map key the file removes from the parent's is a null, an optional field reset to
+// its default stays reset, and a map key both have the same is not written.
+BOOST_FIXTURE_TEST_CASE(ASchemaTypeWithAParent_ResavesMapRemovalsAndResetsAgainstTheParent, parent_fixture)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "resave_unit", "kind": "component",
+		"fields": [
+			{ "name": "hp", "kind": "i32", "default": 0 },
+			{ "name": "label", "kind": "string", "default": "none", "optional": true },
+			{ "name": "tags", "kind": "map", "element": "i32" }
+		]})").as_object())));
+	put("base.unit.desc", R"({"__type":"resave_unit","hp":5,"label":"parent","tags":{"a":1,"b":2}})");
+	const auto child = put("own.unit.desc",
+		R"({"__type":"resave_unit","__parent":"memory://t/base.unit.desc","hp":7,"label":null,"tags":{"b":null,"c":3}})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.unit.desc");
+	BOOST_TEST(saved.at("hp").as_int64() == 7);
+	BOOST_REQUIRE(saved.contains("tags"));
+	BOOST_TEST((saved.at("tags") == json::parse(R"({"b":null,"c":3})")));
+	BOOST_TEST((!saved.contains("label") || saved.at("label") != json::value("parent")));
+	check_reads_back(child, saved, "own.unit.again.desc");
+}
+
+BOOST_FIXTURE_TEST_CASE(ALevelWithAParent_ResavesItsParentAndOnlyItsOwnFields, parent_fixture)
+{
+	put("base.level.desc", R"({"__type":"level_desc","name":"base","worlds":[{"__type":"world_desc"}]})");
+	const auto child = put("own.level.desc", R"({"__type":"level_desc","__parent":"memory://t/base.level.desc","name":"own"})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.level.desc");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "name" }));
+	BOOST_TEST(saved.at("name").as_string() == "own");
+	check_reads_back(child, saved, "own.level.again.desc");
+}
+
+// Nothing of its own: only the header and __parent.
+BOOST_FIXTURE_TEST_CASE(AFileThatOnlyNamesItsParent_ResavesAsOnlyItsParent, parent_fixture)
+{
+	put("base.mat.desc", BASE_MATERIAL);
+	const auto child = put("same.mat.desc", R"({"__type":"material_desc","__parent":"memory://t/base.mat.desc"})");
+
+	const json::object saved = resave(child);
+	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.mat.desc");
+	BOOST_TEST(own_keys(saved).empty());
+	check_reads_back(child, saved, "same.mat.again.desc");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
