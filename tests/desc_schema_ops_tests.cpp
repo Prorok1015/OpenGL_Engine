@@ -68,6 +68,22 @@ namespace ops_test {
 		BOOST_DESCRIBE_CLASS(keyed, (), (counts, names, parts, gain, note, preferred), (), ())
 	};
 
+	struct box
+	{
+		int value = 0;
+	};
+
+	class optional_holder : public desc::schema_desc<optional_holder, desc::schema_kind::component>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.optional_holder";
+
+		std::optional<inner> part;
+		std::optional<box> boxed;
+
+		BOOST_DESCRIBE_CLASS(optional_holder, (), (part, boxed), (), ())
+	};
+
 	// Write policies for the keys a legacy format needs: an explicit null for "nothing", a key that is read but never written.
 	enum class queue { none, opaque, mix };
 	BOOST_DESCRIBE_ENUM(queue, none, opaque, mix)
@@ -196,6 +212,21 @@ namespace desc {
 		f("shininess").key("/uniforms/shininess").write_never(),
 		f("gloss").key("/uniforms/gloss"),
 		f("defines").write_null_if_empty());
+
+	template<>
+	struct json_codec<ops_test::box>
+	{
+		static json::value to_json(const ops_test::box& value) { return json::value(value.value); }
+
+		static bool from_json(ops_test::box& value, const json::value& in)
+		{
+			if (!in.is_int64()) {
+				return false;
+			}
+			value.value = static_cast<int>(in.as_int64());
+			return true;
+		}
+	};
 
 	template<>
 	struct json_codec<ops_test::tagged>
@@ -1204,7 +1235,7 @@ BOOST_AUTO_TEST_CASE(ADocumentMayHaveACustomFieldWithACodec_NotOneWithout)
 	BOOST_TEST(!fx.ds.register_document<ops_test::table_doc>("ops.table_doc"));
 	BOOST_CHECK_MESSAGE(fx.ds.is_registered("ops.table_doc"), "a refused type stays an ordinary desc");
 	BOOST_TEST(!fx.ds.find_schema("ops.table_doc")->is_document);
-	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.table_doc"), "mark_document does not know a codec");
+	BOOST_CHECK_MESSAGE(!fx.ds.mark_document("ops.table_doc"), "a map is not taken by a document yet");
 }
 
 BOOST_AUTO_TEST_CASE(ACustomFieldInAStructureOrAListRefusesTheDocument)
@@ -1402,6 +1433,47 @@ BOOST_AUTO_TEST_CASE(AMapCannotLiveInASchemaWithoutACppType)
 {
 	auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
 	BOOST_CHECK_THROW(desc::compute_layout(schema), std::runtime_error);
+}
+
+BOOST_FIXTURE_TEST_CASE(AMapReadAfterItsParentMergesByKeyAndANullRemovesAKey, ops_fixture)
+{
+	ops_test::keyed value;
+	value.deserialize(ds, parse(R"({ "counts": { "a": 1, "c": 3 } })"));
+	value.deserialize(ds, parse(R"({ "counts": { "b": 2 } })"));
+	BOOST_CHECK((value.counts == std::map<std::string, int>{ { "a", 1 }, { "b", 2 }, { "c", 3 } }));
+
+	value.deserialize(ds, parse(R"({ "counts": { "a": null, "b": 5 } })"));
+	BOOST_CHECK((value.counts == std::map<std::string, int>{ { "b", 5 }, { "c", 3 } }));
+}
+
+BOOST_FIXTURE_TEST_CASE(AnOptionalStructureIsItsValueOrNothing, ops_fixture)
+{
+	ops_test::optional_holder value;
+	BOOST_TEST(!serialized(value).contains("part"));
+
+	value.part = ops_test::inner{ 2.5f, true };
+	const json::object written = serialized(value);
+	BOOST_TEST(written.at("part").at("scale").as_double() == 2.5);
+
+	ops_test::optional_holder copy;
+	copy.deserialize(ds, written);
+	BOOST_REQUIRE(copy.part.has_value());
+	BOOST_TEST(copy.part->flag);
+}
+
+BOOST_AUTO_TEST_CASE(AnOptionalOfATypeWithACodecStaysCustom)
+{
+	const auto schema = desc::schema_generator<ops_test::optional_holder>::make("ops.optional_holder", 1, desc::schema_kind::component);
+	const auto boxed = std::ranges::find(schema.fields, "boxed", &desc::field_schema::key);
+	BOOST_REQUIRE(boxed != schema.fields.end());
+	BOOST_TEST((boxed->kind == desc::field_kind::custom));
+}
+
+BOOST_AUTO_TEST_CASE(ANullOverrideFitsAnOptionalField)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/gain", json::value() }) == desc::override_status::valid));
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts", json::value() }) == desc::override_status::bad_value));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

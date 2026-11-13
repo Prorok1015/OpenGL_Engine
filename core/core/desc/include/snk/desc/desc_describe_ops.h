@@ -377,6 +377,7 @@ namespace desc
 		// An optional is its value or nothing (field_schema::optional): nothing is not written, a JSON null reads as nothing,
 		// the value goes through the ops of its own kind, which are the field's ops.
 		template<typename T>
+			requires (!has_json_codec<std::optional<T>>)
 		struct value_ops<std::optional<T>>
 		{
 			static_assert(std::is_default_constructible_v<T>, "a described std::optional<T> needs a default constructible T");
@@ -421,13 +422,16 @@ namespace desc
 		};
 
 		// A map described as a field_kind::map (no json_codec of its own): an object, a value per key by the ops of the
-		// element. Written by key, so an unordered_map has one text. A null value reads as "no such key" (a file that
-		// overrides a parent's map removes the parent's key with it). A value that does not fit leaves the field as it was.
+		// element. Written by key, so an unordered_map has one text. Read by key too, like every object that overrides a
+		// parent's (json_deep_merge in the editor's documents and override records): the keys of the file are put into
+		// what the map holds, and a null value removes the key. A value that does not fit leaves the field as it was.
 		template<typename M>
 			requires (detail::string_map_traits<M>::value && kind_of<M> == field_kind::map)
 		struct value_ops<M>
 		{
 			using mapped_type = typename detail::string_map_traits<M>::mapped_type;
+			static_assert(!detail::optional_traits<mapped_type>::value,
+				"a map of std::optional<T> cannot be described: an empty value is written as null, which a read takes for a removed key");
 
 			static void to_json(const field_ops& ops, const M& value, json::value& out)
 			{
@@ -455,16 +459,19 @@ namespace desc
 				if (!in.is_object()) {
 					return false;
 				}
-				M parsed;
+				M parsed = value;
 				for (const auto& member : in.as_object()) {
+					const std::string key{ member.key() };
 					if (member.value().is_null()) {
+						parsed.erase(key);
 						continue;
 					}
-					mapped_type element{};
+					const auto existing = parsed.find(key);
+					mapped_type element = existing != parsed.end() ? existing->second : mapped_type{};
 					if (!value_ops<mapped_type>::from_json(*ops.element_ops, element, member.value(), ctx)) {
 						return false;
 					}
-					parsed.insert_or_assign(std::string{ member.key() }, std::move(element));
+					parsed.insert_or_assign(key, std::move(element));
 				}
 				value = std::move(parsed);
 				return true;
