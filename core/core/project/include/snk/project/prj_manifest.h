@@ -10,7 +10,8 @@
 // project.snkproj: the manifest of a game project (ADR-02, docs/roadmap/design/EPIC-42-PLAN.md sec. 2.1).
 namespace prj
 {
-	inline constexpr int k_manifest_format_version = 1;
+	// 2 (EPIC-58 S4, #754): migrated_with and applied_steps, written by a project migration; format 1 still reads.
+	inline constexpr int k_manifest_format_version = 2;
 	inline constexpr std::string_view k_manifest_file_name = "project.snkproj";
 
 	enum class module_kind

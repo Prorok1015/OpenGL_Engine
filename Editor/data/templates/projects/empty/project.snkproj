@@ -1,5 +1,5 @@
 {
-    "format_version": 1,
+    "format_version": 2,
     "name": "Empty Project",
     "engine_version": "0.0.0",
     "start_scene": "res://levels/main.desc",

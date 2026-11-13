@@ -1,5 +1,6 @@
 #include <snk/command/cmd_main_thread_queue.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/ds/ds_json_storage.hpp>
 #include <exception>
 #include <utility>
 
@@ -60,6 +61,8 @@ cmd::main_thread_queue::~main_thread_queue()
 std::future<cmd::result> cmd::main_thread_queue::post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation,
 	std::string confirmation)
 {
+	// Runs on a later frame: the caller's resource (a module's arena) may be gone by then (#827).
+	ds::keep_in_default_resource(args);
 	auto pending = std::make_shared<pending_call>();
 	std::future<result> outcome = pending->promise.get_future();
 	m_tasks.post_main([state = m_state, pending, id = std::move(id),
