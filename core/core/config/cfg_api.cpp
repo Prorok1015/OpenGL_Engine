@@ -244,7 +244,8 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)")
 		("migrate", "editor only, with --headless: migrate the project's data to this engine and exit (EPIC-58). Exit code: "
 			"0 done or nothing to do, 1 a migration is needed (--dry-run), 2 refused, 4 files left as they are (unknown type, "
-			"newer, or invalid with --force), 5 failed and rolled back, 6 failed and the rollback did not finish")
+			"newer, or invalid with --force), 5 failed and rolled back, 6 failed and the rollback did not finish, -1 (255) an "
+			"unexpected error")
 		("dry-run", "with --migrate: print the plan, write nothing")
 		("force", "with --migrate: leave invalid files as they are instead of refusing the migration")
 		("report", po::value<std::string>(), "with --migrate: also write the report (or the plan) to this file, outside the project")

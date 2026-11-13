@@ -454,9 +454,11 @@ jobs:
 
       # EPIC-58 S6 (#757): the migration command line. The repository's sandbox needs no migration: a check that names
       # the file, never a rewrite. tests/static_game/project is left out: its module is compiled into the static host
-      # and is not built for the editor here, so its own types would be unknown_type. A copy of the fixture of old
-      # versions (#750) is migrated, checked byte-stable with desc_resave and rolled back to what it was. --dry-run
-      # writes nothing: the hash of the whole tree, hidden folders included, is the same after it.
+      # and is not built for the editor here, so its own types would be unknown_type. The template project (its module
+      # built above; engine 0.0.0, so a migration is needed) shows that a dry run with a game module loaded writes
+      # nothing either: the module's copy goes to the run's scratch folder. A copy of the fixture of old versions (#750)
+      # is migrated, checked byte-stable with desc_resave and rolled back to what it was. --dry-run writes nothing: the
+      # hash of the whole tree, hidden folders included, is the same after it.
       - name: Migration from the command line
         run: |
           cmake --build build/ci-linux-gcc-debug --target desc_resave --parallel
@@ -475,6 +477,12 @@ jobs:
           before="$(tree_hash projects/sandbox)"
           expect 0 --project projects/sandbox --migrate --dry-run
           if [ "$(tree_hash projects/sandbox)" != "$before" ]; then echo "::error::--dry-run wrote into projects/sandbox"; exit 1; fi
+
+          template="${RUNNER_TEMP}/template_project"
+          before="$(tree_hash "$template")"
+          expect 1 --project "$template" --migrate --dry-run
+          grep -q "module 'game' loaded" "$log"
+          if [ "$(tree_hash "$template")" != "$before" ]; then echo "::error::--dry-run wrote into the template project"; exit 1; fi
 
           fx="${RUNNER_TEMP}/migration_v1"
           rm -rf "$fx" "${RUNNER_TEMP}/migrated"

@@ -141,9 +141,11 @@ BOOST_AUTO_TEST_CASE(AMigratedFile_IsWhatTheEngineSaves)
 	BOOST_TEST(read_text(copy.res() / "cameras/cam_v1.desc") == std::string(reinterpret_cast<const char*>(expected.data()), expected.size()));
 }
 
-BOOST_AUTO_TEST_CASE(ANewerOrBrokenFile_RefusesTheMigration_NothingIsWritten)
+BOOST_AUTO_TEST_CASE(ABrokenFile_RefusesTheMigration_NothingIsWritten)
 {
 	test_util::fixture_copy full{ "migration_v1" };
+	// A newer file alone is left as it is (pmg_command_tests): only the invalid one refuses here.
+	fs::remove(full.res() / "newer.desc");
 	mount(full.res());
 	const auto before = content_of(full.root());
 	const pmg::apply_outcome outcome = apply(full.root(), context_for(full.root()));

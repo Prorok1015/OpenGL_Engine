@@ -15,12 +15,12 @@
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
+#include <snk/desc/desc_system.h>
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/project_migration/pmg_command.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_scene_layer.h>
-#include <snk/desc/desc_system.h>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -169,9 +169,16 @@ int main(int argc, char* argv[])
 		};
 		// In the storage, so the editor can reload a module from a new build (#435).
 		auto& project_host = app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules));
-		project_host.load_all();
+		const core::project_modules_report modules = project_host.load_all();
 		if (migration) {
-			result = run_migration_command(app_storage);
+			// Without a module it needs, its types would read as unknown_type and the migration as partial (4): refused.
+			if (!modules.missing_required.empty() || !modules.refused.empty()) {
+				egLOG_ERROR("project/migrate", "refused: a game module of the project is not loaded (missing: {}; refused: {}); "
+					"build it first", cfg::format_list(modules.missing_required), cfg::format_list(modules.refused));
+				result = prj::migration::k_exit_refused;
+			} else {
+				result = run_migration_command(app_storage);
+			}
 		} else {
 			// After `game`: a game_editor registers into the editor on top of it (#588).
 			project_host.load_editor_modules();

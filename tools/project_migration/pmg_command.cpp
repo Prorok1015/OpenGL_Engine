@@ -142,12 +142,15 @@ int prj::migration::run_migrate(const migrate_command& command, const command_co
 	}
 	const std::string text = outcome.report.id.empty() ? plan_text(plan) : report_text(outcome.report);
 	print(context, text);
+	const int code = exit_code_of(outcome.report.status);
 	if (!command.report.empty()) {
 		if (auto error = write_report(context, command.report, text)) {
 			print_error(context, std::format("--report {}: {}", fs_paths::utf8_of(command.report), *error));
+			// A run whose report was asked for is not done without it; a failed migration keeps the code that says so.
+			if (code == k_exit_done || code == k_exit_partial) return k_exit_refused;
 		}
 	}
-	return exit_code_of(outcome.report.status);
+	return code;
 }
 
 int prj::migration::run_migrate_rollback(std::string_view id, const command_context& context)

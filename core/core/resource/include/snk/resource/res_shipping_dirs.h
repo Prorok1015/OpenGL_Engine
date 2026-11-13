@@ -29,6 +29,13 @@ namespace core::res {
 	// then checked to be a directory of this user, not a link, with mode 0700; Windows: a fresh folder, never an existing
 	// one). Nothing planted in a shared temp folder is reused. `path` empty and `error` set when it cannot be made.
 	SNK_API scratch_folder_result make_scratch_dir(std::string_view project_name);
+	// In the app_data_storage while a read-only project is mounted: memory:// of this run, and the copies of its game
+	// modules (core_project_modules). resource_term removes it.
+	struct run_scratch_folder
+	{
+		explicit run_scratch_folder(std::filesystem::path folder) : path(std::move(folder)) {}
+		std::filesystem::path path;
+	};
 	// Removes the scratch folders of this game whose process is gone (a run that crashed). Only a real directory (not a
 	// link or a junction) is removed; on POSIX also only one owned by this user with mode 0700, so a folder someone else
 	// put in a shared temp folder is never walked. Returns how many.

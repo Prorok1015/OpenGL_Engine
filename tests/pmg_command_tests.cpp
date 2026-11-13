@@ -220,4 +220,33 @@ BOOST_AUTO_TEST_CASE(AReportInsideTheProject_IsRefused_OutsideItIsWritten)
 	BOOST_TEST((snapshot(copy.root()) == before));
 }
 
+// The migration went through but its report could not be written: refused; a failed migration keeps its own code.
+BOOST_AUTO_TEST_CASE(AReportThatCannotBeWritten_IsCode2_UnlessTheMigrationFailed)
+{
+	test_util::fixture_copy outside{ "migration_v1" };
+	leave_only_what_migrates();
+	bool report_written = false;
+	const auto refuse_report = [&report_written](const fs::path&, std::string_view) -> std::optional<std::string> {
+		report_written = true;
+		return std::string{ "injected report failure" };
+	};
+	pmg::command_context with_failing_report = context();
+	with_failing_report.write_report = refuse_report;
+	pmg::migrate_command command;
+	command.report = outside.root() / "report.md";
+	BOOST_TEST(pmg::run_migrate(command, with_failing_report) == pmg::k_exit_refused, printed);
+	BOOST_TEST(report_written);
+	BOOST_TEST(printed.find("injected report failure") != std::string::npos, printed);
+	BOOST_TEST(pmg::run_migrate_rollback("test-migration", context()) == pmg::k_exit_done, printed);
+
+	int content_writes = 0;
+	write = [&content_writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (!relative.generic_string().starts_with(".snk/") && ++content_writes == 3) return std::string{ "injected failure" };
+		return prj::write_project_file(root, relative, text);
+	};
+	with_failing_report = context();
+	with_failing_report.write_report = refuse_report;
+	BOOST_TEST(pmg::run_migrate(command, with_failing_report) == pmg::k_exit_rolled_back, printed);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

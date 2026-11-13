@@ -15,7 +15,8 @@ namespace prj::migration
 	// --dry-run only: the plan is not empty.
 	inline constexpr int k_exit_migration_needed = 1;
 	// Bad input, a refused plan (an invalid file without --force, a newer or invalid project.snkproj), a migration left
-	// unfinished in the project, a refused rollback.
+	// unfinished in the project, a refused rollback, a game module of the project that is not loaded (main), a report
+	// that could not be written after a migration that went through.
 	inline constexpr int k_exit_refused = 2;
 	// Files left as they are: unknown_type, newer, or invalid with --force.
 	inline constexpr int k_exit_partial = 4;
