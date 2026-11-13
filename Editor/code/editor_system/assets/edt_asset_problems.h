@@ -41,7 +41,7 @@ namespace edt
 			kind what = kind::no_id;
 			// The file of a top-layer record, or the .resource of an orphan.
 			std::string path;
-			// A duplicate in the project's own layer (its ID may be replaced).
+			// A duplicate whose file and .resource are both in the project's own layer (its ID may be replaced).
 			bool in_top_layer = false;
 			// The file an orphan may be linked to; empty: none.
 			std::string link_to;

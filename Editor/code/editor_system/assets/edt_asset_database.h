@@ -43,6 +43,8 @@ namespace edt
 		std::int64_t size = 0;
 		std::int64_t mtime = 0; // ticks of std::filesystem::file_time_type
 		bool has_meta = false;
+		// The layer whose .resource the record read (any layer may hold it); meaningful only with has_meta.
+		std::size_t meta_layer = 0;
 		std::int64_t meta_size = 0;
 		std::int64_t meta_mtime = 0;
 		// Why the .resource next to the file could not be read (with the path of the bad field); empty when it was read.
@@ -83,6 +85,8 @@ namespace edt
 	{
 		bool ok = false;
 		std::string error;
+		// A failed undo stays in the history: reading, renaming or writing failed, not a file changed since.
+		bool keep = false;
 	};
 
 	// Where the database keeps its cache: <root>/<relative>, every folder below the root and the files reached without

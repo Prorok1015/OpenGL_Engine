@@ -82,7 +82,8 @@ void edt::asset_problem_publisher::publish(problem_list& problems, const asset_d
 			entry row;
 			row.what = kind::duplicate_id;
 			row.path = holders[i]->path.string();
-			row.in_top_layer = holders[i]->layer == top;
+			// Its .resource may come from a lower layer, which a fix must not touch.
+			row.in_top_layer = holders[i]->layer == top && holders[i]->meta_layer == top;
 			row.item.severity = problem_severity::error;
 			row.item.file = row.path;
 			row.item.code = "asset.duplicate_id";

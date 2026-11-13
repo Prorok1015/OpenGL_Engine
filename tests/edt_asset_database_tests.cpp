@@ -645,6 +645,7 @@ BOOST_AUTO_TEST_CASE(a_bad_cache_is_dropped_whole)
 	const std::vector<std::pair<std::string, edit>> cases = {
 		{ "another __type", [](boost::json::object& root) { root["__type"] = "other"; } },
 		{ "another __version", [](boost::json::object& root) { root["__version"] = 1; } },
+		{ "the version before meta_layer", [](boost::json::object& root) { root["__version"] = 2; } },
 		{ "records not an array", [](boost::json::object& root) { root["records"] = 5; } },
 		{ "a record not an object", [](boost::json::object& root) { root.at("records").as_array().at(0) = 1; } },
 		{ "a path without res://", record_edit([](boost::json::object& r) { r["path"] = "a.png"; }) },
@@ -653,6 +654,8 @@ BOOST_AUTO_TEST_CASE(a_bad_cache_is_dropped_whole)
 		{ "a type of another suffix", record_edit([](boost::json::object& r) { r["type"] = "desc"; }) },
 		{ "a hash without its prefix", record_edit([](boost::json::object& r) { r["hash"] = "0123456789abcdef"; }) },
 		{ "a layer out of range", record_edit([](boost::json::object& r) { r["layer"] = 7; }) },
+		{ "a meta layer out of range", record_edit([](boost::json::object& r) { r["meta_layer"] = 7; }) },
+		{ "a missing meta layer", record_edit([](boost::json::object& r) { r.erase("meta_layer"); }) },
 		{ "a shadowed layer not below", record_edit([](boost::json::object& r) { r["shadowed"] = boost::json::array{ 1 }; }) },
 		{ "a bad id", record_edit([](boost::json::object& r) { r["id"] = "nope"; }) },
 		{ "a missing check time", record_edit([](boost::json::object& r) { r.erase("content_checked_at"); }) },

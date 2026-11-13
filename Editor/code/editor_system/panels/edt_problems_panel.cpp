@@ -1,5 +1,6 @@
 #include "edt_problems_panel.h"
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <format>
 #include <functional>
 #include <optional>
@@ -157,9 +158,14 @@ void edt::problems_panel::on_render()
 	if (const std::optional<std::string> undo = m_undo_label && m_undo ? m_undo_label() : std::nullopt) {
 		ImGui::SameLine();
 		const std::string label = std::format("Undo: {}###problems_undo", *undo);
+		// The button held down is itself the active item: it must stay clickable to be released.
+		const bool held = ImGui::GetActiveID() != 0 && ImGui::GetActiveID() == ImGui::GetID(label.c_str());
+		const bool enabled = !m_undo_enabled || held || m_undo_enabled();
+		ImGui::BeginDisabled(!enabled);
 		if (ImGui::SmallButton(label.c_str())) {
 			chosen = m_undo;
 		}
+		ImGui::EndDisabled();
 	}
 	ImGui::Separator();
 

@@ -37,10 +37,12 @@ namespace edt
 
 		void set_on_activate(activate_fn on_activate) { m_on_activate = std::move(on_activate); }
 		void set_actions(actions_fn actions) { m_actions = std::move(actions); }
-		void set_undo(std::function<std::optional<std::string>()> label, std::function<void()> run)
+		// `enabled` (null: always) greys the button out, e.g. while a dialog waits or an edit is in progress.
+		void set_undo(std::function<std::optional<std::string>()> label, std::function<void()> run, std::function<bool()> enabled = {})
 		{
 			m_undo_label = std::move(label);
 			m_undo = std::move(run);
+			m_undo_enabled = std::move(enabled);
 		}
 
 	protected:
@@ -71,5 +73,6 @@ namespace edt
 		actions_fn m_actions;
 		std::function<std::optional<std::string>()> m_undo_label;
 		std::function<void()> m_undo;
+		std::function<bool()> m_undo_enabled;
 	};
 }

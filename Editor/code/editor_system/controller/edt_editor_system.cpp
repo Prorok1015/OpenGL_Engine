@@ -544,7 +544,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (const asset_fix_result result = m_assets->undo_last(); !result.ok) {
 				egLOG_ERROR("assets", "{}", result.error);
 			}
-		});
+		},
+		// The idle gate of Edit > Undo (register_edit_actions): no dialog waiting, no gesture in progress.
+		[this] { return m_context->dialogs().pending() == 0 && !ImGui::IsAnyItemActive(); });
 	add_panel(m_problems_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });

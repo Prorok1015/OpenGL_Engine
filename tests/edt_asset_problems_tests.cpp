@@ -347,6 +347,44 @@ BOOST_AUTO_TEST_CASE(a_copy_in_a_lower_layer_offers_no_new_id)
 	BOOST_TEST(publisher.actions_of(*copy, *db).empty());
 }
 
+BOOST_AUTO_TEST_CASE(a_copy_whose_resource_comes_from_a_lower_layer_offers_no_new_id)
+{
+	set_time(lower.write("one.png", "one"), std::chrono::hours(2));
+	lower.write("one.png.resource", meta_text(k_guid_b));
+	set_time(upper.write("two.png", "two"), std::chrono::hours(1));
+	lower.write("two.png.resource", meta_text(k_guid_b));
+	open();
+	BOOST_TEST(record("two.png").layer == 1u);
+	BOOST_TEST(record("two.png").meta_layer == 0u);
+	BOOST_TEST(!row("asset.no_id", "two.png"));
+	const auto copy = row("asset.duplicate_id", "two.png");
+	BOOST_REQUIRE(copy);
+	BOOST_TEST(publisher.actions_of(*copy, *db).empty());
+	BOOST_TEST(!db->new_id_for_copy(res::tag::make("two.png")).ok);
+	BOOST_TEST(read_text(lower.path() / "two.png.resource") == meta_text(k_guid_b));
+}
+
+BOOST_AUTO_TEST_CASE(a_link_is_not_undone_once_the_moved_resource_changed)
+{
+	upper.write("a.png", "same bytes");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	open();
+	fs::remove(upper.path() / "a.png");
+	db->apply_changes(std::vector<res::file_change>{ change("a.png", res::change_kind::deleted) });
+	upper.write("b.png", "same bytes");
+	db->apply_changes(std::vector<res::file_change>{ change("b.png", res::change_kind::created) });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(db->link_orphan(res::tag::make("a.png.resource"), res::tag::make("b.png")).ok);
+
+	upper.write("b.png.resource", meta_text(k_guid_b));
+	const edt::asset_fix_result undone = db->undo_last();
+	BOOST_TEST(!undone.ok);
+	BOOST_TEST(!undone.keep);
+	BOOST_TEST(read_text(upper.path() / "b.png.resource") == meta_text(k_guid_b));
+	BOOST_TEST(!fs::exists(upper.path() / "a.png.resource"));
+	BOOST_TEST(!db->next_undo_label().has_value());
+}
+
 BOOST_AUTO_TEST_CASE(undo_is_refused_when_the_file_changed_since)
 {
 	upper.write("plain.png", "plain");
