@@ -306,6 +306,18 @@ BOOST_AUTO_TEST_CASE(AContentRootThatIsALink_IsNotFollowed)
 	BOOST_TEST((scan.find("res/x.desc") == nullptr));
 }
 
+// #856: overlapping content roots would scan and index one file twice; the manifest is refused, nothing is scanned.
+BOOST_AUTO_TEST_CASE(OverlappingContentRoots_MakeTheManifestInvalid)
+{
+	scratch_project project;
+	project.write("res/sub/x.png", "x");
+	project.write("project.snkproj", R"({"format_version": 1, "name": "Scratch", "engine_version": "0.1.0", "content_roots": ["res", "res/sub"]})");
+	const pmg::scan_result scan = pmg::scan_project(project.root, *descs);
+	BOOST_TEST((scan.manifest.kind == pmg::file_class::invalid));
+	BOOST_TEST(scan.manifest.reason.find("overlap") != std::string::npos);
+	BOOST_TEST(scan.files.empty());
+}
+
 BOOST_AUTO_TEST_CASE(AFormatVersionOutOfRange_IsInvalid)
 {
 	scratch_project project;

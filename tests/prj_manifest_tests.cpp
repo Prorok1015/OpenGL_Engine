@@ -10,6 +10,7 @@
 #include <vector>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 	constexpr std::string_view k_full_manifest = R"({
@@ -181,6 +182,35 @@ BOOST_AUTO_TEST_CASE(Parse_ContentRootsAcceptNestedAndTrailingSeparator)
 	const auto result = prj::parse_manifest(minimal_with("content_roots", R"(["res/", "content/shared", "console", "com10"])"));
 	BOOST_REQUIRE(result.data.has_value());
 	BOOST_TEST(result.data->content_roots.size() == 4u);
+}
+
+// #856: one root inside another (in any letter case) would put one file under two res:// tags.
+BOOST_AUTO_TEST_CASE(Parse_OverlappingContentRootsAreRejected_NamingBoth)
+{
+	const std::pair<std::string_view, std::string_view> cases[] = {
+		{ R"(["res", "res/sub"])", "$.content_roots[1]" },
+		{ R"(["res/sub", "res"])", "$.content_roots[1]" },
+		{ R"(["res", "Res/Sub"])", "$.content_roots[1]" },
+		{ R"(["res/", "RES"])", "$.content_roots[1]" },
+		{ R"(["a", "b/c", "b"])", "$.content_roots[2]" },
+	};
+	for (const auto& [roots, json_path] : cases) {
+		BOOST_TEST_INFO("roots: " << roots);
+		const auto result = prj::parse_manifest(minimal_with("content_roots", std::string{ roots }));
+		check_error(result, json_path);
+		if (result.error) {
+			BOOST_TEST(result.error->reason.find("overlap") != std::string::npos);
+		}
+	}
+	const auto named = prj::parse_manifest(minimal_with("content_roots", R"(["res", "res/sub"])"));
+	BOOST_REQUIRE(named.error.has_value());
+	BOOST_TEST(named.error->reason.find("'res'") != std::string::npos);
+	BOOST_TEST(named.error->reason.find("'res/sub'") != std::string::npos);
+
+	for (const std::string_view roots : { R"(["res", "res2"])", R"(["res2", "res"])", R"(["res/a", "res/b"])", R"(["res/a", "res/ab"])" }) {
+		BOOST_TEST_INFO("roots: " << roots);
+		BOOST_TEST(prj::parse_manifest(minimal_with("content_roots", std::string{ roots })).data.has_value());
+	}
 }
 
 BOOST_AUTO_TEST_CASE(Parse_DuplicatesAreRejected)
