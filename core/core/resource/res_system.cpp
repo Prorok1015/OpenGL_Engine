@@ -1569,6 +1569,8 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
       m_watchers.erase(watched);
       auto &into = m_watchers[new_key];
       for (auto &[key, entry] : moving) {
+        // Watching the new key from now on: a signal of it queued before the move is not theirs.
+        entry.epoch = ++m_watch_epoch;
         into.try_emplace(key, std::move(entry));
       }
     }

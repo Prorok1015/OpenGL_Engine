@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include <snk/config/cfg_variables.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
@@ -166,10 +167,16 @@ struct disk_fixture
 	}
 };
 
-// res:// on disk that allows remove/rename but whose watcher reports nothing: no batch, no poll, the test drives every
-// change.
+// res:// on disk that allows remove/rename with no file watcher at all: no batch, no poll, the test drives every change.
 struct quiet_disk_fixture
 {
+	struct no_file_watching
+	{
+		no_file_watching() { cfg::set_variable("res/watch_files", "false"); }
+		~no_file_watching() { cfg::set_variable("res/watch_files", "true"); }
+	};
+
+	no_file_watching unwatched;
 	test_util::temp_dir dir{ "res_asset_index_quiet_disk" };
 	ds::task_system tasks{ test_util::manual_tasks() };
 	std::shared_ptr<fake_index> index = std::make_shared<fake_index>();
