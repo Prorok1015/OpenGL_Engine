@@ -79,8 +79,9 @@ namespace
 		std::map<std::string, limits_value> zones;
 		std::map<std::string, speed_value> speeds;
 		std::optional<float> extra;
+		std::optional<float> bonus = 2.0f;
 	};
-	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels, zones, speeds, extra))
+	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels, zones, speeds, extra, bonus))
 }
 
 namespace desc
@@ -865,14 +866,14 @@ BOOST_AUTO_TEST_CASE(ApplyEdit_ClearingAnOptionalThatHasAnInitializer_KeepsTheNu
 {
 	const desc::type_schema schema = weights_schema();
 	const auto& registry = descs->schemas();
-	json::object overrides = parse(R"({ "boost": 3.0 })");
+	json::object overrides = parse(R"({ "bonus": 3.0 })");
 	const json::value base = ui::compose(schema, registry, { }, false);
 	const json::value before = ui::compose(schema, registry, { &overrides });
 	json::value after = before;
-	after.as_object().erase("boost");
+	after.as_object().erase("bonus");
 	ui::apply_edit(overrides, schema, registry, base, before, after);
 	// without the record the read gives the initializer (2.0): the clear must stay written
-	BOOST_CHECK(overrides == parse(R"({ "boost": null })"));
+	BOOST_CHECK(overrides == parse(R"({ "bonus": null })"));
 }
 
 BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMapWithAnEmptyKey_WritesNothing)
