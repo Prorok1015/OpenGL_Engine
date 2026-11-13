@@ -1450,23 +1450,36 @@ BOOST_AUTO_TEST_CASE(an_outside_file_waits_until_it_is_quiet)
 	BOOST_TEST(db->pending_ids() == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(os_litter_and_temporaries_get_no_id)
+// res::is_ignored_asset_name: one rule for the walk, the batches and the new IDs.
+BOOST_AUTO_TEST_CASE(ignored_names_are_no_records_and_get_no_id)
 {
+	const std::vector<std::string_view> ignored{ ".gitkeep", ".DS_Store", "Thumbs.db", "~$x.docx", "a.tmp", "b~" };
+	write_aged(upper(), "before/.gitkeep", "");
+	write_aged(upper(), "before/Thumbs.db", "thumbs");
+	write_aged(upper(), "before/a.tmp.resource", meta_text(k_guid_a));
 	open();
-	const std::vector<std::string_view> names{ ".DS_Store", "Thumbs.db", "DESKTOP.INI", "~$report.docx", "a.swp", "b.TMP", "c.txt~", ".hidden.png" };
-	for (const std::string_view name : names) {
+	BOOST_TEST(db->records().empty());
+	BOOST_TEST(db->orphans().empty());
+
+	for (const std::string_view name : ignored) {
 		write_aged(upper(), name, "junk");
 		apply(own_change(name, res::change_kind::created));
+		apply(change(name, res::change_kind::modified));
 	}
-	write_aged(upper(), "ext.tmp", "junk from outside");
-	apply(change("ext.tmp", res::change_kind::created));
+	write_aged(upper(), "a.tmp.png", "an asset");
+	write_aged(upper(), "x.tmpl", "an asset too");
+	apply(own_change("a.tmp.png", res::change_kind::created));
+	apply(change("x.tmpl", res::change_kind::created));
 	settle();
-	for (const std::string_view name : names) {
+	for (const std::string_view name : ignored) {
 		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(db->find(res::tag::make(name)) == nullptr);
 			BOOST_TEST(!fs::exists(upper() / (std::string{ name } + ".resource")));
 		}
 	}
-	BOOST_TEST(!fs::exists(upper() / "ext.tmp.resource"));
+	BOOST_TEST(meta_id("a.tmp.png").has_value());
+	BOOST_TEST(meta_id("x.tmpl").has_value());
+	BOOST_TEST(db->records().size() == 2u);
 	BOOST_TEST(db->pending_ids() == 0u);
 }
 

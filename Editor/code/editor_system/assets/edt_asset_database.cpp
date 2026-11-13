@@ -64,6 +64,16 @@ namespace
 		return relative.substr(0, relative.size() - res::asset_meta_suffix.size());
 	}
 
+	// A name the walk neither lists nor enters: one res::is_ignored_asset_name rejects (a hidden folder, a dot file, a
+	// temporary or system file), or the .resource of such a file.
+	bool skipped_name(std::string_view name, bool is_dir)
+	{
+		if (res::is_ignored_asset_name(name)) {
+			return true;
+		}
+		return !is_dir && is_sidecar(name) && res::is_ignored_asset_name(sidecar_owner(name));
+	}
+
 	struct file_stat
 	{
 		bool ok = false;
@@ -194,7 +204,7 @@ namespace
 					continue;
 				}
 				const std::string name = fs_paths::utf8_of(entry.path().filename());
-				if (is_dir && name.starts_with('.')) {
+				if (skipped_name(name, is_dir)) {
 					continue;
 				}
 				slot& found = merged[edt::layer_merge_key(name, state.case_insensitive)];
@@ -1291,13 +1301,14 @@ namespace
 		return std::string{ text };
 	}
 
-	// Below a folder the walk skips: a folder on the way, or the folder itself, whose name starts with '.'.
+	// What the walk skips: below a folder it skips (a folder on the way, or the folder itself), or a file it does not
+	// list (skipped_name).
 	bool under_hidden_folder(std::string_view relative, bool is_directory)
 	{
 		while (true) {
 			const std::size_t slash = relative.find('/');
 			const bool last = slash == std::string_view::npos;
-			if ((!last || is_directory) && relative.starts_with('.')) {
+			if (skipped_name(relative.substr(0, slash), !last || is_directory)) {
 				return true;
 			}
 			if (last) {
@@ -1383,7 +1394,7 @@ public:
 				continue;
 			}
 			std::string on_disk = fs_paths::utf8_of(entry->path().filename());
-			if (is_dir && on_disk.starts_with('.')) {
+			if (skipped_name(on_disk, is_dir)) {
 				continue;
 			}
 			std::string child = joined(path, on_disk);
@@ -2116,18 +2127,6 @@ edt::asset_fix_result edt::asset_database::new_id_for_copy(const res::tag& file)
 	return fix_done();
 }
 
-namespace
-{
-	// OS litter and editor temporaries get no ID of their own (any letter case).
-	bool is_junk_name(std::string_view relative)
-	{
-		std::string name{ relative.substr(relative.find_last_of('/') + 1) };
-		std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return name.starts_with('.') || name == "thumbs.db" || name == "desktop.ini" || name.starts_with("~$") || name.ends_with(".swp")
-			|| name.ends_with(".tmp") || name.ends_with('~');
-	}
-}
-
 void edt::asset_database::remember_gone(const std::vector<asset_record>& gone)
 {
 	const auto now = std::chrono::steady_clock::now();
@@ -2162,7 +2161,7 @@ void edt::asset_database::queue_new_file(const std::string& key, bool own)
 		return;
 	}
 	const asset_record& record = found->second;
-	if (record.layer != top_layer() || record.has_meta || is_junk_name(record.path.view()) || matches_gone(record)) {
+	if (record.layer != top_layer() || record.has_meta || res::is_ignored_asset_name(record.path.view().substr(record.path.view().find_last_of('/') + 1)) || matches_gone(record)) {
 		return;
 	}
 	const auto [entry, added] = m_pending_ids.try_emplace(key, pending_id{ std::chrono::steady_clock::now(), own });
