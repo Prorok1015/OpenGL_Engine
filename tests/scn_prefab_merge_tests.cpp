@@ -5,6 +5,9 @@
 #include <snk/scene/level/scn_node_index.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
+#include <boost/json/monotonic_resource.hpp>
+#include <optional>
+#include <string>
 
 // Behavior of prefab assembly: parse/serialize, hierarchy spawning, override merge for explicit
 // nested instances, and hot reload. Descs live in a RAM resolver; no GPU, window or disk.
@@ -1281,6 +1284,87 @@ BOOST_AUTO_TEST_CASE(AssemblePrefab_NodeNameSurvivesADifferentReferenceKey)
 	auto robot = child_named(reg, root, "robot");
 	BOOST_REQUIRE(robot != entt::null);
 	BOOST_TEST(reg.get<test_util::stat_component>(robot).hp == 2);
+}
+
+// ---------------------------------------------------------------- JSON kept in the default resource (#827)
+
+namespace {
+
+// Long enough to leave Boost.JSON's small-string buffer: the text itself lives in the value's resource.
+constexpr const char* ARENA_LABEL = "a label long enough to be allocated in the arena";
+
+bool in_default_resource(const json::value& value)
+{
+	return value.storage().get() == json::storage_ptr().get();
+}
+
+bool all_in_default_resource(const scn::prefab_desc::prefab_node& node)
+{
+	for (const auto& [key, component] : node.components) {
+		if (component.overrides.storage().get() != json::storage_ptr().get()) return false;
+		for (const auto& edit : component.edits) {
+			if (!in_default_resource(edit.value)) return false;
+		}
+	}
+	for (const auto& record : node.overrides) {
+		if (!in_default_resource(record.value)) return false;
+	}
+	return std::ranges::all_of(node.children, [](const auto& child) { return all_in_default_resource(child); });
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(ParsedOverrideRecord_KeepsItsValueInTheDefaultResource)
+{
+	std::optional<scn::override_record> record;
+	{
+		json::monotonic_resource arena;
+		const json::value in = json::parse(
+			std::string(R"({ "target": [], "component": "stat", "path": "/label", "value": ")") + ARENA_LABEL + "\" }",
+			json::storage_ptr(&arena));
+		record = scn::parse_override_record(in);
+	}
+	BOOST_REQUIRE(record.has_value());
+	BOOST_TEST(in_default_resource(record->value));
+	BOOST_TEST(record->value.as_string() == ARENA_LABEL);
+}
+
+// A module or the editor hands reconcile/expand_instance a node whose records live in its own resource; what the engine
+// keeps (the prefab_instance) and gives back (the expanded node) must outlive that resource.
+BOOST_AUTO_TEST_CASE(NodeFromACaller_IsKeptAndExpandedInTheDefaultResource)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = load<scn::prefab_desc>(put("inst.prefab.desc", instance_with("")));
+	BOOST_REQUIRE(inst);
+
+	entt::registry reg;
+	const auto e = reg.create();
+	scn::prefab_desc::prefab_node expanded;
+	res::tag source;
+	{
+		json::monotonic_resource arena;
+		scn::prefab_desc::prefab_node node = inst->get_root();
+		node.overrides.push_back(scn::override_record{ {}, "stat", "/label", json::value(ARENA_LABEL, json::storage_ptr(&arena)), scn::override_op::set });
+		node.overrides.push_back(scn::override_record{ {}, "stat", "", json::parse(R"({ "hp": 41 })", json::storage_ptr(&arena)), scn::override_op::set });
+		scn::reconcile(*assembler, reg, e, node, scn::reconcile_mode::spawn);
+		BOOST_REQUIRE(scn::expand_instance(*assembler, node, expanded, source));
+	}
+
+	const auto& kept = reg.get<scn::prefab_instance>(e).local_overrides;
+	BOOST_REQUIRE(kept.overrides.size() == 2u);
+	BOOST_TEST(all_in_default_resource(kept));
+	BOOST_TEST(kept.overrides[0].value.as_string() == ARENA_LABEL);
+	BOOST_TEST(kept.overrides[1].value.at("hp").as_int64() == 41);
+
+	BOOST_TEST(all_in_default_resource(expanded));
+	BOOST_REQUIRE(expanded.components.contains("stat"));
+	BOOST_TEST(!expanded.components.at("stat").edits.empty());
+	const auto stat = scn::compose_component_json(expanded.components.at("stat"), nullptr); // the base's stat has no __parent
+	BOOST_TEST(stat.at("label").as_string() == ARENA_LABEL);
+	BOOST_TEST(stat.at("hp").as_int64() == 41);
+
+	BOOST_TEST(reg.get<test_util::stat_component>(e).label == ARENA_LABEL);
+	BOOST_TEST(reg.get<test_util::stat_component>(e).hp == 41);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

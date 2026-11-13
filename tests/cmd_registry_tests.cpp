@@ -3,10 +3,12 @@
 #include <snk/command/cmd_policy.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
+#include <boost/json/monotonic_resource.hpp>
 #include <functional>
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <string>
 #include <utility>
 #include <vector>
@@ -413,6 +415,33 @@ BOOST_AUTO_TEST_CASE(AgentArgumentCheck_RefusesOnlyAgents_BeforeTheSchema_WithOr
 	commands.set_agent_argument_check(nullptr);
 	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})"), cmd::origin::agent("s1")).code == cmd::codes::invalid_args);
 	BOOST_TEST(runs == 1);
+}
+
+// #827: a module builds its command's schemas with any resource of its own; the registry keeps them in the default one.
+BOOST_AUTO_TEST_CASE(Add_KeepsTheSchemasInTheDefaultResource)
+{
+	cmd::command_registry commands;
+	cmd::registration added;
+	{
+		boost::json::monotonic_resource arena;
+		// Assignment would copy into the field's resource: the schemas are constructed in place, as a module's desc has them.
+		const auto construct_in_arena = [&arena](boost::json::value& field, std::string_view text) {
+			std::destroy_at(&field);
+			std::construct_at(&field, boost::json::parse(text, boost::json::storage_ptr(&arena)));
+		};
+		cmd::command_desc desc = make_command("test.arena");
+		construct_in_arena(desc.args_schema, R"({"type":"object","properties":{"text":{"type":"string"}},"additionalProperties":false})");
+		construct_in_arena(desc.result_schema, R"({"type":"object","properties":{},"additionalProperties":false})");
+		BOOST_REQUIRE((desc.args_schema.storage().get() != boost::json::storage_ptr().get()));
+		added = commands.add(std::move(desc));
+	}
+	BOOST_REQUIRE(added.active());
+	const auto* kept = commands.find("test.arena");
+	BOOST_REQUIRE(kept != nullptr);
+	BOOST_TEST((kept->args_schema.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST((kept->result_schema.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST(kept->args_schema.at("properties").at("text").at("type").as_string() == "string");
+	BOOST_TEST(commands.invoke("test.arena", json_of(R"({"text":"a"})"), cmd::origin::test()).ok);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

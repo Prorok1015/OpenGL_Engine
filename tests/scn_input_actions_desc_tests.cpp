@@ -194,4 +194,23 @@ BOOST_AUTO_TEST_CASE(AGamepadSettingThatIsNoObjectOrAHugeNumber_IsWarnedAboutWit
 	BOOST_TEST(warned("/gamepad/deadzone:"));
 }
 
+// #827: the desc keeps the file's JSON as written; it lives in the default resource, not in the caller's.
+BOOST_AUTO_TEST_CASE(SourcesLiveInTheDefaultResource_NotInTheInputs)
+{
+	scn::input_actions_desc desc;
+	{
+		boost::json::monotonic_resource arena;
+		const boost::json::value in = boost::json::parse(R"({ "__type": "input_actions_desc", "__version": 1,
+			"actions": [ { "name": "AnActionNameLongerThanTheSmallBuffer", "bindings": [ { "key": "A" } ] } ],
+			"gamepad": { "deadzone": 0.25, "press_threshold": 0.5 } })", boost::json::storage_ptr(&arena));
+		desc.deserialize(*descs, in.as_object());
+	}
+	BOOST_TEST((desc.actions.source.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST((desc.gamepad.source.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_REQUIRE(desc.actions.source.is_array());
+	BOOST_TEST(desc.actions.source.as_array().at(0).at("name").as_string() == "AnActionNameLongerThanTheSmallBuffer");
+	BOOST_TEST(desc.gamepad.source.at("press_threshold").as_double() == 0.5);
+	BOOST_TEST(scn::build_action_map(desc).size() == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
