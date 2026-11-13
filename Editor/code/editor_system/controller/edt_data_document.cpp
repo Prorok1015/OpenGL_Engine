@@ -607,10 +607,6 @@ edt::save_result edt::data_document::write(bool over)
 	if (!over && m_changed_on_disk) {
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
-	if (needs_version_confirmation()) {
-		return save_result::failure(std::format("{} is version {} and would be written as version {}: it needs a yes first, nothing was written",
-			where(m_source), m_file_version, m_current_version));
-	}
 	desc::desc_system* descs = m_services.descs();
 	res::resource_system* reader = m_services.resources();
 	res::resource_system* writer = m_services.writable_resources();
@@ -638,6 +634,12 @@ edt::save_result edt::data_document::write(bool over)
 		// The watcher may not have said so yet (its signal waits for the main thread): the file is known to differ now.
 		flag_changed(disk_version);
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
+	}
+
+	// After the checks of the file on disk: a conflict is asked about first, the version second.
+	if (needs_version_confirmation()) {
+		return save_result::failure(std::format("{} is version {} and would be written as version {}: it needs a yes first, nothing was written",
+			where(m_source), m_file_version, m_current_version));
 	}
 
 	json::value content(m_own);
