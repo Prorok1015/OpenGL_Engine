@@ -8,10 +8,16 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/desc/desc_describe.h>
+#include <snk/desc/desc_describe_ops.h>
+#include <snk/desc/desc_schema_desc.h>
+#include <snk/desc/desc_system.h>
+#include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -30,6 +36,17 @@ std::string read_file(const fs::path& p)
 	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 }
 
+// A map of tags: each value is read as a reference, so each one follows the rule of #697.
+class texture_table_desc : public desc::schema_desc<texture_table_desc>
+{
+public:
+	static constexpr std::string_view __type = "test.texture_table";
+
+	std::map<std::string, res::tag> textures;
+
+	BOOST_DESCRIBE_CLASS(texture_table_desc, (), (textures), (), ())
+};
+
 const char* const k_material = R"({"__type":"material_desc","queue":"mix","defines":["A"]})";
 
 struct desc_fixture : test_util::scene_env
@@ -43,6 +60,7 @@ struct desc_fixture : test_util::scene_env
 		rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
 			res::mount_access::read_write, res::write_policy::allow_all());
 		seen = events.agent_action.subscribe([this](const edt::agent_action_info& info) { actions.push_back(info); });
+		descs->register_desc<texture_table_desc>("test.texture_table");
 		edt::desc_file_deps deps{ *rs, *descs };
 		deps.top_layer = [this] { return res_root; };
 		deps.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
@@ -627,6 +645,23 @@ BOOST_AUTO_TEST_CASE(TheChecksReadTheProtocolAsResTagDoes_AndRefuseEveryTextWith
 	}
 	const json::object plain{ { "__type", "material_desc" }, { "defines", json::array{ "materials/a.mat.desc" } } };
 	BOOST_TEST(errors_of(plain) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ATagInsideAMapOfTags_FollowsTheStrictRuleToo)
+{
+	for (const char* content : {
+		R"({"__type":"test.texture_table","textures":{"a":"user://x.png"}})",
+		R"({"__type":"test.texture_table","textures":{"a":"res://ok.png","b":"edt://x.png"}})",
+		R"({"__type":"test.texture_table","textures":{"a":"textures/no_protocol.png"}})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/t.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "t.desc"));
+		}
+	}
+	const auto fine = call("desc.create", desc_args("materials/t.desc", R"({"__type":"test.texture_table","textures":{"a":"res://ok.png"}})"));
+	BOOST_TEST_MESSAGE(fine.error);
+	BOOST_TEST(fine.ok);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

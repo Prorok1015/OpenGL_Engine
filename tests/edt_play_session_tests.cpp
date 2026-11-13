@@ -14,6 +14,10 @@
 #include "edt_module_swap_gate.h"
 #include "edt_play_commands.h"
 #include "edt_play_preflight.h"
+#include <snk/desc/desc_describe.h>
+#include <snk/desc/desc_describe_ops.h>
+#include <snk/desc/desc_schema_desc.h>
+#include <boost/describe.hpp>
 #include "edt_play_session.h"
 #include "edt_runtime_commands.h"
 #include "edt_bus_commands.h"
@@ -74,6 +78,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -3228,6 +3233,41 @@ BOOST_AUTO_TEST_CASE(a_tag_field_holds_a_reference_any_other_text_only_warns_abo
 	}
 	BOOST_TEST(rs->live_resources() == live);
 	BOOST_TEST(rs->pending_loads() == pending);
+}
+
+namespace {
+
+// A desc with a map of tags: the preflight reads each value as a reference.
+class tag_map_probe_desc : public desc::schema_desc<tag_map_probe_desc>
+{
+public:
+	static constexpr std::string_view __type = "tag_map_probe_desc";
+
+	std::map<std::string, res::tag> icons;
+
+	BOOST_DESCRIBE_CLASS(tag_map_probe_desc, (), (icons), (), ())
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(the_values_of_a_map_of_tags_are_checked_one_by_one)
+{
+	open_level();
+	descs->register_desc<tag_map_probe_desc>("tag_map_probe_desc");
+	const res::tag there = put("icon_there.png", "x");
+	scn::prefab_desc::prefab_comp_node probe;
+	probe.type_name = "tag_map_probe_desc";
+	probe.overrides["icons"] = json::object{ { "ok", there.string() }, { "gone", tag_of("icon_gone.png").string() }, { "bad", "user://saves/i.png" } };
+	crate().components["probe"] = std::move(probe);
+
+	const auto found = edt::run_play_preflight(state, checks());
+	const auto* gone = with_note(found, "/worlds/0/children/1/components/probe/icons/gone", "missing_resource");
+	BOOST_REQUIRE(gone);
+	BOOST_TEST((gone->item.severity == edt::problem_severity::error));
+	const auto* bad = with_note(found, "/worlds/0/children/1/components/probe/icons/bad", "reference");
+	BOOST_REQUIRE(bad);
+	BOOST_TEST((bad->item.severity == edt::problem_severity::error));
+	BOOST_TEST(!with_note(found, "/worlds/0/children/1/components/probe/icons/ok"));
 }
 
 // #720: the mesh node has a schema, so its geometry and material are tag fields: a reference the rule of #697 refuses and

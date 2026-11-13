@@ -576,7 +576,8 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 							// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
 							const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
 								|| field.kind == desc::field_kind::custom
-								|| (field.kind == desc::field_kind::array && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
+								|| ((field.kind == desc::field_kind::array || field.kind == desc::field_kind::map)
+									&& (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
 							if (!tag_field || (field.kind == desc::field_kind::custom && holds_plain_text(type, field.key))) continue;
 							const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
 							const json::value* held = patch.if_contains(key);
@@ -596,7 +597,17 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 									}
 								}
 							};
-							check_tag(check_tag, *held, pointer + "/" + res::json_pointer_token(key));
+							const std::string at = pointer + "/" + res::json_pointer_token(key);
+							if (field.kind == desc::field_kind::map) {
+								// The values of a map are the tags (or inline descs), one by one, never the map itself as one inline desc.
+								if (const json::object* entries = held->if_object()) {
+									for (const auto& entry : *entries) {
+										check_tag(check_tag, entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+									}
+								}
+								continue;
+							}
+							check_tag(check_tag, *held, at);
 						}
 					}
 				}

@@ -280,7 +280,7 @@ namespace desc
 			const T defaults{};
 			for_each_data_member<T>([&](std::string_view member, auto pointer) {
 				using member_type = std::remove_cvref_t<decltype(defaults.*pointer)>;
-				if constexpr (has_json_codec<member_type>) {
+				if constexpr (has_json_codec<member_type> || (detail::optional_traits<member_type>::value && has_json_codec<detail::unwrap_optional_t<member_type>>)) {
 					result.push_back(member);
 				}
 			});

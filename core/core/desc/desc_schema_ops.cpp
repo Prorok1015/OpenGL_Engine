@@ -171,21 +171,6 @@ namespace desc
 			}
 		}
 
-		std::string escape_token(std::string_view token)
-		{
-			std::string result;
-			for (char c : token) {
-				if (c == '~') {
-					result += "~0";
-				} else if (c == '/') {
-					result += "~1";
-				} else {
-					result.push_back(c);
-				}
-			}
-			return result;
-		}
-
 		const json::value* pointer_get(const json::value& root, const std::vector<std::string>& tokens, std::size_t first)
 		{
 			const json::value* node = &root;
@@ -535,12 +520,68 @@ namespace desc
 
 		std::shared_ptr<const enum_schema> resolve_enum(const field_schema& field, const schema_registry& resolve)
 		{
-			const bool wants_enum = field.kind == field_kind::enumeration || (field.kind == field_kind::array && field.element == field_kind::enumeration);
+			const bool wants_enum = field.kind == field_kind::enumeration || ((field.kind == field_kind::array || field.kind == field_kind::map) && field.element == field_kind::enumeration);
 			if (!wants_enum || field.ref_type.empty()) {
 				return nullptr;
 			}
 			const enum_schema* found = resolve.find_enum(field.ref_type);
 			return found ? std::make_shared<const enum_schema>(*found) : nullptr;
+		}
+
+		json::value zero_json(const field_ops& ops);
+
+		// Every field of a structure at its default, or at the empty value of its kind when it has none: what a null for the
+		// whole structure sets it back to.
+		json::value defaults_object(const schema_binding& nested)
+		{
+			json::value out(json::object{});
+			for (std::size_t i = 0; i < nested.schema->fields.size(); ++i) {
+				const field_schema& field = nested.schema->fields[i];
+				json::value value = field.default_value.is_null() ? zero_json(nested.ops[i]) : field.default_value;
+				if (!value.is_null()) {
+					json_pointer_set(out, field.key, std::move(value));
+				}
+			}
+			return out;
+		}
+
+		// What a field is set back to by a null in the file (field_schema::optional): its kind's empty value. Null: the null itself is
+		// the reset (an entity) or the field's default is (a custom value).
+		json::value zero_json(const field_ops& ops)
+		{
+			const auto zeros = [](std::size_t count, double last = 0.0) {
+				json::array out(count, json::value(0.0));
+				out.back() = last;
+				return json::value(std::move(out));
+			};
+			switch (ops.kind) {
+			case field_kind::boolean: return json::value(false);
+			case field_kind::i32:
+			case field_kind::i64: return json::value(std::int64_t{ 0 });
+			case field_kind::u32:
+			case field_kind::u64: return json::value(std::uint64_t{ 0 });
+			case field_kind::f32:
+			case field_kind::f64: return json::value(0.0);
+			case field_kind::vec2: return zeros(2);
+			case field_kind::vec3: return zeros(3);
+			case field_kind::vec4: return zeros(4);
+			case field_kind::quat:
+			case field_kind::color: return zeros(4, 1.0);
+			case field_kind::string:
+			case field_kind::res_tag:
+			case field_kind::desc_ref: return json::value(std::string_view{});
+			case field_kind::enumeration:
+				return ops.enumeration && !ops.enumeration->items.empty() ? json::value(ops.enumeration->items.front().name) : json::value();
+			case field_kind::structure: return ops.nested ? defaults_object(*ops.nested) : json::value(json::object{});
+			case field_kind::map: return json::value(json::object{});
+			case field_kind::array: return json::value(json::array{});
+			case field_kind::node_ref: return json::value(std::string_view{ "0000000000000000" });
+			// An entity reads a null as "no entity" itself; a custom value has its own default (the codec's T{}), and a runtime
+			// schema does not take a custom field that is optional without one (parse_type_schema).
+			case field_kind::entity:
+			case field_kind::custom: break;
+			}
+			return json::value();
 		}
 
 		void apply_defaults(const schema_binding& binding, dyn_ref ref)
@@ -564,7 +605,7 @@ namespace desc
 		void diff_untyped(const std::string& prefix, const json::value& base, const json::value& edited, std::vector<json_change>& out)
 		{
 			for (const auto& member : edited.as_object()) {
-				const std::string pointer = prefix + "/" + escape_token(member.key());
+				const std::string pointer = prefix + "/" + res::json_pointer_token(member.key());
 				const json::value* before = base.as_object().if_contains(member.key());
 				if (!before) {
 					out.push_back({ pointer, member.value() });
@@ -576,16 +617,46 @@ namespace desc
 			}
 		}
 
+		// A map is compared by key: a key that is new or changed is a record of its own, a key that is gone is a null one
+		// (the value read of a null removes the key, so the override takes it out of what the parent holds).
+		void diff_map(const std::string& pointer, const field_schema& field, const json::object& before, const json::object& after,
+			std::vector<json_change>& out)
+		{
+			const double tolerance = tolerance_for(field.element, field.element);
+			for (const auto& member : after) {
+				if (member.key().empty()) continue; // no such key in a map: the read refuses it
+				const std::string key_pointer = pointer + "/" + res::json_pointer_token(member.key());
+				const json::value* was = before.if_contains(member.key());
+				if (!was || !json_equal(*was, member.value(), tolerance)) {
+					out.push_back({ key_pointer, member.value() });
+				}
+			}
+			for (const auto& member : before) {
+				if (!member.key().empty() && !after.contains(member.key())) {
+					out.push_back({ pointer + "/" + res::json_pointer_token(member.key()), json::value() });
+				}
+			}
+		}
+
 		void diff_fields(const std::string& prefix, const type_schema& schema, const json::value& base, const json::value& edited,
 			const schema_registry* resolve, std::vector<json_change>& out)
 		{
 			for (const auto& field : schema.fields) {
 				const json::value* after = json_pointer_get(edited, field.key);
-				if (!after) {
-					continue;
-				}
 				const json::value* before = json_pointer_get(base, field.key);
 				const std::string pointer = prefix + field.key;
+				if (!after) {
+					// An optional that was there and is not any more is an override too: its absence in the record would
+					// read as "unchanged" and the parent's value would come back.
+					if (field.optional && before && !before->is_null()) {
+						out.push_back({ pointer, json::value() });
+					}
+					continue;
+				}
+				if (field.kind == field_kind::map && before && before->is_object() && after->is_object()) {
+					diff_map(pointer, field, before->as_object(), after->as_object(), out);
+					continue;
+				}
 				if (field.kind == field_kind::structure && before && before->is_object() && after->is_object()) {
 					const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr;
 					if (nested) {
@@ -622,6 +693,18 @@ namespace desc
 					if (field.optional && value.is_null()) {
 						return override_status::valid;
 					}
+					if (field.kind == field_kind::map && field.element == field_kind::structure && value.is_object()) {
+						if (const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr) {
+							for (const auto& entry : value.as_object()) {
+								if (entry.value().is_null()) continue;
+								if (!entry.value().is_object()) return override_status::bad_value;
+								if (const override_status status = check_members(*nested, {}, {}, entry.value().as_object(), nullptr, resolve).status;
+									status != override_status::valid) {
+									return status;
+								}
+							}
+						}
+					}
 					return json_fits(field.kind, field.element, enum_of(field, resolve), value, field.write == write_policy::null_if_empty) ? override_status::valid : override_status::bad_value;
 				}
 			}
@@ -649,7 +732,28 @@ namespace desc
 					}
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
-				case field_kind::map:
+				case field_kind::map: {
+					std::vector<std::string> tokens;
+					if (!json_pointer_tokens(rest, tokens) || tokens.empty()) {
+						return override_status::stale;
+					}
+					// A map has no empty key: the schema refuses it, as the read does.
+					if (tokens.front().empty()) {
+						return override_status::bad_value;
+					}
+					const type_schema* nested = field.element == field_kind::structure && resolve ? resolve->find(field.ref_type) : nullptr;
+					if (tokens.size() > 1) {
+						const std::size_t inner = rest.find('/', 1);
+						return nested && inner != std::string_view::npos ? check_override(*nested, rest.substr(inner), value, resolve) : override_status::valid;
+					}
+					if (value.is_null()) {
+						return override_status::valid;
+					}
+					if (nested) {
+						return value.is_object() ? check_members(*nested, {}, {}, value.as_object(), nullptr, resolve).status : override_status::bad_value;
+					}
+					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
+				}
 				case field_kind::custom:
 					return override_status::valid;
 				case field_kind::vec2:
@@ -676,7 +780,7 @@ namespace desc
 		{
 			for (const auto& member : patch) {
 				if (member.value().is_null()) continue;
-				const std::string here = local + "/" + escape_token(member.key());
+				const std::string here = local + "/" + res::json_pointer_token(member.key());
 				const json::value* now = current ? current->if_contains(member.key()) : nullptr;
 				const json::object* now_object = now && now->is_object() ? &now->as_object() : nullptr;
 
@@ -818,7 +922,7 @@ namespace desc
 				return false;
 			}
 			return std::ranges::all_of(value.as_object(), [&](const auto& item) {
-				return item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value());
+				return !item.key().empty() && (item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value()));
 			});
 		case field_kind::custom: return true;
 		}
@@ -1009,7 +1113,21 @@ namespace desc
 			}
 			read_context field_ctx = ctx;
 			field_ctx.field_pointer = field.key;
-			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx)) {
+			if (!value) {
+				continue;
+			}
+			bool fits = binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx);
+			// A null for an optional field is "not set": the field goes back to its default, or to the empty value of its kind
+			// when it has none (a std::optional reads the null itself: nullopt). Not a bad value, and the check of an override
+			// accepts the same null; under a __parent it takes the parent's value away.
+			if (!fits && field.optional && value->is_null()) {
+				const json::value reset = field.default_value.is_null() ? zero_json(binding.ops[i]) : field.default_value;
+				if (!reset.is_null()) {
+					binding.ops[i].from_json(binding.ops[i], obj, reset, field_ctx);
+				}
+				fits = true;
+			}
+			if (!fits) {
 				egLOG_WARN(log_category, "'{}': value of '{}' does not fit {}, keeping the current one", binding.schema->name, field.key, to_string(field.kind));
 				// The load goes on with the current value: a warning of the resource being loaded, if any (#595). The key is
 				// already a JSON pointer ("/diffuse", "/uniforms/albedo").
