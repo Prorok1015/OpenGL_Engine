@@ -106,7 +106,8 @@
 // Window of 4.0, still 4.0: #802 world_context's accessors are exports (its fields are reordered; layout_revision 1 in
 // gs_module_layout.h refuses a module built before). #786: every member of desc_system, schema_registry and dynamic_desc
 // that touches their containers is an export, and the non-template migrate_object/value/typed of 3.16 are gone
-// (layout_revision 2).
+// (layout_revision 2). #784/#738: the meta func loader_get of a component returns its ecs::sandbox_emplace<T>, the
+// loop and the remap of entity fields are the engine's; meta_archive and snapshot_get are gone (layout_revision 3).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

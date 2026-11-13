@@ -9,6 +9,8 @@
 #include <snk/platform/plt_process.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_command_buffer.hpp>
+#include <snk/ecs/ecs_component.h>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
@@ -334,6 +336,40 @@ BOOST_AUTO_TEST_CASE(a_component_the_library_registers_by_its_schema_spawns_and_
 	BOOST_REQUIRE(after != nullptr);
 	BOOST_TEST(!after->catalog().find(dll_game::schema_component_name));
 	BOOST_TEST(!after->descs().is_registered(dll_game::schema_component_name));
+}
+
+// #738, #784: a C++ component of the module spawned through the sandbox reaches the world by the engine's code and the
+// module's adapter; its entity field names the world entity, and the module's on_construct observer sees that id already.
+BOOST_AUTO_TEST_CASE(a_module_component_from_the_sandbox_names_world_entities_when_it_is_placed)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", DLL_LEVEL)));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	// Observers hear nothing in Edit.
+	contexts().level_set().set_mode(ecs::run_mode::play);
+	entt::registry& reg = world->state();
+
+	auto& sandbox = reg.ctx().contains<ecs::entity_spawner>() ? reg.ctx().get<ecs::entity_spawner>() : reg.ctx().emplace<ecs::entity_spawner>();
+	const auto target = sandbox.create();
+	const auto holder = sandbox.create();
+	sandbox.emplace<dll_game::dll_link>(holder, dll_game::dll_link{ ecs::to_main(target), 5 });
+	scn::world_context::apply_commands(reg, &layer->meta());
+	// What the observer queued through the changer.
+	scn::world_context::apply_commands(reg, &layer->meta());
+
+	const auto view = reg.view<const dll_game::dll_link>();
+	BOOST_REQUIRE(view.size() == 1u);
+	const entt::entity moved = view.front();
+	const dll_game::dll_link& link = view.get<const dll_game::dll_link>(moved);
+	BOOST_TEST(link.value == 5);
+	BOOST_TEST(reg.valid(link.target));
+	BOOST_TEST((link.target != moved));
+	BOOST_REQUIRE(reg.all_of<dll_game::dll_link_seen>(moved));
+	BOOST_TEST((reg.get<dll_game::dll_link_seen>(moved).target == link.target));
 }
 
 // #789: the types a module marks as data documents, from its own code (register_document<T>) and through the export of

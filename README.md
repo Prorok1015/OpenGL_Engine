@@ -166,7 +166,7 @@ Built on [EnTT](https://github.com/skypjack/entt) with engine-specific extension
 | Command Buffer | `sandbox_registry` for deferred spawn/despawn operations |
 | Invoker | Automatic dependency resolution from registry context |
 | Multi-World | Contexts (one registry each) grouped into sets; cross-context data goes through the set channel, see [WORLD_MESSAGING.md](docs/roadmap/design/WORLD_MESSAGING.md) |
-| Serialization | `sandbox_loader_archive` with entity remapping |
+| Serialization | Sandbox commands moved into the world by the engine, entity fields remapped by the component's meta |
 
 ### Resource System
 
