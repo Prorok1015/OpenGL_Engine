@@ -12,16 +12,6 @@ bool inp::action_map::add(std::string name, std::vector<action_binding> bindings
 	return true;
 }
 
-bool inp::action_map::add(std::string name, std::vector<action_binding_v1> bindings)
-{
-	std::vector<action_binding> converted;
-	converted.reserve(bindings.size());
-	for (const action_binding_v1& binding : bindings) {
-		std::visit([&](auto value) { converted.emplace_back(value); }, binding);
-	}
-	return add(std::move(name), std::move(converted));
-}
-
 inp::action_id inp::action_map::id(std::string_view name) const
 {
 	const auto it = std::ranges::find_if(m_actions, [&](const action& a) { return a.name == name; });

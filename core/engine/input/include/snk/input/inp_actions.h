@@ -22,18 +22,15 @@ namespace inp
 	using action_id = std::uint32_t;
 	inline constexpr action_id invalid_action = std::numeric_limits<action_id>::max();
 
-	// What a binding of version 3.15 was. Modules built against it still call the overloads that take it (SNK_API below keeps
-	// their symbols), and read bindings as 2 bytes with the keyboard at index 0 and the mouse at index 1.
-	using action_binding_v1 = std::variant<KEYBOARD_BUTTONS, MOUSE_BUTTONS>;
-	// Alternatives are appended only: modules built before the gamepad ones read this array by the size and the indices of
-	// action_binding_v1 (SNK_MODULE_API_VERSION 3.16). One byte of value keeps it two bytes; a threshold does not fit, so it
-	// lives in gamepad_config.
+	// Alternatives are appended only: modules built before the gamepad ones (SNK_MODULE_API_VERSION 3.16) read this array
+	// by the size and the indices of the keyboard and mouse. One byte of value keeps it two bytes; a threshold does not fit,
+	// so it lives in gamepad_config.
 	using action_binding = std::variant<KEYBOARD_BUTTONS, MOUSE_BUTTONS, GAMEPAD_BUTTONS, GAMEPAD_AXES>;
-	static_assert(sizeof(action_binding) == sizeof(action_binding_v1) && alignof(action_binding) == alignof(action_binding_v1),
-		"action_binding must keep the size of version 3.15: modules read the bindings of an action by it");
+	static_assert(sizeof(action_binding) == 2 && alignof(action_binding) == 1,
+		"action_binding keeps two bytes: modules read the bindings of an action by its size");
 	static_assert(std::is_same_v<std::variant_alternative_t<0, action_binding>, KEYBOARD_BUTTONS>
 		&& std::is_same_v<std::variant_alternative_t<1, action_binding>, MOUSE_BUTTONS>,
-		"the keyboard and mouse alternatives keep their indices (0, 1) for modules of 3.15");
+		"the keyboard and mouse alternatives keep their indices (0, 1)");
 
 	struct action
 	{
@@ -46,10 +43,6 @@ namespace inp
 	public:
 		// Ids follow the order of add(). False, and nothing added, for an empty name or one already there.
 		bool add(std::string name, std::vector<action_binding> bindings);
-		// A braced list of bindings: without this one it would fit both vectors.
-		bool add(std::string name, std::initializer_list<action_binding> bindings) { return add(std::move(name), std::vector<action_binding>(bindings)); }
-		// For modules of 3.15: the symbol they call is kept. Converts to the current bindings.
-		bool add(std::string name, std::vector<action_binding_v1> bindings);
 
 		// Look an action up once (at init, on the main thread: the warned names are kept without a lock) and keep its
 		// id. An unknown name gives invalid_action and a warning, once per name.
