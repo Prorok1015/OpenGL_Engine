@@ -4,6 +4,7 @@
 #include <snk/render/rnd_frame_context.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_gpu_blocks.h>
+#include <snk/resource/res_asset_meta.h>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -384,7 +385,8 @@ BOOST_AUTO_TEST_CASE(TheLightCountAndTheBindingsComeFromTheEngineNotFromTheSourc
 	const fs::path dir = fs::path{ SNK_CORE_RES_DIR } / "shaders";
 	std::size_t files = 0;
 	for (const auto& entry : fs::directory_iterator(dir)) {
-		if (!entry.is_regular_file()) {
+		// A .resource next to each shader holds its asset ID (#768), not GLSL.
+		if (!entry.is_regular_file() || res::is_asset_meta_name(entry.path().filename().string())) {
 			continue;
 		}
 		++files;

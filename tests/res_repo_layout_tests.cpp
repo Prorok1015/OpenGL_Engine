@@ -1,11 +1,15 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include "test_temp_dir.hpp"
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <regex>
 #include <set>
@@ -15,7 +19,7 @@
 
 // The layout of the shipped resources (#163): res:// holds game resources only (no stray test files; the fixtures that
 // stay are listed one by one), and every res:// / engine:// / edt:// path that shipped descs and engine sources
-// mention resolves to a file.
+// mention resolves to a file. Every file of the repository's resource trees has its .resource (#768).
 
 #ifndef SNK_TEST_PROJECT_DIR
 #error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
@@ -50,6 +54,9 @@ const fs::path core_res{ SNK_CORE_RES_DIR };
 const fs::path project_res = fs::path{ SNK_TEST_PROJECT_DIR } / "res";
 const fs::path editor_data{ SNK_EDITOR_DATA_DIR };
 const fs::path repo_root = core_res.parent_path().parent_path();
+const fs::path static_game_res = repo_root / "tests" / "static_game" / "project" / "res";
+// res::is_ignored_asset_name per name; tools/ci/asset_ids.py --self-test checks its port against the same table.
+const fs::path ignored_names_table = repo_root / "tests" / "data" / "asset_ignored_names.txt";
 
 resource_layout shipped_layout()
 {
@@ -83,6 +90,11 @@ bool looks_like_a_test_file(const std::string& segment)
 	return name == "block.png" || name == "milla.bmp" || name == "window.png";
 }
 
+bool is_sidecar_name(std::string_view name)
+{
+	return name.size() > res::asset_meta_suffix.size() && res::is_asset_meta_name(name);
+}
+
 // Files below `root` (the samples submodule aside) with a test-like name in the path that are not allowed fixtures.
 std::vector<std::string> stray_test_files(const fs::path& root, const std::set<std::string>& allowed)
 {
@@ -91,9 +103,14 @@ std::vector<std::string> stray_test_files(const fs::path& root, const std::set<s
 		if (!entry.is_regular_file()) continue;
 		const fs::path rel = entry.path().lexically_relative(root);
 		if (*rel.begin() == "samples") continue;
+		const std::string generic = rel.generic_string();
+		// The .resource of an allowed fixture is its ID (#768), allowed with it.
+		const std::string owner = is_sidecar_name(rel.filename().string())
+			? generic.substr(0, generic.size() - res::asset_meta_suffix.size())
+			: generic;
 		const bool test_like = std::ranges::any_of(rel, [](const fs::path& part) { return looks_like_a_test_file(part.string()); });
-		if (test_like && !allowed.contains(rel.generic_string())) {
-			found.push_back(rel.generic_string());
+		if (test_like && !allowed.contains(owner)) {
+			found.push_back(generic);
 		}
 	}
 	std::ranges::sort(found);
@@ -116,6 +133,67 @@ bool is_below(const fs::path& path, const fs::path& dir)
 bool has_file(const std::vector<fs::path>& roots, std::string_view rel)
 {
 	return std::ranges::any_of(roots, [&](const fs::path& root) { return fs::is_regular_file(root / rel); });
+}
+
+// The files of a resource tree as the editor's asset database walks it (tools/ci/asset_ids.py walks the same way): hidden
+// and ignored names are neither listed nor entered, links are not followed, a git submodule (a .git inside, or the
+// samples submodule, update = none, that may be an empty folder) is left out. Paths relative to the root, sorted.
+struct tree_files
+{
+	std::vector<fs::path> assets;
+	std::vector<fs::path> sidecars;
+};
+
+tree_files walk_tree(const fs::path& root)
+{
+	tree_files out;
+	for (auto it = fs::recursive_directory_iterator(root); it != fs::recursive_directory_iterator(); ++it) {
+		const std::string name = it->path().filename().string();
+		if (it->is_symlink()) {
+			continue;
+		}
+		const fs::path rel = it->path().lexically_relative(root);
+		if (it->is_directory()) {
+			if (res::is_ignored_asset_name(name) || fs::exists(it->path() / ".git") || rel == "samples") {
+				it.disable_recursion_pending();
+			}
+			continue;
+		}
+		if (!it->is_regular_file()) {
+			continue;
+		}
+		if (is_sidecar_name(name)) {
+			if (!res::is_ignored_asset_name(std::string_view{ name }.substr(0, name.size() - res::asset_meta_suffix.size()))) {
+				out.sidecars.push_back(rel);
+			}
+		} else if (!res::is_ignored_asset_name(name)) {
+			out.assets.push_back(rel);
+		}
+	}
+	std::ranges::sort(out.assets);
+	std::ranges::sort(out.sidecars);
+	return out;
+}
+
+// The "__guid" of a desc's root object when it is an asset ID: the ID its .resource holds (EPIC-57 section 8).
+std::optional<std::string> desc_root_guid(const fs::path& path)
+{
+	std::ifstream in(path, std::ios::binary);
+	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	boost::system::error_code ec;
+	const json::value document = json::parse(text, ec);
+	if (ec || !document.is_object()) {
+		return std::nullopt;
+	}
+	const json::value* guid = document.as_object().if_contains("__guid");
+	if (!guid || !guid->is_string()) {
+		return std::nullopt;
+	}
+	const std::optional<res::asset_id> id = res::asset_id_from_text(guid->as_string());
+	if (!id || id->is_nil()) {
+		return std::nullopt;
+	}
+	return res::to_text(*id);
 }
 
 // "protocol://path" -> problem text, or empty when the reference resolves (or is not a file reference).
@@ -237,6 +315,79 @@ BOOST_AUTO_TEST_CASE(EveryAllowedFixture_StillExists)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(EveryFileOfTheRepositoryTrees_HasItsResourceInTheEngineForm)
+{
+	std::map<std::string, std::string> holders; // asset ID -> the .resource that holds it
+	for (const fs::path& root : { core_res, project_res, static_game_res }) {
+		const tree_files files = walk_tree(root);
+		BOOST_TEST(!files.assets.empty(), "no files in " << root.generic_string());
+
+		// A .resource belongs to its file in any letter case, as in the editor.
+		std::map<std::string, fs::path> assets;
+		for (const fs::path& asset : files.assets) {
+			assets.emplace(lower(asset.generic_string()), asset);
+		}
+		std::set<std::string> owned;
+		for (const fs::path& sidecar : files.sidecars) {
+			const std::string where = (root / sidecar).generic_string();
+			const std::string key = lower(sidecar.generic_string());
+			const std::string owner = key.substr(0, key.size() - res::asset_meta_suffix.size());
+			owned.insert(owner);
+			const auto asset = assets.find(owner);
+			BOOST_TEST((asset != assets.end()), where << ": no file next to it");
+
+			const auto bytes = res::read_regular_file_capped(root / sidecar, 64 * 1024);
+			if (!bytes) {
+				BOOST_ERROR(where << ": not readable, or more than 64 KiB");
+				continue;
+			}
+			const std::string text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+			const res::asset_meta_result meta = res::read_asset_meta(text);
+			if (!meta) {
+				BOOST_ERROR(where << ": " << meta.error.field_path << ": " << meta.error.message);
+				continue;
+			}
+			BOOST_TEST(res::write_asset_meta(*meta.meta) == text, where << ": not in the form res::write_asset_meta writes");
+
+			const std::string id = res::to_text(meta.meta->guid);
+			const auto [holder, fresh] = holders.emplace(id, where);
+			BOOST_TEST(fresh, where << ": " << id << " is the ID of " << holder->second << " too");
+			if (asset != assets.end() && lower(asset->second.extension().string()) == ".desc") {
+				if (const auto guid = desc_root_guid(root / asset->second)) {
+					BOOST_TEST(id == *guid, where << ": holds " << id << ", its desc has \"__guid\" " << *guid);
+				}
+			}
+		}
+		for (const auto& [key, asset] : assets) {
+			BOOST_TEST(owned.contains(key), (root / asset).generic_string() << ": no .resource (tools/ci/asset_ids.py --write makes it)");
+		}
+	}
+	BOOST_TEST(holders.size() >= 40u);
+}
+
+BOOST_AUTO_TEST_CASE(IgnoredAssetNames_MatchTheTableTheScriptChecks)
+{
+	std::ifstream in(ignored_names_table, std::ios::binary);
+	BOOST_TEST_REQUIRE(in.is_open(), "cannot open " << ignored_names_table.generic_string());
+	std::size_t rows = 0;
+	for (std::string line; std::getline(in, line);) {
+		if (!line.empty() && line.back() == '\r') {
+			line.pop_back();
+		}
+		if (line.empty() || line.front() == '#') {
+			continue;
+		}
+		const std::size_t tab = line.rfind('\t');
+		BOOST_TEST_REQUIRE(tab != std::string::npos, "expected \"<name>\\t<0|1>\": " << line);
+		const std::string name = line.substr(0, tab);
+		const std::string flag = line.substr(tab + 1);
+		BOOST_TEST_REQUIRE((flag == "0" || flag == "1"), "expected 0 or 1: " << line);
+		BOOST_TEST(res::is_ignored_asset_name(name) == (flag == "1"), "res::is_ignored_asset_name(\"" << name << "\")");
+		++rows;
+	}
+	BOOST_TEST(rows >= 20u);
+}
+
 BOOST_AUTO_TEST_CASE(EveryResEngineAndEdtPathInShippedDescs_ResolvesToAFile)
 {
 	const auto problems = dangling_desc_references(shipped_layout(), { core_res, project_res, editor_data });
@@ -263,13 +414,15 @@ BOOST_AUTO_TEST_CASE(StrayTestFiles_CatchesNewTestFilesAndFoldersAndSparesTheRes
 	dir.write("Bench_Mesh.desc", "{}");
 	dir.write("milla.bmp", "x");
 	dir.write("levels/smoke_level.desc", "{}");
+	dir.write("levels/smoke_level.desc.resource", "{}");
+	dir.write("levels/smoke_extra.desc.RESOURCE", "{}");
 	dir.write("latest.png", "x");
 	dir.write("shaders/templates/normal.frag", "x");
 	dir.write("samples/test_model.glb", "x");
 
 	const auto found = stray_test_files(dir.path(), { "levels/smoke_level.desc" });
 
-	BOOST_TEST((found == std::vector<std::string>{ "Bench_Mesh.desc", "foo_test.desc", "levels/smoke_extra.desc", "milla.bmp", "test3.png", "tests/data.txt" }), joined(found));
+	BOOST_TEST((found == std::vector<std::string>{ "Bench_Mesh.desc", "foo_test.desc", "levels/smoke_extra.desc", "levels/smoke_extra.desc.RESOURCE", "milla.bmp", "test3.png", "tests/data.txt" }), joined(found));
 }
 
 BOOST_AUTO_TEST_CASE(DanglingDescReferences_CatchesMissingFilesAndUnknownProtocols)
