@@ -166,6 +166,41 @@ BOOST_AUTO_TEST_CASE(a_prefab_node_copied_in_a_module_outlives_the_module)
 	owned.reset();
 }
 
+// #802: module code reads a world through world_context's accessors, the engine's exports: the same as the engine reads.
+BOOST_AUTO_TEST_CASE(a_module_reads_a_world_through_the_exported_accessors)
+{
+	scn::world_context world(7, "probe");
+	world.set_kind(scn::context_kind::play);
+	world.set_desc_index(3);
+	world.set_input_layer(1);
+	world.set_extract(false);
+	world.set_mode(ecs::run_mode::pause);
+	world.set_systems({ "a", "b" });
+	const std::string expected = std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", world.get_id(), world.get_name(),
+		static_cast<int>(world.kind()), world.desc_index(), world.input_layer(), world.extract(),
+		static_cast<int>(world.mode()), world.time_scale(), 2);
+	BOOST_REQUIRE(expected.starts_with("7|probe|"));
+
+	using summary_fn = void (*)(const scn::world_context*, char*, std::size_t);
+	char summary[256] = {};
+#if defined(_WIN32)
+	HMODULE library = ::LoadLibraryW(std::filesystem::path(SNK_TEST_COPY_PREFAB_DLL_PATH).c_str());
+	BOOST_REQUIRE(library != nullptr);
+	const auto summarize = reinterpret_cast<summary_fn>(::GetProcAddress(library, "snk_test_world_summary"));
+	BOOST_REQUIRE(summarize != nullptr);
+	summarize(&world, summary, sizeof(summary));
+	BOOST_REQUIRE(::FreeLibrary(library));
+#else
+	void* library = ::dlopen(SNK_TEST_COPY_PREFAB_DLL_PATH, RTLD_NOW | RTLD_LOCAL);
+	BOOST_REQUIRE(library != nullptr);
+	const auto summarize = reinterpret_cast<summary_fn>(::dlsym(library, "snk_test_world_summary"));
+	BOOST_REQUIRE(summarize != nullptr);
+	summarize(&world, summary, sizeof(summary));
+	BOOST_REQUIRE(::dlclose(library) == 0);
+#endif
+	BOOST_TEST(std::string{ summary } == expected);
+}
+
 BOOST_FIXTURE_TEST_SUITE(app_module_dll_tests, test_util::module_env)
 
 BOOST_AUTO_TEST_CASE(a_module_library_fills_its_layer_and_its_worlds_run)
