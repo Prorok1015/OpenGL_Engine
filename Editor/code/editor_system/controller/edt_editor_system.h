@@ -43,6 +43,7 @@ namespace inp  { class input_router; }
 namespace cmd  { class command_registry; }
 
 namespace edt {
+	class asset_database;
 	class agent_server;
 	class agent_access;
 	class agent_policy_model;
@@ -206,6 +207,8 @@ namespace edt {
 		agent_server* agent_server_object() { return m_agent_server.get(); }
 		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
 		agent_access* agent_access_object() { return m_agent_access.get(); }
+		// The asset database of the open project (#760); null without a project.
+		asset_database* assets() { return m_assets.get(); }
 
 	private:
 		// Editor layer & panels
@@ -302,6 +305,8 @@ namespace edt {
 		std::unique_ptr<edt::vcs_service> m_vcs;
 		// After the service whose write observer reaches it, so it is destroyed first.
 		std::unique_ptr<edt::vcs::repository_watcher> m_repo_watcher;
+		// The asset database (#760): follows res:// from init, writes its cache when it goes.
+		std::unique_ptr<edt::asset_database> m_assets;
 		// Forge tokens (#458): the OS store, shared with the forge service (and the settings UI later). Its calls block: only jobs
 		// make them.
 		std::shared_ptr<platform::secret_store> m_secrets;
