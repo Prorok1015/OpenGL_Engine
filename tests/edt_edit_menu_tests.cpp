@@ -13,6 +13,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <boost/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -205,6 +206,70 @@ BOOST_AUTO_TEST_CASE(accepting_the_agents_changes_clears_their_marks)
 	edt::policy_layer allowed;
 	allowed.commands["edit.accept_agent_changes"] = cmd::policy_mode::allow;
 	BOOST_TEST((edt::effective_mode(*accept, allowed, {}).mode == cmd::policy_mode::deny));
+}
+
+// The asset fixes of Problems (S57-4) are undone only on purpose: Edit > Undo Asset Action, never Edit > Undo.
+struct asset_undo_fixture : edit_menu_fixture
+{
+	std::string own_label(const std::string& id)
+	{
+		for (const auto& item : own.items("Edit")) {
+			if (item.id == id) {
+				return item.label;
+			}
+		}
+		return {};
+	}
+
+	const std::string fix = "Create .resource for res://a.png";
+	std::optional<std::string> pending = fix;
+	int undone = 0;
+	edt::action_registry own;
+	std::vector<edt::registration> own_menus = edt::register_builtin_menus(own);
+	std::vector<edt::registration> own_actions = edt::register_edit_actions(own, documents, dialogs, {},
+		[this] { return pending; },
+		[this] {
+			++undone;
+			pending.reset();
+			return true;
+		});
+};
+
+BOOST_FIXTURE_TEST_CASE(undo_never_takes_back_an_asset_action, asset_undo_fixture)
+{
+	BOOST_TEST(own_label("edit.undo") == "Undo");
+	BOOST_TEST(!own.is_enabled("edit.undo"));
+	const auto result = own.invoke("edit.undo", boost::json::object{});
+	if (result.ok) {
+		BOOST_TEST(!result.value.as_object().at("applied").as_bool());
+	}
+	BOOST_TEST(undone == 0);
+	BOOST_TEST((pending == fix));
+	BOOST_TEST(own_label("edit.undo_asset_action") == "Undo Asset Action: " + fix);
+}
+
+BOOST_FIXTURE_TEST_CASE(undo_asset_action_takes_back_the_last_asset_action, asset_undo_fixture)
+{
+	BOOST_REQUIRE(own.is_enabled("edit.undo_asset_action"));
+	const auto result = own.invoke("edit.undo_asset_action", boost::json::object{});
+	BOOST_REQUIRE(result.ok);
+	BOOST_TEST(result.value.as_object().at("applied").as_bool());
+	BOOST_TEST(result.value.as_object().at("label").as_string() == fix);
+	BOOST_TEST(undone == 1);
+	BOOST_TEST(!own.is_enabled("edit.undo_asset_action"));
+	BOOST_TEST(own_label("edit.undo_asset_action") == "Undo Asset Action");
+	const auto* command = own.find("edit.undo_asset_action");
+	BOOST_REQUIRE(command);
+	BOOST_TEST((command->category == cmd::agent_category::not_for_agents));
+	edt::policy_layer allowed;
+	allowed.commands["edit.undo_asset_action"] = cmd::policy_mode::allow;
+	BOOST_TEST((edt::effective_mode(*command, allowed, {}).mode == cmd::policy_mode::deny));
+	// The document's history is its own.
+	rename("b");
+	BOOST_TEST(!own.is_enabled("edit.undo_asset_action"));
+	BOOST_REQUIRE(own.invoke("edit.undo", boost::json::object{}).ok);
+	BOOST_TEST(name() == "a");
+	BOOST_TEST(undone == 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

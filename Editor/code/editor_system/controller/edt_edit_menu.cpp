@@ -48,7 +48,8 @@ namespace {
 }
 
 std::vector<edt::registration> edt::register_edit_actions(
-	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active)
+	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active,
+	std::function<std::optional<std::string>()> asset_undo_label, std::function<bool()> asset_undo)
 {
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
@@ -96,6 +97,28 @@ std::vector<edt::registration> edt::register_edit_actions(
 		},
 		.result_schema = applied_schema(),
 		.enabled = [redo_target, idle] { return idle() && redo_target() && !redo_target()->edits_locked() && redo_target()->next_redo_entry().has_value(); } }));
+
+	// The asset fixes of Problems (S57-4) are undone only on purpose, never by Ctrl+Z: no shortcut; the person's own, so
+	// no policy file hands it to an agent.
+	if (asset_undo_label && asset_undo) {
+		out.push_back(actions.add({ .id = "edit.undo_asset_action", .label = "Undo Asset Action", .menu_path = "Edit",
+			.dynamic_label = [asset_undo_label] {
+				const std::optional<std::string> label = asset_undo_label();
+				return label ? "Undo Asset Action: " + *label : std::string{ "Undo Asset Action" };
+			},
+			.execute = [asset_undo_label, asset_undo](const json::value&) {
+				const std::optional<std::string> label = asset_undo_label();
+				const bool undone = label && asset_undo();
+				json::object out{ { "applied", undone } };
+				if (undone) {
+					out["label"] = *label;
+				}
+				return action_result::success(std::move(out));
+			},
+			.result_schema = applied_schema(),
+			.enabled = [idle, asset_undo_label] { return idle() && asset_undo_label().has_value(); },
+			.category = cmd::agent_category::not_for_agents }));
+	}
 
 	// The person has looked at what the agent did: no more "changed by agent" marks. Not for agents themselves.
 	out.push_back(actions.add({ .id = "edit.accept_agent_changes", .label = "Accept Agent Changes", .menu_path = "Edit",

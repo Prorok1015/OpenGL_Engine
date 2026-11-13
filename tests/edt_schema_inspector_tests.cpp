@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "edt_inspector_panel.h"
 #include "edt_schema_inspector.h"
+#include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/editor/edt_inspector_registry.h>
@@ -11,7 +12,10 @@
 #include <glm/glm.hpp>
 #include <imgui.h>
 #include <algorithm>
+#include <boost/describe.hpp>
 #include <boost/json.hpp>
+#include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -56,6 +60,42 @@ namespace
 			{ "name": "loose", "kind": "f32", "default": null }
 		]
 	})";
+
+	// A map has no blob layout, so it comes from a C++ type: the schema is generated, not parsed.
+	enum class speed_value { slow, fast };
+	BOOST_DESCRIBE_ENUM(speed_value, slow, fast)
+
+	struct limits_value
+	{
+		float min = 0.0f;
+		float max = 1.0f;
+	};
+	BOOST_DESCRIBE_STRUCT(limits_value, (), (min, max))
+
+	struct weights_component
+	{
+		std::map<std::string, float> weights;
+		std::map<std::string, std::string> labels;
+		std::map<std::string, limits_value> zones;
+		std::map<std::string, speed_value> speeds;
+		std::optional<float> extra;
+		std::optional<float> bonus = 2.0f;
+	};
+	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels, zones, speeds, extra, bonus))
+}
+
+namespace desc
+{
+	template<>
+	inline constexpr auto field_attrs<weights_component> = attrs(f("zones").ref("edt.limits"), f("speeds").ref("edt_mode"));
+}
+
+namespace
+{
+	desc::type_schema weights_schema()
+	{
+		return desc::schema_generator<weights_component>::make("edt.weights", 1, desc::schema_kind::component);
+	}
 
 	json::object parse(const char* text)
 	{
@@ -665,6 +705,97 @@ BOOST_AUTO_TEST_CASE(SkyboxInspectorFieldComesFromTheSchema)
 	const drawn_list drawn = draw_twice(imgui, *schema, descs->schemas(), value, &changed);
 	BOOST_CHECK(widget_at(drawn, "/material") == ui::widget::asset);
 	BOOST_CHECK(!changed);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_RemovesAnInheritedKeyWithANullAndAnOwnKeyWithNothing)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "weights": { "a": 1.0, "b": 2.0 } })");
+	json::object overrides;
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
+
+	json::value before = ui::compose(schema, registry, { &parent, &overrides });
+	json::value after = before;
+	after.at_pointer("/weights").as_object().erase("a");
+	after.at_pointer("/weights").as_object().emplace("c", 3.0);
+	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, schema, registry, base, before, after), 2u);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": null, "c": 3.0 } })"));
+
+	// the own key goes again: no record, no empty object left behind; the inherited key stays removed
+	before = ui::compose(schema, registry, { &parent, &overrides });
+	after = before;
+	after.at_pointer("/weights").as_object().erase("c");
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": null } })"));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_ClearingAnOptionalThatHasAnInitializer_KeepsTheNullRecord)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	json::object overrides = parse(R"({ "bonus": 3.0 })");
+	const json::value base = ui::compose(schema, registry, { }, false);
+	const json::value before = ui::compose(schema, registry, { &overrides });
+	json::value after = before;
+	after.as_object().erase("bonus");
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	// without the record the read gives the initializer (2.0): the clear must stay written
+	BOOST_CHECK(overrides == parse(R"({ "bonus": null })"));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMapWithAnEmptyKey_WritesNothing)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	json::object overrides = parse(R"({ "weights": { "a": 1.0 } })");
+	const json::value base = ui::compose(schema, registry, { }, false);
+	const json::value before = ui::compose(schema, registry, { &overrides });
+	json::value after = before;
+	after.at_pointer("/weights").as_object().emplace("", 2.0);
+	after.at_pointer("/weights").as_object().emplace("fine", 3.0);
+	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, schema, registry, base, before, after), 0u);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": 1.0 } })"));
+}
+
+// Every kind of edit of a map, written through apply_edit and read back as the editor reads it (parent + overrides).
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_RoundTripsThroughTheOverrides)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "weights": { "a": 1.0, "b": 2.0 }, "zones": { "z": { "min": 0.0, "max": 2.0 } } })");
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
+
+	const auto without_null_keys = [](json::value shown) {
+		for (const char* name : { "weights", "zones" }) {
+			json::object& entries = shown.at(name).as_object();
+			for (auto it = entries.begin(); it != entries.end();) {
+				it = it->value().is_null() ? entries.erase(it) : std::next(it);
+			}
+		}
+		return shown;
+	};
+	const auto edit_and_check = [&](const char* what, const auto& change) {
+		BOOST_TEST_CONTEXT(what) {
+			json::object overrides;
+			const json::value before = ui::compose(schema, registry, { &parent, &overrides });
+			json::value after = before;
+			change(after);
+			BOOST_CHECK(ui::apply_edit(overrides, schema, registry, base, before, after) > 0u);
+			BOOST_CHECK(without_null_keys(ui::compose(schema, registry, { &parent, &overrides })) == after);
+		}
+	};
+	edit_and_check("add a key", [](json::value& v) { v.at_pointer("/weights").as_object().emplace("c", 3.0); });
+	edit_and_check("change a key", [](json::value& v) { v.at_pointer("/weights/a") = 9.0; });
+	edit_and_check("remove an inherited key", [](json::value& v) { v.at_pointer("/weights").as_object().erase("b"); });
+	edit_and_check("keys with a slash and a tilde", [](json::value& v) {
+		v.at_pointer("/weights").as_object().emplace("a/b", 1.5);
+		v.at_pointer("/weights").as_object().emplace("x~y", 2.5);
+	});
+	edit_and_check("a map of structures", [](json::value& v) {
+		v.at_pointer("/zones/z/max") = 7.0;
+		v.at_pointer("/zones").as_object().emplace("w", parse(R"({ "min": 1.0, "max": 5.0 })"));
+	});
 }
 
 BOOST_AUTO_TEST_SUITE_END()

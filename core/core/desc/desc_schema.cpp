@@ -145,8 +145,8 @@ namespace desc
 				return json::value(std::move(identity));
 			}
 			case field_kind::string:
-			case field_kind::res_tag:
-			case field_kind::node_ref: return json::value(std::string_view{});
+			case field_kind::res_tag: return json::value(std::string_view{});
+			case field_kind::node_ref: return json::value(std::string_view{ "0000000000000000" });
 			case field_kind::array: return json::value(json::array{});
 			case field_kind::map: return json::value(json::object{});
 			default: return json::value();
@@ -320,6 +320,10 @@ namespace desc
 				field.default_value = json::value(normalize_default(field.kind, field.element, *value, where), json::storage_ptr{});
 			} else {
 				field.default_value = zero_default(field.kind);
+			}
+
+			if (field.optional && field.kind == field_kind::custom && field.default_value.is_null()) {
+				fail(where, "a custom field cannot be optional without a 'default': a null would have nothing to reset it to");
 			}
 
 			if (const json::value* range = find_value(object, "range")) {
@@ -682,10 +686,9 @@ namespace desc
 			case field_kind::structure:
 				return structure_problem(field.ref_type);
 			case field_kind::map:
-				return std::format("field '{}' is a map, which a document does not take yet: the parents' keys are merged one by one, and the diff and the override checks of a map come with #790", where);
 			case field_kind::array:
 				if (field.element == field_kind::custom) {
-					return std::format("field '{}' is a list of custom values, so the schema does not describe its elements", where);
+					return std::format("field '{}' is a {} of custom values, so the schema does not describe its elements", where, field.kind == field_kind::map ? "map" : "list");
 				}
 				if (field.element == field_kind::structure) {
 					return structure_problem(field.ref_type);

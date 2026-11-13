@@ -462,6 +462,9 @@ namespace desc
 				}
 				M parsed = value;
 				for (const auto& member : in.as_object()) {
+					if (member.key().empty()) {
+						return false;
+					}
 					const std::string key{ member.key() };
 					if (member.value().is_null()) {
 						parsed.erase(key);
