@@ -132,3 +132,53 @@ res::asset_walk_pairing res::pair_asset_metas(const std::vector<asset_walk_file>
 	}
 	return out;
 }
+
+bool res::asset_entry_redirects(const fs::directory_entry& entry)
+{
+	std::error_code ec;
+	if (entry.is_symlink(ec) || ec) return true;
+#if defined(_WIN32)
+	WIN32_FIND_DATAW data{};
+	// The \\?\ prefix lifts MAX_PATH for an absolute path, and turns off the normalization that would make a '/' a
+	// separator: the path goes with '\' only.
+	std::wstring query = fs::path(entry.path()).make_preferred().native();
+	if (entry.path().is_absolute() && !query.starts_with(LR"(\\?\)")) query.insert(0, LR"(\\?\)");
+	const HANDLE found = ::FindFirstFileW(query.c_str(), &data);
+	if (found == INVALID_HANDLE_VALUE) {
+		egLOG_WARN("assets", "{}: cannot be inspected ({}), left out of the asset walk", fs_paths::utf8_of(entry.path()),
+			std::system_category().message(static_cast<int>(::GetLastError())));
+		return true;
+	}
+	::FindClose(found);
+	if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) return false;
+	return platform::beneath::reparse_tag_redirects(data.dwReserved0) || !platform::beneath::reparse_tag_kept_in_place(data.dwReserved0);
+#else
+	return false;
+#endif
+}
+
+res::asset_meta_file res::read_asset_meta_file(const fs::path& layer_root, const fs::path& relative)
+{
+	asset_meta_file out;
+	platform::beneath::read_request request;
+	request.root = layer_root;
+	request.folder = relative.parent_path();
+	request.leaf = relative.filename();
+	request.max_bytes = asset_meta_max_bytes;
+	std::vector<std::byte> bytes;
+	const platform::beneath::read_result result = platform::beneath::read_beneath(request, bytes);
+	if (result.status == platform::beneath::read_status::missing) return out;
+	out.present = true;
+	if (result.status != platform::beneath::read_status::ok) {
+		out.error = result.error.empty() ? std::string{ "cannot be read" } : result.error;
+		return out;
+	}
+	const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+	asset_meta_result read = read_asset_meta(text);
+	if (!read) {
+		out.error = read.error.field_path.empty() ? read.error.message : read.error.field_path + ": " + read.error.message;
+		return out;
+	}
+	out.meta = std::move(*read.meta);
+	return out;
+}
