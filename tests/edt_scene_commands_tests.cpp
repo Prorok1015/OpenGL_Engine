@@ -7,18 +7,23 @@
 #include "edt_scene_document.h"
 #include "edt_document_cast.h"
 #include <snk/command/cmd_registry.h>
+#include <snk/desc/desc_describe.h>
+#include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_schema_desc.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
+#include <boost/describe.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <glm/vec3.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -713,6 +718,37 @@ BOOST_AUTO_TEST_CASE(a_tag_inside_a_structure_or_an_array_of_them_is_checked)
 
 	const auto fine = call("component.set", R"({"ref":)" + crate
 		+ R"(,"key":"refs","patch":{"slot":{"icon":"res://ok.png"},"slots":[{"icon":"engine://ok.png"}]}})");
+	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
+}
+
+namespace {
+
+// A component with a map of tags: every value is a reference, so each one follows #697.
+class tag_map_component : public desc::schema_desc<tag_map_component, desc::schema_kind::component>
+{
+public:
+	static constexpr std::string_view __type = "probe.tag_map";
+
+	std::map<std::string, res::tag> icons;
+
+	BOOST_DESCRIBE_CLASS(tag_map_component, (), (icons), (), ())
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(a_tag_inside_a_map_is_checked_by_its_key)
+{
+	BOOST_REQUIRE(descs->register_component_desc<tag_map_component>("probe.tag_map"));
+	const std::string crate = ref({ "00000000000000a4" });
+	const auto added = call("component.add", R"({"ref":)" + crate + R"(,"key":"tag_map","type":"probe.tag_map"})");
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+
+	const auto refused = call("component.set", R"({"ref":)" + crate + R"(,"key":"tag_map","patch":{"icons":{"a":"res://ok.png","b/c":"user://x.png"}}})");
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(refused.error.find("icons/b~1c") != std::string::npos, refused.error);
+	BOOST_TEST(!child(root(), 0xa4)->components.at("tag_map").overrides.contains("icons"));
+
+	const auto fine = call("component.set", R"({"ref":)" + crate + R"(,"key":"tag_map","patch":{"icons":{"a":"res://ok.png"}}})");
 	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
 }
 

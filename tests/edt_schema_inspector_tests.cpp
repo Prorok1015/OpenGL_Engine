@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "edt_inspector_panel.h"
 #include "edt_schema_inspector.h"
+#include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/editor/edt_inspector_registry.h>
@@ -11,7 +12,9 @@
 #include <glm/glm.hpp>
 #include <imgui.h>
 #include <algorithm>
+#include <boost/describe.hpp>
 #include <boost/json.hpp>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -56,6 +59,19 @@ namespace
 			{ "name": "loose", "kind": "f32", "default": null }
 		]
 	})";
+
+	// A map has no blob layout, so it comes from a C++ type: the schema is generated, not parsed.
+	struct weights_component
+	{
+		std::map<std::string, float> weights;
+		std::map<std::string, std::string> labels;
+	};
+	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels))
+
+	desc::type_schema weights_schema()
+	{
+		return desc::schema_generator<weights_component>::make("edt.weights", 1, desc::schema_kind::component);
+	}
 
 	json::object parse(const char* text)
 	{
@@ -665,6 +681,29 @@ BOOST_AUTO_TEST_CASE(SkyboxInspectorFieldComesFromTheSchema)
 	const drawn_list drawn = draw_twice(imgui, *schema, descs->schemas(), value, &changed);
 	BOOST_CHECK(widget_at(drawn, "/material") == ui::widget::asset);
 	BOOST_CHECK(!changed);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_RemovesAnInheritedKeyWithANullAndAnOwnKeyWithNothing)
+{
+	const desc::type_schema schema = weights_schema();
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "weights": { "a": 1.0, "b": 2.0 } })");
+	json::object overrides;
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
+
+	json::value before = ui::compose(schema, registry, { &parent, &overrides });
+	json::value after = before;
+	after.at_pointer("/weights").as_object().erase("a");
+	after.at_pointer("/weights").as_object().emplace("c", 3.0);
+	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, schema, registry, base, before, after), 2u);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": null, "c": 3.0 } })"));
+
+	// the own key goes again: no record, no empty object left behind; the inherited key stays removed
+	before = ui::compose(schema, registry, { &parent, &overrides });
+	after = before;
+	after.at_pointer("/weights").as_object().erase("c");
+	ui::apply_edit(overrides, schema, registry, base, before, after);
+	BOOST_CHECK(overrides == parse(R"({ "weights": { "a": null } })"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

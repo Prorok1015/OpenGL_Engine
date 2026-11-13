@@ -651,6 +651,18 @@ namespace desc
 					if (field.optional && value.is_null()) {
 						return override_status::valid;
 					}
+					if (field.kind == field_kind::map && field.element == field_kind::structure && value.is_object()) {
+						if (const type_schema* nested = resolve ? resolve->find(field.ref_type) : nullptr) {
+							for (const auto& entry : value.as_object()) {
+								if (entry.value().is_null()) continue;
+								if (!entry.value().is_object()) return override_status::bad_value;
+								if (const override_status status = check_members(*nested, {}, {}, entry.value().as_object(), nullptr, resolve).status;
+									status != override_status::valid) {
+									return status;
+								}
+							}
+						}
+					}
 					return json_fits(field.kind, field.element, enum_of(field, resolve), value, field.write == write_policy::null_if_empty) ? override_status::valid : override_status::bad_value;
 				}
 			}
@@ -680,14 +692,23 @@ namespace desc
 				}
 				case field_kind::map: {
 					std::vector<std::string> tokens;
-					if (!json_pointer_tokens(rest, tokens) || tokens.empty() || tokens.front().empty()) {
+					if (!json_pointer_tokens(rest, tokens) || tokens.empty()) {
 						return override_status::stale;
 					}
+					// A map has no empty key: the schema refuses it, as the read does.
+					if (tokens.front().empty()) {
+						return override_status::bad_value;
+					}
+					const type_schema* nested = field.element == field_kind::structure && resolve ? resolve->find(field.ref_type) : nullptr;
 					if (tokens.size() > 1) {
-						return override_status::valid;
+						const std::size_t inner = rest.find('/', 1);
+						return nested && inner != std::string_view::npos ? check_override(*nested, rest.substr(inner), value, resolve) : override_status::valid;
 					}
 					if (value.is_null()) {
 						return override_status::valid;
+					}
+					if (nested) {
+						return value.is_object() ? check_members(*nested, {}, {}, value.as_object(), nullptr, resolve).status : override_status::bad_value;
 					}
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
@@ -859,7 +880,7 @@ namespace desc
 				return false;
 			}
 			return std::ranges::all_of(value.as_object(), [&](const auto& item) {
-				return item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value());
+				return !item.key().empty() && (item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value()));
 			});
 		case field_kind::custom: return true;
 		}
@@ -1050,8 +1071,19 @@ namespace desc
 			}
 			read_context field_ctx = ctx;
 			field_ctx.field_pointer = field.key;
-			// A null for an optional field is "not set": a std::optional resets, any other keeps what it has. Not a bad value.
-			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx) && !(field.optional && value->is_null())) {
+			if (!value) {
+				continue;
+			}
+			bool fits = binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx);
+			// A null for an optional field is "not set": a std::optional resets, any other field takes its default (and keeps
+			// what it has when it has none). Not a bad value: the check of an override accepts the same null.
+			if (!fits && field.optional && value->is_null()) {
+				if (!field.default_value.is_null()) {
+					binding.ops[i].from_json(binding.ops[i], obj, field.default_value, field_ctx);
+				}
+				fits = true;
+			}
+			if (!fits) {
 				egLOG_WARN(log_category, "'{}': value of '{}' does not fit {}, keeping the current one", binding.schema->name, field.key, to_string(field.kind));
 				// The load goes on with the current value: a warning of the resource being loaded, if any (#595). The key is
 				// already a JSON pointer ("/diffuse", "/uniforms/albedo").

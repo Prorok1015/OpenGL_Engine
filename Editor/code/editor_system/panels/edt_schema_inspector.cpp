@@ -770,7 +770,9 @@ std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type
 	json::value holder(overrides); // a copy: `overrides` stays intact if anything below throws
 	for (const auto& change : changes) {
 		const json::value* inherited = desc::json_pointer_get(base, change.pointer);
-		if (inherited && same_value(*inherited, change.value)) {
+		// A null is a removal: of a key the parent has (kept as the record), or of one that is only here (no record at all).
+		const bool removes_own = change.value.is_null() && (!inherited || inherited->is_null());
+		if (removes_own || (inherited && same_value(*inherited, change.value))) {
 			if (desc::json_pointer_remove(holder, change.pointer)) {
 				prune_empty_parents(holder, change.pointer);
 			}

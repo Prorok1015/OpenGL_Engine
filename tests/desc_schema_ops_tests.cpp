@@ -13,6 +13,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_dynamic.h>
@@ -259,6 +260,9 @@ namespace desc {
 	inline constexpr auto field_attrs<ops_test::holder> = attrs(
 		f("link").kind(field_kind::desc_ref).ref("ops.target").write_if_valid(),
 		f("extra").kind(field_kind::desc_ref).ref("ops.target").write_null_if_empty());
+
+	template<>
+	inline constexpr auto field_attrs<ops_test::keyed> = attrs(f("parts").ref("ops.inner"));
 
 	template<>
 	inline constexpr auto field_attrs<ops_test::widget> = attrs(
@@ -1549,9 +1553,15 @@ BOOST_AUTO_TEST_CASE(TheJsonSchemaOfAnOptionalAllowsNull)
 	ops_fixture fx;
 	fx.ds.register_desc<ops_test::keyed>("ops.keyed");
 	const json::object generated = desc::to_json_schema(*fx.ds.find_schema("ops.keyed"), fx.ds.schemas());
-	const json::value& type = generated.at("properties").as_object().at("gain").as_object().at("type");
-	BOOST_REQUIRE(type.is_array());
-	BOOST_TEST(type.as_array().size() == 2u);
+	for (const char* name : { "gain", "note", "preferred" }) {
+		BOOST_TEST_CONTEXT(name) {
+			const json::object& field = generated.at("properties").as_object().at(name).as_object();
+			BOOST_REQUIRE(field.contains("anyOf"));
+			const json::array& options = field.at("anyOf").as_array();
+			BOOST_REQUIRE_EQUAL(options.size(), 2u);
+			BOOST_TEST(options[1].as_object().at("type").as_string() == "null");
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AnOptionalOfATypeWithACodecIsListedAmongTheCodecFields)
@@ -1566,6 +1576,77 @@ BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNotABadValue, ops_fixture)
 	value.gain = 2.0f;
 	value.deserialize(ds, parse(R"({ "gain": null })"));
 	BOOST_TEST(!value.gain.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(DiffThenApplyGivesTheEditedValue_AndAnotherDiffIsEmpty)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const json::value base = json::parse(R"({ "counts": { "a": 1, "b": 2, "gone": 9 },
+		"parts": { "p": { "scale": 1.0, "flag": false } }, "gain": 0.5 })");
+	const json::value edited = json::parse(R"({ "counts": { "a": 1, "b": 3, "c": 4 },
+		"parts": { "p": { "scale": 2.0, "flag": false }, "q": { "scale": 1.0, "flag": true } } })");
+
+	json::value applied = base;
+	for (const auto& change : desc::diff(schema, base, edited)) {
+		if (change.value.is_null()) {
+			desc::json_pointer_remove(applied, change.pointer);
+		} else {
+			desc::json_pointer_set(applied, change.pointer, change.value);
+		}
+	}
+	BOOST_CHECK(applied == edited);
+	BOOST_TEST(desc::diff(schema, applied, edited).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AMapKeyWithASlashOrATildeIsEscapedInItsPointer_AndAnEmptyKeyIsRefused)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const auto changes = desc::diff(schema, json::parse(R"({ "counts": {} })"), json::parse(R"({ "counts": { "a/b": 1, "x~y": 2 } })"));
+	BOOST_REQUIRE_EQUAL(changes.size(), 2u);
+	BOOST_TEST(changes[0].pointer == "/counts/a~1b");
+	BOOST_TEST(changes[1].pointer == "/counts/x~0y");
+
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts/a~1b", json::value(1) }) == desc::override_status::valid));
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts/", json::value(1) }) == desc::override_status::bad_value));
+	BOOST_TEST((desc::validate_override(schema, desc::json_change{ "/counts", json::parse(R"({ "": 1 })") }) == desc::override_status::bad_value));
+}
+
+BOOST_FIXTURE_TEST_CASE(AMapWithAnEmptyKeyIsNotRead, ops_fixture)
+{
+	ops_test::keyed value;
+	value.counts = { { "keep", 1 } };
+	value.deserialize(ds, parse(R"({ "counts": { "": 5, "other": 2 } })"));
+	BOOST_CHECK((value.counts == std::map<std::string, int>{ { "keep", 1 } }));
+}
+
+BOOST_AUTO_TEST_CASE(AMapOfStructuresIsCheckedByTheStructure)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	desc::schema_registry registry;
+	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
+	const auto check = [&](std::string_view pointer, const char* value) {
+		return desc::validate_override(schema, desc::json_change{ std::string(pointer), json::parse(value) }, &registry);
+	};
+	BOOST_TEST((check("/parts/p", R"({ "scale": 2.0 })") == desc::override_status::valid));
+	BOOST_TEST((check("/parts/p", R"({ "scale": "wide" })") == desc::override_status::bad_value));
+	BOOST_TEST((check("/parts/p", R"({ "nope": 1 })") == desc::override_status::stale));
+	BOOST_TEST((check("/parts/p/scale", "2.5") == desc::override_status::valid));
+	BOOST_TEST((check("/parts/p/scale", R"("wide")") == desc::override_status::bad_value));
+	BOOST_TEST((check("/parts", R"({ "p": { "scale": "wide" } })") == desc::override_status::bad_value));
+	BOOST_TEST((check("/parts", R"({ "p": null })") == desc::override_status::valid));
+}
+
+BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNoWarning, ops_fixture)
+{
+	int warnings = 0;
+	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view) {
+		if (level == engine::log_level::warn) ++warnings;
+	});
+	ops_test::keyed value;
+	value.gain = 2.0f;
+	value.deserialize(ds, parse(R"({ "gain": null, "note": null })"));
+	BOOST_TEST(!value.gain.has_value());
+	BOOST_TEST(warnings == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
