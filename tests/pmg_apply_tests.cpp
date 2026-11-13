@@ -8,9 +8,11 @@
 #include <snk/project/prj_json_text.h>
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -294,6 +296,48 @@ BOOST_AUTO_TEST_CASE(ASchemaTypeWithAParent_IsWrittenByTheEngine_WithItsOwnField
 		BOOST_TEST_INFO(std::string_view(member.key()));
 		BOOST_TEST((member.key().starts_with("__") || member.key() == "hp" || member.key() == "armor"));
 	}
+}
+
+// #849 writes a desc with a __parent by its own fields (reduce_to_parent); its root __guid is still the file's (#851):
+// the same one it had, none when it had none, and no field of the parent comes with either.
+BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsGuid_AndGetsNoneItDidNotHave)
+{
+	descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "pmg_test_desc", "kind": "component",
+		"fields": [{ "name": "hp", "kind": "i32", "default": 0 }, { "name": "armor", "kind": "i32", "default": 0 }]})").as_object()));
+	descs->register_migration("pmg_test_desc", 1, "adds armor", [](json::object& obj, desc::migration_context&) { obj["armor"] = 1; });
+	constexpr std::string_view base_guid = "00000000-0000-4000-8000-0000000000a1";
+	constexpr std::string_view unit_guid = "00000000-0000-4000-8000-0000000000a2";
+	write_text(copy.res() / "derive/base_unit.desc", std::format(
+		R"({{"__type":"pmg_test_desc","__version":2,"__guid":"{}","hp":5,"armor":0}})", base_guid));
+	write_text(copy.res() / "derive/unit.desc", std::format(
+		R"({{"__type":"pmg_test_desc","__guid":"{}","__parent":"res://derive/base_unit.desc","hp":7}})", unit_guid));
+	write_text(copy.res() / "derive/plain.desc",
+		R"({"__type":"pmg_test_desc","__parent":"res://derive/base_unit.desc","hp":9})");
+
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	for (const std::string path : { "res/derive/unit.desc", "res/derive/plain.desc" }) {
+		BOOST_TEST_INFO(path);
+		const auto file = std::ranges::find_if(outcome.report.files, [&](const auto& f) { return f.path == path; });
+		BOOST_REQUIRE(file != outcome.report.files.end());
+		BOOST_TEST(file->written_as == "engine");
+	}
+
+	const auto keys_of = [](const json::value& value) {
+		std::set<std::string> keys;
+		for (const auto& member : value.as_object()) keys.emplace(member.key());
+		return keys;
+	};
+	const json::value unit = json::parse(read_text(copy.res() / "derive/unit.desc"));
+	BOOST_TEST(unit.at("__guid").as_string() == unit_guid);
+	BOOST_TEST(unit.at("__parent").as_string() == "res://derive/base_unit.desc");
+	BOOST_TEST(unit.at("hp").as_int64() == 7);
+	BOOST_TEST((keys_of(unit) == std::set<std::string>{ "__type", "__version", "__guid", "__parent", "hp", "armor" }));
+
+	const json::value plain = json::parse(read_text(copy.res() / "derive/plain.desc"));
+	BOOST_TEST(plain.at("__parent").as_string() == "res://derive/base_unit.desc");
+	BOOST_TEST((keys_of(plain) == std::set<std::string>{ "__type", "__version", "__parent", "hp", "armor" }));
 }
 
 // A value the migration gives the child that equals the parent's is the parent's: the engine form leaves it out (#812).

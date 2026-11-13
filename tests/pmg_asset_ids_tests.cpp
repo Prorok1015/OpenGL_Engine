@@ -295,6 +295,25 @@ BOOST_AUTO_TEST_CASE(AGuidACoveredResourceHolds_GivesANewId)
 	BOOST_TEST(any_note(outcome.report, "is already the ID of base/textures/s.png"));
 }
 
+// A .resource the step makes is byte for byte the one tools/ci/asset_ids.py --write makes (its BARE_META), so
+// `asset_ids.py --check` and res_repo_layout_tests accept it.
+BOOST_AUTO_TEST_CASE(AResourceTheStepMakes_IsTheOneTheRepositoryToolWrites)
+{
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
+	const std::string expected = std::string("{\n"
+		"    \"__type\" : \"resource_meta\",\n"
+		"    \"__version\" : 1,\n"
+		"    \"__guid\" : \"") + std::string(k_guid) + "\",\n"
+		"    \"importer\" : \"\",\n"
+		"    \"settings\" : {},\n"
+		"    \"flags\" : []\n"
+		"}\n";
+	BOOST_TEST(read_text(copy.res() / "worlds/w_v1.desc.resource") == expected);
+}
+
 // The rule of the ID in a desc is the one tools/ci/asset_ids.py (#768) has: a BOM is skipped. (A desc with a BOM is not
 // one the engine loads, so the scan calls it invalid and a migration refuses the project before this step runs.)
 BOOST_AUTO_TEST_CASE(TheGuidOfADesc_IsReadAsTheRepositoryToolReadsIt)
