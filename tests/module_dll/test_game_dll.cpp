@@ -7,6 +7,7 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_bus_context.hpp>
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
@@ -244,6 +245,18 @@ private:
 		});
 		layer.descs().register_document<dll_config>(dll_game::document_type);
 		layer.descs().register_desc<dll_linked>(dll_game::linked_type);
+		layer.descs().register_migration(dll_game::migrated_type, 1, [](boost::json::object& obj) { obj["migrated_by"] = "dll"; });
+		layer.descs().register_migration(dll_game::migrated_type, 2, "renames old to new",
+			[](boost::json::object& obj, desc::migration_context& context) {
+				if (const auto* old = obj.if_contains("old")) {
+					// A copy first: adding "new" may grow the object and move "old".
+					boost::json::value moved = *old;
+					obj.erase("old");
+					obj["new"] = std::move(moved);
+				} else {
+					context.warn("no 'old' field");
+				}
+			});
 		layer.descs().register_schema(desc::parse_type_schema(boost::json::parse(dll_game::schema_document_json).as_object()));
 		data.require<gs::module_context>().mark_document(dll_game::schema_document_type);
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
@@ -261,6 +274,17 @@ private:
 		layer.catalog().add<dll_game::dll_component>(std::string{ dll_game::component_name },
 			desc::bind_described<dll_game::dll_component>(dll_game::component_name, 1, desc::schema_kind::component));
 		ecs::register_component<dll_game::dll_component>(layer.meta());
+		{
+			using namespace entt::literals;
+			ecs::register_component<dll_game::dll_link>(layer.meta())
+				.data<&dll_game::dll_link::target>("target"_hs)
+				.data<&dll_game::dll_link::value>("value"_hs);
+		}
+		data.require<gs::module_context>().observe<dll_game::dll_link>({}, scn::observed::construct,
+			[](ecs::bus_context& ctx, entt::entity entity) {
+				// The world is read-only here: the record lands with the next apply_commands.
+				ctx.changer().emplace<dll_game::dll_link_seen>(entity, ctx.registry().get<dll_game::dll_link>(entity).target);
+			});
 		data.require<gs::module_context>().register_component(
 			desc::parse_type_schema(boost::json::parse(dll_game::schema_component_json).as_object()));
 		layer.events().add<dll_game::dll_event>({}, &write_dll_event);

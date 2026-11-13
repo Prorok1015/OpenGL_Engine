@@ -1,12 +1,25 @@
 #pragma once
 #include <cstddef>
 #include <string_view>
+#include <entt/entity/entity.hpp>
 
 // What the host test knows of the game module in test_game_dll (a shared library loaded from disk).
 namespace dll_game {
 
 	struct dll_component {
 		int value = 0;
+	};
+
+	// A C++ component of the module with an entity field, registered with its fields in the module's meta context
+	// (#738, #784): moved from the sandbox by the engine's code through the module's adapter.
+	struct dll_link {
+		entt::entity target = entt::null;
+		int value = 0;
+	};
+
+	// What the module's on_construct observer of dll_link saw in `target` when the component was placed.
+	struct dll_link_seen {
+		entt::entity target = entt::null;
 	};
 
 	inline constexpr std::string_view module_name = "test_game_dll";
@@ -30,6 +43,8 @@ namespace dll_game {
 	// A described desc of the module with a desc reference (link, to a dll.config) and a res::tag (icon): the module's
 	// inline readers take a path or a {guid, path} object alike (#758).
 	inline constexpr std::string_view linked_type = "dll.linked";
+	// A type the module migrates from version 1 (#786): the steps live in the engine's registry, written by its code.
+	inline constexpr std::string_view migrated_type = "dll.migrated";
 	inline constexpr const char* schema_document_json = R"json({
 		"name": "dll.settings", "kind": "desc",
 		"fields": [ { "name": "speed", "kind": "f32", "default": 2 }, { "name": "goals", "kind": "array", "element": "i32" } ]

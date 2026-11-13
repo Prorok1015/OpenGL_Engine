@@ -169,13 +169,14 @@ namespace desc
 	class SNK_API schema_registry
 	{
 	public:
-		schema_registry() = default;
+		// Out of line, as every member that touches the maps: a module never compiles code that knows their layout (#786).
+		schema_registry();
 		// A layer over `parent` (MODULE_LAYER.md): lookups fall through to it, its names and ids cannot be
 		// added here, and add/remove/set_version change only this layer.
-		explicit schema_registry(const schema_registry* parent)
-			: m_parent(parent)
-		{
-		}
+		explicit schema_registry(const schema_registry* parent);
+		~schema_registry();
+		schema_registry(const schema_registry&) = delete;
+		schema_registry& operator=(const schema_registry&) = delete;
 
 		// Both add functions return nullptr and keep the registry unchanged when the name (or the id) is taken,
 		// here or in the parent.
@@ -195,7 +196,7 @@ namespace desc
 		const enum_schema* find_enum(std::string_view name) const;
 
 		// This layer's own schemas; type_names() lists the parent's too.
-		std::size_t size() const { return m_types.size(); }
+		std::size_t size() const;
 		std::vector<std::string> type_names() const;
 
 	private:
