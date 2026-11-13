@@ -41,8 +41,9 @@ namespace gs
 		}
 
 		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
-		// type modules read inline. 1: world_context's accessors out of line (#802).
-		inline constexpr std::uint64_t layout_revision = 1;
+		// type modules read inline. 1: world_context's accessors out of line (#802). 3: the sandbox's components move into
+		// the world by engine code through the module's ecs::sandbox_emplace<T> (#784, #738).
+		inline constexpr std::uint64_t layout_revision = 3;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
