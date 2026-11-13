@@ -385,6 +385,31 @@ BOOST_AUTO_TEST_CASE(a_link_is_not_undone_once_the_moved_resource_changed)
 	BOOST_TEST(!db->next_undo_label().has_value());
 }
 
+BOOST_AUTO_TEST_CASE(a_fix_during_a_walk_shows_once_the_walk_ends)
+{
+	set_time(upper.write("one.png", "one"), std::chrono::hours(2));
+	upper.write("one.png.resource", meta_text(k_guid_b));
+	set_time(upper.write("two.png", "two"), std::chrono::hours(1));
+	upper.write("two.png.resource", meta_text(k_guid_b));
+	upper.write("plain.png", "plain");
+	open();
+	db->rebuild();
+	BOOST_REQUIRE(db->scanning());
+
+	BOOST_REQUIRE(db->create_meta(res::tag::make("plain.png")).ok);
+	BOOST_REQUIRE(db->new_id_for_copy(res::tag::make("two.png")).ok);
+	BOOST_TEST(fs::is_regular_file(upper.path() / "plain.png.resource"));
+	test_util::pump(tasks);
+
+	BOOST_TEST(record("plain.png").id.has_value());
+	BOOST_TEST(db->duplicates().empty());
+	BOOST_TEST(!row("asset.no_id", "plain.png"));
+	BOOST_TEST(rows_of("asset.duplicate_id").empty());
+	BOOST_REQUIRE(db->undo_last().ok);
+	test_util::pump(tasks);
+	BOOST_TEST(db->duplicates().size() == 1u);
+}
+
 BOOST_AUTO_TEST_CASE(undo_is_refused_when_the_file_changed_since)
 {
 	upper.write("plain.png", "plain");
