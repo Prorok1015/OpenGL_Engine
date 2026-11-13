@@ -7,6 +7,7 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_file_change.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <chrono>
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -156,6 +158,50 @@ BOOST_AUTO_TEST_CASE(the_snapshot_takes_spellings_as_the_database_merges_them)
 	edt::asset_index_snapshot snapshot;
 	snapshot.refresh(*assets);
 	BOOST_TEST((snapshot.id_of(res::tag{ "res://A.TXT" }) == std::optional{ id_a() }));
+}
+
+// #854: what the walk leaves out of the project folder layer (code/, build/, hidden folders) has no ID in the index, after
+// a walk and after a batch.
+BOOST_AUTO_TEST_CASE(the_snapshot_leaves_out_what_the_project_folder_layer_hides)
+{
+	constexpr std::string_view k_guid_code = "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6";
+	constexpr std::string_view k_guid_build = "1c7d2e3f-4051-4b62-9c73-8d94ea5fb607";
+	constexpr std::string_view k_guid_hidden = "2d8e3f40-5162-4c73-8d84-9ea5fb60c718";
+	constexpr std::string_view k_guid_later = "3e9f4051-6273-4d84-9e95-afb60c71d829";
+	project.write("res/project.snkproj", "{}");
+	project.write("res/code/a.txt", "x");
+	project.write("res/code/a.txt.resource", meta_text(k_guid_code));
+	project.write("res/build/b.txt", "x");
+	project.write("res/build/b.txt.resource", meta_text(k_guid_build));
+	project.write("res/.hidden/c.txt", "x");
+	project.write("res/.hidden/c.txt.resource", meta_text(k_guid_hidden));
+	project.write("res/textures/t.txt", "x");
+	project.write("res/textures/t.txt.resource", meta_text(k_guid_a));
+	make_system();
+	assets->rebuild();
+	pump();
+
+	edt::asset_index_snapshot snapshot;
+	snapshot.refresh(*assets);
+	BOOST_TEST((snapshot.id_of(res::tag{ "res://textures/t.txt" }) == std::optional{ id_a() }));
+	for (const std::string_view hidden : { "res://code/a.txt", "res://build/b.txt", "res://.hidden/c.txt" }) {
+		BOOST_TEST_INFO("tag: " << hidden);
+		BOOST_TEST(!snapshot.id_of(res::tag{ hidden }));
+	}
+	for (const std::string_view guid : { k_guid_code, k_guid_build, k_guid_hidden }) {
+		BOOST_TEST_INFO("id: " << guid);
+		BOOST_TEST(!snapshot.path_of(*res::asset_id_from_text(guid)));
+	}
+
+	project.write("res/code/later.txt", "x");
+	project.write("res/code/later.txt.resource", meta_text(k_guid_later));
+	res::file_change created;
+	created.tag = res::tag{ "res://code/later.txt" };
+	created.kind = res::change_kind::created;
+	assets->apply_changes(std::span{ &created, 1 });
+	snapshot.refresh(*assets);
+	BOOST_TEST(!snapshot.id_of(res::tag{ "res://code/later.txt" }));
+	BOOST_TEST(!snapshot.path_of(*res::asset_id_from_text(k_guid_later)));
 }
 
 BOOST_AUTO_TEST_CASE(applied_through_counts_a_batch_held_behind_a_walk_once_it_is_applied)
