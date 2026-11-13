@@ -341,7 +341,7 @@ std::string edt::play_session::capture_for_reload()
 		saved_world saved;
 		saved.name = std::string{ world.get_name() };
 		saved.systems = world.systems().value_or(std::vector<std::string>{});
-		// A system with an instance keeps state in its fields; system_entry stays as old modules built it (ABI).
+		// A system with an instance keeps state in its fields.
 		const ecs::system_registry& systems = layer->systems().registry();
 		if (const ecs::system_plan* plan = world.plan()) {
 			for (const ecs::phase_plan& phase : plan->phases) {

@@ -33,6 +33,32 @@ namespace res
 		return true;
 	}
 
+	// Not an asset: dot files (.gitkeep, .DS_Store, .x.swp) and well-known temporary or system names (Thumbs.db,
+	// desktop.ini, ~$x, x.tmp, x~). The asset database does not list them and no .resource is made for them.
+	inline bool is_ignored_asset_name(std::string_view name)
+	{
+		const auto equals_lower = [](std::string_view text, std::string_view lower) {
+			if (text.size() != lower.size()) {
+				return false;
+			}
+			for (std::size_t i = 0; i < text.size(); ++i) {
+				const char c = text[i] >= 'A' && text[i] <= 'Z' ? static_cast<char>(text[i] - 'A' + 'a') : text[i];
+				if (c != lower[i]) {
+					return false;
+				}
+			}
+			return true;
+		};
+		if (name.empty() || name.front() == '.' || name.starts_with("~$") || name.back() == '~') {
+			return true;
+		}
+		if (equals_lower(name, "thumbs.db") || equals_lower(name, "desktop.ini")) {
+			return true;
+		}
+		constexpr std::string_view tmp_suffix = ".tmp";
+		return name.size() > tmp_suffix.size() && equals_lower(name.substr(name.size() - tmp_suffix.size()), tmp_suffix);
+	}
+
 	struct asset_meta
 	{
 		asset_id guid;

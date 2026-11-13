@@ -21,17 +21,17 @@ on:
       - '**/*.md'
   # By hand on aibranch or main (Actions > Build > Run workflow): the same jobs as a push.
   workflow_dispatch:
+  # No paths-ignore: Plan and CI summary are required checks, and a run that never starts would leave a PR of docs only
+  # waiting for them. The plan skips every build of such a PR instead.
   pull_request:
     # ready_for_review: marking a draft PR ready adds the shared-engine builds when the PR touches what they check (see plan).
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
 
 # What runs (#830; the `plan` job decides, see there):
 #   every PR event, drafts included, every push and by hand - the six fast jobs: Coverage (Linux GCC Debug, also runs
 #     the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual
-#     smoke. Marking a draft ready does not run them again on a head SHA where they all passed.
+#     smoke. Marking a draft ready does not run them again on a head SHA where they all passed. A PR of docs/** and
+#     *.md only runs none of them: Plan and CI summary alone.
 #   a PR that is not a draft and touches a header, CMake or workflows, every push and by hand - also Windows MSVC
 #     Shared+PCH (#557) and Linux GCC Shared (the project template's game module, #434): the engine as a shared library.
 #     A draft and a PR that touches none of them no longer build Linux GCC Shared.
@@ -53,7 +53,8 @@ permissions:
 
 jobs:
   # Decides what this run builds (#830):
-  #   fast - the six jobs every PR runs. False only when a draft is marked ready for review and every one of them already
+  #   fast - the six jobs every PR runs. False for a PR that changes only docs/** and *.md (as push's paths-ignore), and
+  #          when a draft is marked ready for review and every one of them already
   #          passed in one earlier Build run of this PR on this very head SHA and on the base SHA aibranch has now: a run
   #          checks the merge of head and base, so a base that moved since then means running them again. The earlier
   #          run's base is the "[base <sha>]" of its title (run-name); a run without one does not count.
@@ -86,17 +87,18 @@ jobs:
             const LIST_FILES_LIMIT = 3000;
             let fast = true;
             let abi = true;
+            const DOCS_PATHS = [/^docs\//, /\.md$/];
             if (context.eventName === 'pull_request') {
               const pr = context.payload.pull_request;
-              if (pr.draft) {
-                abi = false;
-              } else {
-                const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
-                const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
-                abi = files.length >= LIST_FILES_LIMIT || touched.some(path => ABI_PATHS.some(re => re.test(path)));
-                core.info(`${files.length} files changed; shared-engine builds: ${abi}`);
-              }
-              if (context.payload.action === 'ready_for_review') {
+              const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+              const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
+              const cut_off = files.length >= LIST_FILES_LIMIT;
+              const docs_only = !cut_off && touched.length > 0 && touched.every(path => DOCS_PATHS.some(re => re.test(path)));
+              abi = !pr.draft && (cut_off || touched.some(path => ABI_PATHS.some(re => re.test(path))));
+              core.info(`${files.length} files changed; docs only: ${docs_only}; shared-engine builds: ${abi}`);
+              if (docs_only) {
+                fast = false;
+              } else if (context.payload.action === 'ready_for_review') {
                 // The live tip, not pr.base.sha: the payload's base SHA can lag behind the branch.
                 const { data: base } = await github.rest.repos.getBranch({ ...context.repo, branch: pr.base.ref });
                 const { data: self } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: context.runId });

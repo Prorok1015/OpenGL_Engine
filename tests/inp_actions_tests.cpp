@@ -63,16 +63,14 @@ BOOST_AUTO_TEST_CASE(ADirectedAxisKnowsItsDeviceAxisAndItsDirection)
 	BOOST_TEST(inp::gamepad_axis_direction(inp::GAMEPAD_AXES::RIGHT_TRIGGER) == 1);
 }
 
-BOOST_AUTO_TEST_CASE(TheBindingsOfVersion315_ConvertToTheCurrentOnes_AndABracedListStaysUnambiguous)
+BOOST_AUTO_TEST_CASE(ABracedListOfBindingsAndAnEmptyOneAreAdded)
 {
 	inp::action_map map;
-	BOOST_TEST(map.add("Old", std::vector<inp::action_binding_v1>{ inp::KEYBOARD_BUTTONS::A, inp::MOUSE_BUTTONS::LEFT }));
 	BOOST_TEST(map.add("Braced", { inp::KEYBOARD_BUTTONS::B, inp::GAMEPAD_BUTTONS::A }));
 	BOOST_TEST(map.add("Empty", {}));
-	BOOST_REQUIRE_EQUAL(map.size(), 3u);
-	BOOST_TEST((map.actions()[0].bindings == std::vector<inp::action_binding>{ inp::KEYBOARD_BUTTONS::A, inp::MOUSE_BUTTONS::LEFT }));
-	BOOST_TEST((map.actions()[1].bindings == std::vector<inp::action_binding>{ inp::KEYBOARD_BUTTONS::B, inp::GAMEPAD_BUTTONS::A }));
-	BOOST_TEST(map.actions()[2].bindings.empty());
+	BOOST_REQUIRE_EQUAL(map.size(), 2u);
+	BOOST_TEST((map.actions()[0].bindings == std::vector<inp::action_binding>{ inp::KEYBOARD_BUTTONS::B, inp::GAMEPAD_BUTTONS::A }));
+	BOOST_TEST(map.actions()[1].bindings.empty());
 }
 
 BOOST_AUTO_TEST_CASE(EveryMouseButtonHasOneNameWithoutTheAliases)

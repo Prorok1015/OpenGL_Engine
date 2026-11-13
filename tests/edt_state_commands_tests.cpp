@@ -790,8 +790,9 @@ BOOST_AUTO_TEST_CASE(AssetQuery_ADirectoryMayCarryTheResPrefix)
 
 BOOST_AUTO_TEST_CASE(AssetQuery_HidesTheResourceSidecars_InAnyLetterCase)
 {
+	// Ignored names (res::is_ignored_asset_name) are hidden as the sidecars are.
 	for (const fs::path& sidecar : { disk.layers[0] / "a.txt.resource", disk.layers[1] / "models" / "ship.glb.RESOURCE",
-		disk.layers[1] / "lonely.resource" }) {
+		disk.layers[1] / "lonely.resource", disk.layers[1] / ".gitkeep", disk.layers[0] / "Thumbs.db", disk.layers[1] / "models" / "a.tmp" }) {
 		std::ofstream(sidecar, std::ios::binary) << "{}";
 	}
 
