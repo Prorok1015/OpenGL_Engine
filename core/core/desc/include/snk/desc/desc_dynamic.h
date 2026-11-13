@@ -15,15 +15,16 @@ namespace desc
 	{
 	public:
 		explicit dynamic_desc(std::shared_ptr<const schema_binding> binding);
+		~dynamic_desc() override;
 
 		void copy_to(desc_base& other) const override;
 		void deserialize(desc_system& system, const json::object& object) override;
 		void serialize(json::object& object) const override;
 
-		const type_schema& schema() const { return *m_binding->schema; }
-		const schema_binding& binding() const { return *m_binding; }
+		const type_schema& schema() const;
+		const schema_binding& binding() const;
 		// The values as the schema lays them out: what a component without a C++ type holds in its world (#606).
-		const dyn_blob& blob() const { return m_blob; }
+		const dyn_blob& blob() const;
 
 		// Field by its key; null for an unknown key.
 		json::value get(std::string_view key) const;

@@ -366,6 +366,20 @@ namespace desc
 	std::optional<write_policy> write_policy_from_string(std::string_view text) { return from_name<write_policy>(write_policy_names, text); }
 	std::optional<schema_kind> schema_kind_from_string(std::string_view text) { return from_name<schema_kind>(schema_kind_names, text); }
 
+	schema_registry::schema_registry() = default;
+
+	schema_registry::schema_registry(const schema_registry* parent)
+		: m_parent(parent)
+	{
+	}
+
+	schema_registry::~schema_registry() = default;
+
+	std::size_t schema_registry::size() const
+	{
+		return m_types.size();
+	}
+
 	const type_schema* schema_registry::add(type_schema schema)
 	{
 		if (contains(schema.name)) {

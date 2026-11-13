@@ -22,9 +22,13 @@ namespace edt
 	{
 		bool opened = false;
 		std::string error;
+		// The file is not meant to be a data document (the open level, a type without a schema or that is no document type, a
+		// file of a lower layer): nothing is wrong with it, so a double click is no reason for a warning window.
+		bool unsuitable = false;
 
-		static open_result ok() { return { true, {} }; }
-		static open_result failure(std::string message) { return { false, std::move(message) }; }
+		static open_result ok() { return { true, {}, false }; }
+		static open_result failure(std::string message) { return { false, std::move(message), false }; }
+		static open_result not_a_document(std::string message) { return { false, std::move(message), true }; }
 	};
 
 	// A desc file of a type with a schema and is_document (EPIC-56, #791) edited as data. The document keeps what the file
@@ -65,6 +69,10 @@ namespace edt
 		const std::string& chain_problem() const { return m_chain_problem; }
 
 		const std::string& type() const { return m_type; }
+		// The schema of the document's type (null when it is gone, e.g. the game layer that registered it was replaced).
+		const desc::type_schema* schema() const;
+		// The files the document inherits from, the nearest first (empty without __parent).
+		const std::vector<res::tag>& parents() const { return m_parents; }
 		const boost::json::object& own() const { return m_own; }
 		// The values the file inherits, header keys left out (empty without __parent).
 		const boost::json::object& inherited() const { return m_inherited; }
@@ -90,7 +98,6 @@ namespace edt
 			std::vector<res::tag> parents;
 		};
 
-		const desc::type_schema* schema() const;
 		open_result load(const res::tag& file, loaded& out) const;
 		open_result resolve_chain(const res::tag& file, const boost::json::object& own, const std::string& type,
 			boost::json::object& inherited, std::vector<res::tag>& parents) const;

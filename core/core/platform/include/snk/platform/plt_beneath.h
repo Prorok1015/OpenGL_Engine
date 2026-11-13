@@ -121,4 +121,9 @@ namespace platform::beneath {
 	// the name is `not_regular`.
 	SNK_API read_result read_beneath(const read_request& request, std::vector<std::byte>& out);
 
+	// read_beneath without holding the whole file: the same checks, then `sink` gets the file in chunks, in order, and
+	// stops the read by returning false (the result is ok then). A file that grows past `max_bytes` while it is read is
+	// `too_large` too. The folders are let go once the file is open; the open file is what is read. For a hash of any size.
+	SNK_API read_result read_beneath_stream(const read_request& request, const std::function<bool(std::span<const std::byte>)>& sink);
+
 }

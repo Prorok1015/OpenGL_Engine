@@ -1,4 +1,5 @@
 #include "edt_asset_layers.h"
+#include <snk/common/fs_paths.h>
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -38,7 +39,7 @@ std::vector<edt::layer_entry> edt::list_merged_directory(
 
 			layer_entry e;
 			e.path = it->path();
-			e.name = e.path.filename().string();
+			e.name = fs_paths::utf8_of(e.path.filename());
 			e.relative = relative_dir / e.path.filename();
 			e.is_dir = is_dir;
 			e.layer = i;

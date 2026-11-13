@@ -226,6 +226,48 @@ BOOST_AUTO_TEST_CASE(PathsOutsideTheProject_OrNotDescFiles_AreRefusedBeforeTheDi
 	BOOST_TEST(!fs::exists(dir.path() / "escape.desc"));
 }
 
+BOOST_AUTO_TEST_CASE(AResourceSidecar_IsRefusedByEveryCommand_InAnyLetterCase)
+{
+	for (const char* path : { "materials/a.mat.desc.resource", "materials/A.MAT.DESC.Resource", "x.resource" }) {
+		BOOST_TEST_CONTEXT(path) {
+			for (const char* id : { "desc.create", "desc.read", "desc.write" }) {
+				json::object args{ { "path", path } };
+				if (std::string_view(id) != "desc.read") args["desc"] = json::parse(k_material);
+				if (std::string_view(id) == "desc.write") args["version"] = "v";
+				const auto refused = call(id, args);
+				BOOST_TEST(refused.code == cmd::codes::invalid_args);
+				BOOST_TEST(refused.error.find(".resource") != std::string::npos);
+			}
+		}
+	}
+	BOOST_TEST(!fs::exists(res_root / "materials" / "a.mat.desc.resource"));
+	BOOST_TEST(!fs::exists(res_root / "x.resource"));
+}
+
+BOOST_AUTO_TEST_CASE(AGuidInTheContent_IsRefused_AndAWriteKeepsTheGuidOfTheFile)
+{
+	const auto at_root = call("desc.create", desc_args("materials/g.mat.desc", R"({"__type":"material_desc","__guid":"g"})"));
+	BOOST_TEST(at_root.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(at_root.value.is_object());
+	BOOST_TEST(text_of(at_root.value.at("errors").as_array()[0].at("json_path")) == "/__guid");
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+
+	const auto nested = call("desc.create", desc_args("materials/n.mat.desc", R"({"__type":"material_desc","defines":[{"__guid":"g"}]})"));
+	BOOST_TEST(nested.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(nested.value.is_object());
+	BOOST_TEST(text_of(nested.value.at("errors").as_array()[0].at("json_path")) == "/defines/0/__guid");
+
+	// A file written before the project's migration (EPIC-57 section 6.1) carries its ID as __guid: a write keeps it.
+	std::ofstream(res_root / "materials" / "kept.mat.desc", std::ios::binary)
+		<< R"({"__type":"material_desc","__guid":"11111111-2222-4333-8444-555555555555","queue":"opaque"})";
+	const auto written = call("desc.write", write_args("materials/kept.mat.desc", version_of("materials/kept.mat.desc"),
+		R"({"__type":"material_desc","queue":"mix"})"));
+	BOOST_REQUIRE_MESSAGE(written.ok, written.error);
+	const json::value on_disk = json::parse(read_file(res_root / "materials" / "kept.mat.desc"));
+	BOOST_TEST(text_of(on_disk.at("__guid")) == "11111111-2222-4333-8444-555555555555");
+	BOOST_TEST(text_of(on_disk.at("queue")) == "mix");
+}
+
 BOOST_AUTO_TEST_CASE(Create_NeverReplacesAFile_AlsoOneInALowerLayer)
 {
 	make_material("materials/once.mat.desc");
@@ -407,7 +449,7 @@ BOOST_AUTO_TEST_CASE(AnUnknownKeyWithTwoUnderscores_IsRefused_SoNoObjectHidesFro
 	BOOST_TEST(std::string(hidden.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/__x"));
 	BOOST_TEST(!fs::exists(res_root / "materials" / "h.mat.desc"));
 
-	const auto kept = call("desc.create", desc_args("materials/k.mat.desc", R"({"__type":"material_desc","__guid":"g","__id":3})"));
+	const auto kept = call("desc.create", desc_args("materials/k.mat.desc", R"({"__type":"material_desc","__id":3})"));
 	BOOST_TEST_MESSAGE(kept.error);
 	BOOST_TEST(kept.ok);
 }
