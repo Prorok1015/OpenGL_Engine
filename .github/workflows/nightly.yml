@@ -9,6 +9,9 @@ name: Nightly
 # A red night opens an issue (labels bug, ci, P0) or comments on the open one; the next green night closes it.
 
 on:
+  # PROBE (#830): runs on this PR to show the report; removed in its own commit before the PR leaves draft.
+  pull_request:
+    types: [opened, synchronize, edited]
   schedule:
     # 23:37 UTC: off the hours GitHub's runners are busiest, and the night for the team (UTC+3).
     - cron: '37 23 * * *'
@@ -68,7 +71,9 @@ jobs:
                 if (marker) { last = marker.name.slice('Checked '.length); break; }
               }
             }
-            const run = force || last !== sha;
+            let run = force || last !== sha;
+            // PROBE (#830): on a PR only the probe and the report run.
+            if (context.eventName === 'pull_request') run = 'probe';
             if (!run) core.notice(`${sha} was already green: nothing to run`);
             core.setOutput('run', String(run));
             core.setOutput('last_green', last);
@@ -457,12 +462,25 @@ jobs:
     steps:
       - run: echo "every nightly job passed on ${{ needs.plan.outputs.sha }}"
 
+  # PROBE (#830): red while the PR's title holds PROBE_RED, else green (editing the title runs it again).
+  probe:
+    name: Probe (nightly report)
+    needs: plan
+    if: needs.plan.outputs.run == 'probe'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "${{ contains(github.event.pull_request.title, 'PROBE_RED') }}" = "true" ]; then
+            echo "::error::probe: a red night"; exit 1
+          fi
+          echo "probe: a green night"
+
   # A red night opens an issue (bug, ci, P0) with the run and the commits since the last green night, or comments on the
   # one that is open; a green night closes it.
   report:
     name: Report (nightly)
-    needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package, checked]
-    if: always() && needs.plan.outputs.run == 'true'
+    needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package, checked, probe]
+    if: always() && needs.plan.outputs.run != 'false'
     runs-on: ubuntu-latest
     permissions:
       contents: read
