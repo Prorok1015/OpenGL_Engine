@@ -343,6 +343,34 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsGuid_AndGetsNoneItDidNotHave)
 	BOOST_TEST((keys_of(plain) == std::set<std::string>{ "__type", "__version", "__parent", "hp", "armor" }));
 }
 
+// desc_resave and a migration write one form (#851): after the engine's save keep_root_guid leaves the root __guid as
+// the file has it, so the save of a desc without one adds none.
+BOOST_AUTO_TEST_CASE(KeepRootGuid_TheEnginesSave_AddsNoGuid_AndKeepsTheFilesOne)
+{
+	constexpr std::string_view guid = "00000000-0000-4000-8000-0000000000c1";
+	write_text(copy.res() / "guid/none.desc", R"({"__type":"camera_desc","__version":2,"fov":40})");
+	write_text(copy.res() / "guid/kept.desc", std::format(R"({{"__type":"camera_desc","__version":2,"__guid":"{}","fov":40}})", guid));
+	core::desc::desc_adapter_t adapter(*rs, *descs);
+	const auto saved_of = [&](std::string_view name) {
+		const res::tag tag = res::tag::make(std::format("guid/{}.desc", name));
+		auto loaded = rs->require_sync<desc::desc_base>(tag).get_sync();
+		BOOST_REQUIRE(loaded);
+		const std::vector<std::byte> bytes = adapter.serialize(tag, loaded);
+		return json::parse(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+	};
+
+	json::value none = saved_of("none");
+	BOOST_REQUIRE(none.as_object().contains("__guid"));
+	const json::value none_file = json::parse(read_text(copy.res() / "guid/none.desc"));
+	BOOST_TEST(pmg::keep_root_guid(none.as_object(), none_file.as_object()));
+	BOOST_TEST(!none.as_object().contains("__guid"));
+
+	json::value kept = saved_of("kept");
+	const json::value kept_file = json::parse(read_text(copy.res() / "guid/kept.desc"));
+	BOOST_TEST(!pmg::keep_root_guid(kept.as_object(), kept_file.as_object()));
+	BOOST_TEST(kept.as_object().at("__guid").as_string() == guid);
+}
+
 // A value the migration gives the child that equals the parent's is the parent's: the engine form leaves it out (#812).
 BOOST_AUTO_TEST_CASE(AMigratedValueEqualToTheParents_IsNotWrittenIntoTheChild)
 {
