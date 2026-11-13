@@ -39,11 +39,10 @@ void prj::migration::project_assets::rebuild()
 
 	const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, {}, res::asset_names_case_insensitive);
 	const res::asset_walk_pairing pairing = res::pair_asset_metas(files, res::asset_names_case_insensitive);
-	// Below a content root "." (no prefix): what the scan leaves out of the project folder.
+	// Below a content root "." (no prefix): what the scan leaves out of the project folder, also before project.snkproj
+	// exists there and the walk itself would leave it out.
 	const auto project_own = [&](const res::asset_walk_file& file) {
-		if (!prefixes[file.layer].empty()) return false;
-		const auto first = file.relative.begin();
-		return first != file.relative.end() && is_project_own_name(fs_paths::utf8_of(*first));
+		return prefixes[file.layer].empty() && res::is_in_project_own_folder(file.relative);
 	};
 	const auto entry_of = [&](const res::asset_walk_file& file) {
 		indexed_asset asset;
