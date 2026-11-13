@@ -291,6 +291,26 @@ BOOST_AUTO_TEST_CASE(ASchemaTypeWithAParent_IsWrittenByTheEngine_WithItsOwnField
 	}
 }
 
+// A value the migration gives the child that equals the parent's is the parent's: the engine form leaves it out (#812).
+BOOST_AUTO_TEST_CASE(AMigratedValueEqualToTheParents_IsNotWrittenIntoTheChild)
+{
+	descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "pmg_test_desc", "kind": "component",
+		"fields": [{ "name": "hp", "kind": "i32", "default": 0 }, { "name": "armor", "kind": "i32", "default": 0 }]})").as_object()));
+	descs->register_migration("pmg_test_desc", 1, "adds armor", [](json::object& obj, desc::migration_context&) { obj["armor"] = 1; });
+	write_text(copy.res() / "derive/base_unit.desc", R"({"__type":"pmg_test_desc","__version":2,"hp":5,"armor":1})");
+	write_text(copy.res() / "derive/unit.desc", R"({"__type":"pmg_test_desc","__parent":"res://derive/base_unit.desc","hp":7})");
+
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	const auto file = std::ranges::find_if(outcome.report.files, [](const auto& f) { return f.path == "res/derive/unit.desc"; });
+	BOOST_REQUIRE(file != outcome.report.files.end());
+	BOOST_TEST(file->written_as == "engine");
+	const json::value unit = json::parse(read_text(copy.res() / "derive/unit.desc"));
+	BOOST_TEST(unit.at("__parent").as_string() == "res://derive/base_unit.desc");
+	BOOST_TEST(unit.at("hp").as_int64() == 7);
+	BOOST_TEST(!unit.as_object().contains("armor"));
+}
+
 // A file the rollback cannot put back leaves the migration rollback_failed, which unfinished_migrations reports.
 BOOST_AUTO_TEST_CASE(ARestoreThatFails_IsRollbackFailed_AndUnfinished)
 {
