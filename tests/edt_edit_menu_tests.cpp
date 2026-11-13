@@ -208,56 +208,62 @@ BOOST_AUTO_TEST_CASE(accepting_the_agents_changes_clears_their_marks)
 	BOOST_TEST((edt::effective_mode(*accept, allowed, {}).mode == cmd::policy_mode::deny));
 }
 
-// The asset fixes of Problems (S57-4) are undone by Edit > Undo when the active document has nothing to undo (or
-// no document is active); the document's own edit goes first.
-BOOST_AUTO_TEST_CASE(undo_falls_back_to_the_asset_fixes_when_the_document_has_nothing_to_undo)
+// The asset fixes of Problems (S57-4) are undone only on purpose: Edit > Undo Asset Action, never Edit > Undo.
+struct asset_undo_fixture : edit_menu_fixture
 {
+	std::string own_label(const std::string& id)
+	{
+		for (const auto& item : own.items("Edit")) {
+			if (item.id == id) {
+				return item.label;
+			}
+		}
+		return {};
+	}
+
 	const std::string fix = "Create .resource for res://a.png";
-	edt::action_registry own;
-	std::vector<edt::registration> own_menus = edt::register_builtin_menus(own);
 	std::optional<std::string> pending = fix;
 	int undone = 0;
+	edt::action_registry own;
+	std::vector<edt::registration> own_menus = edt::register_builtin_menus(own);
 	std::vector<edt::registration> own_actions = edt::register_edit_actions(own, documents, dialogs, {},
-		[&pending] { return pending; },
-		[&pending, &undone] {
+		[this] { return pending; },
+		[this] {
 			++undone;
 			pending.reset();
 			return true;
 		});
-	const auto own_label = [&own] {
-		for (const auto& item : own.items("Edit")) {
-			if (item.id == "edit.undo") {
-				return item.label;
-			}
-		}
-		return std::string{};
-	};
+};
 
-	// The scene is active with an empty history.
-	BOOST_TEST(own_label() == "Undo " + fix);
-	BOOST_REQUIRE(own.is_enabled("edit.undo"));
-	auto result = own.invoke("edit.undo", boost::json::object{});
+BOOST_FIXTURE_TEST_CASE(undo_never_takes_back_an_asset_action, asset_undo_fixture)
+{
+	BOOST_TEST(own_label("edit.undo") == "Undo");
+	BOOST_TEST(!own.is_enabled("edit.undo"));
+	const auto result = own.invoke("edit.undo", boost::json::object{});
+	if (result.ok) {
+		BOOST_TEST(!result.value.as_object().at("applied").as_bool());
+	}
+	BOOST_TEST(undone == 0);
+	BOOST_TEST((pending == fix));
+	BOOST_TEST(own_label("edit.undo_asset_action") == "Undo Asset Action: " + fix);
+}
+
+BOOST_FIXTURE_TEST_CASE(undo_asset_action_takes_back_the_last_asset_action, asset_undo_fixture)
+{
+	BOOST_REQUIRE(own.is_enabled("edit.undo_asset_action"));
+	const auto result = own.invoke("edit.undo_asset_action", boost::json::object{});
 	BOOST_REQUIRE(result.ok);
 	BOOST_TEST(result.value.as_object().at("applied").as_bool());
 	BOOST_TEST(result.value.as_object().at("label").as_string() == fix);
 	BOOST_TEST(undone == 1);
-	BOOST_TEST(!own.is_enabled("edit.undo"));
-	BOOST_TEST(own_label() == "Undo");
-
-	pending = fix;
+	BOOST_TEST(!own.is_enabled("edit.undo_asset_action"));
+	BOOST_TEST(own_label("edit.undo_asset_action") == "Undo Asset Action");
+	// The document's history is its own.
 	rename("b");
-	BOOST_TEST(own_label() == "Undo Rename node");
+	BOOST_TEST(!own.is_enabled("edit.undo_asset_action"));
 	BOOST_REQUIRE(own.invoke("edit.undo", boost::json::object{}).ok);
 	BOOST_TEST(name() == "a");
 	BOOST_TEST(undone == 1);
-	BOOST_TEST(own_label() == "Undo " + fix);
-
-	documents.shutdown();
-	BOOST_TEST(own_label() == "Undo " + fix);
-	BOOST_REQUIRE(own.is_enabled("edit.undo"));
-	BOOST_REQUIRE(own.invoke("edit.undo", boost::json::object{}).ok);
-	BOOST_TEST(undone == 2);
-	BOOST_TEST(!own.is_enabled("edit.undo"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

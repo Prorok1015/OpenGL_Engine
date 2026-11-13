@@ -49,7 +49,7 @@ namespace {
 
 std::vector<edt::registration> edt::register_edit_actions(
 	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active,
-	std::function<std::optional<std::string>()> fallback_undo_label, std::function<bool()> fallback_undo)
+	std::function<std::optional<std::string>()> asset_undo_label, std::function<bool()> asset_undo)
 {
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
@@ -58,40 +58,18 @@ std::vector<edt::registration> edt::register_edit_actions(
 	std::vector<registration> out;
 
 	out.push_back(actions.add({ .id = "edit.undo", .label = "Undo", .menu_path = "Edit", .shortcut = "Ctrl+Z",
-		.dynamic_label = [active, fallback_undo_label] {
+		.dynamic_label = [active] {
 			const document* doc = active();
-			if ((!doc || !doc->next_undo_entry()) && fallback_undo_label) {
-				if (const std::optional<std::string> label = fallback_undo_label()) {
-					return "Undo " + *label;
-				}
-			}
 			return menu_text("Undo", doc ? doc->next_undo_entry() : std::nullopt);
 		},
 		.yields_to_text_input = true,
-		.execute = [active, fallback_undo_label, fallback_undo](const json::value&) {
+		.execute = [active](const json::value&) {
 			document* doc = active();
-			if ((!doc || !doc->next_undo_entry()) && fallback_undo) {
-				const std::optional<std::string> label = fallback_undo_label ? fallback_undo_label() : std::nullopt;
-				const bool undone = label && fallback_undo();
-				json::object out{ { "applied", undone } };
-				if (undone) {
-					out["label"] = *label;
-				}
-				return action_result::success(std::move(out));
-			}
 			const auto entry = doc ? doc->next_undo_entry() : std::nullopt;
 			return action_result::success(applied(doc && doc->undo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle, fallback_undo_label, has_fallback = static_cast<bool>(fallback_undo)] {
-			if (!idle()) {
-				return false;
-			}
-			if (const document* doc = active(); doc && doc->next_undo_entry()) {
-				return !doc->edits_locked();
-			}
-			return has_fallback && fallback_undo_label && fallback_undo_label().has_value();
-		} }));
+		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_undo_entry().has_value(); } }));
 
 	out.push_back(actions.add({ .id = "edit.redo", .label = "Redo", .menu_path = "Edit", .shortcut = "Ctrl+Y",
 		.dynamic_label = [active] {
@@ -106,6 +84,26 @@ std::vector<edt::registration> edt::register_edit_actions(
 		},
 		.result_schema = applied_schema(),
 		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_redo_entry().has_value(); } }));
+
+	// The asset fixes of Problems (S57-4) are undone only on purpose, never by Ctrl+Z: no shortcut, not for agents.
+	if (asset_undo_label && asset_undo) {
+		out.push_back(actions.add({ .id = "edit.undo_asset_action", .label = "Undo Asset Action", .menu_path = "Edit",
+			.dynamic_label = [asset_undo_label] {
+				const std::optional<std::string> label = asset_undo_label();
+				return label ? "Undo Asset Action: " + *label : std::string{ "Undo Asset Action" };
+			},
+			.execute = [asset_undo_label, asset_undo](const json::value&) {
+				const std::optional<std::string> label = asset_undo_label();
+				const bool undone = label && asset_undo();
+				json::object out{ { "applied", undone } };
+				if (undone) {
+					out["label"] = *label;
+				}
+				return action_result::success(std::move(out));
+			},
+			.result_schema = applied_schema(),
+			.enabled = [idle, asset_undo_label] { return idle() && asset_undo_label().has_value(); } }));
+	}
 
 	// The person has looked at what the agent did: no more "changed by agent" marks. Not for agents themselves.
 	out.push_back(actions.add({ .id = "edit.accept_agent_changes", .label = "Accept Agent Changes", .menu_path = "Edit",
