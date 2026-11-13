@@ -242,7 +242,9 @@ namespace
 	prj::manifest parse_object(const json::object& root, std::vector<std::string>& warnings)
 	{
 		warn_unknown_fields(root,
-			{ "format_version", "name", "engine_version", "start_scene", "input_actions", "content_roots", "modules", "platforms" },
+			// migrated_with and applied_steps belong to project migration (tools/project_migration), not to struct manifest.
+			{ "format_version", "name", "engine_version", "start_scene", "input_actions", "content_roots", "modules", "platforms",
+				"migrated_with", "applied_steps" },
 			"$", warnings);
 
 		const auto required = [&root](std::string_view key) -> const json::value& {

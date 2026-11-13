@@ -12,7 +12,7 @@
 
 namespace
 {
-	constexpr std::string_view type_name = "resource_meta";
+	constexpr std::string_view type_name = res::asset_meta_type;
 	constexpr std::array<std::string_view, 6> known_keys{ "__type", "__version", "__guid", "importer", "settings", "flags" };
 
 	res::asset_meta_result fail(std::string field_path, std::string message,
