@@ -143,6 +143,19 @@ jobs:
           BASE: ${{ needs.plan.outputs.base }}
         run: echo "this run checks the PR merged onto $BASE"
 
+  # #768: every file of the repository's resource trees has its .resource (EPIC-57 S57-6), in the form the engine writes,
+  # and no two hold one ID. Not behind `fast`: a PR adding only a *.md to a resource tree is docs only for the plan, yet
+  # that file needs its .resource too. Needs no build.
+  asset-ids:
+    name: Asset IDs (.resource)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the .resource files of the repository's resource trees
+        run: |
+          python3 tools/ci/asset_ids.py --self-test
+          python3 tools/ci/asset_ids.py --check core/res projects/sandbox/res tests/static_game/project/res
+
   build:
     name: ${{ matrix.name }}
     needs: plan
@@ -1071,7 +1084,7 @@ jobs:
   # plan would otherwise leave nothing red. Skipped is accepted only where the plan decided to skip.
   summary:
     name: CI summary
-    needs: [plan, build, shared, no-assimp, sanitizers, coverage, editor-smoke]
+    needs: [plan, asset-ids, build, shared, no-assimp, sanitizers, coverage, editor-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1098,6 +1111,7 @@ jobs:
             status=1
           }
           expect() { if [ "$1" = true ]; then echo run; else echo skip; fi; }
+          check asset-ids run
           check build "$(expect "$([ "$matrix" != '[]' ] && echo true)")"
           check shared "$(expect "$abi")"
           for job in no-assimp sanitizers coverage editor-smoke; do check "$job" "$(expect "$fast")"; done
