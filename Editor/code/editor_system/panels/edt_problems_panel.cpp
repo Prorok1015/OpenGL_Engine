@@ -1,6 +1,9 @@
 #include "edt_problems_panel.h"
 #include <imgui.h>
+#include <algorithm>
 #include <format>
+#include <functional>
+#include <map>
 #include <optional>
 #include <utility>
 
@@ -53,6 +56,12 @@ namespace {
 			i += length;
 		}
 		return true;
+	}
+
+	bool same_problem(const edt::problem& a, const edt::problem& b)
+	{
+		return a.severity == b.severity && a.file == b.file && a.line == b.line && a.column == b.column && a.code == b.code
+			&& a.message == b.message && a.notes == b.notes;
 	}
 
 	// The first line: a row of the table is one line high.
@@ -115,8 +124,13 @@ void edt::problems_panel::refresh()
 	m_generation = m_problems.generation();
 	m_rows.clear();
 	m_counts = {};
+	std::map<std::string, int> seen;
 	for (auto& entry : m_problems.list()) {
 		row added;
+		// What the row is, not where it is: a batch that adds or drops rows above must not move a menu to another file.
+		added.id = std::format("{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}", entry.source, entry.item.file, entry.item.line, entry.item.column,
+			entry.item.code, entry.item.message);
+		added.id += std::format("\x1f{}", seen[added.id]++);
 		added.location = problem_display_file(entry.item.file, m_root);
 		if (entry.item.line > 0) added.location += std::format(":{}", entry.item.line);
 		added.tooltip = entry.item.message;
@@ -151,16 +165,39 @@ void edt::problems_panel::on_render()
 		const std::string label = std::format("{} ({})###problems_filter_{}", labels[i], m_counts[i], i);
 		if (ImGui::Checkbox(label.c_str(), &m_shown[i])) filter();
 	}
+	// Run after the frame's drawing: an undo changes the problems the rows were built from.
+	std::function<void()> chosen;
+	if (const std::optional<std::string> undo = m_undo_label && m_undo ? m_undo_label() : std::nullopt) {
+		ImGui::SameLine();
+		const std::string label = std::format("Undo: {}###problems_undo", *undo);
+		// Held down since the last frame it is itself the active item, which the gate would refuse: it stays clickable.
+		const bool enabled = !m_undo_enabled || m_undo_held || m_undo_enabled();
+		ImGui::BeginDisabled(!enabled);
+		if (ImGui::SmallButton(label.c_str())) {
+			chosen = m_undo;
+		}
+		m_undo_held = ImGui::IsItemActive();
+		ImGui::EndDisabled();
+	} else {
+		m_undo_held = false;
+	}
 	ImGui::Separator();
 
 	if (m_rows.empty()) {
 		ImGui::TextDisabled("No problems");
+		// Closes a menu whose row went with the rest.
+		std::optional<std::size_t> none;
+		draw_row_menu(chosen, none);
+		if (chosen) {
+			chosen();
+		}
 		return;
 	}
 
 	constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable
 		| ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
 	std::optional<std::size_t> activated;
+	std::optional<std::size_t> menu_opened;
 	if (ImGui::BeginTable("##problems_rows", 3, flags)) {
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, 70.f);
@@ -176,7 +213,7 @@ void edt::problems_panel::on_render()
 				const row& entry = m_rows[index];
 				const problem_severity severity = entry.item.severity;
 
-				ImGui::PushID(static_cast<int>(index));
+				ImGui::PushID(entry.id.c_str());
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
 				ImGui::PushStyleColor(ImGuiCol_Text, color_of(severity));
@@ -187,10 +224,8 @@ void edt::problems_panel::on_render()
 				activate = activate || (m_on_activate && ImGui::IsItemFocused()
 					&& (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)));
 				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.tooltip.c_str());
-				if (ImGui::BeginPopupContextItem("##problem_menu")) {
-					if (m_on_activate && ImGui::MenuItem("Go to")) activate = true;
-					if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(problem_copy_text(entry.item).c_str());
-					ImGui::EndPopup();
+				if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+					menu_opened = index;
 				}
 				if (activate) activated = index;
 
@@ -213,9 +248,61 @@ void edt::problems_panel::on_render()
 		}
 		ImGui::EndTable();
 	}
+	if (menu_opened) {
+		m_menu_row = m_rows[*menu_opened];
+		ImGui::OpenPopup("##problem_menu");
+	}
+	draw_row_menu(chosen, activated);
 	if (activated) {
 		// A copy: going to a row may change the problems the rows were built from.
-		const row chosen = m_rows[*activated];
-		m_on_activate(chosen.source, chosen.item);
+		const row picked = m_rows[*activated];
+		m_on_activate(picked.source, picked.item);
 	}
+	if (chosen) {
+		chosen();
+	}
+}
+
+void edt::problems_panel::draw_row_menu(std::function<void()>& chosen, std::optional<std::size_t>& activated)
+{
+	if (!ImGui::BeginPopup("##problem_menu")) {
+		m_menu_held = false;
+		return;
+	}
+	// The menu belongs to the row it was opened on: gone or changed by a batch meanwhile, the menu closes unused.
+	const auto current = std::ranges::find_if(m_rows, [this](const row& candidate) { return candidate.id == m_menu_row.id; });
+	if (current == m_rows.end() || !same_problem(current->item, m_menu_row.item)) {
+		ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		m_menu_held = false;
+		return;
+	}
+	const row& entry = *current;
+	bool held = false;
+	if (m_actions) {
+		auto actions = m_actions(entry.source, entry.item);
+		// As the Undo button: a fix waits while a dialog or an edit is in progress; a fix held down stays clickable.
+		const bool enabled = !m_actions_enabled || m_menu_held || m_actions_enabled();
+		ImGui::BeginDisabled(!enabled);
+		for (std::size_t i = 0; i < actions.size(); ++i) {
+			ImGui::PushID(static_cast<int>(i));
+			if (ImGui::MenuItem(actions[i].first.c_str())) {
+				chosen = std::move(actions[i].second);
+			}
+			held = held || ImGui::IsItemActive();
+			ImGui::PopID();
+		}
+		ImGui::EndDisabled();
+		if (!actions.empty()) {
+			ImGui::Separator();
+		}
+	}
+	m_menu_held = held;
+	if (m_on_activate && ImGui::MenuItem("Go to")) {
+		activated = static_cast<std::size_t>(current - m_rows.begin());
+	}
+	if (ImGui::MenuItem("Copy")) {
+		ImGui::SetClipboardText(problem_copy_text(entry.item).c_str());
+	}
+	ImGui::EndPopup();
 }
