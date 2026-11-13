@@ -93,7 +93,7 @@ jobs:
               const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
               const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
               const cut_off = files.length >= LIST_FILES_LIMIT;
-              const docs_only = !cut_off && touched.every(path => DOCS_PATHS.some(re => re.test(path)));
+              const docs_only = !cut_off && touched.length > 0 && touched.every(path => DOCS_PATHS.some(re => re.test(path)));
               abi = !pr.draft && (cut_off || touched.some(path => ABI_PATHS.some(re => re.test(path))));
               core.info(`${files.length} files changed; docs only: ${docs_only}; shared-engine builds: ${abi}`);
               if (docs_only) {
