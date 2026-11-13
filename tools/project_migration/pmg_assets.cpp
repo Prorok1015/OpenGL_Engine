@@ -49,6 +49,7 @@ void prj::migration::project_assets::rebuild()
 		if (res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(files[i].relative))) continue;
 		indexed_asset asset = entry_of(files[i]);
 		if (const std::optional<std::size_t> meta = pairing.meta_of[i]) {
+			asset.has_meta = true;
 			const res::asset_meta_file read = res::read_asset_meta_file(layers[files[*meta].layer], files[*meta].relative);
 			if (read.meta) {
 				asset.id = read.meta->guid;

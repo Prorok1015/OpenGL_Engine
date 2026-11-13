@@ -76,6 +76,25 @@ std::string id_text(const std::optional<res::asset_id>& id)
 	return id ? res::to_text(*id) : std::string{ "none" };
 }
 
+// `text` with a root __guid, written right after __type.
+std::string with_guid(const std::string& text, std::string_view guid)
+{
+	json::object root = json::parse(text).as_object();
+	json::object out;
+	for (const auto& member : root) {
+		out[member.key()] = member.value();
+		if (member.key() == "__type") out["__guid"] = guid;
+	}
+	return json::serialize(out);
+}
+
+// The root __guid of a desc's text, "none" without one.
+std::string guid_in(const std::string& text)
+{
+	const json::value* guid = json::parse(text).as_object().if_contains("__guid");
+	return guid ? std::string(guid->as_string()) : std::string{ "none" };
+}
+
 std::string new_meta_text()
 {
 	res::asset_meta meta;
@@ -168,6 +187,13 @@ struct step_files_fixture : test_util::scene_env
 	{
 		context.files.write(k_plain, "first");
 		context.files.write("res//textures//plain.png", "second");
+	}
+
+	static void pre_drops_the_guid(pmg::project_step_context& context)
+	{
+		json::object root = json::parse(context.files.read("res/worlds/w_v1.desc")).as_object();
+		root.erase("__guid");
+		context.files.write("res/worlds/w_v1.desc", json::serialize(root));
 	}
 
 	// Deleted, then made again: a change of that file, not a created one.
@@ -269,17 +295,34 @@ BOOST_AUTO_TEST_CASE(AFailingStep_RollsBackWhatTheStepsBeforeItDid)
 	BOOST_TEST((content_of(copy.root()) == before));
 }
 
-// The engine's save gives a res:// desc a __guid in its header (desc_adapter_t::serialize); the check after the
-// write takes the class from __type and __version only, so that is no difference. That the save makes one at all is #851.
-BOOST_AUTO_TEST_CASE(AGuidInTheHeaderOfAMigratedDesc_IsNoDifferenceForTheCheck)
+// #851: the engine's save makes a __guid for a res:// desc that has none (desc_adapter_t::serialize); a migration writes
+// the one the file had, or none.
+BOOST_AUTO_TEST_CASE(AMigratedDesc_KeepsItsGuid_AndGetsNoneItDidNotHave)
 {
-	BOOST_REQUIRE(read_text(copy.res() / "worlds/w_v1.desc").find("__guid") == std::string::npos);
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_new_guid));
+	BOOST_REQUIRE(read_text(copy.res() / "worlds/w_v2.desc").find("__guid") == std::string::npos);
 	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
-	const json::value migrated = json::parse(read_text(copy.res() / "worlds/w_v1.desc"));
-	BOOST_TEST(migrated.as_object().contains("__guid"));
+	BOOST_TEST(file_of(outcome.report, "res/worlds/w_v1.desc")->written_as == "engine");
+	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v1.desc")) == k_new_guid);
+	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v2.desc")) == "none");
+}
+
+// The case of #851: a pre step takes the __guid away (as assets.ids will once #772 is done), the type migration that
+// follows must not bring a new one back.
+BOOST_AUTO_TEST_CASE(AGuidAPreStepTookAway_DoesNotComeBack)
+{
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_new_guid));
+	registry.add(test_step("test.drop_guid", pmg::project_phase::pre, pre_drops_the_guid));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::ok));
+	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v1.desc")) == "none");
+	BOOST_TEST(json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().at("__version").as_int64()
+		== descs->current_version("world_desc"));
 }
 
 BOOST_AUTO_TEST_CASE(WhatAStepMayNotTouch_IsRefused_AndChangesNothing)

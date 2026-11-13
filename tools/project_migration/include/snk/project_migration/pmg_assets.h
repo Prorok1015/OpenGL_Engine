@@ -21,6 +21,8 @@ namespace prj::migration
 		std::string res_path;
 		// None: the file has no .resource, or it could not be read (problems() says why).
 		std::optional<res::asset_id> id;
+		// A .resource pairs with the file, read or not.
+		bool has_meta = false;
 	};
 
 	class project_assets

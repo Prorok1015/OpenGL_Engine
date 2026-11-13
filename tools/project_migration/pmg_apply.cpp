@@ -511,6 +511,9 @@ namespace
 				file.written_as = "json";
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
+			// The engine's save makes a __guid for a res:// desc that has none (desc_adapter_t::serialize); a migration
+			// writes the one the file had, or none (#851): the ID of a file is its .resource's (EPIC-57 4.2).
+			const bool had_guid = migrated.is_object() && migrated.as_object().contains("__guid");
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
 
@@ -520,10 +523,13 @@ namespace
 			} else {
 				try {
 					std::string saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original)));
-					const json::value written = json::parse(saved, {}, parse_options());
+					json::value written = json::parse(saved, {}, parse_options());
 					why_json = lost_parent(migrated, &written, {});
 					if (why_json.empty()) {
 						file.written_as = "engine";
+						if (!had_guid && written.is_object() && written.as_object().erase("__guid") > 0) {
+							return text_of(m_context.descs.serialize_to_bytes(written));
+						}
 						return saved;
 					}
 				} catch (const std::exception& e) {

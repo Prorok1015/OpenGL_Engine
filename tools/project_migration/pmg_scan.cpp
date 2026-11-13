@@ -15,6 +15,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -325,15 +326,6 @@ namespace
 		}
 	}
 
-	// A sidecar is <name>.resource next to the asset (EPIC-57 4.2; the paths of sidecars are S57-6, #768).
-	bool has_sidecar(const fs::path& asset)
-	{
-		std::error_code ec;
-		fs::path sidecar = asset;
-		sidecar += ".resource";
-		return fs::is_regular_file(fs::symlink_status(sidecar, ec));
-	}
-
 	struct root_walk
 	{
 		prj::migration::scan_result& result;
@@ -350,7 +342,8 @@ namespace
 			result.files.push_back(std::move(file));
 		}
 
-		void entry(const fs::path& path, const fs::file_status& status)
+		// `owners`: the res::asset_name_key of every file a .resource of this folder belongs to (EPIC-57 4.2).
+		void entry(const fs::path& path, const fs::file_status& status, const std::set<std::string>& owners)
 		{
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
@@ -370,12 +363,15 @@ namespace
 			prj::migration::scanned_file file;
 			file.path = fs_paths::generic_utf8_of(path.lexically_relative(project));
 			const std::string extension = lower(fs_paths::utf8_of(path.extension()));
-			if (extension == ".desc") {
-				scan_desc(file, path, descs, options.max_file_bytes);
-			} else if (extension == ".resource") {
+			if (extension == ".resource") {
 				scan_sidecar(file, path, descs, options);
 			} else {
-				file.kind = has_sidecar(path) ? file_class::current : file_class::missing_resource;
+				file.has_resource = owners.contains(res::asset_name_key(name, res::asset_names_case_insensitive));
+				if (extension == ".desc") {
+					scan_desc(file, path, descs, options.max_file_bytes);
+				} else {
+					file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
+				}
 			}
 			result.files.push_back(std::move(file));
 		}
@@ -396,7 +392,14 @@ namespace
 				entries.emplace_back(it->path(), status_error ? fs::file_status{ fs::file_type::unknown } : status);
 			}
 			if (ec) refuse(dir, std::format("the folder could not be listed to the end: {}", ec.message()));
-			for (const auto& [path, status] : entries) entry(path, status);
+			std::set<std::string> owners;
+			for (const auto& [path, status] : entries) {
+				const std::string name = fs_paths::utf8_of(path.filename());
+				if (fs::is_regular_file(status) && res::is_asset_meta_sidecar(name)) {
+					owners.insert(res::asset_name_key(res::asset_meta_owner(name), res::asset_names_case_insensitive));
+				}
+			}
+			for (const auto& [path, status] : entries) entry(path, status, owners);
 		}
 	};
 
