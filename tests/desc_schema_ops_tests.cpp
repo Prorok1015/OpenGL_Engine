@@ -97,6 +97,17 @@ namespace ops_test {
 		BOOST_DESCRIBE_CLASS(settings_doc, (), (limits, gain), (), ())
 	};
 
+	class attr_optional_desc : public desc::schema_desc<attr_optional_desc, desc::schema_kind::component>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.attr_optional";
+
+		float level = 7.0f;
+		std::string label = "x";
+
+		BOOST_DESCRIBE_CLASS(attr_optional_desc, (), (level, label), (), ())
+	};
+
 	// Write policies for the keys a legacy format needs: an explicit null for "nothing", a key that is read but never written.
 	enum class queue { none, opaque, mix };
 	BOOST_DESCRIBE_ENUM(queue, none, opaque, mix)
@@ -263,6 +274,9 @@ namespace desc {
 
 	template<>
 	inline constexpr auto field_attrs<ops_test::keyed> = attrs(f("parts").ref("ops.inner"));
+
+	template<>
+	inline constexpr auto field_attrs<ops_test::attr_optional_desc> = attrs(f("level").optional(), f("label").optional());
 
 	template<>
 	inline constexpr auto field_attrs<ops_test::widget> = attrs(
@@ -1647,6 +1661,58 @@ BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNoWarning, ops_fixture)
 	value.deserialize(ds, parse(R"({ "gain": null, "note": null })"));
 	BOOST_TEST(!value.gain.has_value());
 	BOOST_TEST(warnings == 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldGoesBackToItsDefault_StdOptionalAttributeAndRuntime, ops_fixture)
+{
+	// std::optional: nothing
+	ops_test::keyed typed;
+	typed.deserialize(ds, parse(R"({ "gain": 2.0 })"));
+	BOOST_REQUIRE(typed.gain.has_value());
+	typed.deserialize(ds, parse(R"({ "gain": null })"));
+	BOOST_TEST(!typed.gain.has_value());
+
+	// field_attr::optional() on a plain member: the default of the schema
+	ops_test::attr_optional_desc plain;
+	plain.deserialize(ds, parse(R"({ "level": 3.0, "label": "set" })"));
+	BOOST_TEST(plain.level == 3.0f);
+	plain.deserialize(ds, parse(R"({ "level": null, "label": null })"));
+	BOOST_TEST(plain.level == 7.0f);
+	BOOST_TEST(plain.label == "x");
+
+	// a runtime schema: the default when it has one, the empty value of the kind when it has none
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(json::parse(R"({
+		"name": "ops.runtime_optional", "kind": "component",
+		"fields": [
+			{ "name": "hp", "kind": "f32", "default": 100, "optional": true },
+			{ "name": "extra", "kind": "f32", "optional": true }
+		]
+	})").as_object())));
+	const auto runtime = spawn("ops.runtime_optional");
+	BOOST_REQUIRE(runtime);
+	runtime->deserialize(ds, parse(R"({ "hp": 5.0, "extra": 3.0 })"));
+	BOOST_TEST(runtime->get("/hp").as_double() == 5.0);
+	runtime->deserialize(ds, parse(R"({ "hp": null, "extra": null })"));
+	BOOST_TEST(runtime->get("/hp").as_double() == 100.0);
+	BOOST_TEST(runtime->get("/extra").as_double() == 0.0);
+}
+
+BOOST_FIXTURE_TEST_CASE(ANullOverrideIsValidForEveryKindOfOptionalField, ops_fixture)
+{
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(json::parse(R"({
+		"name": "ops.runtime_optional2", "kind": "component",
+		"fields": [ { "name": "hp", "kind": "f32", "default": 100, "optional": true }, { "name": "must", "kind": "f32", "default": 1 } ]
+	})").as_object())));
+	const auto runtime = *ds.find_schema("ops.runtime_optional2");
+	const auto typed_std = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	const auto typed_attr = desc::schema_generator<ops_test::attr_optional_desc>::make("ops.attr_optional", 1, desc::schema_kind::component);
+	const auto null_at = [](const desc::type_schema& schema, const char* pointer) {
+		return desc::validate_override(schema, desc::json_change{ pointer, json::value() });
+	};
+	BOOST_TEST((null_at(typed_std, "/gain") == desc::override_status::valid));
+	BOOST_TEST((null_at(typed_attr, "/level") == desc::override_status::valid));
+	BOOST_TEST((null_at(runtime, "/hp") == desc::override_status::valid));
+	BOOST_TEST((null_at(runtime, "/must") == desc::override_status::bad_value));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -543,6 +543,43 @@ namespace desc
 			return found ? std::make_shared<const enum_schema>(*found) : nullptr;
 		}
 
+		// What a field is set back to by a null in the file (field_schema::optional): its kind's empty value. Null: there is none (a
+		// custom value, an entity, a node reference), the field keeps what it has.
+		json::value zero_json(const field_ops& ops)
+		{
+			const auto zeros = [](std::size_t count, double last = 0.0) {
+				json::array out(count, json::value(0.0));
+				out.back() = last;
+				return json::value(std::move(out));
+			};
+			switch (ops.kind) {
+			case field_kind::boolean: return json::value(false);
+			case field_kind::i32:
+			case field_kind::i64: return json::value(std::int64_t{ 0 });
+			case field_kind::u32:
+			case field_kind::u64: return json::value(std::uint64_t{ 0 });
+			case field_kind::f32:
+			case field_kind::f64: return json::value(0.0);
+			case field_kind::vec2: return zeros(2);
+			case field_kind::vec3: return zeros(3);
+			case field_kind::vec4: return zeros(4);
+			case field_kind::quat:
+			case field_kind::color: return zeros(4, 1.0);
+			case field_kind::string:
+			case field_kind::res_tag:
+			case field_kind::desc_ref: return json::value(std::string_view{});
+			case field_kind::enumeration:
+				return ops.enumeration && !ops.enumeration->items.empty() ? json::value(ops.enumeration->items.front().name) : json::value();
+			case field_kind::structure:
+			case field_kind::map: return json::value(json::object{});
+			case field_kind::array: return json::value(json::array{});
+			case field_kind::node_ref:
+			case field_kind::entity:
+			case field_kind::custom: break;
+			}
+			return json::value();
+		}
+
 		void apply_defaults(const schema_binding& binding, dyn_ref ref)
 		{
 			for (std::size_t i = 0; i < binding.ops.size(); ++i) {
@@ -1075,11 +1112,13 @@ namespace desc
 				continue;
 			}
 			bool fits = binding.ops[i].from_json(binding.ops[i], obj, *value, field_ctx);
-			// A null for an optional field is "not set": a std::optional resets, any other field takes its default (and keeps
-			// what it has when it has none). Not a bad value: the check of an override accepts the same null.
+			// A null for an optional field is "not set": the field goes back to its default, or to the empty value of its kind
+			// when it has none (a std::optional reads the null itself: nullopt). Not a bad value, and the check of an override
+			// accepts the same null; under a __parent it takes the parent's value away.
 			if (!fits && field.optional && value->is_null()) {
-				if (!field.default_value.is_null()) {
-					binding.ops[i].from_json(binding.ops[i], obj, field.default_value, field_ctx);
+				const json::value reset = field.default_value.is_null() ? zero_json(binding.ops[i]) : field.default_value;
+				if (!reset.is_null()) {
+					binding.ops[i].from_json(binding.ops[i], obj, reset, field_ctx);
 				}
 				fits = true;
 			}
