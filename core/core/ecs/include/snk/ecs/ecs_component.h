@@ -4,6 +4,7 @@
 #include <entt/meta/meta.hpp>
 #include <entt/meta/factory.hpp>
 #include <entt/meta/context.hpp>
+#include <entt/meta/resolve.hpp>
 #include <entt/locator/locator.hpp>
 #include <snk/common/snk_api.h>
 
@@ -14,27 +15,34 @@ namespace ecs
 	{
 	};
 
-    inline constexpr entt::hashed_string snapshot_get_h = "snapshot_get"_hs;
+    // The component's sandbox_emplace_fn (a function returning it): what world_context::apply_commands moves the
+    // component's sandbox values into the world with. The loop, the entity map and the remap of entity fields are the
+    // engine's (#784), so only this adapter is compiled in a module.
     inline constexpr entt::hashed_string loader_get_h = "loader_get"_hs;
+
+    // Places a copy of `value` (null for an empty type) on `owner` in the world's storage `id`; the placed component,
+    // or null for an empty type.
+    using sandbox_emplace_fn = void* (*)(entt::registry& world, entt::id_type id, entt::entity owner, const void* value);
 
     [[nodiscard]] constexpr auto to_main(ecs::sandbox_entity e) noexcept {
         return static_cast<entt::entity>(static_cast<std::uint32_t>(e));
     }
 
     template<typename T>
-    void meta_snapshot_get(const sandbox_snapshot& snapshot, meta_archive& archive) {
-        snapshot.get<T>(archive);
+    void* sandbox_emplace(entt::registry& world, entt::id_type id, entt::entity owner, const void* value) {
+        auto& storage = world.storage<T>(id);
+        // What basic_continuous_loader::get tells a storage without values by.
+        if constexpr (std::tuple_size_v<decltype(storage.get_as_tuple({}))> == 0u) {
+            storage.emplace(owner);
+            return nullptr;
+        } else {
+            return &storage.emplace(owner, *static_cast<const T*>(value));
+        }
     }
 
     template<typename T>
-    void meta_loader_get(entt::continuous_loader* loader, const entt::basic_sparse_set<ecs::sandbox_entity>* raw_storage_ptr) {
-        const auto* storage_ptr = static_cast<const entt::basic_storage<T, ecs::sandbox_entity>*>(raw_storage_ptr);
-
-        if (!storage_ptr) return;
-
-        ecs::sandbox_loader_archive archive{ *loader, *storage_ptr };
-
-        loader->get<T>(archive);
+    sandbox_emplace_fn sandbox_emplace_of() {
+        return &sandbox_emplace<T>;
     }
 
     // The engine's meta context, read-only: a game module registers into its layer's context (scene_layer::meta()).
@@ -56,7 +64,6 @@ namespace ecs
     entt::meta_factory<T> register_component(entt::meta_ctx& ctx) {
         return entt::meta_factory<T>{ ctx }
             .type(entt::type_hash<T>::value())
-            .template func<&meta_snapshot_get<T>>(snapshot_get_h)
-            .template func<&meta_loader_get<T>>(loader_get_h);
+            .template func<&sandbox_emplace_of<T>>(loader_get_h);
     }
 }

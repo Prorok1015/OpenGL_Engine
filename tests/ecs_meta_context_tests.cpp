@@ -26,6 +26,13 @@ namespace {
 
 	struct tag_component {};
 
+	// Both kinds of entity field a C++ component may hold (#738).
+	struct linked_component {
+		entt::entity world_target = entt::null;
+		ecs::sandbox_entity sandbox_target = entt::null;
+		int value = 0;
+	};
+
 	entt::entity sandbox_id(ecs::sandbox_entity entity)
 	{
 		return static_cast<entt::entity>(static_cast<std::uint32_t>(entity));
@@ -68,7 +75,6 @@ BOOST_FIXTURE_TEST_CASE(registered_component_is_resolved_by_its_type_hash, meta_
 	const auto type = entt::resolve(ecs::meta_context(), registered_hash);
 	BOOST_REQUIRE(type);
 	BOOST_TEST(type.id() == registered_hash);
-	BOOST_TEST(static_cast<bool>(type.func(ecs::snapshot_get_h)));
 	BOOST_TEST(static_cast<bool>(type.func(ecs::loader_get_h)));
 	BOOST_TEST(!entt::resolve(ecs::meta_context(), unregistered_hash));
 }
@@ -117,9 +123,7 @@ BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_refere
 {
 	using namespace entt::literals;
 	entt::meta_ctx layer;
-	ecs::register_component<pointer_component>(layer);
-	// remap_fields resolves the component's fields in the default context.
-	entt::meta_factory<pointer_component>{}.data<&pointer_component::target>("target"_hs);
+	ecs::register_component<pointer_component>(layer).data<&pointer_component::target>("target"_hs);
 
 	entt::registry reg;
 	// The world's ids differ from the sandbox's: an unmapped raw id would name one of these.
@@ -132,7 +136,6 @@ BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_refere
 	sandbox.emplace<pointer_component>(pointer, pointer_component{ sandbox_id(bare) });
 
 	scn::world_context::apply_commands(reg, &layer);
-	entt::meta_reset<pointer_component>();
 
 	BOOST_TEST(live_entities(reg) == 4u);
 	const auto view = reg.view<const pointer_component>();
@@ -144,6 +147,49 @@ BOOST_AUTO_TEST_CASE(an_entity_without_components_reaches_the_world_and_a_refere
 	BOOST_TEST((target != w0 && target != w1));
 	BOOST_TEST((target != moved_pointer));
 	BOOST_TEST(!reg.all_of<pointer_component>(target));
+}
+
+// #738: the entity fields of a C++ component are remapped by the meta of the context it is registered in. Nothing is
+// registered in the default context: there remap_fields looked, and found no fields.
+BOOST_AUTO_TEST_CASE(entity_fields_are_remapped_by_the_context_of_the_registration)
+{
+	using namespace entt::literals;
+	BOOST_REQUIRE(!entt::resolve<linked_component>());
+	const auto register_linked = [](entt::meta_ctx& ctx) {
+		ecs::register_component<linked_component>(ctx)
+			.data<&linked_component::world_target>("world_target"_hs)
+			.data<&linked_component::sandbox_target>("sandbox_target"_hs)
+			.data<&linked_component::value>("value"_hs);
+	};
+
+	entt::meta_ctx layer;
+	register_linked(layer);
+	register_linked(ecs::mutable_meta_context());
+	for (const entt::meta_ctx* context : { static_cast<const entt::meta_ctx*>(&layer), static_cast<const entt::meta_ctx*>(nullptr) }) {
+		BOOST_TEST_INFO((context ? "layer" : "engine"));
+		entt::registry reg;
+		static_cast<void>(reg.create());
+		static_cast<void>(reg.create());
+		auto& sandbox = reg.ctx().emplace<ecs::entity_spawner>();
+		const auto first = sandbox.create();
+		const auto second = sandbox.create();
+		sandbox.emplace<linked_component>(first, linked_component{ sandbox_id(second), second, 3 });
+		sandbox.emplace<linked_component>(second, linked_component{ sandbox_id(first), first, 4 });
+
+		scn::world_context::apply_commands(reg, context);
+
+		const auto view = reg.view<const linked_component>();
+		BOOST_REQUIRE(view.size() == 2u);
+		for (const entt::entity entity : view) {
+			const linked_component& linked = view.get<const linked_component>(entity);
+			BOOST_TEST(reg.valid(linked.world_target));
+			BOOST_TEST((linked.world_target != entity));
+			BOOST_TEST((linked.world_target == ecs::to_main(linked.sandbox_target)));
+			BOOST_TEST(view.get<const linked_component>(linked.world_target).value == (linked.value == 3 ? 4 : 3));
+		}
+	}
+	entt::meta_reset<linked_component>(ecs::mutable_meta_context());
+	BOOST_TEST(!entt::resolve<linked_component>());
 }
 
 // The ids the sandbox released on an earlier apply are not live: they make no world entity.
