@@ -3,10 +3,13 @@ name: Nightly
 # The jobs too slow for every pull request (#830): Linux TSan, the SDK packages (Linux, with and without assimp),
 # the Windows release package and the extract benchmark. They run on aibranch once a night and by hand
 # (Actions > Nightly > Run workflow). build.yml keeps the six fast jobs on every PR and the two shared-engine builds
-# on PRs that touch public headers, CMake or workflows.
+# on PRs that touch headers, CMake or workflows.
 #
-# A schedule fires only from the workflow file on the default branch, so every job checks out aibranch's head itself.
-# A red night opens an issue (labels bug, ci, P0) or comments on the open one; the next green night closes it.
+# A schedule fires only from the workflow file on the default branch (main), and `uses: ./.github/workflows/...` is
+# read from the branch the run started on: until this file is on the default branch, the night runs only by hand.
+# Every job checks out the SHA the plan picked itself.
+# A red night (a failed plan included) opens an issue (labels bug, ci, P0) or comments on the open one; the next green
+# night closes it.
 
 on:
   # PROBE (#830): runs on this PR to show the report; removed in its own commit before the PR leaves draft.
@@ -26,8 +29,9 @@ on:
         type: boolean
         default: false
 
+# PROBE (#830): its own group, so it never displaces a night waiting in the queue.
 concurrency:
-  group: nightly-${{ github.workflow }}
+  group: nightly-${{ github.workflow }}${{ github.event_name == 'pull_request' && '-probe' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -43,6 +47,7 @@ jobs:
       contents: read
       actions: read
     outputs:
+      ref: ${{ steps.plan.outputs.ref }}
       sha: ${{ steps.plan.outputs.sha }}
       run: ${{ steps.plan.outputs.run }}
       last_green: ${{ steps.plan.outputs.last_green }}
@@ -56,19 +61,22 @@ jobs:
             const force = String(inputs.force) === 'true';
             const { data: commit } = await github.rest.repos.getCommit({ ...context.repo, ref });
             const sha = commit.sha;
+            core.setOutput('ref', ref);
             core.setOutput('sha', sha);
-            // The run's own head_sha is the default branch's for a schedule: the SHA a night checked is in the name of its
-            // last job, "Checked <sha>", which runs only when every job before it passed.
+            // The run's own head_sha is the default branch's for a schedule: what a night checked is in the name of its
+            // last job, "Checked <ref>@<sha>", which runs only when every job before it passed. Only nights count
+            // (schedule, by hand) on the same ref: never a probe, never a dispatch on another branch.
             let last = '';
             {
               const runs = await github.rest.actions.listWorkflowRuns({
-                ...context.repo, workflow_id: 'nightly.yml', status: 'success', per_page: 20,
+                ...context.repo, workflow_id: 'nightly.yml', status: 'success', per_page: 50,
               });
+              const prefix = `Checked ${ref}@`;
               for (const r of runs.data.workflow_runs) {
-                if (r.id === context.runId) continue;
+                if (r.id === context.runId || !['schedule', 'workflow_dispatch'].includes(r.event)) continue;
                 const { data } = await github.rest.actions.listJobsForWorkflowRun({ ...context.repo, run_id: r.id });
-                const marker = data.jobs.find(j => j.name.startsWith('Checked ') && j.conclusion === 'success');
-                if (marker) { last = marker.name.slice('Checked '.length); break; }
+                const marker = data.jobs.find(j => j.name.startsWith(prefix) && j.conclusion === 'success');
+                if (marker) { last = marker.name.slice(prefix.length); break; }
               }
             }
             let run = force || last !== sha;
@@ -86,7 +94,7 @@ jobs:
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
-      # ASan+UBSan is FAST, TSan is FULL: the matrix is the fast or the full list (see the tiers above).
+      # ASan+UBSan is build.yml's, on every PR.
       matrix:
         include:
           - { name: "Linux TSan", preset: "ci-linux-tsan", experimental: false }
@@ -246,8 +254,6 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     name: Extract benchmark (Linux, report-only)
     runs-on: ubuntu-latest
-    # Report-only: a slow runner must not turn the night red; a build failure still shows in the job.
-    continue-on-error: true
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -288,7 +294,9 @@ jobs:
         if: always()
         run: ccache -s
 
+      # Report-only: a slow runner must not turn the night red. The optimized -Werror build above still must pass.
       - name: Run extract benchmark
+        continue-on-error: true
         working-directory: build/ci-linux-gcc-release
         run: |
           set -o pipefail
@@ -455,7 +463,7 @@ jobs:
 
   # Runs only when every job above passed: its name records the SHA this night checked (see plan).
   checked:
-    name: Checked ${{ needs.plan.outputs.sha }}
+    name: Checked ${{ needs.plan.outputs.ref }}@${{ needs.plan.outputs.sha }}
     needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-latest
@@ -476,11 +484,11 @@ jobs:
           echo "probe: a green night"
 
   # A red night opens an issue (bug, ci, P0) with the run and the commits since the last green night, or comments on the
-  # one that is open; a green night closes it.
+  # one that is open; a green night closes it. A plan that did not succeed is a red night: nothing was checked.
   report:
     name: Report (nightly)
     needs: [plan, tsan, no-assimp-sdk, extract-bench, sdk-package, windows-package, checked, probe]
-    if: always() && needs.plan.outputs.run != 'false'
+    if: always() && (needs.plan.result != 'success' || needs.plan.outputs.run != 'false')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -495,14 +503,16 @@ jobs:
           script: |
             const title = 'Nightly CI red';
             const needs = JSON.parse(process.env.NEEDS);
-            const failed = Object.entries(needs)
-              .filter(([name, job]) => name !== 'plan' && name !== 'checked' && job.result !== 'success' && job.result !== 'skipped')
-              .map(([name, job]) => `${name}: ${job.result}`);
+            const failed = needs.plan.result !== 'success'
+              ? [`plan: ${needs.plan.result}`]
+              : Object.entries(needs)
+                .filter(([name, job]) => name !== 'plan' && name !== 'checked' && job.result !== 'success' && job.result !== 'skipped')
+                .map(([name, job]) => `${name}: ${job.result}`);
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const open = (await github.paginate(github.rest.issues.listForRepo, {
               ...context.repo, state: 'open', labels: 'ci,bug', per_page: 100,
             })).filter(i => !i.pull_request && i.title.startsWith(title));
-            const sha = process.env.SHA;
+            const sha = process.env.SHA || 'unknown';
             if (failed.length === 0) {
               for (const issue of open) {
                 await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body: `Green again on ${sha}: ${runUrl}` });
@@ -512,9 +522,13 @@ jobs:
             }
             let commits = '';
             const last = process.env.LAST_GREEN;
-            if (last && last !== sha) {
-              const { data } = await github.rest.repos.compareCommitsWithBasehead({ ...context.repo, basehead: `${last}...${sha}` });
-              commits = data.commits.map(c => `- ${c.sha.slice(0, 8)} ${c.commit.message.split('\n')[0]}`).join('\n');
+            if (last && process.env.SHA && last !== sha) {
+              try {
+                const { data } = await github.rest.repos.compareCommitsWithBasehead({ ...context.repo, basehead: `${last}...${sha}` });
+                commits = data.commits.map(c => `- ${c.sha.slice(0, 8)} ${c.commit.message.split('\n')[0]}`).join('\n');
+              } catch (e) {
+                commits = `(could not list the commits: ${e.message})`;
+              }
             }
             const body = [
               `Run: ${runUrl}`,

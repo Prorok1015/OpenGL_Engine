@@ -26,8 +26,11 @@ on:
 #   every PR event, drafts included, every push and by hand - the six fast jobs: Coverage (Linux GCC Debug, also runs
 #     the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual
 #     smoke. Marking a draft ready does not run them again on a head SHA where they all passed.
-#   a PR that is not a draft and touches public headers, CMake or workflows, every push and by hand - also Windows MSVC
+#   a PR that is not a draft and touches a header, CMake or workflows, every push and by hand - also Windows MSVC
 #     Shared+PCH (#557) and Linux GCC Shared (the project template's game module, #434): the engine as a shared library.
+#     A draft and a PR that touches none of them no longer build Linux GCC Shared.
+#   CI summary - the last job: red when the plan or any job the plan asked for did not pass. Plan and CI summary are
+#     the required checks that guard against a run where everything was skipped.
 #   nightly.yml, on aibranch once a night and by hand - Linux TSan, the SDK packages (Linux, with and without assimp),
 #     the Windows package (#223) and the extract benchmark (#505).
 # Every build uses the shared engine but Linux Clang Debug (#223).
@@ -45,10 +48,12 @@ permissions:
 jobs:
   # Decides what this run builds (#830):
   #   fast - the six jobs every PR runs. False only when a draft is marked ready for review and every one of them already
-  #          passed on this very head SHA in the draft's run: the full run then adds only what drafts skip.
+  #          passed in one earlier Build run of this PR on this very head SHA and on the base SHA aibranch has now: a run
+  #          checks the merge of head and base, so a base that moved since then means running them again.
   #   abi  - Windows MSVC Shared+PCH and Linux GCC Shared, the builds of the engine as a shared library. On a PR that is
-  #          not a draft and touches a public header (**/include/**), CMake (CMakeLists.txt, cmake/**,
-  #          CMakePresets.json) or a workflow (.github/**); always on a push and by hand.
+  #          not a draft and touches any header (.h, .hpp, .inl: SNK_API headers live outside include/ too), CMake
+  #          (CMakeLists.txt, *.cmake, *.cmake.in, cmake/**, CMakePresets.json) or a workflow (.github/**); always on a
+  #          push and by hand. A PR whose file list is cut off at GitHub's 3000 files counts as touching them.
   # The changed files are read here, not through `paths:` on the trigger, so the workflow always starts and a required
   # check never waits for a run that does not come. The slow jobs (TSan, the packages, the benchmark) are nightly.yml.
   plan:
@@ -57,7 +62,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      checks: read
+      actions: read
     outputs:
       fast: ${{ steps.plan.outputs.fast }}
       abi: ${{ steps.plan.outputs.abi }}
@@ -69,7 +74,9 @@ jobs:
           script: |
             const FAST = ['Windows MSVC Debug', 'Linux Clang Debug', 'Linux ASan+UBSan', 'Linux GCC no Assimp',
               'Coverage (Linux GCC Debug)', 'Editor visual smoke (Linux)'];
-            const ABI_PATHS = [/(^|\/)include\//, /(^|\/)CMakeLists\.txt$/, /^cmake\//, /^CMakePresets\.json$/, /^\.github\//];
+            const ABI_PATHS = [/\.(h|hpp|inl)$/, /(^|\/)CMakeLists\.txt$/, /\.cmake(\.in)?$/, /^cmake\//, /^CMakePresets\.json$/,
+              /^\.github\//];
+            const LIST_FILES_LIMIT = 3000;
             let fast = true;
             let abi = true;
             if (context.eventName === 'pull_request') {
@@ -79,14 +86,28 @@ jobs:
               } else {
                 const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
                 const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
-                abi = touched.some(path => ABI_PATHS.some(re => re.test(path)));
+                abi = files.length >= LIST_FILES_LIMIT || touched.some(path => ABI_PATHS.some(re => re.test(path)));
                 core.info(`${files.length} files changed; shared-engine builds: ${abi}`);
               }
               if (context.payload.action === 'ready_for_review') {
-                const runs = await github.paginate(github.rest.checks.listForRef, { ...context.repo, ref: pr.head.sha, per_page: 100 });
-                const passed = FAST.filter(name => runs.some(r => r.name === name && r.status === 'completed' && r.conclusion === 'success'));
-                fast = passed.length !== FAST.length;
-                core.info(`fast jobs already green on ${pr.head.sha}: ${passed.length}/${FAST.length}${fast ? ', running them again' : ''}`);
+                // The live tip, not pr.base.sha: the payload's base SHA can lag behind the branch.
+                const { data: base } = await github.rest.repos.getBranch({ ...context.repo, branch: pr.base.ref });
+                const { data: self } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: context.runId });
+                const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                  ...context.repo, workflow_id: self.workflow_id, event: 'pull_request', head_sha: pr.head.sha, per_page: 100,
+                });
+                let green = null;
+                for (const run of runs) {
+                  if (run.id === context.runId) continue;
+                  const ofThisPr = (run.pull_requests || []).find(p => p.number === pr.number);
+                  if (!ofThisPr || ofThisPr.base.sha !== base.commit.sha) continue;
+                  const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, { ...context.repo, run_id: run.id, per_page: 100 });
+                  if (FAST.every(name => jobs.some(j => j.name === name && j.conclusion === 'success'))) { green = run; break; }
+                }
+                fast = green === null;
+                core.info(green
+                  ? `the fast jobs passed on ${pr.head.sha} over base ${base.commit.sha} in ${green.html_url}: not running them again`
+                  : `no earlier run passed every fast job on ${pr.head.sha} over base ${base.commit.sha}: running them`);
               }
             }
             const matrix = [];
@@ -1024,3 +1045,38 @@ jobs:
           name: editor-smoke
           path: headless_out
           if-no-files-found: warn
+
+  # The required check besides Plan (#830): a job skipped by `if` counts as passed for branch protection, so a failed
+  # plan would otherwise leave nothing red. Skipped is accepted only where the plan decided to skip.
+  summary:
+    name: CI summary
+    needs: [plan, build, shared, no-assimp, sanitizers, coverage, editor-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          plan_result="$(jq -r '.plan.result' <<<"$NEEDS")"
+          if [ "$plan_result" != success ]; then
+            echo "::error::Plan: $plan_result"
+            exit 1
+          fi
+          fast="$(jq -r '.plan.outputs.fast' <<<"$NEEDS")"
+          abi="$(jq -r '.plan.outputs.abi' <<<"$NEEDS")"
+          matrix="$(jq -r '.plan.outputs.build_matrix' <<<"$NEEDS")"
+          status=0
+          check() {
+            local job="$1" expected="$2" result
+            result="$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")"
+            if [ "$expected" = run ] && [ "$result" = success ]; then echo "$job: success"; return; fi
+            if [ "$expected" = skip ] && [ "$result" = skipped ]; then echo "$job: skipped by the plan"; return; fi
+            echo "::error::$job: $result (the plan expected it to $expected)"
+            status=1
+          }
+          expect() { if [ "$1" = true ]; then echo run; else echo skip; fi; }
+          check build "$(expect "$([ "$matrix" != '[]' ] && echo true)")"
+          check shared "$(expect "$abi")"
+          for job in no-assimp sanitizers coverage editor-smoke; do check "$job" "$(expect "$fast")"; done
+          exit "$status"
