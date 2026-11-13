@@ -32,6 +32,11 @@ namespace
 							binding.mouse_not_text = bo->contains("mouse") && !bo->at("mouse").is_string();
 							binding.gamepad_not_text = bo->contains("gamepad") && !bo->at("gamepad").is_string();
 							binding.axis_not_text = bo->contains("axis") && !bo->at("axis").is_string();
+							if (const auto* threshold = bo->if_contains("threshold")) {
+								const double number = threshold->is_number() ? threshold->to_number<double>() : -1.0;
+								binding.threshold_invalid = number < 0.0 || number > 1.0;
+								if (!binding.threshold_invalid) binding.threshold = static_cast<float>(number);
+							}
 						}
 						action.bindings.push_back(std::move(binding));
 					}
@@ -57,6 +62,7 @@ json::value desc::json_codec<scn::input_action_list>::to_json(const scn::input_a
 			if (!binding.mouse.empty()) b["mouse"] = binding.mouse;
 			if (!binding.gamepad.empty()) b["gamepad"] = binding.gamepad;
 			if (!binding.axis.empty()) b["axis"] = binding.axis;
+			if (binding.threshold > 0.0f) b["threshold"] = static_cast<double>(binding.threshold);
 			bindings.push_back(std::move(b));
 		}
 		json::object a;
@@ -108,6 +114,9 @@ inp::action_map scn::build_action_map(const input_actions_desc& desc, std::strin
 				egLOG_WARN("input", "{}: /actions/{}/bindings/{}/{}: not a string, skipped", file, i, j, broken->name);
 				continue;
 			}
+			if (b.threshold_invalid) {
+				egLOG_WARN("input", "{}: /actions/{}/bindings/{}/threshold: not a number in 0..1, the device's stays", file, i, j);
+			}
 			const auto named = std::ranges::count_if(fields, [](const field& f) { return !f.value.empty(); });
 			if (named != 1) {
 				egLOG_WARN("input", "{}: /actions/{}/bindings/{}: a binding names exactly one of \"key\", \"mouse\", \"gamepad\" and \"axis\", skipped", file, i, j);
@@ -127,12 +136,12 @@ inp::action_map scn::build_action_map(const input_actions_desc& desc, std::strin
 				}
 			} else if (!b.gamepad.empty()) {
 				if (const auto button = inp::gamepad_button_from_name(b.gamepad)) {
-					bindings.emplace_back(*button);
+					bindings.emplace_back(*button, b.threshold);
 				} else {
 					egLOG_WARN("input", "{}: /actions/{}/bindings/{}/gamepad: unknown gamepad button '{}', skipped", file, i, j, b.gamepad);
 				}
 			} else if (const auto axis = inp::gamepad_axis_from_name(b.axis)) {
-				bindings.emplace_back(*axis);
+				bindings.emplace_back(*axis, b.threshold);
 			} else {
 				egLOG_WARN("input", "{}: /actions/{}/bindings/{}/axis: unknown gamepad axis '{}', skipped", file, i, j, b.axis);
 			}

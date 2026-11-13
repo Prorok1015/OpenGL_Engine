@@ -63,6 +63,24 @@ BOOST_AUTO_TEST_CASE(ADirectedAxisKnowsItsDeviceAxisAndItsDirection)
 	BOOST_TEST(inp::gamepad_axis_direction(inp::GAMEPAD_AXES::RIGHT_TRIGGER) == 1);
 }
 
+BOOST_AUTO_TEST_CASE(ABindingKeepsItsKindCodeAndThreshold)
+{
+	const inp::action_binding key = inp::KEYBOARD_BUTTONS::SPACE;
+	BOOST_TEST((key.kind == inp::binding_kind::keyboard));
+	BOOST_TEST((key.key() == inp::KEYBOARD_BUTTONS::SPACE));
+	BOOST_TEST(!key.mouse_button().has_value());
+	BOOST_TEST(!key.is_gamepad());
+	BOOST_TEST(key.threshold == 0.0f);
+
+	const inp::action_binding trigger{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.4f };
+	BOOST_TEST((trigger.kind == inp::binding_kind::gamepad_axis));
+	BOOST_TEST((trigger.gamepad_axis() == inp::GAMEPAD_AXES::RIGHT_TRIGGER));
+	BOOST_TEST(trigger.is_gamepad());
+	BOOST_TEST(trigger.threshold == 0.4f);
+	BOOST_TEST((trigger != inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER }));
+	BOOST_TEST((inp::action_binding{ inp::MOUSE_BUTTONS::LEFT } != inp::action_binding{ inp::KEYBOARD_BUTTONS::SPACE }));
+}
+
 BOOST_AUTO_TEST_CASE(ABracedListOfBindingsAndAnEmptyOneAreAdded)
 {
 	inp::action_map map;
@@ -105,7 +123,7 @@ BOOST_AUTO_TEST_CASE(AnActionMapKeepsTheOrderAndRefusesEmptyOrRepeatedNames)
 	const auto* fire = map.find(map.id("Fire"));
 	BOOST_REQUIRE(fire);
 	BOOST_TEST(fire->bindings.size() == 2u);
-	BOOST_TEST(std::holds_alternative<inp::MOUSE_BUTTONS>(fire->bindings[0]));
+	BOOST_TEST(fire->bindings[0].mouse_button().has_value());
 	BOOST_TEST(!map.find(inp::invalid_action));
 }
 

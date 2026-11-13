@@ -43,6 +43,17 @@ BOOST_AUTO_TEST_CASE(WhatIsWritten_ReadsBackTheSame)
 	BOOST_TEST((back.overrides() == user.overrides()));
 }
 
+BOOST_AUTO_TEST_CASE(AThresholdOfAGamepadBinding_IsWrittenAndRead)
+{
+	inp::user_bindings user;
+	user.set("Aim", { inp::action_binding{ inp::GAMEPAD_AXES::RIGHT_TRIGGER, 0.35f }, inp::action_binding{ inp::GAMEPAD_BUTTONS::A }, KB::Q });
+	const inp::user_bindings back = gs::parse_user_bindings(gs::write_user_bindings(user));
+	BOOST_REQUIRE_EQUAL(back.overrides().at("Aim").size(), 3u);
+	BOOST_TEST(back.overrides().at("Aim")[0].threshold == 0.35f);
+	BOOST_TEST(back.overrides().at("Aim")[1].threshold == 0.0f);
+	BOOST_TEST((back.overrides() == user.overrides()));
+}
+
 BOOST_AUTO_TEST_CASE(ABindingThatIsWrong_IsSkippedAndTheRestLoads)
 {
 	const inp::user_bindings user = gs::parse_user_bindings(R"json({"__type":"user_input_bindings","__version":1,"actions":[

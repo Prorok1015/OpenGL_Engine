@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <variant>
 #include <vector>
 
 // Game actions (WORLD_BUS.md 4): named actions and the keys, mouse buttons and gamepad buttons and axes bound to them. The map is built once from
@@ -22,15 +21,46 @@ namespace inp
 	using action_id = std::uint32_t;
 	inline constexpr action_id invalid_action = std::numeric_limits<action_id>::max();
 
-	// Alternatives are appended only: modules built before the gamepad ones (SNK_MODULE_API_VERSION 3.16) read this array
-	// by the size and the indices of the keyboard and mouse. One byte of value keeps it two bytes; a threshold does not fit,
-	// so it lives in gamepad_config.
-	using action_binding = std::variant<KEYBOARD_BUTTONS, MOUSE_BUTTONS, GAMEPAD_BUTTONS, GAMEPAD_AXES>;
-	static_assert(sizeof(action_binding) == 2 && alignof(action_binding) == 1,
-		"action_binding keeps two bytes: modules read the bindings of an action by its size");
-	static_assert(std::is_same_v<std::variant_alternative_t<0, action_binding>, KEYBOARD_BUTTONS>
-		&& std::is_same_v<std::variant_alternative_t<1, action_binding>, MOUSE_BUTTONS>,
-		"the keyboard and mouse alternatives keep their indices (0, 1)");
+	enum class binding_kind : std::uint8_t { keyboard, mouse, gamepad_button, gamepad_axis };
+
+	// One input an action is bound to. A module builds and reads it, so its layout is in the module layout key
+	// (gs_module_layout.h); a new kind or field raises layout_revision, no major bump. `code` is the value of the enum
+	// of the kind. `threshold` is the press point of a gamepad axis or trigger, 0 = the device's (gamepad_config).
+	struct action_binding
+	{
+		binding_kind kind = binding_kind::keyboard;
+		std::uint16_t code = 0;
+		float threshold = 0.0f;
+
+		constexpr action_binding() noexcept = default;
+		constexpr action_binding(KEYBOARD_BUTTONS key) noexcept : kind(binding_kind::keyboard), code(static_cast<std::uint16_t>(key)) {}
+		constexpr action_binding(MOUSE_BUTTONS button) noexcept : kind(binding_kind::mouse), code(static_cast<std::uint16_t>(button)) {}
+		constexpr action_binding(GAMEPAD_BUTTONS button, float press_threshold = 0.0f) noexcept
+			: kind(binding_kind::gamepad_button), code(static_cast<std::uint16_t>(button)), threshold(press_threshold) {}
+		constexpr action_binding(GAMEPAD_AXES axis, float press_threshold = 0.0f) noexcept
+			: kind(binding_kind::gamepad_axis), code(static_cast<std::uint16_t>(axis)), threshold(press_threshold) {}
+
+		constexpr bool is_gamepad() const noexcept { return kind == binding_kind::gamepad_button || kind == binding_kind::gamepad_axis; }
+		constexpr std::optional<KEYBOARD_BUTTONS> key() const noexcept
+		{
+			return kind == binding_kind::keyboard ? std::optional{ static_cast<KEYBOARD_BUTTONS>(code) } : std::nullopt;
+		}
+		constexpr std::optional<MOUSE_BUTTONS> mouse_button() const noexcept
+		{
+			return kind == binding_kind::mouse ? std::optional{ static_cast<MOUSE_BUTTONS>(code) } : std::nullopt;
+		}
+		constexpr std::optional<GAMEPAD_BUTTONS> gamepad_button() const noexcept
+		{
+			return kind == binding_kind::gamepad_button ? std::optional{ static_cast<GAMEPAD_BUTTONS>(code) } : std::nullopt;
+		}
+		constexpr std::optional<GAMEPAD_AXES> gamepad_axis() const noexcept
+		{
+			return kind == binding_kind::gamepad_axis ? std::optional{ static_cast<GAMEPAD_AXES>(code) } : std::nullopt;
+		}
+
+		bool operator==(const action_binding&) const noexcept = default;
+	};
+	static_assert(std::is_trivially_copyable_v<action_binding>);
 
 	struct action
 	{
@@ -49,8 +79,9 @@ namespace inp
 		action_id id(std::string_view name) const;
 		// Null for invalid_action or an id out of range.
 		const action* find(action_id id) const;
-		std::span<const action> actions() const { return m_actions; }
-		std::size_t size() const { return m_actions.size(); }
+		// Out of line: a module reads the map through these, never by the offset of m_actions.
+		std::span<const action> actions() const;
+		std::size_t size() const;
 
 	private:
 		std::vector<action> m_actions;

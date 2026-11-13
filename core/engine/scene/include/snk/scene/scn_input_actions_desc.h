@@ -10,7 +10,7 @@
 
 // The game actions of a project (WORLD_BUS.md 4.1): res/input/actions.desc, named by "input_actions" of project.snkproj.
 //   { "__type": "input_actions_desc", "__version": 1,
-//     "actions": [ { "name": "MoveLeft", "bindings": [ { "key": "A" }, { "key": "LEFT" }, { "axis": "LeftX-" } ] },
+//     "actions": [ { "name": "MoveLeft", "bindings": [ { "key": "A" }, { "key": "LEFT" }, { "axis": "LeftX-", "threshold": 0.3 } ] },
 //                  { "name": "Fire", "bindings": [ { "mouse": "LEFT" }, { "gamepad": "A" } ] } ],
 //     "gamepad": { "deadzone": 0.25, "press_threshold": 0.5 } }
 // Key names are those of inp::KEYBOARD_BUTTONS (physical US positions), mouse names those of inp::MOUSE_BUTTONS, "gamepad"
@@ -30,6 +30,10 @@ namespace scn
 		bool mouse_not_text = false;
 		bool gamepad_not_text = false;
 		bool axis_not_text = false;
+		// Optional "threshold" of a gamepad button or axis: the press point in 0..1, 0 = the device's. Anything else is
+		// `threshold_invalid`, reported by build_action_map.
+		float threshold = 0.0f;
+		bool threshold_invalid = false;
 		bool operator==(const input_binding_entry&) const = default;
 	};
 

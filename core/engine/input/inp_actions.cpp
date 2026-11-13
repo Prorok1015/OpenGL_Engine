@@ -12,6 +12,16 @@ bool inp::action_map::add(std::string name, std::vector<action_binding> bindings
 	return true;
 }
 
+std::span<const inp::action> inp::action_map::actions() const
+{
+	return m_actions;
+}
+
+std::size_t inp::action_map::size() const
+{
+	return m_actions.size();
+}
+
 inp::action_id inp::action_map::id(std::string_view name) const
 {
 	const auto it = std::ranges::find_if(m_actions, [&](const action& a) { return a.name == name; });
