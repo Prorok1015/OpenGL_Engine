@@ -31,11 +31,24 @@ namespace
 		const auto* value = object.if_contains("threshold");
 		if (!value) return 0.0f;
 		const double number = value->is_number() ? value->to_number<double>() : -1.0;
-		if (number < 0.0 || number > 1.0) {
+		if (!(number >= 0.0 && number <= 1.0)) {
 			egLOG_WARN("input", "{}: /threshold: not a number in 0..1, the device's stays", where);
 			return 0.0f;
 		}
 		return static_cast<float>(number);
+	}
+
+	void warn_if_threshold(const json::object& object, std::string_view where)
+	{
+		if (object.contains("threshold")) {
+			egLOG_WARN("input", "{}: /threshold: ignored for a key or a mouse button", where);
+		}
+	}
+
+	// The float as its shortest text read back as a double (0.35f writes 0.35, not 0.3499999940395355).
+	json::value threshold_json(float value)
+	{
+		return json::parse(std::format("{}", value));
 	}
 
 	void parse_binding(const json::value& item, std::vector<inp::action_binding>& out, std::string_view where)
@@ -63,11 +76,19 @@ namespace
 			return;
 		}
 		if (kind == "key") {
-			if (const auto parsed = inp::key_from_name(name)) out.emplace_back(*parsed);
-			else egLOG_WARN("input", "{}: unknown key '{}', skipped", where, name);
+			if (const auto parsed = inp::key_from_name(name)) {
+				out.emplace_back(*parsed);
+				warn_if_threshold(*object, where);
+			} else {
+				egLOG_WARN("input", "{}: unknown key '{}', skipped", where, name);
+			}
 		} else if (kind == "mouse") {
-			if (const auto parsed = inp::mouse_button_from_name(name)) out.emplace_back(*parsed);
-			else egLOG_WARN("input", "{}: unknown mouse button '{}', skipped", where, name);
+			if (const auto parsed = inp::mouse_button_from_name(name)) {
+				out.emplace_back(*parsed);
+				warn_if_threshold(*object, where);
+			} else {
+				egLOG_WARN("input", "{}: unknown mouse button '{}', skipped", where, name);
+			}
 		} else if (kind == "gamepad") {
 			if (const auto parsed = inp::gamepad_button_from_name(name)) out.emplace_back(*parsed, threshold_of(*object, where));
 			else egLOG_WARN("input", "{}: unknown gamepad button '{}', skipped", where, name);
@@ -125,7 +146,7 @@ std::string gs::write_user_bindings(const inp::user_bindings& bindings)
 			else if (const auto button = binding.mouse_button()) b["mouse"] = json::string(inp::mouse_button_name(*button));
 			else if (const auto pad = binding.gamepad_button()) b["gamepad"] = json::string(inp::gamepad_button_name(*pad));
 			else if (const auto axis = binding.gamepad_axis()) b["axis"] = json::string(inp::gamepad_axis_name(*axis));
-			if (binding.threshold > 0.0f) b["threshold"] = static_cast<double>(binding.threshold);
+			if (binding.threshold() > 0.0f) b["threshold"] = threshold_json(binding.threshold());
 			out.push_back(std::move(b));
 		}
 		json::object a;

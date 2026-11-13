@@ -30,7 +30,11 @@ namespace inp
 		action_binding binding{};
 		std::string first;
 		std::string second;
-		bool operator==(const binding_conflict&) const = default;
+		// The same input shared by the same two actions: thresholds do not tell conflicts apart.
+		bool operator==(const binding_conflict& other) const
+		{
+			return binding.same_input(other.binding) && first == other.first && second == other.second;
+		}
 	};
 	SNK_API std::vector<binding_conflict> find_binding_conflicts(const action_map& map);
 

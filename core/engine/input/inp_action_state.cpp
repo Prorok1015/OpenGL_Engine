@@ -9,8 +9,8 @@ namespace
 	// the mouse branch must not take it (its value would index the mouse buttons).
 	bool binding_down(const inp::action_binding& binding, const inp::input_state& state)
 	{
-		const std::size_t index = binding.code;
-		switch (binding.kind) {
+		const std::size_t index = binding.code();
+		switch (binding.kind()) {
 		case inp::binding_kind::keyboard: return index < state.keyboard.size() && state.keyboard[index];
 		case inp::binding_kind::mouse: return index < state.mouse.size() && state.mouse[index];
 		default: return false;
@@ -27,8 +27,9 @@ namespace
 
 	bool binding_reached(const inp::action_binding& binding, const inp::action_reach& reach)
 	{
-		switch (binding.kind) {
-		case inp::binding_kind::keyboard: return reach.keys.test(binding.code);
+		const std::size_t index = binding.code();
+		switch (binding.kind()) {
+		case inp::binding_kind::keyboard: return index < reach.keys.size() && reach.keys.test(index);
 		case inp::binding_kind::mouse: return reach.buttons;
 		default: return false;
 		}
@@ -36,9 +37,9 @@ namespace
 
 	bool binding_armed(const inp::action_binding& binding, const inp::action_reach& reach)
 	{
-		const std::size_t index = binding.code;
-		switch (binding.kind) {
-		case inp::binding_kind::keyboard: return reach.armed_keys.test(index);
+		const std::size_t index = binding.code();
+		switch (binding.kind()) {
+		case inp::binding_kind::keyboard: return index < reach.armed_keys.size() && reach.armed_keys.test(index);
 		case inp::binding_kind::mouse: return index < inp::mouse_count && reach.armed_buttons.test(index);
 		default: return false;
 		}

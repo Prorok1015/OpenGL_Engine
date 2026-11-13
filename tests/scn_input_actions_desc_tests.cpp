@@ -76,15 +76,32 @@ BOOST_AUTO_TEST_CASE(AGamepadBindingTakesAThreshold_WhichTheDescSavesBack_AndAWr
 	BOOST_REQUIRE(map.size() == 1u);
 	const auto& bindings = map.actions()[0].bindings;
 	BOOST_REQUIRE(bindings.size() == 4u);
-	BOOST_TEST(bindings[0].threshold == 0.3f);
-	BOOST_TEST(bindings[1].threshold == 0.5f);
-	BOOST_TEST(bindings[2].threshold == 0.0f);
-	BOOST_TEST(bindings[3].threshold == 0.0f);
+	BOOST_TEST(bindings[0].threshold() == 0.3f);
+	BOOST_TEST(bindings[1].threshold() == 0.5f);
+	BOOST_TEST(bindings[2].threshold() == 0.0f);
+	BOOST_TEST(bindings[3].threshold() == 0.0f);
 	BOOST_TEST(warned("/actions/0/bindings/3/threshold: not a number in 0..1"));
 
 	boost::json::object saved;
 	desc.serialize(saved);
 	BOOST_TEST((saved.at("actions") == boost::json::parse(text).as_object().at("actions")));
+}
+
+BOOST_AUTO_TEST_CASE(AThresholdOnAKeyIsWarnedAboutOnce_AndABindingSkippedForItsNameAddsNoSecondWarning)
+{
+	const auto map = scn::build_action_map(read(R"({ "actions": [
+		{ "name": "A", "bindings": [ { "key": "SPACE", "threshold": 0.4 }, { "mouse": "LEFT", "threshold": "x" },
+			{ "gamepad": "TURBO", "threshold": 9 }, { "axis": "LeftX-", "threshold": 0.2 } ] } ] })"), "res://input/actions.desc");
+	BOOST_REQUIRE(map.size() == 1u);
+	BOOST_TEST(map.actions()[0].bindings.size() == 3u);
+	std::size_t about_threshold = 0;
+	for (const auto& w : warnings) {
+		if (w.find("threshold") != std::string::npos) ++about_threshold;
+	}
+	BOOST_TEST(about_threshold == 2u);
+	BOOST_TEST(warned("/actions/0/bindings/0/threshold: ignored for a key or a mouse button"));
+	BOOST_TEST(warned("/actions/0/bindings/1/threshold: ignored for a key or a mouse button"));
+	BOOST_TEST(!warned("/actions/0/bindings/2/threshold"));
 }
 
 BOOST_AUTO_TEST_CASE(ProblemsAreWarnedWithTheirPathAndSkipped)

@@ -79,7 +79,7 @@ namespace
 			declared.id = id;
 			for (const inp::action_binding& binding : action.bindings) {
 				if (const auto key = binding.key()) {
-					declared.keys.set(static_cast<std::size_t>(*key));
+					if (static_cast<std::size_t>(*key) < declared.keys.size()) declared.keys.set(static_cast<std::size_t>(*key));
 				} else if (const auto button = binding.mouse_button()) {
 					declared.mouse = true;
 					if (static_cast<std::size_t>(*button) < inp::mouse_count) declared.buttons.set(static_cast<std::size_t>(*button));

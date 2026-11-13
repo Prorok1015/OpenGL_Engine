@@ -32,7 +32,7 @@ namespace scn
 		bool axis_not_text = false;
 		// Optional "threshold" of a gamepad button or axis: the press point in 0..1, 0 = the device's. Anything else is
 		// `threshold_invalid`, reported by build_action_map.
-		float threshold = 0.0f;
+		double threshold = 0.0;
 		bool threshold_invalid = false;
 		bool operator==(const input_binding_entry&) const = default;
 	};
