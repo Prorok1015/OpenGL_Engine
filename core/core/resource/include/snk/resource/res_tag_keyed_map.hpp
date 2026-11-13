@@ -60,6 +60,22 @@ namespace res
 			}
 		}
 
+		// Each entry cached under `tag`, with its key.
+		template<class Fn>
+		void for_each_of_tag(const tag& tag, Fn&& fn) const
+		{
+			const auto index = m_types.find(tag);
+			if (index == m_types.end()) {
+				return;
+			}
+			for (const ds::type_id type : index->second) {
+				const auto entry = m_entries.find(cache_key{ tag, type });
+				if (entry != m_entries.end()) {
+					fn(entry->first, entry->second);
+				}
+			}
+		}
+
 		// Each tag that has an entry, once.
 		template<class Fn>
 		void for_each_tag(Fn&& fn) const

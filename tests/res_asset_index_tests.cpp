@@ -737,4 +737,134 @@ BOOST_AUTO_TEST_CASE(ProjectFileOverAnEngineAssetPath_WinsForAReferenceWithId)
 	sys.set_asset_index(nullptr);
 }
 
+// #858: a load in flight under its tag, while the index does not know that tag's ID, and the other spelling live under
+// the ID: the rebind keeps both under the ID. The race is real and needs no thread or sleep: the async load waits for
+// the task pump while the rebind runs.
+BOOST_FIXTURE_TEST_CASE(ALoadInFlightUnderItsTag_StaysUnderTheIdTheOtherSpellingHolds, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	watch_log log;
+	log.watch(*rs, a);
+	log.watch(*rs, spelled);
+
+	const auto live = rs->require_sync<res::text_resource>(a);
+	const auto in_flight = rs->require<res::text_resource>(spelled);
+	BOOST_REQUIRE(!in_flight.is_ready());
+	BOOST_REQUIRE(in_flight.get_control_block() != live.get_control_block());
+
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+
+	// Still loading, so still counted: the start of a level waits for it.
+	BOOST_TEST(rs->pending_loads() == 1u);
+	BOOST_TEST(rs->displaced_count() == 1u);
+	// A request gets the live block.
+	BOOST_TEST(rs->require<res::text_resource>(spelled).get_control_block() == live.get_control_block());
+
+	pump();
+	BOOST_TEST(in_flight.is_ready());
+	BOOST_TEST(rs->pending_loads() == 0u);
+
+	// A change of the file reaches both spellings and takes both blocks off the key.
+	ram->files[a] = test_util::to_bytes("A2");
+	ram->files[spelled] = test_util::to_bytes("A2");
+	rs->signal_changed(a);
+	pump();
+	BOOST_TEST(rs->displaced_count() == 0u);
+	std::vector<std::string> told = log.told;
+	std::ranges::sort(told);
+	std::vector<std::string> expected = names({ a, spelled });
+	std::ranges::sort(expected);
+	BOOST_TEST(told == expected);
+	const auto reloaded = rs->require_sync<res::text_resource>(spelled);
+	BOOST_TEST(reloaded.get_control_block() != live.get_control_block());
+	BOOST_TEST(reloaded.get_control_block() != in_flight.get_control_block());
+	BOOST_TEST(text(spelled) == "A2");
+	rs->unwatch(a, &log);
+	rs->unwatch(spelled, &log);
+}
+
+// #858: over a pinned live block the load still counts and a request gets the pinned one; the pin stays, and the
+// displaced block leaves once nothing holds it.
+BOOST_FIXTURE_TEST_CASE(ARebindCollision_KeepsTheLiveBlocksPin_AndLetsTheDisplacedOneGo, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned")));
+	{
+		const auto in_flight = rs->require<res::text_resource>(spelled);
+		index->spell(spelled, k_a);
+		rs->apply_asset_batch(rs->delivering_batch(), {});
+		BOOST_TEST(rs->pending_loads() == 1u);
+		BOOST_TEST(rs->pinned_count() == 1u);
+		BOOST_TEST(text(spelled) == "pinned");
+		pump();
+		BOOST_TEST(in_flight.is_ready());
+		BOOST_TEST(rs->pending_loads() == 0u);
+	}
+	pump();
+	BOOST_TEST(rs->displaced_count() == 0u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(a) == "pinned");
+	rs->unpin_resource(a);
+}
+
+// #858: a change while the displaced block is still loading takes it off the key with the live one.
+BOOST_FIXTURE_TEST_CASE(AChangeWhileTheDisplacedBlockLoads_EvictsItWithTheKey, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	watch_log log;
+	log.watch(*rs, spelled);
+	const auto live = rs->require_sync<res::text_resource>(a);
+	const auto in_flight = rs->require<res::text_resource>(spelled);
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_REQUIRE(rs->displaced_count() == 1u);
+
+	ram->files[a] = test_util::to_bytes("A2");
+	ram->files[spelled] = test_util::to_bytes("A2");
+	rs->signal_changed(a);
+	BOOST_TEST(rs->displaced_count() == 0u);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	pump();
+	BOOST_TEST(log.told == names({ spelled }));
+	const auto reloaded = rs->require_sync<res::text_resource>(spelled);
+	BOOST_TEST(reloaded.get_control_block() != live.get_control_block());
+	BOOST_TEST(reloaded.get_control_block() != in_flight.get_control_block());
+	BOOST_TEST(text(spelled) == "A2");
+	rs->unwatch(spelled, &log);
+}
+
+// #858: a rebind away from the ID (no index any more) takes the displaced block along: still counted while it loads,
+// and a change of either spelling still reaches it.
+BOOST_FIXTURE_TEST_CASE(ARebindAwayFromTheId_KeepsTheDisplacedBlock, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	const auto live = rs->require_sync<res::text_resource>(a);
+	const auto in_flight = rs->require<res::text_resource>(spelled);
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_REQUIRE(rs->displaced_count() == 1u);
+
+	rs->set_asset_index(nullptr);
+	BOOST_TEST(rs->displaced_count() == 1u);
+	BOOST_TEST(rs->pending_loads() == 1u);
+	pump();
+	BOOST_TEST(in_flight.is_ready());
+	BOOST_TEST(rs->pending_loads() == 0u);
+
+	rs->signal_changed(a);
+	rs->signal_changed(spelled);
+	BOOST_TEST(rs->displaced_count() == 0u);
+	pump();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
+
