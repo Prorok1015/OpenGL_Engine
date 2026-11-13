@@ -22,6 +22,7 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -116,6 +117,12 @@ struct host_fixture : test_util::null_engine_fixture
 		BOOST_REQUIRE(context->dialogs().answer(pending.front().id, json::object{ { "choice", std::string(choice) } }).ok);
 	}
 
+	std::string read_text(std::string_view name) const
+	{
+		std::ifstream in(res_root / std::string(name), std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
 	std::size_t open_documents()
 	{
 		std::size_t count = 0;
@@ -201,7 +208,7 @@ BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_AsksFirst_CancelKeepsIt_DiscardClose
 	BOOST_TEST(!host->owns(id));
 }
 
-BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AFailedSaveKeepsItOpen)
+BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AChangedFileIsAskedAbout)
 {
 	edt::document& open = open_config();
 	const edt::document_id id = open.id();
@@ -213,10 +220,13 @@ BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AFailedSaveK
 	}
 	host->request_close(id);
 	answer_unsaved("save");
+	// the file changed on disk: the refused save is a question now, and Cancel keeps the window and the edits
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().kind == "choice");
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
 	BOOST_TEST(open_documents() == 2u);
 	BOOST_TEST(host->owns(id));
-	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
-	BOOST_TEST(context->dialogs().list().front().kind == "message");
+	BOOST_TEST(open.is_dirty());
 }
 
 BOOST_AUTO_TEST_CASE(DirtyAndSaveAll_CoverEveryOpenDataDocument)
@@ -230,6 +240,109 @@ BOOST_AUTO_TEST_CASE(DirtyAndSaveAll_CoverEveryOpenDataDocument)
 	BOOST_TEST(host->save_all());
 	BOOST_TEST(host->dirty().empty());
 	BOOST_TEST(!first.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(Save_OfAFileThatChangedOnDisk_AsksAndOverwriteWritesTheDocument)
+{
+	edt::document& open = open_config();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	host->request_save(open.id());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().list().front().kind == "choice");
+	BOOST_TEST(open.is_dirty());
+
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+	BOOST_TEST(!open.is_dirty());
+	BOOST_TEST(read_text("config.desc").find("5.0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Save_OfAFileThatChangedOnDisk_ReloadTakesTheFile_CancelChangesNothing)
+{
+	edt::document& open = open_config();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	host->request_save(open.id());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
+	BOOST_TEST(open.is_dirty());
+
+	host->request_save(open.id());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(!open.is_dirty());
+	BOOST_TEST(read_text("config.desc").find("4.0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheBannersReload_OfACleanDocument_IsSilent_OfADirtyOne_AsksFirst)
+{
+	edt::document& open = open_config();
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	host->request_reload(open.id());
+	BOOST_TEST(context->dialogs().pending() == 0u);
+
+	make_dirty(open);
+	host->request_reload(open.id());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+	BOOST_TEST(open.is_dirty());
+
+	host->request_reload(open.id());
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(!open.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(TheBannersOverwrite_AlwaysAsks_AndCancelWritesNothing)
+{
+	edt::document& open = open_config();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+	const std::string on_disk = read_text("config.desc");
+
+	host->request_overwrite(open.id());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+	BOOST_TEST(read_text("config.desc") == on_disk);
+	BOOST_TEST(open.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(ClosePrompt_Save_OfAFileThatChangedOnDisk_AsksAgain_OverwriteClosesCancelKeepsTheWindow)
+{
+	edt::document& open = open_config();
+	const edt::document_id id = open.id();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	host->request_close(id);
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().list().front().kind == "choice");
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
+	BOOST_TEST(open_documents() == 2u);
+	BOOST_TEST(host->owns(id));
+
+	host->request_close(id);
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+	BOOST_TEST(open_documents() == 1u);
+	BOOST_TEST(read_text("config.desc").find("5.0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_OfAFileThatChangedOnDisk_AsksAndDoesNotLetTheExitGoOn)
+{
+	edt::document& open = open_config();
+	make_dirty(open);
+	put("config.desc", R"({"__type":"test.config","speed":4.0})");
+
+	BOOST_TEST(!host->save_all());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().list().front().kind == "choice");
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
+	BOOST_TEST(open.is_dirty());
+	BOOST_TEST(read_text("config.desc").find("4.0") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
