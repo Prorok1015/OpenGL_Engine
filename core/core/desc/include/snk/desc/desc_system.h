@@ -17,6 +17,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -109,9 +110,7 @@ namespace desc
 		template<typename T>
 		void register_component_desc(const std::string_view type_name)
 		{
-			if (add_desc<T>(type_name, schema_kind::component)) {
-				m_component_type_names.push_back(std::string{ type_name });
-			}
+			add_desc<T>(type_name, schema_kind::component);
 		}
 
 		// register_desc plus mark_document, for a type the editor opens as a data document (EPIC-56). A custom field that has a
@@ -141,12 +140,7 @@ namespace desc
 		// Every document type, this layer's and the parent's, sorted by name.
 		std::vector<std::string> document_types() const;
 
-		void unregister_desc(const std::string_view type_name)
-		{
-			factory_map.erase(std::string{ type_name });
-			std::erase(m_component_type_names, std::string{ type_name });
-			m_schemas.remove(type_name);
-		}
+		void unregister_desc(std::string_view type_name);
 
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
 		// current_version(name). Migrations registered later move the stored schema's version along, so the order
@@ -154,162 +148,55 @@ namespace desc
 		// A schema whose type has no factory yet gets one that creates dynamic_desc objects; a component schema is
 		// also listed in get_component_type_names(). Structure fields need their nested schemas registered first.
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
-		const type_schema* register_schema(type_schema schema)
-		{
-			if (owned_by_parent(schema.name)) {
-				egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", schema.name);
-				return nullptr;
-			}
-			ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
-				schema.name, schema.version, current_version(schema.name));
-			ASSERT_MSG(!m_schemas.contains(schema.name), "Schema '{}' is already registered!", schema.name);
-			const type_schema* stored = m_schemas.add(std::move(schema));
-			if (stored && !factory_map.contains(stored->name)) {
-				if (auto factory = make_dynamic_factory(*stored, m_schemas)) {
-					factory_map[stored->name] = std::move(factory);
-					if (stored->is_component) {
-						m_component_type_names.push_back(stored->name);
-					}
-				}
-			}
-			return stored;
-		}
+		const type_schema* register_schema(type_schema schema);
 
-		const type_schema* find_schema(std::string_view type_name) const { return m_schemas.find(type_name); }
+		const type_schema* find_schema(std::string_view type_name) const;
 
-		const schema_registry& schemas() const { return m_schemas; }
-		schema_registry& schemas() { return m_schemas; }
+		const schema_registry& schemas() const;
+		schema_registry& schemas();
 
-		bool is_registered(const std::string_view type_name) const
-		{
-			return find_factory(type_name) != nullptr;
-		}
+		bool is_registered(std::string_view type_name) const;
 
 		// The parent's names first, then this layer's.
-		std::vector<std::string> get_component_type_names() const
-		{
-			std::vector<std::string> names = m_parent ? m_parent->get_component_type_names() : std::vector<std::string>{};
-			names.insert(names.end(), m_component_type_names.begin(), m_component_type_names.end());
-			return names;
-		}
+		std::vector<std::string> get_component_type_names() const;
 
 		const desc_system* parent() const { return m_parent; }
 
 		// Migration step: upgrades an object of `type` from `from_version` to `from_version + 1`.
 		// Objects without __version are version 1. A duplicate (type, from_version) keeps the first one.
-		void register_migration(std::string_view type, int from_version, std::function<void(json::object&)> fn)
-		{
-			if (owned_by_parent(type)) {
-				egLOG_ERROR("desc/error", "Migration for '{}' not registered: the type belongs to the parent desc system", type);
-				return;
-			}
-			auto& steps = m_migrations[std::string{ type }];
-			ASSERT_MSG(!steps.contains(from_version), "Migration for '{}' from version {} is already registered!", type, from_version);
-			steps.emplace(from_version, std::move(fn));
-			m_schemas.set_version(type, current_version(type));
-		}
+		void register_migration(std::string_view type, int from_version, std::function<void(json::object&)> fn);
 
 		// The same step with a one-line summary (for the migration plan and report) and a context for warnings. Kept in
 		// the one registry above, so current_version, the duplicate check and modules built before it see it as any
-		// other step; the inline migrate_tree runs it with warnings going to the log only.
+		// other step; migrate_tree without warnings runs it with warnings going to the log only.
 		void register_migration(std::string_view type, int from_version, std::string_view summary,
 			std::function<void(json::object&, migration_context&)> fn);
 
 		// The summary of the step from `from_version`; empty for a step without one or none.
 		std::string migration_summary(std::string_view type, int from_version) const;
 
-		void unregister_migrations(std::string_view type)
-		{
-			m_migrations.erase(std::string{ type });
-			m_schemas.set_version(type, current_version(type));
-		}
+		void unregister_migrations(std::string_view type);
 
-		int current_version(std::string_view type) const
-		{
-			const auto* steps = find_migrations(type);
-			if (!steps || steps->empty()) {
-				return 1;
-			}
-			return steps->rbegin()->first + 1;
-		}
+		int current_version(std::string_view type) const;
 
 		// Brings every typed object under `root` up to current_version. Throws std::runtime_error on
 		// a malformed or newer-than-supported __version, or when a migration step is missing.
-		void migrate_tree(json::object& root, std::string_view context) const
-		{
-			migrate_object(root, context);
-		}
+		void migrate_tree(json::object& root, std::string_view context) const;
 
 		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
 		void migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const;
 
 		// Writes the current __version into an object that has a string __type, and moves the header keys
 		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
-		void stamp_header(json::object& obj) const
-		{
-			auto it = obj.find("__type");
-			if (it == obj.end() || !it->value().is_string()) {
-				return;
-			}
-			obj["__version"] = current_version(std::string{ it->value().as_string() });
-
-			constexpr std::string_view header_keys[] = { "__type", "__version", "__guid" };
-			json::object ordered;
-			for (auto key : header_keys) {
-				if (auto found = obj.find(key); found != obj.end()) {
-					ordered.emplace(found->key(), std::move(found->value()));
-				}
-			}
-			for (auto& member : obj) {
-				if (!ordered.contains(member.key())) {
-					ordered.emplace(member.key(), std::move(member.value()));
-				}
-			}
-			obj = std::move(ordered);
-		}
+		void stamp_header(json::object& obj) const;
 
 		// stamp_header for every typed object under `value` (the files embed typed descs, and a memory://
 		// copy of them goes through the adapter - and its migrations - again).
-		void stamp_tree(json::value& value) const
-		{
-			if (value.is_object()) {
-				auto& obj = value.as_object();
-				stamp_header(obj);
-				for (auto& member : obj) {
-					stamp_tree(member.value());
-				}
-			}
-			else if (value.is_array()) {
-				auto& arr = value.as_array();
-				if (!arr.empty() && arr.front().is_number()) {
-					return;
-				}
-				for (auto& element : arr) {
-					stamp_tree(element);
-				}
-			}
-		}
+		void stamp_tree(json::value& value) const;
 
-		void stamp_tree(json::object& obj) const
-		{
-			json::value wrapper = std::move(obj);
-			stamp_tree(wrapper);
-			obj = std::move(wrapper.as_object());
-		}
+		void stamp_tree(json::object& obj) const;
 
-		std::shared_ptr<desc::desc_base> create_instance(const std::string_view type_id, const res::tag& tag) const
-		{
-			const auto* factory = find_factory(type_id);
-			if (!factory) {
-				egLOG("desc/error", "Failed to create desc instance of type '{0}': type not registered", type_id);
-				return nullptr;
-			}
-			auto instance = (*factory)();
-			instance->m_system = const_cast<desc_system*>(this);
-			instance->set_tag(tag);
-            instance->set_type(type_id);
-			return instance;
-		}
+		std::shared_ptr<desc::desc_base> create_instance(std::string_view type_id, const res::tag& tag) const;
 
 		// resource_system::resolve_reference of the system this one loads through.
 		res::tag resolve_reference(const res::reference& ref) const;
@@ -378,145 +265,42 @@ namespace desc
 		using migration_step_fn = std::function<void(json::object&)>;
 		using migration_steps = std::map<int, migration_step_fn>;
 
-		const factory_fn* find_factory(std::string_view type_name) const
-		{
-			auto it = factory_map.find(std::string{ type_name });
-			if (it != factory_map.end()) {
-				return &it->second;
-			}
-			return m_parent ? m_parent->find_factory(type_name) : nullptr;
-		}
+		const factory_fn* find_factory(std::string_view type_name) const;
 
 		// Why `schema` cannot be a document (empty: it can); see mark_document.
 		std::string document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const;
 
-		const migration_steps* find_migrations(std::string_view type) const
-		{
-			auto it = m_migrations.find(std::string{ type });
-			if (it != m_migrations.end()) {
-				return &it->second;
-			}
-			return m_parent ? m_parent->find_migrations(type) : nullptr;
-		}
+		const migration_steps* find_migrations(std::string_view type) const;
 
-		bool owned_by_parent(std::string_view type_name) const
-		{
-			return m_parent && (m_parent->is_registered(type_name) || m_parent->find_schema(type_name) || m_parent->find_migrations(type_name));
-		}
+		bool owned_by_parent(std::string_view type_name) const;
 
-		// False (nothing registered) when the parent owns the type.
+		// False (nothing registered) when the parent owns the type. Only builds what needs T; the registry is written by
+		// the engine (add_desc_entry), so a module never compiles code that touches its members (#786).
 		template<typename T>
 		bool add_desc(const std::string_view type_name, const schema_kind kind)
 		{
-			if (owned_by_parent(type_name)) {
-				egLOG_ERROR("desc/error", "Desc type '{}' not registered: the type belongs to the parent desc system", type_name);
-				return false;
-			}
-			ASSERT_MSG(!factory_map.contains(std::string{ type_name }), "That desc type is already registered!");
-			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
+			factory_fn factory = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
 			if constexpr (desc::is_described<T>) {
 				static_assert(desc::has_schema_generator<T>, "T is described with BOOST_DESCRIBE_CLASS: include <snk/desc/desc_describe.h> where it is registered");
-				for (auto& enumeration : desc::schema_generator<T>::enums()) {
-					m_schemas.add_enum(std::move(enumeration));
-				}
-				register_schema(desc::schema_generator<T>::make(type_name, current_version(type_name), kind));
+				return add_desc_entry(type_name, kind, std::move(factory), desc::schema_generator<T>::enums(),
+					desc::schema_generator<T>::make(type_name, current_version(type_name), kind));
+			} else {
+				return add_desc_entry(type_name, kind, std::move(factory), {}, std::nullopt);
 			}
-			return true;
 		}
 
-		// The members of 3.16: MSVC exports the inline members of an exported class, and a module of 3.16 built without
-		// inlining imports these symbols from the engine. Keep them, with these signatures, until 4.0 (#786).
-		void migrate_object(json::object& obj, std::string_view context) const
-		{
-			migrate_object(obj, context, plain_step{});
-		}
-
-		void migrate_value(json::value& value, std::string_view context) const
-		{
-			migrate_value(value, context, plain_step{});
-		}
-
-		void migrate_typed(json::object& obj, const std::string& type, std::string_view context) const
-		{
-			migrate_typed(obj, type, context, plain_step{});
-		}
-
-		struct plain_step
-		{
-			void operator()(const migration_step_fn& step, json::object& obj, const std::string&, int) const { step(obj); }
-		};
+		// A schema_kind::component type is listed in get_component_type_names().
+		bool add_desc_entry(std::string_view type_name, schema_kind kind, factory_fn factory, std::vector<enum_schema> enums,
+			std::optional<type_schema> schema);
 
 		// Migrates the object itself first, then its members, so children a migration creates are visited too.
-		// `run(step, obj, type, from)` applies one step.
+		// `run(step, obj, type, from)` applies one step. Defined and instantiated in the engine only.
 		template<class RunStep>
-		void migrate_object(json::object& obj, std::string_view context, const RunStep& run) const
-		{
-			auto type_it = obj.find("__type");
-			if (type_it != obj.end() && type_it->value().is_string()) {
-				migrate_typed(obj, std::string{ type_it->value().as_string() }, context, run);
-			}
-			for (auto& member : obj) {
-				migrate_value(member.value(), context, run);
-			}
-		}
-
+		void migrate_object(json::object& obj, std::string_view context, const RunStep& run) const;
 		template<class RunStep>
-		void migrate_value(json::value& value, std::string_view context, const RunStep& run) const
-		{
-			if (value.is_object()) {
-				migrate_object(value.as_object(), context, run);
-			}
-			else if (value.is_array()) {
-				auto& arr = value.as_array();
-				// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
-				if (!arr.empty() && arr.front().is_number()) {
-					return;
-				}
-				for (auto& element : arr) {
-					migrate_value(element, context, run);
-				}
-			}
-		}
-
+		void migrate_value(json::value& value, std::string_view context, const RunStep& run) const;
 		template<class RunStep>
-		void migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const
-		{
-			constexpr std::int64_t max_version = std::numeric_limits<int>::max();
-
-			std::int64_t parsed = 1;
-			if (auto ver_it = obj.find("__version"); ver_it != obj.end()) {
-				const json::value& raw = ver_it->value();
-				if (raw.is_int64()) {
-					parsed = raw.as_int64();
-				}
-				else if (raw.is_uint64()) {
-					parsed = raw.as_uint64() > static_cast<std::uint64_t>(max_version) ? max_version + 1 : static_cast<std::int64_t>(raw.as_uint64());
-				}
-				else {
-					throw std::runtime_error(std::format("{}: '{}' has a non-integer __version", context, type));
-				}
-				if (parsed < 1 || parsed > max_version) {
-					throw std::runtime_error(std::format("{}: '{}' has an invalid __version", context, type));
-				}
-			}
-
-			const int current = current_version(type);
-			const int version = static_cast<int>(parsed);
-			if (version > current) {
-				throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
-			}
-			if (version < current) {
-				const auto& steps = *find_migrations(type);
-				for (int from = version; from < current; ++from) {
-					auto step = steps.find(from);
-					if (step == steps.end()) {
-						throw std::runtime_error(std::format("{}: no migration for '{}' from version {}", context, type, from));
-					}
-					run(step->second, obj, type, from);
-				}
-			}
-			obj["__version"] = current;
-		}
+		void migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const;
 
 		res::resource_system& m_res_system;
 		const desc_system* m_parent = nullptr;

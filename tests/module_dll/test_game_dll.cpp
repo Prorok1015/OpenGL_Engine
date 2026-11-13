@@ -244,6 +244,16 @@ private:
 		});
 		layer.descs().register_document<dll_config>(dll_game::document_type);
 		layer.descs().register_desc<dll_linked>(dll_game::linked_type);
+		layer.descs().register_migration(dll_game::migrated_type, 1, [](boost::json::object& obj) { obj["migrated_by"] = "dll"; });
+		layer.descs().register_migration(dll_game::migrated_type, 2, "renames old to new",
+			[](boost::json::object& obj, desc::migration_context& context) {
+				if (auto* old = obj.if_contains("old")) {
+					obj["new"] = *old;
+					obj.erase("old");
+				} else {
+					context.warn("no 'old' field");
+				}
+			});
 		layer.descs().register_schema(desc::parse_type_schema(boost::json::parse(dll_game::schema_document_json).as_object()));
 		data.require<gs::module_context>().mark_document(dll_game::schema_document_type);
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
