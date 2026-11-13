@@ -41,8 +41,9 @@ namespace gs
 		}
 
 		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
-		// type modules read inline. 1: world_context's accessors out of line (#802).
-		inline constexpr std::uint64_t layout_revision = 1;
+		// type modules read inline. 1: world_context's accessors out of line (#802). 2: desc_system, schema_registry and
+		// dynamic_desc touch their members only out of line (#786).
+		inline constexpr std::uint64_t layout_revision = 2;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
