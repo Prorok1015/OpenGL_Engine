@@ -53,6 +53,11 @@ namespace edt
 		std::function<bool()> quick_save;     // overwrite the saved level, true if written
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
+		// The documents besides the scene (data documents): unsaved changes among them count for New, Open and Exit, the
+		// save of the prompt writes them first, discard drops them. Left empty, there are none.
+		std::function<bool()> other_documents_dirty;
+		std::function<bool()> save_other_documents;
+		std::function<void()> discard_other_documents;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
 		// Starts loading the level at a project-relative path (`levels/a.desc`) without a round trip through a file
 		// system path: what the commands an agent calls use. Null: those commands answer `failed`.
@@ -98,6 +103,8 @@ namespace edt
 		void save_level();
 		// Save: overwrites the saved level, asks for a path if it has none yet (Ctrl+S).
 		void quick_save();
+		bool anything_dirty() const;
+		void discard_everything();
 		void import_model();
 		// Asks for a folder, makes a project there from the template and switches to it (EPIC-42 #158).
 		void new_project();

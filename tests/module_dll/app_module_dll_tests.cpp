@@ -396,6 +396,37 @@ BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with
 	BOOST_TEST(after->descs().document_types().empty());
 }
 
+// #786: migrations a module registers are written by the engine's code (register_migration is out of line since 4.0), are
+// run by its migrate_tree with their summaries and warnings, and go with the module.
+BOOST_AUTO_TEST_CASE(a_module_registers_migrations_through_the_engine)
+{
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	const desc::desc_system& descs = layer->descs();
+	BOOST_TEST(descs.current_version(dll_game::migrated_type) == 3);
+	BOOST_TEST(descs.migration_summary(dll_game::migrated_type, 2) == "renames old to new");
+
+	boost::json::object file{ { "__type", std::string{ dll_game::migrated_type } }, { "old", 5 } };
+	std::vector<desc::migration_warning> warnings;
+	descs.migrate_tree(file, "dll.desc", warnings);
+	BOOST_TEST(file.at("__version").as_int64() == 3);
+	BOOST_TEST(file.at("migrated_by").as_string() == "dll");
+	BOOST_TEST(file.at("new").as_int64() == 5);
+	BOOST_TEST(!file.contains("old"));
+	BOOST_TEST(warnings.empty());
+
+	boost::json::object without_old{ { "__type", std::string{ dll_game::migrated_type } } };
+	descs.migrate_tree(without_old, "dll2.desc", warnings);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0].file == "dll2.desc");
+
+	loader.unload(dll_game::module_name, root);
+	auto* after = contexts().game_layer();
+	BOOST_REQUIRE(after != nullptr);
+	BOOST_TEST(after->descs().current_version(dll_game::migrated_type) == 1);
+}
+
 // #758: the module's inline readers (desc_ref and res_tag fields, compiled in the module) read a reference written as
 // {guid, path} as they read its path, through the engine's export res::reference_from_json.
 BOOST_AUTO_TEST_CASE(a_module_reads_a_reference_object_like_its_path)

@@ -43,6 +43,8 @@ namespace dll_game {
 	// A described desc of the module with a desc reference (link, to a dll.config) and a res::tag (icon): the module's
 	// inline readers take a path or a {guid, path} object alike (#758).
 	inline constexpr std::string_view linked_type = "dll.linked";
+	// A type the module migrates from version 1 (#786): the steps live in the engine's registry, written by its code.
+	inline constexpr std::string_view migrated_type = "dll.migrated";
 	inline constexpr const char* schema_document_json = R"json({
 		"name": "dll.settings", "kind": "desc",
 		"fields": [ { "name": "speed", "kind": "f32", "default": 2 }, { "name": "goals", "kind": "array", "element": "i32" } ]

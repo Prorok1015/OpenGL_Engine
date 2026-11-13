@@ -8,6 +8,7 @@
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include <format>
 #include <memory>
 #include <optional>
+#include <span>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
@@ -219,7 +221,11 @@ namespace {
 
 	request_path path_of(const cmd::call& call)
 	{
-		const edt::agent_level_path named = edt::check_agent_level_path(view_of(call.args.as_object().at("path").as_string()));
+		const std::string_view text = view_of(call.args.as_object().at("path").as_string());
+		if (res::is_asset_meta_name(text)) {
+			return { {}, "a .resource file holds the ID of its file and is the editor's own: desc.* neither reads nor writes it" };
+		}
+		const edt::agent_level_path named = edt::check_agent_level_path(text);
 		if (!named.ok()) {
 			std::string why = named.error;
 			constexpr std::string_view level_file = "a level file (*.desc)";
@@ -238,15 +244,50 @@ namespace {
 		std::string error;
 	};
 
-	prepared_file prepare(const desc::desc_system& descs, const std::string& relative, const json::value& content)
+	// Where `content` carries a __guid, at any depth: the ID of a file is the editor's to write (EPIC-57).
+	void find_guid_keys(const json::value& value, const std::string& pointer, const std::string& resource, std::vector<res::diagnostic>& out)
+	{
+		if (value.is_array()) {
+			std::size_t index = 0;
+			for (const json::value& element : value.as_array()) find_guid_keys(element, std::format("{}/{}", pointer, index++), resource, out);
+			return;
+		}
+		if (!value.is_object()) return;
+		for (const auto& member : value.as_object()) {
+			if (out.size() >= k_max_reported) return;
+			const std::string_view key(member.key().data(), member.key().size());
+			if (key == "__guid") {
+				out.push_back({ res::diagnostic_severity::error, std::string(res::diagnostic_kind::schema), resource, pointer + "/__guid",
+					"`__guid` is written by the editor: leave it out (desc.write keeps the one the file has)" });
+			} else {
+				find_guid_keys(member.value(), pointer + "/" + res::json_pointer_token(key), resource, out);
+			}
+		}
+	}
+
+	// The root __guid of a file on disk; empty when it has none (or is not a JSON object).
+	std::string guid_of(std::span<const std::byte> bytes)
+	{
+		boost::system::error_code ec;
+		const json::value parsed = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec);
+		if (ec || !parsed.is_object()) return {};
+		const json::value* guid = parsed.as_object().if_contains("__guid");
+		return guid && guid->is_string() ? std::string(view_of(guid->as_string())) : std::string{};
+	}
+
+	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID.
+	prepared_file prepare(const desc::desc_system& descs, const std::string& relative, const json::value& content, const std::string& kept_guid = {})
 	{
 		prepared_file out;
-		for (res::diagnostic& item : edt::validate_desc_tree(descs, content, "res://" + relative)) {
+		const std::string resource = "res://" + relative;
+		find_guid_keys(content, "", resource, out.problems);
+		for (res::diagnostic& item : edt::validate_desc_tree(descs, content, resource)) {
 			if (item.severity == res::diagnostic_severity::error) out.problems.push_back(std::move(item));
 			else out.warnings.push_back(diagnostic_json(item));
 		}
 		if (!out.problems.empty()) return out;
 		json::value stamped = content;
+		if (!kept_guid.empty() && stamped.is_object()) stamped.as_object()["__guid"] = kept_guid;
 		descs.stamp_tree(stamped);
 		const std::vector<std::byte> bytes = descs.serialize_to_bytes(stamped);
 		if (bytes.size() > edt::k_desc_file_limit) {
@@ -329,7 +370,7 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"));
+			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), guid_of(current.bytes));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			const res::tag tag = desc_files::tag_of(path.relative);
@@ -356,7 +397,7 @@ namespace {
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
 				return refused("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"));
+			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), guid_of(current.bytes));
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));
