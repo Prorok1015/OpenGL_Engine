@@ -53,48 +53,61 @@ std::vector<edt::registration> edt::register_edit_actions(
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
 	};
-	const auto active = [&documents]() -> document* { return documents.active(); };
+	// A data window is the active document after it opens and has no history yet: it leaves Ctrl+Z to the scene. The
+	// read-only prefab preview does not: while it is active there is nothing to undo.
+	const auto undo_target = [&documents]() -> document* {
+		document* current = documents.active();
+		return current && (current->next_undo_entry() || current == documents.preview()) ? current : &documents.scene();
+	};
+	const auto redo_target = [&documents]() -> document* {
+		document* current = documents.active();
+		return current && (current->next_redo_entry() || current == documents.preview()) ? current : &documents.scene();
+	};
+	const auto accept_target = [&documents]() -> document* {
+		document* current = documents.active();
+		return current && current->has_agent_changes() ? current : &documents.scene();
+	};
 	std::vector<registration> out;
 
 	out.push_back(actions.add({ .id = "edit.undo", .label = "Undo", .menu_path = "Edit", .shortcut = "Ctrl+Z",
-		.dynamic_label = [active] {
-			const document* doc = active();
+		.dynamic_label = [undo_target] {
+			const document* doc = undo_target();
 			return menu_text("Undo", doc ? doc->next_undo_entry() : std::nullopt);
 		},
 		.yields_to_text_input = true,
-		.execute = [active](const json::value&) {
-			document* doc = active();
+		.execute = [undo_target](const json::value&) {
+			document* doc = undo_target();
 			const auto entry = doc ? doc->next_undo_entry() : std::nullopt;
 			return action_result::success(applied(doc && doc->undo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_undo_entry().has_value(); } }));
+		.enabled = [undo_target, idle] { return idle() && undo_target() && !undo_target()->edits_locked() && undo_target()->next_undo_entry().has_value(); } }));
 
 	out.push_back(actions.add({ .id = "edit.redo", .label = "Redo", .menu_path = "Edit", .shortcut = "Ctrl+Y",
-		.dynamic_label = [active] {
-			const document* doc = active();
+		.dynamic_label = [redo_target] {
+			const document* doc = redo_target();
 			return menu_text("Redo", doc ? doc->next_redo_entry() : std::nullopt);
 		},
 		.yields_to_text_input = true,
-		.execute = [active](const json::value&) {
-			document* doc = active();
+		.execute = [redo_target](const json::value&) {
+			document* doc = redo_target();
 			const auto entry = doc ? doc->next_redo_entry() : std::nullopt;
 			return action_result::success(applied(doc && doc->redo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_redo_entry().has_value(); } }));
+		.enabled = [redo_target, idle] { return idle() && redo_target() && !redo_target()->edits_locked() && redo_target()->next_redo_entry().has_value(); } }));
 
 	// The person has looked at what the agent did: no more "changed by agent" marks. Not for agents themselves.
 	out.push_back(actions.add({ .id = "edit.accept_agent_changes", .label = "Accept Agent Changes", .menu_path = "Edit",
 		.separator_before = true,
-		.execute = [active](const json::value&) {
-			document* doc = active();
+		.execute = [accept_target](const json::value&) {
+			document* doc = accept_target();
 			const bool had = doc && doc->has_agent_changes();
 			if (had) doc->accept_agent_changes();
 			return action_result::success(json::object{ { "accepted", had } });
 		},
 		.result_schema = json::parse(R"({"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"]})"),
-		.enabled = [active] { return active() && active()->has_agent_changes(); },
+		.enabled = [accept_target] { return accept_target() && accept_target()->has_agent_changes(); },
 		.category = cmd::agent_category::not_for_agents }));
 
 	// The other usual binding of Redo: no menu item of its own.
