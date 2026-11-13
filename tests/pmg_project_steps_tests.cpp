@@ -221,7 +221,9 @@ BOOST_AUTO_TEST_CASE(ASecondRun_HasNothingToDo_AndWritesNothing)
 
 	const pmg::migration_plan again = plan();
 	BOOST_TEST(again.empty());
-	BOOST_TEST(!again.manifest_outdated());
+	// The first run was partial (module/unknown.desc): engine_version stays old, but there is nothing to stamp yet.
+	BOOST_TEST(again.manifest_outdated());
+	BOOST_TEST(!again.completes());
 	BOOST_TEST(again.project_steps.empty());
 	pmg::apply_context second = context();
 	second.make_id = [] { return std::string{ "second" }; };

@@ -211,7 +211,8 @@ BOOST_AUTO_TEST_CASE(ABigFileALinkAndASidecar)
 	} else {
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << link_error.message());
 	}
-	BOOST_TEST(pmg::plan_migration(project.root, scan, *descs).empty());
+	// Nothing to migrate among them; the manifest of 0.1.0 alone still has the engine_version to bring along.
+	BOOST_TEST(pmg::plan_migration(project.root, scan, *descs).files.empty());
 }
 
 BOOST_AUTO_TEST_CASE(ABadVersion_IsInvalid_ANewerManifest_IsNewer)
