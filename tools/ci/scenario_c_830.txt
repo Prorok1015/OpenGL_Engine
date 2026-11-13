@@ -1,0 +1,1 @@
+Scenario of #830: a draft PR whose fast jobs passed is marked ready on the same head and the same base; the fast jobs are skipped.
