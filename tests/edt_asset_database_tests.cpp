@@ -430,6 +430,23 @@ BOOST_AUTO_TEST_CASE(a_stamp_close_to_its_check_is_not_trusted)
 	BOOST_TEST(fresh->id.has_value());
 }
 
+// #822 A: the file's check and the .resource's are apart: a racy file next to a trusted .resource is hashed once,
+// and the next start trusts the new hash.
+BOOST_AUTO_TEST_CASE(a_racy_file_with_a_trusted_sidecar_is_hashed_once)
+{
+	write_aged("a.png", "a");
+	write_aged("a.png.resource", meta_text(k_guid_a));
+	cached().reset();
+	// As if the file had been hashed in the tick of its last change; its .resource stays trusted.
+	edit_cache([](boost::json::object& root) {
+		boost::json::object& record = root.at("records").as_array().at(0).as_object();
+		record["content_checked_at"] = record.at("mtime");
+	});
+
+	BOOST_TEST(cached()->files_read() == 1u);
+	BOOST_TEST(cached()->files_read() == 0u);
+}
+
 // #822: nothing of the cache is published before the first walk confirmed it; a file gone meanwhile never shows.
 BOOST_AUTO_TEST_CASE(the_cache_is_not_published_before_the_walk)
 {
@@ -496,7 +513,7 @@ BOOST_AUTO_TEST_CASE(a_bad_cache_is_dropped_whole)
 		{ "a layer out of range", record_edit([](boost::json::object& r) { r["layer"] = 7; }) },
 		{ "a shadowed layer not below", record_edit([](boost::json::object& r) { r["shadowed"] = boost::json::array{ 1 }; }) },
 		{ "a bad id", record_edit([](boost::json::object& r) { r["id"] = "nope"; }) },
-		{ "a missing stamp", record_edit([](boost::json::object& r) { r.erase("checked_at"); }) },
+		{ "a missing check time", record_edit([](boost::json::object& r) { r.erase("content_checked_at"); }) },
 		{ "a path twice", [](boost::json::object& root) {
 			boost::json::array& records = root.at("records").as_array();
 			records.push_back(records.at(0));

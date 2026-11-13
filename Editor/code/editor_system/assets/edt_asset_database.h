@@ -19,6 +19,8 @@
 namespace edt
 {
 	class job_service;
+	// Orders the writes of the cache file (asset_database.cpp).
+	struct asset_cache_writer;
 
 	// One file of the resource tree as the asset database knows it (EPIC-57 section 4.3).
 	struct asset_record
@@ -45,12 +47,14 @@ namespace edt
 		std::string content_hash;
 		// The "__type" of a desc file's root, once hashed; none for any other file (or a desc without one).
 		std::optional<std::string> desc_type;
-		// When the stamps above were taken (ticks of std::filesystem::file_time_type::clock). A stamp this close to it may
-		// not have moved for a change made just after (one tick of a coarse file system), so the cache trusts such a
-		// record only after it was read again.
-		std::int64_t checked_at = 0;
+		// When the file's stamp (size, mtime) and the .resource's were taken, in ticks of
+		// std::filesystem::file_time_type::clock: a stamp this close to its check may not have moved for a change made
+		// just after (one tick of a coarse file system), so the cache trusts what was learned from it only after it was
+		// read again. Kept apart, so a .resource carried over from an older check leaves the file's own check alone.
+		std::int64_t content_checked_at = 0;
+		std::int64_t meta_checked_at = 0;
 
-		// Everything but checked_at: what the record says of the file.
+		// Everything but the times of the checks: what the record says of the file.
 		bool same_as(const asset_record& other) const;
 	};
 
@@ -200,6 +204,9 @@ namespace edt
 		std::map<std::string, asset_record> m_cached;
 		std::uint64_t m_save_job = 0;
 		bool m_save_again = false;
+		// Shared with a background write: one write at a time, and an older snapshot never replaces a newer one.
+		std::shared_ptr<asset_cache_writer> m_writer;
+		std::uint64_t m_snapshots = 0;
 		bool m_loaded_from_cache = false;
 		bool m_dirty = false;
 		std::size_t m_files_read = 0;

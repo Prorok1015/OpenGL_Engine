@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include <snk/platform/plt_file_lock.h>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -61,6 +62,23 @@ BOOST_AUTO_TEST_CASE(a_link_at_the_file_or_a_folder_is_not_followed)
 	BOOST_TEST(!std::filesystem::exists(outside.path() / ".lock"));
 	std::ifstream in(target, std::ios::binary);
 	BOOST_TEST(std::string(std::istreambuf_iterator<char>(in), {}) == "keep");
+}
+#else
+// #822: a junction at a folder of the lock's path is refused and nothing is made where it leads.
+BOOST_AUTO_TEST_CASE(a_junction_at_a_folder_is_not_followed)
+{
+	test_util::temp_dir dir("file_lock_junction");
+	test_util::temp_dir outside("file_lock_junction_outside");
+	const std::filesystem::path link = dir.path() / "linked";
+	const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.path().string() + "\" >NUL";
+	BOOST_REQUIRE_EQUAL(std::system(command.c_str()), 0);
+	BOOST_REQUIRE(std::filesystem::exists(link));
+
+	std::string error;
+	BOOST_TEST(!platform::file_lock::try_acquire(dir.path(), std::filesystem::path("linked") / ".lock", &error).has_value());
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(!std::filesystem::exists(outside.path() / ".lock"));
+	std::filesystem::remove(link);
 }
 #endif
 

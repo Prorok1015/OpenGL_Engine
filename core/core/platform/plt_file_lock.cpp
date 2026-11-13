@@ -1,6 +1,8 @@
 #include <snk/platform/plt_file_lock.h>
 #include <snk/common/fs_paths.h>
 #include <format>
+#include <optional>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -47,6 +49,46 @@ namespace
 			*error = std::move(text);
 		}
 	}
+
+#if defined(_WIN32)
+	std::optional<std::wstring> final_path(HANDLE handle)
+	{
+		constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+		const DWORD size = ::GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
+		if (size == 0) {
+			return std::nullopt;
+		}
+		std::wstring path(size, L'\0');
+		const DWORD length = ::GetFinalPathNameByHandleW(handle, path.data(), size, flags);
+		if (length == 0 || length >= size) {
+			return std::nullopt;
+		}
+		path.resize(length);
+		return path;
+	}
+
+	// The opened file is the root's (as it resolves now) followed by `parts`: no folder between was swapped for a
+	// junction after it was checked (the same check as platform::beneath on Windows).
+	bool lies_below_root(HANDLE file, const fs::path& root, const std::vector<fs::path>& parts)
+	{
+		const HANDLE root_handle = ::CreateFileW(root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (root_handle == INVALID_HANDLE_VALUE) {
+			return false;
+		}
+		std::optional<std::wstring> expected = final_path(root_handle);
+		::CloseHandle(root_handle);
+		const std::optional<std::wstring> actual = final_path(file);
+		if (!expected || !actual) {
+			return false;
+		}
+		for (const fs::path& part : parts) {
+			expected->append(L"\\").append(part.native());
+		}
+		return ::CompareStringOrdinal(actual->c_str(), static_cast<int>(actual->size()), expected->c_str(),
+			static_cast<int>(expected->size()), TRUE) == CSTR_EQUAL;
+	}
+#endif
 }
 
 std::optional<platform::file_lock> platform::file_lock::try_acquire(const fs::path& root, const fs::path& relative, std::string* error)
@@ -59,8 +101,7 @@ std::optional<platform::file_lock> platform::file_lock::try_acquire(const fs::pa
 	const fs::path where = root / relative;
 #if defined(_WIN32)
 	// Checked one folder at a time, then the file is opened without following a reparse point and checked through its
-	// handle. A folder swapped for a junction between the check and the open is not caught: the project's own content
-	// is what this guards against, not a process racing the editor.
+	// handle; its final path then shows that no folder was swapped for a junction after its check.
 	std::error_code made;
 	fs::create_directories(root, made);
 	fs::path folder = root;
@@ -87,7 +128,8 @@ std::optional<platform::file_lock> platform::file_lock::try_acquire(const fs::pa
 	}
 	BY_HANDLE_FILE_INFORMATION information{};
 	if (!::GetFileInformationByHandle(handle, &information)
-		|| (information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+		|| (information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0
+		|| !lies_below_root(handle, root, *parts)) {
 		::CloseHandle(handle);
 		set_error(error, std::format("'{}' is a link or not a file", fs_paths::utf8_of(where)));
 		return std::nullopt;

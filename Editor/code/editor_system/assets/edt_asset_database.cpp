@@ -16,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -312,7 +313,8 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 			continue;
 		}
 		asset_record record;
-		record.checked_at = checked_at;
+		record.content_checked_at = checked_at;
+		record.meta_checked_at = checked_at;
 		record.path = res::tag::make(relative);
 		record.layer = file.layer;
 		record.shadowed_layers = file.shadowed;
@@ -336,7 +338,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 				record.id = before->id;
 				record.flags = before->flags;
 				record.meta_error = before->meta_error;
-				record.checked_at = std::min(record.checked_at, before->checked_at);
+				record.meta_checked_at = std::min(record.meta_checked_at, before->meta_checked_at);
 				scan.records.push_back(std::move(record));
 				continue;
 			}
@@ -421,6 +423,27 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	return out;
 }
 
+struct edt::asset_cache_writer
+{
+	// Writes snapshot number `snapshot` unless a newer one was written already; the error, nullopt on success (a skip
+	// is a success).
+	std::optional<std::string> write(std::uint64_t snapshot, const std::function<std::optional<std::string>()>& write_file)
+	{
+		const std::scoped_lock hold(mutex);
+		if (snapshot <= written) {
+			return std::nullopt;
+		}
+		std::optional<std::string> error = write_file();
+		if (!error) {
+			written = snapshot;
+		}
+		return error;
+	}
+
+	std::mutex mutex;
+	std::uint64_t written = 0;
+};
+
 bool edt::asset_record::same_as(const asset_record& other) const
 {
 	return path == other.path && layer == other.layer && shadowed_layers == other.shadowed_layers && id == other.id
@@ -432,6 +455,7 @@ bool edt::asset_record::same_as(const asset_record& other) const
 edt::asset_database::asset_database(job_service& jobs, editor_events* events, std::vector<fs::path> layers, asset_cache_location cache)
 	: m_jobs(jobs)
 	, m_cache(std::move(cache))
+	, m_writer(std::make_shared<asset_cache_writer>())
 {
 	m_layers.reserve(layers.size());
 	for (fs::path& layer : layers) {
@@ -463,6 +487,11 @@ edt::asset_database::asset_database(job_service& jobs, editor_events* events, st
 edt::asset_database::~asset_database()
 {
 	try {
+		// A background write may be cancelled with the database or still running; save() waits for a running one and
+		// writes what is newest.
+		if (m_save_job != 0) {
+			m_dirty = true;
+		}
 		save();
 	} catch (const std::exception& error) {
 		egLOG_WARN("assets", "the asset database cache was not written: {}", error.what());
@@ -545,8 +574,9 @@ void edt::asset_database::apply_scan(asset_scan scan)
 			&& known->second.mtime == record.mtime) {
 			record.content_hash = known->second.content_hash;
 			record.desc_type = known->second.desc_type;
-			// The hash is as old as that record's check: a stamp it could not trust stays untrusted.
-			record.checked_at = std::min(record.checked_at, known->second.checked_at);
+			// The hash is as old as that record's check, so a stamp it could not trust stays untrusted. Within a session a
+			// record with the same stamp is carried over without the racy check; a restart catches it through this min.
+			record.content_checked_at = std::min(record.content_checked_at, known->second.content_checked_at);
 		}
 		const bool in_flight = std::ranges::find(m_in_flight, key) != m_in_flight.end();
 		if (record.content_hash.empty() && !in_flight) {
@@ -711,9 +741,9 @@ void edt::asset_database::save_when_idle()
 	m_dirty = false;
 	// Copied here, serialized and written on the io lane: the main thread never waits for the disk.
 	m_save_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Save the asset database", "assets", false }, m_lifetime,
-		[cache = m_cache, lock = m_lock, layers = m_layers, records = m_records](ds::task_context&) {
+		[cache = m_cache, lock = m_lock, writer = m_writer, snapshot = ++m_snapshots, layers = m_layers, records = m_records](ds::task_context&) {
 			(void)lock;
-			return write_cache(cache, layers, records);
+			return writer->write(snapshot, [&] { return write_cache(cache, layers, records); });
 		},
 		[this](ds::task_result<std::optional<std::string>>& result) {
 			m_save_job = 0;
@@ -782,7 +812,8 @@ namespace
 		if (record.desc_type) {
 			out["desc_type"] = *record.desc_type;
 		}
-		out["checked_at"] = record.checked_at;
+		out["content_checked_at"] = record.content_checked_at;
+		out["meta_checked_at"] = record.meta_checked_at;
 		return out;
 	}
 
@@ -854,14 +885,15 @@ namespace
 		const auto mtime = integer("mtime");
 		const auto meta_size = integer("meta_size");
 		const auto meta_mtime = integer("meta_mtime");
-		const auto checked_at = integer("checked_at");
+		const auto content_checked_at = integer("content_checked_at");
+		const auto meta_checked_at = integer("meta_checked_at");
 		const auto type = text("type");
 		const auto hash = text("hash");
 		const boost::json::value* has_meta = object->if_contains("has_meta");
 		const boost::json::value* shadowed = object->if_contains("shadowed");
 		const boost::json::value* flags = object->if_contains("flags");
 		if (!path || !is_walk_path(*path) || !layer || *layer < 0 || static_cast<std::size_t>(*layer) >= layer_count || !size || *size < 0
-			|| !mtime || !meta_size || !meta_mtime || !checked_at || !type || !hash || !is_hash_text(*hash) || !has_meta
+			|| !mtime || !meta_size || !meta_mtime || !content_checked_at || !meta_checked_at || !type || !hash || !is_hash_text(*hash) || !has_meta
 			|| !has_meta->is_bool() || !shadowed || !shadowed->is_array() || !flags || !flags->is_array()) {
 			return std::nullopt;
 		}
@@ -877,7 +909,8 @@ namespace
 		record.has_meta = has_meta->get_bool();
 		record.meta_size = *meta_size;
 		record.meta_mtime = *meta_mtime;
-		record.checked_at = *checked_at;
+		record.content_checked_at = *content_checked_at;
+		record.meta_checked_at = *meta_checked_at;
 		record.type = *type;
 		record.content_hash = *hash;
 		// Lower layers only, ascending, each once: as the walk lists them.
@@ -923,12 +956,11 @@ namespace
 	void distrust_racy_stamps(edt::asset_record& record)
 	{
 		const std::int64_t margin = std::chrono::duration_cast<fs::file_time_type::duration>(edt::asset_database::stamp_granularity).count();
-		const std::int64_t trusted_before = record.checked_at - margin;
-		if (record.mtime >= trusted_before) {
+		if (record.mtime >= record.content_checked_at - margin) {
 			record.content_hash.clear();
 			record.desc_type.reset();
 		}
-		if (record.has_meta && record.meta_mtime >= trusted_before) {
+		if (record.has_meta && record.meta_mtime >= record.meta_checked_at - margin) {
 			// No stamp of a real file: the walk reads the .resource again.
 			record.meta_size = -1;
 		}
@@ -1012,7 +1044,7 @@ void edt::asset_database::save()
 	if (!m_lock || !m_dirty) {
 		return;
 	}
-	if (const std::optional<std::string> error = write_cache(m_cache, m_layers, m_records)) {
+	if (const std::optional<std::string> error = m_writer->write(++m_snapshots, [this] { return write_cache(m_cache, m_layers, m_records); })) {
 		egLOG_WARN("assets", "the asset database cache was not written: {}", *error);
 		return;
 	}
