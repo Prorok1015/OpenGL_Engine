@@ -247,9 +247,11 @@ private:
 		layer.descs().register_migration(dll_game::migrated_type, 1, [](boost::json::object& obj) { obj["migrated_by"] = "dll"; });
 		layer.descs().register_migration(dll_game::migrated_type, 2, "renames old to new",
 			[](boost::json::object& obj, desc::migration_context& context) {
-				if (auto* old = obj.if_contains("old")) {
-					obj["new"] = *old;
+				if (const auto* old = obj.if_contains("old")) {
+					// A copy first: adding "new" may grow the object and move "old".
+					boost::json::value moved = *old;
 					obj.erase("old");
+					obj["new"] = std::move(moved);
 				} else {
 					context.warn("no 'old' field");
 				}
