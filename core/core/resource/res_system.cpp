@@ -982,7 +982,8 @@ void res::resource_system::prune_released_edges() {
     it = it->second.empty() ? m_displaced.erase(it) : std::next(it);
   }
   const auto is_released = [this, &originals_by_alias](const res::tag &tag) {
-    if (m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); }) || m_displaced.contains(tag)) {
+    const bool live = m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+    if (live || m_displaced.contains(tag)) {
       return false;
     }
     if (needed_by_layers(tag)) {
@@ -1413,6 +1414,9 @@ void res::resource_system::collect_bindings(std::vector<std::pair<res::tag, res:
       out.push_back(binding);
     }
     m_cache.for_each_tag(add_key);
+    for (const auto &[key, blocks] : m_displaced) {
+      add_key(key);
+    }
     for (const auto &[key, watchers] : m_watchers) {
       add_key(key);
     }
@@ -1504,6 +1508,9 @@ void res::resource_system::apply_rebind(const std::unordered_map<res::tag, res::
       }
     };
     m_cache.for_each_tag(add_key);
+    for (const auto &[key, blocks] : m_displaced) {
+      add_key(key);
+    }
     m_pinned_resources.for_each_tag(add_key);
     for (const auto &[key, watchers] : m_watchers) {
       add_key(key);
@@ -2331,7 +2338,8 @@ std::size_t res::resource_system::displaced_count() const
 	std::shared_lock lock(m_cache_mutex);
 	std::size_t count = 0;
 	for (const auto& [node, blocks] : m_displaced) {
-		count += static_cast<std::size_t>(std::ranges::count_if(blocks, [](const cache_entry& entry) { return !entry.expired(); }));
+		const auto alive = std::ranges::count_if(blocks, [](const cache_entry& entry) { return !entry.expired(); });
+		count += static_cast<std::size_t>(alive);
 	}
 	return count;
 }

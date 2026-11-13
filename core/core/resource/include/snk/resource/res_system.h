@@ -159,7 +159,8 @@ namespace res
 		// Read-only: cached resources that were requested but have neither finished nor failed yet.
 		// Used to tell that the scene has settled (deterministic headless runs).
 		std::size_t pending_loads() const;
-		// Read-only: live blocks a rebind found under a key another live block already held (#858). For tests and diagnostics.
+		// Read-only: live blocks a rebind found under a key another live block already held (#858). For tests and
+		// diagnostics.
 		std::size_t displaced_count() const;
 
 		// Any thread. Drops the cache entries of the tag and of everything built from it (the reverse edges of the
