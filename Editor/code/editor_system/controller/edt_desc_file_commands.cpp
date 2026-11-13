@@ -568,9 +568,10 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 						const desc::override_failure bad = desc::check_override_object(*schema, patch, nullptr, &descs.schemas());
 						if (bad.status != desc::override_status::valid) {
 							const std::string expected = desc::override_expectation(*schema, bad, &descs.schemas());
+							const std::string owner = desc::override_owner(*schema, bad, &descs.schemas());
 							schema_error(pointer + bad.pointer,
-								bad.status == desc::override_status::stale ? std::format("'{}' has no such field", type)
-									: std::format("the value does not fit the field of '{}'{}{}", type, expected.empty() ? "" : ": expected ", expected));
+								bad.status == desc::override_status::stale ? std::format("'{}' has no such field", owner)
+									: std::format("the value does not fit the field of '{}'{}{}", owner, expected.empty() ? "" : ": expected ", expected));
 						}
 						// The fields the schema says hold a tag: a path inside the project, whatever it looks like.
 						for (const desc::field_schema& field : schema->fields) {

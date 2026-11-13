@@ -1744,13 +1744,117 @@ BOOST_AUTO_TEST_CASE(OverrideExpectation_NamesWhatTheFieldWants)
 		const auto failure = desc::check_override_object(schema, json::parse(patch).as_object(), nullptr, &registry);
 		return desc::override_expectation(schema, failure, &registry);
 	};
-	// a map is reported as a whole: what it wants is an object of its values
-	BOOST_TEST(expectation(R"({"parts":{"p":{"scale":"wide"}}})") == "an object (key to value)");
+	// a map of structures is read like a list of them: the value that fails, not the whole map
+	BOOST_TEST(expectation(R"({"parts":{"p":{"scale":"wide"}}})") == "a value of kind f32");
+	BOOST_TEST(expectation(R"({"parts":{"p":5}})") == "an object of 'ops.inner'");
+	// a map of plain values is reported as a whole: what it wants is an object of its values
 	BOOST_TEST(expectation(R"({"counts":{"a":"x"}})") == "an object (key to value)");
 	BOOST_TEST(expectation(R"({"gain":"x"})") == "a value of kind f32");
 	// a stale pointer and a valid object name nothing
 	BOOST_TEST(expectation(R"({"parts":{"p":{"gone":1}}})").empty());
 	BOOST_TEST(expectation(R"({"counts":{"a":1}})").empty());
+}
+
+BOOST_AUTO_TEST_CASE(AMapOfStructuresIsCheckedByItsValues_TheFailureNamesTheKeyAndTheField)
+{
+	const auto schema = desc::schema_generator<ops_test::keyed>::make("ops.keyed", 1, desc::schema_kind::component);
+	desc::schema_registry registry;
+	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
+	using desc::override_status;
+	const auto check_object = [&](const char* patch) {
+		return desc::check_override_object(schema, json::parse(patch).as_object(), nullptr, &registry);
+	};
+
+	BOOST_TEST((check_object(R"({"parts":{}})").status == override_status::valid));
+	BOOST_TEST((check_object(R"({"parts":{"p":{"scale":2.0},"q":null}})").status == override_status::valid));
+
+	const auto wrong = check_object(R"({"parts":{"p":{"scale":1.0},"q":{"scale":"wide"}}})");
+	BOOST_TEST((wrong.status == override_status::bad_value));
+	BOOST_TEST(wrong.pointer == "/parts/q/scale");
+
+	// the key is escaped the way a pointer escapes it
+	BOOST_TEST(check_object(R"({"parts":{"a/b":{"scale":"x"}}})").pointer == "/parts/a~1b/scale");
+	BOOST_TEST(check_object(R"({"parts":{"a~b":{"scale":"x"}}})").pointer == "/parts/a~0b/scale");
+	BOOST_TEST(check_object(R"({"parts":{"~/":{"flag":"x"}}})").pointer == "/parts/~0~1/flag");
+
+	const auto value = check_object(R"({"parts":{"p":5}})");
+	BOOST_TEST((value.status == override_status::bad_value));
+	BOOST_TEST(value.pointer == "/parts/p");
+
+	const auto empty_key = check_object(R"({"parts":{"":{}}})");
+	BOOST_TEST((empty_key.status == override_status::bad_value));
+	BOOST_TEST(empty_key.pointer == "/parts/");
+
+	const auto unknown = check_object(R"({"parts":{"p":{"gone":1}}})");
+	BOOST_TEST((unknown.status == override_status::stale));
+	BOOST_TEST(unknown.pointer == "/parts/p/gone");
+	BOOST_TEST(desc::override_owner(schema, unknown, &registry) == "ops.inner");
+	BOOST_TEST(desc::override_owner(schema, check_object(R"({"gain":"x"})"), &registry) == "ops.keyed");
+}
+
+BOOST_FIXTURE_TEST_CASE(ListsAndStructuresInsideAnItemAreCheckedToo_TheLoadLogCarriesTheFullPointer, ops_fixture)
+{
+	const auto holder = desc::parse_type_schema(json::parse(R"({
+		"name": "ops.holder", "kind": "component",
+		"fields": [ { "name": "rows", "kind": "array", "element": "structure", "ref_type": "ops.row" } ]
+	})").as_object());
+	desc::schema_registry registry;
+	registry.add(desc::parse_type_schema(json::parse(R"({
+		"name": "ops.row", "kind": "structure",
+		"fields": [
+			{ "name": "title", "kind": "string" },
+			{ "name": "cells", "kind": "array", "element": "structure", "ref_type": "ops.inner" },
+			{ "name": "limits", "kind": "structure", "ref_type": "ops.inner" }
+		]
+	})").as_object()));
+	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
+	using desc::override_status;
+	const auto check_object = [&](const char* patch) {
+		return desc::check_override_object(holder, json::parse(patch).as_object(), nullptr, &registry);
+	};
+	const auto check = [&](std::string_view pointer, const char* value) {
+		return desc::validate_override(holder, desc::json_change{ std::string(pointer), json::parse(value) }, &registry);
+	};
+
+	BOOST_TEST((check_object(R"({"rows":[{"title":"a","cells":[{"scale":1.0}],"limits":{"flag":true}},{}]})").status == override_status::valid));
+
+	const auto in_list = check_object(R"({"rows":[{},{"cells":[{"scale":1.0},{"scale":"x"}]}]})");
+	BOOST_TEST((in_list.status == override_status::bad_value));
+	BOOST_TEST(in_list.pointer == "/rows/1/cells/1/scale");
+	BOOST_TEST(desc::override_expectation(holder, in_list, &registry) == "a value of kind f32");
+
+	const auto in_structure = check_object(R"({"rows":[{"limits":{"scale":"x"}}]})");
+	BOOST_TEST((in_structure.status == override_status::bad_value));
+	BOOST_TEST(in_structure.pointer == "/rows/0/limits/scale");
+	BOOST_TEST(desc::override_expectation(holder, in_structure, &registry) == "a value of kind f32");
+
+	const auto in_item = check_object(R"({"rows":[{"cells":[3]}]})");
+	BOOST_TEST(in_item.pointer == "/rows/0/cells/0");
+	BOOST_TEST(desc::override_expectation(holder, in_item, &registry) == "an object of 'ops.inner'");
+
+	const auto gone_in_row = check_object(R"({"rows":[{"gone":1}]})");
+	BOOST_TEST((gone_in_row.status == override_status::stale));
+	BOOST_TEST(desc::override_owner(holder, gone_in_row, &registry) == "ops.row");
+	const auto gone_in_cell = check_object(R"({"rows":[{"cells":[{"gone":1}]}]})");
+	BOOST_TEST(gone_in_cell.pointer == "/rows/0/cells/0/gone");
+	BOOST_TEST(desc::override_owner(holder, gone_in_cell, &registry) == "ops.inner");
+
+	BOOST_TEST((check("/rows/1", R"({"cells":[{"scale":"x"}]})") == override_status::bad_value));
+	BOOST_TEST((check("/rows/1/cells/0", R"({"scale":"x"})") == override_status::bad_value));
+	BOOST_TEST((check("/rows/1/cells/0/scale", "2.0") == override_status::valid));
+	BOOST_TEST((check("/rows/1/limits", R"({"scale":"x"})") == override_status::bad_value));
+	BOOST_TEST((check("/rows/1/limits/gone", "1") == override_status::stale));
+
+	std::vector<std::string> messages;
+	const engine::log_sink_handle sink = engine::add_log_sink([&messages](std::string_view, engine::log_level level, std::string_view text) {
+		if (level == engine::log_level::warn) messages.emplace_back(text);
+	});
+	check("/rows/1", R"({"cells":[{"scale":1.0},{"scale":"x"}]})");
+	check("/rows/0/limits/gone", "1");
+	BOOST_REQUIRE(messages.size() == 2);
+	BOOST_TEST(messages[0].find("'/rows/1/cells/1/scale'") != std::string::npos);
+	BOOST_TEST(messages[0].find("expected a value of kind f32") != std::string::npos);
+	BOOST_TEST(messages[1].find("'/rows/0/limits/gone'") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AMapOfStructuresIsCheckedByTheStructure)
