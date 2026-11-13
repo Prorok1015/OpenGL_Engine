@@ -270,8 +270,8 @@ private:
 		}
 		data.require<gs::module_context>().observe<dll_game::dll_link>({}, scn::observed::construct,
 			[](ecs::bus_context& ctx, entt::entity entity) {
-				entt::registry& reg = ctx.registry();
-				reg.emplace_or_replace<dll_game::dll_link_seen>(entity, dll_game::dll_link_seen{ reg.get<dll_game::dll_link>(entity).target });
+				// The world is read-only here: the record lands with the next apply_commands.
+				ctx.changer().emplace<dll_game::dll_link_seen>(entity, ctx.registry().get<dll_game::dll_link>(entity).target);
 			});
 		data.require<gs::module_context>().register_component(
 			desc::parse_type_schema(boost::json::parse(dll_game::schema_component_json).as_object()));

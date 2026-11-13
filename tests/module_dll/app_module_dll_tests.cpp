@@ -358,6 +358,8 @@ BOOST_AUTO_TEST_CASE(a_module_component_from_the_sandbox_names_world_entities_wh
 	const auto holder = sandbox.create();
 	sandbox.emplace<dll_game::dll_link>(holder, dll_game::dll_link{ ecs::to_main(target), 5 });
 	scn::world_context::apply_commands(reg, &layer->meta());
+	// What the observer queued through the changer.
+	scn::world_context::apply_commands(reg, &layer->meta());
 
 	const auto view = reg.view<const dll_game::dll_link>();
 	BOOST_REQUIRE(view.size() == 1u);
