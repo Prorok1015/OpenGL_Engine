@@ -2,6 +2,7 @@
 #include "edt_world_problems.h"
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
+#include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
 #include <snk/command/cmd_types.h>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
 #include "edt_scene_document.h"
@@ -41,6 +43,7 @@ namespace inp  { class input_router; }
 namespace cmd  { class command_registry; }
 
 namespace edt {
+	class asset_database;
 	class agent_server;
 	class agent_access;
 	class agent_policy_model;
@@ -55,6 +58,7 @@ namespace edt {
 	class live_mode;
 	class editor_context;
 	class editor_layer;
+	class data_document_host;
 	class model_importer;
 	class process_decoder;
 	class asset_exporter;
@@ -203,6 +207,8 @@ namespace edt {
 		agent_server* agent_server_object() { return m_agent_server.get(); }
 		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
 		agent_access* agent_access_object() { return m_agent_access.get(); }
+		// The asset database of the open project (#760); null without a project.
+		asset_database* assets() { return m_assets.get(); }
 
 	private:
 		// Editor layer & panels
@@ -233,6 +239,13 @@ namespace edt {
 		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
 		void close_prefab_editor();
+
+		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
+		desc_file_layout desc_layout();
+		// The kinds of the asset registry first (a module's `.desc` kind, the prefab editor), then any `.desc` as a data
+		// document. `quiet`: a problem or a link, not a double click: a file that is no data document is a log line, no window.
+		bool open_asset(const res::tag& tag, bool quiet);
+		std::unique_ptr<data_document_host> m_data_documents;
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;
@@ -292,6 +305,8 @@ namespace edt {
 		std::unique_ptr<edt::vcs_service> m_vcs;
 		// After the service whose write observer reaches it, so it is destroyed first.
 		std::unique_ptr<edt::vcs::repository_watcher> m_repo_watcher;
+		// The asset database (#760): follows res:// from init, writes its cache when it goes.
+		std::unique_ptr<edt::asset_database> m_assets;
 		// Forge tokens (#458): the OS store, shared with the forge service (and the settings UI later). Its calls block: only jobs
 		// make them.
 		std::shared_ptr<platform::secret_store> m_secrets;

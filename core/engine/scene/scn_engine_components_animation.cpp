@@ -79,59 +79,53 @@ namespace desc
 			return true;
 		}
 	};
+}
 
-	// Keyed by component name, written in name order so that two snapshots of the same world are equal.
-	template<>
-	struct json_codec<std::unordered_map<std::string, scn::tracked_component_info>>
-	{
-		using map = std::unordered_map<std::string, scn::tracked_component_info>;
+// Keyed by component name, written in name order so that two snapshots of the same world are equal.
+json::value desc::json_codec<std::unordered_map<std::string, scn::tracked_component_info>>::to_json(const map& tracked)
+{
+	std::vector<const map::value_type*> entries;
+	entries.reserve(tracked.size());
+	for (const auto& entry : tracked) {
+		entries.push_back(&entry);
+	}
+	std::ranges::sort(entries, {}, [](const map::value_type* entry) { return entry->first; });
+	json::object out;
+	for (const auto* entry : entries) {
+		json::object info;
+		info["type_name"] = entry->second.type_name;
+		info["source_desc"] = entry->second.source_desc.view();
+		info["local_overrides"] = entry->second.local_overrides;
+		out[entry->first] = std::move(info);
+	}
+	return json::value(std::move(out));
+}
 
-		static json::value to_json(const map& tracked)
-		{
-			std::vector<const map::value_type*> entries;
-			entries.reserve(tracked.size());
-			for (const auto& entry : tracked) {
-				entries.push_back(&entry);
-			}
-			std::ranges::sort(entries, {}, [](const map::value_type* entry) { return entry->first; });
-			json::object out;
-			for (const auto* entry : entries) {
-				json::object info;
-				info["type_name"] = entry->second.type_name;
-				info["source_desc"] = entry->second.source_desc.view();
-				info["local_overrides"] = entry->second.local_overrides;
-				out[entry->first] = std::move(info);
-			}
-			return json::value(std::move(out));
+bool desc::json_codec<std::unordered_map<std::string, scn::tracked_component_info>>::from_json(map& tracked, const json::value& in)
+{
+	if (!in.is_object()) {
+		return false;
+	}
+	map parsed;
+	for (const auto& [name, value] : in.as_object()) {
+		const json::object* info = value.if_object();
+		if (!info) {
+			return false;
 		}
-
-		static bool from_json(map& tracked, const json::value& in)
-		{
-			if (!in.is_object()) {
-				return false;
-			}
-			map parsed;
-			for (const auto& [name, value] : in.as_object()) {
-				const json::object* info = value.if_object();
-				if (!info) {
-					return false;
-				}
-				scn::tracked_component_info item;
-				if (const auto* type = info->if_contains("type_name"); type && type->is_string()) {
-					item.type_name = std::string{ type->as_string() };
-				}
-				if (const auto* source = info->if_contains("source_desc"); source && source->is_string() && !source->as_string().empty()) {
-					item.source_desc = res::tag{ std::string_view{ source->as_string() } };
-				}
-				if (const auto* overrides = info->if_contains("local_overrides"); overrides && overrides->is_object()) {
-					item.local_overrides = overrides->as_object();
-				}
-				parsed.emplace(std::string{ name }, std::move(item));
-			}
-			tracked = std::move(parsed);
-			return true;
+		scn::tracked_component_info item;
+		if (const auto* type = info->if_contains("type_name"); type && type->is_string()) {
+			item.type_name = std::string{ type->as_string() };
 		}
-	};
+		if (const auto* source = info->if_contains("source_desc"); source && source->is_string() && !source->as_string().empty()) {
+			item.source_desc = res::tag{ std::string_view{ source->as_string() } };
+		}
+		if (const auto* overrides = info->if_contains("local_overrides"); overrides && overrides->is_object()) {
+			item.local_overrides = overrides->as_object();
+		}
+		parsed.emplace(std::string{ name }, std::move(item));
+	}
+	tracked = std::move(parsed);
+	return true;
 }
 
 void scn::detail::register_animation_components(component_catalog& catalog)

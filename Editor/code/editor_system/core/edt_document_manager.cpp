@@ -5,9 +5,62 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <cctype>
+#include <map>
+#include <string>
 
 namespace {
 constexpr const char* k_preview_problem_source = "preview";
+
+using adopted_list = std::vector<std::unique_ptr<edt::document>>;
+
+using adopted_table = std::map<const edt::document_manager*, adopted_list>;
+
+// Never destroyed: a manager that outlives the other statics (the editor context does) still finds its table.
+adopted_table& adopted_lists()
+{
+	static auto* lists = new adopted_table;
+	return *lists;
+}
+
+// For a read: a manager that adopted nothing has no entry, and a read makes none.
+const adopted_list& adopted_view(const edt::document_manager* manager)
+{
+	static const adopted_list none;
+	const auto found = adopted_lists().find(manager);
+	return found != adopted_lists().end() ? found->second : none;
+}
+
+adopted_list& adopted_of(const edt::document_manager* manager)
+{
+	return adopted_lists()[manager];
+}
+
+std::string source_key(const res::tag& source)
+{
+	std::string protocol{ source.protocol() };
+	std::string rest{ source.relative() };
+	std::vector<std::string> parts;
+	std::size_t start = 0;
+	while (start <= rest.size()) {
+		std::size_t end = rest.find('/', start);
+		if (end == std::string::npos) end = rest.size();
+		std::string part = rest.substr(start, end - start);
+		start = end + 1;
+		if (part.empty() || part == ".") continue;
+		if (part == "..") {
+			if (!parts.empty()) parts.pop_back();
+			continue;
+		}
+		parts.push_back(std::move(part));
+	}
+	std::string key = protocol + "://";
+	for (const std::string& part : parts) key += part + "/";
+#if defined(_WIN32) || defined(__APPLE__)
+	std::ranges::transform(key, key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+	return key;
+}
 }
 
 edt::document_manager::document_manager(document& scene, editor_events& events)
@@ -19,7 +72,10 @@ edt::document_manager::document_manager(document& scene, editor_events& events)
 	m_active = m_scene->id();
 }
 
-edt::document_manager::~document_manager() = default;
+edt::document_manager::~document_manager()
+{
+	adopted_lists().erase(this);
+}
 
 void edt::document_manager::set_preview_kinds(asset_kind_registry& kinds, editor_services& services, problem_list* problems)
 {
@@ -45,6 +101,7 @@ void edt::document_manager::shutdown()
 {
 	if (!m_scene) return;
 	if (m_open_preview) close(m_open_preview->id());
+	while (!adopted_view(this).empty()) close(adopted_view(this).back()->id());
 	m_scene->bind_events(nullptr);
 	m_scene = nullptr;
 	m_active = 0;
@@ -59,7 +116,9 @@ edt::document* edt::document_manager::find(document_id id)
 {
 	if (m_scene && id == m_scene->id()) return m_scene;
 	if (m_open_preview && m_open_preview->is_open() && m_open_preview->id() == id) return m_open_preview;
-	return nullptr;
+	const adopted_list& adopted = adopted_view(this);
+	const auto kept = std::find_if(adopted.begin(), adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	return kept != adopted.end() ? kept->get() : nullptr;
 }
 
 void edt::document_manager::set_active(document_id id)
@@ -111,6 +170,29 @@ edt::previewable_document* edt::document_manager::open_preview(std::string_view 
 	return preview ? open_with(*preview, source) : nullptr;
 }
 
+edt::document& edt::document_manager::adopt(std::unique_ptr<document> adopted)
+{
+	ASSERT_MSG(adopted, "document_manager::adopt: no document");
+	document& kept = *adopted;
+	kept.assign_id(m_next_id++);
+	kept.bind_events(&m_events);
+	adopted_of(this).push_back(std::move(adopted));
+	m_events.document_opened.emit(kept.id());
+	set_active(kept.id());
+	return kept;
+}
+
+edt::document* edt::document_manager::find_by_source(const res::tag& source)
+{
+	if (!source.is_valid()) return nullptr;
+	const std::string wanted = source_key(source);
+	document* found = nullptr;
+	for_each([&](document& candidate) {
+		if (!found && candidate.source().is_valid() && source_key(candidate.source()) == wanted) found = &candidate;
+	});
+	return found;
+}
+
 edt::previewable_document* edt::document_manager::preview()
 {
 	return m_open_preview && m_open_preview->is_open() ? m_open_preview : nullptr;
@@ -120,6 +202,19 @@ void edt::document_manager::close(document_id id)
 {
 	if (m_scene && id == m_scene->id()) {
 		egLOG_WARN("Editor/Documents", "The scene document cannot be closed");
+		return;
+	}
+	const auto adopted = std::find_if(adopted_of(this).begin(), adopted_of(this).end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	if (adopted != adopted_of(this).end()) {
+		// Out of the list before anything is announced, and destroyed after: a listener may still read the closing document.
+		std::unique_ptr<document> closing = std::move(*adopted);
+		adopted_of(this).erase(adopted);
+		closing->bind_events(nullptr);
+		if (m_active == id) {
+			m_active = m_scene ? m_scene->id() : 0;
+			m_events.document_activated.emit(m_active);
+		}
+		m_events.document_closed.emit(id);
 		return;
 	}
 	if (!m_open_preview || !m_open_preview->is_open() || m_open_preview->id() != id) return;
@@ -162,6 +257,13 @@ void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 
 void edt::document_manager::for_each(const std::function<void(document&)>& fn)
 {
+	std::vector<document_id> adopted_ids;
+	adopted_ids.reserve(adopted_view(this).size());
+	for (const auto& kept : adopted_view(this)) adopted_ids.push_back(kept->id());
+
 	if (m_scene) fn(*m_scene);
 	if (preview()) fn(*m_open_preview);
+	for (const document_id id : adopted_ids) {
+		if (document* still_open = find(id)) fn(*still_open);
+	}
 }

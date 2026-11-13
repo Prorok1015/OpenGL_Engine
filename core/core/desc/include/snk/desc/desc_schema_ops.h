@@ -202,12 +202,6 @@ namespace desc
 	// A codec that needs the desc being read (to resolve other descs) declares a third parameter instead:
 	//       static bool from_json(T&, const json::value&, const read_context&);
 	template<typename T>
-	struct json_codec;
-
-	template<typename T>
-	concept has_json_codec = requires { sizeof(json_codec<T>); };
-
-	template<typename T>
 	concept has_contextual_json_codec = has_json_codec<T>
 		&& requires(T& value, const json::value& in, const read_context& ctx) { json_codec<T>::from_json(value, in, ctx); };
 

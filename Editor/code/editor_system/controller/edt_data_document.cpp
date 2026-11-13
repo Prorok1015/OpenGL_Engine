@@ -73,6 +73,13 @@ edt::open_result edt::data_document::read_file(const res::tag& file, json::objec
 		return open_result::failure("the project resources are not available");
 	}
 	desc_file_read read = read_desc_file(*resources, *descs, m_files, file);
+	if (checks) {
+		checks->located = read.located;
+		checks->missing = read.missing;
+		checks->top_layer = read.top_layer;
+		checks->in_open_level = read.in_open_level;
+		checks->version = read.version;
+	}
 	if (!read.error.empty()) {
 		return open_result::failure(std::format("{} {}", where(file), read.error));
 	}
@@ -91,10 +98,6 @@ edt::open_result edt::data_document::read_file(const res::tag& file, json::objec
 	}
 	out = std::move(parsed.as_object());
 	version = code_version_of(read.bytes);
-	if (checks) {
-		checks->top_layer = read.top_layer;
-		checks->in_open_level = read.in_open_level;
-	}
 	return open_result::ok();
 }
 
@@ -110,22 +113,22 @@ edt::open_result edt::data_document::load(const res::tag& file, loaded& out) con
 		return read;
 	}
 	if (!checks.top_layer) {
-		return open_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/", where(file)));
+		return open_result::not_a_document(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/", where(file)));
 	}
 	if (checks.in_open_level) {
-		return open_result::failure(std::format("{} belongs to the open level (its file or one of its worlds)", where(file)));
+		return open_result::not_a_document(std::format("{} belongs to the open level (its file or one of its worlds)", where(file)));
 	}
 	const json::value* type_field = out.own.if_contains("__type");
 	if (!type_field || !type_field->is_string()) {
-		return open_result::failure(std::format("{} /__type: missing or not a string", where(file)));
+		return open_result::not_a_document(std::format("{} /__type: missing or not a string", where(file)));
 	}
 	out.type = std::string{ type_field->as_string() };
 	const desc::type_schema* type_schema = descs->find_schema(out.type);
 	if (!type_schema) {
-		return open_result::failure(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), out.type));
+		return open_result::not_a_document(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), out.type));
 	}
 	if (!type_schema->is_document) {
-		return open_result::failure(std::format("{} /__type: '{}' is not a data document type", where(file), out.type));
+		return open_result::not_a_document(std::format("{} /__type: '{}' is not a data document type", where(file), out.type));
 	}
 	return resolve_chain(file, out.own, out.type, out.inherited, out.parents);
 }
@@ -193,6 +196,7 @@ void edt::data_document::apply(const res::tag& file, loaded&& state)
 	m_parents = std::move(state.parents);
 	m_chain_problem.clear();
 	m_changed_on_disk = false;
+	m_flagged_version.clear();
 	++m_generation;
 	watch_files();
 }
@@ -208,6 +212,34 @@ edt::open_result edt::data_document::open(const res::tag& file)
 	apply(file, std::move(state));
 	m_open = true;
 	return open_result::ok();
+}
+
+edt::open_result edt::data_document::reload()
+{
+	if (!m_open) {
+		return open_result::failure("the document is not open");
+	}
+	loaded state;
+	if (open_result result = load(m_source, state); !result.opened) {
+		return result;
+	}
+	apply(m_source, std::move(state));
+	announce();
+	return open_result::ok();
+}
+
+edt::save_result edt::data_document::save_over()
+{
+	return write(true);
+}
+
+void edt::data_document::flag_changed(const std::string& disk_version)
+{
+	m_changed_on_disk = true;
+	if (disk_version != m_flagged_version) {
+		m_flagged_version = disk_version;
+		++m_disk_changes;
+	}
 }
 
 edt::data_document::~data_document()
@@ -276,11 +308,14 @@ void edt::data_document::on_changed(const res::tag& tag)
 	if (tag == m_source) {
 		json::object on_disk;
 		std::string version;
-		const open_result read = read_file(m_source, on_disk, version);
+		desc_file_read seen;
+		const open_result read = read_file(m_source, on_disk, version, &seen);
 		if (read.opened && version == m_version) {
 			m_changed_on_disk = false;
 			return;
 		}
+		// What the outside change is called when the file does not parse: its bytes, or "missing" when it is gone.
+		if (!read.opened) version = seen.missing ? std::string{ "missing" } : (seen.version.empty() ? std::string{ "unreadable" } : seen.version);
 		if (!is_dirty()) {
 			loaded state;
 			if (open_result reloaded = load(m_source, state); reloaded.opened) {
@@ -289,7 +324,7 @@ void edt::data_document::on_changed(const res::tag& tag)
 				return;
 			}
 		}
-		m_changed_on_disk = true;
+		flag_changed(version);
 		announce();
 		return;
 	}
@@ -371,13 +406,19 @@ bool edt::data_document::restore_own(json::object own)
 
 edt::save_result edt::data_document::save()
 {
+	return write(false);
+}
+
+edt::save_result edt::data_document::write(bool over)
+{
 	if (!m_open) {
 		return save_result::failure("the document is not open");
 	}
-	if (!is_dirty()) {
+	// An overwrite writes the document even when it has no edits: the file on disk is what the person chose to replace.
+	if (!over && !is_dirty()) {
 		return save_result::ok();
 	}
-	if (m_changed_on_disk) {
+	if (!over && m_changed_on_disk) {
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 	desc::desc_system* descs = m_services.descs();
@@ -391,7 +432,11 @@ edt::save_result edt::data_document::save()
 	std::string disk_version;
 	desc_file_read checks;
 	if (open_result read = read_file(m_source, on_disk, disk_version, &checks); !read.opened) {
-		return save_result::failure(std::format("{} cannot be checked before it is written: {}", where(m_source), read.error));
+		// An overwrite goes on over a file that is gone or no longer parses, as long as the path itself is fine: there is no
+		// version to compare, and that is the very thing the person chose to replace.
+		if (!over || !checks.located) {
+			return save_result::failure(std::format("{} cannot be checked before it is written: {}", where(m_source), read.error));
+		}
 	}
 	if (!checks.top_layer) {
 		return save_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", where(m_source)));
@@ -399,7 +444,9 @@ edt::save_result edt::data_document::save()
 	if (checks.in_open_level) {
 		return save_result::failure(std::format("{} belongs to the open level now: nothing was written", where(m_source)));
 	}
-	if (disk_version != m_version) {
+	if (!over && disk_version != m_version) {
+		// The watcher may not have said so yet (its signal waits for the main thread): the file is known to differ now.
+		flag_changed(disk_version);
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 
@@ -422,5 +469,7 @@ edt::save_result edt::data_document::save()
 	m_own = std::move(content.as_object());
 	m_saved_own = m_own;
 	m_version = code_version_of(bytes);
+	m_changed_on_disk = false;
+	m_flagged_version.clear();
 	return save_result::ok();
 }

@@ -154,7 +154,7 @@ namespace desc
 
 		double tolerance_for(field_kind kind, field_kind element)
 		{
-			const field_kind effective = kind == field_kind::array ? element : kind;
+			const field_kind effective = kind == field_kind::array || kind == field_kind::map ? element : kind;
 			switch (effective) {
 			case field_kind::f64: return double_tolerance;
 			case field_kind::boolean:
@@ -621,6 +621,9 @@ namespace desc
 							return check_members(*nested, {}, {}, value.as_object(), nullptr, resolve).status;
 						}
 					}
+					if (field.optional && value.is_null()) {
+						return override_status::valid;
+					}
 					return json_fits(field.kind, field.element, enum_of(field, resolve), value, field.write == write_policy::null_if_empty) ? override_status::valid : override_status::bad_value;
 				}
 			}
@@ -648,6 +651,7 @@ namespace desc
 					}
 					return json_fits(field.element, field_kind::boolean, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
 				}
+				case field_kind::map:
 				case field_kind::custom:
 					return override_status::valid;
 				case field_kind::vec2:
@@ -769,6 +773,7 @@ namespace desc
 			case field_kind::string:
 			case field_kind::res_tag:
 			case field_kind::desc_ref:
+			case field_kind::map:
 			case field_kind::array: return true;
 			case field_kind::enumeration: return enumeration && enumeration->null_value.has_value();
 			default: break;
@@ -809,6 +814,13 @@ namespace desc
 			}
 			return std::ranges::all_of(value.as_array(), [&](const json::value& item) {
 				return json_fits(element, field_kind::boolean, enumeration, item);
+			});
+		case field_kind::map:
+			if (!value.is_object()) {
+				return false;
+			}
+			return std::ranges::all_of(value.as_object(), [&](const auto& item) {
+				return item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value());
 			});
 		case field_kind::custom: return true;
 		}

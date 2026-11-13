@@ -95,6 +95,7 @@ namespace {
 			return typed("object");
 		}
 		case field_kind::array:
+		case field_kind::map:
 		case field_kind::custom: break;
 		}
 		return boost::json::object{};
@@ -106,6 +107,9 @@ namespace {
 		if (field.kind == desc::field_kind::array) {
 			out = typed("array");
 			out["items"] = value_schema(field.element, field.ref_type, resolve, depth, budget);
+		} else if (field.kind == desc::field_kind::map) {
+			out = typed("object");
+			out["additionalProperties"] = value_schema(field.element, field.ref_type, resolve, depth, budget);
 		} else {
 			out = value_schema(field.kind, field.ref_type, resolve, depth, budget);
 		}
@@ -115,6 +119,9 @@ namespace {
 			boost::json::object* bounded = &out;
 			if (components_of(field.kind) != 0) {
 				bounded = &out["items"].as_object();
+			} else if (field.kind == desc::field_kind::map) {
+				bounded = &out["additionalProperties"].as_object();
+				if (components_of(field.element) != 0) bounded = &(*bounded)["items"].as_object();
 			} else if (field.kind == desc::field_kind::array) {
 				bounded = &out["items"].as_object();
 				// An array of vectors keeps the bounds on the numbers inside each vector.

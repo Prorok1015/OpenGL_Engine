@@ -1,5 +1,6 @@
 #pragma once
 // desc_system.h (included below, desc references call get_field_desc) uses these without including them.
+#include <algorithm>
 #include <cstring>
 #include <format>
 #include <sstream>
@@ -15,6 +16,9 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <unordered_map>
+#include <optional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -370,20 +374,150 @@ namespace desc
 			}
 		};
 
+		// An optional is its value or nothing (field_schema::optional): nothing is not written, a JSON null reads as nothing,
+		// the value goes through the ops of its own kind, which are the field's ops.
+		template<typename T>
+			requires (!has_json_codec<std::optional<T>>)
+		struct value_ops<std::optional<T>>
+		{
+			static_assert(std::is_default_constructible_v<T>, "a described std::optional<T> needs a default constructible T");
+
+			static void to_json(const field_ops& ops, const std::optional<T>& value, json::value& out)
+			{
+				if (!value) {
+					out = json::value();
+					return;
+				}
+				value_ops<T>::to_json(ops, *value, out);
+			}
+
+			static bool from_json(const field_ops& ops, std::optional<T>& value, const json::value& in, const read_context& ctx)
+			{
+				if (in.is_null()) {
+					value.reset();
+					return true;
+				}
+				T parsed = value ? *value : T{};
+				if (!value_ops<T>::from_json(ops, parsed, in, ctx)) {
+					return false;
+				}
+				value = std::move(parsed);
+				return true;
+			}
+
+			static bool equal(const field_ops& ops, const std::optional<T>& a, const std::optional<T>& b)
+			{
+				if (a.has_value() != b.has_value()) {
+					return false;
+				}
+				return !a || value_ops<T>::equal(ops, *a, *b);
+			}
+
+			static void assign(std::optional<T>& dst, const std::optional<T>& src)
+			{
+				if constexpr (std::is_copy_assignable_v<T> && std::is_copy_constructible_v<T>) {
+					dst = src;
+				}
+			}
+		};
+
+		// A map described as a field_kind::map (no json_codec of its own): an object, a value per key by the ops of the
+		// element. Written by key, so an unordered_map has one text. Read by key too, like every object that overrides a
+		// parent's (json_deep_merge in the editor's documents and override records): the keys of the file are put into
+		// what the map holds, and a null value removes the key. A key the member initializer puts there comes back at every
+		// load: only a null in the file removes it. A value that does not fit leaves the field as it was.
+		template<typename M>
+			requires (detail::string_map_traits<M>::value && kind_of<M> == field_kind::map)
+		struct value_ops<M>
+		{
+			using mapped_type = typename detail::string_map_traits<M>::mapped_type;
+			static_assert(!detail::optional_traits<mapped_type>::value,
+				"a map of std::optional<T> cannot be described: an empty value is written as null, which a read takes for a removed key");
+
+			static void to_json(const field_ops& ops, const M& value, json::value& out)
+			{
+				std::vector<const typename M::value_type*> entries;
+				entries.reserve(value.size());
+				for (const auto& entry : value) {
+					entries.push_back(&entry);
+				}
+				std::ranges::sort(entries, {}, [](const typename M::value_type* entry) { return entry->first; });
+				json::object members;
+				for (const auto* entry : entries) {
+					json::value converted;
+					value_ops<mapped_type>::to_json(*ops.element_ops, entry->second, converted);
+					members.emplace(entry->first, std::move(converted));
+				}
+				out = json::value(std::move(members));
+			}
+
+			static bool from_json(const field_ops& ops, M& value, const json::value& in, const read_context& ctx)
+			{
+				if (in.is_null() && ops.accepts_null) {
+					value.clear();
+					return true;
+				}
+				if (!in.is_object()) {
+					return false;
+				}
+				M parsed = value;
+				for (const auto& member : in.as_object()) {
+					const std::string key{ member.key() };
+					if (member.value().is_null()) {
+						parsed.erase(key);
+						continue;
+					}
+					const auto existing = parsed.find(key);
+					mapped_type element = existing != parsed.end() ? existing->second : mapped_type{};
+					if (!value_ops<mapped_type>::from_json(*ops.element_ops, element, member.value(), ctx)) {
+						return false;
+					}
+					parsed.insert_or_assign(key, std::move(element));
+				}
+				value = std::move(parsed);
+				return true;
+			}
+
+			static bool equal(const field_ops& ops, const M& a, const M& b)
+			{
+				if (a.size() != b.size()) {
+					return false;
+				}
+				for (const auto& entry : a) {
+					const auto other = b.find(entry.first);
+					if (other == b.end() || !value_ops<mapped_type>::equal(*ops.element_ops, entry.second, other->second)) {
+						return false;
+					}
+				}
+				return true;
+			}
+
+			static void assign(M& dst, const M& src)
+			{
+				dst = src;
+			}
+		};
+
 		template<typename M>
 		field_ops make_value_context(const field_attr_data* attr)
 		{
-			field_ops ops;
-			ops.kind = kind_of<M>;
-			ops.element = element_kind_of<M>();
-			if constexpr (kind_of<M> == field_kind::enumeration) {
-				ops.enumeration = std::make_shared<const enum_schema>(make_enum_schema<M>(attr ? attr->ref : std::string_view{}));
-			} else if constexpr (kind_of<M> == field_kind::array) {
-				ops.element_ops = std::make_shared<const field_ops>(make_value_context<typename detail::sequence_traits<M>::element>(nullptr));
-			} else if constexpr (kind_of<M> == field_kind::structure) {
-				ops.nested = bind_nested<M>(attr && !attr->ref.empty() ? attr->ref : std::string_view{ "struct" });
+			if constexpr (detail::optional_traits<M>::value) {
+				return make_value_context<typename detail::optional_traits<M>::value_type>(attr);
+			} else {
+				field_ops ops;
+				ops.kind = kind_of<M>;
+				ops.element = element_kind_of<M>();
+				if constexpr (kind_of<M> == field_kind::enumeration) {
+					ops.enumeration = std::make_shared<const enum_schema>(make_enum_schema<M>(attr ? attr->ref : std::string_view{}));
+				} else if constexpr (kind_of<M> == field_kind::array) {
+					ops.element_ops = std::make_shared<const field_ops>(make_value_context<typename detail::sequence_traits<M>::element>(nullptr));
+				} else if constexpr (kind_of<M> == field_kind::map) {
+					ops.element_ops = std::make_shared<const field_ops>(make_value_context<typename detail::string_map_traits<M>::mapped_type>(nullptr));
+				} else if constexpr (kind_of<M> == field_kind::structure) {
+					ops.nested = bind_nested<M>(attr && !attr->ref.empty() ? attr->ref : std::string_view{ "struct" });
+				}
+				return ops;
 			}
-			return ops;
 		}
 
 		template<typename T, auto Pointer>

@@ -121,49 +121,71 @@ namespace desc
 	template<typename T>
 	json::value value_to_json(const T& value)
 	{
-		constexpr field_kind kind = kind_of<T>;
-		if constexpr (kind == field_kind::boolean) {
-			return json::value(static_cast<bool>(value));
-		} else if constexpr (kind == field_kind::i32 || kind == field_kind::i64) {
-			return json::value(static_cast<std::int64_t>(value));
-		} else if constexpr (kind == field_kind::u32 || kind == field_kind::u64) {
-			return json::value(static_cast<std::uint64_t>(value));
-		} else if constexpr (kind == field_kind::f32 || kind == field_kind::f64) {
-			return json::value(static_cast<double>(value));
-		} else if constexpr (kind == field_kind::vec2 || kind == field_kind::vec3 || kind == field_kind::vec4) {
-			json::array components;
-			components.reserve(static_cast<std::size_t>(T::length()));
-			for (int i = 0; i < T::length(); ++i) {
-				components.push_back(static_cast<double>(value[i]));
+		if constexpr (detail::optional_traits<T>::value) {
+			// An optional that is not there has no default: null, the field is written only when it has a value.
+			if constexpr (kind_of<T> == field_kind::custom) {
+				return json::value();
+			} else {
+				return value ? value_to_json(*value) : json::value();
 			}
-			return json::value(std::move(components));
-		} else if constexpr (kind == field_kind::quat) {
-			json::array components;
-			components.push_back(static_cast<double>(value.x));
-			components.push_back(static_cast<double>(value.y));
-			components.push_back(static_cast<double>(value.z));
-			components.push_back(static_cast<double>(value.w));
-			return json::value(std::move(components));
-		} else if constexpr (kind == field_kind::string) {
-			return json::value(std::string_view{ value });
-		} else if constexpr (kind == field_kind::res_tag) {
-			return json::value(value.view());
-		} else if constexpr (kind == field_kind::entity) {
-			const auto raw = entity_traits<T>::to_raw(value);
-			return raw ? json::value(*raw) : json::value(nullptr);
-		} else if constexpr (kind == field_kind::enumeration) {
-			return json::value(enum_item_name<T>(value));
-		} else if constexpr (kind == field_kind::array) {
-			json::array elements;
-			elements.reserve(std::size(value));
-			for (const auto& element : value) {
-				elements.push_back(value_to_json(element));
-			}
-			return json::value(std::move(elements));
-		} else if constexpr (kind == field_kind::structure) {
-			return struct_to_json(value);
 		} else {
-			return json::value();
+			constexpr field_kind kind = kind_of<T>;
+			if constexpr (kind == field_kind::boolean) {
+				return json::value(static_cast<bool>(value));
+			} else if constexpr (kind == field_kind::i32 || kind == field_kind::i64) {
+				return json::value(static_cast<std::int64_t>(value));
+			} else if constexpr (kind == field_kind::u32 || kind == field_kind::u64) {
+				return json::value(static_cast<std::uint64_t>(value));
+			} else if constexpr (kind == field_kind::f32 || kind == field_kind::f64) {
+				return json::value(static_cast<double>(value));
+			} else if constexpr (kind == field_kind::vec2 || kind == field_kind::vec3 || kind == field_kind::vec4) {
+				json::array components;
+				components.reserve(static_cast<std::size_t>(T::length()));
+				for (int i = 0; i < T::length(); ++i) {
+					components.push_back(static_cast<double>(value[i]));
+				}
+				return json::value(std::move(components));
+			} else if constexpr (kind == field_kind::quat) {
+				json::array components;
+				components.push_back(static_cast<double>(value.x));
+				components.push_back(static_cast<double>(value.y));
+				components.push_back(static_cast<double>(value.z));
+				components.push_back(static_cast<double>(value.w));
+				return json::value(std::move(components));
+			} else if constexpr (kind == field_kind::string) {
+				return json::value(std::string_view{ value });
+			} else if constexpr (kind == field_kind::res_tag) {
+				return json::value(value.view());
+			} else if constexpr (kind == field_kind::entity) {
+				const auto raw = entity_traits<T>::to_raw(value);
+				return raw ? json::value(*raw) : json::value(nullptr);
+			} else if constexpr (kind == field_kind::enumeration) {
+				return json::value(enum_item_name<T>(value));
+			} else if constexpr (kind == field_kind::array) {
+				json::array elements;
+				elements.reserve(std::size(value));
+				for (const auto& element : value) {
+					elements.push_back(value_to_json(element));
+				}
+				return json::value(std::move(elements));
+			} else if constexpr (kind == field_kind::map) {
+				// By key, so that an unordered_map has one text.
+				std::vector<const typename T::value_type*> entries;
+				entries.reserve(value.size());
+				for (const auto& entry : value) {
+					entries.push_back(&entry);
+				}
+				std::ranges::sort(entries, {}, [](const typename T::value_type* entry) { return entry->first; });
+				json::object members;
+				for (const auto* entry : entries) {
+					members.emplace(entry->first, value_to_json(entry->second));
+				}
+				return json::value(std::move(members));
+			} else if constexpr (kind == field_kind::structure) {
+				return struct_to_json(value);
+			} else {
+				return json::value();
+			}
 		}
 	}
 
@@ -235,9 +257,12 @@ namespace desc
 					field.tooltip = std::string{ attr->tooltip };
 					field.filter = std::string{ attr->filter };
 				}
+				if constexpr (detail::optional_traits<member_type>::value) {
+					field.optional = true;
+				}
 				if constexpr (kind_of<member_type> == field_kind::enumeration) {
 					if (field.ref_type.empty()) {
-						field.ref_type = enum_type_name<member_type>();
+						field.ref_type = enum_type_name<detail::unwrap_optional_t<member_type>>();
 					}
 				}
 				if (converts) {
@@ -272,7 +297,7 @@ namespace desc
 				using member_type = std::remove_cvref_t<decltype(defaults.*pointer)>;
 				if constexpr (kind_of<member_type> == field_kind::enumeration) {
 					const field_attr_data* attr = table.find(member);
-					enum_schema schema = make_enum_schema<member_type>(attr ? attr->ref : std::string_view{});
+					enum_schema schema = make_enum_schema<detail::unwrap_optional_t<member_type>>(attr ? attr->ref : std::string_view{});
 					if (!schema.name.empty()) {
 						result.push_back(std::move(schema));
 					}

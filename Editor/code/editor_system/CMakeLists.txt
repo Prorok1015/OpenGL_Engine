@@ -44,6 +44,7 @@ if(SNK_ENGINE_SHARED)
 	endif()
 endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/assets"
 	"${CMAKE_CURRENT_SOURCE_DIR}/core"
 	"${CMAKE_CURRENT_SOURCE_DIR}/controller"
 	"${CMAKE_CURRENT_SOURCE_DIR}/panels"
