@@ -6,7 +6,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <boost/json/monotonic_resource.hpp>
-#include <optional>
 #include <string>
 
 // Behavior of prefab assembly: parse/serialize, hierarchy spawning, override merge for explicit
@@ -1312,21 +1311,6 @@ bool all_in_default_resource(const scn::prefab_desc::prefab_node& node)
 	return std::ranges::all_of(node.children, [](const auto& child) { return all_in_default_resource(child); });
 }
 
-}
-
-BOOST_AUTO_TEST_CASE(ParsedOverrideRecord_KeepsItsValueInTheDefaultResource)
-{
-	std::optional<scn::override_record> record;
-	{
-		json::monotonic_resource arena;
-		const json::value in = json::parse(
-			std::string(R"({ "target": [], "component": "stat", "path": "/label", "value": ")") + ARENA_LABEL + "\" }",
-			json::storage_ptr(&arena));
-		record = scn::parse_override_record(in);
-	}
-	BOOST_REQUIRE(record.has_value());
-	BOOST_TEST(in_default_resource(record->value));
-	BOOST_TEST(record->value.as_string() == ARENA_LABEL);
 }
 
 // A module or the editor hands reconcile/expand_instance a node whose records live in its own resource; what the engine

@@ -444,4 +444,26 @@ BOOST_AUTO_TEST_CASE(Add_KeepsTheSchemasInTheDefaultResource)
 	BOOST_TEST(commands.invoke("test.arena", json_of(R"({"text":"a"})"), cmd::origin::test()).ok);
 }
 
+// #827: what a command answers outlives the command (a future of main_thread_queue, a module unloaded after it ran).
+BOOST_AUTO_TEST_CASE(Invoke_KeepsTheResultPastTheCommandsResource)
+{
+	cmd::command_registry commands;
+	std::optional<cmd::result> outcome;
+	{
+		boost::json::monotonic_resource arena;
+		cmd::command_desc desc = make_command("test.arena_result", [&arena](const cmd::call&) {
+			return cmd::result::success(boost::json::parse(R"({"text":"a text long enough to be allocated in the arena"})",
+				boost::json::storage_ptr(&arena)));
+		});
+		desc.result_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]})");
+		auto added = commands.add(std::move(desc));
+		BOOST_REQUIRE(added.active());
+		// Constructed from the answer, not assigned: assignment would copy into the optional's own resource.
+		outcome.emplace(commands.invoke("test.arena_result", boost::json::object{}, cmd::origin::test()));
+	}
+	BOOST_REQUIRE(outcome->ok);
+	BOOST_TEST((outcome->value.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST(outcome->value.at("text").as_string() == "a text long enough to be allocated in the arena");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

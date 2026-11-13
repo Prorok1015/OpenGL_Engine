@@ -151,6 +151,8 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 		return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': {}", id, *problem));
 
 	result outcome = command->desc.invoke(request);
+	// The caller may keep it (through a future) past the module that made it (#827).
+	ds::keep_in_default_resource(outcome.value);
 	if (outcome.ok) {
 		if (auto problem = json_schema::validate(command->desc.result_schema, outcome.value)) {
 			egLOG_ERROR("command", "command '{}' ran but returned a malformed result: {}", id, *problem);

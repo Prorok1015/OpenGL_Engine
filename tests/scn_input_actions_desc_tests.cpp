@@ -3,6 +3,7 @@
 #include <snk/scene/scn_input_actions_desc.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <boost/json.hpp>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -194,23 +195,33 @@ BOOST_AUTO_TEST_CASE(AGamepadSettingThatIsNoObjectOrAHugeNumber_IsWarnedAboutWit
 	BOOST_TEST(warned("/gamepad/deadzone:"));
 }
 
-// #827: the desc keeps the file's JSON as written; it lives in the default resource, not in the caller's.
-BOOST_AUTO_TEST_CASE(SourcesLiveInTheDefaultResource_NotInTheInputs)
+// #827: the codecs keep the file's JSON in the default resource, also when the target was in another one (assignment would
+// keep that): a desc copied from a module's starts so.
+BOOST_AUTO_TEST_CASE(CodecsKeepTheSourceInTheDefaultResource_EvenWhenTheTargetWasNot)
 {
-	scn::input_actions_desc desc;
+	scn::input_action_list actions;
+	scn::input_gamepad_settings gamepad;
 	{
 		boost::json::monotonic_resource arena;
-		const boost::json::value in = boost::json::parse(R"({ "__type": "input_actions_desc", "__version": 1,
+		const auto bind_to_arena = [&arena](boost::json::value& field) {
+			std::destroy_at(&field);
+			std::construct_at(&field, boost::json::storage_ptr(&arena));
+		};
+		bind_to_arena(actions.source);
+		bind_to_arena(gamepad.source);
+		const boost::json::value in = boost::json::parse(R"({
 			"actions": [ { "name": "AnActionNameLongerThanTheSmallBuffer", "bindings": [ { "key": "A" } ] } ],
 			"gamepad": { "deadzone": 0.25, "press_threshold": 0.5 } })", boost::json::storage_ptr(&arena));
-		desc.deserialize(*descs, in.as_object());
+		BOOST_REQUIRE(desc::json_codec<scn::input_action_list>::from_json(actions, in.at("actions")));
+		BOOST_REQUIRE(desc::json_codec<scn::input_gamepad_settings>::from_json(gamepad, in.at("gamepad")));
 	}
-	BOOST_TEST((desc.actions.source.storage().get() == boost::json::storage_ptr().get()));
-	BOOST_TEST((desc.gamepad.source.storage().get() == boost::json::storage_ptr().get()));
-	BOOST_REQUIRE(desc.actions.source.is_array());
-	BOOST_TEST(desc.actions.source.as_array().at(0).at("name").as_string() == "AnActionNameLongerThanTheSmallBuffer");
-	BOOST_TEST(desc.gamepad.source.at("press_threshold").as_double() == 0.5);
-	BOOST_TEST(scn::build_action_map(desc).size() == 1u);
+	BOOST_TEST((actions.source.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_TEST((gamepad.source.storage().get() == boost::json::storage_ptr().get()));
+	BOOST_REQUIRE(actions.source.is_array());
+	BOOST_TEST(actions.source.as_array().at(0).at("name").as_string() == "AnActionNameLongerThanTheSmallBuffer");
+	BOOST_TEST(gamepad.source.at("press_threshold").as_double() == 0.5);
+	BOOST_REQUIRE(actions.entries.size() == 1u);
+	BOOST_TEST(actions.entries[0].name == "AnActionNameLongerThanTheSmallBuffer");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

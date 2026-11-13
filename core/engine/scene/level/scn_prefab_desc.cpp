@@ -333,10 +333,34 @@ namespace {
 		for (auto& child : node.children) keep_in_default_resource(child);
 	}
 
+	// Copies the JSON straight into the default resource, once. Lists every field of prefab_node: a new one goes here too.
 	prefab_node kept_copy(const prefab_node& node)
 	{
-		prefab_node copy = node;
-		keep_in_default_resource(copy);
+		prefab_node copy;
+		copy.name = node.name;
+		copy.node_id = node.node_id;
+		copy.position = node.position;
+		copy.rotation = node.rotation;
+		copy.scale = node.scale;
+		copy.has_transform = node.has_transform;
+		for (const auto& [key, component] : node.components) {
+			prefab_comp_node& kept = copy.components[key];
+			kept.type_name = component.type_name;
+			kept.parent_desc = component.parent_desc;
+			kept.overrides = component.overrides; // assignment: into the default resource of `kept`
+			kept.edits.reserve(component.edits.size());
+			for (const auto& edit : component.edits) {
+				kept.edits.push_back({ edit.path, json::value(edit.value, json::storage_ptr{}) });
+			}
+		}
+		copy.overrides.reserve(node.overrides.size());
+		for (const auto& record : node.overrides) {
+			copy.overrides.push_back({ record.target, record.component, record.path, json::value(record.value, json::storage_ptr{}), record.op });
+		}
+		copy.children.reserve(node.children.size());
+		for (const auto& child : node.children) {
+			copy.children.push_back(kept_copy(child));
+		}
 		return copy;
 	}
 
@@ -426,8 +450,7 @@ namespace {
 			if (it == dst.components.end()) {
 				dst.components.emplace(key, std::move(comp));
 			} else if (!comp.overrides.empty()) {
-				it->second.edits.push_back({ "", comp.overrides });
-				ds::keep_in_default_resource(it->second.edits.back().value);
+				it->second.edits.push_back({ "", json::value(json::object(comp.overrides, json::storage_ptr{})) });
 			}
 		}
 		dst.overrides.insert(dst.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
@@ -516,8 +539,7 @@ namespace {
 			egLOG_WARN("desc", "override: component '{}' can only be merged with an object at ''", record.component);
 			return;
 		}
-		it->second.edits.push_back({ record.path, record.value });
-		ds::keep_in_default_resource(it->second.edits.back().value);
+		it->second.edits.push_back({ record.path, json::value(record.value, json::storage_ptr{}) });
 	}
 
 	// Applies the records to a tree that is already a private copy. A record that targets a node below an
