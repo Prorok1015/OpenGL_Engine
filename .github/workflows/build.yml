@@ -136,7 +136,9 @@ jobs:
     if: needs.plan.outputs.base != ''
     runs-on: ubuntu-latest
     steps:
-      - run: echo "this run checks the PR merged onto ${{ needs.plan.outputs.base }}"
+      - env:
+          BASE: ${{ needs.plan.outputs.base }}
+        run: echo "this run checks the PR merged onto $BASE"
 
   build:
     name: ${{ matrix.name }}
