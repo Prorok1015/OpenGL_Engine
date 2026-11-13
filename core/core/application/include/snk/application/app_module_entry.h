@@ -107,7 +107,9 @@
 // that touches their containers is an export, and the non-template migrate_object/value/typed of 3.16 are gone
 // (layout_revision 2). #784/#738: the meta func loader_get of a component returns its ecs::sandbox_emplace<T>, the
 // loop and the remap of entity fields are the engine's; meta_archive and snapshot_get are gone (layout_revision 3).
-// #790: field_kind::map and std::optional<T> in schemas (layout_revision 4).
+// #790: field_kind::map and std::optional<T> in schemas (layout_revision 4). #785/#826: system_registry is all exports,
+// the entry and its map node are the engine's; emplace_schema_component takes a const dyn_blob& and the world keeps
+// the engine's copy in the default resource (layout_revision 5).
 // #781: the 3.15 overloads of inp::action_map::add (std::vector of the old two-alternative binding) are gone; a module of 3.x is
 // refused at load, and one built in the window that imports them fails to load on the unresolved symbol.
 // #782: app::modules::loaded_module_apis, prepared_module::api_version and gs::input_actions::warn_about_old_modules are gone;

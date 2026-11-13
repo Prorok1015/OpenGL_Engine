@@ -315,7 +315,9 @@ namespace desc
 			field.degrees = read_bool(object, "degrees", where, false);
 
 			if (const json::value* value = find_value(object, "default")) {
-				field.default_value = normalize_default(field.kind, field.element, *value, where);
+				// In the default resource: the schema may come from JSON in a resource of the caller's that is gone before the
+				// schema is (#826).
+				field.default_value = json::value(normalize_default(field.kind, field.element, *value, where), json::storage_ptr{});
 			} else {
 				field.default_value = zero_default(field.kind);
 			}

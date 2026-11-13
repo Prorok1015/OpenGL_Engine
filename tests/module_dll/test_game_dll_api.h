@@ -79,6 +79,11 @@ namespace dll_game {
 	// module layer's storage, which outlives the worlds, and written into the round's world as a dll_component.
 	inline constexpr std::string_view menu_system_name = "dll::menu";
 	inline constexpr std::string_view round_system_name = "dll::round";
+	// Hands the engine, once, a blob whose one handle lives in an arena of the module's that is gone when the system
+	// returns (#826): the world must keep its own copy. Pool id: scn::schema_component_id(arena_blob_name).
+	inline constexpr std::string_view arena_blob_system_name = "dll::arena_blob";
+	inline constexpr std::string_view arena_blob_name = "dll.arena_blob";
+	inline constexpr std::string_view arena_blob_text = "from the module's arena";
 	inline constexpr std::string_view result_system_name = "dll::result";
 	inline constexpr std::string_view menu_tag = "memory://t/dll_menu.desc";
 	inline constexpr std::string_view round_tag = "memory://t/dll_round.desc";
