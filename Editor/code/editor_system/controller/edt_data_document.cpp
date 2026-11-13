@@ -110,22 +110,22 @@ edt::open_result edt::data_document::load(const res::tag& file, loaded& out) con
 		return read;
 	}
 	if (!checks.top_layer) {
-		return open_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/", where(file)));
+		return open_result::not_a_document(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/", where(file)));
 	}
 	if (checks.in_open_level) {
-		return open_result::failure(std::format("{} belongs to the open level (its file or one of its worlds)", where(file)));
+		return open_result::not_a_document(std::format("{} belongs to the open level (its file or one of its worlds)", where(file)));
 	}
 	const json::value* type_field = out.own.if_contains("__type");
 	if (!type_field || !type_field->is_string()) {
-		return open_result::failure(std::format("{} /__type: missing or not a string", where(file)));
+		return open_result::not_a_document(std::format("{} /__type: missing or not a string", where(file)));
 	}
 	out.type = std::string{ type_field->as_string() };
 	const desc::type_schema* type_schema = descs->find_schema(out.type);
 	if (!type_schema) {
-		return open_result::failure(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), out.type));
+		return open_result::not_a_document(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), out.type));
 	}
 	if (!type_schema->is_document) {
-		return open_result::failure(std::format("{} /__type: '{}' is not a data document type", where(file), out.type));
+		return open_result::not_a_document(std::format("{} /__type: '{}' is not a data document type", where(file), out.type));
 	}
 	return resolve_chain(file, out.own, out.type, out.inherited, out.parents);
 }

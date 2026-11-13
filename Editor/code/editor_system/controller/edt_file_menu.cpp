@@ -250,7 +250,8 @@ void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::functio
 {
 	switch (choice) {
 	case unsaved_choice::save:
-		// A failed write must not continue into New/Exit either: the changes would be lost.
+		// The data documents are saved first and stay saved when the scene cannot be: a failed write stops New/Exit, the
+		// changes of the scene would be lost.
 		if (m_hooks.save_other_documents && m_hooks.other_documents_dirty && m_hooks.other_documents_dirty() && !m_hooks.save_other_documents()) {
 			return;
 		}
@@ -437,6 +438,7 @@ void edt::file_menu::register_actions()
 			if (auto busy = level_change_busy()) return *busy;
 			if (!restricted(request)) {
 				if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+				if (anything_dirty()) discard_everything();
 				m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
 				return action_result::success(json::object{ { "level_loading", true } });
 			}

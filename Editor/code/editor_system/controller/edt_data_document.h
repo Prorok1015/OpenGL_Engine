@@ -22,9 +22,13 @@ namespace edt
 	{
 		bool opened = false;
 		std::string error;
+		// The file is not meant to be a data document (the open level, a type without a schema or that is no document type, a
+		// file of a lower layer): nothing is wrong with it, so a double click is no reason for a warning window.
+		bool unsuitable = false;
 
-		static open_result ok() { return { true, {} }; }
-		static open_result failure(std::string message) { return { false, std::move(message) }; }
+		static open_result ok() { return { true, {}, false }; }
+		static open_result failure(std::string message) { return { false, std::move(message), false }; }
+		static open_result not_a_document(std::string message) { return { false, std::move(message), true }; }
 	};
 
 	// A desc file of a type with a schema and is_document (EPIC-56, #791) edited as data. The document keeps what the file

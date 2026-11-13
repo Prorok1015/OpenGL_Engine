@@ -6,6 +6,7 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_panel_registry.h>
+#include <algorithm>
 #include <format>
 
 edt::data_document_host::data_document_host(editor_context& context, editor_services& services,
@@ -49,7 +50,7 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	}
 	auto created = std::make_unique<data_document>(m_services, m_layout());
 	if (const open_result opened = created->open(tag); !opened.opened) {
-		if (quiet) {
+		if (quiet || opened.unsuitable) {
 			egLOG_INFO("editor", "'{}' is not opened as a data document: {}", tag.view(), opened.error);
 			return;
 		}
@@ -105,6 +106,8 @@ std::vector<edt::document_id> edt::data_document_host::dirty() const
 	for (const auto& [id, shown] : m_windows) {
 		if (const document* open = m_context.documents().find(id); open && open->is_dirty()) out.push_back(id);
 	}
+	// The ids grow in the order the windows were opened: what is saved first does not depend on the hash table.
+	std::ranges::sort(out);
 	return out;
 }
 

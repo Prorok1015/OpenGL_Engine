@@ -14,10 +14,21 @@ constexpr const char* k_preview_problem_source = "preview";
 
 using adopted_list = std::vector<std::unique_ptr<edt::document>>;
 
-std::map<const edt::document_manager*, adopted_list>& adopted_lists()
+using adopted_table = std::map<const edt::document_manager*, adopted_list>;
+
+// Never destroyed: a manager that outlives the other statics (the editor context does) still finds its table.
+adopted_table& adopted_lists()
 {
-	static std::map<const edt::document_manager*, adopted_list> lists;
-	return lists;
+	static auto* lists = new adopted_table;
+	return *lists;
+}
+
+// For a read: a manager that adopted nothing has no entry, and a read makes none.
+const adopted_list& adopted_view(const edt::document_manager* manager)
+{
+	static const adopted_list none;
+	const auto found = adopted_lists().find(manager);
+	return found != adopted_lists().end() ? found->second : none;
 }
 
 adopted_list& adopted_of(const edt::document_manager* manager)
@@ -90,7 +101,7 @@ void edt::document_manager::shutdown()
 {
 	if (!m_scene) return;
 	if (m_open_preview) close(m_open_preview->id());
-	while (!adopted_of(this).empty()) close(adopted_of(this).back()->id());
+	while (!adopted_view(this).empty()) close(adopted_view(this).back()->id());
 	m_scene->bind_events(nullptr);
 	m_scene = nullptr;
 	m_active = 0;
@@ -105,8 +116,9 @@ edt::document* edt::document_manager::find(document_id id)
 {
 	if (m_scene && id == m_scene->id()) return m_scene;
 	if (m_open_preview && m_open_preview->is_open() && m_open_preview->id() == id) return m_open_preview;
-	const auto kept = std::find_if(adopted_of(this).begin(), adopted_of(this).end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
-	return kept != adopted_of(this).end() ? kept->get() : nullptr;
+	const adopted_list& adopted = adopted_view(this);
+	const auto kept = std::find_if(adopted.begin(), adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
+	return kept != adopted.end() ? kept->get() : nullptr;
 }
 
 void edt::document_manager::set_active(document_id id)
@@ -246,8 +258,8 @@ void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 void edt::document_manager::for_each(const std::function<void(document&)>& fn)
 {
 	std::vector<document_id> adopted_ids;
-	adopted_ids.reserve(adopted_of(this).size());
-	for (const auto& kept : adopted_of(this)) adopted_ids.push_back(kept->id());
+	adopted_ids.reserve(adopted_view(this).size());
+	for (const auto& kept : adopted_view(this)) adopted_ids.push_back(kept->id());
 
 	if (m_scene) fn(*m_scene);
 	if (preview()) fn(*m_open_preview);

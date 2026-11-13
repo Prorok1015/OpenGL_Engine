@@ -152,15 +152,24 @@ BOOST_AUTO_TEST_CASE(Open_OfAFileThatIsOpen_FocusesItAndMakesNoSecondDocument)
 	BOOST_TEST(context->documents().active() == &first);
 }
 
-BOOST_AUTO_TEST_CASE(Open_OfAFileThatIsNoDataDocument_OpensNothing_ShowsAMessage_OrOnlyALogLineWhenQuiet)
+BOOST_AUTO_TEST_CASE(Open_OfAFileThatIsNoDataDocument_OpensNothingAndOnlyLogsIt)
 {
 	const res::tag plain = put("plain.desc", R"({"__type":"test.plain","speed":2.0})");
 
 	host->open(plain, true);
+	host->open(plain, false);
 	BOOST_TEST(open_documents() == 1u);
 	BOOST_TEST(context->dialogs().pending() == 0u);
+}
 
-	host->open(plain, false);
+BOOST_AUTO_TEST_CASE(Open_OfADocumentThatIsBroken_ShowsAMessageUnlessQuiet)
+{
+	const res::tag broken = put("broken.desc", R"({"__type":"test.config","__parent":"res://missing.desc"})");
+
+	host->open(broken, true);
+	BOOST_TEST(context->dialogs().pending() == 0u);
+
+	host->open(broken, false);
 	BOOST_TEST(open_documents() == 1u);
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_TEST(context->dialogs().list().front().kind == "message");
