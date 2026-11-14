@@ -80,12 +80,16 @@ namespace prj::migration
 		// The .resource version the engine reads. Only a test sets another one: it stands for an engine whose
 		// res::asset_meta_version was raised with the step under test.
 		std::int64_t resource_meta_version = res::asset_meta_version;
+		// Asked before each entry of a folder: true stops the scan there (scan_result::incomplete). Empty: never stopped.
+		std::function<bool()> stop;
 	};
 
 	struct scan_result
 	{
 		manifest_state manifest;
 		std::vector<scanned_file> files;
+		// scan_options::stop ended the scan early: the files are only part of the project.
+		bool incomplete = false;
 
 		std::size_t count(file_class kind) const;
 		const scanned_file* find(std::string_view path) const;

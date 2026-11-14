@@ -366,8 +366,15 @@ namespace
 
 		// `owners`: by the res::asset_name_key of every file a .resource of this folder belongs to, that .resource's name
 		// (EPIC-57 4.2); of two in other letter cases, the first by name.
+		bool stopped()
+		{
+			if (!result.incomplete && options.stop && options.stop()) result.incomplete = true;
+			return result.incomplete;
+		}
+
 		void entry(const fs::path& path, const fs::file_status& status, const std::map<std::string, std::string>& owners)
 		{
+			if (stopped()) return;
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
@@ -403,6 +410,7 @@ namespace
 		// One folder at a time: a folder that cannot be listed is reported and the walk goes on with the others.
 		void folder(const fs::path& dir)
 		{
+			if (stopped()) return;
 			std::error_code ec;
 			fs::directory_iterator it(dir, fs::directory_options::none, ec);
 			if (ec) {
@@ -411,6 +419,7 @@ namespace
 			}
 			std::vector<std::pair<fs::path, fs::file_status>> entries;
 			for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+				if (stopped()) return;
 				std::error_code status_error;
 				const fs::file_status status = it->symlink_status(status_error);
 				entries.emplace_back(it->path(), status_error ? fs::file_status{ fs::file_type::unknown } : status);

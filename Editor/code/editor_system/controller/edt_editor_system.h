@@ -60,6 +60,7 @@ namespace edt {
 	class forge_account_panel;
 	class migration_panel;
 	class migration_notice_model;
+	struct journal_offer;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -208,8 +209,8 @@ namespace edt {
 		void open_migration_window();
 		// The window, rolling migration `id` back (project.migrate_rollback as a person's call).
 		void open_migration_rollback(const std::string& id);
-		// Once the project is open and the start level settled (#761): a migration left unfinished is offered for a rollback.
-		void offer_migration_rollback(const std::filesystem::path& root);
+		// migration_startup's question (#761): Roll Back / Later for an unfinished migration, or why it cannot be rolled back.
+		void offer_migration_rollback(const journal_offer& offer);
 		// Once the project is open and the start level settled (#761): a scan of the project on the io lane, with a snapshot
 		// of the game layer's types; the notice "N files in an old format" when it found a migration is needed.
 		void start_migration_scan(const std::filesystem::path& root);
@@ -294,7 +295,9 @@ namespace edt {
 		std::optional<std::string> migration_blocker() const;
 		// The notice of a project in an old format (#761) and whether its scan still runs.
 		std::unique_ptr<migration_notice_model> m_migration_notice;
-		bool m_migration_scan_running = false;
+		std::uint64_t m_migration_scan_job = 0;
+		// Migration and rollback runs started so far: a format check made before one is stale.
+		std::uint64_t m_migration_runs = 0;
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load

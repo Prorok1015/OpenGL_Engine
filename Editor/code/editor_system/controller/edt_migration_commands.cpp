@@ -27,6 +27,15 @@
 #include <stop_token>
 #include <utility>
 
+bool edt::valid_migration_id(std::string_view id)
+{
+	constexpr std::size_t max_bytes = 128;
+	if (id.empty() || id.size() > max_bytes || id.front() == '.') return false;
+	return std::ranges::all_of(id, [](char c) {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '+';
+	});
+}
+
 namespace {
 	namespace json = boost::json;
 	namespace fs = std::filesystem;
@@ -81,15 +90,10 @@ namespace {
 
 	// A journal's report.json is read at most this big (a project of many files keeps a long list).
 	constexpr std::uintmax_t k_max_journal_bytes = std::uintmax_t{ 16 } << 20;
-	constexpr std::size_t k_max_id_bytes = 128;
 
-	// A migration id as apply_migration makes them ("<UTC>-<engine version>", "-2"...): one plain folder name, never a path.
 	bool valid_migration_id(std::string_view id)
 	{
-		if (id.empty() || id.size() > k_max_id_bytes || id == "." || id == "..") return false;
-		return std::ranges::all_of(id, [](char c) {
-			return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '+';
-		});
+		return edt::valid_migration_id(id);
 	}
 
 	constexpr std::string_view k_job_result_schema = R"json({"type":"object","properties":{
@@ -298,12 +302,18 @@ namespace {
 		return hash.value();
 	}
 
-	// At most k_max_listed paths of a journal, each cut short: a journal is a file anyone can edit.
+	// At most k_max_listed paths of a journal, each cut short and without control characters: a journal is a file anyone
+	// can edit, and a line break in a path must not forge a line of the question a person reads.
 	std::string listed(const std::vector<std::string>& paths)
 	{
 		std::string out;
 		for (std::size_t i = 0; i < paths.size() && i < k_max_listed; ++i) {
-			out += (i == 0 ? " " : ", ") + (paths[i].size() > 200 ? paths[i].substr(0, 200) + "..." : paths[i]);
+			std::string path = paths[i].size() > 200 ? paths[i].substr(0, 200) + "..." : paths[i];
+			std::ranges::replace_if(path, [](char c) {
+				const auto byte = static_cast<unsigned char>(c);
+				return byte < 0x20 || byte == 0x7f;
+			}, '?');
+			out += (i == 0 ? " " : ", ") + path;
 		}
 		if (paths.size() > k_max_listed) out += ", ...";
 		return out;
@@ -342,6 +352,8 @@ namespace {
 		std::optional<std::string> rollback_error;
 		// A rollback the job's stop reached before it began: nothing was written.
 		bool not_run = false;
+		// rollback_context::wrote: the rollback wrote something (its journal first).
+		bool rollback_wrote = false;
 	};
 
 	// Where the job's io work and the main thread meet (#761): the main thread hands the apply over once, the io work runs
@@ -1072,7 +1084,9 @@ namespace {
 			run.writes = true;
 			begin_writes(run);
 			say_running(run, true);
-			run.handoff->hand([rollback = m_deps.rollback, root = run.root, id = run.id, weak = std::weak_ptr<apply_handoff>(run.handoff)]() {
+			// The io work rolls back only the journal checked here: one that reads otherwise by then is refused, unwritten.
+			run.handoff->hand([rollback = m_deps.rollback, root = run.root, id = run.id, checked = pmg::journal_hash(journal.bytes),
+								  weak = std::weak_ptr<apply_handoff>(run.handoff)]() {
 				apply_result result;
 				// As the commit of a migration: a stop seen now writes nothing; from here on a cancel is refused.
 				const auto handoff = weak.lock();
@@ -1081,7 +1095,9 @@ namespace {
 					return result;
 				}
 				try {
-					const pmg::rollback_context context{};
+					pmg::rollback_context context{};
+					context.wrote = &result.rollback_wrote;
+					context.journal_hash = checked;
 					result.rollback_error = rollback ? rollback(root, id, context) : pmg::rollback_migration(root, id, context);
 				} catch (const std::exception& e) {
 					result.stopped = e.what();
@@ -1106,10 +1122,19 @@ namespace {
 				code = pmg::k_exit_refused;
 				refused = "the job was cancelled before the rollback began: nothing was written";
 			} else if (result.stopped) {
-				code = pmg::k_exit_rollback_failed;
-				error = std::format("the rollback stopped: {}; the state of the project is unknown: run editor --migrate-rollback {}", *result.stopped, run.id);
+				// Its journal says whether it began: a migration not left unfinished by it had nothing written, and the level
+				// comes back as after a refusal.
+				const std::vector<std::string> left = pmg::unfinished_migrations(run.root);
+				if (result.rollback_wrote || std::ranges::find(left, run.id) != left.end()) {
+					code = pmg::k_exit_rollback_failed;
+					error = std::format("the rollback stopped: {}; the state of the project is unknown: run editor --migrate-rollback {}", *result.stopped,
+						run.id);
+				} else {
+					code = pmg::k_exit_refused;
+					refused = std::format("the rollback stopped before it wrote anything: {}", *result.stopped);
+				}
 			} else if (result.rollback_error) {
-				code = pmg::rollback_exit_code(run.root, run.id, result.rollback_error);
+				code = pmg::rollback_exit_code(result.rollback_error, result.rollback_wrote);
 				if (code == pmg::k_exit_rollback_failed) error = *result.rollback_error;
 				else refused = *result.rollback_error;
 			}

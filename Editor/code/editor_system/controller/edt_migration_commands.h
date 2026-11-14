@@ -92,5 +92,9 @@ namespace edt
 
 	inline constexpr std::string_view k_migration_frame_id = "edt/migrate_project";
 
+	// A migration id project.migrate_rollback takes: one folder name of [A-Za-z0-9._+-], at most 128 bytes, not starting with
+	// '.' (apply_migration makes "<UTC>-<engine version>", "-2"...).
+	[[nodiscard]] bool valid_migration_id(std::string_view id);
+
 	[[nodiscard]] std::vector<registration> register_migration_commands(cmd::command_registry& commands, migration_deps deps);
 }

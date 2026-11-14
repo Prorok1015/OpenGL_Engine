@@ -1,4 +1,5 @@
 #include "edt_migration_startup.h"
+#include "edt_migration_commands.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_json_text.h>
 #include <boost/json.hpp>
@@ -34,7 +35,8 @@ namespace {
 
 		std::uint64_t m_hash = 0xcbf29ce484222325ull;
 	};
-	// A journal's folder name is whatever is on the disk: shown without control characters, cut short.
+	// A journal's folder name is whatever is on the disk: shown without control characters and without '#' (a dialog's title
+	// is its ImGui name, where "##" and "###" change the ID), cut short.
 	std::string shown_id(std::string_view id)
 	{
 		std::string out;
@@ -45,7 +47,7 @@ namespace {
 				break;
 			}
 			const auto byte = static_cast<unsigned char>(c);
-			out.push_back(byte < 0x20 || byte == 0x7f ? '?' : c);
+			out.push_back(byte < 0x20 || byte == 0x7f || c == '#' ? '?' : c);
 		}
 		return out;
 	}
@@ -58,6 +60,15 @@ edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unf
 	offer.id = unfinished.front();
 	const std::string id = shown_id(offer.id);
 	const std::string others = unfinished.size() > 1 ? std::format(" ({} more after it)", unfinished.size() - 1) : std::string{};
+	if (!valid_migration_id(offer.id)) {
+		// Not a name apply_migration makes: neither the editor nor the command line rolls it back.
+		const std::string reason = std::format("the folder .snk/migrations/{} holds an unfinished journal, but its name is not a "
+			"migration id, so it cannot be rolled back from the editor; look at it and restore its backup by hand{}", id, others);
+		offer.what = headless ? journal_offer::kind::warn : journal_offer::kind::inform;
+		offer.title = "An unfinished migration";
+		offer.text = reason;
+		return offer;
+	}
 	if (headless) {
 		offer.what = journal_offer::kind::warn;
 		offer.text = std::format("migration {} did not finish{}: the project may be partly migrated; roll it back with "
@@ -70,6 +81,36 @@ edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unf
 		"Roll it back now? Every file it wrote is put back from .snk/migrations/{}/backup.\n"
 		"Later: Project > Migrate Project... offers it again, or run editor --migrate-rollback {}.", id, others, id, id);
 	return offer;
+}
+
+edt::migration_startup::migration_startup(ports ports, bool headless) : m_ports(std::move(ports)), m_headless(headless)
+{
+}
+
+bool edt::migration_startup::tick()
+{
+	if (m_done) return false;
+	const auto unfinished = [this] { return m_ports.unfinished ? m_ports.unfinished() : std::vector<std::string>{}; };
+	if (m_headless) {
+		m_done = true;
+		const journal_offer offer = decide_journal_offer(unfinished(), true);
+		if (offer.what == journal_offer::kind::warn && m_ports.warn) m_ports.warn(offer.text);
+		return false;
+	}
+	if (m_ports.settled && !m_ports.settled()) return true;
+	m_done = true;
+	const journal_offer offer = decide_journal_offer(unfinished(), false);
+	if (offer.what != journal_offer::kind::none) {
+		if (m_ports.warn) m_ports.warn(offer.text);
+		if (m_ports.ask) m_ports.ask(offer);
+	}
+	if (m_ports.start_scan) m_ports.start_scan();
+	return false;
+}
+
+std::filesystem::path edt::migration_notice_file(const std::vector<std::filesystem::path>& edt_roots, const std::filesystem::path& user_data_dir)
+{
+	return (edt_roots.empty() ? user_data_dir : edt_roots.back()) / "settings" / "migration_notice.json";
 }
 
 edt::migration_scan_summary edt::summarize_scan(const pmg::scan_result& scan, const pmg::project_step_registry& steps)
@@ -90,6 +131,7 @@ edt::migration_scan_summary edt::summarize_scan(const pmg::scan_result& scan, co
 		}
 	}
 	out.manifest = scan.manifest.kind == pmg::file_class::outdated && scan.count(pmg::file_class::unknown_type) == 0;
+	out.complete = !scan.incomplete;
 	hash.add(out.manifest ? "manifest" : "");
 	out.set = hash.text();
 	return out;
@@ -102,7 +144,12 @@ edt::migration_notice_model::migration_notice_model(ports ports) : m_ports(std::
 bool edt::migration_notice_model::deliver(const scan_ticket& started, const scan_ticket& now, migration_scan_summary summary)
 {
 	if (!(started == now)) {
-		egLOG_INFO("project/migrate", "the format check of the project is dropped: the project or the game layer changed while it ran");
+		egLOG_INFO("project/migrate", "the format check of the project is dropped: the project, the game layer or its files (a migration "
+			"or a rollback) changed while it ran");
+		return false;
+	}
+	if (!summary.complete) {
+		egLOG_INFO("project/migrate", "the format check of the project was stopped before its end: nothing is shown");
 		return false;
 	}
 	m_ticket = started;

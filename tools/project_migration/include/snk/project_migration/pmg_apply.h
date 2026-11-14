@@ -136,7 +136,16 @@ namespace prj::migration
 		project_writer write;
 		std::function<void()> pause_watch;
 		std::function<void()> resume_watch;
+		// Set to true once the rollback wrote anything (the journal's in_progress first): an error while it is still false
+		// changed nothing. Null: not told.
+		bool* wrote = nullptr;
+		// journal_hash of report.json as the caller checked it: a journal that reads otherwise now is refused before any
+		// write. Empty: not checked.
+		std::string journal_hash;
 	};
+
+	// The hash a journal (and every file of it) is compared by: 16 hex digits.
+	std::string journal_hash(std::string_view bytes);
 
 	// Restores the backup of migration `id` and deletes the files it created. A file already back to its original is
 	// left as it is, so a rollback that stopped half way can be run again. Refuses before writing anything (naming the

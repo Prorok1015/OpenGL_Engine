@@ -153,19 +153,21 @@ std::string prj::migration::journal_status(const fs::path& root, std::string_vie
 	return status && status->is_string() ? std::string(status->as_string()) : std::string{};
 }
 
-int prj::migration::rollback_exit_code(const fs::path& root, std::string_view id, const std::optional<std::string>& error)
+int prj::migration::rollback_exit_code(const std::optional<std::string>& error, bool wrote)
 {
 	if (!error) return k_exit_done;
-	return journal_status(root, id) == to_string(migration_status::rollback_failed) ? k_exit_rollback_failed : k_exit_refused;
+	return wrote ? k_exit_rollback_failed : k_exit_refused;
 }
 
 int prj::migration::run_migrate_rollback(std::string_view id, const command_context& context)
 {
+	bool wrote = false;
 	rollback_context rollback;
 	rollback.write = context.write;
+	rollback.wrote = &wrote;
 	if (const std::optional<std::string> error = rollback_migration(context.root, id, rollback)) {
 		print_error(context, std::format("rollback of {}: {}", id, *error));
-		return rollback_exit_code(context.root, id, error);
+		return rollback_exit_code(error, wrote);
 	}
 	print(context, std::format("migration {} rolled back", id));
 	return k_exit_done;

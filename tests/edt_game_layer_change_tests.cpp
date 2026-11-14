@@ -164,6 +164,21 @@ struct editor_fixture : test_util::module_env {
 
 BOOST_FIXTURE_TEST_SUITE(edt_game_layer_change_tests, editor_fixture)
 
+// #761: a detached level has no worlds, so a save would write an empty level over its file: refused whatever lifted a
+// migration's block. A level loaded meanwhile replaces what the detach kept and saves again.
+BOOST_AUTO_TEST_CASE(a_detached_level_is_never_saved)
+{
+	open_level(put("lv.desc", BASE_LEVEL));
+	level_ctrl.detach_from_game_layer();
+	BOOST_TEST(level_ctrl.is_detached());
+	BOOST_TEST(state.world_names.empty());
+	BOOST_TEST(!level_ctrl.write_level_to_disk("lv.desc"));
+	BOOST_TEST(!level_ctrl.quick_save_level());
+	open_level(put("lv2.desc", BASE_LEVEL));
+	BOOST_TEST(!level_ctrl.is_detached());
+	BOOST_TEST((state.world_names == std::vector<std::string>{ "w0", "w1" }), boost::test_tools::per_element());
+}
+
 BOOST_AUTO_TEST_CASE(the_edited_level_moves_into_the_layer_of_a_loaded_module_and_back)
 {
 	contexts().level_set().set_mode(ecs::run_mode::edit);
