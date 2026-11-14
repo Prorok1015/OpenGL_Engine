@@ -552,12 +552,25 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 			}
 		}
 		if (const json::value* parent = object.if_contains("__parent")) {
-			if (!parent->is_string()) {
-				schema_error(pointer + "/__parent", "`__parent` must be a string tag");
-			} else if (std::string problem = strict_tag_problem(view_of(parent->as_string())); !problem.empty()) {
+			// The object form is checked by its path as written, like the string: a guid alone names nothing to check.
+			std::optional<std::string> written;
+			if (parent->is_string()) {
+				written = std::string(view_of(parent->as_string()));
+			} else if (!parent->is_object()) {
+				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"guid\", \"path\"} reference");
+			} else if (std::string problem = edt::reference_object_problem(parent->as_object()); !problem.empty()) {
 				schema_error(pointer + "/__parent", "`__parent`: " + problem);
-			} else if (const edt::agent_level_path named = edt::check_agent_level_path(view_of(parent->as_string())); !named.ok()) {
-				schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project: " + named.error);
+			} else if (!parent->as_object().contains("path")) {
+				schema_error(pointer + "/__parent", "`__parent` needs a \"path\": a \"guid\" alone is not accepted here");
+			} else {
+				written = edt::reference_path_text(parent->as_object());
+			}
+			if (written) {
+				if (std::string problem = strict_tag_problem(*written); !problem.empty()) {
+					schema_error(pointer + "/__parent", "`__parent`: " + problem);
+				} else if (const edt::agent_level_path named = edt::check_agent_level_path(*written); !named.ok()) {
+					schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project: " + named.error);
+				}
 			}
 		}
 		if (const json::value* type_value = object.if_contains("__type")) {

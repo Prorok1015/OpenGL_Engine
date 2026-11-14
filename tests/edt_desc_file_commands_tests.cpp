@@ -490,6 +490,53 @@ BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagFie
 	}
 }
 
+BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_PassesTheSameChecksAsTheString)
+{
+	for (const char* content : {
+		R"({"__type":"material_desc","__parent":{"path":"user://secret.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"edt://base.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"../x.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"user/xsave.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"user:/xsave.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"materials/other.mat.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res/other.mat.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://a/../../x.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://a/x.png"}})",
+		R"({"__type":"material_desc","__parent":{"path":""}})",
+		R"({"__type":"material_desc","__parent":{"path":5}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://secret.desc"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"not-a-uuid","path":"res://base_material.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc","__type":"material_desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc","other":"user://secret.desc"}})",
+		R"({"__type":"material_desc","__parent":{}})",
+		R"({"__type":"material_desc","__parent":["res://base_material.desc"]})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/t.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "t.mat.desc"));
+		}
+	}
+	for (const char* content : {
+		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://materials/other.mat.desc"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto made = call("desc.create", desc_args("materials/ok.mat.desc", content));
+			BOOST_TEST_MESSAGE(made.error);
+			BOOST_TEST(made.ok);
+			fs::remove(res_root / "materials" / "ok.mat.desc");
+		}
+	}
+
+	make_material("materials/w.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
+	const auto guid_only = call("desc.write", write_args("materials/w.mat.desc", version_of("materials/w.mat.desc"),
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})"));
+	BOOST_TEST(guid_only.code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+}
+
 BOOST_AUTO_TEST_CASE(AnUnknownKeyWithTwoUnderscores_IsRefused_SoNoObjectHidesFromTheCheck)
 {
 	const auto hidden = call("desc.create", desc_args("materials/h.mat.desc", R"({"__type":"material_desc","__x":{"__type":"no_such_desc"}})"));

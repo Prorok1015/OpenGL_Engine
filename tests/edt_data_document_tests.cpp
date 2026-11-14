@@ -288,6 +288,48 @@ BOOST_AUTO_TEST_CASE(TheChainIsMergedFromTheFarthestParentToTheNearest)
 	BOOST_TEST(!document.inherited().contains("__parent"));
 }
 
+BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_IsFoundByItsPathOrItsId)
+{
+	put("parent.desc", R"({"__type":"test.config","speed":2.5})");
+	put("moved.desc", R"({"__type":"test.config","speed":6.5})");
+	const res::tag by_path = put("by_path.desc", R"({"__type":"test.config","__parent":{"path":"res://parent.desc"}})");
+	const res::tag by_id = put("by_id.desc",
+		R"({"__type":"test.config","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://parent.desc"}})");
+
+	edt::data_document plain = make();
+	const edt::open_result opened = plain.open(by_path);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(plain.shown().at("speed").to_number<double>() == 2.5);
+	BOOST_REQUIRE(plain.parents().size() == 1u);
+	BOOST_TEST(plain.parents().front().view() == "res://parent.desc");
+
+	edt::data_document unindexed = make();
+	BOOST_REQUIRE(unindexed.open(by_id).opened);
+	BOOST_TEST(unindexed.shown().at("speed").to_number<double>() == 2.5, "without an asset index the path is the parent");
+
+	auto index = std::make_shared<ids_index>();
+	index->hold(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), "res://moved.desc");
+	rs->set_asset_index(index);
+	edt::data_document indexed = make();
+	const edt::open_result followed = indexed.open(by_id);
+	const double speed = followed.opened ? indexed.shown().at("speed").to_number<double>() : 0.0;
+	const std::vector<res::tag> parents = indexed.parents();
+	rs->set_asset_index(nullptr);
+	BOOST_REQUIRE_MESSAGE(followed.opened, followed.error);
+	BOOST_TEST(speed == 6.5, "the file that holds the guid now is the parent, whatever the stale path says");
+	BOOST_REQUIRE(parents.size() == 1u);
+	BOOST_TEST(parents.front().view() == "res://moved.desc");
+
+	const auto refused = [this](const res::tag& file) {
+		const edt::open_result result = make().open(file);
+		BOOST_TEST(!result.opened);
+		BOOST_TEST(result.error.find("res://") != std::string::npos, result.error);
+	};
+	refused(put("user_ref.desc", R"({"__type":"test.config","__parent":{"path":"user://p.desc"}})"));
+	refused(put("guid_only.desc", R"({"__type":"test.config","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})"));
+	refused(put("other_key.desc", R"({"__type":"test.config","__parent":{"path":"res://parent.desc","x":1}})"));
+}
+
 BOOST_AUTO_TEST_CASE(AParentMayLiveInALowerLayer_TheDocumentItselfMayNot)
 {
 	write(lower, "engine.desc", R"({"__type":"test.config","speed":8.0})");

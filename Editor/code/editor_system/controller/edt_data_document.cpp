@@ -10,6 +10,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <algorithm>
@@ -74,17 +75,36 @@ namespace
 		return false;
 	}
 
-	std::optional<res::tag> parent_of(const json::object& body, const res::tag& file, std::string& error)
+	// Null `resources`: the guid of a {guid, path} parent cannot be looked up, its path is the parent.
+	std::optional<res::tag> parent_of(const json::object& body, const res::tag& file, const res::resource_system* resources, std::string& error)
 	{
 		const json::value* field = body.if_contains("__parent");
 		if (!field) {
 			return std::nullopt;
 		}
-		if (!field->is_string() || !std::string_view{ field->as_string() }.starts_with("res://")) {
+		const auto refuse = [&] {
 			error = std::format("{} /__parent: a parent is written as res://<path> (a path inside the project)", where(file));
 			return std::nullopt;
+		};
+		const std::optional<res::reference> read = res::reference_from_json(*field);
+		if (!read) {
+			return refuse();
 		}
-		return res::tag{ std::string_view{ field->as_string() } };
+		// The text as written: res::tag turns a backslash into a slash.
+		std::string_view written;
+		if (const json::string* text = field->if_string()) {
+			written = std::string_view{ *text };
+		} else if (const json::value* path = field->as_object().if_contains("path")) {
+			written = std::string_view{ path->as_string() };
+		}
+		if (!written.empty() && !written.starts_with("res://")) {
+			return refuse();
+		}
+		res::tag parent = resources ? resources->resolve_reference(*read) : read->path;
+		if (!parent.view().starts_with("res://")) {
+			return refuse();
+		}
+		return parent;
 	}
 }
 
@@ -277,7 +297,7 @@ edt::open_result edt::data_document::resolve_chain(const res::tag& file, const j
 	json::object current = own;
 	while (true) {
 		std::string error;
-		const std::optional<res::tag> parent = parent_of(current, current_tag, error);
+		const std::optional<res::tag> parent = parent_of(current, current_tag, m_services.resources(), error);
 		if (!error.empty()) {
 			return open_result::failure(std::move(error));
 		}
