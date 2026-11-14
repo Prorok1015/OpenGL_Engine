@@ -864,7 +864,7 @@ BOOST_AUTO_TEST_CASE(JobGet_WithAFilter_RewritesTheMessageFieldsOfAResult_NotADi
 {
 	edt::agent_log_roots roots;
 	roots.project = { "/home/dev/games/demo" };
-	roots.disk.unlisted = { "/etc" };
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
 	cmd::log_read_filter filter;
 	edt::install_agent_log_filter(filter, [] { return false; }, roots);
 	cmd::command_registry filtered;
@@ -901,7 +901,7 @@ BOOST_AUTO_TEST_CASE(JobGet_WithAFilter_RewritesTheTextOfAMigrationAnswer_NotOfA
 {
 	edt::agent_log_roots roots;
 	roots.project = { "/home/dev/games/demo" };
-	roots.disk.unlisted = { "/etc" };
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
 	cmd::log_read_filter filter;
 	edt::install_agent_log_filter(filter, [] { return false; }, roots);
 	cmd::command_registry filtered;
