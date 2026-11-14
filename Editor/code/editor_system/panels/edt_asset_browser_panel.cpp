@@ -196,7 +196,7 @@ namespace edt
 			const bool from_lower_layer = e.src.layer != top_layer;
 			if (from_lower_layer)
 				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-			ImGui::Selectable(e.label.c_str());
+			const bool picked = ImGui::Selectable(e.label.c_str(), !e.src.is_dir && e.src.relative == m_selected_rel);
 			if (m_ui_probe) {
 				if (ImGui::IsItemVisible()) {
 					const ImVec2 item_min = ImGui::GetItemRectMin();
@@ -216,6 +216,8 @@ namespace edt
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					navigate_to(e.src.relative);
 			} else {
+				if (picked)
+					m_selected_rel = e.src.relative;
 				// Double-click on file
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 					if (m_on_file_double_clicked)
@@ -248,6 +250,59 @@ namespace edt
 		if (m_entries.empty())
 			ImGui::TextDisabled("(empty)");
 
+		draw_usages();
+
 		ImGui::Columns(1);
+	}
+}
+
+void edt::asset_browser_panel::draw_usages()
+{
+	if (m_selected_rel.empty() || !m_usages.has_source())
+		return;
+	ImGui::Separator();
+	const std::string selected = fs_paths::generic_utf8_of(m_selected_rel);
+	ImGui::Text("Used by: %s", selected.c_str());
+	ImGui::SameLine();
+	ImGui::TextDisabled("(saved files)");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Found in the files as they are on the disk: an unsaved change is not counted.");
+
+	const usage_report* report = m_usages.report_for(res::tag::make(selected));
+	if (!report) {
+		ImGui::TextDisabled("No asset database: no project is open.");
+		return;
+	}
+	if (!report->complete)
+		ImGui::TextDisabled("Still reading files: the list may grow.");
+	if (report->items.empty())
+		ImGui::TextDisabled("Nothing refers to it.");
+	for (std::size_t index = 0; index < report->items.size(); ++index) {
+		const asset_usage& usage = report->items[index];
+		// Found by its text, not through a field of a schema: it may be no reference at all.
+		const bool loose = usage.kind == usage_kind::loose;
+		if (loose)
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+		ImGui::PushID(static_cast<int>(index));
+		ImGui::Selectable(usage_row_text(usage).c_str());
+		ImGui::PopID();
+		if (loose)
+			ImGui::PopStyleColor();
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("%s", loose ? "Not a field of a schema (a custom field, the record of a prefab instance): found by its text."
+				: usage.by_guid ? "Refers to it by its ID." : "Refers to it by its path.");
+			constexpr std::string_view protocol = "res://";
+			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && m_on_file_double_clicked && usage.file.starts_with(protocol))
+				m_on_file_double_clicked(fs_paths::path_from_utf8(std::string_view(usage.file).substr(protocol.size())));
+		}
+	}
+	if (!report->skipped.empty()) {
+		ImGui::TextDisabled("%zu file(s) too large to read for references", report->skipped.size());
+		if (ImGui::IsItemHovered()) {
+			std::string names;
+			for (const std::string& file : report->skipped)
+				names += file + '\n';
+			ImGui::SetTooltip("%s", names.c_str());
+		}
 	}
 }

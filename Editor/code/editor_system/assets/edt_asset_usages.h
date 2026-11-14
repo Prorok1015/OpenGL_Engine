@@ -3,6 +3,8 @@
 #include <snk/editor/edt_registration.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_tag.h>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <span>
@@ -59,6 +61,33 @@ namespace edt
 	// asset's file. `descs` says what each reference is (classify_reference); null: by its place only.
 	usage_report find_usages(const asset_database& assets, const desc::desc_system* descs, const usage_target& target,
 		std::string_view manifest_file = {}, std::span<const manifest_reference> manifest = {});
+
+	// One row of "Used by" as the asset browser shows it: "<file>  <pointer>  (<kind>)".
+	std::string usage_row_text(const asset_usage& usage);
+
+	// The usages of the asset picked in the browser ("Used by"), asked again only when another asset is picked or the
+	// database moved (its revision), not at every frame.
+	class usage_list
+	{
+	public:
+		// `report` gives the usages of an asset now (nullopt: no database, no project); `revision` grows whenever what
+		// it would say may have changed.
+		using report_source = std::function<std::optional<usage_report>(const res::tag& asset)>;
+		void set_source(report_source report, std::function<std::uint64_t()> revision);
+		bool has_source() const { return static_cast<bool>(m_report); }
+		// Null: no source, or the source has no database.
+		const usage_report* report_for(const res::tag& asset);
+		// How many times the source was asked. For tests.
+		std::size_t queries() const { return m_queries; }
+
+	private:
+		report_source m_report;
+		std::function<std::uint64_t()> m_revision;
+		std::optional<res::tag> m_asset;
+		std::uint64_t m_seen = 0;
+		std::optional<usage_report> m_cached;
+		std::size_t m_queries = 0;
+	};
 
 	struct asset_usage_sources
 	{

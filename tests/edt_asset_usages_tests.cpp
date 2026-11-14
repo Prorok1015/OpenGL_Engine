@@ -257,4 +257,44 @@ BOOST_AUTO_TEST_CASE(AssetUsages_AnswersByPathOrGuid_PageByPage)
 	BOOST_TEST(commands.invoke("asset.usages", json::object{ { "guid", "not-a-guid" } }).code == cmd::codes::invalid_args);
 }
 
+// "Used by" in the asset browser asks the database only when another asset is picked or the database moved, not at every
+// frame; without a database (no project) it says so by giving no report.
+BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainOnlyWhenTheDatabaseMovedOrAnotherAssetIsPicked)
+{
+	auto& assets = open();
+	const res::tag sky = res::tag::make("sky.desc");
+	edt::usage_list list;
+	BOOST_TEST(list.report_for(sky) == nullptr);
+
+	list.set_source([this](const res::tag& asset) -> std::optional<edt::usage_report> {
+		return edt::find_usages(*db, nullptr, edt::usage_target{ asset, std::nullopt });
+	}, [this] { return db->revision(); });
+	const edt::usage_report* first = list.report_for(sky);
+	BOOST_REQUIRE(first);
+	BOOST_TEST(first->items.size() == 5u);
+	BOOST_TEST(list.report_for(sky) == first);
+	BOOST_TEST(list.queries() == 1u);
+	BOOST_TEST(list.report_for(res::tag::make("materials/child.desc")) != nullptr);
+	BOOST_TEST(list.queries() == 2u);
+
+	const edt::asset_usage* inherited = at(*list.report_for(sky), "res://materials/child.desc", "/__parent");
+	BOOST_REQUIRE(inherited);
+	BOOST_TEST(edt::usage_row_text(*inherited) == "res://materials/child.desc  /__parent  (parent)");
+	BOOST_TEST(list.queries() == 3u);
+
+	write("materials/child.desc", R"({ "__type": "material_desc" })");
+	res::file_change change;
+	change.tag = res::tag::make("materials/child.desc");
+	change.kind = res::change_kind::modified;
+	assets.apply_changes(std::vector<res::file_change>{ change });
+	test_util::pump(tasks);
+	const edt::usage_report* after = list.report_for(sky);
+	BOOST_REQUIRE(after);
+	BOOST_TEST(list.queries() == 4u, "the database moved: asked again");
+	BOOST_TEST(after->items.size() == 4u);
+
+	list.set_source([](const res::tag&) -> std::optional<edt::usage_report> { return std::nullopt; }, {});
+	BOOST_TEST(list.report_for(sky) == nullptr, "no database: no report");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

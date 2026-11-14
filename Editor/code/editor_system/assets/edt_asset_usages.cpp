@@ -196,6 +196,33 @@ edt::usage_report edt::find_usages(const asset_database& assets, const desc::des
 	return out;
 }
 
+std::string edt::usage_row_text(const asset_usage& usage)
+{
+	return std::format("{}  {}  ({})", usage.file, usage.json_pointer.empty() ? std::string_view{ "/" } : std::string_view{ usage.json_pointer },
+		usage_kind_name(usage.kind));
+}
+
+void edt::usage_list::set_source(report_source report, std::function<std::uint64_t()> revision)
+{
+	m_report = std::move(report);
+	m_revision = std::move(revision);
+	m_asset.reset();
+	m_cached.reset();
+}
+
+const edt::usage_report* edt::usage_list::report_for(const res::tag& asset)
+{
+	if (!m_report) return nullptr;
+	const std::uint64_t now = m_revision ? m_revision() : 0;
+	if (!m_asset || !(*m_asset == asset) || now != m_seen) {
+		m_asset = asset;
+		m_seen = now;
+		m_cached = m_report(asset);
+		++m_queries;
+	}
+	return m_cached ? &*m_cached : nullptr;
+}
+
 std::vector<edt::registration> edt::register_asset_usage_commands(cmd::command_registry& commands, asset_usage_sources sources)
 {
 	std::vector<registration> out;

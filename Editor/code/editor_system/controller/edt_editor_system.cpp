@@ -1033,16 +1033,25 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		usage_sources.assets = [this]() -> const asset_database* { return m_assets.get(); };
 		usage_sources.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		// The project context lives in the app data storage as long as the editor.
-		usage_sources.manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
-		usage_sources.manifest = [manifest = &project] {
+		const auto manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
+		const auto manifest_references = [manifest = &project] {
 			std::vector<manifest_reference> out;
 			if (!manifest->data.start_scene.empty()) out.push_back(manifest_reference{ "/start_scene", manifest->data.start_scene });
 			if (!manifest->data.input_actions.empty()) out.push_back(manifest_reference{ "/input_actions", manifest->data.input_actions });
 			return out;
 		};
+		usage_sources.manifest_file = manifest_file;
+		usage_sources.manifest = manifest_references;
 		for (auto& command : register_asset_usage_commands(m_context->actions().commands(), std::move(usage_sources))) {
 			m_registrations.push_back(std::move(command));
 		}
+		m_asset_browser_panel->set_usages(
+			[this, manifest_file, manifest_references](const res::tag& asset) -> std::optional<usage_report> {
+				if (!m_assets) return std::nullopt;
+				const std::vector<manifest_reference> manifest = manifest_references();
+				return find_usages(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
+			},
+			[this] { return m_assets ? m_assets->revision() : std::uint64_t{ 0 }; });
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
