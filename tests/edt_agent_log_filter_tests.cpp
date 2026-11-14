@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -303,6 +304,16 @@ BOOST_AUTO_TEST_CASE(OnWindows_AnMsysPath_IsThePathOfItsDrive)
 	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
 	BOOST_TEST(edt::agent_log_text("bad value at /a/b/name", known) == "bad value at /a/b/name");
 }
+
+BOOST_AUTO_TEST_CASE(OnWindows_ADriveThatIsNotListed_IsAPathWhole)
+{
+	edt::agent_log_roots known;
+	known.disk.unlisted = { "Z:" };
+	BOOST_TEST(edt::agent_log_text(R"(open Z:\share\x now)", known) == "open <path> now");
+	BOOST_TEST(edt::agent_log_text("open z:/share/x.txt:3", known) == "open <path>:3");
+	BOOST_TEST(edt::agent_log_text("open /z/share/x now", known) == "open <path> now");
+	BOOST_TEST(edt::agent_log_text("open /y/share/x and /z", known) == "open /y/share/x and /z");
+}
 #else
 BOOST_AUTO_TEST_CASE(OffWindows_AnMsysPath_IsAnAbsolutePathLikeAnyOther)
 {
@@ -381,6 +392,59 @@ BOOST_AUTO_TEST_CASE(AJsonPointer_IsNoPath_UnlessTheListingHasItsFirstTwoSegment
 		}
 	}
 	BOOST_TEST(edt::agent_log_text("bad value at /components/0/name", known) == "bad value at <path>");
+}
+
+BOOST_AUTO_TEST_CASE(OnlyAFixedDriveFromC_IsListed_EveryOtherTypeIsNotRead)
+{
+	// The values of GetDriveTypeW.
+	constexpr unsigned unknown = 0, no_root_dir = 1, removable = 2, fixed = 3, remote = 4, cdrom = 5, ramdisk = 6;
+	BOOST_TEST(fixed == edt::k_agent_log_drive_fixed);
+	BOOST_TEST(edt::agent_log_drive_is_listed('C', fixed));
+	BOOST_TEST(edt::agent_log_drive_is_listed('Z', fixed));
+	BOOST_TEST(edt::agent_log_drive_is_listed('d', fixed));
+	for (const unsigned type : { unknown, no_root_dir, removable, remote, cdrom, ramdisk, 7u, 0xFFFFFFFFu }) {
+		BOOST_TEST_CONTEXT(type) {
+			BOOST_TEST(!edt::agent_log_drive_is_listed('C', type));
+			BOOST_TEST(!edt::agent_log_drive_is_listed('Z', type));
+		}
+	}
+	for (const char letter : { 'A', 'B', 'a', 'b', '1', '/', '\0' }) {
+		BOOST_TEST_CONTEXT(static_cast<int>(letter)) {
+			BOOST_TEST(!edt::agent_log_drive_is_listed(letter, fixed));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TheMountTable_GivesTheFirstLevelNetworkMounts_WithTheirEscapesDecoded)
+{
+	const std::string mounts =
+		"/dev/sda1 / ext4 rw,relatime 0 0\n"
+		"/dev/sdb1 /data ext4 rw,relatime 0 0\n"
+		"server:/export /nfs3 nfs rw,vers=3 0 0\n"
+		"server:/export /nfs4 nfs4 rw,vers=4.2 0 0\n"
+		"//server/share /cifs cifs rw 0 0\n"
+		"//server/share /smb smb3 rw 0 0\n"
+		"/etc/auto.misc /misc autofs rw,relatime 0 0\n"
+		"user@host:/srv /sshfs fuse.sshfs rw,nosuid 0 0\n"
+		"server:/deep /mnt/nas nfs rw 0 0\n"
+		"server:/a\\040b /mnt\\040share nfs4 rw 0 0\n"
+		"server:/t /tab\\011bed nfs rw 0 0\n"
+		"server:/n /new\\012line cifs rw 0 0\n"
+		"server:/s /back\\134slash cifs rw 0 0\n"
+		"portal /run fuse.portal rw 0 0\n"
+		"broken /half\n"
+		"\n"
+		"server:/last /last nfs";
+	const std::vector<std::string> expected{
+		"nfs3", "nfs4", "cifs", "smb", "misc", "sshfs", "mnt share", "tab\tbed", "new\nline", "back\\slash", "last",
+	};
+	const std::vector<std::string> found = edt::agent_log_remote_mounts(mounts);
+	BOOST_TEST(found == expected, boost::test_tools::per_element());
+	BOOST_TEST(edt::agent_log_remote_mounts("").empty());
+	BOOST_TEST(edt::agent_log_remote_mounts("server:/x / nfs rw 0 0\n").empty());
+	const std::vector<std::string> not_an_escape = edt::agent_log_remote_mounts("server:/x /a\\04 nfs rw 0 0\r\n");
+	BOOST_REQUIRE(not_an_escape.size() == 1u);
+	BOOST_TEST(not_an_escape.front() == "a\\04");
 }
 
 // The listing of the machine itself stays within its limits and holds nothing of the folders it does not enter.

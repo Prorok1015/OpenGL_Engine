@@ -45,9 +45,23 @@ namespace edt
 	agent_log_disk agent_log_disk_of(const std::filesystem::path& root, std::span<const std::string> skipped, agent_log_disk_limits limits = {});
 
 	// The disk of this machine, listed now (once, when the editor starts). Not entered: /net, /proc, /sys, /dev and
-	// the first-level network and automount points of /proc/self/mounts. On Windows: the current drive ("/Users/x")
-	// and every drive C: to Z: whose root exists ("C:/Users/x").
+	// the first-level network and automount points of /proc/self/mounts. On Windows: every drive the system has, by
+	// agent_log_drive_is_listed ("C:/Users/x", or "Z:" in `unlisted` without a file system call), and the current
+	// drive ("/Users/x") when it is a listed one.
 	agent_log_disk agent_log_disk_at_start();
+
+	// DRIVE_FIXED of GetDriveTypeW.
+	inline constexpr unsigned k_agent_log_drive_fixed = 3;
+
+	// Whether the drive `letter` of the type GetDriveTypeW gave is listed two levels down. Only a fixed disk from C:
+	// on is; a network drive, one without a root, a removable one, a CD, a RAM disk and an unknown type are not read
+	// at all (a drive that is gone can block for seconds) and count as a path whole.
+	bool agent_log_drive_is_listed(char letter, unsigned type);
+
+	// The first-level folders (names without '/': "mnt share") that `mounts`, the text of /proc/self/mounts, says are
+	// network or automount points (nfs*, cifs, smb3, autofs, fuse.sshfs). Octal escapes of a mount point are decoded
+	// ("\040" is a space); a mount point further down than the first level is left out.
+	std::vector<std::string> agent_log_remote_mounts(std::string_view mounts);
 
 	// The folders a path in a log line may be under, and what stands in for each. Empty: none. A folder may be listed
 	// in every spelling a line can have (as given and as the system resolves it); a trailing separator does not count.

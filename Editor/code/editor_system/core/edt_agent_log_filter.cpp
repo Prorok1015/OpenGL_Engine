@@ -12,12 +12,21 @@
 #include <cstddef>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <memory>
 #include <span>
 #include <string>
 #include <system_error>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 	namespace fs = std::filesystem;
@@ -206,8 +215,8 @@ namespace {
 			return found ? root.size() - 2 + k_long_share_length : 0;
 		}
 		if (root_matches(text, from, root)) return root.size();
-		// "/c/Users" is the root "C:/Users".
-		const bool as_drive = msys && root.size() > 2 && root[1] == ':' && same_letter(text[from + 1], root[0])
+		// "/c/Users" is the root "C:/Users", "/z" the drive "Z:".
+		const bool as_drive = msys && root.size() >= 2 && root[1] == ':' && same_letter(text[from + 1], root[0])
 			&& root_matches(text, from + 2, root.substr(2));
 		return as_drive ? root.size() : 0;
 	}
@@ -391,14 +400,13 @@ namespace {
 		}
 	}
 
-#ifndef _WIN32
-	// "\040" of /proc/self/mounts is a space.
+	// "\040" of /proc/self/mounts is a space, "\011" a tab, "\012" a newline, "\134" a backslash.
 	std::string unescaped_mount(std::string_view text)
 	{
 		std::string out;
 		for (std::size_t at = 0; at < text.size(); ++at) {
 			const auto octal = [text](std::size_t i) { return i < text.size() && text[i] >= '0' && text[i] <= '7'; };
-			if (text[at] == '\\' && octal(at + 1) && octal(at + 2) && octal(at + 3)) {
+			if (text[at] == '\\' && octal(at + 1) && text[at + 1] <= '3' && octal(at + 2) && octal(at + 3)) {
 				out.push_back(static_cast<char>((text[at + 1] - '0') * 64 + (text[at + 2] - '0') * 8 + (text[at + 3] - '0')));
 				at += 3;
 			} else {
@@ -408,20 +416,46 @@ namespace {
 		return out;
 	}
 
+	// The next field of a line of /proc/self/mounts, taken off `line`; empty when there is none.
+	std::string_view next_mount_field(std::string_view& line)
+	{
+		const std::size_t begin = line.find_first_not_of(" \t\r");
+		if (begin == std::string_view::npos) return {};
+		line.remove_prefix(begin);
+		const std::size_t space = line.find_first_of(" \t\r");
+		const std::string_view field = line.substr(0, space);
+		line.remove_prefix(field.size());
+		return field;
+	}
+
+#ifdef _WIN32
+	static_assert(static_cast<unsigned>(DRIVE_FIXED) == edt::k_agent_log_drive_fixed);
+
+	// From the mount table of the system: asks no drive.
+	unsigned drive_type_of(char letter)
+	{
+		const wchar_t root[4]{ static_cast<wchar_t>(letter), L':', L'\\', L'\0' };
+		return static_cast<unsigned>(GetDriveTypeW(root));
+	}
+
+	// 0 when the current folder is on no drive (a share) or its name does not fit.
+	char current_drive_letter()
+	{
+		wchar_t folder[MAX_PATH];
+		const DWORD length = GetCurrentDirectoryW(MAX_PATH, folder);
+		if (length < 2 || length >= MAX_PATH || folder[1] != L':' || folder[0] > L'z') return '\0';
+		const char letter = static_cast<char>(folder[0]);
+		return is_letter(letter) ? letter : '\0';
+	}
+#else
 	// The first-level folders the listing does not enter: reading one can block (a server that is gone) or never end.
 	std::vector<std::string> skipped_folders()
 	{
 		std::vector<std::string> out{ "net", "proc", "sys", "dev" };
 		std::ifstream mounts("/proc/self/mounts");
-		std::string device;
-		std::string point;
-		std::string type;
-		while (mounts >> device >> point >> type) {
-			mounts.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-			const bool remote = type.starts_with("nfs") || type == "cifs" || type == "smb3" || type == "autofs" || type == "fuse.sshfs";
-			if (!remote || point.size() < 2 || point.find('/', 1) != std::string::npos) continue;
-			out.push_back(unescaped_mount(std::string_view(point).substr(1)));
-		}
+		const std::string text{ std::istreambuf_iterator<char>(mounts), std::istreambuf_iterator<char>() };
+		std::vector<std::string> remote = edt::agent_log_remote_mounts(text);
+		out.insert(out.end(), std::make_move_iterator(remote.begin()), std::make_move_iterator(remote.end()));
 		return out;
 	}
 #endif
@@ -476,18 +510,52 @@ edt::agent_log_disk edt::agent_log_disk_of(const fs::path& root, std::span<const
 	return out;
 }
 
+bool edt::agent_log_drive_is_listed(char letter, unsigned type)
+{
+	// A: and B: are floppy drives whatever they report: asking one without a disk in it can take seconds.
+	const bool floppy = letter == 'A' || letter == 'B' || letter == 'a' || letter == 'b';
+	return is_letter(letter) && !floppy && type == k_agent_log_drive_fixed;
+}
+
+std::vector<std::string> edt::agent_log_remote_mounts(std::string_view mounts)
+{
+	std::vector<std::string> out;
+	while (!mounts.empty()) {
+		const std::size_t line_end = mounts.find('\n');
+		std::string_view line = mounts.substr(0, line_end);
+		mounts.remove_prefix(line_end == std::string_view::npos ? mounts.size() : line_end + 1);
+		next_mount_field(line);
+		const std::string point = unescaped_mount(next_mount_field(line));
+		const std::string_view type = next_mount_field(line);
+		const bool remote = type.starts_with("nfs") || type == "cifs" || type == "smb3" || type == "autofs" || type == "fuse.sshfs";
+		// The listing enters first-level folders only: a mount point further down is never read.
+		if (!remote || point.size() < 2 || point[0] != '/' || point.find('/', 1) != std::string::npos) continue;
+		out.push_back(point.substr(1));
+	}
+	return out;
+}
+
 edt::agent_log_disk edt::agent_log_disk_at_start()
 {
 	agent_log_disk out;
 	const agent_log_disk_limits limits{};
 #ifdef _WIN32
-	list_disk(out, fs::path("/"), {}, {}, limits, false);
-	// A: and B: are left out: asking a drive without a disk in it can take seconds.
-	for (char letter = 'C'; letter <= 'Z'; ++letter) {
+	// "/Users/x" is a path on the current drive: listed only when that drive is a local disk.
+	const char current = current_drive_letter();
+	if (current != '\0' && agent_log_drive_is_listed(current, drive_type_of(current))) {
+		list_disk(out, fs::path("/"), {}, {}, limits, false);
+	}
+	const DWORD drives = GetLogicalDrives();
+	for (int index = 0; index < 26; ++index) {
+		if ((drives & (DWORD{ 1 } << index)) == 0) continue;
+		if (out.names.size() + out.unlisted.size() >= limits.total) break;
+		const char letter = static_cast<char>('A' + index);
 		const std::string drive{ letter, ':' };
-		const fs::path root = fs_paths::path_from_utf8(drive + "/");
-		std::error_code ec;
-		if (fs::exists(root, ec) && !ec) list_disk(out, root, drive, {}, limits, true);
+		if (agent_log_drive_is_listed(letter, drive_type_of(letter))) {
+			list_disk(out, fs_paths::path_from_utf8(drive + "/"), drive, {}, limits, true);
+		} else {
+			out.unlisted.push_back(drive);
+		}
 	}
 #else
 	const std::vector<std::string> skipped = skipped_folders();
