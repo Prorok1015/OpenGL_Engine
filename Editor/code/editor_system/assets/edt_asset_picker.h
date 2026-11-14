@@ -96,7 +96,8 @@ namespace edt::picker
 	// layer covers is not a record of its own, so it is not listed.
 	candidates_page candidates(const catalog& source, const filter& wanted, std::string_view query, std::size_t limit);
 
-	// What is written into the field for the picked file.
+	// What is written into the field for the picked file: {guid, path} when the file has an ID (EPIC-57 section 4.4),
+	// its res:// path otherwise.
 	boost::json::value reference_value(const asset_record& record);
 
 	struct reference_state
