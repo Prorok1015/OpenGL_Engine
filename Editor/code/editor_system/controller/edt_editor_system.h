@@ -205,6 +205,10 @@ namespace edt {
 		void open_agents_panel();
 		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
 		void open_migration_window();
+		// The window, rolling migration `id` back (project.migrate_rollback as a person's call).
+		void open_migration_rollback(const std::string& id);
+		// Once the project is open and the start level settled (#761): a migration left unfinished is offered for a rollback.
+		void offer_migration_rollback(const std::filesystem::path& root);
 
 	public:
 		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection

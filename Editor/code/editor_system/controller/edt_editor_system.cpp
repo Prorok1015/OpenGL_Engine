@@ -48,6 +48,7 @@
 #include "edt_migration_commands.h"
 #include "edt_migration_window_model.h"
 #include "edt_migration_panel.h"
+#include "edt_migration_startup.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -1122,6 +1123,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}));
 	}
 
+	// #761: a migration the project was left with is offered for a rollback once the start level settled; headless nobody
+	// is asked (a WARN names the command line), and nothing waits for an answer.
+	if (!project_held && data.has_value<prj::project_context>()) {
+		if (headless) {
+			const journal_offer offer = decide_journal_offer(prj::migration::unfinished_migrations(data.require<prj::project_context>().root), true);
+			if (offer.what == journal_offer::kind::warn) egLOG_WARN("project/migrate", "{}", offer.text);
+		} else {
+			editor_layer->register_implicit("edt/migration_journal", [this, root = data.require<prj::project_context>().root] {
+				const bool settling = m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
+					|| editor_layer->has_implicit_prefix("edt/load_level");
+				if (settling) return true;
+				offer_migration_rollback(root);
+				return false;
+			});
+		}
+	}
+
 	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
 		editor_layer->register_implicit("edt/open_migration", [this] {
 			const bool settling = m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
@@ -1575,6 +1593,24 @@ void edt::editor_system::open_migration_window()
 	if (m_migration_panel == nullptr) return;
 	m_context->panels().set_open(m_migration_panel->get_id(), true);
 	m_migration_panel->show_and_plan();
+}
+
+void edt::editor_system::open_migration_rollback(const std::string& id)
+{
+	if (m_migration_panel == nullptr) return;
+	m_context->panels().set_open(m_migration_panel->get_id(), true);
+	m_migration_panel->show_and_roll_back(id);
+}
+
+void edt::editor_system::offer_migration_rollback(const std::filesystem::path& root)
+{
+	const journal_offer offer = decide_journal_offer(prj::migration::unfinished_migrations(root), false);
+	if (offer.what != journal_offer::kind::ask) return;
+	egLOG_WARN("project/migrate", "{}", offer.text);
+	m_context->dialogs().choose(offer.title, offer.text, { std::string(k_journal_offer_roll_back), std::string(k_journal_offer_later) },
+		[this, id = offer.id](std::optional<std::size_t> answer) {
+			if (answer && *answer == 0) open_migration_rollback(id);
+		});
 }
 
 void edt::editor_system::open_agents_panel()

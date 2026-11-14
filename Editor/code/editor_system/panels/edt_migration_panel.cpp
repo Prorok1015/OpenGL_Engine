@@ -54,6 +54,13 @@ void edt::migration_panel::show_and_plan()
 	m_model.request_plan();
 }
 
+void edt::migration_panel::show_and_roll_back(const std::string& id)
+{
+	m_open = true;
+	m_focus = true;
+	m_model.roll_back(id);
+}
+
 void edt::migration_panel::on_before_begin()
 {
 	ImGui::SetNextWindowSize(ImVec2(720.f, 520.f), ImGuiCond_FirstUseEver);
