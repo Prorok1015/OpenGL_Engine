@@ -424,6 +424,9 @@ namespace res
 		void pin_bound(const cache_key& key, std::shared_ptr<resource_handle> block, bool always_cache);
 		// The node's pins and their owners, whoever pinned: a file that is gone (forget_erased).
 		void unpin_node(const res::tag& node);
+		// apply_rebind, after rekey_locked (its locks held): each owner goes to its own tag's node, the pin with it.
+		void rehome_pin_owners_locked(const std::unordered_map<res::tag, res::tag>& fresh,
+			const std::unordered_map<res::tag, res::tag>& remap);
 		const resource_system& root() const;
 		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
@@ -610,9 +613,10 @@ namespace res
 		// holders let go. Under m_cache_mutex.
 		std::unordered_map<res::tag, std::vector<cache_entry>> m_displaced;
 		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
-		// The tags (spellings, as pinned) that hold the pins of a node (#869): unpin_resource takes one away and the pin
-		// goes with the last. A node without an entry is unpinned at once. Under m_pinning_mutex.
-		std::unordered_map<res::tag, std::unordered_set<res::tag>> m_pin_owners;
+		// The tags (spellings, as pinned) that hold each pin, by the pin's key (#869): unpin_resource takes one away and the
+		// pin goes with the last. An owner follows its tag: to the tag's node after a rebind, to the new name after a move.
+		// A pin without an entry is unpinned at once. Under m_pinning_mutex.
+		tag_keyed_map<std::unordered_set<res::tag>> m_pin_owners;
 
 		struct watcher {
 			reload_callback callback;

@@ -4,6 +4,7 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_binary.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <algorithm>
 #include <atomic>
@@ -929,14 +930,21 @@ BOOST_FIXTURE_TEST_CASE(AWarmupOfOneSpelling_GoesWithItsOwnUnpinOnly, index_fixt
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
-// #869: a pin in a layer and one in its root are each their own.
-BOOST_FIXTURE_TEST_CASE(APinInALayer_AndOneInTheRoot_AreEachTheirOwn, index_fixture)
+// #869: in a layer (a module's) the spellings own their shares the same way, and the root's pins are apart.
+BOOST_FIXTURE_TEST_CASE(PinsOfTwoSpellingsInALayer_AreOwnedApartFromTheRoot, index_fixture)
 {
 	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
 	index->put(a, k_a);
+	index->spell(spelled, k_a);
 	res::resource_system layer{ *rs };
-	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("layer")));
+	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
+	layer.pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
 	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("root")));
+	BOOST_TEST(layer.pinned_count() == 1u);
+
+	layer.unpin_resource(spelled);
+	BOOST_TEST(layer.pinned_count() == 1u);
 	rs->unpin_resource(a);
 	BOOST_TEST(rs->pinned_count() == 0u);
 	BOOST_TEST(layer.pinned_count() == 1u);
@@ -944,7 +952,68 @@ BOOST_FIXTURE_TEST_CASE(APinInALayer_AndOneInTheRoot_AreEachTheirOwn, index_fixt
 	BOOST_TEST(layer.pinned_count() == 0u);
 }
 
-// #869: a file erased is gone under every spelling: the node's pin goes whoever pinned it.
+// #869: owners are per pin, so per type: a spelling takes away only the pins of the types it pinned.
+BOOST_FIXTURE_TEST_CASE(OwnersArePerType_AnUnpinTakesOnlyTheTypesItsTagPinned, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("text")));
+	rs->pin_resource(spelled, res::binary_resource(spelled, test_util::to_bytes("bytes")));
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a rebind back to tags (the index goes) takes each owner to its own tag's node, with a pin each.
+BOOST_FIXTURE_TEST_CASE(ARebindBackToTags_GivesEachSpellingItsOwnPin, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	BOOST_TEST(rs->pinned_count() == 1u);
+
+	rs->set_asset_index(nullptr);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: register_alias copies a pin with no owner, so the alias' unpin takes the copy away; where the alias' node has a
+// pin of its own owners, the copy does not replace it and the alias' unpin leaves it to them.
+BOOST_FIXTURE_TEST_CASE(APinCopiedToAnAlias_GoesWithTheAliasUnpin_UnlessOthersOwnTheAliasPin, index_fixture)
+{
+	const res::tag original = put("o.txt", "O");
+	const res::tag alias = put("al.txt", "AL");
+	rs->pin_resource(original, res::text_resource(original, test_util::to_bytes("pinned")));
+	rs->register_alias(original, alias);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(alias);
+	BOOST_TEST(rs->pinned_count() == 1u);
+
+	const res::tag other = put("other.txt", "X");
+	const res::tag owned_alias = put("owned.txt", "Y");
+	index->put(other, k_b);
+	index->spell(owned_alias, k_b);
+	rs->pin_resource(other, res::text_resource(other, test_util::to_bytes("other")));
+	rs->register_alias(original, owned_alias);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(owned_alias);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(other);
+	rs->unpin_resource(original);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// Regression guard (#869): a file erased is gone under every spelling, so the node's pin goes whoever pinned it.
 BOOST_FIXTURE_TEST_CASE(ErasingAFile_TakesThePinOfEverySpellingAway, index_fixture)
 {
 	const res::tag a = put("a.txt", "A");
