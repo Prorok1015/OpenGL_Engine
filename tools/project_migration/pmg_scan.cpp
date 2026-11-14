@@ -633,6 +633,23 @@ namespace
 			&& lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) == ".desc";
 	}
 
+	bool holds_reference(const json::value& value, int depth)
+	{
+		if (depth > 128) return false;
+		if (const json::string* text = value.if_string()) return std::string_view(*text).starts_with("res://");
+		if (const json::array* items = value.if_array()) {
+			return std::ranges::any_of(*items, [depth](const json::value& item) { return holds_reference(item, depth + 1); });
+		}
+		if (const json::object* object = value.if_object()) {
+			if (object->contains("guid")) return true;
+			for (const auto& member : *object) {
+				if (member.key() == "__parent") continue;
+				if (holds_reference(member.value(), depth + 1)) return true;
+			}
+		}
+		return false;
+	}
+
 	// scanned_file::reference_fixes of every desc, by the walker of the editor's save (desc::write_references_with) over
 	// `assets`. A file assets.ids gives a .resource in the same migration (listed without one, not invalid) answers an ID
 	// as well: its references change in that migration, so the step is planned for them. The ID itself is never written.
@@ -665,11 +682,12 @@ namespace
 			if (!result.incomplete && options.stop && options.stop()) result.incomplete = true;
 			if (result.incomplete) return;
 			const read_result read = read_file(project, project / fs_paths::path_from_utf8(file.path), options.max_file_bytes);
-			// Every reference the walker changes holds a res:// path.
-			if (!read.error.empty() || read.text.find("res://") == std::string::npos) continue;
+			// Every reference the walker changes holds a res:// path or a guid.
+			if (!read.error.empty() || (read.text.find("res://") == std::string::npos && read.text.find("\"guid\"") == std::string::npos)) continue;
 			boost::system::error_code error;
 			json::value root = parse_desc_json(read.text, error);
 			if (error || !root.is_object()) continue;
+			file.outdated_references = file.kind == file_class::outdated && holds_reference(root, 0);
 			file.reference_fixes = desc::write_references_with(root, schema_of, ids).total();
 		}
 	}

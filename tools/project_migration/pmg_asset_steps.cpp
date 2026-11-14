@@ -153,7 +153,7 @@ namespace
 
 	bool refs_needed(const scan_result& scan)
 	{
-		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return refs_readable(file) && file.reference_fixes > 0; });
+		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return refs_readable(file) && (file.reference_fixes > 0 || file.outdated_references); });
 	}
 
 	// The rule of the editor's save (desc::write_references_with) over the index of the project as the pre steps left it, so
@@ -172,7 +172,7 @@ namespace
 			const std::string read = context.files.read(file.path);
 			std::string_view text = read;
 			if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
-			if (text.find("res://") == std::string_view::npos) continue;
+			if (text.find("res://") == std::string_view::npos && text.find("\"guid\"") == std::string_view::npos) continue;
 			boost::system::error_code error;
 			json::parse_options options;
 			options.max_depth = 128;

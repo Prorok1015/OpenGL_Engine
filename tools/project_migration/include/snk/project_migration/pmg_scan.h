@@ -63,6 +63,10 @@ namespace prj::migration
 		// res:// path whose file has an ID, or gets one from assets.ids, and a {guid, path} whose path is stale. Read from
 		// the file as it is, with the current schemas.
 		std::size_t reference_fixes = 0;
+		// An outdated desc that holds a reference anywhere (a res:// string under any key but "__parent", or an object with
+		// a "guid"): its type migration may move one into a tag field, which reference_fixes, read by the current schemas
+		// from the file as it is, cannot see. assets.refs is planned for it, so one run is enough.
+		bool outdated_references = false;
 	};
 
 	struct manifest_state

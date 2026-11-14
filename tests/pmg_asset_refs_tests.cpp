@@ -343,6 +343,37 @@ BOOST_AUTO_TEST_CASE(ASecondRun_HasNothingToDo)
 	BOOST_TEST((content_of(copy.root()) == migrated));
 }
 
+// A type migration that moves a reference into a tag field: the scan reads the old file by the current schema and cannot
+// count it, so the step is planned for the outdated file that holds a reference, and one run leaves nothing to do.
+BOOST_AUTO_TEST_CASE(AReferenceATypeMigrationMovesIntoATagField_IsWrittenInTheSameRun)
+{
+	descs->register_migration("refs_test.moved", 1, [](json::object& object) {
+		if (auto old = object.find("old_texture"); old != object.end()) {
+			json::value moved = std::move(old->value());
+			object.erase(old);
+			object["texture"] = std::move(moved);
+		}
+	});
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({
+		"name": "refs_test.moved", "version": 2,
+		"fields": [ { "name": "texture", "kind": "res_tag", "default": "" } ]
+	})").as_object())));
+	write_text(copy.res() / "refs/moved.desc", R"({"__type":"refs_test.moved","old_texture":"res://textures/with_meta.png"})");
+
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* moved = scan.find("res/refs/moved.desc");
+	BOOST_REQUIRE(moved != nullptr);
+	BOOST_TEST(moved->reference_fixes == 0u);
+	BOOST_TEST(moved->outdated_references);
+	BOOST_TEST(!scan.find("res/worlds/w_v2.desc")->outdated_references, "a __parent is no reference of a field");
+	BOOST_REQUIRE(planned(plan(), "assets.refs"));
+
+	migrate();
+	const json::value after = json::parse(read_text(copy.res() / "refs/moved.desc"));
+	BOOST_TEST(after.as_object().at("texture") == reference(k_with_meta_id, "res://textures/with_meta.png"));
+	BOOST_TEST(plan().empty());
+}
+
 // "__parent" is no field of a schema: a file whose only reference is one is not written by the step (w_v2, w_v3 stay
 // byte for byte as the type migrations left them).
 BOOST_AUTO_TEST_CASE(AParentReference_IsLeftAsItIs)
