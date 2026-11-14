@@ -71,7 +71,7 @@ namespace edt
 		// The "__type" of a desc file's root, once hashed; none for any other file (or a desc without one).
 		std::optional<std::string> desc_type;
 		// The direct references of a desc file, once hashed (#774, EPIC-57 section 6.3); none for any other file.
-		std::vector<raw_reference> references;
+		raw_reference_list references;
 		// A desc file bigger than asset_database::max_desc_bytes: its references (and __type) were not read.
 		bool references_skipped = false;
 		// When the file's stamp (size, mtime) and the .resource's were taken, in ticks of
@@ -145,7 +145,7 @@ namespace edt
 		bool unchanged = false;
 		std::string content_hash;
 		std::optional<std::string> desc_type;
-		std::vector<raw_reference> references;
+		raw_reference_list references;
 		// A desc bigger than the limit of the read: neither its "__type" nor its references were read.
 		bool references_skipped = false;
 		// The string "__guid" of a desc's root, as written (not checked).
@@ -299,6 +299,9 @@ namespace edt
 		void set_clock_for_tests(std::function<std::chrono::steady_clock::time_point()> clock) { m_clock = std::move(clock); }
 
 		const asset_record* find(const res::tag& path) const;
+		// As find, and when names are case insensitive the file of that name in any letter case (the record has the
+		// spelling on the disk).
+		const asset_record* find_any_case(const res::tag& path) const;
 		std::vector<const asset_record*> find(const res::asset_id& id) const;
 		const std::map<std::string, asset_record>& records() const { return m_records; }
 		// IDs that more than one file carries.

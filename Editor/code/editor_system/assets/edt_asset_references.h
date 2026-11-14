@@ -1,9 +1,12 @@
 #pragma once
 #include <snk/resource/res_asset_id.h>
 #include <boost/json/fwd.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,8 +30,8 @@ namespace edt
 		component,
 	};
 
-	// A reference as the file holds it, before a schema says what it is: every string naming a protocol and every
-	// {guid, path} object. Read without the desc system, on the database's worker thread; the schema is asked when the
+	// A reference as the file holds it, before a schema says what it is: every res:// or engine:// string and every
+	// {guid, path} object with a guid or such a path. Other schemes (memory://, https://) can name no file of the project. Read without the desc system, on the database's worker thread; the schema is asked when the
 	// references are looked at, so the database does not depend on the game module that is loaded.
 	struct raw_reference
 	{
@@ -45,6 +48,20 @@ namespace edt
 	};
 
 	std::vector<raw_reference> collect_raw_references(const boost::json::value& document);
+
+	// The references of one file as the database keeps them: shared, never changed, so a record is copied cheaply (a walk
+	// copies every record). Null: none.
+	using raw_reference_list = std::shared_ptr<const std::vector<raw_reference>>;
+
+	inline std::span<const raw_reference> references_in(const raw_reference_list& list)
+	{
+		return list ? std::span<const raw_reference>(*list) : std::span<const raw_reference>{};
+	}
+
+	inline bool same_references(const raw_reference_list& a, const raw_reference_list& b)
+	{
+		return a == b || std::ranges::equal(references_in(a), references_in(b));
+	}
 
 	enum class usage_kind : std::uint8_t
 	{

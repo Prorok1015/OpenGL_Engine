@@ -72,7 +72,7 @@ namespace edt
 
 	// asset.usages {path | guid, page_size?, cursor?}
 	//   -> {target: {path?, guid?}, source: "disk", complete, items: [{file, json_pointer, kind, via}], skipped: [{file, reason}],
-	//       next_cursor?}
+	//       next_cursor?}; skipped on the first page only.
 	//   kind: field, parent, component, loose (not a field of a schema: a custom field, the record of a prefab instance) or
 	//   manifest; via: guid or path. What is saved on the disk only: an unsaved edit of an open document is not seen.
 	std::vector<registration> register_asset_usage_commands(cmd::command_registry& commands, asset_usage_sources sources);

@@ -8,6 +8,7 @@
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_system.h>
+#include <boost/json/monotonic_resource.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
@@ -251,6 +252,9 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	std::uint64_t hash = 14695981039346656037ull;
 	std::string text;
 	bool keep_text = is_desc;
+	if (keep_text && before.ok && before.size >= 0 && static_cast<std::uint64_t>(before.size) <= max_desc_bytes) {
+		text.reserve(static_cast<std::size_t>(before.size));
+	}
 	const platform::beneath::read_result result = platform::beneath::read_beneath_stream(request,
 		[&](std::span<const std::byte> chunk) {
 			hash = fnv1a_64_update(hash, chunk);
@@ -280,9 +284,12 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 		boost::json::parse_options options;
 		// As deep as the desc adapter reads.
 		options.max_depth = 128;
-		const boost::json::value document = boost::json::parse(text, ec, {}, options);
+		// The tree of a level is a few times its text: one arena, freed whole when the references are taken.
+		boost::json::monotonic_resource arena;
+		const boost::json::value document = boost::json::parse(text, ec, &arena, options);
+		std::string{}.swap(text);
 		if (!ec) {
-			out.references = collect_raw_references(document);
+			out.references = std::make_shared<const std::vector<raw_reference>>(collect_raw_references(document));
 		}
 		if (!ec && document.is_object()) {
 			if (const boost::json::value* type = document.as_object().if_contains("__type"); type && type->is_string()) {
@@ -323,7 +330,7 @@ bool edt::asset_record::same_as(const asset_record& other) const
 		&& size == other.size && mtime == other.mtime && has_meta == other.has_meta && meta_layer == other.meta_layer
 		&& meta_size == other.meta_size
 		&& meta_mtime == other.meta_mtime && meta_error == other.meta_error && flags == other.flags && type == other.type
-		&& content_hash == other.content_hash && desc_type == other.desc_type && references == other.references
+		&& content_hash == other.content_hash && desc_type == other.desc_type && same_references(references, other.references)
 		&& references_skipped == other.references_skipped && content_id == other.content_id
 		&& meta_id == other.meta_id;
 }
@@ -607,7 +614,7 @@ void edt::asset_database::pair_moves(std::vector<asset_record> gone, const std::
 		if (arrived.content_hash.empty() && !match->content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
 			arrived.content_hash = match->content_hash;
 			arrived.desc_type = match->desc_type;
-			arrived.references = match->references;
+			arrived.references = std::move(match->references);
 			arrived.references_skipped = match->references_skipped;
 			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
 			std::erase(m_unhashed, key);
@@ -806,6 +813,15 @@ const edt::asset_record* edt::asset_database::find(const res::tag& path) const
 	return found == m_records.end() ? nullptr : &found->second;
 }
 
+const edt::asset_record* edt::asset_database::find_any_case(const res::tag& path) const
+{
+	if (const asset_record* exact = find(path); exact || !m_case_insensitive) {
+		return exact;
+	}
+	const auto folded = m_by_folded.find(layer_merge_key(path.string(), true));
+	return folded == m_by_folded.end() ? nullptr : find(res::tag{ folded->second });
+}
+
 std::vector<const edt::asset_record*> edt::asset_database::find(const res::asset_id& id) const
 {
 	std::vector<const asset_record*> out;
@@ -891,70 +907,75 @@ namespace
 		return out;
 	}
 
-	std::string_view place_name(edt::reference_place place)
+	// {"owners": [[type, pointer], ...], "items": [[pointer, path, guid or "", owner index, place], ...]}: a level has
+	// thousands of references and few owners.
+	boost::json::object references_to_json(std::span<const edt::raw_reference> references)
 	{
-		switch (place) {
-		case edt::reference_place::parent: return "parent";
-		case edt::reference_place::component: return "component";
-		case edt::reference_place::value: break;
+		boost::json::array owners;
+		std::map<std::pair<std::string_view, std::string_view>, std::size_t> owner_index;
+		boost::json::array items;
+		items.reserve(references.size());
+		for (const edt::raw_reference& reference : references) {
+			const auto [owner, added] = owner_index.try_emplace({ reference.owner_type, reference.owner_pointer }, owners.size());
+			if (added) {
+				owners.push_back(boost::json::array{ reference.owner_type, reference.owner_pointer });
+			}
+			items.push_back(boost::json::array{ reference.json_pointer, reference.path,
+				reference.guid ? res::to_text(*reference.guid) : std::string{}, owner->second, static_cast<int>(reference.place) });
 		}
-		return "value";
-	}
-
-	boost::json::value reference_to_json(const edt::raw_reference& reference)
-	{
 		boost::json::object out;
-		out["pointer"] = reference.json_pointer;
-		out["path"] = reference.path;
-		if (reference.guid) {
-			out["guid"] = res::to_text(*reference.guid);
-		}
-		out["owner_type"] = reference.owner_type;
-		out["owner_pointer"] = reference.owner_pointer;
-		out["place"] = place_name(reference.place);
+		out["owners"] = std::move(owners);
+		out["items"] = std::move(items);
 		return out;
 	}
 
-	// The form reference_to_json writes, nothing else: a cache that holds another is dropped whole.
-	std::optional<edt::raw_reference> cached_reference(const boost::json::value& item)
+	// The form references_to_json writes, nothing else: a cache that holds another is dropped whole.
+	std::optional<std::vector<edt::raw_reference>> cached_references(const boost::json::value& value)
 	{
-		const boost::json::object* object = item.if_object();
-		if (!object) {
+		const boost::json::object* object = value.if_object();
+		const boost::json::value* owners_value = object ? object->if_contains("owners") : nullptr;
+		const boost::json::value* items_value = object ? object->if_contains("items") : nullptr;
+		if (!owners_value || !owners_value->is_array() || !items_value || !items_value->is_array()) {
 			return std::nullopt;
 		}
-		const auto text = [object](std::string_view name) -> const boost::json::string* {
-			const boost::json::value* field = object->if_contains(name);
-			return field ? field->if_string() : nullptr;
-		};
-		const boost::json::string* pointer = text("pointer");
-		const boost::json::string* path = text("path");
-		const boost::json::string* owner_type = text("owner_type");
-		const boost::json::string* owner_pointer = text("owner_pointer");
-		const boost::json::string* place = text("place");
-		if (!pointer || !path || !owner_type || !owner_pointer || !place) {
-			return std::nullopt;
-		}
-		edt::raw_reference out;
-		out.json_pointer = std::string{ *pointer };
-		out.path = std::string{ *path };
-		out.owner_type = std::string{ *owner_type };
-		out.owner_pointer = std::string{ *owner_pointer };
-		const std::string_view place_text{ *place };
-		if (place_text == "parent") {
-			out.place = edt::reference_place::parent;
-		} else if (place_text == "component") {
-			out.place = edt::reference_place::component;
-		} else if (place_text != "value") {
-			return std::nullopt;
-		}
-		if (const boost::json::value* guid = object->if_contains("guid")) {
-			out.guid = guid->is_string() ? res::asset_id_from_text(std::string_view{ guid->get_string() }) : std::nullopt;
-			if (!out.guid) {
+		std::vector<std::pair<std::string, std::string>> owners;
+		for (const boost::json::value& owner : owners_value->get_array()) {
+			const boost::json::array* pair = owner.if_array();
+			if (!pair || pair->size() != 2 || !(*pair)[0].is_string() || !(*pair)[1].is_string()) {
 				return std::nullopt;
 			}
+			owners.emplace_back(std::string{ (*pair)[0].get_string() }, std::string{ (*pair)[1].get_string() });
 		}
-		if (!out.owner_pointer.empty() && !out.json_pointer.starts_with(out.owner_pointer)) {
-			return std::nullopt;
+		std::vector<edt::raw_reference> out;
+		out.reserve(items_value->get_array().size());
+		for (const boost::json::value& item : items_value->get_array()) {
+			const boost::json::array* fields = item.if_array();
+			if (!fields || fields->size() != 5 || !(*fields)[0].is_string() || !(*fields)[1].is_string() || !(*fields)[2].is_string()
+				|| !(*fields)[3].is_int64() || !(*fields)[4].is_int64()) {
+				return std::nullopt;
+			}
+			const std::int64_t owner = (*fields)[3].get_int64();
+			const std::int64_t place = (*fields)[4].get_int64();
+			if (owner < 0 || static_cast<std::size_t>(owner) >= owners.size() || place < 0
+				|| place > static_cast<std::int64_t>(edt::reference_place::component)) {
+				return std::nullopt;
+			}
+			edt::raw_reference reference;
+			reference.json_pointer = std::string{ (*fields)[0].get_string() };
+			reference.path = std::string{ (*fields)[1].get_string() };
+			if (const std::string_view guid{ (*fields)[2].get_string() }; !guid.empty()) {
+				reference.guid = res::asset_id_from_text(guid);
+				if (!reference.guid) {
+					return std::nullopt;
+				}
+			}
+			reference.owner_type = owners[static_cast<std::size_t>(owner)].first;
+			reference.owner_pointer = owners[static_cast<std::size_t>(owner)].second;
+			reference.place = static_cast<edt::reference_place>(place);
+			if (!reference.owner_pointer.empty() && !reference.json_pointer.starts_with(reference.owner_pointer)) {
+				return std::nullopt;
+			}
+			out.push_back(std::move(reference));
 		}
 		return out;
 	}
@@ -998,13 +1019,8 @@ namespace
 		if (record.desc_type) {
 			out["desc_type"] = *record.desc_type;
 		}
-		if (!record.references.empty()) {
-			boost::json::array references;
-			references.reserve(record.references.size());
-			for (const edt::raw_reference& reference : record.references) {
-				references.push_back(reference_to_json(reference));
-			}
-			out["references"] = std::move(references);
+		if (!edt::references_in(record.references).empty()) {
+			out["references"] = references_to_json(edt::references_in(record.references));
 		}
 		if (record.references_skipped) {
 			out["references_skipped"] = true;
@@ -1176,16 +1192,14 @@ namespace
 			record.desc_type = std::string{ desc_type->get_string() };
 		}
 		if (const boost::json::value* references = object->if_contains("references")) {
-			if (!references->is_array() || record.type != "desc" || record.content_hash.empty()) {
+			if (record.type != "desc" || record.content_hash.empty()) {
 				return std::nullopt;
 			}
-			for (const boost::json::value& item : references->get_array()) {
-				std::optional<edt::raw_reference> reference = cached_reference(item);
-				if (!reference) {
-					return std::nullopt;
-				}
-				record.references.push_back(std::move(*reference));
+			std::optional<std::vector<edt::raw_reference>> read = cached_references(*references);
+			if (!read) {
+				return std::nullopt;
 			}
+			record.references = std::make_shared<const std::vector<edt::raw_reference>>(std::move(*read));
 		}
 		if (const boost::json::value* skipped = object->if_contains("references_skipped")) {
 			if (!skipped->is_bool() || record.type != "desc" || record.content_hash.empty()) {
@@ -1204,7 +1218,7 @@ namespace
 		if (record.mtime >= record.content_checked_at - margin) {
 			record.content_hash.clear();
 			record.desc_type.reset();
-			record.references.clear();
+			record.references.reset();
 			record.references_skipped = false;
 		}
 		if (record.has_meta && record.meta_mtime >= record.meta_checked_at - margin) {
@@ -2300,7 +2314,7 @@ void edt::asset_database::give_pending_ids()
 			// Hashed before it waited: hashed again for its root's "__guid", read off the main thread.
 			record.content_hash.clear();
 			record.desc_type.reset();
-			record.references.clear();
+			record.references.reset();
 			record.references_skipped = false;
 			if (std::ranges::find(m_in_flight, key) == m_in_flight.end() && std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
 				m_unhashed.push_back(key);

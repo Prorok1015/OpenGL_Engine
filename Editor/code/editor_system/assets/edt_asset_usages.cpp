@@ -3,9 +3,9 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_asset_walk.h>
 #include <boost/json.hpp>
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <format>
@@ -23,12 +23,10 @@ namespace
 	constexpr std::size_t k_max_text = 512;
 	constexpr std::size_t k_max_cursor = std::size_t{ 1 } << 16;
 
+	// As a walk pairs names: the same rule the database merges files by.
 	bool same_path(std::string_view a, std::string_view b, bool case_insensitive)
 	{
-		if (!case_insensitive) return a == b;
-		return a.size() == b.size() && std::ranges::equal(a, b, [](unsigned char x, unsigned char y) {
-			return std::tolower(x) == std::tolower(y);
-		});
+		return a == b || (case_insensitive && res::asset_name_key(a, true) == res::asset_name_key(b, true));
 	}
 
 	// Whether a reference written as `reference` leads to the asset (`path`, `id`).
@@ -127,7 +125,7 @@ namespace
 		std::optional<std::string> after;
 		if (const json::value* cursor = args.if_contains("cursor")) {
 			const std::string_view text(cursor->as_string().data(), cursor->as_string().size());
-			after = text.size() <= k_max_cursor ? text_of_hex(text) : std::nullopt;
+			after = !text.empty() && text.size() <= k_max_cursor ? text_of_hex(text) : std::nullopt;
 			if (!after) return cmd::result::failure(cmd::codes::invalid_args, "the cursor is not one this command returned");
 		}
 
@@ -155,8 +153,10 @@ namespace
 		if (index < report.items.size() && !items.empty()) out["next_cursor"] = hex_of(row_key(report.items[index - 1]));
 		out["items"] = std::move(items);
 		json::array skipped;
-		for (const std::string& file : report.skipped) {
-			skipped.push_back(json::object{ { "file", file }, { "reason", "too_large" } });
+		if (!after) {
+			for (const std::string& file : report.skipped) {
+				skipped.push_back(json::object{ { "file", file }, { "reason", "too_large" } });
+			}
 		}
 		out["skipped"] = std::move(skipped);
 		return cmd::result::success(std::move(out));
@@ -170,7 +170,11 @@ edt::usage_report edt::find_usages(const asset_database& assets, const desc::des
 	out.path = target.path;
 	out.id = target.id;
 	if (target.path) {
-		if (const asset_record* record = assets.find(*target.path); record && record->id) out.id = record->id;
+		// The asset as the disk spells it: "res://Sky.desc" names sky.desc where names are case insensitive.
+		if (const asset_record* record = assets.find_any_case(*target.path)) {
+			out.path = record->path;
+			if (record->id) out.id = record->id;
+		}
 	} else if (target.id) {
 		if (const std::vector<const asset_record*> holders = assets.find(*target.id); !holders.empty()) out.path = holders.front()->path;
 	}
@@ -178,7 +182,7 @@ edt::usage_report edt::find_usages(const asset_database& assets, const desc::des
 
 	for (const auto& [key, record] : assets.records()) {
 		if (record.references_skipped) out.skipped.push_back(std::string(record.path.view()));
-		for (const raw_reference& reference : record.references) {
+		for (const raw_reference& reference : references_in(record.references)) {
 			const std::optional<bool> by_guid = matches(assets, reference, out.path, out.id);
 			if (!by_guid) continue;
 			const std::optional<usage_kind> kind = classify_reference(reference, descs);
@@ -234,6 +238,7 @@ std::vector<edt::registration> edt::register_asset_usage_commands(cmd::command_r
 			},
 			"skipped": {
 				"type": "array",
+				"description": "desc files too large to be read for references; on the first page only",
 				"items": {
 					"type": "object",
 					"properties": { "file": { "type": "string" }, "reason": { "type": "string" } },
