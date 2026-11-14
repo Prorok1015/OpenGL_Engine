@@ -916,7 +916,7 @@ namespace
 		boost::json::array items;
 		items.reserve(references.size());
 		for (const edt::raw_reference& reference : references) {
-			const auto [owner, added] = owner_index.try_emplace({ reference.owner_type, reference.owner_pointer }, owners.size());
+			const auto [owner, added] = owner_index.try_emplace(std::pair<std::string_view, std::string_view>{ reference.owner_type, reference.owner_pointer }, owners.size());
 			if (added) {
 				owners.push_back(boost::json::array{ reference.owner_type, reference.owner_pointer });
 			}

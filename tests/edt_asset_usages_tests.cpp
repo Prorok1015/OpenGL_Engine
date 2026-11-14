@@ -309,7 +309,7 @@ BOOST_AUTO_TEST_CASE(ADescBiggerThanTheLimit_IsSkipped)
 	BOOST_TEST(edt::references_in(content.references).empty());
 	const edt::asset_content whole = edt::read_asset_content(layer.path(), "levels/main.desc", true, edt::asset_database::max_desc_bytes);
 	BOOST_TEST(!whole.references_skipped);
-	BOOST_REQUIRE(whole.references);
+	BOOST_REQUIRE(whole.references != nullptr);
 	BOOST_TEST(whole.references->size() == 6u, "https:// is no reference to a file of the project");
 }
 

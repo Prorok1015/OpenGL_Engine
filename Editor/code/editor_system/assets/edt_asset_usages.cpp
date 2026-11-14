@@ -259,7 +259,7 @@ std::vector<edt::registration> edt::register_asset_usage_commands(cmd::command_r
 	desc.id = "asset.usages";
 	desc.summary = "The files that refer to an asset under res:// (by its path or its guid), as saved on the disk: file, JSON pointer, kind";
 	desc.category = cmd::agent_category::read;
-	desc.args_schema = parse_schema(std::format(R"({{
+	desc.args_schema = parse_schema(std::format(R"json({{
 		"type": "object",
 		"properties": {{
 			"path": {{ "type": "string", "description": "res:// path of the asset (or a path relative to res://)" }},
@@ -268,8 +268,8 @@ std::vector<edt::registration> edt::register_asset_usage_commands(cmd::command_r
 			"cursor": {{ "type": "string", "description": "next_cursor of the previous page" }}
 		}},
 		"additionalProperties": false
-	}})", k_max_page_size, k_default_page_size), "asset.usages args");
-	desc.result_schema = parse_schema(R"({
+	}})json", k_max_page_size, k_default_page_size), "asset.usages args");
+	desc.result_schema = parse_schema(R"json({
 		"type": "object",
 		"properties": {
 			"target": { "type": "object", "properties": { "path": { "type": "string" }, "guid": { "type": "string" } } },
@@ -300,7 +300,7 @@ std::vector<edt::registration> edt::register_asset_usage_commands(cmd::command_r
 			"next_cursor": { "type": "string" }
 		},
 		"required": ["target", "source", "complete", "items", "skipped"]
-	})", "asset.usages result");
+	})json", "asset.usages result");
 	desc.invoke = [sources = std::move(sources)](const cmd::call& call) { return usages(sources, call); };
 	if (registration added = commands.add(std::move(desc)); added.active()) out.push_back(std::move(added));
 	return out;

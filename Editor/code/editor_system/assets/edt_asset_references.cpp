@@ -44,10 +44,10 @@ namespace
 		return value.starts_with("res://") || value.starts_with("engine://");
 	}
 
-	// A node of a prefab: its "components" map names each component by its type.
-	bool is_prefab_node(const json::object& object)
+	// A node of a prefab, or a prefab's root: its "components" map names each component by its type.
+	bool is_prefab_node(const json::object& object, std::string_view type)
 	{
-		return object.contains("__id") || object.contains("transform") || object.contains("children");
+		return type == "prefab_desc" || object.contains("__id") || object.contains("transform") || object.contains("children");
 	}
 
 	struct collector
@@ -98,7 +98,7 @@ namespace
 			const bool typed = type && type->is_string();
 			const std::string owner_type = typed ? std::string(view_of(type->as_string())) : outer_type;
 			const std::string& owner_pointer = typed ? pointer : outer_pointer;
-			const bool prefab_node = is_prefab_node(object);
+			const bool prefab_node = is_prefab_node(object, typed ? std::string_view(owner_type) : std::string_view{});
 			for (const auto& member : object) {
 				const std::string_view key = view_of(member.key());
 				const std::string at = pointer + "/" + token_of(member.key());

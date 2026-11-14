@@ -174,6 +174,22 @@ BOOST_AUTO_TEST_CASE(TheSchemaOfTheOwner_SaysWhatEachReferenceIs)
 	BOOST_TEST((kind_at(k_node + "/components/mesh_node_desc/geometry") == kind::field), "the schema of the component's key");
 }
 
+BOOST_AUTO_TEST_CASE(ThePrefabRoot_HasComponentsToo)
+{
+	const std::vector<edt::raw_reference> found = edt::collect_raw_references(json::parse(R"({
+		"__type": "prefab_desc",
+		"components": { "sky": "res://sky.desc", "mesh_node_desc": { "geometry": "res://g.desc" } }
+	})"));
+	BOOST_REQUIRE(found.size() == 2u);
+	const auto sky = std::ranges::find_if(found, [](const edt::raw_reference& r) { return r.json_pointer == "/components/sky"; });
+	BOOST_REQUIRE(sky != found.end());
+	BOOST_TEST((sky->place == edt::reference_place::component));
+	const auto geometry = std::ranges::find_if(found, [](const edt::raw_reference& r) { return r.json_pointer == "/components/mesh_node_desc/geometry"; });
+	BOOST_REQUIRE(geometry != found.end());
+	BOOST_TEST(geometry->owner_type == "mesh_node_desc");
+	BOOST_TEST((edt::classify_reference(*geometry, descs.get()) == edt::usage_kind::field));
+}
+
 BOOST_AUTO_TEST_CASE(WithoutADescSystem_OnlyThePlaceSaysAnything)
 {
 	BOOST_TEST((edt::classify_reference(*at(k_node + "/components/mesh/geometry"), nullptr) == edt::usage_kind::loose));
