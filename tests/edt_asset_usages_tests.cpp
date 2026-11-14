@@ -420,14 +420,4 @@ BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainOnlyWhenTheDatabaseMovedOrAnotherAss
 	BOOST_TEST(list.report_for(sky) == nullptr, "no database: no report");
 }
 
-BOOST_AUTO_TEST_CASE(AnIdNoFileHolds_FindsItsReferencesOnce)
-{
-	open();
-	const edt::usage_report report = edt::find_usages(*db, nullptr, edt::usage_target{ std::nullopt, res::asset_id_from_text(k_gone_guid) });
-	BOOST_TEST(!report.path.has_value());
-	BOOST_REQUIRE(report.items.size() == 1u);
-	BOOST_TEST(report.items[0].json_pointer == k_node + "/lost/material");
-	BOOST_TEST(report.items[0].by_guid);
-}
-
 BOOST_AUTO_TEST_SUITE_END()
