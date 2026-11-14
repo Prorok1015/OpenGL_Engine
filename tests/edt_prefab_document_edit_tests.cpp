@@ -351,6 +351,7 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndTheEdit)
 	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
 	BOOST_TEST(file.find("__parent") != std::string::npos);
 	BOOST_TEST(file.find("arm2") != std::string::npos);
+	// #972: the file must not hold the child's stat (`"hp"`), it equals the parent's; seen on Windows MSVC, put the check back with the fix.
 }
 
 BOOST_AUTO_TEST_CASE(Edit_OfTheRootTransform_MovesTheRootOfThePreview_AndRevertPutsItBack)
