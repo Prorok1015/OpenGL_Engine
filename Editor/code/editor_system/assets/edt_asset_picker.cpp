@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <utility>
 
 namespace
 {
