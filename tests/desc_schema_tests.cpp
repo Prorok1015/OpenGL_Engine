@@ -837,7 +837,8 @@ BOOST_FIXTURE_TEST_CASE(ReadReferences_ARuntimeSchemaHoldsTheTagOfAGuidAndAPath,
 
 	runtime->deserialize(ds, parse(R"({ "link": { "__type": "rd.inline", "hp": 2 } })"));
 	BOOST_TEST(runtime->get("/link") == json::parse(R"({ "__type": "rd.inline", "hp": 2 })"));
-	// An object that is no reference never gets into a res_tag field: it does not fit (json_fits), the field keeps its tag.
+	// An object that is no reference never gets into a res_tag field: it does not fit (json_fits), the field keeps
+	// its tag.
 	runtime->deserialize(ds, parse(R"({ "tag": { "hp": 3 }, "tags": [ { "hp": 3 } ], "maybe_tag": { "id": 1 } })"));
 	BOOST_TEST(runtime->get("/tag") == json::value("res://new_place.desc"));
 	BOOST_TEST(runtime->get("/tags").as_array().size() == 4u);
