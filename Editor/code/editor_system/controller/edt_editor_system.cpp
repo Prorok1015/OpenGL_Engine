@@ -808,7 +808,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
 			m_pending_desc_handle = {};
 			if (m_loading_level) abandon_level_load();
-			m_level_ctrl.detach_from_game_layer();
+			// A level a stopped migration left detached stays as it was kept (a second detach would keep the empty worlds).
+			if (!m_level_ctrl.is_detached()) m_level_ctrl.detach_from_game_layer();
 			return level;
 		};
 		migration.pause_watch = [this] { m_level_ctrl.unwatch_level(); };
@@ -818,6 +819,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_assets) m_assets->rebuild();
 		};
 		migration.reopen_level = [this](const res::tag& level, std::function<void(bool)> loaded) -> std::optional<std::string> {
+			// The files are still half migrated (a rollback refused): the level stays detached, as the stopped migration left it.
+			if (m_migration_stopped && !(m_migration_stopped->rolled_back && m_migration_stopped->rolled_back())) return m_migration_stopped->reason;
 			m_level_ctrl.attach_to_game_layer();
 			if (!level.is_valid()) return std::nullopt;
 			if (!begin_level_load(level)) return "'" + std::string(level.view()) + "' did not start loading again";
@@ -841,6 +844,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		migration.current_level_tag = [this] { return current_level_tag(); };
 		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
 		migration.running_changed = [this](bool running) { m_migration_running = running; };
+		// The save block of a stopped migration goes with its rollback (its rolled_back() sees the journal too).
+		migration.migration_rolled_back = [this](const std::string&) {
+			if (m_migration_stopped && m_migration_stopped->rolled_back && m_migration_stopped->rolled_back()) m_migration_stopped.reset();
+		};
 		migration.show_progress = [](bool open) {
 			constexpr const char* title = "Migrating Project##edt_migrate";
 			ImGui::OpenPopup(title);

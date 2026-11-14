@@ -287,6 +287,48 @@ BOOST_AUTO_TEST_CASE(TextFromTheProject_HasNoControlCharacters)
 	BOOST_TEST(model.plan()->text == "a [31mb\nc");
 }
 
+// #761: a migration that failed (code 5 or 6) or an unfinished one in the plan offers Roll Back; it runs
+// project.migrate_rollback {id} as a person's call and shows its answer as a rollback's.
+BOOST_AUTO_TEST_CASE(RollBack_IsOfferedForAFailedOrUnfinishedMigration_AndShowsItsAnswer)
+{
+	plan();
+	BOOST_TEST(!model.can_roll_back());
+	model.migrate();
+	finish(json::parse(R"({"code":4,"status":"partial","id":"m1","text":"t"})"));
+	BOOST_TEST(!model.can_roll_back());
+	model.close();
+
+	plan();
+	model.migrate();
+	finish(json::parse(R"({"code":6,"status":"rollback_failed","error":"stopped","unfinished":["m2"],"text":"t"})"));
+	BOOST_TEST_REQUIRE(model.can_roll_back());
+	BOOST_TEST(model.rollback_id() == "m2");
+	model.roll_back(model.rollback_id());
+	BOOST_TEST((model.state() == phase::running));
+	BOOST_TEST(model.rolling_back());
+	BOOST_REQUIRE(!calls.empty());
+	BOOST_TEST(calls.back().id == "project.migrate_rollback");
+	BOOST_TEST(json::serialize(calls.back().args) == R"({"id":"m2"})");
+	finish(json::parse(R"({"code":0,"status":"rolled_back","id":"m2","text":"migration m2 rolled back","level":{"tag":"","reopened":false,"reason":"no level was open"}})"));
+	BOOST_TEST_REQUIRE((model.state() == phase::report_shown));
+	BOOST_TEST(model.report()->rollback);
+	BOOST_TEST(model.report()->code == 0);
+	BOOST_TEST(!model.rolling_back());
+	BOOST_TEST(!model.can_roll_back());
+	BOOST_TEST(edt::migration_window_model::rollback_outcome_text(0).find("Rolled back") != std::string::npos);
+	model.close();
+
+	// The plan names an unfinished migration: Roll Back is offered there too; a refusal at once keeps the plan.
+	plan_answer = cmd::result::success(json::parse(R"({"code":2,"text":"t","fingerprint":"","plan":{"files":[],"project_steps":[],
+		"skipped":[],"refused":"migration m3 did not finish","unfinished":["m3"]}})"));
+	plan();
+	BOOST_TEST(model.rollback_id() == "m3");
+	migrate_answer = cmd::result::failure(cmd::codes::busy, "Play is running");
+	model.roll_back("m3");
+	BOOST_TEST((model.state() == phase::plan_shown));
+	BOOST_TEST(model.error_code() == cmd::codes::busy);
+}
+
 BOOST_AUTO_TEST_CASE(TheOpenAction_IsForAPersonOnly)
 {
 	edt::action_registry actions;
