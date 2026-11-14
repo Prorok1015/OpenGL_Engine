@@ -1371,8 +1371,8 @@ std::size_t spawned_nodes(entt::registry& reg)
 	return reg.view<scn::parent_component>().size();
 }
 
-// A file that refers to itself gives a desc that holds a handle to itself: taken apart when the test is done, or the
-// leak check of the sanitizer run reports the cycle.
+// Two files that refer to each other give descs that hold handles to one another (#958): taken apart when the test is
+// done, or the leak check of the sanitizer run reports the cycle. A file that refers to itself needs none of it (#952).
 void take_apart(const std::shared_ptr<const scn::prefab_desc>& prefab)
 {
 	auto& root = std::const_pointer_cast<scn::prefab_desc>(prefab)->get_root();
@@ -1399,18 +1399,18 @@ BOOST_AUTO_TEST_CASE(APrefabWhoseChildInstantiatesIt_IsBuiltOnce_AndTheSpawnEnds
 	BOOST_TEST(spawned_nodes(reg) == 1u);
 	BOOST_TEST(!reg.all_of<scn::prefab_instance>(again));
 
-	// Built from its root node alone, nobody said which prefab it is: the first instance is expanded, the one inside is not.
+	// The reference to itself was refused when the file was read (#952): the node holds no handle to its own prefab, so
+	// nothing keeps the desc alive once its users let go, and built from its root node alone it is the same one child.
+	const auto& own_reference = self->get_root().children.at(0).components.at("ref").parent_desc;
+	BOOST_TEST(own_reference.has_error());
+	BOOST_TEST(!own_reference.get_tag().is_valid());
 	entt::registry bare;
 	auto from_node = bare.create();
 	assemble_prefab_node(*assembler, bare, from_node, self->get_root());
 	const auto outer = child_named(bare, from_node, "again");
 	BOOST_REQUIRE(bare.valid(outer));
-	const auto inner = child_named(bare, outer, "again");
-	BOOST_REQUIRE(bare.valid(inner));
-	BOOST_TEST(child_names(bare, inner).empty());
-	BOOST_TEST(spawned_nodes(bare) == 2u);
-
-	take_apart(self);
+	BOOST_TEST(child_names(bare, outer).empty());
+	BOOST_TEST(spawned_nodes(bare) == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(PrefabsThatInstantiateEachOther_EndWhereTheCircleCloses)
@@ -1456,8 +1456,6 @@ BOOST_AUTO_TEST_CASE(APrefabReachedAgainThroughASecondComponent_IsNotBuiltAgain)
 	BOOST_REQUIRE(reg.valid(both));
 	BOOST_TEST((child_names(reg, both) == std::vector<std::string>{ "tip" }));
 	BOOST_TEST(spawned_nodes(reg) == 2u);
-
-	take_apart(twice);
 }
 
 BOOST_AUTO_TEST_CASE(OnePrefabUnderTwoSiblings_IsNoCircle)
