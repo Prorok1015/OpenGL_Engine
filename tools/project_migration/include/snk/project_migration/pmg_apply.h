@@ -175,7 +175,6 @@ namespace prj::migration
 	//   is no reserved one (below);
 	// - every path is at most 1024 bytes and a chain of plain names below the root; a file of files[] is project.snkproj or
 	//   lies inside a content root of that manifest, a created file lies inside a content root;
-	// - no component of a path, a root or the id looks like a Windows short (8.3) alias ('~' and a digit), on any system;
 	// - and none lies below a first folder prj::is_code_ignored_dir refuses (any '.' name, build, out, ...) or one of
 	//   prj::own_top_dir_names (code, .snk, .cache, build), whatever a content root says.
 	std::optional<std::string> check_journal_paths(const std::filesystem::path& root, std::string_view id, const journal_paths& journal);

@@ -783,28 +783,27 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesAPathTooLongToShow)
 		"longer than 1024 bytes");
 }
 
-// #910 review: a name that could be a Windows short (8.3) alias reaches a folder its letters do not name ("SNK~1" is
-// .snk): refused on every system, in a content root and in a path, and nothing is deleted.
-BOOST_AUTO_TEST_CASE(ARollback_RefusesShortNameAliases)
+// #910 review: a name with '~' and a digit is an ordinary name; aliases are stopped by the Windows primitives (lies_at),
+// so a project that migrates such a file can roll it back too.
+BOOST_AUTO_TEST_CASE(AFileNamedLikeAShortName_MigratesAndRollsBack)
 {
-	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
-	write_text(copy.root() / ".snk/x", "keep");
-	const fs::path saved = copy.root() / ".snk/migrations/test-migration/backup/project.snkproj";
-	const std::string original = read_text(saved);
-	json::value manifest = json::parse(original);
-	manifest.as_object()["content_roots"] = json::array{ "res", "SNK~1" };
-	write_text(saved, json::serialize(manifest));
-	expect_refused(copy.root(), [](json::object& journal) { journal["created_files"] = json::array{ "SNK~1/x" }; }, "short name");
-	write_text(saved, original);
-	expect_refused(copy.root(), [](json::object& journal) { journal["created_files"] = json::array{ "res/GIT~1/x" }; }, "short name");
-	BOOST_TEST(read_text(copy.root() / ".snk/x") == "keep");
-	// A '~' without a digit after it is no alias.
-	write_text(copy.res() / "a~b.desc", "{}");
+	write_text(copy.res() / "IMG~1/cam~1.desc", read_text(copy.res() / "cameras/cam_v1.desc"));
+	const auto before = content_of(copy.root());
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_REQUIRE(std::ranges::any_of(outcome.report.files, [](const auto& f) { return f.path == "res/IMG~1/cam~1.desc"; }));
+	BOOST_TEST(read_text(copy.res() / "IMG~1/cam~1.desc") != before.at("res/IMG~1/cam~1.desc"));
+
+	write_text(copy.res() / "IMG~1.PNG", "png");
 	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
 	json::value journal = json::parse(read_text(journal_path));
-	journal.as_object()["created_files"] = json::array{ "res/a~b.desc" };
+	journal.as_object()["created_files"] = json::array{ "res/IMG~1.PNG" };
 	write_text(journal_path, json::serialize(journal));
+
 	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+	BOOST_TEST(!pmg::rollback_migration(copy.root(), "test-migration").has_value());
+	BOOST_TEST((content_of(copy.root()) == before));
+	BOOST_TEST(!fs::exists(copy.res() / "IMG~1.PNG"));
 }
 
 #ifdef _WIN32

@@ -261,27 +261,6 @@ namespace
 			|| (c >= 0xe0020 && c <= 0xe007f);
 	}
 
-	// A name Windows could take for the short (8.3) alias of another file: every alias holds '~' and a digit. Refused on
-	// every system: a project moves between them, and the alias would reach a folder its letters do not name.
-	bool may_be_short_name(std::string_view name)
-	{
-		for (std::size_t at = name.find('~'); at != std::string_view::npos; at = name.find('~', at + 1)) {
-			if (at + 1 < name.size() && name[at + 1] >= '0' && name[at + 1] <= '9') return true;
-		}
-		return false;
-	}
-
-	std::optional<std::string_view> short_name_in(std::string_view path)
-	{
-		for (std::size_t from = 0; from <= path.size();) {
-			const std::size_t end = std::min(path.find('/', from), path.size());
-			const std::string_view part = path.substr(from, end - from);
-			if (may_be_short_name(part)) return part;
-			from = end + 1;
-		}
-		return std::nullopt;
-	}
-
 	// The first component of a journal path, or the path itself.
 	std::string_view first_component(std::string_view path)
 	{
@@ -322,10 +301,6 @@ namespace
 		}
 		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", shown);
 		if (manifest_allowed && path == k_manifest_path) return std::nullopt;
-		if (auto part = short_name_in(path)) {
-			return std::format("'{}' holds '{}', which Windows could take for the short name of another folder or file", shown,
-				journal_path_text(*part));
-		}
 		const std::string_view top = first_component(path);
 		if (is_reserved_top(top, reserved)) return std::format("'{}' is in '{}', where a migration never writes", shown, journal_path_text(top));
 		if (!tag_of(std::string(path), content_roots)) return std::format("'{}' is not inside a content root of the project", shown);
@@ -341,10 +316,6 @@ namespace
 			while (!text.empty() && text.back() == '/') text.pop_back();
 			const std::string shown = journal_path_text(text);
 			if (text.empty() || text == "." || !is_plain_relative(text)) return std::format("the content root '{}' is not a folder inside the project", shown);
-			if (auto part = short_name_in(text)) {
-				return std::format("the content root '{}' holds '{}', which Windows could take for the short name of another folder", shown,
-					journal_path_text(*part));
-			}
 			const std::string_view top = first_component(text);
 			if (is_reserved_top(top, reserved)) return std::format("the content root '{}' lies in '{}', which is never content", shown, journal_path_text(top));
 		}
@@ -1315,7 +1286,7 @@ std::string prj::migration::journal_path_text(std::string_view path)
 
 std::optional<std::string> prj::migration::check_journal_paths(const fs::path& root, std::string_view id, const journal_paths& journal)
 {
-	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos || may_be_short_name(id)) {
+	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos) {
 		return std::format("'{}' does not name a migration", journal_path_text(id));
 	}
 	// Exactly what apply_migration writes: a journal may not point the backup at another folder of the project.
