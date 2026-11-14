@@ -333,6 +333,46 @@ BOOST_AUTO_TEST_CASE(ADescriptionThatThrows_RefusesTheCall_WithNobodyAsked)
 	BOOST_TEST(runs == 0);
 }
 
+// A call a person allowed that met `busy` is tried again with a ticket agent_confirmations approved itself (#759):
+// the command tells that retry from the person's own answer, and only while the retry runs.
+BOOST_AUTO_TEST_CASE(ARetryAfterBusy_RunsWithATicketApprovedInternally)
+{
+	std::vector<std::pair<std::string, bool>> seen;
+	bool still_busy = true;
+	cmd::command_desc desc;
+	desc.id = "project.migrate";
+	desc.category = agent_category::scene_edit;
+	desc.risk = cmd::danger::confirm;
+	desc.summary = "migrates";
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.invoke = [this, &seen, &still_busy](const cmd::call& call) {
+		seen.emplace_back(call.confirmation, confirmations->approved_internally(call.confirmation));
+		if (still_busy) return cmd::result::failure(cmd::codes::busy, "Play is running");
+		++runs;
+		return cmd::result::success();
+	};
+	registrations.push_back(commands.add(std::move(desc)));
+
+	run("project.migrate");
+	BOOST_TEST(confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(seen.size() == 1u);
+	BOOST_TEST(!seen[0].first.empty());
+	BOOST_TEST(!seen[0].second);
+	BOOST_TEST(finished.empty());
+
+	still_busy = false;
+	current += 1s;
+	confirmations->tick();
+	BOOST_REQUIRE(seen.size() == 2u);
+	BOOST_TEST(!seen[1].first.empty());
+	BOOST_TEST(seen[1].first != seen[0].first);
+	BOOST_TEST(seen[1].second);
+	BOOST_TEST(!confirmations->approved_internally(seen[1].first));
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].ok);
+	BOOST_TEST(runs == 1);
+}
+
 namespace {
 
 // code.write of #451: code_edit, cmake_presets for a CMake file; `classify` stands for its category_of.

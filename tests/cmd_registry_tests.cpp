@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <string>
 #include <utility>
@@ -464,6 +465,123 @@ BOOST_AUTO_TEST_CASE(Invoke_KeepsTheResultPastTheCommandsResource)
 	BOOST_REQUIRE(outcome->ok);
 	BOOST_TEST((outcome->value.storage().get() == boost::json::storage_ptr().get()));
 	BOOST_TEST(outcome->value.at("text").as_string() == "a text long enough to be allocated in the arena");
+}
+
+namespace {
+
+// One decision for every agent call; a person can be asked.
+struct fixed_gate final : cmd::policy_gate
+{
+	cmd::policy_mode mode = cmd::policy_mode::allow;
+	cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override
+	{
+		if (mode == cmd::policy_mode::allow) return cmd::policy_decision::allow();
+		if (mode == cmd::policy_mode::ask) return cmd::policy_decision::ask("why");
+		return cmd::policy_decision::deny("no");
+	}
+	bool can_ask() const override { return true; }
+};
+
+struct describe_seen
+{
+	int described = 0;
+	int runs = 0;
+	std::string ticket;
+	bool throws = false;
+};
+
+cmd::command_desc described_echo(describe_seen& seen, cmd::danger risk, bool before_allowed)
+{
+	cmd::command_desc desc = echo_command(seen.runs);
+	desc.risk = risk;
+	desc.describe_before_allowed_invoke = before_allowed;
+	desc.describe = [&seen](const cmd::call& request) -> std::optional<std::string> {
+		++seen.described;
+		seen.ticket = request.confirmation;
+		if (seen.throws) throw std::runtime_error("broken");
+		return std::string("what it does");
+	};
+	return desc;
+}
+
+}
+
+// #759: describe_before_allowed_invoke describes a call with a risk that the policy allows without a question, once.
+BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_DescribesAnAllowedRiskyCall_Once)
+{
+	cmd::command_registry commands;
+	describe_seen seen;
+	auto reg = commands.add(described_echo(seen, cmd::danger::confirm, true));
+	commands.set_policy_gate(std::make_shared<fixed_gate>());
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::agent("s1")).ok);
+	BOOST_TEST(seen.described == 1);
+	BOOST_TEST(seen.ticket.empty());
+	BOOST_TEST(seen.runs == 1);
+}
+
+// Without the flag, without a risk, with invalid arguments, for a person's call, and for a call carrying a ticket nothing more is described.
+BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_OnlyForTheFlag_ARisk_ValidArgs_AnAgent_WithoutATicket)
+{
+	cmd::command_registry commands;
+	auto gate = std::make_shared<fixed_gate>();
+	commands.set_policy_gate(gate);
+	{
+		describe_seen seen;
+		auto reg = commands.add(described_echo(seen, cmd::danger::confirm, false));
+		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::agent("s1")).ok);
+		BOOST_TEST(seen.described == 0);
+	}
+	{
+		describe_seen seen;
+		auto reg = commands.add(described_echo(seen, cmd::danger::none, true));
+		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::agent("s1")).ok);
+		BOOST_TEST(seen.described == 0);
+	}
+	{
+		describe_seen seen;
+		auto reg = commands.add(described_echo(seen, cmd::danger::confirm, true));
+		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})"), cmd::origin::agent("s1")).code == cmd::codes::invalid_args);
+		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::ui()).ok);
+		cmd::call with_ticket{ json_of(R"({"text":"a"})"), cmd::origin::agent("s1"), 0, "0123" };
+		BOOST_TEST(commands.invoke("test.echo", with_ticket).ok);
+		BOOST_TEST(seen.described == 0);
+		BOOST_TEST(seen.runs == 2);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_ADescriptionThatThrows_RefusesTheCall)
+{
+	cmd::command_registry commands;
+	describe_seen seen;
+	seen.throws = true;
+	auto reg = commands.add(described_echo(seen, cmd::danger::confirm, true));
+	commands.set_policy_gate(std::make_shared<fixed_gate>());
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::agent("s1")).code == cmd::codes::denied);
+	BOOST_TEST(seen.described == 1);
+	BOOST_TEST(seen.runs == 0);
+}
+
+// The question's description names the ticket only to a command with the flag; the approved call is not described again.
+BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_TheQuestionNamesItsTicket_OnlyWithTheFlag)
+{
+	cmd::command_registry commands;
+	auto gate = std::make_shared<fixed_gate>();
+	gate->mode = cmd::policy_mode::ask;
+	commands.set_policy_gate(gate);
+	for (const bool flag : { true, false }) {
+		describe_seen seen;
+		auto reg = commands.add(described_echo(seen, cmd::danger::confirm, flag));
+		const cmd::result asked = commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::agent("s1"));
+		BOOST_REQUIRE(asked.code == cmd::codes::confirmation_required);
+		const std::string ticket(asked.value.at("ticket").as_string());
+		BOOST_TEST(seen.described == 1);
+		BOOST_TEST(seen.ticket == (flag ? ticket : std::string{}));
+		BOOST_REQUIRE(commands.approve(ticket));
+		const cmd::call approved{ json_of(R"({"text":"a"})"), cmd::origin::agent("s1"), 0, ticket };
+		BOOST_TEST(commands.invoke("test.echo", approved).ok);
+		BOOST_TEST(seen.described == 1);
+		BOOST_TEST(seen.runs == 1);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

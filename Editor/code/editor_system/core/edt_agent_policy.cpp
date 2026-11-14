@@ -37,6 +37,7 @@ namespace edt
 			cmd::agent_category::play,
 			cmd::agent_category::vcs_read, cmd::agent_category::vcs_commit, cmd::agent_category::vcs_branch,
 			cmd::agent_category::vcs_sync, cmd::agent_category::vcs_push, cmd::agent_category::vcs_forge,
+			cmd::agent_category::project_migrate,
 		};
 
 		cmd::policy_mode mode_of_risk(cmd::danger risk)
@@ -401,11 +402,15 @@ namespace edt
 	{
 		// A command's own entry is the only thing that lifts its risk floor; an entry for its category is held to it.
 		// It speaks for the command's own category only: "code.write": "allow" must not allow its CMake writes.
+		// The one place a layer's word is read: an `allow` that must stay a question is held to ask here.
+		const auto held = [&](cmd::policy_mode mode) {
+			return needs_consent_each_call(command, category) ? cmd::strictest(mode, cmd::policy_mode::ask) : mode;
+		};
 		if (category == command.category) {
-			if (const auto own = commands.find(command.id); own != commands.end()) return own->second;
+			if (const auto own = commands.find(command.id); own != commands.end()) return held(own->second);
 		}
 		if (const auto entry = categories.find(category); entry != categories.end()) {
-			return cmd::strictest(entry->second, mode_of_risk(command.risk));
+			return held(cmd::strictest(entry->second, mode_of_risk(command.risk)));
 		}
 		return std::nullopt;
 	}
@@ -590,7 +595,8 @@ namespace edt
 		// must not be able to answer for the category.
 		cmd::policy_mode category_mode(const policy_layer& layer, cmd::agent_category category, cmd::danger risk)
 		{
-			const cmd::policy_mode floor = mode_of_risk(risk);
+			cmd::policy_mode floor = mode_of_risk(risk);
+			if (category == cmd::agent_category::project_migrate) floor = cmd::strictest(floor, cmd::policy_mode::ask);
 			if (const auto entry = layer.categories.find(category); entry != layer.categories.end()) return cmd::strictest(entry->second, floor);
 			return cmd::strictest(default_mode(category), floor);
 		}
