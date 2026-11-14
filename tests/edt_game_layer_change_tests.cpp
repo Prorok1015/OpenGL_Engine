@@ -179,6 +179,25 @@ BOOST_AUTO_TEST_CASE(a_detached_level_is_never_saved)
 	BOOST_TEST((state.world_names == std::vector<std::string>{ "w0", "w1" }), boost::test_tools::per_element());
 }
 
+// #761 review: a rebuild that fails keeps the level detached (its JSON kept), so a save still refuses instead of writing
+// the empty worlds; the next attach that succeeds brings the level back.
+BOOST_AUTO_TEST_CASE(a_failed_attach_stays_detached)
+{
+	open_level(put("lv.desc", BASE_LEVEL));
+	level_ctrl.detach_from_game_layer();
+	const auto contexts_of_the_editor = services.ctx_manager;
+	services.ctx_manager.reset();
+	level_ctrl.attach_to_game_layer();
+	BOOST_TEST(level_ctrl.is_detached());
+	BOOST_TEST(state.world_names.empty());
+	BOOST_TEST(!level_ctrl.write_level_to_disk("lv.desc"));
+
+	services.ctx_manager = contexts_of_the_editor;
+	level_ctrl.attach_to_game_layer();
+	BOOST_TEST(!level_ctrl.is_detached());
+	BOOST_TEST((state.world_names == std::vector<std::string>{ "w0", "w1" }), boost::test_tools::per_element());
+}
+
 BOOST_AUTO_TEST_CASE(the_edited_level_moves_into_the_layer_of_a_loaded_module_and_back)
 {
 	contexts().level_set().set_mode(ecs::run_mode::edit);

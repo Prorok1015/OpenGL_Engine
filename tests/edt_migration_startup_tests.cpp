@@ -95,6 +95,25 @@ BOOST_AUTO_TEST_CASE(AnInvalidId_IsNotOfferedForARollback_ItsReasonIsShown)
 	}
 }
 
+// #761 review: the block of a migration that stopped holds for the whole project (whatever level is loaded meanwhile) until
+// that migration is rolled back; then it goes for good.
+BOOST_AUTO_TEST_CASE(TheSaveBlock_HoldsForTheProject_UntilTheRollback)
+{
+	edt::migration_save_block block;
+	BOOST_TEST(!block.reason().has_value());
+	bool rolled_back = false;
+	block.hold([&rolled_back] { return rolled_back; }, "roll the migration back first");
+	// Another level loaded: the editor no longer touches the block, it still holds.
+	for (int i = 0; i < 3; ++i) {
+		BOOST_REQUIRE(block.reason().has_value());
+		BOOST_TEST(*block.reason() == "roll the migration back first");
+	}
+	rolled_back = true;
+	BOOST_TEST(!block.reason().has_value());
+	rolled_back = false;
+	BOOST_TEST(!block.reason().has_value());
+}
+
 // The checks of an opened project run once, after the start level settled; headless only a WARN: no question, no scan.
 BOOST_AUTO_TEST_CASE(TheStartupChecks_AskOnce_AndHeadlessAsksNothing)
 {

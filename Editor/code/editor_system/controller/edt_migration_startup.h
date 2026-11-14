@@ -33,6 +33,34 @@ namespace edt
 	// `unfinished`: prj::migration::unfinished_migrations of the project's root.
 	journal_offer decide_journal_offer(const std::vector<std::string>& unfinished, bool headless);
 
+	// The save block of a migration (or a rollback) that stopped half way (#761): it holds for the whole project, whatever
+	// level is loaded meanwhile, until `rolled_back()` says that migration was rolled back. No ImGui.
+	class migration_save_block
+	{
+	public:
+		void hold(std::function<bool()> rolled_back, std::string reason)
+		{
+			m_rolled_back = std::move(rolled_back);
+			m_reason = std::move(reason);
+		}
+
+		// Why nothing may be saved; nullopt once the migration was rolled back (the block goes then) or none was held.
+		std::optional<std::string> reason()
+		{
+			if (!m_reason) return std::nullopt;
+			if (m_rolled_back && m_rolled_back()) {
+				m_reason.reset();
+				m_rolled_back = {};
+				return std::nullopt;
+			}
+			return m_reason;
+		}
+
+	private:
+		std::function<bool()> m_rolled_back;
+		std::optional<std::string> m_reason;
+	};
+
 	// The checks of an opened project, each once (#761): the rollback question, then the background scan. Headless: a WARN
 	// only, no question, no scan. No ImGui.
 	class migration_startup

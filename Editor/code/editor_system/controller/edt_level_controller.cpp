@@ -278,8 +278,8 @@ void edt::level_controller::attach_to_game_layer()
 {
 	const notify_worlds_replaced notify{ on_worlds_replaced };
 	if (!m_detached_level) return;
-	const boost::json::object level_json = std::move(*m_detached_level);
-	m_detached_level.reset();
+	// Kept until the level is rebuilt: a failed rebuild stays detached, so no save writes its empty worlds (#761).
+	const boost::json::object level_json = *m_detached_level;
 
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
@@ -296,6 +296,7 @@ void edt::level_controller::attach_to_game_layer()
 		egLOG_ERROR("Editor/GameLayer", "Level desc '{}' failed to load in the new game layer", m_state.editor_tag.view());
 		return;
 	}
+	m_detached_level.reset();
 	populate_worlds_from_level(level_res);
 	const int world_count = static_cast<int>(m_state.world_names.size());
 	const int world = m_detached_world >= 0 && m_detached_world < world_count ? m_detached_world : 0;

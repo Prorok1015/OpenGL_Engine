@@ -21,6 +21,7 @@
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
+#include "edt_migration_startup.h"
 #include "edt_module_swap_gate.h"
 #include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
@@ -279,16 +280,9 @@ namespace edt {
 		res::tag m_level_after_layer_change;
 		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
 		std::uint64_t m_game_layer_generation = 0;
-		// A migration stopped with an exception and left `level` detached: no level is saved until that migration is rolled
-		// back or another level is loaded (the same level loaded again is still half migrated), so the files stay as the
-		// rollback expects them.
-		struct stopped_migration
-		{
-			res::tag level;
-			std::function<bool()> rolled_back;
-			std::string reason;
-		};
-		std::optional<stopped_migration> m_migration_stopped;
+		// A migration (or rollback) stopped half way: no level of the project is saved until that migration is rolled back,
+		// whatever level is loaded meanwhile, so the files stay as the rollback expects them.
+		migration_save_block m_migration_stopped;
 		// project.migrate writes the project on the io lane (#761): Play, level changes and saves, builds, module reloads
 		// and quitting are refused until it ended (migration_blocker).
 		bool m_migration_running = false;
