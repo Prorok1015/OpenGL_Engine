@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_prefab_document.h"
+#include "edt_prefab_close.h"
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -538,6 +539,112 @@ BOOST_AUTO_TEST_CASE(Revert_OfADeletedFile_ReportsItAndKeepsTheEdits)
 	BOOST_TEST(!error.empty());
 	BOOST_TEST(arm_name() == "arm2");
 	BOOST_TEST(document->is_dirty());
+}
+
+namespace {
+
+struct close_probe
+{
+	edt::prefab_close_ports ports()
+	{
+		edt::prefab_close_ports out;
+		out.ask = [this](std::function<void(edt::unsaved_choice)> answer) {
+			++questions;
+			asked = std::move(answer);
+		};
+		out.apply = [this] { ++applies; return apply_result; };
+		out.report_failure = [this](const std::string& error) { failure = error; };
+		return out;
+	}
+	int questions = 0;
+	int applies = 0;
+	int closed = 0;
+	std::string failure;
+	edt::save_result apply_result = edt::save_result::ok();
+	std::function<void(edt::unsaved_choice)> asked;
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(CloseQuestion_ACleanDocumentClosesWithoutAsking)
+{
+	close_probe probe;
+	edt::close_prefab_with_question(false, probe.ports(), [&probe] { ++probe.closed; });
+	BOOST_TEST(probe.closed == 1);
+	BOOST_TEST(probe.questions == 0);
+}
+
+BOOST_AUTO_TEST_CASE(CloseQuestion_SaveApplies_ThenCloses)
+{
+	close_probe probe;
+	edt::close_prefab_with_question(true, probe.ports(), [&probe] { ++probe.closed; });
+	BOOST_REQUIRE(probe.questions == 1);
+	BOOST_TEST(probe.closed == 0);
+	probe.asked(edt::unsaved_choice::save);
+	BOOST_TEST(probe.applies == 1);
+	BOOST_TEST(probe.closed == 1);
+}
+
+BOOST_AUTO_TEST_CASE(CloseQuestion_AFailedSave_KeepsTheDocumentOpenAndReports)
+{
+	close_probe probe;
+	probe.apply_result = edt::save_result::failure("nope");
+	edt::close_prefab_with_question(true, probe.ports(), [&probe] { ++probe.closed; });
+	probe.asked(edt::unsaved_choice::save);
+	BOOST_TEST(probe.closed == 0);
+	BOOST_TEST(probe.failure == "nope");
+}
+
+BOOST_AUTO_TEST_CASE(CloseQuestion_DiscardCloses_CancelStays)
+{
+	close_probe discard;
+	edt::close_prefab_with_question(true, discard.ports(), [&discard] { ++discard.closed; });
+	discard.asked(edt::unsaved_choice::discard);
+	BOOST_TEST(discard.closed == 1);
+	BOOST_TEST(discard.applies == 0);
+
+	close_probe cancel;
+	edt::close_prefab_with_question(true, cancel.ports(), [&cancel] { ++cancel.closed; });
+	cancel.asked(edt::unsaved_choice::cancel);
+	BOOST_TEST(cancel.closed == 0);
+	BOOST_TEST(cancel.applies == 0);
+}
+
+BOOST_AUTO_TEST_CASE(ToolbarState_FollowsTheDocument)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::prefab_toolbar_state state = edt::toolbar_state_of(*document);
+	BOOST_TEST(!state.apply_enabled);
+	BOOST_TEST(state.revert_enabled);
+
+	BOOST_REQUIRE(rename_arm("arm2"));
+	state = edt::toolbar_state_of(*document);
+	BOOST_TEST(state.apply_enabled);
+	BOOST_TEST(state.apply_hint.empty());
+
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+	state = edt::toolbar_state_of(*document);
+	BOOST_TEST(!state.apply_enabled);
+	BOOST_TEST(state.apply_hint.find("changed on disk") != std::string::npos);
+
+	document->set_lock_source([] { return true; });
+	state = edt::toolbar_state_of(*document);
+	BOOST_TEST(!state.apply_enabled);
+	BOOST_TEST(!state.revert_enabled);
+	BOOST_TEST(state.apply_hint.find("Play") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Close_UnwatchesTheFile)
+{
+	const std::size_t before = rs->watched_tag_count();
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(rs->watched_tag_count() > before);
+	document->close();
+	BOOST_TEST(rs->watched_tag_count() == before);
 }
 
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)

@@ -85,6 +85,7 @@
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include "edt_document_cast.h"
+#include "edt_prefab_close.h"
 #include "edt_state_commands.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_loop_service_interface.h>
@@ -1936,6 +1937,8 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
 		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
 		if (m_play && m_play->active()) m_play->stop(play_reason::user);
+		// Reload, quit and project switch wait for a dirty prefab; this is the way in of anything else (a module loaded by hand).
+		if (dirty_prefab()) egLOG_WARN("editor", "the game layer changes: the prefab editor is closed with unapplied edits");
 		close_prefab_editor();
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
@@ -2458,32 +2461,32 @@ bool edt::editor_system::poll_pending_desc()
 
 edt::prefab_document* edt::editor_system::dirty_prefab()
 {
-	prefab_document* prefab = prefab_of(m_context->documents());
-	return prefab && prefab->is_open() && prefab->is_dirty() ? prefab : nullptr;
+	return dirty_prefab_of(m_context->documents());
 }
 
 void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
 {
-	prefab_document* prefab = prefab_of(m_context->documents());
-	if (!prefab || !prefab->is_dirty()) {
-		proceed();
-		return;
+	prefab_document* prefab = dirty_prefab();
+	if (prefab) {
+		// The window stays while the question is open (closing it asked, nothing was decided).
+		m_prefab_panel->set_open(true);
 	}
-	// The window stays while the question is open (closing it asked, nothing was decided).
-	m_prefab_panel->set_open(true);
-	m_context->dialogs().confirm_unsaved([this, id = prefab->id(), proceed = std::move(proceed), alive = std::weak_ptr<int>(m_prefab_alive)](unsaved_choice choice) {
-		if (!alive.lock() || choice == unsaved_choice::cancel) return;
+	const document_id id = prefab ? prefab->id() : document_id{};
+	prefab_close_ports ports;
+	ports.ask = [this](std::function<void(unsaved_choice)> answer) {
+		m_context->dialogs().confirm_unsaved([answer = std::move(answer), alive = std::weak_ptr<int>(m_prefab_alive)](unsaved_choice choice) {
+			if (alive.lock()) answer(choice);
+		});
+	};
+	ports.apply = [this, id]() -> save_result {
 		prefab_document* open = prefab_of(m_context->documents());
-		if (!open || open->id() != id) return;
-		if (choice == unsaved_choice::save) {
-			if (const save_result saved = open->save(); !saved.saved) {
-				egLOG_WARN("editor", "{}", saved.error);
-				m_context->dialogs().message(message_level::error, std::format("'{}' was not applied and stays open:\n{}", open->title(), saved.error));
-				return;
-			}
-		}
-		proceed();
-	});
+		return open && open->id() == id ? open->save() : save_result::failure("the prefab is not open any more");
+	};
+	ports.report_failure = [this](const std::string& error) {
+		egLOG_WARN("editor", "{}", error);
+		m_context->dialogs().message(message_level::error, std::format("The prefab was not applied and stays open:\n{}", error));
+	};
+	close_prefab_with_question(prefab != nullptr, ports, std::move(proceed));
 }
 
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)

@@ -1,5 +1,6 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
+#include "edt_prefab_close.h"
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
@@ -60,22 +61,17 @@ namespace edt
 
 	void prefab_editor_panel::render_toolbar()
 	{
-		const std::string blocker = m_ctx->apply_blocker();
-		const bool can_apply = blocker.empty() && m_ctx->is_dirty() && !m_ctx->changed_on_disk();
-		ImGui::BeginDisabled(!can_apply);
+		const prefab_toolbar_state state = toolbar_state_of(*m_ctx);
+		ImGui::BeginDisabled(!state.apply_enabled);
 		if (ImGui::Button("Apply") && m_on_apply) {
 			m_on_apply();
 		}
 		ImGui::EndDisabled();
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-			if (!blocker.empty()) {
-				ImGui::SetTooltip("%s", blocker.c_str());
-			} else if (m_ctx->changed_on_disk()) {
-				ImGui::SetTooltip("The file changed on disk: Reload or Overwrite first");
-			}
+		if (!state.apply_hint.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::SetTooltip("%s", state.apply_hint.c_str());
 		}
 		ImGui::SameLine();
-		ImGui::BeginDisabled(m_ctx->edits_locked());
+		ImGui::BeginDisabled(!state.revert_enabled);
 		if (ImGui::Button("Revert") && m_on_revert) {
 			m_on_revert();
 		}
