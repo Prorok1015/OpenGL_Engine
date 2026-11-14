@@ -1279,7 +1279,7 @@ BOOST_FIXTURE_TEST_CASE(ABatchAboutAnotherFile_LeavesTheReloadRunning, index_fix
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
-// #869: a pin register_alias copies onto a key whose reload still loads is newer: the reload does not put its file over it.
+// #869: a pin register_alias copies onto a key whose reload still loads is newer: the reload does not overwrite it.
 BOOST_FIXTURE_TEST_CASE(AnAliasCopyWhileTheAliasReloads_IsNotOverwritten, index_fixture)
 {
 	const res::tag original = put("o.txt", "O");
