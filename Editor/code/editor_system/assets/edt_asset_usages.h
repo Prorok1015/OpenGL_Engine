@@ -44,6 +44,8 @@ namespace edt
 	{
 		std::string json_pointer;
 		std::string path;
+
+		bool operator==(const manifest_reference&) const = default;
 	};
 
 	struct usage_report
@@ -57,6 +59,8 @@ namespace edt
 		std::vector<std::string> skipped;
 		// The database has walked the tree and hashed every file: no desc file is still to be read.
 		bool complete = false;
+		// A file of the database is the asset (false: asked by a path or an ID no file has).
+		bool found = false;
 	};
 
 	// A reference matches when its guid is the asset's ID, or, with no guid or a guid no file holds, when its path names the
@@ -100,25 +104,40 @@ namespace edt
 
 	// The usages of the asset picked in the browser ("Used by"), asked again only when another asset is picked or the
 	// database moved (its revision), not at every frame.
+	// Everything a report depends on besides the asset: a report with another stamp is asked again.
+	struct usage_stamp
+	{
+		// asset_database::revision(): the files and the references read from them.
+		std::uint64_t database = 0;
+		// The generation of the game layer: its schemas say what each reference is (field or loose).
+		std::uint64_t schemas = 0;
+		// The manifest is read from memory: an edit of it moves no revision.
+		std::vector<manifest_reference> manifest;
+
+		bool operator==(const usage_stamp&) const = default;
+	};
+
 	class usage_list
 	{
 	public:
-		// `report` gives the usages of an asset now (nullopt: no database, no project); `revision` grows whenever what
-		// it would say may have changed.
+		// `report` gives the usages of an asset now (nullopt: no database, no project); `stamp` says what it depends on.
 		using report_source = std::function<std::optional<usage_report>(const res::tag& asset)>;
-		void set_source(report_source report, std::function<std::uint64_t()> revision);
+		void set_source(report_source report, std::function<usage_stamp()> stamp);
 		bool has_source() const { return static_cast<bool>(m_report); }
 		// Null: no source, or the source has no database.
 		const usage_report* report_for(const res::tag& asset);
+		// usage_row_text of each item of the last report, made once per report.
+		const std::vector<std::string>& rows() const { return m_rows; }
 		// How many times the source was asked. For tests.
 		std::size_t queries() const { return m_queries; }
 
 	private:
 		report_source m_report;
-		std::function<std::uint64_t()> m_revision;
+		std::function<usage_stamp()> m_stamp;
 		std::optional<res::tag> m_asset;
-		std::uint64_t m_seen = 0;
+		usage_stamp m_seen;
 		std::optional<usage_report> m_cached;
+		std::vector<std::string> m_rows;
 		std::size_t m_queries = 0;
 	};
 

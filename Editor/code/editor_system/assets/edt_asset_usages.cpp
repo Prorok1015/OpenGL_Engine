@@ -189,11 +189,15 @@ edt::usage_report edt::usage_index::find(const asset_database& assets, const des
 	if (target.path) {
 		// The asset as the disk spells it: "res://Sky.desc" names sky.desc where names are case insensitive.
 		if (const asset_record* record = assets.find_any_case(*target.path)) {
+			out.found = true;
 			out.path = record->path;
 			if (record->id) out.id = record->id;
 		}
 	} else if (target.id) {
-		if (const std::vector<const asset_record*> holders = assets.find(*target.id); !holders.empty()) out.path = holders.front()->path;
+		if (const std::vector<const asset_record*> holders = assets.find(*target.id); !holders.empty()) {
+			out.found = true;
+			out.path = holders.front()->path;
+		}
 	}
 	out.complete = assets.walked_once() && assets.pending_hashes() == 0;
 	out.skipped = m_skipped;
@@ -231,22 +235,28 @@ std::string edt::usage_row_text(const asset_usage& usage)
 		usage_kind_name(usage.kind));
 }
 
-void edt::usage_list::set_source(report_source report, std::function<std::uint64_t()> revision)
+void edt::usage_list::set_source(report_source report, std::function<usage_stamp()> stamp)
 {
 	m_report = std::move(report);
-	m_revision = std::move(revision);
+	m_stamp = std::move(stamp);
 	m_asset.reset();
 	m_cached.reset();
+	m_rows.clear();
 }
 
 const edt::usage_report* edt::usage_list::report_for(const res::tag& asset)
 {
 	if (!m_report) return nullptr;
-	const std::uint64_t now = m_revision ? m_revision() : 0;
-	if (!m_asset || !(*m_asset == asset) || now != m_seen) {
+	usage_stamp now = m_stamp ? m_stamp() : usage_stamp{};
+	if (!m_asset || !(*m_asset == asset) || !(now == m_seen)) {
 		m_asset = asset;
-		m_seen = now;
+		m_seen = std::move(now);
 		m_cached = m_report(asset);
+		m_rows.clear();
+		if (m_cached) {
+			m_rows.reserve(m_cached->items.size());
+			for (const asset_usage& usage : m_cached->items) m_rows.push_back(usage_row_text(usage));
+		}
 		++m_queries;
 	}
 	return m_cached ? &*m_cached : nullptr;

@@ -1072,7 +1072,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				const std::vector<manifest_reference> manifest = manifest_references();
 				return index->find(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
 			},
-			[this] { return m_assets ? m_assets->revision() : std::uint64_t{ 0 }; });
+			[this, manifest_references] {
+				return usage_stamp{ m_assets ? m_assets->revision() : std::uint64_t{ 0 }, m_game_layer_generation, manifest_references() };
+			});
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));

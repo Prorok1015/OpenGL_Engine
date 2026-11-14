@@ -393,26 +393,40 @@ void edt::asset_browser_panel::draw_usage_rows()
 		ImGui::TextDisabled("No asset database: no project is open.");
 		return;
 	}
+	if (report->complete && !report->found) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("(missing)");
+	}
 	if (!report->complete)
 		ImGui::TextDisabled("Still reading files: the list may grow.");
 	if (report->items.empty())
 		ImGui::TextDisabled("Nothing refers to it.");
-	for (std::size_t index = 0; index < report->items.size(); ++index) {
-		const asset_usage& usage = report->items[index];
-		// Found by its text, not through a field of a schema: it may be no reference at all.
-		const bool loose = usage.kind == usage_kind::loose;
-		if (loose)
-			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-		ImGui::PushID(static_cast<int>(index));
-		ImGui::Selectable(usage_row_text(usage).c_str());
-		ImGui::PopID();
-		if (loose)
-			ImGui::PopStyleColor();
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("%s", loose ? "Not a field of a schema (a custom field, the record of a prefab instance): found by its text."
-				: usage.by_guid ? "Refers to it by its ID." : "Refers to it by its path.");
+	const std::vector<std::string>& rows = m_usages.rows();
+	ImGuiListClipper clipper;
+	clipper.Begin(static_cast<int>(rows.size()));
+	while (clipper.Step()) {
+		for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
+			const asset_usage& usage = report->items[static_cast<std::size_t>(index)];
+			// The row is drawn as plain text over an unnamed selectable: a "##" in a file name or a JSON key stays text.
+			const ImVec2 row_start = ImGui::GetCursorPos();
+			ImGui::PushID(index);
+			ImGui::Selectable("##usage");
+			ImGui::PopID();
+			const bool hovered = ImGui::IsItemHovered();
+			const bool opened = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+			ImGui::SetCursorPos(row_start);
+			// Found by its text, not through a field of a schema: it may be no reference at all.
+			const bool loose = usage.kind == usage_kind::loose;
+			if (loose)
+				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+			ImGui::TextUnformatted(rows[static_cast<std::size_t>(index)].c_str());
+			if (loose)
+				ImGui::PopStyleColor();
+			if (hovered)
+				ImGui::SetTooltip("%s", loose ? "Not a field of a schema (a custom field, the record of a prefab instance): found by its text."
+					: usage.by_guid ? "Refers to it by its ID." : "Refers to it by its path.");
 			constexpr std::string_view protocol = "res://";
-			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && m_on_file_double_clicked && usage.file.starts_with(protocol))
+			if (opened && m_on_file_double_clicked && usage.file.starts_with(protocol))
 				m_on_file_double_clicked(fs_paths::path_from_utf8(std::string_view(usage.file).substr(protocol.size())));
 		}
 	}
