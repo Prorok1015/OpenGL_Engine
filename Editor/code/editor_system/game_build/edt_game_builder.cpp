@@ -317,6 +317,9 @@ bool edt::game_builder::is_building() const
 edt::action_result edt::game_builder::start(build_request request)
 {
 	if (request.configuration.empty()) return action_result::failure("invalid_args", "The build request has no configuration");
+	if (std::optional<std::string> why = m_options.start_blocker ? m_options.start_blocker() : std::nullopt) {
+		return action_result::failure("busy", *why);
+	}
 	if (is_building()) {
 		// The person's build runs, or waits for the live one to stop.
 		const bool manual_ahead = !m_running_preemptible || (m_pending && !m_pending->preemptible);

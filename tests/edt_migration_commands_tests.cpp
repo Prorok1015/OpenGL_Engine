@@ -11,6 +11,7 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 #ifndef _WIN32
@@ -64,6 +66,16 @@ std::map<std::string, std::string> snapshot(const fs::path& root)
 		files[fs::relative(entry.path(), root).generic_string()] = std::move(content);
 	}
 	return files;
+}
+
+// The editor's pool: the job (and the apply in it) runs on an io thread of its own while the test thread runs the frames.
+ds::task_system_config job_pool()
+{
+	ds::task_system_config config;
+	config.mode = ds::policy::threaded;
+	config.io_threads = 1;
+	config.compute_threads = 1;
+	return config;
 }
 
 struct migration_fixture : test_util::scene_env
@@ -118,6 +130,7 @@ struct migration_fixture : test_util::scene_env
 		deps.apply = [this](const pmg::migration_plan& plan, const pmg::apply_context& context) {
 			return apply ? apply(plan, context) : pmg::apply_migration(plan, context);
 		};
+		deps.running_changed = [this](bool running) { running_said.push_back(running); };
 		registrations = edt::register_migration_commands(commands, std::move(deps));
 	}
 
@@ -143,18 +156,38 @@ struct migration_fixture : test_util::scene_env
 		return desc->describe(request).value_or(std::string{});
 	}
 
-	// The frames of the editor until no callback asks for another one.
+	// One frame of the editor: every implicit callback once, then what the job queued for the main thread.
+	void run_frame()
+	{
+		const auto callbacks = implicit;
+		std::vector<std::string> ended;
+		for (const auto& [id, callback] : callbacks) {
+			if (!callback()) ended.push_back(id);
+		}
+		for (const std::string& id : ended) std::erase_if(implicit, [&id](const auto& entry) { return entry.first == id; });
+		job_tasks.drain_main(std::chrono::milliseconds(1));
+	}
+
+	// The frames of the editor until no callback asks for another one; the apply runs on the job's thread meanwhile.
 	void run_frames()
 	{
-		for (int frame = 0; frame < 32 && !implicit.empty(); ++frame) {
-			const auto callbacks = implicit;
-			std::vector<std::string> ended;
-			for (const auto& [id, callback] : callbacks) {
-				if (!callback()) ended.push_back(id);
-			}
-			for (const std::string& id : ended) std::erase_if(implicit, [&id](const auto& entry) { return entry.first == id; });
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!implicit.empty() && std::chrono::steady_clock::now() < deadline) {
+			run_frame();
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
 		}
 		BOOST_TEST(implicit.empty());
+	}
+
+	// Until the job service has no job running: its end is delivered on the main thread.
+	void settle_jobs()
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!jobs.list().empty() && std::chrono::steady_clock::now() < deadline) {
+			job_tasks.drain_main(std::chrono::milliseconds(1));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		BOOST_TEST(jobs.list().empty());
 	}
 
 	// Starts project.migrate, runs the frames and the job; the job's result.
@@ -169,7 +202,7 @@ struct migration_fixture : test_util::scene_env
 		BOOST_REQUIRE_MESSAGE(started.ok, started.code << ": " << started.error);
 		const std::uint64_t job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
 		run_frames();
-		test_util::pump(job_tasks);
+		settle_jobs();
 		const auto info = jobs.info(job);
 		BOOST_REQUIRE(info.has_value());
 		BOOST_REQUIRE((info->status == edt::job_status::done));
@@ -185,7 +218,7 @@ struct migration_fixture : test_util::scene_env
 	}
 
 	test_util::fixture_copy copy{ "migration_v1" };
-	ds::task_system job_tasks{ test_util::manual_tasks() };
+	ds::task_system job_tasks{ job_pool() };
 	edt::job_service jobs{ job_tasks };
 	cmd::command_registry commands;
 
@@ -207,6 +240,7 @@ struct migration_fixture : test_util::scene_env
 	std::optional<std::string> left_detached;
 	res::tag left_detached_level;
 	std::function<bool()> left_detached_rolled_back;
+	std::vector<bool> running_said;
 	std::vector<edt::registration> registrations;
 };
 
@@ -366,7 +400,9 @@ BOOST_AUTO_TEST_CASE(AnApplyThatThrows_IsCode6_AndTheLevelStaysDetached)
 {
 	fs::remove(copy.res() / "broken.desc");
 	current_level = res::tag::make("levels/old.desc");
-	apply = [](const pmg::migration_plan&, const pmg::apply_context& context) -> pmg::apply_outcome {
+	std::atomic<bool> held_during_apply{ false };
+	apply = [this, &held_during_apply](const pmg::migration_plan&, const pmg::apply_context& context) -> pmg::apply_outcome {
+		held_during_apply = rs->changes_held();
 		write_text(context.root / ".snk/migrations/test-stopped/report.json", R"({"status":"in_progress"})");
 		throw std::runtime_error("injected apply failure");
 	};
@@ -392,6 +428,98 @@ BOOST_AUTO_TEST_CASE(AnApplyThatThrows_IsCode6_AndTheLevelStaysDetached)
 	BOOST_TEST(left_detached_rolled_back());
 	BOOST_TEST(rebuilds == 1);
 	BOOST_TEST((std::ranges::find(signaled, std::string{ "res://cameras/cam_v1.desc" }) != signaled.end()));
+	// The changes were held while it ran and let go before the announcement, the exception notwithstanding.
+	BOOST_TEST(held_during_apply.load());
+	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST((running_said == std::vector<bool>{ true, false }));
+}
+
+// #761: the apply runs on the job's io thread while the frames go on; the engine's loads of a desc hop to the main thread
+// (the frame callback pumps them), the mounts' reports are held meanwhile, and the editor is told a migration runs (its
+// Play, saves, builds, reloads and exit are refused then). The answer is the one of an apply on the main thread.
+BOOST_AUTO_TEST_CASE(TheApply_RunsOnTheIoThread_ItsEngineLoadsHopToTheMainThread)
+{
+	fs::remove(copy.res() / "broken.desc");
+	current_level = res::tag::make("levels/old.desc");
+	const std::thread::id main_thread = std::this_thread::get_id();
+	std::atomic<bool> on_io{ false };
+	std::atomic<bool> held{ false };
+	std::atomic<bool> told_running{ false };
+	std::atomic<int> hops{ 0 };
+	std::atomic<int> hops_on_main{ 0 };
+	apply = [&, main_thread](const pmg::migration_plan& plan, const pmg::apply_context& context) {
+		on_io = std::this_thread::get_id() != main_thread;
+		held = rs->changes_held();
+		told_running = running_said == std::vector<bool>{ true };
+		// No Boost.Test assertion off the test thread: a missing hook fails the run instead.
+		if (!context.on_main) throw std::runtime_error("the apply got no on_main");
+		pmg::apply_context counted = context;
+		counted.on_main = [&, main_thread, inner = context.on_main](const std::function<void()>& fn) {
+			++hops;
+			return inner([&, main_thread] {
+				if (std::this_thread::get_id() == main_thread) ++hops_on_main;
+				fn();
+			});
+		};
+		return pmg::apply_migration(plan, counted);
+	};
+	static_cast<void>(ask());
+	const json::object result = migrate();
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
+	BOOST_TEST(std::string(result.at("status").as_string()) == "partial");
+	BOOST_TEST(fs::exists(copy.root() / ".snk" / "migrations" / std::string(result.at("id").as_string()) / "report.json"));
+	BOOST_TEST(result.at("level").at("reopened").as_bool());
+	BOOST_TEST((std::ranges::find(signaled, std::string{ "res://cameras/cam_v1.desc" }) != signaled.end()));
+	BOOST_TEST(on_io.load());
+	BOOST_TEST(held.load());
+	BOOST_TEST(told_running.load());
+	BOOST_TEST(hops.load() > 0);
+	BOOST_TEST(hops_on_main.load() == hops.load());
+	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST((running_said == std::vector<bool>{ true, false }));
+}
+
+// The editor goes away while the apply waits for the main thread: the hop is refused at once (no hang), the apply ends,
+// the hold goes, and the job ends without an answer of success.
+BOOST_AUTO_TEST_CASE(TheEditorGoingAway_MidRun_RefusesTheHops_AndTheJobEnds)
+{
+	fs::remove(copy.res() / "broken.desc");
+	std::atomic<bool> entered{ false };
+	std::atomic<bool> frames_stopped{ false };
+	std::atomic<int> refused{ 0 };
+	apply = [&](const pmg::migration_plan&, const pmg::apply_context& context) {
+		entered = true;
+		while (!frames_stopped) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		if (!context.on_main([] {})) ++refused;
+		// A refused hop fails the real apply, which then rolls back; here nothing was written.
+		return pmg::apply_outcome{};
+	};
+	static_cast<void>(ask());
+	const cmd::result started = call("project.migrate");
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const auto job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (!entered && std::chrono::steady_clock::now() < deadline) {
+		run_frame();
+		std::this_thread::sleep_for(std::chrono::microseconds(200));
+	}
+	BOOST_REQUIRE(entered.load());
+	BOOST_TEST(rs->changes_held());
+	frames_stopped = true;
+	implicit.clear();
+	registrations.clear();
+	BOOST_TEST(refused.load() == 1);
+	BOOST_TEST(!rs->changes_held());
+	settle_jobs();
+	const auto info = jobs.info(job);
+	BOOST_REQUIRE(info.has_value());
+	if (info->status == edt::job_status::done) {
+		BOOST_REQUIRE(info->result && info->result->is_object());
+		BOOST_TEST(error_code_of(info->result->as_object()) == cmd::codes::failed);
+	} else {
+		BOOST_TEST((info->status == edt::job_status::cancelled));
+	}
 }
 
 // The game module swapped between the question and the run: the code that would migrate is not the one asked about.
@@ -451,7 +579,7 @@ BOOST_AUTO_TEST_CASE(UnsavedChanges_NeedInput_AndABusyEditor_IsBusy)
 	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
 	busy = "Play is running";
 	run_frames();
-	test_util::pump(job_tasks);
+	settle_jobs();
 	const auto info = jobs.info(static_cast<std::uint64_t>(started.value.at("job").as_int64()));
 	BOOST_REQUIRE(info && info->result);
 	BOOST_TEST(error_code_of(info->result->as_object()) == cmd::codes::busy);
@@ -469,7 +597,7 @@ BOOST_AUTO_TEST_CASE(OneMigrationAtATime)
 	static_cast<void>(ask());
 	BOOST_TEST(call("project.migrate").code == cmd::codes::busy);
 	run_frames();
-	test_util::pump(job_tasks);
+	settle_jobs();
 }
 
 // res/ is a link out of the project: the plan and the migration refuse it, nothing is written on either side.

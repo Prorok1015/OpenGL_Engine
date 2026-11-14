@@ -14,13 +14,16 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <format>
 #include <future>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace {
@@ -217,7 +220,147 @@ namespace {
 		return std::nullopt;
 	}
 
-	// One project.migrate from the job's start to its answer; the steps run in the implicit frame callback.
+	// What apply_migration came to on the io lane: its outcome, or the exception that stopped it.
+	struct apply_result
+	{
+		pmg::apply_outcome outcome;
+		std::optional<std::string> stopped;
+	};
+
+	// Where the job's io work and the main thread meet (#761): the main thread hands the apply over once, the io work runs
+	// it and hands the result back; meanwhile the apply's on_main hops wait here for the next frame of the main thread.
+	class apply_handoff
+	{
+	public:
+		// Main thread, frame 2: false when the job was abandoned first. From here on the job waits for the apply.
+		bool claim()
+		{
+			std::lock_guard lock(m_mutex);
+			if (m_closed) return false;
+			m_handed = true;
+			return true;
+		}
+
+		void hand(std::function<apply_result()> apply)
+		{
+			{
+				std::lock_guard lock(m_mutex);
+				m_apply = std::move(apply);
+			}
+			m_changed.notify_all();
+		}
+
+		// The job: the apply once it was handed over, waiting at most `step` for it.
+		std::function<apply_result()> take(std::chrono::milliseconds step)
+		{
+			std::unique_lock lock(m_mutex);
+			m_changed.wait_for(lock, step, [this] { return static_cast<bool>(m_apply); });
+			std::function<apply_result()> apply = std::exchange(m_apply, {});
+			if (apply) m_running = true;
+			return apply;
+		}
+
+		void finish(apply_result result)
+		{
+			{
+				std::lock_guard lock(m_mutex);
+				m_running = false;
+				m_over = true;
+				m_result = std::move(result);
+			}
+			m_changed.notify_all();
+		}
+
+		// The job saw its stop token: true when nothing was handed over yet, and then nothing ever will be.
+		bool abandon()
+		{
+			std::lock_guard lock(m_mutex);
+			if (m_handed) return false;
+			m_closed = true;
+			return true;
+		}
+
+		// Whether the job has nothing more to run: the apply was never handed over, or it ended.
+		bool apply_over()
+		{
+			std::lock_guard lock(m_mutex);
+			return !m_handed || m_over;
+		}
+
+		// apply_context::on_main, on the io lane: waits until the main thread ran `fn`; false at once when it never will.
+		bool run_on_main(const std::function<void()>& fn)
+		{
+			auto item = std::make_shared<hop>();
+			item->fn = &fn;
+			std::future<bool> ran = item->done.get_future();
+			{
+				std::lock_guard lock(m_mutex);
+				if (m_closed) return false;
+				m_hops.push_back(item);
+			}
+			return ran.get();
+		}
+
+		// Main thread, every frame of the run: the hops queued since the last one.
+		void pump()
+		{
+			std::deque<std::shared_ptr<hop>> hops;
+			{
+				std::lock_guard lock(m_mutex);
+				hops.swap(m_hops);
+			}
+			for (const auto& item : hops) {
+				try {
+					(*item->fn)();
+					item->done.set_value(true);
+				} catch (...) {
+					item->done.set_exception(std::current_exception());
+				}
+			}
+		}
+
+		// Main thread: the result, once.
+		std::optional<apply_result> take_result()
+		{
+			std::lock_guard lock(m_mutex);
+			return std::exchange(m_result, std::nullopt);
+		}
+
+		// Main thread, the editor going away: every hop, waiting or later, is refused, an apply not taken yet never runs,
+		// and one that runs is waited for (it fails fast: it cannot reach the main thread any more).
+		void close()
+		{
+			std::unique_lock lock(m_mutex);
+			m_closed = true;
+			for (const auto& item : m_hops) item->done.set_value(false);
+			m_hops.clear();
+			if (m_apply) {
+				m_apply = {};
+				m_over = true;
+			}
+			m_changed.wait(lock, [this] { return !m_running; });
+		}
+
+	private:
+		struct hop
+		{
+			const std::function<void()>* fn = nullptr;
+			std::promise<bool> done;
+		};
+
+		std::mutex m_mutex;
+		std::condition_variable m_changed;
+		bool m_handed = false;
+		bool m_closed = false;
+		bool m_running = false;
+		bool m_over = false;
+		std::function<apply_result()> m_apply;
+		std::optional<apply_result> m_result;
+		std::deque<std::shared_ptr<hop>> m_hops;
+	};
+
+	// One project.migrate from the job's start to its answer; the steps run in the implicit frame callback, the apply in
+	// the job's io work.
 	struct migration_run
 	{
 		std::promise<json::value> promise;
@@ -235,6 +378,15 @@ namespace {
 		std::optional<std::string> reopen_error;
 		json::object answer;
 		bool fulfilled = false;
+		std::shared_ptr<apply_handoff> handoff = std::make_shared<apply_handoff>();
+		// From the hand-off to the result: the main thread pumps the hops and waits.
+		bool applying = false;
+		bool writes = false;
+		// migration_deps::running_changed(true) was said.
+		bool running_said = false;
+		std::shared_ptr<const pmg::migration_plan> plan;
+		// What the mounts report waits from before the first write until the result is in (then announce_changes).
+		res::change_hold hold;
 
 		void fulfil(json::value value)
 		{
@@ -251,6 +403,18 @@ namespace {
 		{
 			pmg::register_project_steps(m_steps);
 		}
+
+		// The editor goes away during a run: the apply's hops fail at once and the apply, which then rolls back, is waited
+		// for before what it uses goes; the job ends with a failure.
+		~migration_commands()
+		{
+			if (!m_running) return;
+			m_running->handoff->close();
+			m_running->hold.release();
+		}
+
+		migration_commands(const migration_commands&) = delete;
+		migration_commands& operator=(const migration_commands&) = delete;
 
 		cmd::result plan(const cmd::call&) const
 		{
@@ -331,12 +495,24 @@ namespace {
 				run->shown = shown->fingerprint;
 				std::erase_if(m_shown, [&key](const shown_plan& entry) { return entry.key == key; });
 			}
-			auto work = [future = run->promise.get_future().share(), abandoned = run->abandoned](ds::task_context& task) -> json::value {
+			// The io work runs the apply the main thread hands over, and otherwise waits for the answer. Once the apply was
+			// handed over it is never abandoned: it runs to its end, and the main thread announces what it wrote.
+			auto work = [future = run->promise.get_future().share(), abandoned = run->abandoned, handoff = run->handoff](ds::task_context& task) -> json::value {
 				try {
-					while (future.wait_for(k_wait_step) != std::future_status::ready) {
+					while (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+						if (std::function<apply_result()> apply = handoff->take(k_wait_step)) {
+							handoff->finish(apply());
+							continue;
+						}
 						if (task.stop.stop_requested()) {
-							abandoned->store(true);
-							throw ds::task_cancelled{};
+							if (handoff->abandon()) {
+								abandoned->store(true);
+								throw ds::task_cancelled{};
+							}
+							if (handoff->apply_over()) {
+								return error_value(cmd::codes::failed, "the migration ended without an answer (the job was cancelled or the editor "
+									"stopped): see .snk/migrations");
+							}
 						}
 					}
 					return future.get();
@@ -439,12 +615,26 @@ namespace {
 			if (m_deps.show_progress) m_deps.show_progress(open);
 		}
 
+		void say_running(migration_run& run, bool running)
+		{
+			if (run.running_said == running) return;
+			run.running_said = running;
+			if (m_deps.running_changed) m_deps.running_changed(running);
+		}
+
+		void end_run(migration_run& run)
+		{
+			run.hold.release();
+			say_running(run, false);
+			m_running.reset();
+		}
+
 		// Ends a run that loads no level again.
 		bool stop(migration_run& run, json::value answer)
 		{
 			show_progress(false);
 			run.fulfil(std::move(answer));
-			m_running.reset();
+			end_run(run);
 			return false;
 		}
 
@@ -458,6 +648,14 @@ namespace {
 				return true;
 			}
 			if (run.frame == 2) return migrate_now(current);
+			if (run.applying) {
+				show_progress(true);
+				run.handoff->pump();
+				std::optional<apply_result> result = run.handoff->take_result();
+				if (!result) return true;
+				run.applying = false;
+				return after_apply(current, std::move(*result));
+			}
 			if (!run.modal_closed) {
 				show_progress(false);
 				run.modal_closed = true;
@@ -490,17 +688,47 @@ namespace {
 				return stop(run, std::move(answer));
 			}
 
-			const bool writes = !plan.empty();
+			if (!run.handoff->claim()) return stop(run, error_value(cmd::codes::failed, "the job was cancelled: nothing was written"));
+			run.writes = !plan.empty();
+			run.plan = std::make_shared<const pmg::migration_plan>(plan);
 			// Nothing is written for an empty plan: the documents and the level stay as they are.
-			if (writes) run.level = m_deps.close_documents_and_detach_level ? m_deps.close_documents_and_detach_level() : res::tag{};
-			pmg::apply_outcome outcome;
-			std::optional<std::string> stopped;
-			try {
-				const pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), m_deps.pause_watch, {}, {}, {}, &m_steps, {} };
-				outcome = m_deps.apply ? m_deps.apply(plan, context) : pmg::apply_migration(plan, context);
-			} catch (const std::exception& e) {
-				stopped = e.what();
+			if (run.writes) {
+				run.level = m_deps.close_documents_and_detach_level ? m_deps.close_documents_and_detach_level() : res::tag{};
+				if (m_deps.pause_watch) m_deps.pause_watch();
+				run.hold = m_deps.resources().hold_changes();
 			}
+			say_running(run, true);
+			// The engine's loads of a desc hop to the main thread (this callback pumps them every frame); the rest runs on io.
+			pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), {}, {}, {}, {}, &m_steps, {} };
+			context.on_main = [weak = std::weak_ptr<apply_handoff>(run.handoff)](const std::function<void()>& fn) {
+				const auto handoff = weak.lock();
+				return handoff && handoff->run_on_main(fn);
+			};
+			run.handoff->hand([apply = m_deps.apply, plan = run.plan, context]() {
+				apply_result result;
+				try {
+					result.outcome = apply ? apply(*plan, context) : pmg::apply_migration(*plan, context);
+				} catch (const std::exception& e) {
+					result.stopped = e.what();
+				} catch (...) {
+					result.stopped = "an unknown error";
+				}
+				return result;
+			});
+			run.applying = true;
+			return true;
+		}
+
+		// The main thread, once the io work handed the result back: what S7 did right after apply_migration.
+		bool after_apply(const std::shared_ptr<migration_run>& current, apply_result result)
+		{
+			migration_run& run = *current;
+			// Before the announcement: what the mounts reported meanwhile goes first, coalesced, then every written file.
+			run.hold.release();
+			const pmg::migration_plan& plan = *run.plan;
+			const bool writes = run.writes;
+			const pmg::apply_outcome& outcome = result.outcome;
+			const std::optional<std::string>& stopped = result.stopped;
 
 			if (stopped) {
 				// What was written is not known: as a rollback that did not finish.
@@ -595,7 +823,7 @@ namespace {
 				run.answer["level"] = level_json(run, reopened, "the level did not load again from disk (see the log and Problems)");
 			}
 			run.fulfil(std::move(run.answer));
-			m_running.reset();
+			end_run(run);
 		}
 
 		edt::migration_deps m_deps;

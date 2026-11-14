@@ -85,6 +85,10 @@ namespace edt
 		std::filesystem::path projects_path;   // where "New Project" and "Open Project" start
 		// File > Recent Projects, most recent first (manifest files); the one open now is left out by the caller.
 		std::vector<std::filesystem::path> recent_projects;
+		// Why the editor may not exit or switch projects now (a project migration writes files): file.exit,
+		// file.open_project and the recent projects answer `busy` with it, and exit() (File > Exit, the window's close
+		// request) shows it instead of asking. Null or nullopt: they run.
+		std::function<std::optional<std::string>()> exit_blocker;
 	};
 
 	// The File menu: New / Open / Save / Save As / Import / New Project / Open Project / Exit, with the "unsaved

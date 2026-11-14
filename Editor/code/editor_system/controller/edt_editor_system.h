@@ -272,6 +272,10 @@ namespace edt {
 			std::string reason;
 		};
 		std::optional<stopped_migration> m_migration_stopped;
+		// project.migrate writes the project on the io lane (#761): Play, level changes and saves, builds, module reloads
+		// and quitting are refused until it ended (migration_blocker).
+		bool m_migration_running = false;
+		std::optional<std::string> migration_blocker() const;
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load

@@ -290,6 +290,11 @@ void edt::file_menu::exit()
 	// one on top of a Save As that the first prompt's "Save" opened.
 	if (m_exit_prompt_id && m_dialogs.is_pending(*m_exit_prompt_id)) return;
 	if (m_save_as_id && m_dialogs.is_pending(*m_save_as_id)) return;
+	if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+		egLOG_WARN("editor", "exit refused: {}", *why);
+		m_dialogs.message(message_level::warning, std::format("The editor cannot close now: {}.", *why));
+		return;
+	}
 	m_exit_prompt_id = guard_unsaved([this](bool discard) { invoke("file.exit", json::object{ { "discard_unsaved", discard } }); });
 }
 
@@ -357,6 +362,9 @@ void edt::file_menu::ask_save_path(std::function<void()> then)
 
 edt::action_result edt::file_menu::switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch)
 {
+	if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+		return action_result::failure(cmd::codes::busy, *why);
+	}
 	// Checked here, so a project that cannot open never costs the user this editor.
 	const auto opened = prj::open_project(project);
 	if (!opened.context) return action_result::failure("failed", opened.error);
@@ -632,6 +640,9 @@ void edt::file_menu::register_actions()
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
+			if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+				return action_result::failure(cmd::codes::busy, *why);
+			}
 			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			if (anything_dirty()) discard_everything();
 			m_hooks.exit();

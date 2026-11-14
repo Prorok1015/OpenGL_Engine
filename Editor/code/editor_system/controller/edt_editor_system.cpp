@@ -639,6 +639,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
 	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
+		if (auto migrating = migration_blocker()) return migrating;
 		if (m_loading_level) return std::string{ "a level is loading" };
 		if (m_migration_stopped) {
 			if (m_migration_stopped->rolled_back && m_migration_stopped->rolled_back()) {
@@ -652,6 +653,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
 	// its level (#518). A person has no menu or shortcut then.
 	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
+		if (auto migrating = migration_blocker()) return migrating;
 		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
 		if (m_loading_level) return std::string{ "a level is loading" };
 		return std::nullopt;
@@ -661,6 +663,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 #endif
 	hooks.agent_import = m_agent_import.get();
 	hooks.exit = m_exit_action;
+	hooks.exit_blocker = [this] { return migration_blocker(); };
 	hooks.resources_path = m_res.get_resources_path();
 	hooks.open_project = start_editor_on;
 	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
@@ -822,6 +825,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		migration.current_level_tag = [this] { return current_level_tag(); };
 		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
+		migration.running_changed = [this](bool running) { m_migration_running = running; };
 		migration.show_progress = [](bool open) {
 			constexpr const char* title = "Migrating Project##edt_migrate";
 			ImGui::OpenPopup(title);
@@ -865,6 +869,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	build_options.events = &m_context->events();
 	build_options.auto_jobs = [] { return estimate_jobs().jobs; };
+	build_options.start_blocker = [this] { return migration_blocker(); };
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
@@ -927,6 +932,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		editor_layer->register_implicit(id, std::move(poll));
 	};
 	reload_options.defer = [this] {
+		if (auto migrating = migration_blocker()) return *migrating;
 		if (auto loading = load_in_progress()) return *loading;
 		if (const auto contexts = m_services.ctx_manager.lock(); contexts && contexts->level_switch_pending()) {
 			return std::string{ "the game is switching to another level" };
@@ -1364,7 +1370,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	};
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
-	options.start_blocker = [this] { return load_in_progress(); };
+	options.start_blocker = [this] {
+		if (auto migrating = migration_blocker()) return migrating;
+		return load_in_progress();
+	};
 	options.each_frame = [this](const std::string& id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
 	options.preflight = [this] {
 		play_preflight_services services;
@@ -2136,6 +2145,12 @@ void edt::editor_system::go_to(const desc_target& target)
 	if (!open_asset(res::tag{ target.resource }, true)) {
 		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
 	}
+}
+
+std::optional<std::string> edt::editor_system::migration_blocker() const
+{
+	if (m_migration_running) return std::string{ "a project migration is running" };
+	return std::nullopt;
 }
 
 std::optional<std::string> edt::editor_system::load_in_progress() const
