@@ -158,6 +158,10 @@ namespace desc
 
 		bool is_registered(std::string_view type_name) const;
 
+		// Every type this layer and the parent know of (a factory, a schema or migration steps), sorted, each once: what a
+		// snapshot of the types needs to answer is_registered, find_schema and current_version off the main thread.
+		std::vector<std::string> type_names() const;
+
 		// The parent's names first, then this layer's.
 		std::vector<std::string> get_component_type_names() const;
 

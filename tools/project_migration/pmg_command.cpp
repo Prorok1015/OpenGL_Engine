@@ -46,17 +46,6 @@ namespace
 	{
 		return context.write_report ? context.write_report(file, text) : prj::write_text_atomically(file, text);
 	}
-
-	std::string journal_status(const fs::path& root, std::string_view id)
-	{
-		const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format(".snk/migrations/{}/report.json", id)));
-		if (!text.exists || !text.error.empty()) return {};
-		boost::system::error_code error;
-		const json::value journal = json::parse(text.text, error);
-		if (error || !journal.is_object()) return {};
-		const json::value* status = journal.as_object().if_contains("status");
-		return status && status->is_string() ? std::string(status->as_string()) : std::string{};
-	}
 }
 
 int prj::migration::exit_code_of(migration_status status)
@@ -153,13 +142,32 @@ int prj::migration::run_migrate(const migrate_command& command, const command_co
 	return code;
 }
 
+std::string prj::migration::journal_status(const fs::path& root, std::string_view id)
+{
+	const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format(".snk/migrations/{}/report.json", id)));
+	if (!text.exists || !text.error.empty()) return {};
+	boost::system::error_code error;
+	const json::value journal = json::parse(text.text, error);
+	if (error || !journal.is_object()) return {};
+	const json::value* status = journal.as_object().if_contains("status");
+	return status && status->is_string() ? std::string(status->as_string()) : std::string{};
+}
+
+int prj::migration::rollback_exit_code(const std::optional<std::string>& error, bool wrote)
+{
+	if (!error) return k_exit_done;
+	return wrote ? k_exit_rollback_failed : k_exit_refused;
+}
+
 int prj::migration::run_migrate_rollback(std::string_view id, const command_context& context)
 {
+	bool wrote = false;
 	rollback_context rollback;
 	rollback.write = context.write;
+	rollback.wrote = &wrote;
 	if (const std::optional<std::string> error = rollback_migration(context.root, id, rollback)) {
 		print_error(context, std::format("rollback of {}: {}", id, *error));
-		return journal_status(context.root, id) == to_string(migration_status::rollback_failed) ? k_exit_rollback_failed : k_exit_refused;
+		return rollback_exit_code(error, wrote);
 	}
 	print(context, std::format("migration {} rolled back", id));
 	return k_exit_done;

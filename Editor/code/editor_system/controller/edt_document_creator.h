@@ -34,7 +34,8 @@ namespace edt
 			std::function<res::resource_system*()> resources;
 			// The folders behind res://, lowest layer first.
 			std::function<std::vector<std::filesystem::path>()> layers;
-			// Why nothing may be written now (a project migration runs): create() refuses with it. Null or nullopt: it runs.
+			// Why nothing may be written now (a project migration runs, or stopped half way and is not rolled back): create()
+			// refuses with it. Null or nullopt: it runs.
 			std::function<std::optional<std::string>()> blocker = {};
 		};
 

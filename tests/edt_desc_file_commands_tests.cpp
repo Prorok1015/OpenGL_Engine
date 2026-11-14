@@ -70,6 +70,7 @@ struct desc_fixture : test_util::scene_env
 		deps.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
 		deps.open_level_files = [this] { return open_level; };
 		deps.events = &events;
+		deps.write_blocker = [this] { return blocked; };
 		registrations = edt::register_desc_file_commands(commands, std::move(deps));
 	}
 
@@ -129,6 +130,7 @@ struct desc_fixture : test_util::scene_env
 	cmd::command_registry commands;
 	std::vector<edt::registration> registrations;
 	std::vector<std::string> open_level;
+	std::optional<std::string> blocked;
 };
 
 }
@@ -392,6 +394,31 @@ BOOST_AUTO_TEST_CASE(TheFileOfTheOpenLevel_AndItsWorldFiles_AreBusy)
 	BOOST_TEST(commands.find("desc.write")->describe(request)->rfind("This request will be refused", 0) == 0u);
 	const cmd::call world_request = call_of(write_args("worlds/main.desc", "v", R"({"__type":"world_desc"})"));
 	BOOST_TEST(commands.find("desc.write")->describe(world_request)->rfind("This request will be refused", 0) == 0u);
+}
+
+// While a migration runs, or after one stopped half way until it is rolled back (#761), nothing an agent writes reaches
+// the project: busy with the editor's reason, and the question says the request will be refused.
+BOOST_AUTO_TEST_CASE(WhileTheProjectMayNotBeWritten_CreateAndWriteAreBusy_WithItsReason)
+{
+	make_material("materials/s.mat.desc");
+	const std::string version = version_of("materials/s.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "s.mat.desc");
+	blocked = "a migration of the project stopped half way: roll the migration back first";
+
+	const auto written = call("desc.write", write_args("materials/s.mat.desc", version, k_material));
+	BOOST_TEST(written.code == cmd::codes::busy);
+	BOOST_TEST(written.error.find(*blocked) != std::string::npos);
+	BOOST_TEST(read_file(res_root / "materials" / "s.mat.desc") == before);
+	const cmd::call request = call_of(write_args("materials/s.mat.desc", version, k_material));
+	BOOST_TEST(commands.find("desc.write")->describe(request)->rfind("This request will be refused", 0) == 0u);
+
+	const auto made = call("desc.create", desc_args("materials/n.mat.desc", k_material));
+	BOOST_TEST(made.code == cmd::codes::busy);
+	BOOST_TEST(made.error.find(*blocked) != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "n.mat.desc"));
+
+	blocked.reset();
+	make_material("materials/n.mat.desc");
 }
 
 BOOST_AUTO_TEST_CASE(AnOpenLevelThatCannotBeReadOrParsed_MakesEveryWriteBusy)

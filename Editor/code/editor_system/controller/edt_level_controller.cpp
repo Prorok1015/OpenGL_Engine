@@ -150,6 +150,8 @@ void edt::level_controller::new_level()
 		return;
 	}
 
+	// The new level replaces one a detach kept (a stopped migration's): attach_to_game_layer must not bring that back.
+	m_detached_level.reset();
 	watch_level();
 
 	auto level_res = m_services.resources()->require_sync<scn::level_desc>(m_state.editor_tag);
@@ -206,6 +208,8 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		return false;
 	}
 	if (ctx_mgr->load_level(m_state.editor_tag)) {
+		// A loaded level replaces one a detach kept (a stopped migration's), so it can be saved again.
+		m_detached_level.reset();
 		watch_level();
 		m_state.level_guid = level_res->get_guid();
 		m_state.level_parent = level_res->get_parent();
@@ -275,8 +279,8 @@ void edt::level_controller::attach_to_game_layer()
 {
 	const notify_worlds_replaced notify{ on_worlds_replaced };
 	if (!m_detached_level) return;
-	const boost::json::object level_json = std::move(*m_detached_level);
-	m_detached_level.reset();
+	// Kept until the level is rebuilt: a failed rebuild stays detached, so no save writes its empty worlds (#761).
+	const boost::json::object level_json = *m_detached_level;
 
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
@@ -293,6 +297,7 @@ void edt::level_controller::attach_to_game_layer()
 		egLOG_ERROR("Editor/GameLayer", "Level desc '{}' failed to load in the new game layer", m_state.editor_tag.view());
 		return;
 	}
+	m_detached_level.reset();
 	populate_worlds_from_level(level_res);
 	const int world_count = static_cast<int>(m_state.world_names.size());
 	const int world = m_detached_world >= 0 && m_detached_world < world_count ? m_detached_world : 0;
@@ -344,6 +349,11 @@ boost::json::object edt::level_controller::build_level_json() const
 
 bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 {
+	// Detached, the worlds are gone (detach_from_game_layer): a save would write an empty level over the file (#761).
+	if (is_detached()) {
+		egLOG_ERROR("Editor/Save", "Level not saved to '{}': the level is detached (a game layer change or a project migration)", rel_path);
+		return false;
+	}
 	// A path typed into Save As (or sent by an agent) becomes a res:// tag; one that already names a protocol cannot.
 	if (rel_path.find("://") != std::string::npos) {
 		egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);

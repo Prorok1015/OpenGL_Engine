@@ -3,6 +3,7 @@
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
 #include "edt_document_creator.h"
+#include "edt_migration_startup.h"
 #include "test_fake_asset_catalog.hpp"
 #include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
@@ -1657,6 +1658,55 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WhileABlockerHolds_RefusesWithItsRea
 
 	blocked = false;
 	BOOST_TEST(creator.create("", "test.config", "x").ok());
+}
+
+// After a migration that stopped half way (code 6) nothing is written into the project until it is rolled back (#761):
+// the editor hands the same reason to the creator and to a data document's save.
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_AfterAStoppedMigration_IsRefusedUntilItIsRolledBack)
+{
+	bool rolled_back = false;
+	edt::migration_save_block stopped;
+	stopped.hold([&rolled_back] { return rolled_back; }, "a migration of the project stopped half way: roll the migration back first");
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; }, [&stopped] { return stopped.reason(); } } };
+
+	const edt::document_creation refused = creator.create("", "test.config", "x");
+	BOOST_TEST(refused.error == "a migration of the project stopped half way: roll the migration back first");
+	BOOST_TEST(!fs::exists(res_root / "x.desc"));
+
+	rolled_back = true;
+	BOOST_TEST(creator.create("", "test.config", "x").ok());
+}
+
+BOOST_AUTO_TEST_CASE(Save_AfterAStoppedMigration_IsRefusedWithItsReason_UntilItIsRolledBack)
+{
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	bool rolled_back = false;
+	edt::migration_save_block stopped;
+	stopped.hold([&rolled_back] { return rolled_back; }, "a migration of the project stopped half way: roll the migration back first");
+	edt::desc_file_layout files = layout();
+	files.write_blocker = [&stopped] { return stopped.reason(); };
+	edt::data_document document(services, std::move(files));
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_REQUIRE(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const std::string on_disk = text_of("config.desc");
+
+	const edt::save_result saved = document.save();
+	BOOST_TEST(!saved.saved);
+	BOOST_TEST(saved.error == "a migration of the project stopped half way: roll the migration back first");
+	const edt::save_result over = document.save_over();
+	BOOST_TEST(!over.saved);
+	BOOST_TEST(over.error == saved.error);
+	BOOST_TEST(text_of("config.desc") == on_disk);
+	BOOST_TEST(document.is_dirty());
+
+	rolled_back = true;
+	const edt::save_result after = document.save();
+	BOOST_REQUIRE_MESSAGE(after.saved, after.error);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
 }
 
 BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverTheLabelOfADeletedFile)

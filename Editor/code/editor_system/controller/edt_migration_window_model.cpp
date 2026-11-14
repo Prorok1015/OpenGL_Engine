@@ -155,6 +155,11 @@ namespace {
 				for (std::string& warning : warnings_of(file)) out.warnings.push_back(std::format("{}: {}", path, warning));
 			});
 		}
+		if (const json::array* unfinished = array_of(answer, "unfinished")) {
+			for (const json::value& id : *unfinished) {
+				if (id.is_string()) out.unfinished.push_back(clean(id.as_string(), k_line_cap, false));
+			}
+		}
 		if (const json::value* level = answer.if_contains("level"); level && level->is_object()) {
 			const json::object& state = level->as_object();
 			const std::string tag = string_of(state, "tag");
@@ -196,6 +201,48 @@ std::string edt::migration_window_model::outcome_text(int code)
 	case k_code_rollback_failed: return "Failed and the rollback did not finish: the project is partly migrated";
 	default: return "Not migrated";
 	}
+}
+
+std::string edt::migration_window_model::rollback_outcome_text(int code)
+{
+	switch (code) {
+	case k_code_done: return "Rolled back: the project is as it was before the migration";
+	case k_code_refused: return "Rollback refused: nothing was written";
+	case k_code_rollback_failed: return "The rollback did not finish: the project is partly migrated";
+	default: return "Not rolled back";
+	}
+}
+
+std::string edt::migration_window_model::rollback_id() const
+{
+	if (m_phase == phase::report_shown && m_report) {
+		if (m_report->code != k_code_rolled_back && m_report->code != k_code_rollback_failed) return {};
+		if (!m_report->id.empty()) return m_report->id;
+		return m_report->unfinished.empty() ? std::string{} : m_report->unfinished.front();
+	}
+	if (m_phase == phase::plan_shown && m_plan && !m_plan->unfinished.empty()) return m_plan->unfinished.front();
+	return {};
+}
+
+void edt::migration_window_model::roll_back(const std::string& id)
+{
+	if (m_phase == phase::running || id.empty() || !m_ports.invoke) return;
+	clear_error();
+	m_notice.clear();
+	const cmd::result started = m_ports.invoke("project.migrate_rollback", json::object{ { "id", id } });
+	if (!started.ok) {
+		fail(started.code.empty() ? std::string("failed") : started.code, started.error);
+		return;
+	}
+	const json::value* job = started.value.is_object() ? started.value.as_object().if_contains("job") : nullptr;
+	if (!job || !job->is_number()) {
+		fail("failed", "no rollback job was started");
+		return;
+	}
+	m_job = job->to_number<std::uint64_t>();
+	m_rolling_back = true;
+	m_report.reset();
+	m_phase = phase::running;
 }
 
 void edt::migration_window_model::clear_error()
@@ -285,10 +332,11 @@ void edt::migration_window_model::finished(std::uint64_t id, job_status status, 
 	if (!m_job || *m_job != id) return;
 	m_job.reset();
 	m_phase = phase::report_shown;
+	const bool rollback = std::exchange(m_rolling_back, false);
 	report_view report;
 	if (status == job_status::cancelled) {
 		report.error_code = "cancelled";
-		report.error_text = "the migration job was cancelled before it wrote anything";
+		report.error_text = rollback ? "the rollback job was cancelled before it wrote anything" : "the migration job was cancelled before it wrote anything";
 	} else if (status == job_status::failed) {
 		report.error_code = "failed";
 		report.error_text = clean(error, k_line_cap, false);
@@ -298,6 +346,7 @@ void edt::migration_window_model::finished(std::uint64_t id, job_status status, 
 	} else {
 		report = report_of(result->as_object());
 	}
+	report.rollback = rollback;
 	if (!report.error_code.empty()) {
 		egLOG_WARN("project/migrate", "migration window: {}: {}", report.error_code, report.error_text);
 	}

@@ -52,6 +52,14 @@ namespace prj::migration
 	// The plan as --dry-run prints it.
 	std::string plan_text(const migration_plan& plan);
 
+	// The status report.json of migration `id` names; empty when it has none or it cannot be read.
+	std::string journal_status(const std::filesystem::path& root, std::string_view id);
+
+	// What a rollback that ended with `error` exits with: k_exit_done without one, k_exit_refused when it wrote nothing
+	// (rollback_context::wrote stayed false: a refusal, a retry refused included), else k_exit_rollback_failed (files were
+	// put back only in part).
+	int rollback_exit_code(const std::optional<std::string>& error, bool wrote);
+
 	int run_migrate(const migrate_command& command, const command_context& context);
 	int run_migrate_rollback(std::string_view id, const command_context& context);
 }
