@@ -93,4 +93,23 @@ namespace edt {
 	void ask_project_trust(dialog_service& dialogs, std::weak_ptr<project_trust_service> trust,
 		std::function<void(trust_answer)> on_answer);
 
+	// What the person asked for together with the trust question (a build, a reload, live mode): it waits for the
+	// modules the "Trust" let in, runs a frame after them, and only while the project is still trusted; a later
+	// "Don't Trust" drops it.
+	class trusted_followups
+	{
+	public:
+		void queue(std::function<void()> action) { if (action) m_waiting_load.push_back(std::move(action)); }
+		// The modules were loaded: what waited is ready for the next frame.
+		void loaded();
+		// Runs what is ready while `trusted`; drops it otherwise.
+		void run_ready(bool trusted);
+		void drop();
+		[[nodiscard]] bool empty() const { return m_waiting_load.empty() && m_ready.empty(); }
+
+	private:
+		std::vector<std::function<void()>> m_waiting_load;
+		std::vector<std::function<void()>> m_ready;
+	};
+
 }

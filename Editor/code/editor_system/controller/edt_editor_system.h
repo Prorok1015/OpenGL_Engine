@@ -374,9 +374,7 @@ namespace edt {
 		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
 		// it.
 		std::weak_ptr<edt::project_trust_service> m_trust;
-		// What runs after the modules a "Trust" let in were loaded, and what runs on the frame after that load.
-		std::vector<std::function<void()>> m_trust_waiting_load;
-		std::vector<std::function<void()>> m_trust_after_load;
+		edt::trusted_followups m_trust_followups;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor

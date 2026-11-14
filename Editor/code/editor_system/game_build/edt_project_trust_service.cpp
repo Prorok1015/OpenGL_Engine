@@ -141,3 +141,27 @@ std::optional<std::string> edt::held_modules_status(const std::vector<std::strin
 	for (const std::string& name : held) names += (names.empty() ? "" : ", ") + name;
 	return std::format("Not loaded, the project is not trusted: {} (Project > Trust Project Modules...)", names);
 }
+
+void edt::trusted_followups::loaded()
+{
+	for (auto& action : m_waiting_load) m_ready.push_back(std::move(action));
+	m_waiting_load.clear();
+}
+
+void edt::trusted_followups::run_ready(bool trusted)
+{
+	std::vector<std::function<void()>> ready = std::move(m_ready);
+	m_ready.clear();
+	if (!trusted) {
+		if (!ready.empty()) egLOG_WARN("editor/trust", "what was asked for with the trust question does not run: {}",
+			k_untrusted_project_error);
+		return;
+	}
+	for (auto& action : ready) action();
+}
+
+void edt::trusted_followups::drop()
+{
+	m_waiting_load.clear();
+	m_ready.clear();
+}

@@ -168,6 +168,33 @@ BOOST_AUTO_TEST_CASE(AForeignLibrary_WaitsForTheAnswer)
 	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
 }
 
+// A build asked for with "Trust" runs a frame after the modules load, only while the project is still trusted; a
+// "Don't Trust" in between drops it (#985 review).
+BOOST_AUTO_TEST_CASE(WhatTrustAskedFor_RunsOnlyWhileTrusted)
+{
+	int runs = 0;
+	edt::trusted_followups followups;
+	followups.queue([&runs] { ++runs; });
+	followups.loaded();
+	followups.run_ready(true);
+	BOOST_TEST(runs == 1);
+	BOOST_CHECK(followups.empty());
+
+	followups.queue([&runs] { ++runs; });
+	followups.drop();
+	followups.loaded();
+	followups.run_ready(true);
+	BOOST_TEST(runs == 1);
+
+	followups.queue([&runs] { ++runs; });
+	followups.loaded();
+	followups.run_ready(false);
+	BOOST_TEST(runs == 1);
+	BOOST_CHECK(followups.empty());
+	followups.run_ready(true);
+	BOOST_TEST(runs == 1);
+}
+
 // Held modules, waiting or refused, are named in the menu bar until they load (#921 review).
 BOOST_AUTO_TEST_CASE(HeldModules_AreShownUntilTheyLoad)
 {

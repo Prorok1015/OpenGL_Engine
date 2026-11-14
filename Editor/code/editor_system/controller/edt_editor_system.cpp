@@ -1497,6 +1497,7 @@ void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<voi
 			});
 			return;
 		}
+		m_trust_followups.drop();
 		if (trust && trust->waiting()) {
 			egLOG_WARN("editor/trust", "the project runs without its modules ({}): you did not trust it",
 				module_list(trust->waiting_modules()));
@@ -1522,7 +1523,7 @@ void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<voi
 void edt::editor_system::load_waiting_modules(ds::app_data_storage& data, std::function<void()> then)
 {
 	// Kept here, not in the callback: register_implicit ignores the id while an earlier load still waits.
-	if (then) m_trust_waiting_load.push_back(std::move(then));
+	m_trust_followups.queue(std::move(then));
 	// Not inside the dialog's answer, nor under a level load, a migration or Play: the game layer changes with it.
 	editor_layer->register_implicit("edt/project_trust/load", [this, &data, logged = std::make_shared<std::string>()] {
 		std::string reason;
@@ -1550,13 +1551,11 @@ void edt::editor_system::load_waiting_modules(ds::app_data_storage& data, std::f
 			egLOG_WARN("editor/trust", "modules not loaded after trust: refused {}; untrusted {}; missing {}",
 				module_list(report.refused), module_list(report.untrusted), module_list(report.missing_required));
 		}
-		for (auto& next : m_trust_waiting_load) m_trust_after_load.push_back(std::move(next));
-		m_trust_waiting_load.clear();
+		m_trust_followups.loaded();
 		// A frame later: a build or live mode started now would run beside the layer change of this load.
 		editor_layer->register_implicit("edt/project_trust/after", [this] {
-			std::vector<std::function<void()>> ready = std::move(m_trust_after_load);
-			m_trust_after_load.clear();
-			for (auto& next : ready) next();
+			const auto trust = m_trust.lock();
+			m_trust_followups.run_ready(trust && trust->trusted());
 			return false;
 		});
 		return false;
