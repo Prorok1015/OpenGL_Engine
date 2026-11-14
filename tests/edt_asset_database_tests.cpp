@@ -1395,10 +1395,12 @@ BOOST_AUTO_TEST_CASE(a_resource_rewritten_within_its_stamp_granularity_is_read_a
 {
 	write_aged("a.png", "a");
 	const fs::path meta = upper.write("a.png.resource", meta_text(k_guid_b));
+	// Racy whenever the database checks it, however slow the run.
+	const fs::file_time_type stamp = fs::file_time_type::clock::now() + std::chrono::minutes(1);
+	fs::last_write_time(meta, stamp);
 	auto& assets = open();
 	BOOST_REQUIRE(record("a.png").id.has_value());
 	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_b);
-	const fs::file_time_type stamp = fs::last_write_time(meta);
 
 	upper.write("a.png.resource", meta_text(k_guid_c));
 	fs::last_write_time(meta, stamp);

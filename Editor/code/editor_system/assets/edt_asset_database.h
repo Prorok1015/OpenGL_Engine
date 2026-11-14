@@ -208,7 +208,9 @@ namespace edt
 		// A larger cache is not read (the walk then reads every file).
 		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
 		// A file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s): a .resource with
-		// one is read again by every walk and batch, a file's hash only after a restart (#973).
+		// one is read again by every walk and batch, a file's hash only after a restart (#973). The polling watcher
+		// (res::diff_snapshots, state_of) compares size and time only, so it may not report such a rewrite at all
+		// (#975).
 		static constexpr std::chrono::seconds stamp_granularity{ 2 };
 		// A git index or HEAD written this recently means a git operation may still be writing files (#765).
 		static constexpr std::chrono::seconds git_quiet_time{ 5 };
