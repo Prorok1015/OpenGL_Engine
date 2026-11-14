@@ -66,6 +66,9 @@
 #include "edt_curl_transport.h"
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
+#include "edt_live_consent.h"
+#include "edt_agent_policy.h"
+#include "edt_settings.h"
 #include "edt_play_commands.h"
 #include "edt_runtime_commands.h"
 #include "edt_bus_commands.h"
@@ -497,6 +500,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	asset_kind_hooks asset_hooks;
 	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	asset_hooks.desc_layout = [this] { return desc_layout(); };
+	asset_hooks.edits_locked = [this] { return m_play && m_play->active(); };
 	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
 		if (m_context->documents().preview() == &open) m_prefab_panel->set_open(true);
 	});
@@ -1021,6 +1026,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
+	settings_command.live_enabled = [this] { return m_live_mode && m_live_mode->enabled(); };
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -1031,6 +1037,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
 	};
+	vcs.live_mode_on = [this] { return m_live_mode && m_live_mode->enabled(); };
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
 	edt::vcs::repository_watcher::ports watch_ports;
 	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
@@ -1348,6 +1355,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 {
 	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
 		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
+	// No key, no consent: live mode is neither read on nor stored for a project whose path cannot be made canonical.
+	const std::optional<std::string> project_key = snk_dir ? canonical_project_settings_key(snk_dir->parent_path())
+		: std::nullopt;
 	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
 
 	live_mode_options live;
@@ -1385,11 +1395,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
 	};
-	if (snk_dir) {
-		live.store_enabled = [this, dir = *snk_dir](bool enabled) {
-			auto problem = update_build_settings(dir,[enabled](build_settings& settings) { settings.live_enabled = enabled; });
-			m_build_settings_panel->refresh_if_clean();
-			return problem;
+	if (project_key) {
+		live.store_enabled = [this, key = *project_key](bool enabled) {
+			return store_live_consent(m_res, key, enabled);
 		};
 	}
 	live.on_toggled = [this] {
@@ -1405,13 +1413,18 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	};
 	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
 	m_live_mode->watch(m_res);
-	m_build_settings_panel->set_on_settings_applied([this](const build_settings& settings) { m_live_mode->follow_settings(settings); });
 	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
+	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this](bool enabled) {
+		if (auto refused = m_live_mode->set_enabled(enabled, true)) {
+			egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+		}
+	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
-	if (snk_dir && load_build_settings(*snk_dir).live_enabled) {
+	if (snk_dir && project_key
+		&& live_mode_at_open(load_build_settings(*snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
 		if (auto refused = m_live_mode->set_enabled(true, false)) {
-			egLOG_WARN("editor/build", "live mode is on in .snk/build.json but stays off: {}", *refused);
+			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
 		}
 	}
 }

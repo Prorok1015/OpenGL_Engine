@@ -209,14 +209,6 @@ std::optional<std::string> edt::live_mode::set_enabled(bool enabled, bool store)
 	return std::nullopt;
 }
 
-void edt::live_mode::follow_settings(const build_settings& settings)
-{
-	if (settings.live_enabled == m_build.enabled()) return;
-	if (auto refused = set_enabled(settings.live_enabled, false)) {
-		egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
-	}
-}
-
 void edt::live_mode::on_changes(std::span<const res::file_change> changes)
 {
 	if (!m_build.enabled()) return;
