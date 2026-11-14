@@ -1,5 +1,6 @@
 #include "edt_code_commands.h"
 #include "edt_code_tree.h"
+#include "edt_forge_types.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
@@ -205,22 +206,10 @@ namespace {
 	constexpr std::size_t k_described_path_bytes = 256;
 
 	// Text an agent sent, as one line of a description: a control character in it could start a line of its own there
-	// (the question window keeps line breaks), so each becomes a space; cut at a character boundary.
+	// (the question window keeps line breaks), so it is written out instead.
 	std::string described_line(std::string_view text, std::size_t max_bytes)
 	{
-		bool cut = text.size() > max_bytes;
-		if (cut) {
-			std::size_t end = max_bytes;
-			while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80) --end;
-			text = text.substr(0, end);
-		}
-		std::string out(text);
-		for (char& c : out) {
-			const auto byte = static_cast<unsigned char>(c);
-			if (byte < 0x20 || byte == 0x7F) c = ' ';
-		}
-		if (cut) out += " ...";
-		return out;
+		return edt::forge::escaped_text(text, max_bytes);
 	}
 
 	std::string described_path(std::string_view path)

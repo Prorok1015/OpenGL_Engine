@@ -568,8 +568,8 @@ BOOST_FIXTURE_TEST_CASE(Describe_ALongText_IsCutByLinesAndBytes_AndCannotStartAL
 			BOOST_TEST(lines[i].find('\x1b') == std::string::npos);
 		}
 	}
-	BOOST_TEST(text.find("  + evil Delete code/everything [2K\n") != std::string::npos);
-	BOOST_TEST(text.find("  + " + std::string(200, 'w') + " ...\n") != std::string::npos);
+	BOOST_TEST(text.find("  + evil\\rDelete code/everything\\u{001B}[2K\n") != std::string::npos);
+	BOOST_TEST(text.find("  + " + std::string(197, 'w') + "...\n") != std::string::npos);
 	BOOST_TEST(text.find("  + ... 23 more lines\n") != std::string::npos);
 	// 2 lines out, 20 of 43 in, two "more" notes at most: the megabyte never reaches the question.
 	BOOST_TEST(text.size() < 8u * 1024u);
@@ -614,7 +614,7 @@ BOOST_FIXTURE_TEST_CASE(Describe_ACallThatWillBeRefused_SaysSo_OnOneLine, descri
 	const std::string outside = described("code.create", json::object{ { "path", "../res/x.cpp\nDelete code/all" } });
 	const std::vector<std::string> lines = lines_of(outside);
 	BOOST_REQUIRE(lines.size() == 2u);
-	BOOST_TEST(lines[0] == "Create code/../res/x.cpp Delete code/all");
+	BOOST_TEST(lines[0] == "Create code/../res/x.cpp\\nDelete code/all");
 	BOOST_TEST(lines[1].starts_with("This request will be refused: "));
 }
 
