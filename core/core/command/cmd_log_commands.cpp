@@ -45,7 +45,10 @@ namespace {
 		return static_cast<std::uint64_t>(*number);
 	}
 
-	cmd::result read_log(const cmd::call& request)
+	// A read that leaves entries out looks further than `limit`: at most this many pages of the journal.
+	constexpr std::size_t MAX_FILTERED_PAGES = 64;
+
+	cmd::result read_log(const cmd::call& request, const cmd::log_read_filter* filter)
 	{
 		const json::object& args = request.args.as_object();
 		engine::log_query query;
@@ -67,18 +70,34 @@ namespace {
 			query.limit = static_cast<std::size_t>(*count);
 		}
 
-		const engine::log_page page = engine::read_log_journal(query);
+		const std::size_t wanted = query.limit;
+		const bool leaves_out = filter != nullptr && static_cast<bool>(filter->visible);
 		json::array entries;
-		entries.reserve(page.entries.size());
-		for (const auto& entry : page.entries) {
-			const auto since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(entry.time.time_since_epoch());
-			entries.push_back(json::object{
-				{ "seq", static_cast<std::int64_t>(entry.seq) },
-				{ "time_ms", static_cast<std::int64_t>(since_epoch.count()) },
-				{ "level", json::string(level_name(entry.level)) },
-				{ "category", json::string(entry.category) },
-				{ "text", json::string(entry.text) } });
+		entries.reserve(wanted);
+		engine::log_page page;
+		bool dropped = false;
+		for (std::size_t pages = 0; entries.size() < wanted && pages < (leaves_out ? MAX_FILTERED_PAGES : 1); ++pages) {
+			page = engine::read_log_journal(query);
+			dropped = dropped || page.dropped;
+			for (const auto& entry : page.entries) {
+				// Stops at the entry after the last one given, so the next read goes on exactly there.
+				if (entries.size() == wanted) {
+					page.next_seq = entry.seq;
+					break;
+				}
+				if (leaves_out && !filter->visible(entry.category, request.from)) continue;
+				const auto since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(entry.time.time_since_epoch());
+				entries.push_back(json::object{
+					{ "seq", static_cast<std::int64_t>(entry.seq) },
+					{ "time_ms", static_cast<std::int64_t>(since_epoch.count()) },
+					{ "level", json::string(level_name(entry.level)) },
+					{ "category", json::string(entry.category) },
+					{ "text", json::string(filter != nullptr && filter->redact ? filter->redact(entry.text, request.from) : entry.text) } });
+			}
+			if (page.entries.size() < query.limit) break;
+			query.since_seq = page.next_seq;
 		}
+		page.dropped = dropped;
 		return cmd::result::success(json::object{
 			{ "entries", std::move(entries) },
 			{ "next_seq", static_cast<std::int64_t>(page.next_seq) },
@@ -86,7 +105,7 @@ namespace {
 	}
 }
 
-cmd::registration cmd::register_log_commands(command_registry& registry)
+cmd::registration cmd::register_log_commands(command_registry& registry, const log_read_filter* filter)
 {
 	command_desc desc;
 	desc.id = "log.read";
@@ -126,6 +145,6 @@ cmd::registration cmd::register_log_commands(command_registry& registry)
 		"required": ["entries", "next_seq", "dropped"],
 		"additionalProperties": false
 	})");
-	desc.invoke = read_log;
+	desc.invoke = [filter](const cmd::call& request) { return read_log(request, filter); };
 	return registry.add(std::move(desc));
 }

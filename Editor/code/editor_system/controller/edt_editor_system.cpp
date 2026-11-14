@@ -1,4 +1,5 @@
 #include "edt_editor_system.h"
+#include "edt_agent_log_filter.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
@@ -6,6 +7,7 @@
 #include "edt_asset_problems.h"
 #include "edt_asset_usages.h"
 #include "edt_begin_then_poll.h"
+#include <memory>
 #include <algorithm>
 #include <chrono>
 #include <snk/editor/edt_editor_context.h>
@@ -331,6 +333,12 @@ edt::editor_system::~editor_system()
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
 	m_session_connections.clear();
+	if (m_log_filter) {
+		// They name this system: nothing of it may be asked once it is gone, and without them an agent would read the
+		// whole journal, so the registry's agents go first (m_agent_server above).
+		m_log_filter->visible = [](std::string_view, const cmd::origin& from) { return from.kind == cmd::origin_kind::ui; };
+		m_log_filter->redact = nullptr;
+	}
 	m_agent_access.reset();
 	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
 	// The layer may outlive this system: no game layout drawn through it any more.
@@ -1228,6 +1236,33 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_agent_argument_checks = &commands;
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
 			approved_snapshot_for(user_dir / "settings", options.project_dir));
+		// What log.read gives anyone but the person at the editor (#935). The filter is the engine's, kept in the storage.
+		if (data.has_value<cmd::log_read_filter>()) {
+			m_log_filter = &data.require<cmd::log_read_filter>();
+			const auto build_allowed = [this, &commands] {
+				const cmd::command_desc* build = commands.find("build.game_module");
+				return m_agent_access != nullptr && build != nullptr
+					&& m_agent_access->policy().effective(*build).mode != cmd::policy_mode::deny;
+			};
+			// Asked for every entry of a read: the policy (which looks at its files) is asked a few times a second at most.
+			struct build_answer
+			{
+				bool allowed = false;
+				std::chrono::steady_clock::time_point at{};
+			};
+			m_log_filter->visible = [build_allowed, answer = std::make_shared<build_answer>()](std::string_view category, const cmd::origin& from) {
+				if (from.kind == cmd::origin_kind::ui) return true;
+				const auto now = std::chrono::steady_clock::now();
+				if (answer->at == std::chrono::steady_clock::time_point{} || now - answer->at > std::chrono::milliseconds(250)) {
+					answer->allowed = build_allowed();
+					answer->at = now;
+				}
+				return agent_log_category_visible(category, answer->allowed);
+			};
+			m_log_filter->redact = [roots = agent_log_roots_of(options.project_dir)](std::string_view text, const cmd::origin& from) {
+				return from.kind == cmd::origin_kind::ui ? std::string(text) : agent_log_text(text, roots);
+			};
+		}
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->set_policy_file(project_policy);
 		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });

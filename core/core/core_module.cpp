@@ -192,7 +192,9 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	// One command registry per process: the engine registers into it here, the editor and the game add theirs.
 	// Created on the main thread, which is the only one that may invoke commands.
 	auto& commands = data.construct<cmd::command_registry>();
-	data.construct<engine_commands>().log = cmd::register_log_commands(commands);
+	// Before the registration that reads it; the editor fills it in once it knows what an agent may see (#935).
+	const auto& log_filter = data.construct<cmd::log_read_filter>();
+	data.construct<engine_commands>().log = cmd::register_log_commands(commands, &log_filter);
 	open_cli_project(data);
 	res::resource_init(data);// core
 	desc::desc_init(data);// core
