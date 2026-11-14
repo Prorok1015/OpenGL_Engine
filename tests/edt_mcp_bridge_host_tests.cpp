@@ -2073,7 +2073,7 @@ BOOST_AUTO_TEST_CASE(AHeldCallsAnswerAndItsProgressNotes_AreRewrittenForTheAgent
 {
 	edt::agent_log_roots roots;
 	roots.project = { "/home/dev/games/demo" };
-	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	roots.disk.unlisted = { "/etc" };
 	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
 	add(job_command("test.job_paths", [](ds::task_context&) {
 		return json_of(R"json({"text":"+open /etc/secret/key","error":{"code":"git_failed","message":"fatal: cannot read /etc/secret/key","stderr_tail":"at /home/dev/games/demo/a.txt"}})json");
@@ -2100,7 +2100,7 @@ BOOST_AUTO_TEST_CASE(AHeldCallsAnswer_HasTheTextOfAMigrationAnswerRewritten_NotO
 {
 	edt::agent_log_roots roots;
 	roots.project = { "/home/dev/games/demo" };
-	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	roots.disk.unlisted = { "/etc" };
 	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
 	add(job_command("test.job_migrates", [](ds::task_context&) {
 		return json_of(R"json({"code":2,"status":"refused","id":"m1","text":"rollback of m1: cannot open /etc/secret/key"})json");
@@ -2127,7 +2127,7 @@ BOOST_AUTO_TEST_CASE(AHeldCallsAnswer_HasTheTextOfAMigrationAnswerRewritten_NotO
 BOOST_AUTO_TEST_CASE(AHeldCallsError_IsRewrittenForTheAgent_AlsoWhenTheJobEndedBeforeTheCall)
 {
 	edt::agent_log_roots roots;
-	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	roots.disk.unlisted = { "/etc" };
 	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
 	add(job_command("test.job_fails", [](ds::task_context&) -> json::value { throw std::runtime_error("cannot open /etc/secret/key"); }));
 

@@ -32,7 +32,8 @@ namespace edt
 		// After this the call is answered with the job still running, and its progress is no longer forwarded.
 		std::chrono::milliseconds hold_limit{ std::chrono::minutes(10) };
 		// What log.read asks (#935; may be null, outlives the bridge): the note of a progress notification and, in a held
-		// call's answer, `error` and the message fields of `result` (k_agent_job_result_fields) go through its `redact`.
+		// call's answer, `error`, the message fields of `result` (k_agent_job_result_fields) and its `text` beside a
+		// `code` key go through its `redact`.
 		const cmd::log_read_filter* log_filter = nullptr;
 	};
 

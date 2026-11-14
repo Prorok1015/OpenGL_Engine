@@ -5,30 +5,42 @@
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
+#include <algorithm>
+#include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 // #935: what log.read gives an agent of the engine's journal.
 namespace {
 
 namespace fs = std::filesystem;
 
-// A disk that has /usr, /etc and /home with anything below them, whatever the machine of the test has.
-bool on_a_made_up_disk(const fs::path& folder)
-{
-	const std::string text = folder.generic_string();
-	return text.starts_with("/usr/") || text.starts_with("/etc/") || text.starts_with("/home/");
-}
-
+// A made-up listing: /usr, /etc and /home with anything below them, and two folders with a space in the name.
 edt::agent_log_roots roots()
 {
 	edt::agent_log_roots out;
 	out.project = { "/home/dev/games/demo" };
 	out.home = { "/home/dev" };
 	out.temp = { "/tmp" };
-	out.on_disk = on_a_made_up_disk;
+	out.disk.unlisted = { "/usr", "/etc", "/home" };
+	out.disk.names = { "/usr/local dir", "C:/Program Files" };
 	return out;
+}
+
+edt::agent_log_roots with_names(std::vector<std::string> names)
+{
+	edt::agent_log_roots out;
+	out.disk.names = std::move(names);
+	return out;
+}
+
+bool has(const std::vector<std::string>& all, const std::string& one)
+{
+	return std::find(all.begin(), all.end(), one) != all.end();
 }
 
 }
@@ -66,9 +78,8 @@ BOOST_AUTO_TEST_CASE(PathsOfTheProjectKeepTheirTail_TheOthersBecomeAnonymous)
 
 BOOST_AUTO_TEST_CASE(WhatOnlyLooksLikeAPath_IsLeftAlone)
 {
-	// Every folder is there: only the rules about what comes before a token keep these.
-	edt::agent_log_roots known = roots();
-	known.on_disk = [](const fs::path&) { return true; };
+	// /usr and /etc are known by their first folder only: after a resource name that is not enough.
+	const edt::agent_log_roots known = roots();
 	for (const char* text : { "res://levels/a.desc /header/type: unknown texture type", "ratio 3/4, either/or", "https://example.org/x",
 		"a.desc /components/mesh/geometry: not found", "<project>/res/a.desc", "memory://import/a.desc: /usr/bin is not a field",
 		"'levels/a.desc' (/etc/x/y)", "x // y/z", "see /usr" }) {
@@ -80,10 +91,115 @@ BOOST_AUTO_TEST_CASE(WhatOnlyLooksLikeAPath_IsLeftAlone)
 	BOOST_TEST(edt::agent_log_text("res://a.desc /home/dev/x", known) == "res://a.desc <home>/x");
 }
 
+BOOST_AUTO_TEST_CASE(AfterAResourceName_AListedPathIsStillAPath_AJsonPointerIsNot)
+{
+	const edt::agent_log_roots known = with_names({ "/usr/bin", "/etc/fstab" });
+	BOOST_TEST(edt::agent_log_text("res://a.desc /usr/bin/cmake", known) == "res://a.desc <path>");
+	BOOST_TEST(edt::agent_log_text("levels/a.desc: /etc/fstab is not a field", known) == "levels/a.desc: <path> is not a field");
+	for (const char* text : { "res://a.desc /components/0/name", "a.desc /usr/name: not found", "a.desc /usr/binary/x" }) {
+		BOOST_TEST_CONTEXT(text) {
+			BOOST_TEST(edt::agent_log_text(text, known) == text);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ALineNumberAfterAPath_StaysAfterTheStandIn)
+{
+	const edt::agent_log_roots known = with_names({ "/etc/fstab", "/usr/include" });
+	BOOST_TEST(edt::agent_log_text("bad line /etc/fstab:3", known) == "bad line <path>:3");
+	BOOST_TEST(edt::agent_log_text("/usr/include/x.h:10:5: error: y", known) == "<path>:10:5: error: y");
+	BOOST_TEST(edt::agent_log_text(R"(C:\src\a.cpp:42 and more)", known) == "<path>:42 and more");
+	BOOST_TEST(edt::agent_log_text("see /etc/fstab.", known) == "see <path>.");
+}
+
+BOOST_AUTO_TEST_CASE(AFolderWithASpace_IsAPathOnlyWhenTheListingHasIt)
+{
+	const edt::agent_log_roots listed = with_names({ "/media/John Smith", "C:/Users/John Smith" });
+	BOOST_TEST(edt::agent_log_text("open /media/John Smith/x.txt now", listed) == "open <path> now");
+	BOOST_TEST(edt::agent_log_text("open /media/John Smith", listed) == "open <path>");
+	BOOST_TEST(edt::agent_log_text(R"(open C:\Users\John Smith\x.txt now)", listed) == "open <path> now");
+	BOOST_TEST(edt::agent_log_text("open /media/John Smithers/x.txt", listed) == "open /media/John Smithers/x.txt");
+
+	// Only the first folder is known: the space ends the path, and the sentence after it is not swallowed.
+	edt::agent_log_roots unlisted;
+	unlisted.disk.unlisted = { "/media" };
+	BOOST_TEST(edt::agent_log_text("open /media/John Smith/x.txt", unlisted) == "open <path> Smith/x.txt");
+	BOOST_TEST(edt::agent_log_text("read /media/usb and/or the other one", unlisted) == "read <path> and/or the other one");
+	BOOST_TEST(edt::agent_log_text(R"(open C:\Users\John Smith\x.txt)", unlisted) == R"(open <path> Smith\x.txt)");
+}
+
+BOOST_AUTO_TEST_CASE(APathList_IsRewrittenElementByElement_HoweverLongTheLine)
+{
+	edt::agent_log_roots known = with_names({ "/usr/bin" });
+	known.disk.unlisted = { "/etc" };
+	std::string line = "PATH=";
+	std::string expected = "PATH=";
+	for (std::size_t element = 0; line.size() < 64 * 1024; ++element) {
+		if (element > 0) {
+			line += ':';
+			expected += ':';
+		}
+		const char* const texts[3][2] = { { "/usr/bin", "<path>" }, { "/opt/none", "/opt/none" }, { "/etc/alternatives", "<path>" } };
+		line += texts[element % 3][0];
+		expected += texts[element % 3][1];
+	}
+	BOOST_TEST((edt::agent_log_text(line, known) == expected));
+
+	// A token longer than the scanner looks at: its start still goes.
+	const std::string endless = "/usr/bin/" + std::string(64 * 1024, 'a');
+	BOOST_TEST(edt::agent_log_text(endless, known).starts_with("<path>"));
+}
+
+// The scanner takes the listing, never the disk: a folder that is really there is no path without it.
+BOOST_AUTO_TEST_CASE(ALine_IsOnlyComparedWithTheListing_NeverWithTheDisk)
+{
+	const test_util::temp_dir dir{ "edt_agent_log_filter_no_disk" };
+	fs::create_directories(dir.path() / "sub");
+	const std::string real = "/" + (dir.path().relative_path() / "sub" / "x.txt").generic_string();
+	BOOST_TEST(edt::agent_log_text("read " + real, edt::agent_log_roots{}) == "read " + real);
+	BOOST_TEST(edt::agent_log_text("at /snk_no_such_folder_935/x/y", with_names({ "/snk_no_such_folder_935/x" })) == "at <path>");
+}
+
+BOOST_AUTO_TEST_CASE(TheListingOfADisk_HoldsTwoLevels_WithinItsLimits_WithoutTheSkippedFolders)
+{
+	const test_util::temp_dir dir{ "edt_agent_log_filter_listing" };
+	for (const char* file : { "a/one/deep.txt", "a/two.txt", "b/John Smith/x.txt", "skip/hidden.txt", "top.txt",
+		"big/0", "big/1", "big/2", "big/3", "big/4" }) {
+		fs::create_directories((dir.path() / file).parent_path());
+		std::ofstream(dir.path() / file) << "x";
+	}
+	const std::vector<std::string> skipped{ "skip" };
+
+	const edt::agent_log_disk found = edt::agent_log_disk_of(dir.path(), skipped, edt::agent_log_disk_limits{ 4096, 4 });
+	for (const char* name : { "/a/one", "/a/two.txt", "/b/John Smith" }) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(has(found.names, name));
+		}
+	}
+	BOOST_TEST(found.names.size() == 3u);
+	BOOST_TEST(has(found.unlisted, "/skip"));
+	BOOST_TEST(has(found.unlisted, "/big"));
+	BOOST_TEST(found.unlisted.size() == 2u);
+
+	edt::agent_log_roots known;
+	known.disk = found;
+	BOOST_TEST(edt::agent_log_text("read /a/one/deep.txt, /b/John Smith/x.txt, /skip/hidden.txt, /big/9 and /a/none /top.txt", known)
+		== "read <path>, <path>, <path>, <path> and /a/none /top.txt");
+
+	for (const std::size_t total : { std::size_t{ 0 }, std::size_t{ 1 }, std::size_t{ 3 } }) {
+		BOOST_TEST_CONTEXT(total) {
+			const edt::agent_log_disk cut = edt::agent_log_disk_of(dir.path(), skipped, edt::agent_log_disk_limits{ total, 512 });
+			BOOST_TEST(cut.names.size() + cut.unlisted.size() <= total);
+		}
+	}
+	const edt::agent_log_disk none = edt::agent_log_disk_of(dir.path() / "no_such_folder", {});
+	BOOST_TEST(none.names.empty());
+	BOOST_TEST(none.unlisted.empty());
+}
+
 BOOST_AUTO_TEST_CASE(WithoutRoots_OnlyAbsolutePathsGo)
 {
-	edt::agent_log_roots none;
-	none.on_disk = [](const fs::path& folder) { return folder.generic_string() == "/home/x"; };
+	const edt::agent_log_roots none = with_names({ "/home/x" });
 	BOOST_TEST(edt::agent_log_text("at /home/x/y and /header/type", none) == "at <path> and /header/type");
 	BOOST_TEST(edt::agent_log_text("", none) == "");
 }
@@ -111,7 +227,7 @@ BOOST_AUTO_TEST_CASE(FileAddressesAndShares_AreFiles_OtherAddressesAreNot)
 	BOOST_TEST(edt::agent_log_text("x // y/z and https://example.org/usr/bin", known) == "x // y/z and https://example.org/usr/bin");
 }
 
-BOOST_AUTO_TEST_CASE(APathOutsideTheRoots_GoesOnThroughOneSpace_WhenWhatFollowsIsMoreOfIt)
+BOOST_AUTO_TEST_CASE(APathOutsideTheRoots_GoesOnThroughASpace_OnlyInAFolderTheListingHas)
 {
 	const edt::agent_log_roots known = roots();
 	BOOST_TEST(edt::agent_log_text(R"(ran C:\Program Files\CMake\bin\cmake.exe --version)", known) == "ran <path> --version");
@@ -119,6 +235,9 @@ BOOST_AUTO_TEST_CASE(APathOutsideTheRoots_GoesOnThroughOneSpace_WhenWhatFollowsI
 	BOOST_TEST(edt::agent_log_text(R"(C:\a\b  c\d)", known) == R"(<path>  c\d)");
 	BOOST_TEST(edt::agent_log_text("/usr/bin/cmake /usr/bin/ninja", known) == "<path> <path>");
 	BOOST_TEST(edt::agent_log_text("/usr/bin/x: error in a/b", known) == "<path>: error in a/b");
+	// Not in the listing: the next word is not the path's, even when it has a separator.
+	BOOST_TEST(edt::agent_log_text("/usr/share dir/bin/x and more", known) == "<path> dir/bin/x and more");
+	BOOST_TEST(edt::agent_log_text(R"(ran C:\Other Files\x.exe)", known) == R"(ran <path> Files\x.exe)");
 }
 
 BOOST_AUTO_TEST_CASE(ARoot_MatchesOnlyAWholeFolderName)
@@ -126,7 +245,6 @@ BOOST_AUTO_TEST_CASE(ARoot_MatchesOnlyAWholeFolderName)
 	edt::agent_log_roots known;
 	known.project = { "/p/demo/" };
 	known.home = { "/home/u" };
-	known.on_disk = [](const fs::path&) { return false; };
 	BOOST_TEST(edt::agent_log_text("open /p/demo/a.desc", known) == "open <project>/a.desc");
 	BOOST_TEST(edt::agent_log_text("in /p/demo", known) == "in <project>");
 	BOOST_TEST(edt::agent_log_text("in /p/demo.", known) == "in <project>.");
@@ -179,7 +297,7 @@ BOOST_AUTO_TEST_CASE(OnWindows_AnMsysPath_IsThePathOfItsDrive)
 {
 	edt::agent_log_roots known;
 	known.project = { R"(C:\Games\Demo)" };
-	known.on_disk = [](const fs::path& folder) { return folder.generic_string() == "c:/Users"; };
+	known.disk.names = { "C:/Users" };
 	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo/res/a.desc and /C/games/demo", known) == "open <project>/res/a.desc and <project>");
 	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo2/a.desc", known) == "open /c/Games/Demo2/a.desc");
 	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
@@ -190,7 +308,7 @@ BOOST_AUTO_TEST_CASE(OffWindows_AnMsysPath_IsAnAbsolutePathLikeAnyOther)
 {
 	edt::agent_log_roots known;
 	known.project = { "/c/Games/Demo" };
-	known.on_disk = [](const fs::path& folder) { return folder.generic_string() == "/c/Users"; };
+	known.disk.names = { "/c/Users" };
 	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo/res/a.desc", known) == "open <project>/res/a.desc");
 	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
 	BOOST_TEST(edt::agent_log_text("open /C/games/demo/a and /c/none/x", known) == "open /C/games/demo/a and /c/none/x");
@@ -254,19 +372,31 @@ BOOST_AUTO_TEST_CASE(AJobResultsText_IsRewrittenOnlyBesideACode_NeverADiff)
 	BOOST_TEST((edt::agent_job_result(nested, &filter, cmd::origin::agent("s1")) == nested));
 }
 
-BOOST_AUTO_TEST_CASE(AJsonPointer_IsNoPath_UnlessItsFirstTwoSegmentsAreOnTheDisk)
+BOOST_AUTO_TEST_CASE(AJsonPointer_IsNoPath_UnlessTheListingHasItsFirstTwoSegments)
 {
-	const test_util::temp_dir dir{ "edt_agent_log_filter_disk" };
-	fs::create_directories(dir.path() / "sub");
-	// No roots and the real disk.
-	const edt::agent_log_roots none{};
-	for (const char* text : { "bad value at /components/0/name", "/header/type: unknown texture type", "see /snk_no_such_folder_935/x/y" }) {
+	const edt::agent_log_roots known = with_names({ "/etc/fstab", "/components/0" });
+	for (const char* text : { "bad value at /components/1/name", "/header/type: unknown texture type", "see /etc/hosts", "see /etc" }) {
 		BOOST_TEST_CONTEXT(text) {
-			BOOST_TEST(edt::agent_log_text(text, none) == text);
+			BOOST_TEST(edt::agent_log_text(text, known) == text);
 		}
 	}
-	BOOST_TEST(edt::agent_log_text("read " + (dir.path() / "sub" / "x.txt").string(), none) == "read <path>");
-	BOOST_TEST(edt::agent_log_text("read " + (dir.path() / "sub" / "x.txt").generic_string(), none) == "read <path>");
+	BOOST_TEST(edt::agent_log_text("bad value at /components/0/name", known) == "bad value at <path>");
+}
+
+// The listing of the machine itself stays within its limits and holds nothing of the folders it does not enter.
+BOOST_AUTO_TEST_CASE(TheListingOfThisMachine_StaysWithinItsLimits)
+{
+	const edt::agent_log_disk found = edt::agent_log_disk_at_start();
+	BOOST_TEST(found.names.size() + found.unlisted.size() <= edt::agent_log_disk_limits{}.total);
+#ifdef __linux__
+	for (const std::string& name : found.names) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(!name.starts_with("/proc/"));
+			BOOST_TEST(!name.starts_with("/sys/"));
+			BOOST_TEST(!name.starts_with("/dev/"));
+		}
+	}
+#endif
 }
 
 BOOST_AUTO_TEST_CASE(TheRootsOfAProcess_AreAbsoluteWithoutATrailingSeparator)

@@ -10,8 +10,12 @@
 #include <cctype>
 #include <chrono>
 #include <cstddef>
-#include <exception>
+#include <fstream>
+#include <iterator>
+#include <limits>
 #include <memory>
+#include <span>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -65,10 +69,24 @@ namespace {
 		return is_space(c) || c == '\'' || c == '"' || c == ')' || c == ',' || c == ';' || c == '>' || c == ']' || c == '}' || c == '|';
 	}
 
-	std::size_t token_end(std::string_view text, std::size_t from)
+	bool is_digit(char c)
 	{
-		std::size_t end = from;
-		while (end < text.size() && !ends_a_path(text[end])) ++end;
+		return c >= '0' && c <= '9';
+	}
+
+	// One token is looked at this far: a line without a space (a PATH list) is not scanned once per element.
+	constexpr std::size_t k_token_limit = 4096;
+
+	// `drive`: `from` is at "C:", whose ':' ends nothing.
+	std::size_t token_end(std::string_view text, std::size_t from, bool drive = false)
+	{
+		const std::size_t limit = text.size() - from > k_token_limit ? from + k_token_limit : text.size();
+		std::size_t end = drive && limit - from >= 2 ? from + 2 : from;
+		while (end < limit && !ends_a_path(text[end])) {
+			// "/a/b:/c/d" is a list: each element is a path of its own.
+			if (text[end] == ':' && end + 1 < text.size() && text[end + 1] == '/') break;
+			++end;
+		}
 		return end;
 	}
 
@@ -213,56 +231,53 @@ namespace {
 		std::size_t end = at;
 		while (end > 0 && between(text[end - 1])) --end;
 		std::size_t begin = end;
-		while (begin > 0 && !is_space(text[begin - 1])) --begin;
+		while (begin > 0 && end - begin < k_token_limit && !is_space(text[begin - 1])) --begin;
 		const std::string_view word = text.substr(begin, end - begin);
 		return (word.find("://") != std::string_view::npos && !word.starts_with("file://")) || word.ends_with(".desc");
 	}
 
-	bool folder_exists(std::string_view text, const edt::agent_log_roots& roots)
+	struct disk_match
 	{
-		try {
-			const fs::path folder = fs_paths::path_from_utf8(text);
-			if (roots.on_disk) return roots.on_disk(folder);
-			std::error_code ec;
-			return fs::exists(folder, ec);
-		} catch (const std::exception&) {
-			// Bytes that are no text in the platform's encoding name no file.
-			return false;
+		bool found = false;
+		// By a name of two segments, not only by a first segment whose content is not known.
+		bool listed = false;
+		// What the name covers in the text ("/media/John Smith", the space with it); 0 when not `listed`.
+		std::size_t length = 0;
+	};
+
+	// What the listing of the disk says of the token at `from`. Compares text only: never asks the file system.
+	disk_match disk_at(std::string_view text, std::size_t from, const edt::agent_log_disk& disk, bool msys)
+	{
+		disk_match out;
+		for (const std::string& name : disk.names) {
+			const std::size_t covered = name.empty() ? 0 : root_length(text, from, name, false, msys);
+			if (covered <= out.length) continue;
+			out = disk_match{ true, true, covered };
 		}
+		if (out.found) return out;
+		for (const std::string& name : disk.unlisted) {
+			const std::size_t covered = name.empty() ? 0 : root_length(text, from, name, false, msys);
+			const std::size_t next = from + covered + 1;
+			if (covered == 0 || next >= text.size() || !is_separator(text[next - 1])) continue;
+			if (!is_path_char(text[next]) || is_separator(text[next])) continue;
+			out.found = true;
+			break;
+		}
+		return out;
 	}
 
-	// Whether `path` ("/a/b/c") has two segments at least and the first two ("/a/b") are on the disk.
-	bool first_two_exist(std::string_view path, const edt::agent_log_roots& roots)
+	// Where a path that ends at `last` at most (and not before `least`) ends: before the punctuation of a sentence
+	// and before ":<line>" or ":<line>:<col>".
+	std::size_t path_end(std::string_view text, std::size_t least, std::size_t last)
 	{
-		const std::size_t second = path.find_first_of("/\\", 1);
-		if (second == std::string_view::npos || second == 1) return false;
-		std::size_t end = path.find_first_of("/\\", second + 1);
-		if (end == std::string_view::npos) end = path.size();
-		if (end == second + 1) return false;
-		return folder_exists(path.substr(0, end), roots);
-	}
-
-	// The same for a path is_msys_drive took ("/c/Users/x"): whether "c:/Users" is on the disk.
-	bool msys_folder_exists(std::string_view path, const edt::agent_log_roots& roots)
-	{
-		if (path.size() < 4) return false;
-		std::size_t end = path.find_first_of("/\\", 3);
-		if (end == std::string_view::npos) end = path.size();
-		std::string folder{ path[1], ':' };
-		folder.append(path.substr(2, end - 2));
-		return folder_exists(folder, roots);
-	}
-
-	// Where a path with a space in a folder name goes on to ("C:\Program Files\x"); 0 when the space ends it.
-	std::size_t end_after_space(std::string_view text, std::size_t end)
-	{
-		if (end + 1 >= text.size() || text[end] != ' ') return 0;
-		const std::size_t next_end = token_end(text, end + 1);
-		const std::string_view part = text.substr(end + 1, next_end - end - 1);
-		if (part.empty() || part.find_first_of("/\\") == std::string_view::npos) return 0;
-		// A path of its own, a flag or an address is not the rest of this one.
-		if (is_separator(part[0]) || part[0] == '-' || part[0] == '<' || is_drive(part) || part.find("://") != std::string_view::npos) return 0;
-		return next_end;
+		while (last > least && (text[last - 1] == '.' || text[last - 1] == ':')) --last;
+		for (int part = 0; part < 2; ++part) {
+			std::size_t digits = last;
+			while (digits > least && is_digit(text[digits - 1])) --digits;
+			if (digits == last || digits <= least || text[digits - 1] != ':') break;
+			last = digits - 1;
+		}
+		return last;
 	}
 
 	struct found_path
@@ -309,25 +324,17 @@ namespace {
 			return found_path{ begin, after - begin, root.label, token_end(text, after) - after };
 		}
 
-		const auto without_punctuation = [text, from](std::size_t last) {
-			while (last > from + 1 && (text[last - 1] == '.' || text[last - 1] == ':')) --last;
-			return last;
-		};
-		std::size_t end = token_end(text, from);
-		std::size_t trimmed = without_punctuation(end);
-		// "/header/type" may as well be a JSON pointer: a path only when it leads somewhere on this disk.
+		const disk_match on_disk = disk_at(text, from, roots.disk, msys);
+		// "/header/type" may as well be a JSON pointer: a path only when the listing of the disk has it.
 		if (rooted && !in_file_address) {
-			if (follows_a_resource(text, at)) return {};
-			const std::string_view path = text.substr(from, trimmed - from);
-			if (!(msys && msys_folder_exists(path, roots)) && !first_two_exist(path, roots)) return {};
+			if (!on_disk.found) return {};
+			if (!on_disk.listed && follows_a_resource(text, at)) return {};
 		}
-		while (trimmed == end) {
-			const std::size_t more = end_after_space(text, end);
-			if (more == 0) break;
-			end = more;
-			trimmed = without_punctuation(end);
-		}
-		return found_path{ begin, trimmed - begin, k_any_label, 0 };
+		// A space is the path's only inside a folder the listing has ("/media/John Smith"); elsewhere it ends it.
+		const std::size_t listed_end = from + on_disk.length;
+		const std::size_t least = on_disk.length > 0 ? listed_end : from + 1;
+		const std::size_t end = path_end(text, least, token_end(text, listed_end, drive && on_disk.length == 0));
+		return found_path{ begin, end - begin, k_any_label, 0 };
 	}
 
 	void add_root(std::vector<fs::path>& out, const fs::path& folder)
@@ -342,6 +349,82 @@ namespace {
 		fs::path resolved = fs::weakly_canonical(spelled, ec);
 		if (!ec && !resolved.empty() && resolved != spelled) out.push_back(std::move(resolved));
 	}
+
+	// The entries of `folder` as "<prefix>/<name>"; false when there are more than `most` or it cannot be read.
+	bool list_folder(const fs::path& folder, const std::string& prefix, std::size_t most, std::vector<std::string>& out)
+	{
+		std::error_code ec;
+		fs::directory_iterator entry(folder, ec);
+		for (; !ec && entry != fs::directory_iterator(); entry.increment(ec)) {
+			if (out.size() >= most) return false;
+			out.push_back(prefix + "/" + fs_paths::utf8_of(entry->path().filename()));
+		}
+		return !ec;
+	}
+
+	// Adds two levels of `root` to `out` under `prefix` ("" or "C:"); `with_first`: the first-level names too.
+	void list_disk(edt::agent_log_disk& out, const fs::path& root, const std::string& prefix, std::span<const std::string> skipped,
+		const edt::agent_log_disk_limits& limits, bool with_first)
+	{
+		const auto used = [&out] { return out.names.size() + out.unlisted.size(); };
+		std::error_code ec;
+		fs::directory_iterator entry(root, ec);
+		for (; !ec && entry != fs::directory_iterator(); entry.increment(ec)) {
+			if (used() >= limits.total) return;
+			const std::string name = fs_paths::utf8_of(entry->path().filename());
+			const std::string first = prefix + "/" + name;
+			// Before anything asks the folder itself: a network mount may not answer.
+			if (std::find(skipped.begin(), skipped.end(), name) != skipped.end()) {
+				out.unlisted.push_back(first);
+				continue;
+			}
+			if (with_first) out.names.push_back(first);
+			std::error_code entry_ec;
+			if (!entry->is_directory(entry_ec) || entry_ec) continue;
+			std::vector<std::string> below;
+			const bool whole = list_folder(entry->path(), first, limits.per_folder, below);
+			if (!whole || used() + below.size() > limits.total) {
+				if (used() < limits.total) out.unlisted.push_back(first);
+				continue;
+			}
+			out.names.insert(out.names.end(), std::make_move_iterator(below.begin()), std::make_move_iterator(below.end()));
+		}
+	}
+
+#ifndef _WIN32
+	// "\040" of /proc/self/mounts is a space.
+	std::string unescaped_mount(std::string_view text)
+	{
+		std::string out;
+		for (std::size_t at = 0; at < text.size(); ++at) {
+			const auto octal = [text](std::size_t i) { return i < text.size() && text[i] >= '0' && text[i] <= '7'; };
+			if (text[at] == '\\' && octal(at + 1) && octal(at + 2) && octal(at + 3)) {
+				out.push_back(static_cast<char>((text[at + 1] - '0') * 64 + (text[at + 2] - '0') * 8 + (text[at + 3] - '0')));
+				at += 3;
+			} else {
+				out.push_back(text[at]);
+			}
+		}
+		return out;
+	}
+
+	// The first-level folders the listing does not enter: reading one can block (a server that is gone) or never end.
+	std::vector<std::string> skipped_folders()
+	{
+		std::vector<std::string> out{ "net", "proc", "sys", "dev" };
+		std::ifstream mounts("/proc/self/mounts");
+		std::string device;
+		std::string point;
+		std::string type;
+		while (mounts >> device >> point >> type) {
+			mounts.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+			const bool remote = type.starts_with("nfs") || type == "cifs" || type == "smb3" || type == "autofs" || type == "fuse.sshfs";
+			if (!remote || point.size() < 2 || point.find('/', 1) != std::string::npos) continue;
+			out.push_back(unescaped_mount(std::string_view(point).substr(1)));
+		}
+		return out;
+	}
+#endif
 
 	void redact_string(boost::json::value& value, const cmd::log_read_filter* filter, const cmd::origin& from)
 	{
@@ -386,9 +469,37 @@ boost::json::value edt::agent_job_result(const boost::json::value& result, const
 	return out;
 }
 
+edt::agent_log_disk edt::agent_log_disk_of(const fs::path& root, std::span<const std::string> skipped, agent_log_disk_limits limits)
+{
+	agent_log_disk out;
+	list_disk(out, root, {}, skipped, limits, false);
+	return out;
+}
+
+edt::agent_log_disk edt::agent_log_disk_at_start()
+{
+	agent_log_disk out;
+	const agent_log_disk_limits limits{};
+#ifdef _WIN32
+	list_disk(out, fs::path("/"), {}, {}, limits, false);
+	// A: and B: are left out: asking a drive without a disk in it can take seconds.
+	for (char letter = 'C'; letter <= 'Z'; ++letter) {
+		const std::string drive{ letter, ':' };
+		const fs::path root = fs_paths::path_from_utf8(drive + "/");
+		std::error_code ec;
+		if (fs::exists(root, ec) && !ec) list_disk(out, root, drive, {}, limits, true);
+	}
+#else
+	const std::vector<std::string> skipped = skipped_folders();
+	list_disk(out, fs::path("/"), {}, skipped, limits, false);
+#endif
+	return out;
+}
+
 edt::agent_log_roots edt::agent_log_roots_of(const fs::path& project)
 {
 	agent_log_roots roots;
+	roots.disk = agent_log_disk_at_start();
 	add_root(roots.project, project);
 	for (const char* variable : k_home_variables) {
 		if (const auto home = environment_utf8(variable); home && !home->empty()) {

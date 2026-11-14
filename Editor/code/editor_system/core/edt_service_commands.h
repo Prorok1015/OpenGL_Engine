@@ -27,7 +27,8 @@ namespace edt
 	// show everything gets `label`, `note` and `error` of a job, `text` of a dialog and `file`, `message` and `notes` of a
 	// problem through its `redact`, and no problem of the sources `build` and `reload` while it hides "editor/build".
 	// A job's `result` is the answer of the command that started it: only its message fields
-	// (k_agent_job_result_fields, agent_job_result) go through `redact`, the rest goes out as that command made it.
+	// (k_agent_job_result_fields, agent_job_result), and `text` only beside a `code` key, go through `redact`; the
+	// rest goes out as that command made it.
 	[[nodiscard]] SNK_EDITOR_API std::vector<registration> register_job_commands(cmd::command_registry& commands, job_service& jobs);
 	[[nodiscard]] SNK_EDITOR_API std::vector<registration> register_job_commands(cmd::command_registry& commands, job_service& jobs,
 		const cmd::log_read_filter* filter);
