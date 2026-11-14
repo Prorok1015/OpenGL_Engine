@@ -354,22 +354,34 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndWritesOnlyTheDifferences
 	BOOST_TEST(file.find("\"hp\"") == std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(Edit_OfTheRootTransform_ReachesThePreview)
+BOOST_AUTO_TEST_CASE(Edit_OfTheRootTransform_MovesTheRootOfThePreview_AndRevertPutsItBack)
 {
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
+	entt::registry* reg = document->get_registry();
+	BOOST_REQUIRE(reg);
+	const auto root_position = [reg]() -> glm::vec3 {
+		for (auto&& [entity, instance] : reg->view<scn::prefab_instance>().each()) {
+			if (const auto* placed = reg->try_get<scn::local_transform>(entity)) return glm::vec3(placed->local[3]);
+		}
+		return { -1.f, -1.f, -1.f };
+	};
+	const auto root_is_at = [&root_position](float x, float y, float z) {
+		const glm::vec3 at = root_position();
+		return at.x == x && at.y == y && at.z == z;
+	};
+	BOOST_TEST(root_is_at(0.f, 0.f, 0.f));
+
+	// A position without has_transform: the document is edited, so the preview follows it too.
 	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
-		prefab.get_root().has_transform = true;
 		prefab.get_root().position = { 4.f, 5.f, 6.f };
 		return true;
 	}));
-	entt::registry* reg = document->get_registry();
-	BOOST_REQUIRE(reg);
-	bool found = false;
-	for (auto&& [entity, placed] : reg->view<scn::local_transform>().each()) {
-		if (placed.local[3].x == 4.f && placed.local[3].y == 5.f && placed.local[3].z == 6.f) found = true;
-	}
-	BOOST_TEST(found);
+	BOOST_TEST(root_is_at(4.f, 5.f, 6.f));
+
+	BOOST_TEST_REQUIRE(document->revert().empty());
+	BOOST_TEST(root_is_at(0.f, 0.f, 0.f));
+	BOOST_TEST(!document->is_dirty());
 }
 
 BOOST_AUTO_TEST_CASE(Apply_OfTheOpenLevelsFile_IsRefused)

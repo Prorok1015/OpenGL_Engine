@@ -181,13 +181,10 @@ void edt::prefab_document::sync_preview()
 	scn::ecs_assembler* assembler = m_services.assembler();
 	if (reg && assembler && m_working && m_root != entt::null && reg->valid(m_root)) {
 		scn::reconcile(*assembler, *reg, m_root, m_working->get_root(), scn::reconcile_mode::reload);
-		// reconcile moves the children only: the root's own transform is placed here.
-		const scn::prefab_desc::prefab_node& root = m_working->get_root();
-		if (root.has_transform) {
-			reg->emplace_or_replace<scn::local_transform>(m_root, root.get_local_transform());
-			if (reg->ctx().contains<ecs::event<scn::transform_updated>>()) {
-				reg->ctx().get<ecs::event<scn::transform_updated>>().emit(m_root);
-			}
+		// reconcile moves the children only: the root's own transform is placed here, whether or not the file spells it out.
+		reg->emplace_or_replace<scn::local_transform>(m_root, m_working->get_root().get_local_transform());
+		if (reg->ctx().contains<ecs::event<scn::transform_updated>>()) {
+			reg->ctx().get<ecs::event<scn::transform_updated>>().emit(m_root);
 		}
 	}
 }
@@ -288,7 +285,12 @@ std::string edt::prefab_document::revert()
 		version = on_disk.version;
 	}
 	// The cache may hold an older read of the file: drop it, then take the prefab fresh.
-	writer->evict_cached(m_source_tag);
+	// Nothing written: only a file that differs from what the open instances read needs the others told.
+	if (!version.empty() && version != m_disk_version) {
+		writer->signal_changed(m_source_tag);
+	} else {
+		writer->evict_cached(m_source_tag);
+	}
 	auto handle = reader->require_sync<scn::prefab_desc>(m_source_tag);
 	if (!handle.is_ready()) {
 		return std::format("{} could not be loaded", m_source_tag.view());
