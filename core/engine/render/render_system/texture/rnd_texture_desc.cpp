@@ -1,5 +1,8 @@
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/resource/res_diagnostics.h>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <format>
 #include <string>
 #include <string_view>
@@ -132,14 +135,60 @@ namespace rnd::driver
 			return "unknown";
 		}
 
+		// Characters that hide or reorder text: bidi controls, line/paragraph separators, zero-width and soft hyphen.
+		constexpr bool is_invisible_code_point(std::uint32_t cp)
+		{
+			return cp == 0x00AD || cp == 0x061C || (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x2028 && cp <= 0x202E)
+				|| cp == 0x2060 || (cp >= 0x2066 && cp <= 0x2069) || cp == 0xFEFF;
+		}
+
+		// Text from a file for an error message: at most max_bytes, cut between code points, with every control,
+		// invisible or malformed piece shown as '?'.
+		std::string printable_text(std::string_view value, std::size_t max_bytes)
+		{
+			std::string shown;
+			shown.reserve(std::min(value.size(), max_bytes));
+			std::size_t i = 0;
+			while (i < value.size()) {
+				const auto lead = static_cast<unsigned char>(value[i]);
+				std::size_t len = 0;
+				if (lead < 0x80) len = 1;
+				else if (lead >= 0xC2 && lead <= 0xDF) len = 2;
+				else if (lead >= 0xE0 && lead <= 0xEF) len = 3;
+				else if (lead >= 0xF0 && lead <= 0xF4) len = 4;
+
+				bool valid = len != 0 && i + len <= value.size();
+				std::uint32_t cp = len == 1 ? lead : (lead & (0x7Fu >> len));
+				for (std::size_t k = 1; valid && k < len; ++k) {
+					const auto next = static_cast<unsigned char>(value[i + k]);
+					valid = (next & 0xC0) == 0x80;
+					cp = (cp << 6) | (next & 0x3Fu);
+				}
+				if (valid && ((len == 3 && cp < 0x800) || (len == 4 && (cp < 0x10000 || cp > 0x10FFFF)) || (cp >= 0xD800 && cp <= 0xDFFF))) {
+					valid = false;
+				}
+
+				if (!valid) {
+					if (shown.size() + 1 > max_bytes) break;
+					shown.push_back('?');
+					++i;
+					continue;
+				}
+				const bool hidden = cp < 0x20 || (cp >= 0x7F && cp <= 0x9F) || is_invisible_code_point(cp);
+				const std::size_t out_len = hidden ? 1 : len;
+				if (shown.size() + out_len > max_bytes) break;
+				if (hidden) shown.push_back('?');
+				else shown.append(value.substr(i, len));
+				i += len;
+			}
+			return shown;
+		}
+
 		// The value comes from a file: a name this build does not know fails the load of that file. It never asserts (an
 		// abort in Debug) and never goes on with a format nobody asked for (#930).
 		[[noreturn]] void unknown_value(std::string_view json_path, std::string_view what, std::string_view value)
 		{
-			std::string shown(value.substr(0, 64));
-			for (char& c : shown) {
-				if (static_cast<unsigned char>(c) < 0x20 || c == 0x7F) c = '?';
-			}
+			const std::string shown = printable_text(value, 64);
 			throw res::load_error(res::diagnostic_kind::load, json_path, std::format("unknown texture {} '{}'", what, shown));
 		}
 
@@ -176,8 +225,8 @@ namespace rnd::driver
 			case TEXTURE_TYPE::TEXTURE_CUBE_MAP: return "texture_cube_map";
 			case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY: return "texture_cube_array";
 			case TEXTURE_TYPE::RENDERBUFFER: return "renderbuffer";
-			case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
-			case TEXTURE_TYPE::TEXTURE_2D_ARRAY: break;
+			case TEXTURE_TYPE::TEXTURE_1D_ARRAY: return "texture_1d_array";
+			case TEXTURE_TYPE::TEXTURE_2D_ARRAY: return "texture_2d_array";
 			}
 			return "unknown";
 		}
@@ -188,6 +237,8 @@ namespace rnd::driver
 			if (type == "texture_2d") return TEXTURE_TYPE::TEXTURE_2D;
 			if (type == "texture_3d") return TEXTURE_TYPE::TEXTURE_3D;
 			if (type == "texture_cube_map") return TEXTURE_TYPE::TEXTURE_CUBE_MAP;
+			if (type == "texture_1d_array") return TEXTURE_TYPE::TEXTURE_1D_ARRAY;
+			if (type == "texture_2d_array") return TEXTURE_TYPE::TEXTURE_2D_ARRAY;
 			if (type == "texture_cube_array") return TEXTURE_TYPE::TEXTURE_CUBE_ARRAY;
 			if (type == "renderbuffer") return TEXTURE_TYPE::RENDERBUFFER;
 			unknown_value("/header/type", "type", type);

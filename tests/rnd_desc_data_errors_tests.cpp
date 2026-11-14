@@ -58,6 +58,41 @@ BOOST_AUTO_TEST_CASE(ATextureOfAnUnknownFormat_FailsItsLoad_AndNamesTheValue)
 	BOOST_TEST(texture.error_text().find("unknown texture format 'RGBA99?line two'") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(AnUnknownValue_WithABidiOverrideAndACutMultiByteChar_IsShownWithoutRawControlBytes)
+{
+	// 5 shown chars + 58 'x' = 63 bytes: the 2-byte char that follows would end at byte 65, so it is dropped whole.
+	const std::string name = "ab\\u202Ecd" + std::string(58, 'x') + "\\u00e9z";
+	const auto texture = load<rnd::texture_desc>("hidden.desc",
+		R"({"__type":"texture_2d_desc","header":{"type":")" + name + R"("}})");
+
+	BOOST_TEST(texture.has_error());
+	const std::string text = texture.error_text();
+	BOOST_TEST(text.find("unknown texture type 'ab?cd" + std::string(58, 'x') + "'") != std::string::npos);
+	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos);
+	BOOST_TEST(text.find('\xC3') == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ATextureArrayType_SurvivesAWriteAndARead)
+{
+	for (const char* name : { "texture_1d_array", "texture_2d_array" }) {
+		BOOST_TEST_CONTEXT(name) {
+			const std::string text = std::string(R"({"__type":"texture_2d_desc","header":{"type":")") + name + R"("}})";
+			const auto loaded = load<rnd::texture_desc>(std::string(name) + ".desc", text);
+
+			BOOST_REQUIRE_MESSAGE(loaded.is_ready() && !loaded.has_error(), loaded.error_text());
+			const auto desc = loaded.get_sync();
+			BOOST_REQUIRE(desc);
+			const bool is_1d = std::string_view(name) == "texture_1d_array";
+			BOOST_TEST((desc->header.type == (is_1d ? rnd::driver::TEXTURE_TYPE::TEXTURE_1D_ARRAY
+				: rnd::driver::TEXTURE_TYPE::TEXTURE_2D_ARRAY)));
+
+			boost::json::object written;
+			desc->serialize(written);
+			BOOST_TEST(std::string_view(written.at("header").as_object().at("type").as_string()) == std::string_view(name));
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(GeometryBytes_ThatAreNoBytes_FailTheLoad)
 {
 	std::size_t index = 0;
