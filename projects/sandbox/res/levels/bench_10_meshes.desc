@@ -1,0 +1,295 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "name" : "bench_10_meshes",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 4,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "inp::update_actions",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "627fdb3021b44819",
+                    "name" : "Camera A",
+                    "transform" : {
+                        "position" : [0.0, 0.0, 14.0]
+                    },
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 2
+                        }
+                    }
+                },
+                {
+                    "__id" : "c8cec430f536d18e",
+                    "name" : "Camera B",
+                    "transform" : {
+                        "position" : [0.0, 6.517638206481934, 15.931851387023926],
+                        "rotation" : [-15.0, 0.0, 0.0]
+                    },
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 2
+                        }
+                    }
+                },
+                {
+                    "__id" : "cc55413f3f17a7d8",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "2732f55bf9391723",
+                    "name" : "skybox",
+                    "components" : {
+                        "skybox" : "res://skybox/skybox.desc"
+                    }
+                },
+                {
+                    "__id" : "24086ac65c39f9d4",
+                    "name" : "robot_00",
+                    "transform" : {
+                        "position" : [-9.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "673db862f9f07ecb",
+                    "name" : "quad_00_01",
+                    "transform" : {
+                        "position" : [-7.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "485631641ca14846",
+                    "name" : "quad_01_02",
+                    "transform" : {
+                        "position" : [-5.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "3dac0dcbda67141c",
+                    "name" : "quad_02_03",
+                    "transform" : {
+                        "position" : [-3.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "8d5244b6cec880a4",
+                    "name" : "quad_03_04",
+                    "transform" : {
+                        "position" : [-1.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "7b93731c0e5dd416",
+                    "name" : "quad_04_05",
+                    "transform" : {
+                        "position" : [1.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "42044799301f557e",
+                    "name" : "quad_05_06",
+                    "transform" : {
+                        "position" : [3.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "49e6792c1c141c53",
+                    "name" : "quad_06_07",
+                    "transform" : {
+                        "position" : [5.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "256fbe183b604b03",
+                    "name" : "quad_07_08",
+                    "transform" : {
+                        "position" : [7.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "a09e4fe3128438fd",
+                    "name" : "robot_09",
+                    "transform" : {
+                        "position" : [-9.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                }
+            ]
+        }
+    ]
+}
