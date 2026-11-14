@@ -1064,6 +1064,14 @@ std::string prj::migration::plan_refusal(const migration_plan& plan)
 	return plan.refused;
 }
 
+std::optional<std::string> prj::migration::content_roots_refusal(const std::vector<fs::path>& content_roots)
+{
+	if (auto why = content_root_error(content_roots, reserved_top_names())) {
+		return std::format("project.snkproj: {}; a migration of it could not be rolled back", *why);
+	}
+	return std::nullopt;
+}
+
 std::vector<prj::migration::skipped_file> prj::migration::skipped_by(const migration_plan& plan)
 {
 	std::vector<skipped_file> skipped;
@@ -1121,9 +1129,9 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		return outcome;
 	}
 	const std::vector<fs::path>& content_roots = loaded_manifest.data->content_roots;
-	// A migration its own rollback would refuse is not started: the roots are judged by the rollback's rule.
-	if (auto why = content_root_error(content_roots, reserved_top_names())) {
-		outcome.refused = std::format("project.snkproj: {}; a migration of it could not be rolled back", *why);
+	// Again here: the manifest may have changed since the plan.
+	if (auto why = content_roots_refusal(content_roots)) {
+		outcome.refused = std::move(*why);
 		return outcome;
 	}
 

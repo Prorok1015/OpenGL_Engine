@@ -107,6 +107,10 @@ namespace prj::migration
 	// file without plan.force, or plan.refused. Empty when it may run.
 	std::string plan_refusal(const migration_plan& plan);
 
+	// Why a project with these content roots is not migrated: its rollback would refuse them (check_journal_paths'
+	// rule). plan_migration puts it in plan.refused, so the plan and a dry run show it; apply_migration checks again.
+	std::optional<std::string> content_roots_refusal(const std::vector<std::filesystem::path>& content_roots);
+
 	// The files a migration of `plan` leaves as they are and reports: unknown_type and newer ones (never migrated), and
 	// the invalid ones plan.force passes over.
 	std::vector<skipped_file> skipped_by(const migration_plan& plan);

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -65,6 +66,17 @@ namespace {
 
 	constexpr std::string_view k_not_below = "the path is not a chain of folder names below the root";
 
+}
+
+bool platform::beneath::may_be_short_name(const fs::path& name)
+{
+	const auto& text = name.native();
+	for (std::size_t at = 0; at + 1 < text.size(); ++at) {
+		if (text[at] == '~' && text[at + 1] >= '0' && text[at + 1] <= '9') {
+			return true;
+		}
+	}
+	return false;
 }
 
 #if !defined(_WIN32)
@@ -670,23 +682,76 @@ namespace {
 		return followed;
 	}
 
+	std::optional<std::wstring> final_path(HANDLE handle)
+	{
+		constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+		const DWORD size = ::GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
+		if (size == 0) {
+			return std::nullopt;
+		}
+		std::wstring path(size, L'\0');
+		const DWORD length = ::GetFinalPathNameByHandleW(handle, path.data(), size, flags);
+		if (length == 0 || length >= size) {
+			return std::nullopt;
+		}
+		path.resize(length);
+		return path;
+	}
+
+	// When Windows gives no final path (some network redirectors): a write or a delete is refused, a read goes on if no
+	// name could be a short (8.3) alias.
+	enum class unnormalized { refuse, check_names };
+
+	// Belt and braces over the handle-relative opens: the final path of `file` is `root_path`, the folders and the name,
+	// so no short (8.3) name or other alias reached it.
+	bool lies_at(HANDLE file, const std::optional<std::wstring>& root_path, std::span<const fs::path> parts, const fs::path& name,
+		unnormalized fallback)
+	{
+		const auto actual = final_path(file);
+		if (!actual || !root_path) {
+			const auto plain = [](const fs::path& part) { return !platform::beneath::may_be_short_name(part); };
+			return fallback == unnormalized::check_names && std::ranges::all_of(parts, plain) && plain(name);
+		}
+		std::wstring expected = *root_path;
+		if (expected.ends_with(L'\\')) {
+			expected.pop_back(); // the root of a drive ends with its separator
+		}
+		for (const auto& part : parts) {
+			expected.append(L"\\").append(part.native());
+		}
+		expected.append(L"\\").append(name.native());
+		return ::CompareStringOrdinal(actual->c_str(), static_cast<int>(actual->size()), expected.c_str(),
+			static_cast<int>(expected.size()), TRUE) == CSTR_EQUAL;
+	}
+
 	// Held without FILE_SHARE_DELETE: while the handle is open nobody can rename, remove or replace the folder.
 	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE;
 	constexpr ULONG k_folder_share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+
+	struct held_chain {
+		std::vector<handle_holder> folders;
+		// The root's final path, nullopt when Windows gives none.
+		std::optional<std::wstring> root_path;
+
+		bool empty() const { return folders.empty(); }
+		HANDLE last() const { return folders.back().get(); }
+	};
 
 	// The root and every folder down to `parts`, each opened from the handle of the one above it and all held until
 	// the chain goes; empty on failure, `reached` naming where it stopped.
 	// A folder a file system filter keeps as a reparse point (a cloud placeholder) is entered through the filter
 	// (enter_folder), for writes too since #523; a link or a junction is refused anywhere.
-	std::vector<handle_holder> hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached)
+	// Each folder must lie at its names (lies_at) before the next is opened or made: a short (8.3) alias (GIT~1) would
+	// otherwise lead into another folder, and with `create` make folders there.
+	held_chain hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached, unnormalized fallback)
 	{
-		std::vector<handle_holder> chain;
+		held_chain chain;
 		// Closing what was held must not change the error the caller reports.
 		const auto give_up = [&chain] {
 			const DWORD code = ::GetLastError();
-			chain.clear();
+			chain.folders.clear();
 			::SetLastError(code);
-			return std::vector<handle_holder>{};
+			return held_chain{};
 		};
 		if (create) {
 			std::error_code ec;
@@ -702,21 +767,40 @@ namespace {
 		if (!top.valid()) {
 			return give_up();
 		}
-		chain.push_back(std::move(top));
-		for (const auto& part : parts) {
+		chain.root_path = final_path(top.get());
+		chain.folders.push_back(std::move(top));
+		const std::span<const fs::path> all_parts(parts);
+		for (std::size_t index = 0; index < parts.size(); ++index) {
+			const fs::path& part = parts[index];
 			reached /= part;
-			handle_holder next = open_in(chain.back().get(), part, k_folder_access, k_folder_share,
-				create ? FILE_OPEN_IF : FILE_OPEN, FILE_DIRECTORY_FILE);
-			const HANDLE parent = chain.back().get();
+			const HANDLE parent = chain.last();
+			handle_holder next = open_in(parent, part, k_folder_access, k_folder_share, create ? FILE_OPEN_IF : FILE_OPEN, FILE_DIRECTORY_FILE);
 			next = enter_folder(std::move(next), [parent, &part] {
 				return open_in(parent, part, k_folder_access, k_folder_share, FILE_OPEN, FILE_DIRECTORY_FILE, false);
 			});
 			if (!next.valid()) {
 				return give_up();
 			}
-			chain.push_back(std::move(next));
+			if (!lies_at(next.get(), chain.root_path, all_parts.first(index), part, fallback)) {
+				::SetLastError(ERROR_CANT_ACCESS_FILE);
+				return give_up();
+			}
+			chain.folders.push_back(std::move(next));
 		}
 		return chain;
+	}
+
+	// Before a rename that may replace `leaf`: what is there now lies at its name, so a short (8.3) alias does not
+	// replace another file. Nothing there, or a file being deleted (opening one is denied), lets the rename go on.
+	bool replaced_leaf_lies_at(const held_chain& chain, std::span<const fs::path> parts, const fs::path& leaf)
+	{
+		const handle_holder existing = open_in(chain.last(), leaf, FILE_READ_ATTRIBUTES,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, 0);
+		if (!existing.valid()) {
+			const DWORD code = ::GetLastError();
+			return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND || code == ERROR_ACCESS_DENIED;
+		}
+		return lies_at(existing.get(), chain.root_path, parts, leaf, unnormalized::refuse);
 	}
 
 	bool set_delete_on_close(HANDLE file)
@@ -751,38 +835,6 @@ namespace {
 		const fs::path& m_path;
 		bool m_armed = true;
 	};
-
-	std::optional<std::wstring> final_path(HANDLE handle)
-	{
-		constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
-		const DWORD size = ::GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
-		if (size == 0) {
-			return std::nullopt;
-		}
-		std::wstring path(size, L'\0');
-		const DWORD length = ::GetFinalPathNameByHandleW(handle, path.data(), size, flags);
-		if (length == 0 || length >= size) {
-			return std::nullopt;
-		}
-		path.resize(length);
-		return path;
-	}
-
-	// Belt and braces over the handle-relative opens: the file's final path is the root's, the folders and the name.
-	bool lies_at(HANDLE file, HANDLE root, const std::vector<fs::path>& parts, const fs::path& name)
-	{
-		const auto actual = final_path(file);
-		auto expected = final_path(root);
-		if (!actual || !expected) {
-			return false;
-		}
-		for (const auto& part : parts) {
-			expected->append(L"\\").append(part.native());
-		}
-		expected->append(L"\\").append(name.native());
-		return ::CompareStringOrdinal(actual->c_str(), static_cast<int>(actual->size()), expected->c_str(),
-			static_cast<int>(expected->size()), TRUE) == CSTR_EQUAL;
-	}
 
 	// NtSetInformationFile (wdm.h), looked up rather than declared: winternl.h does not have it.
 	using set_information_file_t = NTSTATUS(NTAPI*)(HANDLE, IO_STATUS_BLOCK*, void*, ULONG, ULONG);
@@ -833,7 +885,7 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 		return std::string{ k_not_below };
 	}
 	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(root.path(), *parts, true, reached);
+	const held_chain chain = hold_chain(root.path(), *parts, true, reached, unnormalized::refuse);
 	if (chain.empty()) {
 		return last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached);
 	}
@@ -842,12 +894,12 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 	}
 	const fs::path target = reached / request.leaf;
 	// FILE_CREATE: nothing planted at the temp name is opened, not even a link.
-	handle_holder file = open_in(chain.back().get(), request.tmp_leaf, FILE_GENERIC_WRITE | DELETE, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE);
+	handle_holder file = open_in(chain.last(), request.tmp_leaf, FILE_GENERIC_WRITE | DELETE, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE);
 	if (!file.valid()) {
 		return last_error_text("cannot create", request.tmp_path);
 	}
 	temp_guard guard{ file.get(), request.tmp_path };
-	if (!lies_at(file.get(), chain.front().get(), *parts, request.tmp_leaf)) {
+	if (!lies_at(file.get(), chain.root_path, *parts, request.tmp_leaf, unnormalized::refuse)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the temp file was not created below the root", request.tmp_path);
 	}
@@ -867,11 +919,15 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 	if (request.hook && *request.hook) {
 		(*request.hook)(write_stage::before_rename, request.tmp_path);
 	}
+	if (request.replace && !replaced_leaf_lies_at(chain, *parts, request.leaf)) {
+		::SetLastError(ERROR_CANT_ACCESS_FILE);
+		return last_error_text("the file to replace is not below the root under this name", target);
+	}
 	// A file that was just removed (an erase on this thread) can stay delete-pending while another handle (watcher,
 	// indexer, antivirus) is open on it, and replacing it is denied for a moment.
 	bool renamed = false;
 	for (int attempt = 0; attempt < 50 && !renamed; ++attempt) {
-		renamed = rename_to(file.get(), chain.back().get(), request.leaf, request.replace);
+		renamed = rename_to(file.get(), chain.last(), request.leaf, request.replace);
 		if (!renamed) {
 			if (::GetLastError() != ERROR_ACCESS_DENIED) {
 				break;
@@ -893,7 +949,7 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 		return std::string{ k_not_below };
 	}
 	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(root.path(), *parts, false, reached);
+	const held_chain chain = hold_chain(root.path(), *parts, false, reached, unnormalized::refuse);
 	if (chain.empty()) {
 		const DWORD code = ::GetLastError();
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND
@@ -901,7 +957,7 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 			: last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached);
 	}
 	const fs::path path = reached / leaf;
-	handle_holder file = open_in(chain.back().get(), leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
+	handle_holder file = open_in(chain.last(), leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
 		files_only ? FILE_NON_DIRECTORY_FILE : 0);
 	if (!file.valid()) {
 		const DWORD code = ::GetLastError();
@@ -919,7 +975,7 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 	}
 	// As write_beneath and rename_beneath: a short (8.3) name or any other alias of a folder or of the leaf would
 	// delete a file elsewhere than the names say.
-	if (!lies_at(file.get(), chain.front().get(), *parts, leaf)) {
+	if (!lies_at(file.get(), chain.root_path, *parts, leaf, unnormalized::refuse)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the file was not found below the root under these names", path);
 	}
@@ -937,12 +993,12 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 		return std::string{ k_not_below };
 	}
 	fs::path from_reached;
-	const std::vector<handle_holder> from_chain = hold_chain(root.path(), *from_parts, false, from_reached);
+	const held_chain from_chain = hold_chain(root.path(), *from_parts, false, from_reached, unnormalized::refuse);
 	if (from_chain.empty()) {
 		return last_error_text("cannot open the folder (a link, a junction, or not a folder)", from_reached);
 	}
 	const fs::path source = from_reached / request.from_leaf;
-	handle_holder file = open_in(from_chain.back().get(), request.from_leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	handle_holder file = open_in(from_chain.last(), request.from_leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		FILE_OPEN, FILE_NON_DIRECTORY_FILE);
 	if (!file.valid()) {
 		return last_error_text("cannot find", source);
@@ -955,16 +1011,20 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("not a regular file", source);
 	}
-	if (!lies_at(file.get(), from_chain.front().get(), *from_parts, request.from_leaf)) {
+	if (!lies_at(file.get(), from_chain.root_path, *from_parts, request.from_leaf, unnormalized::refuse)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the file was not found below the root", source);
 	}
 	fs::path to_reached;
-	const std::vector<handle_holder> to_chain = hold_chain(root.path(), *to_parts, false, to_reached);
+	const held_chain to_chain = hold_chain(root.path(), *to_parts, false, to_reached, unnormalized::refuse);
 	if (to_chain.empty()) {
 		return last_error_text("cannot open the target folder (missing, a link, a junction, or not a folder)", to_reached);
 	}
-	if (!rename_to(file.get(), to_chain.back().get(), request.to_leaf, request.allow_replace)) {
+	if (request.allow_replace && !replaced_leaf_lies_at(to_chain, *to_parts, request.to_leaf)) {
+		::SetLastError(ERROR_CANT_ACCESS_FILE);
+		return last_error_text("the file to replace is not below the root under this name", to_reached / request.to_leaf);
+	}
+	if (!rename_to(file.get(), to_chain.last(), request.to_leaf, request.allow_replace)) {
 		return last_error_text("cannot move to", to_reached / request.to_leaf);
 	}
 	return {};
@@ -989,7 +1049,7 @@ namespace {
 			return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
 		};
 		fs::path reached;
-		const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached);
+		const held_chain chain = hold_chain(request.root, *parts, false, reached, unnormalized::check_names);
 		if (chain.empty()) {
 			return { is_missing() ? read_status::missing : read_status::failed,
 				last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached) };
@@ -1001,7 +1061,7 @@ namespace {
 		// Opened itself if it is a reparse point (open_in adds FILE_OPEN_REPARSE_POINT); shared, so a writer may still
 		// replace or remove the file while it is read.
 		constexpr ULONG k_file_share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-		file_out = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN, 0);
+		file_out = open_in(chain.last(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN, 0);
 		if (!file_out.valid()) {
 			if (is_missing()) {
 				return { read_status::missing, {} };
@@ -1024,7 +1084,7 @@ namespace {
 			return { read_status::failed, last_error_text("cannot inspect the reparse point", path) };
 		case reparse_kind::filter: {
 			// A placeholder or a deduplicated file: read through its filter, if that is still the same file.
-			handle_holder followed = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN,
+			handle_holder followed = open_in(chain.last(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN,
 				FILE_NON_DIRECTORY_FILE, false);
 			BY_HANDLE_FILE_INFORMATION after{};
 			if (!followed.valid() || !::GetFileInformationByHandle(followed.get(), &after)) {
@@ -1042,7 +1102,7 @@ namespace {
 			return { read_status::not_regular, {} };
 		}
 		// A short (8.3) name or any other alias would read a file elsewhere than the names say.
-		if (!lies_at(file_out.get(), chain.front().get(), *parts, request.leaf)) {
+		if (!lies_at(file_out.get(), chain.root_path, *parts, request.leaf, unnormalized::check_names)) {
 			::SetLastError(ERROR_CANT_ACCESS_FILE);
 			return { read_status::failed, last_error_text("the file was not found below the root under these names", path) };
 		}

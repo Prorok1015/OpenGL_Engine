@@ -16,6 +16,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -806,30 +807,100 @@ BOOST_AUTO_TEST_CASE(AFileNamedLikeAShortName_MigratesAndRollsBack)
 	BOOST_TEST(!fs::exists(copy.res() / "IMG~1.PNG"));
 }
 
+// #910 review: the name rule a read falls back on when Windows gives no final path.
+BOOST_AUTO_TEST_CASE(AShortNameLookalike_HasATildeAndADigit)
+{
+	BOOST_TEST(platform::beneath::may_be_short_name("SNK~1"));
+	BOOST_TEST(platform::beneath::may_be_short_name("IMG~12.PNG"));
+	BOOST_TEST(!platform::beneath::may_be_short_name("a~b.desc"));
+	BOOST_TEST(!platform::beneath::may_be_short_name("name~"));
+	BOOST_TEST(!platform::beneath::may_be_short_name("plain.desc"));
+}
+
 #ifdef _WIN32
-// #910 review: on Windows the no-follow primitives refuse an alias themselves: a delete or a read through the short name
-// of .snk does not reach .snk.
+namespace {
+	fs::path short_name_given(const fs::path& path)
+	{
+		std::wstring buffer(MAX_PATH + 1, L'\0');
+		const DWORD length = ::GetShortPathNameW(path.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
+		if (length == 0 || length >= buffer.size()) return {};
+		const fs::path alias = fs::path(buffer.substr(0, length)).filename();
+		return alias == path.filename() ? fs::path{} : alias;
+	}
+
+	// The short name of `path`: the one Windows made, else `wanted` set here. Most volumes make no 8.3 names; setting one
+	// needs SeRestorePrivilege, which an administrator (a CI runner) has. Empty when neither works.
+	fs::path short_name_of(const fs::path& path, const wchar_t* wanted)
+	{
+		if (fs::path alias = short_name_given(path); !alias.empty()) return alias;
+		HANDLE token = nullptr;
+		if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)) {
+			TOKEN_PRIVILEGES privileges{};
+			privileges.PrivilegeCount = 1;
+			if (::LookupPrivilegeValueW(nullptr, L"SeRestorePrivilege", &privileges.Privileges[0].Luid)) {
+				privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+				::AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr);
+			}
+			::CloseHandle(token);
+		}
+		const HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (file == INVALID_HANDLE_VALUE) return {};
+		const BOOL set = ::SetFileShortNameW(file, wanted);
+		::CloseHandle(file);
+		return set ? short_name_given(path) : fs::path{};
+	}
+}
+
+// #910 review: on Windows the no-follow primitives refuse an alias themselves, in a folder of the chain and at the
+// leaf: a delete, a read, a write (no folder is made inside .snk) and a move through a short name do not reach what it
+// names, and a write does not replace a file through its short name.
 BOOST_AUTO_TEST_CASE(TheBeneathPrimitives_RefuseAShortNameAlias)
 {
 	write_text(copy.root() / ".snk/x", "keep");
-	const fs::path full = fs::canonical(copy.root() / ".snk");
-	std::wstring buffer(MAX_PATH + 1, L'\0');
-	const DWORD length = ::GetShortPathNameW(full.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
-	if (length == 0 || length >= buffer.size()) {
-		BOOST_TEST_MESSAGE("no short name for .snk here: skipped");
+	write_text(copy.root() / "res/a_long_file_name.txt", "kept");
+	const fs::path folder_alias = short_name_of(fs::canonical(copy.root() / ".snk"), L"SNK~1");
+	const fs::path leaf_alias = short_name_of(fs::canonical(copy.root() / "res/a_long_file_name.txt"), L"ALONGF~1.TXT");
+	if (folder_alias.empty() || leaf_alias.empty()) {
+		BOOST_TEST_MESSAGE("TheBeneathPrimitives_RefuseAShortNameAlias: no short names on this volume and none can be set: skipped");
 		return;
 	}
-	buffer.resize(length);
-	const fs::path alias = fs::path(buffer).filename();
-	if (alias == full.filename()) {
-		BOOST_TEST_MESSAGE("8.3 names are off on this volume: skipped");
-		return;
-	}
-	const prj::project_file_text read = prj::read_project_file(copy.root(), alias / "x");
+	BOOST_TEST_MESSAGE(std::format("TheBeneathPrimitives_RefuseAShortNameAlias: runs with {} and {}", folder_alias.string(), leaf_alias.string()));
+
+	const prj::project_file_text read = prj::read_project_file(copy.root(), folder_alias / "x");
 	BOOST_TEST((!read.exists || !read.error.empty()));
 	platform::beneath::pinned_root pinned{ fs::canonical(copy.root()) };
-	BOOST_TEST(!platform::beneath::remove_beneath(pinned, alias, "x", true).empty());
+	BOOST_TEST(!platform::beneath::remove_beneath(pinned, folder_alias, "x", true).empty());
 	BOOST_TEST(read_text(copy.root() / ".snk/x") == "keep");
+
+	const std::string text = "lock";
+	const auto bytes = std::as_bytes(std::span(text));
+	platform::beneath::write_request into_folder{};
+	into_folder.folder = folder_alias / "index.lock";
+	into_folder.leaf = "x";
+	into_folder.tmp_leaf = "x.tmp";
+	into_folder.data = bytes;
+	into_folder.tmp_path = copy.root() / folder_alias / "index.lock/x.tmp";
+	BOOST_TEST(!platform::beneath::write_beneath(pinned, into_folder).empty());
+	BOOST_TEST(!fs::exists(copy.root() / ".snk/index.lock"));
+
+	platform::beneath::rename_request moved{};
+	moved.from_folder = "res";
+	moved.from_leaf = "a_long_file_name.txt";
+	moved.to_folder = folder_alias;
+	moved.to_leaf = "moved.txt";
+	BOOST_TEST(!platform::beneath::rename_beneath(pinned, moved).empty());
+	BOOST_TEST(!fs::exists(copy.root() / ".snk/moved.txt"));
+
+	platform::beneath::write_request over_leaf{};
+	over_leaf.folder = "res";
+	over_leaf.leaf = leaf_alias;
+	over_leaf.tmp_leaf = "replace.tmp";
+	over_leaf.data = bytes;
+	over_leaf.tmp_path = copy.root() / "res/replace.tmp";
+	BOOST_TEST(!platform::beneath::write_beneath(pinned, over_leaf).empty());
+	BOOST_TEST(read_text(copy.root() / "res/a_long_file_name.txt") == "kept");
+	BOOST_TEST(!fs::exists(copy.root() / "res/replace.tmp"));
 }
 #endif
 
@@ -844,6 +915,8 @@ BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
 			write_text(copy.root() / "project.snkproj", json::serialize(manifest));
 			fs::create_directories(copy.root() / extra);
 			const auto before = content_of(copy.root());
+			const pmg::migration_plan plan = pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs), *descs);
+			BOOST_TEST(pmg::plan_refusal(plan).find("could not be rolled back") != std::string::npos, pmg::plan_refusal(plan));
 			const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
 			BOOST_TEST(outcome.refused.find("could not be rolled back") != std::string::npos, outcome.refused);
 			BOOST_TEST((content_of(copy.root()) == before));
