@@ -830,24 +830,32 @@ namespace {
 
 	// The short name of `path`: the one Windows made, else `wanted` set here. Most volumes make no 8.3 names; setting one
 	// needs SeRestorePrivilege, which an administrator (a CI runner) has. Empty when neither works.
+	void set_restore_privilege(bool enabled)
+	{
+		HANDLE token = nullptr;
+		if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)) return;
+		TOKEN_PRIVILEGES privileges{};
+		privileges.PrivilegeCount = 1;
+		if (::LookupPrivilegeValueW(nullptr, L"SeRestorePrivilege", &privileges.Privileges[0].Luid)) {
+			privileges.Privileges[0].Attributes = enabled ? SE_PRIVILEGE_ENABLED : 0;
+			::AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr);
+		}
+		::CloseHandle(token);
+	}
+
 	fs::path short_name_of(const fs::path& path, const wchar_t* wanted)
 	{
 		if (fs::path alias = short_name_given(path); !alias.empty()) return alias;
-		HANDLE token = nullptr;
-		if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)) {
-			TOKEN_PRIVILEGES privileges{};
-			privileges.PrivilegeCount = 1;
-			if (::LookupPrivilegeValueW(nullptr, L"SeRestorePrivilege", &privileges.Privileges[0].Luid)) {
-				privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-				::AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr);
-			}
-			::CloseHandle(token);
-		}
+		set_restore_privilege(true);
 		const HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-		if (file == INVALID_HANDLE_VALUE) return {};
-		const BOOL set = ::SetFileShortNameW(file, wanted);
-		::CloseHandle(file);
+		BOOL set = FALSE;
+		if (file != INVALID_HANDLE_VALUE) {
+			set = ::SetFileShortNameW(file, wanted);
+			::CloseHandle(file);
+		}
+		// The rest of unit_tests runs without the privilege, as a person's editor does.
+		set_restore_privilege(false);
 		return set ? short_name_given(path) : fs::path{};
 	}
 }

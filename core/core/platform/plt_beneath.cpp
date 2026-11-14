@@ -791,14 +791,18 @@ namespace {
 	}
 
 	// Before a rename that may replace `leaf`: what is there now lies at its name, so a short (8.3) alias does not
-	// replace another file. Nothing there, or a file being deleted (opening one is denied), lets the rename go on.
+	// replace another file. Nothing there lets the rename go on; so does a file being deleted (opening one is denied),
+	// unless the name could be an alias, which then cannot be checked.
 	bool replaced_leaf_lies_at(const held_chain& chain, std::span<const fs::path> parts, const fs::path& leaf)
 	{
 		const handle_holder existing = open_in(chain.last(), leaf, FILE_READ_ATTRIBUTES,
 			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, 0);
 		if (!existing.valid()) {
 			const DWORD code = ::GetLastError();
-			return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND || code == ERROR_ACCESS_DENIED;
+			if (code == ERROR_ACCESS_DENIED) {
+				return !platform::beneath::may_be_short_name(leaf);
+			}
+			return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
 		}
 		return lies_at(existing.get(), chain.root_path, parts, leaf, unnormalized::refuse);
 	}
