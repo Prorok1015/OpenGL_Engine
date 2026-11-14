@@ -1,4 +1,5 @@
 #include "edt_schema_inspector.h"
+#include "edt_override_edit.h"
 #include "edt_reference.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
@@ -1202,7 +1203,7 @@ json::value edt::schema_ui::compose(const desc::type_schema& schema, const desc:
 		}
 		json::value copy(*layer);
 		resolve_aliases(schema, copy);
-		desc::json_deep_merge(result.as_object(), copy.as_object());
+		override_edit::merge_layer(registry, schema, result.as_object(), copy.as_object());
 	}
 	drop_null_keys(schema, registry, result, 0);
 	return result;

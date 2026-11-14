@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -638,6 +639,105 @@ BOOST_FIXTURE_TEST_CASE(WriteReferences_APathWithAnIdBecomesAGuidAndAPath, schem
 	ds.write_references(again);
 	BOOST_TEST(again == file, "a second pass changes nothing");
 	rs.set_asset_index(nullptr);
+}
+
+// #773: a writer never drops a guid the file had. Where the index gives a path no ID (an unknown guid, a duplicate, no
+// index), the guid the replaced file wrote for that path is written back, unless the index puts it on another file.
+BOOST_FIXTURE_TEST_CASE(WriteReferences_KeepsTheGuidTheReplacedFileHadForAPath, schema_fixture)
+{
+	register_reference_schemas(ds);
+	const json::value replaced = json::parse(R"({
+		"__type": "wr.thing",
+		"texture": { "guid": "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6", "path": "res://kept.png" },
+		"tex": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://moved_away.png" },
+		"list": [ { "guid": "11111111-2222-4333-8444-555555555555", "path": "res://twice.png" },
+		          { "guid": "66666666-7777-4888-9999-aaaaaaaaaaaa", "path": "res://twice.png" } ]
+	})");
+	const json::value written = json::parse(R"({
+		"__type": "wr.thing",
+		"texture": "res://kept.png",
+		"tex": "res://moved_away.png",
+		"list": [ "res://twice.png", "res://other.png" ],
+		"named": { "a": "res://kept.png" }
+	})");
+	const json::value kept_texture = json::object{ { "guid", "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6" }, { "path", "res://kept.png" } };
+
+	json::value without_index = written;
+	ds.write_references(without_index, &replaced);
+	BOOST_TEST(without_index.at("texture") == kept_texture);
+	BOOST_TEST(without_index.at_pointer("/named/a") == kept_texture, "a path the file wrote with a guid gets it wherever it stands");
+	BOOST_TEST(without_index.at_pointer("/list/0") == json::value("res://twice.png"), "a path written with two guids keeps none");
+
+	auto index = std::make_shared<ids_index>();
+	index->hold(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), "res://elsewhere.png");
+	rs.set_asset_index(index);
+	json::value with_index = written;
+	ds.write_references(with_index, &replaced);
+	const std::string bytes(R"({"texture":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://kept.png"}})");
+	json::value from_bytes = written;
+	ds.write_references(from_bytes, std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+	rs.set_asset_index(nullptr);
+
+	BOOST_TEST(with_index.at("texture") == kept_texture, "a guid the index does not know is kept");
+	BOOST_TEST(with_index.at("tex") == json::value("res://moved_away.png"), "a guid the index puts on another file is not");
+	BOOST_TEST(from_bytes.at("texture") == kept_texture);
+}
+
+// #773: a reference that already names where its file is, in whatever spelling, is left as written: no file changes for it.
+BOOST_FIXTURE_TEST_CASE(WriteReferences_LeavesAReferenceThatIsRightAsWritten, schema_fixture)
+{
+	register_reference_schemas(ds);
+	auto index = std::make_shared<ids_index>();
+	index->hold(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), "res://known.png");
+	rs.set_asset_index(index);
+	const json::value original = json::parse(R"({
+		"__type": "wr.thing",
+		"texture": { "path": "res://known.png", "guid": "3F2A9C1E-7B4D-4E8A-9C0F-1A2B3C4D5E6F" }
+	})");
+	json::value file = original;
+	ds.write_references(file);
+	rs.set_asset_index(nullptr);
+	BOOST_TEST(file == original);
+	BOOST_TEST(json::serialize(file) == json::serialize(original), "the order of the keys stays too");
+}
+
+// #773: an override record has no __type; the schema of the component it applies to says where its references are.
+BOOST_FIXTURE_TEST_CASE(WriteReferences_AtAPointerOfASchema, schema_fixture)
+{
+	register_reference_schemas(ds);
+	const res::asset_id known = *res::asset_id_from_text("11111111-2222-4333-8444-555555555555");
+	auto index = std::make_shared<ids_index>();
+	index->hold(known, "res://known.png");
+	rs.set_asset_index(index);
+	const desc::type_schema& thing = *ds.find_schema("wr.thing");
+	const auto at = [&](std::string_view pointer, json::value value, const json::value* merged_into = nullptr) {
+		ds.write_references(thing, pointer, value, merged_into);
+		return value;
+	};
+	const json::value ref = json::object{ { "guid", res::to_text(known) }, { "path", "res://known.png" } };
+
+	const json::value texture = at("/texture", json::value("res://known.png"));
+	const json::value alias = at("/tex", json::value("res://known.png"));
+	const json::value list_item = at("/list/0", json::value("res://known.png"));
+	const json::value slot = at("/slot", json::parse(R"({"image":"res://known.png"})"));
+	const json::value slot_image = at("/slot/image", json::value("res://known.png"));
+	const json::value slots_item = at("/slots/0/image", json::value("res://known.png"));
+	const json::value label = at("/label", json::value("res://known.png"));
+	const json::value blob = at("/blob", json::value("res://known.png"));
+	const json::value merged_into = json::parse(R"({"texture":{"__type":"wr.thing"},"tex":"res://x.png"})");
+	const json::value whole = at("", json::parse(R"({"texture":"res://known.png","tex":"res://known.png"})"), &merged_into);
+	rs.set_asset_index(nullptr);
+
+	BOOST_TEST(texture == ref);
+	BOOST_TEST(alias == ref);
+	BOOST_TEST(list_item == ref);
+	BOOST_TEST(slot.at("image") == ref);
+	BOOST_TEST(slot_image == ref);
+	BOOST_TEST(slots_item == ref);
+	BOOST_TEST(label == json::value("res://known.png"));
+	BOOST_TEST(blob == json::value("res://known.png"));
+	BOOST_TEST(whole.at("texture") == json::value("res://known.png"), "merged into an inline desc, a path stays a string");
+	BOOST_TEST(whole.at("tex") == ref);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

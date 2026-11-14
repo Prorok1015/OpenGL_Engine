@@ -48,7 +48,8 @@ constexpr const char* k_plain_schema = R"({
 
 constexpr const char* k_linked_schema = R"({
 	"name": "test.linked", "kind": "desc", "is_document": true,
-	"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 }, { "name": "texture", "kind": "res_tag", "default": "" } ]
+	"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 }, { "name": "texture", "kind": "res_tag", "default": "" },
+		{ "name": "material", "kind": "desc_ref", "ref_type": "test.plain", "default": "" } ]
 })";
 
 // Path <-> ID both ways, as the editor's asset database answers.
@@ -1567,6 +1568,38 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 	BOOST_TEST(held == expected);
 	BOOST_REQUIRE_MESSAGE(again.saved, again.error);
 	BOOST_TEST(parsed("linked.desc").at("texture") == expected);
+}
+
+// #773: in a __parent chain a reference field of the nearer file replaces the farther one's value whole. Merged key by
+// key, a {guid, path} would take the __type of an inline desc, an inline desc the guid of a reference, and a new path the
+// old guid.
+BOOST_AUTO_TEST_CASE(AParentChain_AReferenceReplacesTheInheritedValueWhole)
+{
+	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
+	put("inline_parent.desc", R"({"__type":"test.linked","material":{"__type":"test.plain","speed":5.0}})");
+	put("ref_parent.desc", R"({"__type":"test.linked","material":{)" + guid + R"(,"path":"res://m.desc"}})");
+	put("ref_over_inline.desc", R"({"__type":"test.linked","__parent":"res://inline_parent.desc","material":{)" + guid + R"(,"path":"res://m.desc"}})");
+	put("inline_over_ref.desc", R"({"__type":"test.linked","__parent":"res://ref_parent.desc","material":{"__type":"test.plain","speed":2.0}})");
+	put("path_over_ref.desc", R"({"__type":"test.linked","__parent":"res://ref_parent.desc","material":{"path":"res://n.desc"}})");
+	// One level more: the chain the document is opened over is merged the same way.
+	put("grandchild.desc", R"({"__type":"test.linked","__parent":"res://ref_over_inline.desc","speed":3.0})");
+	const auto material_of = [this](std::string_view name) {
+		edt::data_document document = make();
+		const edt::open_result opened = document.open(res::tag{ "res://" + std::string(name) });
+		BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+		return json::value(document.shown().at("material"));
+	};
+
+	const json::value reference = json::parse("{" + guid + R"(,"path":"res://m.desc"})");
+	BOOST_TEST(material_of("ref_over_inline.desc") == reference);
+	BOOST_TEST(material_of("grandchild.desc") == reference);
+	BOOST_TEST(material_of("path_over_ref.desc") == json::parse(R"({"path":"res://n.desc"})"));
+	const json::value inline_over = material_of("inline_over_ref.desc");
+	BOOST_REQUIRE(inline_over.is_object());
+	BOOST_TEST(inline_over.as_object().at("__type") == json::value("test.plain"));
+	BOOST_TEST(inline_over.as_object().at("speed").to_number<double>() == 2.0);
+	BOOST_TEST(!inline_over.as_object().contains("guid"));
+	BOOST_TEST(!inline_over.as_object().contains("path"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

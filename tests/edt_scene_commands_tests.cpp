@@ -17,8 +17,10 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
+#include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/level/scn_level_desc.h>
 #include <boost/describe.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
@@ -30,6 +32,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -170,6 +173,33 @@ namespace desc
 {
 	template<>
 	inline constexpr auto field_attrs<slot_map_component> = attrs(f("slots").ref("probe.icon_slot"));
+}
+
+namespace {
+
+// Path <-> ID both ways, as the editor's asset database answers.
+struct written_ids_index final : res::asset_index
+{
+	std::map<std::string, res::asset_id, std::less<>> ids;
+	std::map<res::asset_id, res::tag> paths;
+
+	void hold(const res::asset_id& id, std::string_view path)
+	{
+		ids.emplace(std::string(path), id);
+		paths.insert_or_assign(id, res::tag{ std::string(path) });
+	}
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		const auto found = ids.find(tag.view());
+		return found == ids.end() ? std::nullopt : std::optional{ found->second };
+	}
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(edt_scene_commands_tests, commands_fixture)
@@ -1019,6 +1049,50 @@ BOOST_AUTO_TEST_CASE(a_reference_is_checked_by_its_guid_and_its_written_path)
 	BOOST_CHECK_MESSAGE(written.error.find("material/path") != std::string::npos, written.error);
 	BOOST_CHECK_MESSAGE(moved.ok, moved.error);
 	BOOST_CHECK_MESSAGE(known.ok, known.error);
+}
+
+// #773: an override record has no __type. The level writer reads its value by the schema of the component the instance
+// has there, so a reference set on an instance is written as {guid, path} too: in a record of the field and in a record of
+// the whole component.
+BOOST_AUTO_TEST_CASE(a_reference_in_an_override_record_is_written_with_its_guid)
+{
+	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");
+	const auto set = [&](const std::string& patch) {
+		return call("component.set", R"({"ref":)" + eye + R"(,"key":"mesh","patch":)" + patch + "}");
+	};
+	const auto geometry_set = set(R"({"geometry":"res://g.desc"})");
+	BOOST_REQUIRE_MESSAGE(geometry_set.ok, geometry_set.error);
+	const auto material_set = set(R"({"material":{"path":"res://m.desc"}})");
+	BOOST_REQUIRE_MESSAGE(material_set.ok, material_set.error);
+
+	const res::asset_id geometry = *res::asset_id_from_text("11111111-2222-4333-8444-555555555555");
+	const res::asset_id material = *res::asset_id_from_text("66666666-7777-4888-9999-aaaaaaaaaaaa");
+	auto index = std::make_shared<written_ids_index>();
+	index->hold(geometry, "res://g.desc");
+	index->hold(material, "res://m.desc");
+	rs->set_asset_index(index);
+	json::value level(scn::level_desc::build_json("l", scene.world_descs, *descs, ""));
+	edt::override_edit::write_record_references(*descs, *assembler, scene.world_descs, level);
+	rs->set_asset_index(nullptr);
+
+	boost::system::error_code ec;
+	const json::value* records = level.find_pointer("/worlds/1/children/0/overrides", ec);
+	BOOST_REQUIRE(records);
+	BOOST_REQUIRE(records->is_array());
+	const auto record_at = [&](std::string_view path) -> const json::value* {
+		for (const json::value& record : records->as_array()) {
+			const json::value* component = record.as_object().if_contains("component");
+			const json::value* at = record.as_object().if_contains("path");
+			if (component && *component == "mesh" && at && *at == path) return record.as_object().if_contains("value");
+		}
+		return nullptr;
+	};
+	const json::value* field_record = record_at("/material");
+	const json::value* component_record = record_at("");
+	BOOST_REQUIRE(field_record);
+	BOOST_REQUIRE(component_record);
+	BOOST_TEST(*field_record == json::value(json::object{ { "guid", res::to_text(material) }, { "path", "res://m.desc" } }));
+	BOOST_TEST(component_record->at("geometry") == json::value(json::object{ { "guid", res::to_text(geometry) }, { "path", "res://g.desc" } }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

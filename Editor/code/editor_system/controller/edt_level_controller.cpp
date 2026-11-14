@@ -1,5 +1,6 @@
 #include "edt_level_controller.h"
 #include "edt_desc_file_commands.h"
+#include "edt_override_edit.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
@@ -377,6 +378,9 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 
 	// Same writer as every other desc save, so level files are indented and diff well.
 	boost::json::value level_file{ std::move(level_json) };
+	if (scn::ecs_assembler* assembler = m_services.assembler()) {
+		override_edit::write_record_references(*m_services.descs(), *assembler, m_state.world_descs, level_file);
+	}
 	m_services.descs()->write_references(level_file);
 	const auto bytes = m_services.descs()->serialize_to_bytes(level_file);
 	// Through the resolver, which keeps the file (and its temp file) inside the resource root: a Save As path with

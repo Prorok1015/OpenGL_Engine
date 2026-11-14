@@ -103,7 +103,7 @@ std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, c
     json::value file{ std::move(body) };
     // As desc_adapter_t: only a res:// file is in the asset index.
     if (tag.protocol() == ::res::tag::default_protocol()) {
-        m_desc_system.write_references(file);
+        m_desc_system.write_references_over(file, tag);
     }
     return m_desc_system.serialize_to_bytes(file);
 }

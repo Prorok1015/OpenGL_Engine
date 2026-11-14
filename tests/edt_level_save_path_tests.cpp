@@ -126,25 +126,6 @@ struct ids_index final : res::asset_index
 	}
 };
 
-// The first object under `value` whose "__type" is `type`.
-const boost::json::object* typed_object(const boost::json::value& value, std::string_view type)
-{
-	if (const boost::json::object* object = value.if_object()) {
-		if (const boost::json::value* named = object->if_contains("__type"); named && named->is_string() && named->as_string() == type) {
-			return object;
-		}
-		for (const auto& member : *object) {
-			if (const boost::json::object* found = typed_object(member.value(), type)) return found;
-		}
-	}
-	if (const boost::json::array* items = value.if_array()) {
-		for (const boost::json::value& item : *items) {
-			if (const boost::json::object* found = typed_object(item, type)) return found;
-		}
-	}
-	return nullptr;
-}
-
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtLevelSavePathTests, level_save_fixture)
@@ -369,12 +350,19 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 	scn::prefab_desc::prefab_comp_node sky;
 	sky.type_name = "skybox_desc";
 	sky.overrides["material"] = "res://sky.mat.desc";
+	// A guid the index does not know: written back as it is.
+	const boost::json::value unknown = boost::json::parse(R"({"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://gone.mat.desc"})");
+	scn::prefab_desc::prefab_comp_node lost_sky;
+	lost_sky.type_name = "skybox_desc";
+	lost_sky.overrides["material"] = unknown;
 	scn::world_desc world;
 	world.get_root().node_id = 1;
 	world.get_root().components["sky"] = std::move(sky);
+	world.get_root().components["sky_lost"] = std::move(lost_sky);
 	// No world name: no world is loaded here, so the save has no live transforms to take over.
 	state.world_descs.push_back(std::move(world));
 	state.level_tag = res::tag::make("levels/sky.desc");
+	state.level_guid = "11111111-2222-4333-8444-555555555555";
 
 	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
 	auto index = std::make_shared<ids_index>();
@@ -387,9 +375,14 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 
 	BOOST_REQUIRE(first);
 	const boost::json::value file = boost::json::parse(written);
-	const boost::json::object* component = typed_object(file, "skybox_desc");
-	BOOST_REQUIRE(component);
-	BOOST_TEST(component->at("material") == boost::json::value(boost::json::object{ { "guid", res::to_text(id) }, { "path", "res://sky.mat.desc" } }));
+	boost::system::error_code ec_of_pointer;
+	const boost::json::value* sky_json = file.find_pointer("/worlds/0/components/sky", ec_of_pointer);
+	const boost::json::value* lost_json = file.find_pointer("/worlds/0/components/sky_lost", ec_of_pointer);
+	BOOST_REQUIRE(sky_json);
+	BOOST_REQUIRE(lost_json);
+	BOOST_TEST(sky_json->at("material") == boost::json::value(boost::json::object{ { "guid", res::to_text(id) }, { "path", "res://sky.mat.desc" } }));
+	BOOST_TEST(lost_json->at("material") == unknown);
+	BOOST_TEST(file.at("__guid") == boost::json::value("11111111-2222-4333-8444-555555555555"), "the level's own __guid stays with an index");
 	BOOST_REQUIRE(second);
 	BOOST_TEST(read_file(content / "levels" / "sky.desc") == written);
 }

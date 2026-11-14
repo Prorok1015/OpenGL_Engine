@@ -6,10 +6,14 @@
 #include <snk/resource/res_tag_json.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <format>
 #include <initializer_list>
 #include <limits>
+#include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -564,129 +568,310 @@ namespace
 		return out;
 	}
 
-	// One reference value: an inline desc (it has "__type") is left to the walk over typed objects.
-	void write_reference(const res::resource_system& resources, json::value& value)
-	{
-		if (const json::string* text = value.if_string()) {
-			const res::tag path{ std::string(text->data(), text->size()) };
-			if (path.protocol() != res::tag::default_protocol()) {
-				return;
-			}
-			if (const auto guid = resources.asset_id_of(path)) {
-				value = reference_object(*guid, path);
-			}
-			return;
-		}
-		const json::object* object = value.if_object();
-		if (!object || object->contains("__type")) {
-			return;
-		}
-		const auto read = res::reference_from_json(value);
-		if (!read) {
-			return;
-		}
-		if (!read->guid.is_nil()) {
-			if (const auto now = resources.asset_path_of(read->guid); now && now->protocol() == res::tag::default_protocol()) {
-				value = reference_object(read->guid, *now);
-			}
-			return;
-		}
-		if (read->path.protocol() != res::tag::default_protocol()) {
-			return;
-		}
-		if (const auto guid = resources.asset_id_of(read->path)) {
-			value = reference_object(*guid, read->path);
-		}
-	}
+	// The guid the replaced file wrote for each path. A path it wrote with two guids has none.
+	using kept_guids = std::map<std::string, std::optional<res::asset_id>, std::less<>>;
 
-	json::value* value_at(json::value& root, std::string_view key)
+	void collect_kept(const json::value& value, kept_guids& out, int depth)
 	{
-		if (!key.starts_with('/')) {
-			json::object* object = root.if_object();
-			return object ? object->if_contains(key) : nullptr;
+		if (depth > 128) {
+			return;
 		}
-		return const_cast<json::value*>(desc::json_pointer_get(std::as_const(root), key));
-	}
-
-	void write_fields(const desc::desc_system& descs, const res::resource_system& resources, const desc::type_schema& schema, json::value& data);
-
-	void write_element(const desc::desc_system& descs, const res::resource_system& resources, const desc::field_schema& field, desc::field_kind kind,
-		json::value& value)
-	{
-		if (is_reference_kind(kind)) {
-			write_reference(resources, value);
-		}
-		else if (kind == desc::field_kind::structure && value.is_object()) {
-			if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
-				write_fields(descs, resources, *nested, value);
-			}
-		}
-	}
-
-	// The fields of one object of `schema`: a typed object or a structure in one. Inline descs are typed objects of their own.
-	void write_fields(const desc::desc_system& descs, const res::resource_system& resources, const desc::type_schema& schema, json::value& data)
-	{
-		for (const desc::field_schema& field : schema.fields) {
-			std::vector<std::string_view> keys{ field.key };
-			for (const std::string& alias : field.read_aliases) {
-				keys.push_back(alias);
-			}
-			for (const std::string_view key : keys) {
-				json::value* value = value_at(data, key);
-				if (!value) {
-					continue;
-				}
-				if (field.kind == desc::field_kind::array) {
-					if (json::array* items = value->if_array()) {
-						for (json::value& item : *items) {
-							write_element(descs, resources, field, field.element, item);
-						}
+		if (const json::object* object = value.if_object()) {
+			if (!object->contains("__type")) {
+				if (const auto read = res::reference_from_json(value); read && !read->guid.is_nil() && !read->path.view().empty()) {
+					const auto [found, added] = out.try_emplace(std::string(read->path.view()), read->guid);
+					if (!added && found->second != read->guid) {
+						found->second.reset();
 					}
+					return;
 				}
-				else if (field.kind == desc::field_kind::map) {
-					if (json::object* entries = value->if_object()) {
-						for (auto& entry : *entries) {
-							write_element(descs, resources, field, field.element, entry.value());
-						}
-					}
-				}
-				else {
-					write_element(descs, resources, field, field.kind, *value);
-				}
+			}
+			for (const auto& member : *object) {
+				collect_kept(member.value(), out, depth + 1);
 			}
 		}
-	}
-
-	void write_tree(const desc::desc_system& descs, const res::resource_system& resources, json::value& value)
-	{
-		if (json::object* object = value.if_object()) {
-			if (const json::value* type = object->if_contains("__type"); type && type->is_string()) {
-				if (const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()))) {
-					write_fields(descs, resources, *schema, value);
-				}
-			}
-			for (auto& member : *object) {
-				write_tree(descs, resources, member.value());
-			}
-		}
-		else if (json::array* items = value.if_array()) {
-			// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
+		else if (const json::array* items = value.if_array()) {
 			if (!items->empty() && items->front().is_number()) {
 				return;
 			}
-			for (json::value& item : *items) {
-				write_tree(descs, resources, item);
+			for (const json::value& item : *items) {
+				collect_kept(item, out, depth + 1);
 			}
 		}
 	}
+
+	struct reference_writer
+	{
+		const desc::desc_system& descs;
+		const res::resource_system& resources;
+		bool has_index = false;
+		const kept_guids* kept = nullptr;
+		// What the edited value replaces (a component an override record applies to): where it holds an object, a path stays a
+		// string, since an object would be merged into it.
+		const json::value* merged_into = nullptr;
+
+		// The index's ID for `path`, else the guid the replaced file had for it: a writer never drops a guid the file had,
+		// unless the index puts that guid on another file.
+		std::optional<res::asset_id> id_for(const res::tag& path) const
+		{
+			if (has_index) {
+				if (auto id = resources.asset_id_of(path)) {
+					return id;
+				}
+			}
+			if (!kept) {
+				return std::nullopt;
+			}
+			const auto found = kept->find(path.view());
+			if (found == kept->end() || !found->second) {
+				return std::nullopt;
+			}
+			if (has_index) {
+				if (const auto now = resources.asset_path_of(*found->second); now && !(*now == path)) {
+					return std::nullopt;
+				}
+			}
+			return found->second;
+		}
+
+		bool merged_into_object(const std::string& where) const
+		{
+			const json::value* held = merged_into ? desc::json_pointer_get(*merged_into, where) : nullptr;
+			return held && held->is_object();
+		}
+
+		// One reference value; an inline desc (it has "__type") is left to the walk over typed objects.
+		void reference(json::value& value, const std::string& where) const
+		{
+			if (const json::string* text = value.if_string()) {
+				const res::tag path{ std::string(text->data(), text->size()) };
+				if (path.protocol() != res::tag::default_protocol() || merged_into_object(where)) {
+					return;
+				}
+				if (const auto guid = id_for(path)) {
+					value = reference_object(*guid, path);
+				}
+				return;
+			}
+			const json::object* object = value.if_object();
+			if (!object || object->contains("__type")) {
+				return;
+			}
+			const auto read = res::reference_from_json(value);
+			if (!read) {
+				return;
+			}
+			if (!read->guid.is_nil()) {
+				if (!has_index) {
+					return;
+				}
+				const auto now = resources.asset_path_of(read->guid);
+				// Already where the file is, however it is spelled: left as written, so no file changes for nothing.
+				if (!now || now->protocol() != res::tag::default_protocol() || *now == read->path) {
+					return;
+				}
+				value = reference_object(read->guid, *now);
+				return;
+			}
+			if (read->path.protocol() != res::tag::default_protocol()) {
+				return;
+			}
+			if (const auto guid = id_for(read->path)) {
+				value = reference_object(*guid, read->path);
+			}
+		}
+
+		void element(const desc::field_schema& field, desc::field_kind kind, json::value& value, const std::string& where, int depth) const
+		{
+			if (is_reference_kind(kind)) {
+				reference(value, where);
+			}
+			else if (kind == desc::field_kind::structure && value.is_object()) {
+				if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+					fields(*nested, value, where, depth + 1);
+				}
+			}
+		}
+
+		// The value of `field` itself: a list or map element by element.
+		void field_value(const desc::field_schema& field, json::value& value, const std::string& where, int depth) const
+		{
+			if (field.kind == desc::field_kind::array) {
+				if (json::array* items = value.if_array()) {
+					for (std::size_t i = 0; i < items->size(); ++i) {
+						element(field, field.element, (*items)[i], where + "/" + std::to_string(i), depth);
+					}
+				}
+			}
+			else if (field.kind == desc::field_kind::map) {
+				if (json::object* entries = value.if_object()) {
+					for (auto& entry : *entries) {
+						element(field, field.element, entry.value(), where + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())), depth);
+					}
+				}
+			}
+			else {
+				element(field, field.kind, value, where, depth);
+			}
+		}
+
+		// The fields of one object of `schema`: a typed object or a structure in one. Inline descs are typed objects of their own.
+		void fields(const desc::type_schema& schema, json::value& data, const std::string& where, int depth) const
+		{
+			if (depth > 32) {
+				return;
+			}
+			for (const desc::field_schema& field : schema.fields) {
+				std::vector<std::string_view> keys{ field.key };
+				for (const std::string& alias : field.read_aliases) {
+					keys.push_back(alias);
+				}
+				for (const std::string_view key : keys) {
+					if (json::value* value = value_at(data, key)) {
+						field_value(field, *value, where + pointer_of(key), depth);
+					}
+				}
+			}
+		}
+
+		void tree(json::value& value, const std::string& where) const
+		{
+			if (json::object* object = value.if_object()) {
+				if (const json::value* type = object->if_contains("__type"); type && type->is_string()) {
+					if (const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()))) {
+						fields(*schema, value, where, 0);
+					}
+				}
+				for (auto& member : *object) {
+					tree(member.value(), where + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
+				}
+			}
+			else if (json::array* items = value.if_array()) {
+				// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
+				if (!items->empty() && items->front().is_number()) {
+					return;
+				}
+				for (std::size_t i = 0; i < items->size(); ++i) {
+					tree((*items)[i], where + "/" + std::to_string(i));
+				}
+			}
+		}
+
+		// `value` is what an object of `schema` holds at `tokens` (none: the object itself).
+		void at(const desc::type_schema& schema, std::span<const std::string> tokens, json::value& value, const std::string& where, int depth) const
+		{
+			if (depth > 32) {
+				return;
+			}
+			if (tokens.empty()) {
+				fields(schema, value, where, depth);
+				return;
+			}
+			std::vector<std::string> key_tokens;
+			for (const desc::field_schema& field : schema.fields) {
+				std::vector<std::string_view> keys{ field.key };
+				for (const std::string& alias : field.read_aliases) {
+					keys.push_back(alias);
+				}
+				for (const std::string_view key : keys) {
+					if (!desc::json_pointer_tokens(pointer_of(key), key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
+						|| !std::equal(key_tokens.begin(), key_tokens.end(), tokens.begin())) {
+						continue;
+					}
+					const std::span<const std::string> rest = tokens.subspan(key_tokens.size());
+					if (rest.empty()) {
+						field_value(field, value, where, depth);
+					}
+					else if (field.kind == desc::field_kind::array || field.kind == desc::field_kind::map) {
+						if (rest.size() == 1) {
+							element(field, field.element, value, where, depth);
+						}
+						else if (field.element == desc::field_kind::structure) {
+							if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+								at(*nested, rest.subspan(1), value, where, depth + 1);
+							}
+						}
+					}
+					else if (field.kind == desc::field_kind::structure) {
+						if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+							at(*nested, rest, value, where, depth + 1);
+						}
+					}
+					return;
+				}
+			}
+		}
+
+		static std::string pointer_of(std::string_view key)
+		{
+			return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
+		}
+
+		static json::value* value_at(json::value& root, std::string_view key)
+		{
+			if (!key.starts_with('/')) {
+				json::object* object = root.if_object();
+				return object ? object->if_contains(key) : nullptr;
+			}
+			return const_cast<json::value*>(desc::json_pointer_get(std::as_const(root), key));
+		}
+	};
 }
 
-void desc::desc_system::write_references(json::value& root) const
+void desc::desc_system::write_references(json::value& root, const json::value* replaced) const
 {
-	if (!m_res_system.has_asset_index()) {
+	kept_guids kept;
+	if (replaced) {
+		collect_kept(*replaced, kept, 0);
+	}
+	const reference_writer writer{ *this, m_res_system, m_res_system.has_asset_index(), kept.empty() ? nullptr : &kept };
+	if (writer.has_index || writer.kept) {
+		writer.tree(root, {});
+	}
+}
+
+void desc::desc_system::write_references(json::value& root, std::span<const std::byte> replaced_file) const
+{
+	const std::string_view text(reinterpret_cast<const char*>(replaced_file.data()), replaced_file.size());
+	// A file without a {guid, path} has no guid to keep: it is not parsed again.
+	if (text.find("\"guid\"") == std::string_view::npos) {
+		write_references(root);
 		return;
 	}
-	write_tree(*this, m_res_system, root);
+	json::parse_options options;
+	options.max_depth = 128;
+	boost::system::error_code ec;
+	const json::value replaced = json::parse(text, ec, {}, options);
+	write_references(root, ec ? nullptr : &replaced);
+}
+
+void desc::desc_system::write_references_over(json::value& root, const res::tag& file) const
+{
+	if (!m_res_system.exists(file)) {
+		write_references(root);
+		return;
+	}
+	const auto raw = m_res_system.fetch_data(file);
+	if (!raw || !raw->wait_for(std::chrono::seconds(5)) || !raw->is_ready()) {
+		write_references(root);
+		return;
+	}
+	write_references(root, std::span<const std::byte>(raw->data));
+}
+
+void desc::desc_system::write_references(const type_schema& schema, std::string_view pointer, json::value& value, const json::value* merged_into) const
+{
+	std::vector<std::string> tokens;
+	if (!desc::json_pointer_tokens(pointer, tokens)) {
+		return;
+	}
+	reference_writer writer{ *this, m_res_system, m_res_system.has_asset_index() };
+	if (!writer.has_index) {
+		return;
+	}
+	writer.merged_into = merged_into;
+	writer.at(schema, tokens, value, {}, 0);
+	writer.tree(value, {});
 }
 
 std::optional<res::tag> desc::reference_tag(const json::value& in, const read_context& ctx)
