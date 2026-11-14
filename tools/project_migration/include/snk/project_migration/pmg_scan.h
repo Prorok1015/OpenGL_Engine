@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/desc/desc_system.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/project/prj_version.h>
 #include <snk/resource/res_asset_meta.h>
 #include <cstddef>
@@ -111,6 +112,8 @@ namespace prj::migration
 		std::vector<scanned_file> files;
 		// scan_options::stop ended the scan early: the files are only part of the project.
 		bool incomplete = false;
+		// Every .resource of scan_options::read_only_layers, by layer and path: the plan's fingerprint stats them (#759).
+		std::vector<read_only_resource> read_only_resources;
 
 		std::size_t count(file_class kind) const;
 		const scanned_file* find(std::string_view path) const;

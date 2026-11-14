@@ -615,4 +615,33 @@ BOOST_AUTO_TEST_CASE(WriteReferencesOver_KeepsAGuidOfTheReplacedFile_WriteRefere
 	BOOST_TEST(*desc::json_pointer_get(with, "/list/0") == reference(k_with_meta_id, "res://textures/with_meta.png"));
 }
 
+// The read-only layers are the layers of res:// outside the project folder, however the project root is spelled; a
+// content root is never one of them.
+BOOST_AUTO_TEST_CASE(ReadOnlyLayers_AreTheLayersOfResOutsideTheProject)
+{
+	outside_folder engine;
+	BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), { engine.path, copy.res() }));
+	BOOST_TEST((pmg::read_only_layers(*rs, copy.root()) == std::vector<fs::path>{ engine.path }));
+	BOOST_TEST((pmg::read_only_layers(*rs, copy.root() / "res" / "..") == std::vector<fs::path>{ engine.path }));
+	BOOST_TEST((pmg::read_only_layers(*rs, copy.root() / "res") == std::vector<fs::path>{ engine.path }));
+}
+
+// The scan lists every .resource of the read-only layers, which the plan's fingerprint stats.
+BOOST_AUTO_TEST_CASE(TheScan_ListsTheResourcesOfTheReadOnlyLayers)
+{
+	outside_folder engine;
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text("00000000-0000-4000-8000-0000000000e1");
+	write_text(engine.path / "shaders/lit.png", "png");
+	write_text(engine.path / "shaders/lit.png.resource", res::write_asset_meta(meta));
+	write_text(engine.path / "shaders/plain.png", "png");
+	pmg::scan_options options;
+	options.read_only_layers = { engine.path };
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs, options);
+	BOOST_REQUIRE(scan.read_only_resources.size() == 1u);
+	BOOST_TEST((scan.read_only_resources.front().layer == engine.path));
+	BOOST_TEST(scan.read_only_resources.front().path == "shaders/lit.png.resource");
+	BOOST_TEST(scan.find("shaders/lit.png") == nullptr, "a read-only layer is not scanned");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

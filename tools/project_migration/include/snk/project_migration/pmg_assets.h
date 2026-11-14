@@ -23,6 +23,15 @@ namespace prj::migration
 	// from and never writes (project_assets, scan_options::read_only_layers, #776).
 	std::vector<std::filesystem::path> read_only_layers(const res::resource_system& resources, const std::filesystem::path& root);
 
+	// A .resource of a read-only layer: what a plan's fingerprint stats, so an ID a reference would take cannot change
+	// unseen between the plan and its run (#759).
+	struct read_only_resource
+	{
+		std::filesystem::path layer;
+		// Relative to the layer, with '/'.
+		std::string path;
+	};
+
 	struct indexed_asset
 	{
 		// Relative to the project root, with '/' ("res/textures/a.png").
@@ -64,6 +73,8 @@ namespace prj::migration
 		const std::map<std::string, indexed_asset>& orphans() const { return m_orphans; }
 		// A .resource that cannot be read, an orphan, a content root that is not walked: one line each.
 		const std::vector<std::string>& problems() const { return m_problems; }
+		// Every .resource the walk found in the read-only layers, in the order of the walk.
+		const std::vector<read_only_resource>& read_only_resources() const { return m_read_only_resources; }
 
 	private:
 		std::filesystem::path m_root;
@@ -76,5 +87,6 @@ namespace prj::migration
 		// An ID -> the res_path of its holder.
 		std::map<res::asset_id, std::string> m_holders;
 		std::vector<std::string> m_problems;
+		std::vector<read_only_resource> m_read_only_resources;
 	};
 }

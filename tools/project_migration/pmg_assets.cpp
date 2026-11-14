@@ -9,15 +9,31 @@
 
 namespace fs = std::filesystem;
 
+namespace
+{
+	// The real path of `path`; where the file system cannot tell it, the absolute path lexically normalized, so a layer
+	// whose real path is unknown is still compared with the project instead of taken for one outside it.
+	fs::path comparable(const fs::path& path)
+	{
+		std::error_code ec;
+		fs::path out = fs::weakly_canonical(path, ec);
+		if (ec) {
+			std::error_code absolute_error;
+			out = fs::absolute(path, absolute_error);
+			if (absolute_error) out = path;
+			out = out.lexically_normal();
+		}
+		if (!out.has_filename() && out.has_parent_path()) out = out.parent_path();
+		return out;
+	}
+}
+
 std::vector<fs::path> prj::migration::read_only_layers(const res::resource_system& resources, const fs::path& root)
 {
-	std::error_code root_error;
-	const fs::path project = fs::weakly_canonical(root, root_error);
+	const fs::path project = comparable(root);
 	std::vector<fs::path> out;
 	for (const fs::path& layer : resources.get_resource_layers()) {
-		std::error_code error;
-		const fs::path real = fs::weakly_canonical(layer, error);
-		if (root_error || error || !fs_paths::is_inside(project, real)) out.push_back(layer);
+		if (!fs_paths::is_inside(project, comparable(layer))) out.push_back(layer);
 	}
 	return out;
 }
@@ -36,6 +52,7 @@ void prj::migration::project_assets::rebuild()
 	m_problems.clear();
 	m_held_ids.clear();
 	m_holders.clear();
+	m_read_only_resources.clear();
 
 	// Lowest first, as res:// stacks them: the read-only layers, then the content roots, the first of project.snkproj
 	// the highest layer.
@@ -98,6 +115,10 @@ void prj::migration::project_assets::rebuild()
 		}
 	};
 
+	for (const res::asset_walk_file& file : files) {
+		const std::string relative = fs_paths::generic_utf8_of(file.relative);
+		if (read_only[file.layer] && res::is_asset_meta_sidecar(relative)) m_read_only_resources.push_back(read_only_resource{ layers[file.layer], relative });
+	}
 	for (std::size_t i = 0; i < files.size(); ++i) {
 		if (project_own(files[i]) || res::is_asset_meta_sidecar(fs_paths::generic_utf8_of(files[i].relative))) continue;
 		indexed_asset asset = entry_of(files[i]);

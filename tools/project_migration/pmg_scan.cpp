@@ -250,8 +250,9 @@ namespace
 		file.kind = kind;
 	}
 
-	// By the path of a desc: the text of one assets.refs reads that may hold a reference, kept from the walk until the
-	// index is built (scanned_file::reference_fixes), so no desc is read twice.
+	// By the path of a desc: the text of one assets.refs reads that may hold a reference. reference_fixes can only be
+	// counted once the index of every layer exists, after the walk; the text is kept in memory until then so no desc is
+	// read twice, and only for these candidates, not for every file.
 	using reference_texts = std::map<std::string, std::string>;
 
 	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
@@ -868,6 +869,10 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		}
 	}
 	count_reference_fixes(result, types, assets, texts, options);
+	result.read_only_resources = assets.read_only_resources();
+	std::ranges::sort(result.read_only_resources, {}, [](const read_only_resource& file) {
+		return std::pair{ fs_paths::generic_utf8_of(file.layer), file.path };
+	});
 	return result;
 }
 

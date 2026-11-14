@@ -185,7 +185,7 @@ namespace {
 	}
 
 	// The plan as the answer gives it (every file's steps and warnings, the project steps, what is skipped, the manifest),
-	// every byte of the project it was made from, and the code that would migrate it.
+	// every byte of the project it was made from, the read-only layers' .resource files, and the code that would migrate it.
 	std::uint64_t fingerprint_of(const fs::path& root, const pmg::migration_plan& plan, std::uint64_t code_identity)
 	{
 		const std::uintmax_t max_bytes = pmg::scan_options{}.max_file_bytes;
@@ -197,8 +197,8 @@ namespace {
 		std::vector<std::pair<std::string, std::string>> files;
 		files.reserve(plan.scan.files.size());
 		for (const pmg::scanned_file& file : plan.scan.files) {
-			std::string facts = std::format("{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
-				file.resource_path, file.resource_unreadable);
+			std::string facts = std::format("{}|{}|{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
+				file.resource_path, file.resource_unreadable, file.reference_fixes, file.outdated_references);
 			for (const std::string& type : file.unknown_types) facts += "|" + type;
 			files.emplace_back(file.path, std::move(facts));
 		}
@@ -207,6 +207,14 @@ namespace {
 			hash.add_part(path);
 			hash.add_part(facts);
 			hash.add_file(root, fs_paths::path_from_utf8(path), max_bytes, rewritten_by_migration(path));
+		}
+		// The layers below the project the IDs of references come from (assets.refs, #776), and every .resource there by
+		// what it is, its size and its time, as a file the migration never rewrites.
+		for (const fs::path& layer : plan.read_only_layers) hash.add_part(fs_paths::generic_utf8_of(layer));
+		for (const pmg::read_only_resource& meta : plan.scan.read_only_resources) {
+			hash.add_part(fs_paths::generic_utf8_of(meta.layer));
+			hash.add_part(meta.path);
+			hash.add_file(meta.layer, fs_paths::path_from_utf8(meta.path), max_bytes, false);
 		}
 		return hash.value();
 	}
