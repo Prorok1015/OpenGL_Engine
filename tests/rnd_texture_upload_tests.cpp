@@ -208,6 +208,7 @@ BOOST_AUTO_TEST_CASE(AGeneratedTexture_WithAShortBufferOrNoSize_MakesNoTexture)
 	BOOST_TEST(!textures.generate(tag, { 2, 2 }, texture_header::TYPE::RGB8, std::vector<unsigned char>(2 * 2 * 3 - 1)).is_valid());
 	BOOST_TEST(!textures.generate(tag, { 0, 2 }, texture_header::TYPE::RGBA8, std::vector<unsigned char>(16)).is_valid());
 	BOOST_TEST(!textures.generate(tag, { 2, -1 }, texture_header::TYPE::RGBA8, std::vector<unsigned char>(16)).is_valid());
+	BOOST_TEST(!textures.generate(tag, { 2, 2 }, texture_header::TYPE::RGBA16F, std::vector<unsigned char>(2 * 2 * 16)).is_valid());
 	BOOST_TEST(uploads.empty());
 
 	const rnd::texture_id id = textures.generate(tag, { 2, 2 }, texture_header::TYPE::RGB8, std::vector<unsigned char>(2 * 2 * 3));
