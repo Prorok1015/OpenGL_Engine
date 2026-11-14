@@ -33,6 +33,12 @@ struct repo_file {
 	bool is_desc = false;
 };
 
+// A project template's res/config holds files of the types its game module declares (#800); the engine alone does not know them.
+bool is_game_type_file_of_a_template(std::string_view protocol, std::string_view relative)
+{
+	return protocol == "edt" && relative.starts_with("templates/projects/") && relative.find("/res/config/") != std::string_view::npos;
+}
+
 // Read once: the images next to the descs (skybox faces) are loaded by descs that reference them.
 const std::vector<repo_file>& repo_files()
 {
@@ -49,8 +55,10 @@ const std::vector<repo_file>& repo_files()
 				if (!entry.is_regular_file()) continue;
 				std::ifstream in(entry.path(), std::ios::binary);
 				std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+				const std::string relative = fs::relative(entry.path(), root).generic_string();
+				if (is_game_type_file_of_a_template(protocol, relative)) continue;
 				repo_file file;
-				file.tag = res::tag{ protocol, fs::relative(entry.path(), root).generic_string() };
+				file.tag = res::tag{ protocol, relative };
 				file.bytes.resize(text.size());
 				std::memcpy(file.bytes.data(), text.data(), text.size());
 				file.is_desc = entry.path().extension() == ".desc";
