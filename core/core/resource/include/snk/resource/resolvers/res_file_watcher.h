@@ -9,11 +9,15 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 #include <boost/asio.hpp>
 #include <snk/common/fs_paths.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_file_change.h>
 
 namespace fs = std::filesystem;
@@ -156,9 +160,11 @@ namespace res {
                 }
                 return;
             }
-            if (fs::exists(path)) {
+            std::error_code ec;
+            const auto written = fs::last_write_time(path, ec);
+            if (!ec) {
                 std::lock_guard lock(m_state_mutex);
-                file_states[path] = fs::last_write_time(path);
+                file_states[path] = written;
             }
         }
 
@@ -203,13 +209,24 @@ namespace res {
             timer.async_wait([this](auto ec) {
                 if (ec || m_stopped) return;
 
-                if (m_batch_mode) {
-                    poll_changes();
-                }
-                else {
-                    for (const auto& root : watch_paths) {
-                        update_state(root, true);
+                // Whatever one poll throws (the file system, a callback of whoever watches), the next one is scheduled:
+                // an exception that left this handler used to end the watching for good, without a word (#939).
+                try {
+                    if (m_batch_mode) {
+                        poll_changes();
                     }
+                    else {
+                        for (const auto& root : watch_paths) {
+                            update_state(root, true);
+                        }
+                    }
+                    m_last_poll_error.clear();
+                }
+                catch (const std::exception& e) {
+                    report_poll_error(e.what());
+                }
+                catch (...) {
+                    report_poll_error("unknown exception");
                 }
                 schedule_timer();
             });
@@ -264,32 +281,48 @@ namespace res {
             }
         }
 
+        // Once per distinct failure, not twice a second for as long as it lasts.
+        void report_poll_error(std::string_view what) {
+            if (m_last_poll_error == what) return;
+            m_last_poll_error = what;
+            egLOG_WARN("resource", "a poll of the watched files failed and is tried again: {}", what);
+        }
+
+        // Files come and go while they are listed (another thread renames a temporary file into place): nothing here
+        // throws for that. A file that cannot be looked at is left for the next poll.
         void update_state(const fs::path& root, bool notify) {
-            if (!fs::exists(root)) return;
+            std::error_code ec;
+            if (!fs::is_directory(root, ec)) return;
 
             std::vector<fs::path> changed;
 
             {
                 std::lock_guard lock(m_state_mutex);
-                for (const auto& entry : fs::recursive_directory_iterator(root)) {
-                    if (!entry.is_regular_file()) continue;
+                fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+                const fs::recursive_directory_iterator end;
+                for (; !ec && it != end; it.increment(ec)) {
+                    std::error_code entry_ec;
+                    if (!it->is_regular_file(entry_ec) || entry_ec) continue;
 
-                    auto path = entry.path();
-                    auto last_time = fs::last_write_time(path);
+                    const fs::path path = it->path();
+                    const auto last_time = fs::last_write_time(path, entry_ec);
+                    if (entry_ec) continue;
 
-                    auto it = file_states.find(path);
-                    if (it == file_states.end()) {
+                    auto known = file_states.find(path);
+                    if (known == file_states.end()) {
                         file_states[path] = last_time;
                         if (notify) changed.push_back(path);
                     }
-                    else if (it->second != last_time) {
-                        it->second = last_time;
+                    else if (known->second != last_time) {
+                        known->second = last_time;
                         if (notify) changed.push_back(path);
                     }
                 }
 
+                // Only what is known to be gone: a file that could not be asked about stays known.
                 std::erase_if(file_states, [](const auto& item) {
-                    return !fs::exists(item.first);
+                    std::error_code gone;
+                    return !fs::exists(item.first, gone) && !gone;
                 });
             }
 
@@ -301,6 +334,7 @@ namespace res {
         std::function<void(fs::path)> m_notify_cb;
         boost::asio::steady_timer timer;
         std::atomic<bool> m_stopped{ false };
+        std::string m_last_poll_error;
         std::vector<fs::path> watch_paths;
         std::mutex m_state_mutex;
         std::unordered_map<fs::path, fs::file_time_type> file_states;
