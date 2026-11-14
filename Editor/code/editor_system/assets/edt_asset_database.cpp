@@ -23,6 +23,7 @@
 #include <span>
 #include <stdexcept>
 #include <system_error>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -83,6 +84,11 @@ namespace
 		return out;
 	}
 
+}
+
+bool edt::holds_id_before(const asset_record& a, const asset_record& b)
+{
+	return std::tie(a.layer, a.mtime, a.path.string()) < std::tie(b.layer, b.mtime, b.path.string());
 }
 
 std::string edt::asset_type_of(std::string_view path)
@@ -381,6 +387,11 @@ void edt::asset_database::after_walk(walk_end end)
 {
 	if (end == walk_end::applied) {
 		m_walk_retried = false;
+		++m_walks_applied;
+		// Nothing waits behind it: every batch received so far is in what the walk found.
+		if (m_deferred.empty()) {
+			m_applied_through = m_received_through;
+		}
 	} else if (end == walk_end::cancelled && !m_walk_retried) {
 		// Once: a walk cancelled again (or one that fails) is not restarted in a loop. The deferred changes wait for it.
 		m_walk_retried = true;
@@ -1166,6 +1177,8 @@ public:
 		: m_layers(layers)
 		, m_case_insensitive(case_insensitive)
 	{
+		m_project_folder.reserve(layers.size());
+		for (const fs::path& layer : layers) m_project_folder.push_back(res::is_project_folder_layer(layer));
 	}
 
 	std::string key_of(const std::string& text) const { return edt::layer_merge_key(text, m_case_insensitive); }
@@ -1197,7 +1210,7 @@ public:
 				continue;
 			}
 			std::string on_disk = fs_paths::utf8_of(entry->path().filename());
-			if (res::is_skipped_asset_name(on_disk, is_dir)) {
+			if (res::is_skipped_asset_entry(on_disk, is_dir, path.empty() && m_project_folder[layer])) {
 				continue;
 			}
 			std::string child = joined(path, on_disk);
@@ -1317,6 +1330,7 @@ private:
 	}
 
 	const std::vector<fs::path>& m_layers;
+	std::vector<bool> m_project_folder;
 	bool m_case_insensitive = false;
 	// By merge key of the folder's path; std::map: folder_at hands out references while it adds.
 	std::map<std::string, std::optional<folder>> m_folders;
@@ -1329,7 +1343,8 @@ void edt::asset_database::attach(res::resource_system& resources)
 		m_resources->unsubscribe_changes(this);
 	}
 	m_resources = &resources;
-	resources.subscribe_changes(res::tag::default_protocol(), this, [this](std::span<const res::file_change> changes) {
+	resources.subscribe_changes(res::tag::default_protocol(), this, [this, &resources](std::span<const res::file_change> changes) {
+		m_received_through = resources.delivering_batch();
 		apply_changes(changes);
 	});
 }
@@ -1430,7 +1445,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			continue;
 		}
 		if (defer) {
-			if (m_deferred.size() < max_deferred_changes) {
+			if (m_deferred.size() < m_max_deferred) {
 				res::file_change waiting = change;
 				// The first walk finds the file anyway: what it finds is left to migration and gets no ID here.
 				if (!m_walked_once && waiting.kind == res::change_kind::created) {
@@ -1440,6 +1455,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			} else {
 				m_deferred.clear();
 				m_walk_again = true;
+				++m_changes_dropped;
 			}
 			continue;
 		}
@@ -1603,6 +1619,9 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	}
 	hash_next();
 	save_when_idle();
+	// Applied, not waiting behind a walk: every batch received so far is in the records (an earlier one that waited was
+	// applied after the walk, before this one).
+	m_applied_through = m_received_through;
 	if (m_on_batch) {
 		m_on_batch(batch);
 	}

@@ -916,7 +916,10 @@ void res::resource_system::record_dependencies(const res::tag &requested,
   std::unique_lock lock(m_cache_mutex);
   // The key the block is cached under: the binding its request made (a rebind since then moved the block with it).
   const res::tag dependent = node_locked(requested);
-  if (!m_cache.any_of_tag(dependent, [&block](const cache_entry &entry) { return entry.lock() == block; })) {
+  const auto is_block = [&block](const cache_entry &entry) { return entry.lock() == block; };
+  const auto displaced = m_displaced.find(dependent);
+  if (!m_cache.any_of_tag(dependent, is_block) &&
+      (displaced == m_displaced.end() || std::ranges::none_of(displaced->second, is_block))) {
     return;
   }
   if (m_depends_on.size() >= m_edge_sweep_at) {
@@ -973,8 +976,14 @@ void res::resource_system::prune_released_edges() {
       originals_by_alias.emplace(node_locked(alias), original);
     }
   }
+  // A displaced block whose holders let go is gone for good.
+  for (auto it = m_displaced.begin(); it != m_displaced.end();) {
+    std::erase_if(it->second, [](const cache_entry &entry) { return entry.expired(); });
+    it = it->second.empty() ? m_displaced.erase(it) : std::next(it);
+  }
   const auto is_released = [this, &originals_by_alias](const res::tag &tag) {
-    if (m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); })) {
+    const bool live = m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+    if (live || m_displaced.contains(tag)) {
       return false;
     }
     if (needed_by_layers(tag)) {
@@ -1143,8 +1152,8 @@ res::tag res::resource_system::index_node(const res::tag &tag, const asset_index
 }
 
 bool res::resource_system::keyed_by_tag_locked(const res::tag &tag) const {
-  return m_cache.any_of_tag(tag, [](const cache_entry &) { return true; }) || m_watchers.contains(tag) ||
-         m_depends_on.contains(tag) || m_dependents.contains(tag);
+  return m_cache.any_of_tag(tag, [](const cache_entry &) { return true; }) || m_displaced.contains(tag) ||
+         m_watchers.contains(tag) || m_depends_on.contains(tag) || m_dependents.contains(tag);
 }
 
 res::tag res::resource_system::node_locked(const res::tag &tag) const {
@@ -1405,6 +1414,9 @@ void res::resource_system::collect_bindings(std::vector<std::pair<res::tag, res:
       out.push_back(binding);
     }
     m_cache.for_each_tag(add_key);
+    for (const auto &[key, blocks] : m_displaced) {
+      add_key(key);
+    }
     for (const auto &[key, watchers] : m_watchers) {
       add_key(key);
     }
@@ -1496,6 +1508,9 @@ void res::resource_system::apply_rebind(const std::unordered_map<res::tag, res::
       }
     };
     m_cache.for_each_tag(add_key);
+    for (const auto &[key, blocks] : m_displaced) {
+      add_key(key);
+    }
     m_pinned_resources.for_each_tag(add_key);
     for (const auto &[key, watchers] : m_watchers) {
       add_key(key);
@@ -1510,7 +1525,7 @@ void res::resource_system::apply_rebind(const std::unordered_map<res::tag, res::
       alias_nodes.insert(alias);
     }
     const auto has_entries = [&](const res::tag &node) {
-      return m_cache.any_of_tag(node, [](const cache_entry &) { return true; }) ||
+      return m_cache.any_of_tag(node, [](const cache_entry &) { return true; }) || m_displaced.contains(node) ||
              m_pinned_resources.any_of_tag(node, [](const auto &) { return true; }) || m_watchers.contains(node) ||
              m_depends_on.contains(node) || m_dependents.contains(node) || m_aliases.contains(node) ||
              alias_nodes.contains(node) || needed_by_layers(node);
@@ -1553,8 +1568,22 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
     return it == remap.end() ? key : it->second;
   };
   for (const auto &[old_key, new_key] : remap) {
-    // A live entry already under the new key wins (the other spelling's block); the one that loses drops out of the
-    // cache and its holders get no more reloads (#858).
+    // A live entry already under the new key wins (the other spelling's block): requests get it. The one that loses
+    // stays under the key, displaced (#858). A pin the new key has stays; else the old key's pin moves, as before.
+    m_cache.for_each_of_tag(old_key, [&](const cache_key &key, const cache_entry &entry) {
+      const auto block = entry.lock();
+      if (!block) {
+        return;
+      }
+      const cache_entry *existing = m_cache.find(cache_key{new_key, key.type});
+      if (const auto winner = existing ? existing->lock() : nullptr; winner && winner != block) {
+        m_displaced[new_key].push_back(entry);
+      }
+    });
+    if (auto moved = m_displaced.extract(old_key)) {
+      auto &into = m_displaced[new_key];
+      into.insert(into.end(), moved.mapped().begin(), moved.mapped().end());
+    }
     m_cache.copy_tag(old_key, new_key, [](const cache_entry &entry) { return !entry.expired(); });
     m_cache.erase_tag(old_key);
     m_pinned_resources.copy_tag(old_key, new_key, [](const auto &entry) { return entry != nullptr; });
@@ -1642,6 +1671,7 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     batch = changed_batch(tag);
     for (const auto &changed : batch) {
       m_cache.erase_tag(changed);
+      m_displaced.erase(changed);
     }
     // A changed original has to run its adapter again (it stores fresh data and registers the alias anew), so its
     // alias goes with its edge; the alias entry itself was evicted above as a dependent. The alias lock is taken inside
@@ -2288,14 +2318,29 @@ std::size_t res::resource_system::pending_loads() const
 {
 	std::shared_lock lock(m_cache_mutex);
 	std::size_t count = 0;
-	m_cache.for_each([&count](const cache_entry& entry) {
+	const auto count_loading = [&count](const cache_entry& entry) {
 		if (const auto block = entry.lock()) {
 			const auto status = block->status.load();
 			if (status != core::res::res_status::ready && status != core::res::res_status::error) {
 				++count;
 			}
 		}
-	});
+	};
+	m_cache.for_each(count_loading);
+	for (const auto& [node, blocks] : m_displaced) {
+		std::ranges::for_each(blocks, count_loading);
+	}
+	return count;
+}
+
+std::size_t res::resource_system::displaced_count() const
+{
+	std::shared_lock lock(m_cache_mutex);
+	std::size_t count = 0;
+	for (const auto& [node, blocks] : m_displaced) {
+		const auto alive = std::ranges::count_if(blocks, [](const cache_entry& entry) { return !entry.expired(); });
+		count += static_cast<std::size_t>(alive);
+	}
 	return count;
 }
 

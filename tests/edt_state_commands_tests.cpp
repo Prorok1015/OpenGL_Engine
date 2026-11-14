@@ -803,6 +803,35 @@ BOOST_AUTO_TEST_CASE(AssetQuery_HidesTheResourceSidecars_InAnyLetterCase)
 	BOOST_TEST(names_of_tags(call("asset.query", R"({"glob":"*.resource"})")).empty());
 }
 
+// #854: asset.query lists what the asset walk enters: nothing inside a hidden folder, and in the layer that is the project
+// folder (it holds project.snkproj) not its code/, build/ or project.snkproj; a lower layer's build/ stays.
+BOOST_AUTO_TEST_CASE(AssetQuery_SkipsHiddenFoldersAndTheProjectsOwnNames)
+{
+	temp_layers::put(disk.layers[1] / ".git" / "config", "x");
+	temp_layers::put(disk.layers[1] / ".hidden" / "b.txt", "x");
+	temp_layers::put(disk.layers[1] / "project.snkproj", "{}");
+	temp_layers::put(disk.layers[1] / "code" / "main.cpp", "x");
+	temp_layers::put(disk.layers[1] / "build" / "out.bin", "x");
+	temp_layers::put(disk.layers[0] / "build" / "kept.txt", "x");
+
+	const auto result = call("asset.query");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((names_of_tags(result) == std::vector<std::string>{
+		"res://a.txt", "res://build/kept.txt", "res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
+}
+
+// #854: a layer without project.snkproj is no project folder: its code/ and build/ hold assets like any folder.
+BOOST_AUTO_TEST_CASE(AssetQuery_ListsCodeAndBuildOfALayerWithoutAProjectFile)
+{
+	temp_layers::put(disk.layers[1] / "code" / "main.cpp", "x");
+	temp_layers::put(disk.layers[1] / "build" / "out.bin", "x");
+
+	const auto result = call("asset.query");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((names_of_tags(result) == std::vector<std::string>{ "res://a.txt", "res://build/out.bin", "res://code/main.cpp",
+		"res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
+}
+
 BOOST_AUTO_TEST_CASE(AssetQuery_SkipsLinksAndNamesThatAreNotUtf8)
 {
 	std::error_code ec;
