@@ -375,7 +375,7 @@ BOOST_AUTO_TEST_CASE(AFolderRemovedDuringAScan_DoesNotReportItsNeighbours_BatchM
 	};
 	BOOST_TEST(run_until(sub_is_gone));
 	for (const auto& change : reported) {
-		BOOST_TEST(change.kind == res::change_kind::deleted);
+		BOOST_TEST((change.kind == res::change_kind::deleted));
 		BOOST_TEST((change.path == sub || change.path == sub / "inner.txt"));
 	}
 
