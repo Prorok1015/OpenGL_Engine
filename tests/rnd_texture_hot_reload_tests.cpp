@@ -406,7 +406,7 @@ BOOST_AUTO_TEST_CASE(CubemapData_AGuidAndAPath_IsOnePicture_FoundByItsGuid)
 	picture(image, 42);
 	auto index = std::make_shared<test_util::asset_ids_index>();
 	index->hold(guid, image.view());
-	resources().set_asset_index(index);
+	const test_util::asset_index_scope installed{ resources(), index };
 
 	const res::tag single{ "memory://reload/sky_single.desc" };
 	description(single, { { "__type", "texture_cubemap_desc" },
@@ -444,8 +444,6 @@ BOOST_AUTO_TEST_CASE(CubemapData_AGuidAndAPath_IsOnePicture_FoundByItsGuid)
 	const auto flat_desc = material(flat);
 	settle(flat_desc);
 	expect_pixels(textures.binding(textures.id_of(flat)).handle, 0, 42);
-
-	resources().set_asset_index(nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

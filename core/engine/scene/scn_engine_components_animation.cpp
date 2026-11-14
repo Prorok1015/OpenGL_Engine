@@ -1,5 +1,5 @@
 #include "scn_engine_components_detail.h"
-#include <snk/resource/res_reference.h>
+#include <snk/desc/desc_schema_ops.h>
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_animation_clip_desc.h>
@@ -104,6 +104,12 @@ json::value desc::json_codec<std::unordered_map<std::string, scn::tracked_compon
 
 bool desc::json_codec<std::unordered_map<std::string, scn::tracked_component_info>>::from_json(map& tracked, const json::value& in)
 {
+	return from_json(tracked, in, read_context{});
+}
+
+bool desc::json_codec<std::unordered_map<std::string, scn::tracked_component_info>>::from_json(map& tracked, const json::value& in,
+	const read_context& ctx)
+{
 	if (!in.is_object()) {
 		return false;
 	}
@@ -117,10 +123,10 @@ bool desc::json_codec<std::unordered_map<std::string, scn::tracked_component_inf
 		if (const auto* type = info->if_contains("type_name"); type && type->is_string()) {
 			item.type_name = std::string{ type->as_string() };
 		}
-		// Written as a path here; read in either form a reference has, so a file a later writer made still loads (#920).
+		// Written as a path here; read in either form a reference has, the guid first, as every other reference (#920).
 		if (const auto* source = info->if_contains("source_desc")) {
-			if (const auto reference = res::reference_from_json(*source); reference && !reference->path.view().empty()) {
-				item.source_desc = reference->path;
+			if (const auto resolved = desc::reference_tag(*source, ctx); resolved && resolved->is_valid()) {
+				item.source_desc = *resolved;
 			}
 		}
 		if (const auto* overrides = info->if_contains("local_overrides"); overrides && overrides->is_object()) {

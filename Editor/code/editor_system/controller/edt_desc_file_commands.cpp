@@ -26,6 +26,7 @@
 #include <system_error>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace {
 	namespace json = boost::json;
@@ -163,23 +164,25 @@ namespace {
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
-					const std::optional<res::tag> world_file = world_file_of(world);
-					if (!world_file) continue;
-					const edt::agent_level_path named = edt::check_agent_folder(world_file->view());
-					if (named.ok() && same_file(locate(named.path))) return true;
+					for (const res::tag& world_file : world_files_of(world)) {
+						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
+						if (named.ok() && same_file(locate(named.path))) return true;
+					}
 				}
 			}
 			return false;
 		}
 
-		// The file an entry of a level's `worlds` names, in either form a reference is written: a path, or {guid, path}
-		// where the guid says where the file is now. An entry read only as a string let a world written as {guid, path}
-		// slip past the two guards here (#920). None for a world written inline.
-		std::optional<res::tag> world_file_of(const json::value& world) const
+		// The files an entry of a level's `worlds` names, as a path or as {guid, path}: where the guid is now and what `path`
+		// spells, since the index may have moved the guid while the stale path still names a world (#920). None when inline.
+		std::vector<res::tag> world_files_of(const json::value& world) const
 		{
+			std::vector<res::tag> files;
 			const std::optional<res::reference> reference = res::reference_from_json(world);
-			if (!reference) return std::nullopt;
-			return m_deps.res.resolve_reference(*reference);
+			if (!reference) return files;
+			files.push_back(m_deps.res.resolve_reference(*reference));
+			if (!(reference->path == files.front())) files.push_back(reference->path);
+			return files;
 		}
 
 		// The same question for a path no file has: it is the open level's own name or one of the names in its `worlds`, so a
@@ -201,10 +204,10 @@ namespace {
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
-					const std::optional<res::tag> world_file = world_file_of(world);
-					if (!world_file) continue;
-					const edt::agent_level_path named = edt::check_agent_folder(world_file->view());
-					if (named.ok() && name_key(named.path) == wanted) return true;
+					for (const res::tag& world_file : world_files_of(world)) {
+						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
+						if (named.ok() && name_key(named.path) == wanted) return true;
+					}
 				}
 			}
 			return false;

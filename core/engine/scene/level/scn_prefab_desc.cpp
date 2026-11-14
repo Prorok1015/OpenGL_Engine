@@ -534,10 +534,10 @@ namespace {
 			}
 			return;
 		}
-		// A reference in either form a file writes it; under the key of a registered type an object is that type's fields
-		// (parse_component reads it the same way).
-		const bool whole_reference = record.value.is_string()
-			|| (!desc_system.is_registered(record.component) && res::reference_from_json(record.value));
+		// The component's type decides, not the record's key: a typed component may well have a field called "path".
+		const prefab_comp_node& held = it->second;
+		const bool has_fields = !held.type_name.empty() && (desc_system.is_registered(held.type_name) || held.parent_desc.is_valid());
+		const bool whole_reference = record.value.is_string() || (!has_fields && res::reference_from_json(record.value));
 		if (record.path.empty() && whole_reference) {
 			// a plain reference to a desc replaces the component whole
 			it->second = scn::parse_component(desc_system, owner, record.value, record.component);

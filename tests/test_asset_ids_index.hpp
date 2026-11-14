@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
+#include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <functional>
 #include <map>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace test_util
 {
@@ -33,6 +35,23 @@ namespace test_util
 			const auto found = paths.find(id);
 			return found == paths.end() ? std::nullopt : std::optional{ found->second };
 		}
+	};
+
+	// An index installed for a scope: a check that fails before the end of a test leaves none for the tests after it.
+	class asset_index_scope
+	{
+	public:
+		asset_index_scope(res::resource_system& resources, std::shared_ptr<const res::asset_index> index)
+			: m_resources(resources)
+		{
+			m_resources.set_asset_index(std::move(index));
+		}
+		~asset_index_scope() { m_resources.set_asset_index(nullptr); }
+		asset_index_scope(const asset_index_scope&) = delete;
+		asset_index_scope& operator=(const asset_index_scope&) = delete;
+
+	private:
+		res::resource_system& m_resources;
 	};
 
 	// {"guid": ..., "path": ...} as a file writes a reference; an empty guid leaves the key out.
