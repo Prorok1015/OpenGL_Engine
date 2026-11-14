@@ -507,7 +507,9 @@ bool res::resource_system::remount(std::string_view protocol, std::vector<std::f
   }
   found->roots = std::move(roots);
   // The new resolver takes the old one's place in one step: no load in between finds the protocol unmounted. The old one
-  // goes after, once the calls into it have ended.
+  // goes after, once the calls into it have ended; its destructor writes out what is still queued in it, to the old roots
+  // it was addressed to. Until then its watcher may still signal: what it and a read through the new resolver meanwhile
+  // left in the cache is evicted below, after the release, so nothing read from the old roots stays.
   resolver replaced = make_mount_resolver(*found);
   {
     std::unique_lock lock(m_registry_mutex);
@@ -2731,7 +2733,9 @@ void res::resource_system::release_resolver(resolver removed, std::string_view p
 	ASSERT_MSG(!own_call, "{}:// is unmounted from inside a call into its own resolver", protocol);
 	if (own_call) {
 		egLOG_ERROR("res/resolver", "{}:// is unmounted from inside a call into its own resolver: it is left alive", protocol);
-		// Leaked on purpose: destroying it here would join its io thread from a call that thread may be waiting on.
+		// Leaked on purpose: destroying it here would join its io thread from a call that thread may be waiting on. It keeps
+		// the [this] of its callbacks into this system, which may die first: acceptable only because this is a
+		// programmer's error already, asserted above.
 		(void)new resolver(std::move(removed));
 		return;
 	}
