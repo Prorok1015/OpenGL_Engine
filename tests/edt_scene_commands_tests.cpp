@@ -9,6 +9,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_describe_ops.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_schema_desc.h>
@@ -142,6 +143,33 @@ struct commands_fixture : test_util::scene_env
 const std::vector<const char*> all_commands = { "scene.node.create", "scene.node.delete", "scene.node.duplicate",
 	"scene.node.reparent", "scene.node.rename", "component.add", "component.remove", "component.set", "transform.set" };
 
+}
+
+namespace {
+
+// A map of structures that hold a tag: a {guid, path} reference inside one of its values replaces what is there (#773).
+struct icon_slot
+{
+	res::tag icon;
+};
+BOOST_DESCRIBE_STRUCT(icon_slot, (), (icon))
+
+class slot_map_component : public desc::schema_desc<slot_map_component, desc::schema_kind::component>
+{
+public:
+	static constexpr std::string_view __type = "probe.slot_map";
+
+	std::map<std::string, icon_slot> slots;
+
+	BOOST_DESCRIBE_CLASS(slot_map_component, (), (slots), (), ())
+};
+
+}
+
+namespace desc
+{
+	template<>
+	inline constexpr auto field_attrs<slot_map_component> = attrs(f("slots").ref("probe.icon_slot"));
 }
 
 BOOST_FIXTURE_TEST_SUITE(edt_scene_commands_tests, commands_fixture)
@@ -913,6 +941,55 @@ BOOST_AUTO_TEST_CASE(a_reference_in_a_patch_replaces_the_value_whole)
 	BOOST_REQUIRE(set(eye, R"({"visible":false})").ok);
 	BOOST_TEST(whole(records_of(), json::parse(R"({"path":"res://n.desc"})")));
 	BOOST_TEST(!merged_material(records_of()));
+
+	// The Inspector writes an instance's component through write_component with the component's schema: the same.
+	namespace oe = edt::override_edit;
+	prefab_node& owner = *child(root(1), 0xe1);
+	const std::vector<std::uint64_t> target{ 0xc1 };
+	const auto base_node = oe::find_base_node(*assembler, owner, target);
+	BOOST_REQUIRE(base_node.has_value());
+	const json::object base_json = oe::component_json(base_node->components.at("mesh"));
+	json::object edited = oe::effective_component(owner, target, "mesh", base_json);
+	edited["visible"] = true;
+	oe::write_component(owner, target, "mesh", base_json, edited, descs.get(), descs->find_schema("mesh_node_desc"));
+	BOOST_TEST(whole(records_of(), json::parse(R"({"path":"res://n.desc"})")));
+	BOOST_TEST(!merged_material(records_of()));
+
+	// The other way: an inline desc where a reference was replaces it whole, on a node and in the records of an instance.
+	const json::value inline_material = json::parse(R"({"__type":"material_desc","__parent":"res://base_material.desc"})");
+	BOOST_REQUIRE(set(crate, R"({"material":)" + json::serialize(inline_material) + "}").ok);
+	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material") == inline_material);
+	const json::object over_reference{ { "material", reference } };
+	oe::write_component(owner, target, "mesh", over_reference, json::object{ { "material", inline_material } }, descs.get(),
+		descs->find_schema("mesh_node_desc"));
+	BOOST_TEST(whole(records_of(), inline_material));
+	BOOST_TEST(!merged_material(records_of()));
+}
+
+// #773: inside a map of structures a reference replaces the value too, and the records of an instance set it whole.
+BOOST_AUTO_TEST_CASE(a_reference_inside_a_map_of_structures_replaces_the_value_whole)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.icon_slot","kind":"struct",
+		"fields":[{"name":"icon","kind":"res_tag","default":""}]})").as_object())));
+	descs->register_component_desc<slot_map_component>("probe.slot_map");
+	const std::string crate = ref({ "00000000000000a4" });
+	const auto added = call("component.add", R"({"ref":)" + crate + R"(,"key":"slots","type":"probe.slot_map",)"
+		+ R"("fields":{"slots":{"a":{"icon":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://a.png"}}}}})");
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+
+	const auto moved = call("component.set", R"({"ref":)" + crate + R"(,"key":"slots","patch":{"slots":{"a":{"icon":{"path":"res://b.png"}}}}})");
+	BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
+	const json::value overrides(child(root(), 0xa4)->components.at("slots").overrides);
+	const json::value* icon = desc::json_pointer_get(overrides, "/slots/a/icon");
+	BOOST_REQUIRE(icon);
+	BOOST_TEST(*icon == json::parse(R"({"path":"res://b.png"})"));
+
+	const desc::type_schema* schema = descs->find_schema("probe.slot_map");
+	BOOST_REQUIRE(schema);
+	const json::value base = json::parse(R"({"slots":{"a":{"icon":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://a.png"}}}})");
+	const json::value edited = json::parse(R"({"slots":{"a":{"icon":{"path":"res://b.png"}},"b":{"icon":"res://c.png"}}})");
+	const std::vector<std::string> whole = edt::override_edit::whole_values(*descs, *schema, base, edited);
+	BOOST_TEST((whole == std::vector<std::string>{ "/slots/a/icon" }));
 }
 
 // #773: with an asset index, component.set checks a reference where its guid leads and its written path too (a game

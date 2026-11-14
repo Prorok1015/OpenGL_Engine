@@ -1,6 +1,10 @@
 #include "edt_override_edit.h"
+#include "edt_reference.h"
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_diagnostics.h>
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include <algorithm>
@@ -50,6 +54,77 @@ namespace
 	{
 		std::erase_if(owner.overrides, [&] (const scn::override_record& r) { return same_target(r, target, component); });
 	}
+
+	// Inline descs inside inline descs: deeper than any shipped data.
+	constexpr int k_max_depth = 8;
+
+	bool is_reference(const json::value& value)
+	{
+		return edt::is_reference_object(value) && edt::reference_object_problem(value.as_object()).empty();
+	}
+
+	bool is_tag_kind(desc::field_kind kind)
+	{
+		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
+	}
+
+	std::string pointer_of(std::string_view key)
+	{
+		return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
+	}
+
+	std::string token_of(const json::string& key)
+	{
+		return res::json_pointer_token(std::string_view(key.data(), key.size()));
+	}
+
+	void collect_whole(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& base, const json::value& edited,
+		const std::string& at, std::vector<std::string>& out, int depth)
+	{
+		if (depth >= k_max_depth) return;
+		const auto whole_or_into = [&](const json::value& held, const std::string& where, const auto& into) {
+			const json::value* was = desc::json_pointer_get(base, where);
+			if (is_reference(held) || (was && is_reference(*was))) {
+				out.push_back(where);
+				return;
+			}
+			into();
+		};
+		for (const desc::field_schema& field : schema.fields) {
+			std::vector<std::string> pointers{ pointer_of(field.key) };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			for (const std::string& pointer : pointers) {
+				const std::string where = at + pointer;
+				const json::value* held = desc::json_pointer_get(edited, where);
+				if (!held || !held->is_object()) continue;
+				if (is_tag_kind(field.kind)) {
+					whole_or_into(*held, where, [&] {
+						const json::value* type = held->as_object().if_contains("__type");
+						const desc::type_schema* nested = type && type->is_string() ? descs.find_schema(std::string_view(type->as_string())) : nullptr;
+						if (nested) collect_whole(descs, *nested, base, edited, where, out, depth + 1);
+					});
+				} else if (field.kind == desc::field_kind::structure) {
+					if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) collect_whole(descs, *nested, base, edited, where, out, depth + 1);
+				} else if (field.kind == desc::field_kind::map) {
+					const desc::type_schema* nested = field.element == desc::field_kind::structure ? descs.find_schema(field.ref_type) : nullptr;
+					for (const auto& entry : held->as_object()) {
+						if (!entry.value().is_object()) continue;
+						const std::string item = where + "/" + token_of(entry.key());
+						if (is_tag_kind(field.element)) whole_or_into(entry.value(), item, [] {});
+						else if (nested) collect_whole(descs, *nested, base, edited, item, out, depth + 1);
+					}
+				}
+			}
+		}
+	}
+}
+
+std::vector<std::string> edt::override_edit::whole_values(const desc::desc_system& descs, const desc::type_schema& schema,
+	const json::value& base, const json::value& edited)
+{
+	std::vector<std::string> out;
+	collect_whole(descs, schema, base, edited, {}, out, 0);
+	return out;
 }
 
 const scn::prefab_desc* edt::override_edit::referenced_prefab(const prefab_node& node)
@@ -260,7 +335,7 @@ void edt::override_edit::effective_transform(
 
 void edt::override_edit::write_component(
 	prefab_node& owner, std::span<const uint64_t> target, const std::string& component,
-	const json::object& base, const json::object& edited, std::span<const std::string> replaced)
+	const json::object& base, const json::object& edited, const desc::desc_system* descs, const desc::type_schema* schema)
 {
 	json::value changed = diff(base, edited);
 	erase_records(owner, target, component);
@@ -268,6 +343,7 @@ void edt::override_edit::write_component(
 	std::vector<scn::override_record> whole;
 	const json::value base_value(base);
 	const json::value edited_value(edited);
+	const std::vector<std::string> replaced = descs && schema ? whole_values(*descs, *schema, base_value, edited_value) : std::vector<std::string>{};
 	for (const std::string& pointer : replaced) {
 		const json::value* now = desc::json_pointer_get(edited_value, pointer);
 		if (!now) continue;

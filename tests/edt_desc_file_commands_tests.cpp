@@ -720,7 +720,15 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 	const auto unknown = call("desc.create", desc_args("materials/r.mat.desc", unknown_guid.c_str()));
 	const auto known = call("desc.create", desc_args("materials/k.mat.desc",
 		R"({"__type":"material_desc","shader_fragment":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"}})"));
+	const std::string unknown_with_path = R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag"}})";
+	const auto by_path = call("desc.create", desc_args("materials/p.mat.desc", unknown_with_path.c_str()));
 	rs->set_asset_index(nullptr);
+	// A guid no file holds, with a path: the path is what loads, and the agent is told so.
+	BOOST_REQUIRE_MESSAGE(by_path.ok, by_path.error);
+	const json::array& warned = by_path.value.at("warnings").as_array();
+	BOOST_REQUIRE_EQUAL(warned.size(), 1u);
+	BOOST_TEST(std::string(warned[0].at("kind").as_string()) == std::string("reference"));
+	BOOST_TEST(std::string(warned[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));
 	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
 	BOOST_REQUIRE(unknown.value.is_object());
 	BOOST_TEST(std::string(unknown.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));

@@ -12,6 +12,7 @@
 // How the editor turns an edit inside a prefab instance into override records on the instance node.
 // `owner` is the node of the edited desc that instantiates the prefab, `target` the node-id path below it.
 namespace edt { class scene_document; struct editor_services; }
+namespace desc { class desc_system; struct type_schema; }
 
 namespace edt::override_edit
 {
@@ -85,11 +86,19 @@ namespace edt::override_edit
 		glm::vec3& position, glm::vec3& rotation, glm::vec3& scale);
 
 	// Replace the records of (target, component) by one record holding the difference to the base; no difference, no record.
-	// Each pointer of `replaced` (a {guid, path} reference, EPIC-57 section 4.4) gets a record of its own that sets the value
-	// there whole: merged as part of the component it would mix with the inline desc or reference of the base.
+	// With the component's `schema`, a reference field (EPIC-57 section 4.4) that holds a {guid, path} reference, or an
+	// inline desc where the base has a reference, gets a record of its own that sets the value there whole (whole_values):
+	// merged as part of the component it would mix with the inline desc or the reference of the base.
 	void write_component(
 		prefab_node& owner, std::span<const uint64_t> target, const std::string& component,
-		const boost::json::object& base, const boost::json::object& edited, std::span<const std::string> replaced = {});
+		const boost::json::object& base, const boost::json::object& edited,
+		const desc::desc_system* descs = nullptr, const desc::type_schema* schema = nullptr);
+
+	// The pointers of the reference fields of `edited` (a component of `schema`) whose value goes whole, not merged: a
+	// {guid, path} reference, or any object where `base` holds one. Read through structures, maps of them and inline
+	// descs, by every key a field is read under.
+	std::vector<std::string> whole_values(const desc::desc_system& descs, const desc::type_schema& schema,
+		const boost::json::value& base, const boost::json::value& edited);
 
 	void write_transform(
 		prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,

@@ -289,14 +289,20 @@ namespace {
 		return edt::is_reference_object(value) && edt::reference_object_problem(value.as_object()).empty();
 	}
 
-	// A reference the patch gives a reference field replaces the value there whole (EPIC-57 section 4.4): merged into an
-	// inline desc it would keep the __type and the old desc would load, merged into another reference it would keep the
-	// old guid, and the edit would do nothing. The form of the patch and the kind of the field decide, not what it is
-	// merged into. `patch` is the part of the patch at `at` in `edited`.
-	void replace_references(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& patch, json::value& edited,
-		const std::string& at, int depth)
+	// A value the patch gives a reference field replaces what is there whole when either is a {guid, path} reference
+	// (EPIC-57 section 4.4): a reference merged into an inline desc would keep its __type and the old desc would load, into
+	// another reference it would keep the old guid, and an inline desc merged into a reference would mix the two. The form
+	// of the patch, of the base and the kind of the field decide. `patch` is the part of the patch at `at`; `base` and
+	// `edited` are whole components.
+	void replace_references(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& patch, const json::value& base,
+		json::value& edited, const std::string& at, int depth)
 	{
 		if (depth >= k_max_inline_depth) return;
+		const auto replaces = [&](const json::value& given, const std::string& where) {
+			if (is_patch_reference(given)) return true;
+			const json::value* was = desc::json_pointer_get(base, where);
+			return was && is_patch_reference(*was) && given.as_object().contains("__type");
+		};
 		for (const desc::field_schema& field : schema.fields) {
 			std::vector<std::string> pointers{ pointer_of(field.key) };
 			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
@@ -305,50 +311,25 @@ namespace {
 				if (!value || !value->is_object()) continue;
 				const std::string where = at + pointer;
 				if (is_tag_kind(field.kind)) {
-					if (is_patch_reference(*value)) {
+					if (replaces(*value, where)) {
 						desc::json_pointer_set(edited, where, *value);
 					} else if (const json::value* type = type_of_inline(value->as_object(), desc::json_pointer_get(edited, where))) {
 						if (const desc::type_schema* nested = descs.find_schema(std::string_view(type->as_string()))) {
-							replace_references(descs, *nested, *value, edited, where, depth + 1);
+							replace_references(descs, *nested, *value, base, edited, where, depth + 1);
 						}
 					}
 				} else if (field.kind == desc::field_kind::structure) {
-					if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) replace_references(descs, *nested, *value, edited, where, depth + 1);
-				} else if (field.kind == desc::field_kind::map && is_tag_kind(field.element)) {
+					if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) replace_references(descs, *nested, *value, base, edited, where, depth + 1);
+				} else if (field.kind == desc::field_kind::map) {
+					const desc::type_schema* nested = field.element == desc::field_kind::structure ? descs.find_schema(field.ref_type) : nullptr;
 					for (const auto& entry : value->as_object()) {
-						if (!is_patch_reference(entry.value())) continue;
-						desc::json_pointer_set(edited, where + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())), entry.value());
-					}
-				}
-			}
-		}
-	}
-
-	// The pointers of `value` (a component of `schema`, or a part of one at `at`) where a reference field holds a {guid,
-	// path} reference: what an override record must set whole (override_edit::write_component).
-	void reference_pointers(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& value, const std::string& at,
-		std::vector<std::string>& out, int depth)
-	{
-		if (depth >= k_max_inline_depth) return;
-		for (const desc::field_schema& field : schema.fields) {
-			const std::string pointer = pointer_of(field.key);
-			const json::value* held = desc::json_pointer_get(value, pointer);
-			if (!held || !held->is_object()) continue;
-			const std::string where = at + pointer;
-			if (is_tag_kind(field.kind)) {
-				if (is_patch_reference(*held)) {
-					out.push_back(where);
-				} else if (const json::value* type = type_of_inline(held->as_object(), nullptr)) {
-					if (const desc::type_schema* nested = descs.find_schema(std::string_view(type->as_string()))) {
-						reference_pointers(descs, *nested, *held, where, out, depth + 1);
-					}
-				}
-			} else if (field.kind == desc::field_kind::structure) {
-				if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) reference_pointers(descs, *nested, *held, where, out, depth + 1);
-			} else if (field.kind == desc::field_kind::map && is_tag_kind(field.element)) {
-				for (const auto& entry : held->as_object()) {
-					if (is_patch_reference(entry.value())) {
-						out.push_back(where + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+						if (!entry.value().is_object()) continue;
+						const std::string item = where + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size()));
+						if (is_tag_kind(field.element)) {
+							if (replaces(entry.value(), item)) desc::json_pointer_set(edited, item, entry.value());
+						} else if (nested) {
+							replace_references(descs, *nested, entry.value(), base, edited, item, depth + 1);
+						}
 					}
 				}
 			}
@@ -359,7 +340,7 @@ namespace {
 	json::object patched_fields(const desc::desc_system& descs, const std::string& type, const json::object& base, const json::object& patch)
 	{
 		json::value edited = merge_patch(base, patch);
-		if (const desc::type_schema* schema = descs.find_schema(type)) replace_references(descs, *schema, json::value(patch), edited, {}, 0);
+		if (const desc::type_schema* schema = descs.find_schema(type)) replace_references(descs, *schema, json::value(patch), json::value(base), edited, {}, 0);
 		return std::move(edited.as_object());
 	}
 
@@ -820,11 +801,7 @@ namespace {
 			if (auto bad = check_fields(*descs, ctx.sources.services.resources(), type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
 			if (edited == effective) return cmd::result::success();
 			changing();
-			std::vector<std::string> references;
-			if (const desc::type_schema* schema = descs->find_schema(type_of(component->second))) {
-				reference_pointers(*descs, *schema, json::value(edited), {}, references, 0);
-			}
-			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited, references);
+			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited, descs, descs->find_schema(type_of(component->second)));
 			return cmd::result::success();
 		});
 	}
