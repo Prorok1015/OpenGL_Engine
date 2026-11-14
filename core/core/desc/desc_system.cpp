@@ -616,24 +616,57 @@ namespace
 		}
 	}
 
+	desc::schema_lookup schema_lookup_of(const desc::desc_system& descs)
+	{
+		return [&descs](std::string_view type_name) { return descs.find_schema(type_name); };
+	}
+
 	struct reference_writer
 	{
-		const desc::desc_system& descs;
-		const res::resource_system& resources;
+		const desc::schema_lookup& schema_of;
+		const desc::reference_ids& ids;
 		bool has_index = false;
 		const kept_guids* kept = nullptr;
 		// What the edited value replaces (a component an override record applies to): where it holds an object, a path stays a
 		// string, since an object would be merged into it.
 		const json::value* merged_into = nullptr;
+		desc::reference_counts* counts = nullptr;
+
+		std::optional<res::asset_id> index_id(const res::tag& path) const
+		{
+			if (!has_index || !ids.id_of) {
+				return std::nullopt;
+			}
+			auto id = ids.id_of(path);
+			return id && !id->is_nil() ? id : std::nullopt;
+		}
+
+		std::optional<res::tag> index_path(const res::asset_id& guid) const
+		{
+			if (!has_index || !ids.path_of || guid.is_nil()) {
+				return std::nullopt;
+			}
+			return ids.path_of(guid);
+		}
+
+		void count(std::size_t desc::reference_counts::* what) const
+		{
+			if (counts) {
+				++(counts->*what);
+			}
+		}
+
+		const desc::type_schema* find_schema(std::string_view type_name) const
+		{
+			return schema_of ? schema_of(type_name) : nullptr;
+		}
 
 		// The index's ID for `path`, else the guid the replaced file had for it: a writer never drops a guid the file had,
 		// unless the index puts that guid on another file.
 		std::optional<res::asset_id> id_for(const res::tag& path) const
 		{
-			if (has_index) {
-				if (auto id = resources.asset_id_of(path)) {
-					return id;
-				}
+			if (auto id = index_id(path)) {
+				return id;
 			}
 			if (!kept) {
 				return std::nullopt;
@@ -642,10 +675,8 @@ namespace
 			if (found == kept->end() || !found->second) {
 				return std::nullopt;
 			}
-			if (has_index) {
-				if (const auto now = resources.asset_path_of(*found->second); now && !(*now == path)) {
-					return std::nullopt;
-				}
+			if (const auto now = index_path(*found->second); now && !(*now == path)) {
+				return std::nullopt;
 			}
 			return found->second;
 		}
@@ -666,6 +697,7 @@ namespace
 				}
 				if (const auto guid = id_for(path)) {
 					value = reference_object(*guid, path);
+					count(&desc::reference_counts::ids_written);
 				}
 				return;
 			}
@@ -681,12 +713,13 @@ namespace
 				if (!has_index) {
 					return;
 				}
-				const auto now = resources.asset_path_of(read->guid);
+				const auto now = index_path(read->guid);
 				// Already where the file is, however it is spelled: left as written, so no file changes for nothing.
 				if (!now || now->protocol() != res::tag::default_protocol() || *now == read->path) {
 					return;
 				}
 				value = reference_object(read->guid, *now);
+				count(&desc::reference_counts::paths_repaired);
 				return;
 			}
 			if (read->path.protocol() != res::tag::default_protocol()) {
@@ -694,6 +727,7 @@ namespace
 			}
 			if (const auto guid = id_for(read->path)) {
 				value = reference_object(*guid, read->path);
+				count(&desc::reference_counts::ids_written);
 			}
 		}
 
@@ -703,7 +737,7 @@ namespace
 				reference(value, where);
 			}
 			else if (kind == desc::field_kind::structure && value.is_object()) {
-				if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+				if (const desc::type_schema* nested = find_schema(field.ref_type)) {
 					fields(*nested, value, where, depth + 1);
 				}
 			}
@@ -754,8 +788,8 @@ namespace
 		{
 			if (json::object* object = value.if_object()) {
 				if (const json::value* type = object->if_contains("__type"); type && type->is_string()) {
-					if (const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()))) {
-						fields(*schema, value, where, 0);
+					if (const desc::type_schema* typed = find_schema(std::string_view(type->as_string()))) {
+						fields(*typed, value, where, 0);
 					}
 				}
 				for (auto& member : *object) {
@@ -803,13 +837,13 @@ namespace
 							element(field, field.element, value, where, depth);
 						}
 						else if (field.element == desc::field_kind::structure) {
-							if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+							if (const desc::type_schema* nested = find_schema(field.ref_type)) {
 								at(*nested, rest.subspan(1), value, where, depth + 1);
 							}
 						}
 					}
 					else if (field.kind == desc::field_kind::structure) {
-						if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+						if (const desc::type_schema* nested = find_schema(field.ref_type)) {
 							at(*nested, rest, value, where, depth + 1);
 						}
 					}
@@ -844,7 +878,9 @@ namespace
 		if (replaced) {
 			collect_kept(*replaced, kept, file, 0);
 		}
-		const reference_writer writer{ descs, resources, resources.has_asset_index(), kept.empty() ? nullptr : &kept };
+		const desc::schema_lookup schema_of = schema_lookup_of(descs);
+		const desc::reference_ids ids = desc::asset_index_ids(resources);
+		const reference_writer writer{ schema_of, ids, resources.has_asset_index(), kept.empty() ? nullptr : &kept, nullptr, nullptr };
 		if (writer.has_index || writer.kept) {
 			writer.tree(root, {});
 		}
@@ -905,13 +941,35 @@ void desc::desc_system::write_references(const type_schema& schema, std::string_
 	if (!desc::json_pointer_tokens(pointer, tokens)) {
 		return;
 	}
-	reference_writer writer{ *this, m_res_system, m_res_system.has_asset_index() };
-	if (!writer.has_index) {
+	if (!m_res_system.has_asset_index()) {
 		return;
 	}
-	writer.merged_into = merged_into;
+	const desc::schema_lookup schema_of = schema_lookup_of(*this);
+	const desc::reference_ids ids = desc::asset_index_ids(m_res_system);
+	const reference_writer writer{ schema_of, ids, true, nullptr, merged_into, nullptr };
 	writer.at(schema, tokens, value, {}, 0);
 	writer.tree(value, {});
+}
+
+desc::reference_counts desc::desc_system::write_references_with(json::value& root, const reference_ids& ids) const
+{
+	return desc::write_references_with(root, schema_lookup_of(*this), ids);
+}
+
+desc::reference_counts desc::write_references_with(json::value& root, const schema_lookup& schema_of, const reference_ids& ids)
+{
+	reference_counts counts;
+	const reference_writer writer{ schema_of, ids, true, nullptr, nullptr, &counts };
+	writer.tree(root, {});
+	return counts;
+}
+
+desc::reference_ids desc::asset_index_ids(const res::resource_system& resources)
+{
+	reference_ids ids;
+	ids.id_of = [&resources](const res::tag& path) { return resources.asset_id_of(path); };
+	ids.path_of = [&resources](const res::asset_id& guid) { return resources.asset_path_of(guid); };
+	return ids;
 }
 
 std::optional<res::tag> desc::reference_tag(const json::value& in, const read_context& ctx)

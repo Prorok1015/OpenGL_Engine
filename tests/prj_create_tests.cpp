@@ -112,6 +112,34 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 	BOOST_TEST(cmake.find("set(SNK_GAME_EDITOR_MODULE game_editor)") != std::string::npos);
 }
 
+// #912: a new project ignores the MCP token, caches and build trees even when its template's .gitignore does not:
+// the missing lines are added after the template's own, which stay; one that ignores as much counts.
+BOOST_AUTO_TEST_CASE(Create_FromATemplateWithoutTheIgnoreLines_AddsThem)
+{
+	test_util::temp_dir dir("prj_create_ignore");
+	fs::copy(k_empty_template, dir.path() / "bare", fs::copy_options::recursive);
+	fs::remove(dir.path() / "bare" / ".gitignore");
+	fs::copy(k_empty_template, dir.path() / "partial", fs::copy_options::recursive);
+	dir.write("partial/.gitignore", "# ours\n*.log\n/.cache\n");
+
+	const auto bare = prj::create_project(dir.path() / "bare", dir.path() / "game_bare", "Bare");
+	BOOST_REQUIRE_MESSAGE(bare.error.empty(), bare.error);
+	BOOST_TEST((lines_of(read_text(dir.path() / "game_bare" / ".gitignore"))
+		== std::vector<std::string>{ ".snk/mcp.json", ".cache/", "build/" }));
+
+	const auto partial = prj::create_project(dir.path() / "partial", dir.path() / "game_partial", "Partial");
+	BOOST_REQUIRE_MESSAGE(partial.error.empty(), partial.error);
+	BOOST_TEST((lines_of(read_text(dir.path() / "game_partial" / ".gitignore"))
+		== std::vector<std::string>{ "# ours", "*.log", "/.cache", ".snk/mcp.json", "build/" }));
+
+	// A template written with CRLF gets its new lines with CRLF too.
+	fs::copy(k_empty_template, dir.path() / "crlf", fs::copy_options::recursive);
+	dir.write("crlf/.gitignore", "# ours\r\n.cache/\r\n");
+	const auto crlf = prj::create_project(dir.path() / "crlf", dir.path() / "game_crlf", "Crlf");
+	BOOST_REQUIRE_MESSAGE(crlf.error.empty(), crlf.error);
+	BOOST_TEST(read_text(dir.path() / "game_crlf" / ".gitignore") == "# ours\r\n.cache/\r\n.snk/mcp.json\r\nbuild/\r\n");
+}
+
 BOOST_AUTO_TEST_CASE(Create_IntoAnEmptyFolder_FillsIt)
 {
 	test_util::temp_dir dir("prj_create_empty");

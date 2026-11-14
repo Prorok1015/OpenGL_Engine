@@ -4,10 +4,12 @@
 #include "edt_data_document.h"
 #include "edt_document_creator.h"
 #include "edt_migration_startup.h"
+#include "edt_version_notice.h"
 #include "test_fake_asset_catalog.hpp"
 #include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
 #include "edt_data_document_view.h"
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
@@ -377,6 +379,34 @@ BOOST_AUTO_TEST_CASE(AFileOfAnOlderVersion_IsMigratedInMemoryAndWrittenInTheCurr
 	BOOST_TEST(saved.at("__version").to_number<int>() == 2);
 	BOOST_TEST(!saved.contains("velocity"));
 	BOOST_TEST(saved.at("speed").to_number<double>() == 5.0);
+}
+
+// R26 of EPIC-58 (#761): the confirmed write of a file of an older version says, as a WARN, that older editors will not
+// open it; the next save of the same file says nothing.
+BOOST_AUTO_TEST_CASE(TheConfirmedWriteOfAnOlderFile_WarnsThatOlderEditorsWillNotOpenIt)
+{
+	descs->register_migration("test.config", 1, [](json::object&) {});
+	const res::tag file = put("old.desc", R"({"__type":"test.config","speed":4.0})");
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "Editor/Save") warnings.emplace_back(message);
+	});
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(!document.save().saved);
+	BOOST_TEST(warnings.empty());
+
+	document.confirm_version_write();
+	BOOST_REQUIRE(document.save().saved);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings.front() == edt::version_upgrade_text("res://old.desc", 1, 2));
+
+	BOOST_REQUIRE(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 5.0;
+		return true;
+	}));
+	BOOST_REQUIRE(document.save().saved);
+	BOOST_TEST(warnings.size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(RestoreOwn_BringsASnapshotBackAndTracksTheSavedState)

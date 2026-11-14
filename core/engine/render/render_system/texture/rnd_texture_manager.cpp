@@ -8,6 +8,7 @@
 #include <snk/common/engine_assert.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <utility>
 
 rnd::texture_manager::~texture_manager()
@@ -206,6 +207,17 @@ const rnd::driver::texture_header& rnd::texture_manager::info(texture_id id) con
 
 rnd::texture_id rnd::texture_manager::generate(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data)
 {
+	// The driver reads width * height * channels bytes from the buffer: a short one would be read past its end.
+	// Byte formats only: of a float or depth format the driver reads more than a byte a channel.
+	const std::size_t per_pixel = channels == rnd::driver::texture_header::TYPE::R8 ? 1
+		: channels == rnd::driver::texture_header::TYPE::RGB8 ? 3
+		: channels == rnd::driver::texture_header::TYPE::RGBA8 ? 4 : 0;
+	const std::uint64_t needed = size.x > 0 && size.y > 0 ? static_cast<std::uint64_t>(size.x) * static_cast<std::uint64_t>(size.y) * per_pixel : 0;
+	if (needed == 0 || data.size() < needed) {
+		egLOG_WARN("render/texture", "texture '{}' is not generated: {}x{} needs {} bytes of R8, RGB8 or RGBA8, got {}", tag.view(), size.x, size.y, needed, data.size());
+		return {};
+	}
+
 	rnd::driver::texture_header header;
 	header.data.extent.width = size.x;
 	header.data.extent.height = size.y;

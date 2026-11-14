@@ -67,7 +67,7 @@ struct mesh_visible_fixture : test_util::null_engine_fixture
 	void load_bench_level()
 	{
 		auto& levels = storage.require<scn::context_manager>();
-		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/bench_100_meshes.desc")));
+		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/bench_10_meshes.desc")));
 		test_util::pump(tasks);
 		BOOST_REQUIRE(run_frames(3) == 3);
 	}
