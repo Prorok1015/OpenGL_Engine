@@ -2,12 +2,16 @@
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project/prj_version.h>
+#include <algorithm>
+#include <array>
 #include <exception>
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <boost/json/parse.hpp>
@@ -50,6 +54,50 @@ namespace
 	{
 		std::ifstream in(file, std::ios::binary);
 		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	// What a new project's repository must never carry (#912): the person's MCP token, caches, build trees. A line is
+	// there when the file has it or one of the lines that ignore at least as much.
+	struct ignored_line
+	{
+		std::string_view line;
+		std::array<std::string_view, 3> covered_by;
+	};
+	constexpr std::array<ignored_line, 3> k_ignored_lines{ {
+		{ ".snk/mcp.json", { ".snk/*", ".snk/", ".snk" } },
+		{ ".cache/", { ".cache", "/.cache/", "/.cache" } },
+		{ "build/", { "build", "/build/", "/build" } } } };
+
+	// The project's .gitignore with k_ignored_lines: written, or the lines the template's file lacks added at its end.
+	std::optional<std::string> ignore_private_files(const fs::path& project_dir)
+	{
+		const fs::path file = project_dir / ".gitignore";
+		std::string text = read_text(file);
+		std::string added;
+		for (const auto& [line, covered_by] : k_ignored_lines) {
+			bool present = false;
+			std::size_t start = 0;
+			while (start <= text.size() && !present) {
+				std::size_t end = text.find('\n', start);
+				if (end == std::string::npos) end = text.size();
+				std::string_view existing(text.data() + start, end - start);
+				if (!existing.empty() && existing.back() == '\r') existing.remove_suffix(1);
+				present = existing == line || std::ranges::find(covered_by, existing) != covered_by.end();
+				start = end + 1;
+			}
+			if (!present) {
+				added += line;
+				added += '\n';
+			}
+		}
+		if (added.empty()) return std::nullopt;
+		if (!text.empty() && text.back() != '\n') text += '\n';
+		text += added;
+		std::ofstream out(file, std::ios::binary | std::ios::trunc);
+		out << text;
+		out.close();
+		if (out.fail()) return std::format("cannot write '{}'", utf8_of(file));
+		return std::nullopt;
 	}
 
 	// Writes the copied manifest with the new project's name and this engine's version; the rest stays as the
@@ -140,6 +188,9 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 		return fail(std::format("cannot copy the template to '{}': {}", utf8_of(target_dir), ec.message()));
 	}
 	if (auto problem = stamp_manifest(staging / k_manifest_file_name, name)) {
+		return fail(std::move(*problem));
+	}
+	if (auto problem = ignore_private_files(staging)) {
 		return fail(std::move(*problem));
 	}
 	if (prepare) {

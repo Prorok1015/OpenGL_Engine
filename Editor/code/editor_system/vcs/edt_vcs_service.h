@@ -351,6 +351,9 @@ namespace edt
 		void probe_repository(const std::optional<std::filesystem::path>& project);
 		void set_probe_timeout();
 		started unavailable() const;
+		// The open project's folder in the repository, '/'-separated: empty for the repository's root, else with a
+		// trailing '/'. Nullopt when it is not in the repository (or either is unknown).
+		std::optional<std::string> project_prefix() const;
 		// The scratch folder with an empty hooks folder in it, made on first use; the error text when it cannot be.
 		std::optional<std::string> ensure_scratch();
 		// Defined in the .cpp, its only user. `write`: nullopt for a read, whose caller is `reader` (not ui: the

@@ -8,6 +8,8 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -1283,6 +1285,69 @@ namespace {
 		return std::nullopt;
 	}
 
+	// Folders of a project that hold the person's own files (an MCP token, caches, local settings): never an agent's to
+	// stage (#912).
+	constexpr std::array<std::string_view, 2> k_private_project_folders{ ".snk", ".cache" };
+
+	bool equal_ignoring_case(std::string_view a, std::string_view b)
+	{
+		return std::ranges::equal(a, b, [](unsigned char x, unsigned char y) {
+			return std::tolower(x) == std::tolower(y);
+		});
+	}
+
+	// `file` (repository path, '/'-separated) below `prefix` (the project's folder in the repository: empty for its
+	// root, else ending in '/'), in any letter case: a case-insensitive file system takes another spelling as the same.
+	std::optional<std::string_view> project_relative(std::string_view file, std::string_view prefix)
+	{
+		if (file.size() < prefix.size() || !equal_ignoring_case(file.substr(0, prefix.size()), prefix)) {
+			return std::nullopt;
+		}
+		return file.substr(prefix.size());
+	}
+
+	// Why an agent's stage of `paths` is refused: a file it would add is outside the project or in one of its private
+	// folders. Directories are listed as git add takes them (tracked and untracked, ignored files left out). Nullopt:
+	// allowed. `project_prefix` nullopt: the project is not in this repository.
+	std::optional<git_output> stage_scope_refusal(const git_context& git, const std::vector<std::string>& paths,
+		const std::optional<std::string>& project_prefix, std::stop_token stop)
+	{
+		const auto refuse = [](std::string why) { return refused("path_outside_project", std::move(why)); };
+		if (!project_prefix) {
+			return refuse("the open project is not in this repository: an agent stages only the project's files");
+		}
+		std::vector<std::string> args{ "ls-files", "-z", "--full-name", "--cached", "--others", "--exclude-standard",
+			"--" };
+		args.insert(args.end(), paths.begin(), paths.end());
+		const git_output listed = run_git(git, args, stop, k_list_cap);
+		if (!succeeded(listed)) return refuse("git could not list the files these paths stage");
+		std::vector<std::string> files = split_nul(listed.out);
+		for (const auto& path : paths) {
+			const fs::path normal = fs::path(path).lexically_normal();
+			if (normal.is_absolute() || normal.has_root_name() || (!normal.empty() && *normal.begin() == "..")) {
+				return refuse(std::format("'{}' is not a path inside the repository", edt::vcs::valid_utf8(path)));
+			}
+			std::string text = edt::utf8_of(normal);
+			std::ranges::replace(text, '\\', '/');
+			files.push_back(std::move(text));
+		}
+		for (const auto& file : files) {
+			const std::optional<std::string_view> inside = project_relative(file, *project_prefix);
+			if (!inside) {
+				return refuse(std::format("'{}' is outside the open project: an agent stages only the project's files",
+					edt::vcs::valid_utf8(file)));
+			}
+			const std::string_view first = inside->substr(0, inside->find('/'));
+			for (const std::string_view folder : k_private_project_folders) {
+				if (equal_ignoring_case(first, folder)) {
+					return refuse(std::format("'{}' is in the project's {}/ folder, which holds the person's own "
+						"files: an agent never stages it; name the files to stage", edt::vcs::valid_utf8(file), folder));
+				}
+			}
+		}
+		return std::nullopt;
+	}
+
 	// Deletes the commit message file however the job ends.
 	struct remove_on_exit
 	{
@@ -2187,7 +2252,11 @@ edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::s
 	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	std::vector<std::string> args{ "add", "--" };
 	args.insert(args.end(), paths.begin(), paths.end());
-	return run_job("git add", [args = std::move(args), paths](const git_context& git, ds::task_context& task) -> json::value {
+	return run_job("git add", [args = std::move(args), paths, prefix = project_prefix()](const git_context& git,
+		ds::task_context& task) -> json::value {
+		if (git.guarded) {
+			if (auto refusal = stage_scope_refusal(git, paths, prefix, task.stop)) return refusal_json(*refusal, task);
+		}
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::paths, paths, {} }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
@@ -2195,6 +2264,23 @@ edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::s
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
 	}, write_mode{ caller.kind, true, false });
+}
+
+std::optional<std::string> edt::vcs_service::project_prefix() const
+{
+	const std::optional<fs::path> project = m_options.project_root ? m_options.project_root() : std::nullopt;
+	if (!project || !m_state.root) return std::nullopt;
+	std::error_code ec;
+	const fs::path root = fs::weakly_canonical(*m_state.root, ec);
+	if (ec) return std::nullopt;
+	const fs::path folder = fs::weakly_canonical(*project, ec);
+	if (ec) return std::nullopt;
+	const fs::path relative = folder.lexically_relative(root);
+	if (relative.empty() || *relative.begin() == "..") return std::nullopt;
+	if (relative == ".") return std::string{};
+	std::string prefix = edt::utf8_of(relative);
+	std::ranges::replace(prefix, '\\', '/');
+	return prefix + "/";
 }
 
 edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std::string>& paths, const cmd::origin& caller)

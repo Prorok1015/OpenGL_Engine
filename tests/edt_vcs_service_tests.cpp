@@ -1480,6 +1480,51 @@ BOOST_AUTO_TEST_CASE(RealRepository_FetchPullPush_AgainstALocalBareRepository)
 	BOOST_TEST(head_of(remote) == head_of(other));
 }
 
+// #912: an agent stages only files of the open project, and never its .snk/ (the MCP token) or .cache/, whatever path
+// it names (a folder, another letter case, a path out of the project); nothing is staged then. A person's stage is
+// plain git add.
+BOOST_AUTO_TEST_CASE(AnAgentStagesOnlyTheProjectsOwnFiles)
+{
+	isolate_config();
+	const fs::path repo = make_repository();
+	const fs::path project = repo / "game";
+	write(project / "res" / "a.txt", "a\n");
+	write(project / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	write(project / ".cache" / "user_profile", "p\n");
+	write(repo / "outside.txt", "o\n");
+	make_service(real_options(project));
+	const auto staged = [&] {
+		std::vector<std::string> out;
+		const json::value status = finish(service->start_status(cmd::origin_kind::ui));
+		for (const auto& item : status.as_object().at("entries").as_array()) {
+			const json::value* index = item.as_object().if_contains("index");
+			if (index && text(*index) == "A") out.emplace_back(text(item.as_object().at("path")));
+		}
+		std::ranges::sort(out);
+		return out;
+	};
+
+	for (const std::vector<std::string>& paths : std::vector<std::vector<std::string>>{ { "." }, { "game" }, { "game/" },
+			{ "game/.snk/mcp.json" }, { "game/.SNK/mcp.json" }, { "game/.cache" }, { "outside.txt" },
+			{ "game/res/a.txt", "outside.txt" }, { "game/res/../../outside.txt" } }) {
+		BOOST_TEST_CONTEXT(paths.front()) {
+			const json::value result = finish(service->start_stage(paths, cmd::origin_kind::agent));
+			BOOST_TEST(is_error(result, "path_outside_project"), json::serialize(result));
+			BOOST_TEST(staged().empty());
+		}
+	}
+
+	const json::value own = finish(service->start_stage({ "game/res" }, cmd::origin_kind::agent));
+	BOOST_TEST(!own.as_object().contains("error"), json::serialize(own));
+	BOOST_TEST((staged() == std::vector<std::string>{ "game/res/a.txt" }));
+
+	const json::value by_person = finish(service->start_stage({ "." }, cmd::origin_kind::ui));
+	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
+	const std::vector<std::string> all = staged();
+	BOOST_TEST((std::ranges::find(all, "game/.snk/mcp.json") != all.end()));
+	BOOST_TEST((std::ranges::find(all, "outside.txt") != all.end()));
+}
+
 // Owner decision (#454): an agent's commit runs no hook of the repository; a person's does.
 BOOST_AUTO_TEST_CASE(AHostilePreCommitHook_RunsForAPersonButNotForAnAgent)
 {
