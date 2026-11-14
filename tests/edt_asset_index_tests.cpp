@@ -515,6 +515,11 @@ BOOST_AUTO_TEST_CASE(batch_by_batch_answers_as_a_fresh_snapshot_after_every_kind
 	check({});
 
 	// A file moved onto a path that held another ID, which goes in the same batch: the path answers the moved file's.
+	// The moved files get stamps of their own: one written in the same clock tick as the file it replaces would be taken
+	// as that file unchanged.
+	for (const char* moved : { "moved/a.txt", "moved/a.txt.resource" }) {
+		fs::last_write_time(content / moved, fs::file_time_type::clock::now() - std::chrono::hours(3));
+	}
 	fs::remove(content / "d.txt");
 	fs::remove(content / "d.txt.resource");
 	fs::rename(content / "moved/a.txt", content / "d.txt");
