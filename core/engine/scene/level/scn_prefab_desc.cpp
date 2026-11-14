@@ -1016,8 +1016,9 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 		if (walk.nodes >= g_spawn_limits.nodes) {
 			if (!walk.over_budget) {
 				walk.over_budget = true;
-				egLOG_ERROR("desc", "a spawn builds more than {} nodes: the rest of the tree is left out (last prefab: {})",
-					g_spawn_limits.nodes, inside.empty() ? std::string_view{ "none" } : inside.back().view());
+				egLOG_ERROR("desc", "a spawn builds more than {} nodes: the rest of the tree is left out{} (last prefab: {})",
+					g_spawn_limits.nodes, reload ? ", other live instances are left as they are" : "",
+					inside.empty() ? std::string_view{ "none" } : inside.back().view());
 			}
 			break;
 		}
@@ -1485,7 +1486,8 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 		const auto* instance = reg.try_get<scn::prefab_instance>(root_entity);
 		if (!instance || instance->source_prefab != desc->get_tag()) continue;
 		// Out of budget: a tree not started keeps all its live children, as the rest of a tree cut short does.
-		if (walk.over_budget || walk.nodes >= g_spawn_limits.nodes) {
+		if (walk.over_budget) break; // the cut inside a tree already reported it, with this outcome
+		if (walk.nodes >= g_spawn_limits.nodes) {
 			egLOG_ERROR("desc", "a hot reload builds more than {} nodes: the other live instances of {} are left as they are",
 				g_spawn_limits.nodes, desc->get_tag().view());
 			walk.over_budget = true;
