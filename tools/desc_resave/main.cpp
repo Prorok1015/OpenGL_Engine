@@ -138,8 +138,21 @@ int main(int argc, char** argv)
 
 	int failed = 0;
 	int changed = 0;
+	// A project template's own game types are declared by its game module, which this tool does not load (#800).
+	const auto is_game_type_of_a_template = [&](const res::tag& tag, const fs::path& path) {
+		if (tag.protocol() != "edt" || tag.string().find("templates/projects/") == std::string::npos) return false;
+		boost::system::error_code parse_error;
+		const json::value root = json::parse(as_text(read_file(path)), parse_error);
+		const json::value* type = parse_error || !root.is_object() ? nullptr : root.as_object().if_contains("__type");
+		return type && type->is_string() && !desc_sys.is_registered(std::string{ type->as_string() });
+	};
+
 	for (const auto& [path, tag] : files) {
 		const std::string rel = tag.string();
+		if (is_game_type_of_a_template(tag, path)) {
+			egLOG_INFO("desc_resave", "{}: a game type of a template, skipped", rel);
+			continue;
+		}
 		auto handle = res_sys.require_sync<desc::desc_base>(tag);
 		auto loaded = handle.get_sync();
 		if (!loaded) {
