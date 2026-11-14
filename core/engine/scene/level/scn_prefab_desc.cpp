@@ -14,9 +14,12 @@
 #include <cstddef>
 #include <format>
 #include <functional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace scn {
 
@@ -394,18 +397,24 @@ namespace {
 		return child;
 	}
 
-	// Prefabs open one inside another on the way from the root of a spawn down to one node, at most.
-	constexpr std::size_t max_instance_depth = 16;
-	// Nodes one spawn builds, at most: a few small files that fan out (K children that each instantiate the next
-	// prefab) would otherwise build K^depth entities.
-	constexpr std::size_t max_spawn_nodes = 100'000;
+	// Where one spawn is cut short; a test lowers them (scn::detail::set_spawn_node_limit / set_spawn_depth_limit).
+	struct spawn_limits
+	{
+		// Nodes one outer call builds: a few small files that fan out would otherwise build K^depth entities.
+		std::size_t nodes = 1'000'000;
+		// Prefabs open one inside another above one node; the file the spawn starts from is not one of them.
+		std::size_t depth = 16;
+	};
+	spawn_limits g_spawn_limits;
 
 	// What one spawn knows on its way down the tree (#924). A project's files decide what references what: a prefab
 	// that instantiates itself, directly or through others, must end, and so must one that fans out without bound.
 	struct spawn_walk
 	{
-		// The prefabs being expanded between the root of the spawn and the node at hand, outermost first.
-		std::vector<res::tag> open;
+		// The prefabs whose own content the node at hand is, outermost first; the tags live on the stack of the walk.
+		std::span<const res::tag> open;
+		// How many of the first ones are the file the spawn starts from (a world, a prefab spawned as such).
+		std::size_t roots = 0;
 		std::size_t nodes = 0;
 		bool over_budget = false;
 	};
@@ -426,41 +435,115 @@ namespace {
 		walk_scope& operator=(const walk_scope&) = delete;
 
 		spawn_walk& walk() const { return *t_walk; }
+		// No spawn was running on this thread: this call is the outer one.
+		bool outermost() const { return m_previous == nullptr; }
 
 	private:
 		spawn_walk m_own;
 		spawn_walk* m_previous;
 	};
 
-	// Takes what a node opened off spawn_walk::open again, however the node's work ends.
+	// Says what is open for the work below it, and puts back what was, however that work ends.
 	class open_scope
 	{
 	public:
-		explicit open_scope(std::vector<res::tag>& open) : m_open(open), m_size(open.size()) {}
-		~open_scope() { m_open.resize(m_size); }
+		open_scope(spawn_walk& walk, std::span<const res::tag> open) : m_walk(walk), m_previous(walk.open) { walk.open = open; }
+		~open_scope() { m_walk.open = m_previous; }
 		open_scope(const open_scope&) = delete;
 		open_scope& operator=(const open_scope&) = delete;
 
 	private:
-		std::vector<res::tag>& m_open;
-		std::size_t m_size;
+		spawn_walk& m_walk;
+		std::span<const res::tag> m_previous;
 	};
 
-	bool is_open(const std::vector<res::tag>& tags, const res::tag& tag)
+	bool is_open(std::span<const res::tag> tags, const res::tag& tag)
 	{
 		return !tag.string().empty() && std::find(tags.begin(), tags.end(), tag) != tags.end();
 	}
 
-	std::string path_text(const std::vector<res::tag>& open, const std::vector<res::tag>& chain, const res::tag& last)
+	std::string path_text(std::span<const res::tag> open, std::span<const res::tag> chain, const res::tag& last)
 	{
 		std::string text;
-		for (const std::vector<res::tag>* part : { &open, &chain }) {
-			for (const res::tag& tag : *part) {
+		for (const std::span<const res::tag> part : { open, chain }) {
+			for (const res::tag& tag : part) {
 				text += std::string(tag.view()) + " -> ";
 			}
 		}
 		return text + std::string(last.view());
 	}
+
+	// A node of an expanded tree that is not content of the file its parent is from: an outer file put it there.
+	struct scope_mark
+	{
+		// The node's child indices from the root of the tree.
+		std::vector<std::size_t> path;
+		// How many of the open prefabs the node is inside; its subtree is inside as many unless marked again.
+		std::size_t depth = 0;
+	};
+
+	// Marks sorted by path, seen from the node `skip` levels below the root they were made for.
+	struct marks_view
+	{
+		std::span<const scope_mark> marks;
+		std::size_t skip = 0;
+
+		const scope_mark* here() const
+		{
+			return !marks.empty() && marks.front().path.size() == skip ? &marks.front() : nullptr;
+		}
+
+		marks_view child(std::size_t index) const
+		{
+			const std::span<const scope_mark> below = here() ? marks.subspan(1) : marks;
+			const auto less = [at = skip] (const scope_mark& mark, std::size_t value) { return mark.path[at] < value; };
+			const auto first = std::lower_bound(below.begin(), below.end(), index, less);
+			const auto last = std::lower_bound(first, below.end(), index + 1, less);
+			return marks_view{
+				below.subspan(static_cast<std::size_t>(first - below.begin()), static_cast<std::size_t>(last - first)), skip + 1 };
+		}
+	};
+
+	// The marks at and below `from` become marks of a tree where the children of `from` start at `first_child`.
+	void graft_marks(std::vector<scope_mark>& marks, marks_view from, std::size_t first_child, std::size_t deepest)
+	{
+		for (const scope_mark& mark : from.marks) {
+			if (mark.path.size() <= from.skip) continue;
+			scope_mark moved{
+				std::vector<std::size_t>(mark.path.begin() + static_cast<std::ptrdiff_t>(from.skip), mark.path.end()),
+				std::min(mark.depth, deepest) };
+			moved.path.front() += first_child;
+			marks.push_back(std::move(moved));
+		}
+	}
+
+	// Child `index` of the node at `parent` is removed: its marks go, those of the later children move up.
+	void forget_child(std::vector<scope_mark>& marks, std::span<const std::size_t> parent, std::size_t index)
+	{
+		const auto below_parent = [parent] (const scope_mark& mark) {
+			return mark.path.size() > parent.size() && std::equal(parent.begin(), parent.end(), mark.path.begin());
+		};
+		std::erase_if(marks, [&] (const scope_mark& mark) { return below_parent(mark) && mark.path[parent.size()] == index; });
+		for (scope_mark& mark : marks) {
+			if (below_parent(mark) && mark.path[parent.size()] > index) --mark.path[parent.size()];
+		}
+	}
+
+	// What expanding one node gave besides the tree: the prefabs it opened, outermost first, and the marks of the tree.
+	struct expansion
+	{
+		std::vector<res::tag> chain;
+		std::vector<scope_mark> marks;
+	};
+
+	// Where add_node records put their nodes: each is content of the file the records are from.
+	struct added_nodes
+	{
+		std::vector<scope_mark>& marks;
+		// The node whose children are being added to.
+		std::vector<std::size_t> at;
+		std::size_t depth = 0;
+	};
 
 	struct prefab_ref {
 		std::string key;
@@ -497,10 +580,12 @@ namespace {
 		return std::nullopt;
 	}
 
-	void add_or_merge_node(desc::desc_system& desc_system, const desc::desc_base& owner, std::vector<prefab_node>& siblings, const json::object& value);
+	void add_or_merge_node(desc::desc_system& desc_system, const desc::desc_base& owner, std::vector<prefab_node>& siblings,
+		const json::object& value, added_nodes& added);
 
 	// Overlays `src` (the JSON of a node) onto an existing node: only what the JSON spells out changes.
-	void merge_into_node(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& dst, const json::object& src)
+	void merge_into_node(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& dst, const json::object& src,
+		added_nodes& added)
 	{
 		prefab_node parsed = scn::parse_node(desc_system, owner, src, false);
 		if (src.contains("name")) dst.name = parsed.name;
@@ -522,12 +607,13 @@ namespace {
 		dst.overrides.insert(dst.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
 		if (auto* children = src.if_contains("children"); children && children->is_array()) {
 			for (const auto& child : children->as_array()) {
-				if (child.is_object()) add_or_merge_node(desc_system, owner, dst.children, child.as_object());
+				if (child.is_object()) add_or_merge_node(desc_system, owner, dst.children, child.as_object(), added);
 			}
 		}
 	}
 
-	void add_or_merge_node(desc::desc_system& desc_system, const desc::desc_base& owner, std::vector<prefab_node>& siblings, const json::object& value)
+	void add_or_merge_node(desc::desc_system& desc_system, const desc::desc_base& owner, std::vector<prefab_node>& siblings,
+		const json::object& value, added_nodes& into)
 	{
 		std::optional<uint64_t> id;
 		if (const auto* raw = value.if_contains("__id"); raw && raw->is_string()) {
@@ -535,10 +621,15 @@ namespace {
 		}
 		if (id) {
 			if (auto existing = std::ranges::find(siblings, *id, &prefab_node::node_id); existing != siblings.end()) {
-				merge_into_node(desc_system, owner, *existing, value);
+				into.at.push_back(static_cast<std::size_t>(existing - siblings.begin()));
+				merge_into_node(desc_system, owner, *existing, value, into);
+				into.at.pop_back();
 				return;
 			}
 		}
+		scope_mark mark{ into.at, into.depth };
+		mark.path.push_back(siblings.size());
+		into.marks.push_back(std::move(mark));
 		prefab_node added = scn::parse_node(desc_system, owner, value, false);
 		if (!id) {
 			egLOG_WARN("desc", "add_node: node '{}' has no valid __id, it gets a new one", added.name);
@@ -610,12 +701,15 @@ namespace {
 
 	// Applies the records to a tree that is already a private copy. A record that targets a node below an
 	// instance of another prefab is handed down to that instance, which resolves it once it is expanded.
-	void apply_records(const scn::ecs_assembler& assembler, const desc::desc_base& owner, prefab_node& root, const std::vector<scn::override_record>& records)
+	// `marks` follows what the records do to the tree; a node they add is inside `depth_of_records` open prefabs.
+	void apply_records(const scn::ecs_assembler& assembler, const desc::desc_base& owner, prefab_node& root,
+		const std::vector<scn::override_record>& records, std::vector<scope_mark>& marks, std::size_t depth_of_records)
 	{
 		auto& desc_system = assembler.get_desc_system();
 		for (const auto& record : records) {
 			prefab_node* parent = nullptr;
 			prefab_node* node = &root;
+			added_nodes added{ marks, {}, depth_of_records };
 			bool resolved = true;
 			for (size_t depth = 0; depth < record.target.size(); ++depth) {
 				auto child = std::ranges::find(node->children, record.target[depth], &prefab_node::node_id);
@@ -630,6 +724,7 @@ namespace {
 					}
 					break;
 				}
+				added.at.push_back(static_cast<std::size_t>(child - node->children.begin()));
 				parent = node;
 				node = &*child;
 			}
@@ -637,7 +732,7 @@ namespace {
 
 			switch (record.op) {
 			case scn::override_op::add_node:
-				add_or_merge_node(desc_system, owner, node->children, record.value.as_object());
+				add_or_merge_node(desc_system, owner, node->children, record.value.as_object(), added);
 				break;
 
 			case scn::override_op::remove:
@@ -650,6 +745,9 @@ namespace {
 				} else if (!parent) {
 					egLOG_WARN("desc", "override: the root of an instance cannot be removed, record skipped");
 				} else {
+					const std::size_t index = added.at.back();
+					added.at.pop_back();
+					forget_child(marks, added.at, index);
 					std::erase_if(parent->children, [node] (const prefab_node& candidate) { return &candidate == node; });
 				}
 				break;
@@ -664,21 +762,25 @@ namespace {
 	// What `node` stands for when it is more than its own fields: the prefab it references (itself expanded)
 	// plus the node's own extra components and children, then the node's override records. False for a plain
 	// node without records. `source` is the referenced prefab, empty when there is none.
-	// `open`: the prefabs already being expanded above `node` (spawn_walk::open); `chain` takes the ones this call
-	// expands, outermost first. A reference to a prefab that is open already, or one nested too deep, is ignored: the
-	// node is built without it and without the component that made it.
+	// `open`: the prefabs `node` is inside (spawn_walk::open), the first `roots` of them the file the spawn starts from;
+	// `own`: the marks of the tree `node` is in, seen from it. A reference to a prefab that is open already, or one
+	// nested too deep, is ignored: the node is built without it and without the component that made it.
+	// Only the root of a prefab is inside it here: what `node` attaches below itself, and what its records add, is
+	// content of the file `node` is from, so `made.marks` says for each such node of `out` how much it is inside.
 	bool materialize(const scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source,
-		const std::vector<res::tag>& open, std::vector<res::tag>& chain)
+		std::span<const res::tag> open, std::size_t roots, expansion& made, marks_view own)
 	{
+		// Taken before this call opens anything: `node` is content of a file that is inside this much.
+		const std::size_t depth = open.size() + made.chain.size();
 		std::optional<prefab_ref> ref = find_prefab_ref(assembler, node);
 		std::optional<std::string> ignored;
 		if (ref) {
 			const res::tag& tag = ref->prefab->get_tag();
-			if (is_open(open, tag) || is_open(chain, tag)) {
-				egLOG_ERROR("desc", "a prefab instantiates itself, reference ignored: {}", path_text(open, chain, tag));
+			if (is_open(open, tag) || is_open(made.chain, tag)) {
+				egLOG_ERROR("desc", "a prefab instantiates itself, reference ignored: {}", path_text(open, made.chain, tag));
 				ignored = ref->key;
-			} else if (open.size() + chain.size() >= max_instance_depth) {
-				egLOG_ERROR("desc", "prefabs nested deeper than {}, reference ignored: {}", max_instance_depth, path_text(open, chain, tag));
+			} else if (depth - std::min(roots, depth) >= g_spawn_limits.depth) {
+				egLOG_ERROR("desc", "prefabs nested deeper than {}, reference ignored: {}", g_spawn_limits.depth, path_text(open, made.chain, tag));
 				ignored = ref->key;
 			}
 			if (ignored) ref.reset();
@@ -690,22 +792,28 @@ namespace {
 		if (ref) {
 			owner = ref->prefab.get();
 			source = ref->prefab->get_tag();
-			chain.push_back(ref->prefab->get_tag());
-			if (!materialize(assembler, ref->prefab->get_root(), out, source, open, chain)) {
+			made.chain.push_back(ref->prefab->get_tag());
+			if (!materialize(assembler, ref->prefab->get_root(), out, source, open, roots, made, {})) {
 				out = ref->prefab->get_root();
 			}
 			source = ref->prefab->get_tag();
 			for (const auto& [key, comp] : node.components) {
 				if (key != ref->key) out.components[key] = comp;
 			}
+			const std::size_t first_own = out.children.size();
 			out.children.insert(out.children.end(), node.children.begin(), node.children.end());
+			graft_marks(made.marks, own, first_own, depth);
+			for (std::size_t i = 0; i < node.children.size(); ++i) {
+				if (!own.child(i).here()) made.marks.push_back(scope_mark{ { first_own + i }, depth });
+			}
 		} else {
 			out = node;
+			graft_marks(made.marks, own, 0, depth);
 			// Left in, the component would be spawned as a prefab by the assembler: the very instance just refused.
 			if (ignored) out.components.erase(*ignored);
 		}
 		out.overrides.clear();
-		apply_records(assembler, *owner, out, node.overrides);
+		apply_records(assembler, *owner, out, node.overrides, made.marks, depth);
 		return true;
 	}
 
@@ -808,16 +916,26 @@ json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cn
 bool scn::expand_instance(
 	const ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
 {
-	std::vector<res::tag> chain;
-	if (!materialize(assembler, node, out, source, {}, chain)) return false;
+	expansion made;
+	if (!materialize(assembler, node, out, source, {}, 0, made, {})) return false;
 	keep_in_default_resource(out);
 	return true;
+}
+
+std::size_t scn::detail::set_spawn_node_limit(std::size_t nodes)
+{
+	return std::exchange(g_spawn_limits.nodes, nodes);
+}
+
+std::size_t scn::detail::set_spawn_depth_limit(std::size_t depth)
+{
+	return std::exchange(g_spawn_limits.depth, depth);
 }
 
 namespace {
 
 void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity live, const prefab_node& node,
-	scn::reconcile_mode mode, spawn_walk& walk);
+	scn::reconcile_mode mode, spawn_walk& walk, marks_view own);
 
 }
 
@@ -829,13 +947,14 @@ void scn::reconcile(
 	reconcile_mode mode
 ) {
 	const walk_scope scope;
-	reconcile_node(assembler, reg, live, node, mode, scope.walk());
+	reconcile_node(assembler, reg, live, node, mode, scope.walk(), {});
 }
 
 namespace {
 
+// `own`: the marks of the expanded tree `node` is a part of, seen from it; walk.open is what `node` is inside.
 void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity live, const prefab_node& node,
-	scn::reconcile_mode mode, spawn_walk& walk)
+	scn::reconcile_mode mode, spawn_walk& walk, marks_view own)
 {
 	using scn::reconcile_mode;
 	++walk.nodes;
@@ -844,12 +963,19 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 	prefab_node expanded;
 	const prefab_node* content = &node;
 	res::tag source;
-	std::vector<res::tag> chain;
-	const bool expanded_node = materialize(assembler, node, expanded, source, walk.open, chain);
-	// Open for everything built below this node, the components included.
-	const open_scope opened(walk.open);
-	walk.open.insert(walk.open.end(), chain.begin(), chain.end());
-	if (expanded_node) {
+	expansion made;
+	marks_view marks = own;
+	// What the content is inside: the prefabs `node` is inside and, after them, the ones it stands for.
+	std::vector<res::tag> opened_here;
+	std::span<const res::tag> inside = walk.open;
+	if (materialize(assembler, node, expanded, source, walk.open, walk.roots, made, own)) {
+		std::ranges::sort(made.marks, {}, &scope_mark::path);
+		marks = marks_view{ made.marks, 0 };
+		if (!made.chain.empty()) {
+			opened_here.assign(walk.open.begin(), walk.open.end());
+			opened_here.insert(opened_here.end(), made.chain.begin(), made.chain.end());
+			inside = opened_here;
+		}
 		if (!source.string().empty()) {
 			// A transform the node spells out places the instance; otherwise the prefab root's does, with the
 			// target-[] transform records applied. Taken before the prefab_instance below replaces `node`.
@@ -864,6 +990,8 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 		}
 		content = &expanded;
 	}
+	// Open for the components of this node; each child says below how much of it it is inside.
+	const open_scope opened(walk, inside);
 
 	for (const auto& [comp_name, cnode] : content->components) {
 		if (cnode.type_name == "prefab_desc") continue;
@@ -888,15 +1016,20 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 	live_children existing = reload ? live_children(reg, live) : live_children();
 	std::unordered_set<entt::entity> kept;
 
-	for (const auto& child_node : content->children) {
-		if (walk.nodes >= max_spawn_nodes) {
+	for (std::size_t index = 0; index < content->children.size(); ++index) {
+		const prefab_node& child_node = content->children[index];
+		if (walk.nodes >= g_spawn_limits.nodes) {
 			if (!walk.over_budget) {
 				walk.over_budget = true;
 				egLOG_ERROR("desc", "a spawn builds more than {} nodes: the rest of the tree is left out (last prefab: {})",
-					max_spawn_nodes, walk.open.empty() ? std::string_view{ "none" } : walk.open.back().view());
+					g_spawn_limits.nodes, inside.empty() ? std::string_view{ "none" } : inside.back().view());
 			}
 			break;
 		}
+		// A child an outer file put here is content of that file: the prefabs opened since are not open for it.
+		const marks_view child_marks = marks.child(index);
+		const scope_mark* outer = child_marks.here();
+		const open_scope child_open(walk, outer ? inside.first(std::min(outer->depth, inside.size())) : inside);
 		const uint64_t node_id = child_node.node_id;
 		std::string_view name = child_node.name.empty() ? std::string_view{ "unnamed_child" } : std::string_view{ child_node.name };
 		const glm::mat4 local = child_node.get_local_transform();
@@ -910,11 +1043,13 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 			reg.emplace_or_replace<scn::name_component>(child, scn::name_component{ .name = std::string{ name } });
 
 			scn::apply_node_path(reg, live, child, node_id);
-			reconcile_node(assembler, reg, child, child_node, reconcile_mode::reload, walk);
+			// As a fresh node has none: the reference that made it an instance may be gone, or refused now.
+			reg.remove<scn::prefab_instance>(child);
+			reconcile_node(assembler, reg, child, child_node, reconcile_mode::reload, walk, child_marks);
 		} else {
 			child = create_child_entity(reg, live, std::string{ name }, local);
 			scn::apply_node_path(reg, live, child, node_id);
-			reconcile_node(assembler, reg, child, child_node, reconcile_mode::spawn, walk);
+			reconcile_node(assembler, reg, child, child_node, reconcile_mode::spawn, walk, child_marks);
 		}
 		kept.insert(child);
 	}
@@ -1346,11 +1481,26 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 	}
 
 	for (auto root_entity : roots_to_reload) {
+		// The reload of an instance above it may have destroyed this one, or refused the reference that made it one.
+		if (!reg.valid(root_entity)) continue;
+		const auto* instance = reg.try_get<scn::prefab_instance>(root_entity);
+		if (!instance || instance->source_prefab != desc->get_tag()) continue;
 		// An instance node keeps itself (it names the prefab again, so the changed one is picked up); a plain
 		// prefab root is rebuilt from the changed desc. A copy: reconcile replaces the prefab_instance it came from.
-		const scn::prefab_desc::prefab_node& remembered = reg.get<scn::prefab_instance>(root_entity).local_overrides;
-		const scn::prefab_desc::prefab_node node = remembered.components.empty() ? desc->get_root() : remembered;
-		scn::reconcile(assembler, reg, root_entity, node, scn::reconcile_mode::reload);
+		const scn::prefab_desc::prefab_node& remembered = instance->local_overrides;
+		const bool plain_root = remembered.components.empty();
+		const scn::prefab_desc::prefab_node node = plain_root ? desc->get_root() : remembered;
+
+		const walk_scope scope;
+		spawn_walk& walk = scope.walk();
+		// A plain root is the changed prefab's own content, as in assemble_prefab; an instance node opens it itself.
+		std::vector<res::tag> inside(walk.open.begin(), walk.open.end());
+		if (plain_root) {
+			inside.push_back(desc->get_tag());
+			if (scope.outermost()) walk.roots = 1;
+		}
+		const open_scope opened(walk, inside);
+		reconcile_node(assembler, reg, root_entity, node, scn::reconcile_mode::reload, walk, {});
 	}
 }
 
@@ -1371,8 +1521,8 @@ void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& r
 		egLOG_ERROR("desc", "a prefab instantiates itself, it is not built again: {}", path_text(walk.open, {}, source_prefab));
 		return;
 	}
-	if (walk.open.size() >= max_instance_depth) {
-		egLOG_ERROR("desc", "prefabs nested deeper than {}, not built: {}", max_instance_depth, path_text(walk.open, {}, source_prefab));
+	if (walk.open.size() - std::min(walk.roots, walk.open.size()) >= g_spawn_limits.depth) {
+		egLOG_ERROR("desc", "prefabs nested deeper than {}, not built: {}", g_spawn_limits.depth, path_text(walk.open, {}, source_prefab));
 		return;
 	}
 
@@ -1414,7 +1564,12 @@ void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& r
 		reg.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
 	}
 
-	const open_scope opened(walk.open);
-	if (!source_prefab.string().empty()) walk.open.push_back(source_prefab);
-	reconcile_node(assembler, reg, e, root_node, scn::reconcile_mode::spawn, walk);
+	std::vector<res::tag> inside(walk.open.begin(), walk.open.end());
+	if (!source_prefab.string().empty()) {
+		inside.push_back(source_prefab);
+		// The file an outer call starts from (a world, a prefab spawned as such) is not nested in anything.
+		if (scope.outermost()) walk.roots = 1;
+	}
+	const open_scope opened(walk, inside);
+	reconcile_node(assembler, reg, e, root_node, scn::reconcile_mode::spawn, walk, {});
 }
