@@ -210,7 +210,7 @@ std::vector<edt::registration> edt::register_asset_usage_commands(cmd::command_r
 	desc.args_schema = parse_schema(std::format(R"json({{
 		"type": "object",
 		"properties": {{
-			"path": {{ "type": "string", "description": "res:// path of the asset (or a path relative to res://)" }},
+			"path": {{ "type": "string", "description": "the asset by its res:// path (or a path relative to res://)" }},
 			"guid": {{ "type": "string", "description": "the asset's ID, as its .resource holds it" }},
 			"page_size": {{ "type": "integer", "minimum": 1, "maximum": {}, "description": "items per page, default {}" }},
 			"cursor": {{ "type": "string", "description": "next_cursor of the previous page" }}
