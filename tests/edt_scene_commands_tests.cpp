@@ -1024,8 +1024,8 @@ BOOST_AUTO_TEST_CASE(a_reference_inside_a_map_of_structures_replaces_the_value_w
 	BOOST_TEST((whole == std::vector<std::string>{ "/slots/a/icon" }));
 }
 
-// #773: with an asset index, component.set checks a reference where its guid leads and its written path too (a game
-// without an index loads that one). A guid no file holds, without a path, leads nowhere.
+// #773, #954: component.set checks the written path of a reference (a game without an asset index loads that one); a guid
+// needs a path, and one the index holds must name the same file.
 BOOST_AUTO_TEST_CASE(a_reference_is_checked_by_its_guid_and_its_written_path)
 {
 	const std::string crate = ref({ "00000000000000a4" });
@@ -1041,14 +1041,19 @@ BOOST_AUTO_TEST_CASE(a_reference_is_checked_by_its_guid_and_its_written_path)
 	const auto written = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://saves/m.desc"})");
 	const auto moved = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/old.mat.desc"})");
 	const auto known = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})");
+	const auto same = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/moved.mat.desc"})");
+	const auto not_held = set(R"({"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://materials/new.mat.desc"})");
 	rs->set_asset_index(nullptr);
 
-	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
-	BOOST_CHECK_MESSAGE(unknown.error.find("0b6c1d2e") != std::string::npos, unknown.error);
+	for (const cmd::result* alone : { &unknown, &known }) {
+		BOOST_TEST(alone->code == cmd::codes::invalid_args);
+		BOOST_CHECK_MESSAGE(alone->error.find("a \"guid\" alone is not accepted here") != std::string::npos, alone->error);
+	}
 	BOOST_TEST(written.code == cmd::codes::invalid_args);
-	BOOST_CHECK_MESSAGE(written.error.find("material/path") != std::string::npos, written.error);
-	BOOST_CHECK_MESSAGE(moved.ok, moved.error);
-	BOOST_CHECK_MESSAGE(known.ok, known.error);
+	BOOST_TEST(moved.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(moved.error.find("name different files") != std::string::npos, moved.error);
+	BOOST_CHECK_MESSAGE(same.ok, same.error);
+	BOOST_CHECK_MESSAGE(not_held.ok, not_held.error);
 }
 
 // #773: an override record has no __type. The level writer reads its value by the schema of the component the instance

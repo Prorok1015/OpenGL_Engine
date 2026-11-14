@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
@@ -86,5 +87,20 @@ namespace edt
 		out.stale_path = !read->path.view().empty() && read->path.view() != held->view();
 		out.tag = *held;
 		return out;
+	}
+
+	// What an agent may not write (#954), empty when fine: a guid without a path, or one that names another file than it.
+	inline std::string agent_reference_problem(const boost::json::object& object, const res::resource_system* resources)
+	{
+		if (std::string form = reference_object_problem(object); !form.empty()) return form;
+		if (!object.contains("guid")) return {};
+		if (reference_path_text(object).empty()) return "a reference needs a \"path\": a \"guid\" alone is not accepted here";
+		const std::optional<reference_target> target = target_of(boost::json::value(object), resources);
+		if (!target || !target->stale_path) return {};
+		// As the asset database pairs names: letter case does not tell two files apart where the file system does not.
+		const bool folded = res::asset_names_case_insensitive;
+		if (res::asset_name_key(target->reference.path.view(), folded) == res::asset_name_key(target->tag.view(), folded)) return {};
+		return std::format("\"guid\" and \"path\" name different files: {} is the ID of '{}'", res::to_text(target->reference.guid),
+			target->tag.view());
 	}
 }

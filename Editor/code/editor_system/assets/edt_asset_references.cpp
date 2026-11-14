@@ -71,12 +71,13 @@ namespace
 
 		// `object` has no key but "guid" and "path" (is_reference_shaped), so the copy is small.
 		void reference(const json::object& object, const std::string& pointer, const std::string& owner_type, const std::string& owner_pointer,
-			edt::reference_place place)
+			edt::reference_place place, bool by_guid = true)
 		{
-			if (const auto read = res::reference_from_json(json::value(object));
-				read && (!read->guid.is_nil() || names_project_file(read->path.view()))) {
-				add(pointer, std::string(read->path.view()), read->guid.is_nil() ? std::nullopt : std::optional{ read->guid }, owner_type,
-					owner_pointer, place);
+			const auto read = res::reference_from_json(json::value(object));
+			if (!read) return;
+			const bool has_guid = by_guid && !read->guid.is_nil();
+			if (has_guid || names_project_file(read->path.view())) {
+				add(pointer, std::string(read->path.view()), has_guid ? std::optional{ read->guid } : std::nullopt, owner_type, owner_pointer, place);
 			}
 		}
 
@@ -114,7 +115,8 @@ namespace
 					if (const json::string* parent = member.value().if_string()) {
 						text(view_of(*parent), at, owner_type, owner_pointer, edt::reference_place::parent);
 					} else if (const json::object* written = member.value().if_object(); written && is_reference_shaped(*written)) {
-						reference(*written, at, owner_type, owner_pointer, edt::reference_place::parent);
+						// A file's own parent is found by its path only, as the engine's read_parent loads it (#964).
+						reference(*written, at, owner_type, owner_pointer, edt::reference_place::parent, !pointer.empty());
 					}
 					continue;
 				}

@@ -507,11 +507,10 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 	const auto schema_error = [&](std::string pointer, std::string reason) {
 		add(std::string(res::diagnostic_kind::schema), std::move(pointer), std::move(reason));
 	};
-	// A {guid, path} reference (EPIC-57 section 4.4): its form, its path a tag a file may hold; without a path, with an
-	// asset index, its guid must be one a file holds.
+	// A {guid, path} reference (EPIC-57 section 4.4): edt::agent_reference_problem, and its path a tag a file may hold.
 	const auto check_reference = [&](const json::value& value, const std::string& at) {
 		const json::object& object = value.as_object();
-		if (std::string problem = edt::reference_object_problem(object); !problem.empty()) {
+		if (std::string problem = edt::agent_reference_problem(object, resources); !problem.empty()) {
 			schema_error(at, std::move(problem));
 			return;
 		}
@@ -524,13 +523,8 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		}
 		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
 		if (!target || !target->unknown_id) return;
-		const std::string guid = res::to_text(target->reference.guid);
-		if (path.empty()) {
-			schema_error(at + "/guid", std::format("no file has the ID {} and the reference has no path", guid));
-		} else {
-			add(std::string(res::diagnostic_kind::reference), at + "/guid", std::format("no file has the ID {}: '{}' is loaded by its path", guid, path),
-				res::diagnostic_severity::warning);
-		}
+		add(std::string(res::diagnostic_kind::reference), at + "/guid",
+			std::format("no file has the ID {}: '{}' is loaded by its path", res::to_text(target->reference.guid), path), res::diagnostic_severity::warning);
 	};
 
 	const auto walk = [&](const auto& self, const json::value& value, const std::string& pointer) -> void {
@@ -552,15 +546,13 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 			}
 		}
 		if (const json::value* parent = object.if_contains("__parent")) {
-			// An agent names the parent by its path only: the guid is the editor's to write (#773).
+			// The object form is checked by its path as written, like the string.
 			std::optional<std::string> written;
 			if (parent->is_string()) {
 				written = std::string(view_of(parent->as_string()));
 			} else if (!parent->is_object()) {
-				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"path\"} reference");
-			} else if (parent->as_object().contains("guid")) {
-				schema_error(pointer + "/__parent", "`__parent`: give the path only; the editor writes the guid");
-			} else if (std::string problem = edt::reference_object_problem(parent->as_object()); !problem.empty()) {
+				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"guid\", \"path\"} reference");
+			} else if (std::string problem = edt::agent_reference_problem(parent->as_object(), resources); !problem.empty()) {
 				schema_error(pointer + "/__parent", "`__parent`: " + problem);
 			} else {
 				written = edt::reference_path_text(parent->as_object());

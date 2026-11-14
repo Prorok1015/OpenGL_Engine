@@ -288,7 +288,8 @@ BOOST_AUTO_TEST_CASE(TheChainIsMergedFromTheFarthestParentToTheNearest)
 	BOOST_TEST(!document.inherited().contains("__parent"));
 }
 
-BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_IsFoundByItsPathOrItsId)
+// #964: the engine loads a file's parent by its path; until it follows the guid the document does the same.
+BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_IsFoundByItsPath)
 {
 	put("parent.desc", R"({"__type":"test.config","speed":2.5})");
 	put("moved.desc", R"({"__type":"test.config","speed":6.5})");
@@ -316,9 +317,9 @@ BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_IsFoundByItsPathOrItsId)
 	const std::vector<res::tag> parents = indexed.parents();
 	rs->set_asset_index(nullptr);
 	BOOST_REQUIRE_MESSAGE(followed.opened, followed.error);
-	BOOST_TEST(speed == 6.5, "the file that holds the guid now is the parent, whatever the stale path says");
+	BOOST_TEST(speed == 2.5, "the path is the parent, wherever the guid leads");
 	BOOST_REQUIRE(parents.size() == 1u);
-	BOOST_TEST(parents.front().view() == "res://moved.desc");
+	BOOST_TEST(parents.front().view() == "res://parent.desc");
 
 	const auto refused = [this](const res::tag& file) {
 		const edt::open_result result = make().open(file);

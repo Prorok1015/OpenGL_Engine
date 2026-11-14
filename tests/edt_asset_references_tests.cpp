@@ -211,8 +211,8 @@ BOOST_AUTO_TEST_CASE(AParentAndAComponentWrittenAsReferenceObjects_KeepTheirPlac
 	const edt::raw_reference parent = found_at("/__parent");
 	BOOST_TEST((parent.place == edt::reference_place::parent));
 	BOOST_TEST(parent.path == "res://base.prefab.desc");
-	BOOST_REQUIRE(parent.guid.has_value());
-	BOOST_TEST(res::to_text(*parent.guid) == k_guid);
+	// #964: the engine loads a file's own parent by its path, so no guid is kept for it.
+	BOOST_TEST(!parent.guid.has_value());
 	BOOST_TEST((edt::classify_reference(parent, descs.get()) == edt::usage_kind::parent));
 
 	const edt::raw_reference sky = found_at("/components/sky");

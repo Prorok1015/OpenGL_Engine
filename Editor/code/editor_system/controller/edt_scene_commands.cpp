@@ -121,16 +121,13 @@ namespace {
 	};
 
 	// A {guid, path} reference (EPIC-57 section 4.4) is held to the rule of #697 where it leads: the file that holds its
-	// guid, else its path. One that leads nowhere (no file has the guid, no path) is refused.
+	// guid, else its path, after the rule of edt::agent_reference_problem.
 	std::optional<reference_issue> reference_object_refusal(const json::value& value, const res::resource_system* resources,
 		std::string_view owner_protocol)
 	{
-		if (std::string why = edt::reference_object_problem(value.as_object()); !why.empty()) return reference_issue{ {}, std::move(why) };
+		if (std::string why = edt::agent_reference_problem(value.as_object(), resources); !why.empty()) return reference_issue{ {}, std::move(why) };
 		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
 		if (!target) return reference_issue{ {}, "not a reference" };
-		if (target->unknown_id && target->tag.view().empty()) {
-			return reference_issue{ {}, std::format("no file has the ID {} and the reference has no path", res::to_text(target->reference.guid)) };
-		}
 		// The written path is what a game without an asset index loads: it follows the rule too, wherever the guid leads.
 		if (const std::string written = edt::reference_path_text(value.as_object()); !written.empty()) {
 			if (std::string why = reference_refusal(json::string(written), owner_protocol); !why.empty()) return reference_issue{ "path", std::move(why) };

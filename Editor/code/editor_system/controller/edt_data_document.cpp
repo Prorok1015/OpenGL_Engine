@@ -75,8 +75,7 @@ namespace
 		return false;
 	}
 
-	// Null `resources`: the guid of a {guid, path} parent cannot be looked up, its path is the parent.
-	std::optional<res::tag> parent_of(const json::object& body, const res::tag& file, const res::resource_system* resources, std::string& error)
+	std::optional<res::tag> parent_of(const json::object& body, const res::tag& file, std::string& error)
 	{
 		const json::value* field = body.if_contains("__parent");
 		if (!field) {
@@ -100,11 +99,11 @@ namespace
 		if (!written.empty() && !written.starts_with("res://")) {
 			return refuse();
 		}
-		res::tag parent = resources ? resources->resolve_reference(*read) : read->path;
-		if (!parent.view().starts_with("res://")) {
+		// By its path only, as the engine's read_parent loads a file's parent until it follows a guid (#964).
+		if (!read->path.view().starts_with("res://")) {
 			return refuse();
 		}
-		return parent;
+		return read->path;
 	}
 }
 
@@ -297,7 +296,7 @@ edt::open_result edt::data_document::resolve_chain(const res::tag& file, const j
 	json::object current = own;
 	while (true) {
 		std::string error;
-		const std::optional<res::tag> parent = parent_of(current, current_tag, m_services.resources(), error);
+		const std::optional<res::tag> parent = parent_of(current, current_tag, error);
 		if (!error.empty()) {
 			return open_result::failure(std::move(error));
 		}
