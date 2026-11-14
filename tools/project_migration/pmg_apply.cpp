@@ -541,9 +541,9 @@ namespace
 				file.written_as = "json";
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
-			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
-			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
-			// .resource's (EPIC-57 4.2).
+			// A migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
+			// .resource's (EPIC-57 4.2). The engine's save keeps the __guid it loaded and makes none up (#772); restore_guid
+			// puts the root __guid back where the file had it.
 			std::optional<root_guid> guid_before;
 			if (migrated.is_object()) {
 				const json::object& root = migrated.as_object();

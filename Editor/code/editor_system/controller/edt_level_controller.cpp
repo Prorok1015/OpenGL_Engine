@@ -1,4 +1,5 @@
 #include "edt_level_controller.h"
+#include "edt_desc_file_commands.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
@@ -8,7 +9,7 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/desc/desc_system.h>
-#include <snk/desc/desc_guid.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <boost/json.hpp>
@@ -77,6 +78,15 @@ namespace {
 		}
 		descs.stamp_tree(file);
 		level_json = std::move(file);
+	}
+
+	// The root __guid of the file a save replaces in the folder res:// writes into; empty when there is none there.
+	std::string root_guid_on_disk(const res::resource_system& resources, const std::string& rel_path)
+	{
+		const std::filesystem::path top = resources.get_resources_path();
+		if (top.empty()) return {};
+		const auto bytes = res::read_file_within_dir(top, rel_path, edt::k_desc_file_limit);
+		return bytes ? edt::desc_root_guid(*bytes) : std::string{};
 	}
 
 	// Tells the coordinator that the worlds were replaced, on every way out of the function.
@@ -321,9 +331,11 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	const std::string stem = frel.stem().string();
 	const std::string level_name = stem.empty() ? m_state.level_name : stem;
 
-	// Saving the same file keeps its guid; saving to another path (Save As) writes a new file, which gets a new guid.
+	// The level's ID is its .resource (EPIC-57): a save keeps the __guid the file had until the project's migration takes
+	// it out, and makes none up (#772). Save As to a new file writes none, the asset database gives the file a new ID;
+	// Save As over another file keeps that file's.
 	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
-	const std::string guid = (same_file && !m_state.level_guid.empty()) ? m_state.level_guid : desc::generate_guid();
+	const std::string guid = same_file ? m_state.level_guid : root_guid_on_disk(*m_services.writable_resources(), rel_path);
 
 	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
 	if (m_state.level_parent.is_valid()) {

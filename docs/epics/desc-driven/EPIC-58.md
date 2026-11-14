@@ -201,7 +201,8 @@ struct project_step {
 | id | Фаза | Владелец | Что делает |
 |---|---|---|---|
 | `engine.manifest_format` | pre | EPIC-58 | поднимает `format_version` манифеста до текущего |
-| `assets.ids` | pre | EPIC-57 (S57-12, #776) | создаёт отсутствующие `.resource`, id берёт из `__guid` desc; снятие `__guid` из desc — `assets.ids_drop_desc_guid` вместе с S57-8 (#772) |
+| `assets.ids` | pre | EPIC-57 (S57-12, #776) | создаёт отсутствующие `.resource`, id берёт из `__guid` desc |
+| `assets.ids_drop_desc_guid` | post | EPIC-57 (S57-8, #772) | снимает корневой `__guid` у desc с `.resource`; `__guid` ≠ ID — строка в отчёте |
 | `assets.refs` | post | EPIC-57 (S57-12, #776) | переписывает ссылки на форму с id; после S57-9 (#773) |
 
 **Контекст `migration_apply_context` даёт шагам:**
@@ -272,7 +273,11 @@ struct project_step {
   - `needed`: в скане есть файл без `.resource` (`scanned_file::has_resource`). Пара `.resource` ↔ файл в скане — по `res::asset_name_key` владельца, как у базы редактора: `a.png.RESOURCE` — это `.resource` файла `a.png`.
   - `apply`: каждому такому файлу — `<file>.resource` (`res::write_asset_meta`, `importer` пустой) через `context.files.create`; откат их удаляет. Файл, у которого индекс уже видит `.resource` (другой регистр, другой корень), пропускается.
   - ID — корневой `__guid` desc, если это валидный id и его не держит ни один файл индекса (сироты тоже) и ни один выданный в этом прогоне; иначе новый. Обе строки повтора — в отчёте: первый файл «ID … from its __guid», следующий «its __guid … is already the ID of …».
-  - `__guid` в desc **остаётся** до S57-8 (#772): сейчас его пишут сохранение уровня в редакторе (`level_guid`) и `desc_adapter_t::serialize`, и снятый `__guid` вернулся бы другим. Снимет его шаг `assets.ids_drop_desc_guid` (`post`) вместе с #772.
+  - `__guid` в desc шаг оставляет: его снимает `assets.ids_drop_desc_guid` (`post`, #772) после типовых миграций.
+- **`assets.ids_drop_desc_guid` (`post`, #772).**
+  - `needed`: в скане есть не-invalid desc с корневым `__guid` (`scanned_file::root_guid`).
+  - `apply`: у каждого такого desc, у которого индекс (перестроенный после `pre`) видит `.resource` с ID, корневой `__guid` снимается (`context.files.write`, стиль `desc::pretty_json_bytes`). Desc без `.resource` держит `__guid` и даёт строку в отчёт.
+  - Обратно `__guid` не вернётся: сохранения редактора и движка держат `__guid` файла и не придумывают новый (#772).
   - Перекрытый файл нижнего content root тоже получает `.resource`: скан видит каждый корень, иначе шаг был бы нужен всегда.
 - **#851.** Типовая миграция, которая сохраняет desc движком, убирает из результата корневой `__guid`, если его не было на входе (вход — текст после шагов `pre`). Был — остаётся тем же. Миграция `__guid` не придумывает.
 - **`assets.refs`** — отдельный PR после S57-9 (#773): до этого проверки ссылок требуют строку `res://`.

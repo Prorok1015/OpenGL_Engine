@@ -197,6 +197,7 @@ namespace
 		file.reason.clear();
 		file.objects.clear();
 		file.unknown_types.clear();
+		file.root_guid = !sidecar && root.contains("__guid");
 		object_walker walker{ descs, file.objects, {}, sidecar };
 		walker.object(root, "");
 		if (!walker.bad_version.empty()) {

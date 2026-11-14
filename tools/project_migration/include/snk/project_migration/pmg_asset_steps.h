@@ -10,7 +10,10 @@ namespace prj::migration
 {
 	// assets.ids (pre): a .resource for every content file without one (scanned_file::has_resource). Its ID is the
 	// root __guid of a desc when that is a valid ID no other file holds, else a new one; a __guid another file took
-	// first (by path) is in the report. The desc keeps its __guid until S57-8 (#772) stops the editor's saves writing it.
+	// first (by path) is in the report. The desc keeps its __guid for assets.ids_drop_desc_guid.
+	// assets.ids_drop_desc_guid (post, #772): the root __guid out of every desc that has a .resource, which is its ID
+	// from now on; a __guid other than that ID is in the report. Saves keep a __guid a file has and make none up, so
+	// none comes back.
 	void register_asset_project_steps(project_step_registry& registry);
 
 	// The root __guid of a desc's text as an ID, as tools/ci/asset_ids.py reads it (#768): a UTF-8 BOM is skipped, the

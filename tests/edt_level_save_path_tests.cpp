@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_editor_services.h>
+#include <snk/resource/res_mount_table.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include "edt_file_menu.h"
@@ -9,6 +10,7 @@
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
+#include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -73,6 +75,25 @@ struct level_save_fixture : test_util::scene_env
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
+};
+
+
+// res:// as a project mounts it (add_mount), so the save can read the file it replaces in the top folder.
+struct level_guid_fixture : level_save_fixture
+{
+	level_guid_fixture()
+	{
+		rs->unregistrate_resolver(res::tag::default_protocol());
+		rs->add_mount(res::mount{ res::tag::default_protocol(), { content } });
+	}
+
+	void write(const std::string& relative, const std::string& text)
+	{
+		fs::create_directories((content / relative).parent_path());
+		std::ofstream(content / relative, std::ios::binary) << text;
+	}
+
+	boost::json::object saved(const std::string& relative) { return boost::json::parse(read_file(content / relative)).as_object(); }
 };
 
 }
@@ -213,6 +234,48 @@ BOOST_AUTO_TEST_CASE(ALevelWithAParent_IsSavedWithItsParentAndOnlyItsOwnFields)
 	const auto again = boost::json::parse(read_file(content / "levels" / "saved.desc")).as_object();
 	BOOST_TEST(again.at("__parent").as_string() == "res://levels/base.desc");
 	BOOST_TEST(!again.contains("worlds"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// #772: the ID of a level is its .resource. A save keeps the __guid its file had until the project's migration takes it
+// out, and never makes one up; Save As over another file keeps that file's.
+BOOST_FIXTURE_TEST_SUITE(EdtLevelGuidTests, level_guid_fixture)
+
+BOOST_AUTO_TEST_CASE(SaveAs_ToANewFile_WritesNoGuid)
+{
+	state.level_tag = res::tag::make("levels/mine.desc");
+	state.level_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/copy.desc"));
+	BOOST_TEST(!saved("levels/copy.desc").contains("__guid"));
+	BOOST_TEST(state.level_guid.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Save_KeepsTheGuidTheFileHad_AndMakesNoneUp)
+{
+	state.level_tag = res::tag::make("levels/mine.desc");
+	state.level_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	BOOST_TEST(saved("levels/mine.desc").at("__guid").as_string() == "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+
+	state.level_guid.clear();
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	BOOST_TEST(!saved("levels/mine.desc").contains("__guid"));
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_OverAnotherFile_KeepsThatFilesGuid)
+{
+	write("levels/other.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"other","worlds":[]})");
+	write("levels/plain.desc", R"({"__type":"level_desc","name":"plain","worlds":[]})");
+	state.level_tag = res::tag::make("levels/mine.desc");
+	state.level_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/other.desc"));
+	BOOST_TEST(saved("levels/other.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+	BOOST_TEST(state.level_guid == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/plain.desc"));
+	BOOST_TEST(!saved("levels/plain.desc").contains("__guid"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

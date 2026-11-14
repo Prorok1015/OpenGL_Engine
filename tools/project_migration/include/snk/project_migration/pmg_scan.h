@@ -51,6 +51,8 @@ namespace prj::migration
 		// A file that is no .resource has one beside it, paired as the editor's asset database pairs them
 		// (res::asset_name_key of its owner); false is what EPIC-57's assets.ids step gives one (#776).
 		bool has_resource = true;
+		// A desc whose root has a "__guid", whatever its value: what assets.ids_drop_desc_guid takes out (#772).
+		bool root_guid = false;
 	};
 
 	struct manifest_state
