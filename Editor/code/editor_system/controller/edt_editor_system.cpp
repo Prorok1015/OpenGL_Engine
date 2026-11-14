@@ -1022,6 +1022,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
+	settings_command.live_enabled = [this] { return m_live_mode && m_live_mode->enabled(); };
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
 		m_registrations.push_back(std::move(command));
 	}
