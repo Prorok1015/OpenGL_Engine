@@ -3,11 +3,14 @@
 #include "edt_vcs_parse.h"
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_manifest.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -1210,8 +1213,10 @@ namespace {
 			}
 			return std::nullopt;
 		}
-		const git_output diff = run_git(git, { "diff-tree", "--quiet", std::string(trim(head.out)), target, "--", *path },
-			task.stop, k_read_cap);
+		// -r: without it diff-tree compares the top-level trees, and any change in the project's folder matches the
+		// pathspec of a project in a subfolder (#948).
+		const git_output diff = run_git(git, { "diff-tree", "-r", "--quiet", std::string(trim(head.out)), target, "--",
+			*path }, task.stop, k_read_cap);
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
 		if (succeeded(diff)) return std::nullopt;
 		if (diff.process.error.empty() && diff.process.exit_code == 1) {
@@ -1219,6 +1224,215 @@ namespace {
 				"judges them", shown));
 		}
 		return deny(std::format("git could not compare the agent policy file '{}' with the target", shown));
+	}
+
+	// Two names of one file system entry: in any letter case where the file system ignores it (Windows, macOS).
+	bool same_name(std::string_view a, std::string_view b)
+	{
+#if defined(_WIN32) || defined(__APPLE__)
+		return std::ranges::equal(a, b, [](unsigned char x, unsigned char y) {
+			return std::tolower(x) == std::tolower(y);
+		});
+#else
+		return a == b;
+#endif
+	}
+
+	// `file` (repository path, '/'-separated) below `prefix` (the project's folder in the repository: empty for its
+	// root, else ending in '/').
+	std::optional<std::string_view> project_relative(std::string_view file, std::string_view prefix)
+	{
+		if (file.size() < prefix.size() || !same_name(file.substr(0, prefix.size()), prefix)) return std::nullopt;
+		return file.substr(prefix.size());
+	}
+
+	// An 8.3 short name ("SNK~1"): another spelling of a folder, which only the file system can resolve.
+	bool looks_like_short_name(std::string_view part)
+	{
+#ifdef _WIN32
+		for (std::size_t i = part.find('~'); i != std::string_view::npos; i = part.find('~', i + 1)) {
+			if (i + 1 < part.size() && part[i + 1] >= '0' && part[i + 1] <= '9') return true;
+		}
+#else
+		static_cast<void>(part);
+#endif
+		return false;
+	}
+
+#ifdef _WIN32
+	// The name an existing entry has, when `path` names it by its 8.3 short name; nullopt: Windows could not tell.
+	std::optional<std::string> long_name_of(const fs::path& path)
+	{
+		const DWORD size = GetLongPathNameW(path.c_str(), nullptr, 0);
+		if (size == 0) return std::nullopt;
+		std::wstring long_path(size, L'\0');
+		const DWORD written = GetLongPathNameW(path.c_str(), long_path.data(), size);
+		if (written == 0 || written >= size) return std::nullopt;
+		long_path.resize(written);
+		return edt::utf8_of(fs::path(long_path).filename());
+	}
+#endif
+
+	// The project's first folder `first` as the file system names it: a short name ("SNK~1") becomes the name of the
+	// entry it resolves to; a name of nothing on the disk stays as it is. Nullopt: the file system could not tell.
+	std::optional<std::string> own_name_of(std::string_view first, const fs::path& project_dir)
+	{
+		if (!looks_like_short_name(first)) return std::string(first);
+#ifdef _WIN32
+		if (project_dir.empty()) return std::nullopt;
+		const fs::path on_disk = project_dir / path_of(first);
+		std::error_code ec;
+		const bool exists = fs::exists(on_disk, ec);
+		if (ec) return std::nullopt;
+		if (!exists) return std::string(first);
+		return long_name_of(on_disk);
+#else
+		static_cast<void>(project_dir);
+		return std::string(first);
+#endif
+	}
+
+	// A name the file system may take for another one this check knows by its own spelling: one with any non-ASCII
+	// letter where names are folded (case folding takes U+017F for "s", HFS+ ignores some code points). Short names
+	// are resolved instead (own_name_of).
+	bool may_name_another(std::string_view part)
+	{
+#if defined(_WIN32) || defined(__APPLE__)
+		return std::ranges::any_of(part, [](unsigned char c) { return c >= 0x80; });
+#else
+		return false;
+#endif
+	}
+
+	// What of the open project decides the code that is built and loaded (#909): its .snk/ (build settings,
+	// migrations, the agent policy), its manifest (content roots, modules), build/ (the built modules) and, while live
+	// mode builds every change at once, code/.
+	struct protected_scope
+	{
+		// A project is open: with no prefix for it then (not in this repository, or no canonical path), an agent's
+		// checkout or pull is refused, as nothing tells what it would change.
+		bool open = false;
+		// edt::vcs_service::project_prefix.
+		std::optional<std::string> prefix;
+		// edt::vcs_service::project_dir.
+		std::filesystem::path dir;
+		bool code = false;
+	};
+
+	constexpr std::string_view k_mode_symlink = "120000";
+	constexpr std::string_view k_mode_gitlink = "160000";
+
+	// Whether an entry of the target (repository path `file`, its mode there: empty when it goes) can change what the
+	// open project builds: a protected file of it, a link or a submodule in it or in its place, or a name the file
+	// system may take for one of these. Folders of the project's path are compared on the disk (they exist).
+	bool protected_entry(std::string_view file, std::string_view mode, const protected_scope& scope,
+		const fs::path& root)
+	{
+		const bool link = mode == k_mode_symlink || mode == k_mode_gitlink;
+		std::string_view prefix = *scope.prefix;
+		std::string_view rest = file;
+		fs::path walked = root;
+		while (!prefix.empty()) {
+			const std::string_view want = prefix.substr(0, prefix.find('/'));
+			prefix.remove_prefix(want.size() + 1);
+			const std::size_t slash = rest.find('/');
+			const std::string_view part = rest.substr(0, slash);
+			std::error_code ec;
+			const bool same = same_name(part, want)
+				|| fs::equivalent(walked / path_of(part), walked / path_of(want), ec);
+			if (!same) return false;
+			if (slash == std::string_view::npos) return link;
+			rest.remove_prefix(slash + 1);
+			walked /= path_of(want);
+		}
+		if (link) return true;
+		const std::size_t slash = rest.find('/');
+		const std::string_view first = rest.substr(0, slash);
+		if (may_name_another(first)) return true;
+		const std::optional<std::string> own = own_name_of(first, scope.dir);
+		if (!own) return true;
+		if (slash == std::string_view::npos) return same_name(*own, prj::k_manifest_file_name);
+		std::vector<std::string_view> folders{ ".snk", "build" };
+		if (scope.code) folders.push_back("code");
+		for (const std::string_view folder : folders) {
+			std::error_code ec;
+			if (same_name(*own, folder)) return true;
+			if (!scope.dir.empty() && fs::equivalent(scope.dir / path_of(first), scope.dir / folder, ec)) return true;
+		}
+		return false;
+	}
+
+	struct target_entry
+	{
+		std::string path;
+		// Its mode in the target; empty when the target does not have it.
+		std::string mode;
+	};
+
+	// The entries `git diff-tree -r -z` (`raw_diff`) or `git ls-tree -r -z` prints; nullopt: not that format.
+	std::optional<std::vector<target_entry>> target_entries(std::string_view text, bool raw_diff)
+	{
+		std::vector<target_entry> out;
+		const std::vector<std::string> fields = split_nul(text);
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			const std::string_view field = fields[i];
+			if (raw_diff) {
+				// ":<old mode> <new mode> <old oid> <new oid> <status>", then the path.
+				if (!field.starts_with(':') || i + 1 >= fields.size()) return std::nullopt;
+				const std::size_t space = field.find(' ');
+				if (space == std::string_view::npos) return std::nullopt;
+				const std::string_view mode = field.substr(space + 1, field.find(' ', space + 1) - space - 1);
+				out.push_back({ fields[++i], mode == "000000" ? std::string{} : std::string(mode) });
+			}
+			else {
+				// "<mode> <type> <oid>\t<path>"
+				const std::size_t tab = field.find('\t');
+				if (tab == std::string_view::npos) return std::nullopt;
+				out.push_back({ std::string(field.substr(tab + 1)), std::string(field.substr(0, field.find(' '))) });
+			}
+		}
+		return out;
+	}
+
+	// A guarded checkout or pull to `target` (a commit OID) that would change protected files of the open project: an
+	// agent cannot bring them in, a person can. Nullopt: allowed.
+	std::optional<json::value> protected_refusal(const git_context& git, const std::string& target,
+		const protected_scope& scope, const ds::task_context& task)
+	{
+		if (!git.guarded || !scope.open) return std::nullopt;
+		const auto deny = [](std::string message) { return error_json("denied", message, {}, -1); };
+		if (!scope.prefix) {
+			return deny("the open project is not in this repository, or its folder could not be resolved: an agent "
+				"cannot check out or pull here");
+		}
+		const git_output head = run_git(git, { "rev-parse", "--verify", "--quiet", "HEAD^{commit}" }, task.stop,
+			k_read_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (!head.process.error.empty() || head.truncated) return deny("git could not read HEAD");
+		// No commit yet: every file of the target comes in.
+		const bool unborn = head.process.exit_code != 0;
+		const git_output changed = unborn
+			? run_git(git, { "ls-tree", "-r", "-z", "--full-tree", target }, task.stop, k_list_cap)
+			: run_git(git, { "diff-tree", "-r", "-z", "--no-renames", std::string(trim(head.out)), target }, task.stop,
+				k_list_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		const std::optional<std::vector<target_entry>> entries = succeeded(changed)
+			? target_entries(changed.out, !unborn) : std::nullopt;
+		if (!entries) return deny("git could not tell which files the target changes");
+		constexpr std::size_t k_shown = 10;
+		std::vector<std::string> found;
+		std::size_t count = 0;
+		for (const target_entry& entry : *entries) {
+			if (!protected_entry(entry.path, entry.mode, scope, git.cwd)) continue;
+			if (++count <= k_shown) found.push_back(edt::vcs::valid_utf8(entry.path));
+		}
+		if (count == 0) return std::nullopt;
+		std::string list;
+		for (const auto& file : found) list += (list.empty() ? "" : ", ") + file;
+		if (count > found.size()) list += std::format(" and {} more", count - found.size());
+		return deny(std::format("the target changes files of the project that decide what code is built and loaded, "
+			"or links and submodules in it ({}{}): an agent cannot bring them in, a person can (the Git panel)", list,
+			scope.code ? "; code/ too while live mode is on" : ""));
 	}
 
 	// A guarded commit's message: every line that reads as an Agent-Session trailer goes (it is the editor's to write),
@@ -1281,6 +1495,93 @@ namespace {
 			return std::format("the paths take more than {} bytes: give fewer per call", edt::vcs_service::k_max_paths_bytes);
 		}
 		return std::nullopt;
+	}
+
+	// Folders of a project that hold the person's own files (an MCP token, caches, local settings): never an agent's to
+	// stage, commit or push (#912).
+	constexpr std::array<std::string_view, 2> k_private_project_folders{ ".snk", ".cache" };
+
+	// The open project as an agent's git write sees it: its folder in the repository and on the disk.
+	struct project_scope
+	{
+		// edt::vcs_service::project_prefix; nullopt: the project is not in this repository.
+		std::optional<std::string> prefix;
+		std::filesystem::path dir;
+	};
+
+	enum class policy_file_rule : std::uint8_t { private_file, publishable };
+
+	// The project's policy file (.snk/agent_policy.json, committed by the template): an agent's commit or push may carry
+	// it (checkout and pull guard it, policy_refusal); an agent's stage may not change it.
+	constexpr std::string_view k_policy_file_in_snk = "agent_policy.json";
+
+	// Why an agent may not write `files` (repository paths) into git: one is outside the open project or in one of its
+	// private folders, by name or as the same folder on the disk (a short name, a link). Nullopt: allowed.
+	std::optional<git_output> private_files_refusal(const std::vector<std::string>& files, const project_scope& scope,
+		std::string_view action, policy_file_rule policy_file = policy_file_rule::private_file)
+	{
+		const auto refuse = [](std::string why) { return refused("path_outside_project", std::move(why)); };
+		if (!scope.prefix) {
+			return refuse(std::format("the open project is not in this repository: an agent {} only the project's files",
+				action));
+		}
+		for (const auto& file : files) {
+			const std::string shown = edt::vcs::valid_utf8(file);
+			const std::optional<std::string_view> inside = project_relative(file, *scope.prefix);
+			if (!inside) {
+				return refuse(std::format("'{}' is outside the open project: an agent {} only the project's files",
+					shown, action));
+			}
+			const std::size_t slash = inside->find('/');
+			const std::string_view first = inside->substr(0, slash);
+			const std::optional<std::string> own = own_name_of(first, scope.dir);
+			if (!own) {
+				return refuse(std::format("'{}' names a folder by its short name, and the file system could not tell "
+					"which folder it is", shown));
+			}
+			for (const std::string_view folder : k_private_project_folders) {
+				std::error_code ec;
+				const bool same_folder = same_name(*own, folder) || (slash != std::string_view::npos
+					&& !scope.dir.empty() && fs::equivalent(scope.dir / path_of(first), scope.dir / folder, ec));
+				const bool policy = policy_file == policy_file_rule::publishable && folder == ".snk"
+					&& slash != std::string_view::npos && same_name(inside->substr(slash + 1), k_policy_file_in_snk);
+				if (same_folder && !policy) {
+					return refuse(std::format("'{}' is in the project's {}/ folder, which holds the person's own files: "
+						"an agent never {} it", shown, folder, action));
+				}
+			}
+		}
+		return std::nullopt;
+	}
+
+	// The paths an agent's stage changes: modified, deleted and untracked files under `paths` (ignored files left out),
+	// as repository paths. Exactly these are staged, so what was checked is what git adds. Nullopt: git could not tell.
+	std::optional<std::vector<std::string>> stage_list(const git_context& git, const std::vector<std::string>& paths,
+		std::stop_token stop)
+	{
+		std::vector<std::string> args{ "ls-files", "-z", "--full-name", "--modified", "--deleted", "--others",
+			"--exclude-standard", "--" };
+		args.insert(args.end(), paths.begin(), paths.end());
+		const git_output listed = run_git(git, args, stop, k_list_cap);
+		if (!succeeded(listed)) return std::nullopt;
+		std::vector<std::string> files = split_nul(listed.out);
+		std::ranges::sort(files);
+		files.erase(std::ranges::unique(files).begin(), files.end());
+		return files;
+	}
+
+	// What an agent's commit or push would publish: the files the index changes against HEAD, or that the commits not
+	// on any remote change. Nullopt: git could not tell.
+	std::optional<std::vector<std::string>> changed_files(const git_context& git, const std::vector<std::string>& args,
+		std::stop_token stop)
+	{
+		const git_output listed = run_git(git, args, stop, k_list_cap);
+		if (!succeeded(listed)) return std::nullopt;
+		std::vector<std::string> files;
+		for (auto& file : split_nul(listed.out)) {
+			if (!file.empty()) files.push_back(std::move(file));
+		}
+		return files;
 	}
 
 	// Deletes the commit message file however the job ends.
@@ -2185,16 +2486,93 @@ std::optional<std::string> edt::vcs_push_branch_refusal(const vcs_policy& policy
 edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::string>& paths, const cmd::origin& caller)
 {
 	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
-	std::vector<std::string> args{ "add", "--" };
-	args.insert(args.end(), paths.begin(), paths.end());
-	return run_job("git add", [args = std::move(args), paths](const git_context& git, ds::task_context& task) -> json::value {
-		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::paths, paths, {} }, task.stop)) {
+	// An agent's stage adds exactly the files it was checked for, passed through a file only this editor writes to.
+	const bool guarded = caller.kind != cmd::origin_kind::ui;
+	fs::path list_file;
+	if (guarded) {
+		if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
+		list_file = m_scratch.root / std::format("stage_paths_{}.txt", ++m_message_count);
+	}
+	const project_scope scope{ project_prefix(), project_dir() };
+	return run_job("git add", [paths, list_file, scope](const git_context& git, ds::task_context& task) -> json::value {
+		std::vector<std::string> args{ "add", "--" };
+		std::optional<remove_on_exit> cleanup;
+		std::vector<std::string> checked = paths;
+		if (git.guarded) {
+			// The paths named are checked too: git's literal pathspec keeps their letter case, so ".Cache" lists
+			// nothing where the file system takes it for .cache.
+			std::vector<std::string> named;
+			named.reserve(paths.size());
+			for (const auto& path : paths) {
+				const fs::path normal = path_of(path).lexically_normal();
+				if (normal.is_absolute() || normal.has_root_name() || (!normal.empty() && *normal.begin() == "..")) {
+					return refusal_json(refused("path_outside_project", std::format("'{}' is not a path inside the "
+						"repository", edt::vcs::valid_utf8(path))), task);
+				}
+				std::string text = edt::utf8_of(normal);
+				std::ranges::replace(text, '\\', '/');
+				named.push_back(std::move(text));
+			}
+			if (auto refusal = private_files_refusal(named, scope, "stages")) return refusal_json(*refusal, task);
+			const auto listed = stage_list(git, paths, task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!listed) {
+				return refusal_json(refused("path_outside_project", "git could not list the files these paths stage"),
+					task);
+			}
+			if (auto refusal = private_files_refusal(*listed, scope, "stages")) return refusal_json(*refusal, task);
+			if (listed->empty()) return output_json(git_output{});
+			cleanup.emplace(list_file);
+			std::string text;
+			for (const auto& file : *listed) {
+				text += file;
+				text.push_back('\0');
+			}
+			std::ofstream out(list_file, std::ios::binary | std::ios::trunc);
+			out.write(text.data(), static_cast<std::streamsize>(text.size()));
+			out.close();
+			if (!out) {
+				return error_json("git_failed",
+					std::format("cannot write the paths to stage to '{}'", utf8_of(list_file)), {}, -1);
+			}
+			args = { "add", "--pathspec-from-file=" + utf8_of(list_file), "--pathspec-file-nul" };
+			checked = *listed;
+		} else {
+			args.insert(args.end(), paths.begin(), paths.end());
+		}
+		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::paths, checked, {} }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
 	}, write_mode{ caller.kind, true, false });
+}
+
+std::filesystem::path edt::vcs_service::project_dir() const
+{
+	const std::optional<fs::path> project = m_options.project_root ? m_options.project_root() : std::nullopt;
+	if (!project) return {};
+	std::error_code ec;
+	fs::path dir = fs::weakly_canonical(*project, ec);
+	return ec ? fs::path{} : dir;
+}
+
+std::optional<std::string> edt::vcs_service::project_prefix() const
+{
+	const std::optional<fs::path> project = m_options.project_root ? m_options.project_root() : std::nullopt;
+	if (!project || !m_state.root) return std::nullopt;
+	std::error_code ec;
+	const fs::path root = fs::weakly_canonical(*m_state.root, ec);
+	if (ec) return std::nullopt;
+	const fs::path folder = fs::weakly_canonical(*project, ec);
+	if (ec) return std::nullopt;
+	const fs::path relative = folder.lexically_relative(root);
+	if (relative.empty() || *relative.begin() == "..") return std::nullopt;
+	if (relative == ".") return std::string{};
+	std::string prefix = edt::utf8_of(relative);
+	std::ranges::replace(prefix, '\\', '/');
+	return prefix + "/";
 }
 
 edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std::string>& paths, const cmd::origin& caller)
@@ -2226,9 +2604,22 @@ edt::vcs_service::started edt::vcs_service::start_commit(const std::string& mess
 	// The runner has no stdin: the message goes through a file only this editor writes to.
 	if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
 	const fs::path file = m_scratch.root / std::format("commit_message_{}.txt", ++m_message_count);
-	return run_job("git commit", [file, message = std::move(text)](const git_context& git,
+	const project_scope scope{ project_prefix(), project_dir() };
+	return run_job("git commit", [file, message = std::move(text), scope](const git_context& git,
 		ds::task_context& task) -> json::value {
 		const remove_on_exit cleanup{ file };
+		// The index may hold what a person staged: an agent's commit publishes none of the person's own files.
+		if (git.guarded) {
+			const auto staged = changed_files(git, { "diff", "--cached", "--name-only", "-z", "--no-renames" },
+				task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!staged) {
+				return refusal_json(refused("path_outside_project", "git could not list what the commit holds"), task);
+			}
+			if (auto refusal = private_files_refusal(*staged, scope, "commits", policy_file_rule::publishable)) {
+				return refusal_json(*refusal, task);
+			}
+		}
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::index, {}, {} }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
@@ -2274,10 +2665,14 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 	if (caller.kind != cmd::origin_kind::ui) {
 		if (auto error = pattern_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
-	return run_job("git checkout", [ref](const git_context& git, ds::task_context& task) -> json::value {
+	const protected_scope scope{ m_options.project_root && m_options.project_root().has_value(), project_prefix(),
+		project_dir(), m_options.live_mode_on && m_options.live_mode_on() };
+	return run_job("git checkout", [ref, scope](const git_context& git, ds::task_context& task) -> json::value {
 		// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
 		std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
 		std::string upstream;
+		std::string attach;
+		std::string checked_oid;
 		if (git.guarded) {
 			// Resolved once: the filter check and the checkout must see the same tree.
 			const auto plan = plan_checkout(git, ref, task.stop);
@@ -2296,14 +2691,17 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 				}
 				target_oid = std::string(trim(peeled.out));
 			}
+			checked_oid = target_oid;
 			if (auto refusal = policy_refusal(git, target_oid, task)) return std::move(*refusal);
+			if (auto refusal = protected_refusal(git, target_oid, scope, task)) return std::move(*refusal);
 			if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, target_oid }, task.stop)) {
 				return refusal_json(*refusal, task);
 			}
-			// A branch by its short name, once refs/heads/<ref> is known to exist: `checkout refs/heads/x` would detach,
-			// and with a branch x git takes the branch even when a tag x exists too.
-			if (plan->kind == checkout_kind::commit) {
-				args = { "checkout", "-q", "--no-recurse-submodules", "--detach", plan->target, "--" };
+			// The checked OID, detached, never the branch's name: another write may move the branch meanwhile. The
+			// branch is attached after, while it still is that OID.
+			if (plan->kind == checkout_kind::commit || plan->kind == checkout_kind::branch) {
+				args = { "checkout", "-q", "--no-recurse-submodules", "--detach", target_oid, "--" };
+				if (plan->kind == checkout_kind::branch) attach = ref;
 			}
 			else if (plan->kind == checkout_kind::remote_branch) {
 				// The checked OID, not the remote ref, which a fetch on the other io thread may move meanwhile; the
@@ -2314,6 +2712,30 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 		}
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = tree_write_failure_of(out, task)) return std::move(*failure);
+		if (!attach.empty()) {
+			const git_output now = run_git(git, { "rev-parse", "--verify", "--quiet",
+				"refs/heads/" + attach + "^{commit}" }, task.stop, k_read_cap);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!succeeded(now) || trim(now.out) != checked_oid) {
+				return error_json("git_failed", std::format("branch '{}' moved during the checkout: the checked "
+					"commit {} is checked out detached", vcs::valid_utf8(attach), checked_oid), out.err, -1);
+			}
+			const git_output attached = run_write(git, { "symbolic-ref", "-m", "checkout: moving to " + attach, "HEAD",
+				"refs/heads/" + attach }, task.stop);
+			if (auto failure = write_failure_of(attached, task)) return std::move(*failure);
+			// A fetch into refs/heads/* may move the branch between the check and the attach: HEAD goes back to the
+			// checked commit, which the index and the work tree already are, so nothing is written to the disk.
+			const git_output after = run_git(git, { "rev-parse", "--verify", "--quiet",
+				"refs/heads/" + attach + "^{commit}" }, task.stop, k_read_cap);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!succeeded(after) || trim(after.out) != checked_oid) {
+				const git_output detached = run_write(git, { "checkout", "-q", "--no-recurse-submodules", "--detach",
+					checked_oid, "--" }, task.stop);
+				if (auto failure = tree_write_failure_of(detached, task)) return std::move(*failure);
+				return error_json("git_failed", std::format("branch '{}' moved during the checkout: the checked "
+					"commit {} is checked out detached", vcs::valid_utf8(attach), checked_oid), out.err, -1);
+			}
+		}
 		if (!upstream.empty()) {
 			// The branch stays when this fails: the checkout is done, only the tracking is missing.
 			const git_output tracked = run_write(git, { "branch", "--set-upstream-to=" + upstream, ref }, task.stop);
@@ -2363,7 +2785,10 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	}
 	// git pull --ff-only in steps, so the filter check sees what the merge would change: fetch, then a fast-forward
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
-	return run_job("git pull", [remote, branch](const git_context& shared, ds::task_context& task) -> json::value {
+	const protected_scope scope{ m_options.project_root && m_options.project_root().has_value(), project_prefix(),
+		project_dir(), m_options.live_mode_on && m_options.live_mode_on() };
+	return run_job("git pull", [remote, branch, scope](const git_context& shared,
+		ds::task_context& task) -> json::value {
 		git_context git = shared;
 		progress_state progress;
 		report_progress(git, task, progress);
@@ -2433,6 +2858,7 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 			return error_json("git_failed", "what fetch got for merging is not a commit", fetched.err, -1);
 		}
 		if (auto refusal = policy_refusal(git, commit, task)) return std::move(*refusal);
+		if (auto refusal = protected_refusal(git, commit, scope, task)) return std::move(*refusal);
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, commit }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
@@ -2465,12 +2891,30 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 	args.push_back(remote);
 	args.push_back(guarded ? std::format("refs/heads/{0}:refs/heads/{0}", branch) : branch);
 	const hard_rule rule = [branch](const vcs_policy& policy) { return vcs_push_branch_refusal(policy, branch); };
-	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
+	const project_scope scope{ project_prefix(), project_dir() };
+	return run_job("git push", [args = std::move(args), remote, branch, scope](const git_context& shared,
+		ds::task_context& task) -> json::value {
 		git_context git = shared;
 		progress_state progress;
 		report_progress(git, task, progress);
 		if (git.guarded) {
 			if (auto refusal = remote_refusal(git, remote)) return std::move(*refusal);
+			// What the commits this remote does not have yet change, merges against each parent (-m): a person's
+			// commit of their own files is not an agent's to publish, whichever other remote already has it. A remote
+			// name with a glob character would widen --remotes=<name> to others.
+			if (remote.find_first_of("*?[\\") != std::string::npos) {
+				return refusal_json(refused("path_outside_project", "git could not list what the push sends to a "
+					"remote with a glob character in its name"), task);
+			}
+			const auto pushed = changed_files(git, { "log", "-z", "-m", "--name-only", "--format=", "--no-renames",
+				"refs/heads/" + branch, "--not", "--remotes=" + remote }, task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!pushed) {
+				return refusal_json(refused("path_outside_project", "git could not list what the push sends"), task);
+			}
+			if (auto refusal = private_files_refusal(*pushed, scope, "pushes", policy_file_rule::publishable)) {
+				return refusal_json(*refusal, task);
+			}
 		}
 		if (auto refusal = network_refusal(git, remote, task.stop)) return refusal_json(*refusal, task);
 		const git_output out = run_write(git, args, task.stop);

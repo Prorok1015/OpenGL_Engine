@@ -71,6 +71,8 @@ const std::set<std::string> allowed_fixtures = {
 	"levels/smoke_level.desc",
 	"levels/smoke_two_worlds.desc",
 	"levels/bench_100_meshes.desc",
+	// The bench's make-up at a tenth of its size: the null-backend checks that need its meshes, not its scale (#898).
+	"levels/bench_10_meshes.desc",
 	"bench/bench_quad.desc",
 };
 

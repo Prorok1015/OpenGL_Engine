@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "rnd_null_driver.h"
+#include "png_bomb_builder.hpp"
 #include <snk/command/cmd_registry.h>
 #include <snk/command/cmd_types.h>
 #include <snk/render/rnd_capture_commands.h>
@@ -373,6 +374,20 @@ BOOST_AUTO_TEST_CASE(MissingOrBrokenReference_Fails)
 	broken.insert(broken.end(), junk.begin(), junk.end());
 	put("res://refs/broken.png", broken);
 	BOOST_CHECK_EQUAL(compare(R"json({"reference":"res://refs/broken.png"})json").code, cmd::codes::failed);
+}
+
+BOOST_AUTO_TEST_CASE(ReferenceThatInflatesPastItsHeader_CannotBeDecoded)
+{
+	// The header says 4x2 like the capture; the IDAT of a few kilobytes unpacks to a megabyte, far over the decode budget.
+	const std::vector<std::byte> bomb = test_util::png_bomb::png_rgba(4, 2, test_util::png_bomb::zlib_stream({ 0 }, 4096));
+	BOOST_REQUIRE(bomb.size() < 16u * 1024u);
+	put("res://refs/bomb.png", bomb);
+
+	const auto result = compare(R"json({"reference":"res://refs/bomb.png"})json");
+
+	BOOST_CHECK(!result.ok);
+	BOOST_CHECK_EQUAL(result.code, cmd::codes::failed);
+	BOOST_CHECK_EQUAL(result.error, "the reference 'res://refs/bomb.png' cannot be decoded");
 }
 
 BOOST_AUTO_TEST_CASE(NotAPngOrJpeg_IsRefusedByItsBytes)

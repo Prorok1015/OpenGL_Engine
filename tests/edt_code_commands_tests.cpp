@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_code_commands.h"
+#include "edt_agent_confirmations.h"
 #include "edt_agent_policy.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_registry.h>
@@ -312,12 +313,49 @@ BOOST_AUTO_TEST_CASE(UnderTheDefaultPolicy_ReadsAreTools_ChangesAreAskedAbout)
 			BOOST_TEST((policy.effective(command).mode == cmd::policy_mode::ask));
 			BOOST_TEST(command.mutates);
 			// Only the commands that take a file away are destructive; a write keeps the file (its version is the lock).
-			BOOST_TEST(command.destructive == (std::string_view(id) == "code.delete" || std::string_view(id) == "code.rename"));
+			const bool takes_a_file_away = std::string_view(id) == "code.delete" || std::string_view(id) == "code.rename";
+			BOOST_TEST(command.destructive == takes_a_file_away);
+			BOOST_TEST((command.risk == (takes_a_file_away ? cmd::danger::confirm : cmd::danger::none)));
 		}
 	}
 	const cmd::command_desc& write = *commands.find("code.write");
 	const auto cmake = category_of("code.write", json::object{ { "path", "CMakeLists.txt" }, { "version", "v" }, { "text", "" } });
 	BOOST_TEST((policy.effective(write, cmake).mode == cmd::policy_mode::ask));
+}
+
+// #933: "allow until the session ends", given for a code.create, is for the code_files category; it must not let the
+// same session delete or rename a file without a question.
+BOOST_AUTO_TEST_CASE(ASessionGrantForCodeFiles_CoversACreate_NeverADeleteOrARename)
+{
+	edt::agent_policy policy{ dir.path() / "no_project_policy.json", dir.path() / "no_personal_policy.json" };
+	edt::session_grants grants;
+	auto gate = std::make_shared<edt::agent_policy_gate>(policy);
+	gate->set_can_ask(true);
+	gate->set_session_grants(&grants);
+	commands.set_policy_gate(gate);
+	grants.add("s1", agent_category::code_files);
+
+	cmd::call creation;
+	creation.args = json::object{ { "path", "src/granted.cpp" } };
+	creation.from = cmd::origin::agent("s1");
+	const auto created = commands.invoke("code.create", creation);
+	BOOST_REQUIRE_MESSAGE(created.ok, created.error);
+
+	cmd::call removal;
+	removal.args = json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") } };
+	removal.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("code.delete", removal).code == cmd::codes::confirmation_required);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+
+	cmd::call move;
+	move.args = json::object{ { "from", "src/game.cpp" }, { "to", "src/moved.cpp" } };
+	move.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("code.rename", move).code == cmd::codes::confirmation_required);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	BOOST_TEST(!fs::exists(code / "src" / "moved.cpp"));
+
+	// The fixture's registry outlives the grants of this test.
+	gate->set_session_grants(nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_AnAgentsWriteRunsOnlyAfterAPersonSaidYes)

@@ -44,7 +44,8 @@ namespace edt
 		std::function<void(const std::string& module, std::function<void(const core::reload_report&)> done)> reload_module;
 		// Why live mode cannot be turned on now; empty: it can. Null: it always can.
 		std::function<std::string()> unavailable_reason;
-		// Writes live_enabled into build.json; the error, nullopt when it is stored. Null: not stored.
+		// Keeps the person's switch in their own settings (edt_live_consent.h, never the project); the error, nullopt
+		// when it is stored. Null: not stored.
 		std::function<std::optional<std::string>(bool enabled)> store_enabled;
 		// After live mode was turned on or off: the tools an agent sees changed.
 		std::function<void()> on_toggled;
@@ -78,11 +79,9 @@ namespace edt
 
 		[[nodiscard]] bool enabled() const { return m_build.enabled(); }
 		[[nodiscard]] std::string unavailable_reason() const;
-		// `store`: build.json too (a failed write is logged; the switch still flips for this session). Turning on while
-		// unavailable is refused with the reason.
+		// `store`: the person's settings too (a failed write is logged; the switch still flips for this session).
+		// Turning on while unavailable is refused with the reason.
 		std::optional<std::string> set_enabled(bool enabled, bool store);
-		// build.json was applied by the Build Settings window: follow its live_enabled.
-		void follow_settings(const build_settings& settings);
 
 		void on_changes(std::span<const res::file_change> changes);
 		// Every frame, outside the job pump.
