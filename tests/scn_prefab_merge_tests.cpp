@@ -1675,4 +1675,53 @@ BOOST_AUTO_TEST_CASE(HotReload_AFileRewrittenToReferToItself_IsRefusedTheSameWay
 	BOOST_TEST(spawned_nodes(reg) == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(APrefabThatRefersToItself_IsSavedWithTheReferenceItHad)
+{
+	const auto tag = put("keep.prefab.desc", prefab_with_children(
+		instance_child("bare", "keep.prefab.desc") + "," + parent_child("typed", R"("memory://t/keep.prefab.desc")")));
+	auto handle = require_loaded<desc::desc_base>(tag);
+	const auto prefab = std::dynamic_pointer_cast<scn::prefab_desc>(handle.get());
+	BOOST_REQUIRE(prefab);
+	BOOST_REQUIRE(reference_refused(handle, 0));
+	BOOST_REQUIRE(reference_refused(handle, 1));
+
+	json::object out;
+	prefab->serialize(out);
+
+	const auto& children = out.at("children").as_array();
+	BOOST_REQUIRE(children.size() == 2u);
+	const auto& bare = children[0].at("components").at("ref");
+	BOOST_REQUIRE(bare.is_string());
+	BOOST_TEST(json::value_to<std::string>(bare) == tag.string());
+	const auto& typed = children[1].at("components").at("ref").at("__parent");
+	BOOST_REQUIRE(typed.is_string());
+	BOOST_TEST(json::value_to<std::string>(typed) == tag.string());
+}
+
+BOOST_AUTO_TEST_CASE(RefusedTag_OfARefusedHandle_IsTheReferenceItRefused_AndItsOwnTagStaysEmpty)
+{
+	const auto tag = put("named_back.prefab.desc", prefab_with_children(instance_child("again", "named_back.prefab.desc")));
+	auto handle = require_loaded<desc::desc_base>(tag);
+	const auto prefab = std::dynamic_pointer_cast<scn::prefab_desc>(handle.get());
+	BOOST_REQUIRE(prefab);
+	BOOST_REQUIRE(reference_refused(handle, 0));
+
+	const auto& refused = prefab->get_root().children[0].components.at("ref").parent_desc;
+	BOOST_TEST(!refused.get_tag().is_valid());
+	BOOST_TEST((res::refused_tag(refused) == tag));
+
+	const auto made = rs->refused<desc::desc_base>(tag_of("made.desc"), "refused by the test");
+	BOOST_TEST(!made.get_tag().is_valid());
+	BOOST_TEST((res::refused_tag(made) == tag_of("made.desc")));
+}
+
+BOOST_AUTO_TEST_CASE(RefusedTag_OfAnyOtherHandle_IsItsOwnTag)
+{
+	const auto tag = put("plain.desc", R"({"__type":"stat_desc","hp":5})");
+	const auto loaded = require_loaded<desc::desc_base>(tag);
+	BOOST_REQUIRE(loaded.is_ready());
+	BOOST_TEST((res::refused_tag(loaded) == tag));
+	BOOST_TEST(!res::refused_tag(res::res_handle<desc::desc_base>{}).is_valid());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

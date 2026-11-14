@@ -237,8 +237,9 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 void scn::prefab_desc::serialize(json::object& data) const
 {
 	auto serialize_comp = [] (const prefab_comp_node& cnode) -> json::value {
+		// A refused reference has no tag of its own (#697): the file keeps the reference it had (#952).
 		if (cnode.overrides.empty() && cnode.type_name.empty() && cnode.parent_desc.is_valid()) {
-			return json::value_from(cnode.parent_desc.get_tag());
+			return json::value_from(::res::refused_tag(cnode.parent_desc));
 		}
 
 		json::object out;
@@ -246,7 +247,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 			out["__type"] = cnode.type_name;
 		}
 		if (cnode.parent_desc.is_valid()) {
-			out["__parent"] = json::value_from(cnode.parent_desc.get_tag());
+			out["__parent"] = json::value_from(::res::refused_tag(cnode.parent_desc));
 		}
 		for (const auto& kv : cnode.overrides) {
 			out[kv.key()] = kv.value();

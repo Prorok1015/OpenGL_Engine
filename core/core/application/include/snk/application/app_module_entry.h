@@ -120,6 +120,7 @@
 // #759: cmd::command_desc gains describe_before_allowed_invoke at its end and joins the layout key (layout_revision 10).
 // #952 (no bump): desc_system::get_field_desc, inline in module code, refuses a reference to the owner itself (or to an alias
 // of it) through the exports that are there; a module built before keeps such a handle until rebuilt. No layout changes.
+// res::refused_tag (the tag a refused handle was asked for) is a new export (no type changes: the layout key stays).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
