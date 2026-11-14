@@ -3,6 +3,11 @@
 #include <string>
 #include <string_view>
 
+namespace res
+{
+	class resource_system;
+}
+
 namespace edt {
 
 	struct build_settings;
@@ -18,6 +23,11 @@ namespace edt {
 	// The settings text with `project` turned on or off; other projects and unknown keys are kept.
 	std::string with_live_consent(const std::optional<std::string>& settings_text, std::string_view project,
 		bool enabled);
+
+	// The consent of `project` as edt://settings/live_mode.json of `res` holds it now.
+	bool read_live_consent(res::resource_system& res, std::string_view project);
+	// Turns `project` on or off in edt://settings/live_mode.json of `res`; the error, nullopt when it is stored.
+	std::optional<std::string> store_live_consent(res::resource_system& res, std::string_view project, bool enabled);
 
 	// Live mode at the opening of `project`: on only by the person's consent. A live_enabled of build.json is ignored,
 	// with a warning when it asks for live mode the person did not turn on.

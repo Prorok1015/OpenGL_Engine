@@ -1,9 +1,11 @@
 #include "edt_live_consent.h"
 #include "edt_build_settings.h"
+#include "edt_settings.h"
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
+#include <format>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -46,6 +48,20 @@ std::string edt::with_live_consent(const std::optional<std::string>& settings_te
 		projects.get_object().erase(project);
 	}
 	return json::serialize(root);
+}
+
+bool edt::read_live_consent(res::resource_system& res, std::string_view project)
+{
+	return live_consented(read_setting(res, k_live_mode_settings), project);
+}
+
+std::optional<std::string> edt::store_live_consent(res::resource_system& res, std::string_view project, bool enabled)
+{
+	const std::string text = with_live_consent(read_setting(res, k_live_mode_settings), project, enabled);
+	if (!write_setting(res, k_live_mode_settings, text)) {
+		return std::format("edt://settings/{} cannot be written", k_live_mode_settings);
+	}
+	return std::nullopt;
 }
 
 bool edt::live_mode_at_open(const build_settings& project_settings, const std::optional<std::string>& settings_text,

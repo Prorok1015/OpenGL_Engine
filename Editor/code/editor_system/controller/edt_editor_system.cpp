@@ -67,6 +67,7 @@
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_live_consent.h"
+#include "edt_agent_policy.h"
 #include "edt_settings.h"
 #include "edt_play_commands.h"
 #include "edt_runtime_commands.h"
@@ -1339,12 +1340,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 {
 	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
 		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
-	std::optional<std::string> project_key;
-	if (snk_dir) {
-		std::error_code ec;
-		const std::filesystem::path root = std::filesystem::weakly_canonical(snk_dir->parent_path(), ec);
-		project_key = fs_paths::generic_utf8_of(ec ? snk_dir->parent_path() : root);
-	}
+	// No key, no consent: live mode is neither read on nor stored for a project whose path cannot be made canonical.
+	const std::optional<std::string> project_key = snk_dir ? canonical_project_settings_key(snk_dir->parent_path())
+		: std::nullopt;
 	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
 
 	live_mode_options live;
@@ -1383,12 +1381,8 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
 	};
 	if (project_key) {
-		live.store_enabled = [this, key = *project_key](bool enabled) -> std::optional<std::string> {
-			const std::string text = with_live_consent(read_setting(m_res, k_live_mode_settings), key, enabled);
-			if (!write_setting(m_res, k_live_mode_settings, text)) {
-				return std::format("edt://settings/{} cannot be written", k_live_mode_settings);
-			}
-			return std::nullopt;
+		live.store_enabled = [this, key = *project_key](bool enabled) {
+			return store_live_consent(m_res, key, enabled);
 		};
 	}
 	live.on_toggled = [this] {

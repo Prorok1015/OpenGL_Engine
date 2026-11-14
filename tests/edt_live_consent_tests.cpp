@@ -1,6 +1,11 @@
 #include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
+#include "test_temp_dir.hpp"
 #include "edt_build_settings.h"
+#include "edt_data_protocol.h"
 #include "edt_live_consent.h"
+#include "edt_settings.h"
+#include <filesystem>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <cstddef>
 #include <optional>
@@ -69,6 +74,31 @@ BOOST_AUTO_TEST_CASE(UnreadableSettingsGiveNoConsent)
 	}
 	const std::string kept = edt::with_live_consent(std::string{ R"({"note":"mine","projects":{}})" }, k_project, true);
 	BOOST_TEST(kept.find(R"("note":"mine")") != std::string::npos);
+}
+
+// #908: the switch goes into edt://settings/live_mode.json and comes back from it; turning off takes the project out.
+BOOST_AUTO_TEST_CASE(TheSwitchIsStoredInThePersonsSettings)
+{
+	// Before the resource system: its vfs io thread is joined before the scratch directory goes away.
+	test_util::temp_dir dir{ "edt_live_consent" };
+	test_util::ram_res_env env;
+	const std::filesystem::path data = dir.path() / "data";
+	BOOST_REQUIRE(std::filesystem::create_directories(data));
+	BOOST_REQUIRE(edt::register_data_protocol(*env.rs, data, dir.path() / "user"));
+
+	BOOST_TEST(!edt::read_live_consent(*env.rs, k_project));
+	BOOST_TEST(!edt::store_live_consent(*env.rs, k_project, true));
+	BOOST_TEST(!edt::store_live_consent(*env.rs, k_other, true));
+	BOOST_TEST(edt::read_live_consent(*env.rs, k_project));
+	const std::filesystem::path file = dir.path() / "user" / "settings" / std::string{ edt::k_live_mode_settings };
+	BOOST_REQUIRE(std::filesystem::is_regular_file(file));
+
+	BOOST_TEST(!edt::store_live_consent(*env.rs, k_project, false));
+	BOOST_TEST(!edt::read_live_consent(*env.rs, k_project));
+	BOOST_TEST(edt::read_live_consent(*env.rs, k_other));
+	const std::optional<std::string> text = edt::read_setting(*env.rs, edt::k_live_mode_settings);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST(text->find(k_project) == std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
