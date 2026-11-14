@@ -2318,7 +2318,7 @@ std::string res::resource_system::not_mounted_error(std::string_view protocol) c
   }
   std::ranges::sort(mounted);
   std::string list;
-  for (const auto name : mounted) {
+  for (const std::string &name : mounted) {
     list += list.empty() ? std::string{name} : std::format(", {}", name);
   }
   return std::format("'{}://' is not mounted in this run (mounted: {})", protocol, list.empty() ? "none" : list);
