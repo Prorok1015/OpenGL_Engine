@@ -38,6 +38,18 @@ namespace
 		});
 	}
 
+	// The schemes a file of the project can be named by: res://, and engine:// for #891.
+	bool names_project_file(std::string_view value)
+	{
+		return value.starts_with("res://") || value.starts_with("engine://");
+	}
+
+	// A node of a prefab: its "components" map names each component by its type.
+	bool is_prefab_node(const json::object& object)
+	{
+		return object.contains("__id") || object.contains("transform") || object.contains("children");
+	}
+
 	struct collector
 	{
 		std::vector<edt::raw_reference>& out;
@@ -48,11 +60,10 @@ namespace
 			out.push_back(edt::raw_reference{ std::move(pointer), std::move(path), guid, owner_type, owner_pointer, place });
 		}
 
-		// A string that names no protocol is no reference (#697 refuses it), and is not kept.
 		void text(std::string_view value, const std::string& pointer, const std::string& owner_type, const std::string& owner_pointer,
 			edt::reference_place place)
 		{
-			if (value.find("://") == std::string_view::npos) return;
+			if (!names_project_file(value)) return;
 			add(pointer, std::string(value), std::nullopt, owner_type, owner_pointer, place);
 		}
 
@@ -77,7 +88,8 @@ namespace
 			const json::value* type = object.if_contains("__type");
 			if (!type && is_reference_shaped(object)) {
 				// Only a small object is copied: one that has no key but "guid" and "path".
-				if (const auto read = res::reference_from_json(json::value(object)); read && (!read->guid.is_nil() || !read->path.view().empty())) {
+				if (const auto read = res::reference_from_json(json::value(object));
+					read && (!read->guid.is_nil() || names_project_file(read->path.view()))) {
 					add(pointer, std::string(read->path.view()), read->guid.is_nil() ? std::nullopt : std::optional{ read->guid }, outer_type,
 						outer_pointer, edt::reference_place::value);
 				}
@@ -86,6 +98,7 @@ namespace
 			const bool typed = type && type->is_string();
 			const std::string owner_type = typed ? std::string(view_of(type->as_string())) : outer_type;
 			const std::string& owner_pointer = typed ? pointer : outer_pointer;
+			const bool prefab_node = is_prefab_node(object);
 			for (const auto& member : object) {
 				const std::string_view key = view_of(member.key());
 				const std::string at = pointer + "/" + token_of(member.key());
@@ -96,12 +109,15 @@ namespace
 					continue;
 				}
 				if (key.starts_with("__")) continue;
-				// The components of a prefab node: one given as a tag is the desc it is made of.
-				if (key == "components" && member.value().is_object()) {
+				// The components of a prefab node: one given as a tag is the desc it is made of; one without "__type" is of
+				// the type its key names, as the prefab loader reads it.
+				if (prefab_node && key == "components" && member.value().is_object()) {
 					for (const auto& component : member.value().as_object()) {
 						const std::string component_at = at + "/" + token_of(component.key());
 						if (const json::string* tag = component.value().if_string()) {
 							text(view_of(*tag), component_at, owner_type, owner_pointer, edt::reference_place::component);
+						} else if (component.value().is_object()) {
+							members(component.value().as_object(), component_at, std::string(view_of(component.key())), component_at, depth + 1);
 						} else {
 							value(component.value(), component_at, owner_type, owner_pointer, depth + 1);
 						}

@@ -40,6 +40,9 @@ constexpr std::string_view k_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 const char* const k_level = R"({
 	"__type": "level_desc",
 	"note": "https://example.com/page",
+	"scratch": "memory://generated/mesh",
+	"a/b~c": "res://escaped.png",
+	"settings": { "components": { "x": "res://not_a_component.desc" } },
 	"plain": "textures/a.png",
 	"vertices": [0.0, 1.0, 2.0],
 	"worlds": [ {
@@ -53,7 +56,8 @@ const char* const k_level = R"({
 				"inst": { "__type": "prefab_desc", "__parent": "res://rig.prefab.desc" },
 				"table": { "__type": "refs.table", "named": { "a": "res://a.png", "b": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f" } } },
 				"probe": { "__type": "refs.probe", "list": [ "res://l0.png" ], "slot": { "image": "res://s.png" }, "tex": "res://alias.png",
-				           "label": "res://label.png", "blob": { "deep": "engine://e.png" } }
+				           "label": "res://label.png", "blob": { "deep": "engine://e.png" } },
+				"mesh_node_desc": { "geometry": "res://untyped.desc" }
 			},
 			"overrides": [ { "target": [], "component": "mesh", "path": "/material", "value": "res://other.desc" } ]
 		} ]
@@ -132,10 +136,24 @@ BOOST_AUTO_TEST_CASE(EveryPlaceOfAReference_IsCollectedWithItsPointerAndOwner)
 	BOOST_TEST(guid_only->path.empty());
 	BOOST_TEST(guid_only->guid.has_value());
 
-	BOOST_TEST(at("/note") != nullptr, "a string of another scheme is kept: the schema decides later");
+	const edt::raw_reference* untyped = at(k_node + "/components/mesh_node_desc/geometry");
+	BOOST_REQUIRE(untyped);
+	BOOST_TEST(untyped->owner_type == "mesh_node_desc", "a component without __type is of the type its key names");
+	BOOST_TEST(untyped->owner_pointer == k_node + "/components/mesh_node_desc");
+
+	const edt::raw_reference* escaped = at("/a~1b~0c");
+	BOOST_REQUIRE_MESSAGE(escaped, "'/' and '~' of a key are escaped in the pointer");
+	BOOST_TEST(escaped->path == "res://escaped.png");
+
+	const edt::raw_reference* not_component = at("/settings/components/x");
+	BOOST_REQUIRE(not_component);
+	BOOST_TEST((not_component->place == edt::reference_place::value), "\"components\" outside a prefab node is a plain key");
+
+	BOOST_TEST(at("/note") == nullptr, "https:// names no file of the project");
+	BOOST_TEST(at("/scratch") == nullptr, "nor does memory://");
 	BOOST_TEST(at("/plain") == nullptr, "a string without a protocol is no reference");
 	BOOST_TEST(at("/vertices/0") == nullptr);
-	BOOST_TEST(references.size() == 13u);
+	BOOST_TEST(references.size() == 15u);
 }
 
 BOOST_AUTO_TEST_CASE(TheSchemaOfTheOwner_SaysWhatEachReferenceIs)
@@ -153,7 +171,7 @@ BOOST_AUTO_TEST_CASE(TheSchemaOfTheOwner_SaysWhatEachReferenceIs)
 	BOOST_TEST((kind_at(k_node + "/components/probe/label") == kind::loose), "a string field is no reference field");
 	BOOST_TEST((kind_at(k_node + "/components/probe/blob/deep") == kind::loose), "the value of a custom field");
 	BOOST_TEST((kind_at(k_node + "/overrides/0/value") == kind::loose), "the record of a prefab instance");
-	BOOST_TEST(!kind_at("/note").has_value(), "another scheme where no schema field is");
+	BOOST_TEST((kind_at(k_node + "/components/mesh_node_desc/geometry") == kind::field), "the schema of the component's key");
 }
 
 BOOST_AUTO_TEST_CASE(WithoutADescSystem_OnlyThePlaceSaysAnything)

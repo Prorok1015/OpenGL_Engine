@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Who refers to an asset (#774, EPIC-57 section 6.3): the references the asset database reads from the files on the disk,
@@ -27,6 +28,7 @@ namespace json = boost::json;
 
 constexpr std::string_view k_sky_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 constexpr std::string_view k_gone_guid = "00000000-0000-4000-8000-000000000009";
+constexpr std::string_view k_other_guid = "5b1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
 
 std::string meta_text(std::string_view guid)
 {
@@ -45,7 +47,8 @@ const char* const k_level = R"({
 			"mesh": { "__type": "mesh_node_desc", "material": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://old_sky.desc" } },
 			"inst": { "__type": "prefab_desc", "__parent": "res://sky.desc" },
 			"lost": { "__type": "mesh_node_desc", "material": { "guid": "00000000-0000-4000-8000-000000000009", "path": "res://sky.desc" } },
-			"other": { "__type": "mesh_node_desc", "material": "res://other.desc" }
+			"other": { "__type": "mesh_node_desc", "material": "res://other.desc" },
+			"foreign": { "__type": "mesh_node_desc", "material": { "guid": "5b1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "path": "res://sky.desc" } }
 		} } ] } ],
 	"web": "https://example.com/sky.desc"
 })";
@@ -56,6 +59,8 @@ struct usages_fixture
 	{
 		write("sky.desc", R"({ "__type": "material_desc" })");
 		write("sky.desc.resource", meta_text(k_sky_guid));
+		write("other.desc", R"({ "__type": "material_desc" })");
+		write("other.desc.resource", meta_text(k_other_guid));
 		write("levels/main.desc", k_level);
 		write("materials/child.desc", R"({ "__type": "material_desc", "__parent": "res://sky.desc" })");
 	}
@@ -67,13 +72,49 @@ struct usages_fixture
 		fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(1));
 	}
 
-	edt::asset_database& open(bool with_cache = false)
+	edt::asset_database& open(bool with_cache = false, bool case_insensitive = edt::platform_case_insensitive, bool pump = true)
 	{
 		db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ layer.path() },
 			with_cache ? edt::asset_cache_location{ cache.path(), "asset_db" } : edt::asset_cache_location{});
+		db->set_case_insensitive(case_insensitive);
 		db->rebuild();
-		test_util::pump(tasks);
+		if (pump) test_util::pump(tasks);
 		return *db;
+	}
+
+	fs::path cache_file() const { return cache.path() / "asset_db" / "assets.json"; }
+
+	json::value read_cache() const
+	{
+		std::ifstream in(cache_file(), std::ios::binary);
+		return json::parse(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
+	}
+
+	void write_cache(const json::value& document) const
+	{
+		std::ofstream(cache_file(), std::ios::binary | std::ios::trunc) << json::serialize(document);
+	}
+
+	// The cache's record of `path`, changed by `change`.
+	template <typename Change>
+	void change_cached_record(std::string_view path, Change change) const
+	{
+		json::value document = read_cache();
+		for (json::value& record : document.at("records").as_array()) {
+			if (std::string_view(record.at("path").as_string()) == path) change(record.as_object());
+		}
+		write_cache(document);
+	}
+
+	cmd::command_registry& usages_command()
+	{
+		edt::asset_usage_sources sources;
+		sources.assets = [this]() -> const edt::asset_database* { return db.get(); };
+		sources.manifest_file = [] { return std::string("game.snkproj"); };
+		sources.manifest = [] { return std::vector<edt::manifest_reference>{ { "/start_scene", "res://sky.desc" } }; };
+		registered = edt::register_asset_usage_commands(commands, std::move(sources));
+		BOOST_REQUIRE(registered.size() == 1u);
+		return commands;
 	}
 
 	edt::usage_report sky_usages() const
@@ -95,6 +136,8 @@ struct usages_fixture
 	edt::editor_events events;
 	edt::job_service jobs{ tasks, &events };
 	std::unique_ptr<edt::asset_database> db;
+	cmd::command_registry commands;
+	std::vector<edt::registration> registered;
 };
 
 const std::string k_node = "/worlds/0/children/0/components";
@@ -133,6 +176,7 @@ BOOST_AUTO_TEST_CASE(EveryReferenceToTheAsset_IsFoundWithItsFileAndPointer)
 	BOOST_TEST((inherited->kind == edt::usage_kind::parent));
 
 	BOOST_TEST(!at(report, "res://levels/main.desc", k_node + "/other/material"));
+	BOOST_TEST(!at(report, "res://levels/main.desc", k_node + "/foreign/material"), "another file's guid: its path does not count");
 	BOOST_TEST(!at(report, "res://levels/main.desc", "/web"));
 	BOOST_TEST(report.items.size() == 5u);
 
@@ -176,18 +220,85 @@ BOOST_AUTO_TEST_CASE(TheReferences_ComeBackFromTheCache_AndAnOlderCacheIsDropped
 
 	// A cache of version 3 has no references: it is dropped and every file is read again.
 	db.reset();
-	const fs::path file = cache.path() / "asset_db" / "assets.json";
-	std::string text;
-	{
-		std::ifstream in(file, std::ios::binary);
-		text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-	}
-	json::value document = json::parse(text);
+	json::value document = read_cache();
 	document.as_object()["__version"] = 3;
-	std::ofstream(file, std::ios::binary | std::ios::trunc) << json::serialize(document);
+	write_cache(document);
 	auto& third = open(true);
 	BOOST_TEST(!third.loaded_from_cache());
 	BOOST_TEST(sky_usages().items.size() == 5u);
+}
+
+BOOST_AUTO_TEST_CASE(ABrokenReferenceInTheCache_DropsTheCache)
+{
+	open(true).save();
+	const std::vector<std::pair<std::string, json::value>> broken{
+		{ "an item that is no tuple", json::object{ { "owners", json::array{ json::array{ "", "" } } }, { "items", json::array{ "res://sky.desc" } } } },
+		{ "an owner out of range", json::object{ { "owners", json::array{} }, { "items", json::array{ json::array{ "/a", "res://sky.desc", "", 0, 0 } } } } },
+		{ "a bad guid", json::object{ { "owners", json::array{ json::array{ "", "" } } }, { "items", json::array{ json::array{ "/a", "", "nope", 0, 0 } } } } },
+		{ "an unknown place", json::object{ { "owners", json::array{ json::array{ "", "" } } }, { "items", json::array{ json::array{ "/a", "res://sky.desc", "", 0, 7 } } } } },
+		{ "a list", json::array{} },
+	};
+	for (const auto& [why, references] : broken) {
+		db.reset();
+		open(true).save();
+		db.reset();
+		change_cached_record("res://levels/main.desc", [&references](json::object& record) { record["references"] = references; });
+		BOOST_TEST(!open(true).loaded_from_cache(), why);
+		BOOST_TEST(sky_usages().items.size() == 5u, why);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(InACaseInsensitiveTree_TheAssetIsFoundInAnyCase)
+{
+	open(false, true);
+	const edt::usage_report report = edt::find_usages(*db, nullptr, edt::usage_target{ res::tag::make("Sky.DESC"), std::nullopt });
+	BOOST_REQUIRE(report.path.has_value());
+	BOOST_TEST(report.path->view() == "res://sky.desc", "the spelling on the disk");
+	BOOST_REQUIRE(report.id.has_value());
+	BOOST_TEST(res::to_text(*report.id) == k_sky_guid);
+	BOOST_TEST(report.items.size() == 5u);
+	BOOST_TEST(at(report, "res://levels/main.desc", k_node + "/mesh/material") != nullptr, "found by the guid of the file");
+
+	const cmd::result answer = usages_command().invoke("asset.usages", json::object{ { "path", "res://SKY.desc" } });
+	BOOST_REQUIRE_MESSAGE(answer.ok, answer.error);
+	BOOST_TEST(std::string(answer.value.at("target").at("path").as_string()) == "res://sky.desc");
+}
+
+BOOST_AUTO_TEST_CASE(BeforeTheFilesAreRead_TheAnswerIsNotComplete)
+{
+	open(false, edt::platform_case_insensitive, false);
+	BOOST_TEST(!sky_usages().complete);
+	const cmd::result answer = usages_command().invoke("asset.usages", json::object{ { "path", "res://sky.desc" } });
+	BOOST_REQUIRE_MESSAGE(answer.ok, answer.error);
+	BOOST_TEST(!answer.value.at("complete").as_bool());
+	test_util::pump(tasks);
+	BOOST_TEST(sky_usages().complete);
+}
+
+BOOST_AUTO_TEST_CASE(AFileTooLargeToRead_IsListedOnTheFirstPageOnly)
+{
+	open(true).save();
+	db.reset();
+	change_cached_record("res://levels/main.desc", [](json::object& record) {
+		record.erase("references");
+		record["references_skipped"] = true;
+	});
+	BOOST_REQUIRE(open(true).loaded_from_cache());
+	const edt::usage_report report = sky_usages();
+	BOOST_TEST(report.skipped == std::vector<std::string>{ "res://levels/main.desc" });
+
+	auto& registry = usages_command();
+	const cmd::result first = registry.invoke("asset.usages", json::object{ { "path", "res://sky.desc" }, { "page_size", 1 } });
+	BOOST_REQUIRE_MESSAGE(first.ok, first.error);
+	const json::array& skipped = first.value.at("skipped").as_array();
+	BOOST_REQUIRE(skipped.size() == 1u);
+	BOOST_TEST(std::string(skipped[0].at("file").as_string()) == "res://levels/main.desc");
+	BOOST_TEST(std::string(skipped[0].at("reason").as_string()) == "too_large");
+	BOOST_REQUIRE(first.value.as_object().contains("next_cursor"));
+	const cmd::result second = registry.invoke("asset.usages",
+		json::object{ { "path", "res://sky.desc" }, { "page_size", 1 }, { "cursor", first.value.at("next_cursor") } });
+	BOOST_REQUIRE_MESSAGE(second.ok, second.error);
+	BOOST_TEST(second.value.at("skipped").as_array().empty());
 }
 
 BOOST_AUTO_TEST_CASE(ADescBiggerThanTheLimit_IsSkipped)
@@ -195,10 +306,11 @@ BOOST_AUTO_TEST_CASE(ADescBiggerThanTheLimit_IsSkipped)
 	const edt::asset_content content = edt::read_asset_content(layer.path(), "levels/main.desc", true, 16);
 	BOOST_TEST(content.ok);
 	BOOST_TEST(content.references_skipped);
-	BOOST_TEST(content.references.empty());
+	BOOST_TEST(edt::references_in(content.references).empty());
 	const edt::asset_content whole = edt::read_asset_content(layer.path(), "levels/main.desc", true, edt::asset_database::max_desc_bytes);
 	BOOST_TEST(!whole.references_skipped);
-	BOOST_TEST(whole.references.size() == 6u);
+	BOOST_REQUIRE(whole.references);
+	BOOST_TEST(whole.references->size() == 6u, "https:// is no reference to a file of the project");
 }
 
 BOOST_AUTO_TEST_CASE(TheManifest_IsAUsageToo)
@@ -216,13 +328,7 @@ BOOST_AUTO_TEST_CASE(TheManifest_IsAUsageToo)
 BOOST_AUTO_TEST_CASE(AssetUsages_AnswersByPathOrGuid_PageByPage)
 {
 	open();
-	cmd::command_registry commands;
-	edt::asset_usage_sources sources;
-	sources.assets = [this]() -> const edt::asset_database* { return db.get(); };
-	sources.manifest_file = [] { return std::string("game.snkproj"); };
-	sources.manifest = [] { return std::vector<edt::manifest_reference>{ { "/start_scene", "res://sky.desc" } }; };
-	const auto registered = edt::register_asset_usage_commands(commands, std::move(sources));
-	BOOST_REQUIRE(registered.size() == 1u);
+	usages_command();
 
 	const cmd::result by_path = commands.invoke("asset.usages", json::object{ { "path", "res://sky.desc" } });
 	BOOST_REQUIRE_MESSAGE(by_path.ok, by_path.error);
@@ -255,6 +361,14 @@ BOOST_AUTO_TEST_CASE(AssetUsages_AnswersByPathOrGuid_PageByPage)
 		== cmd::codes::invalid_args);
 	BOOST_TEST(commands.invoke("asset.usages", json::object{ { "path", "engine://sky.desc" } }).code == cmd::codes::invalid_args);
 	BOOST_TEST(commands.invoke("asset.usages", json::object{ { "guid", "not-a-guid" } }).code == cmd::codes::invalid_args);
+	for (const std::string_view cursor : { "zz", "abc", "" }) {
+		BOOST_TEST(commands.invoke("asset.usages", json::object{ { "path", "res://sky.desc" }, { "cursor", cursor } }).code
+			== cmd::codes::invalid_args, cursor);
+	}
+	for (const int size : { 0, 201, -1 }) {
+		BOOST_TEST(commands.invoke("asset.usages", json::object{ { "path", "res://sky.desc" }, { "page_size", size } }).code
+			== cmd::codes::invalid_args, size);
+	}
 }
 
 // "Used by" in the asset browser asks the database only when another asset is picked or the database moved, not at every
