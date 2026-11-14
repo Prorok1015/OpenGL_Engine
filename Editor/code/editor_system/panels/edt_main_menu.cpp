@@ -64,6 +64,7 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 {
 	std::vector<registration> out;
 	out.push_back(actions.add_menu("File"));
+	out.push_back(actions.add_menu("Project"));
 	out.push_back(actions.add_menu("Edit"));
 	out.push_back(actions.add_menu(std::string(view_menu_name)));
 	out.push_back(actions.add_menu("Build"));

@@ -44,6 +44,8 @@
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
 #include "edt_migration_commands.h"
+#include "edt_migration_window_model.h"
+#include "edt_migration_panel.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -842,6 +844,30 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_registrations.push_back(std::move(command));
 		}
 	}
+	// EPIC-58 S8 (#761): Project > Migrate Project... opens the Project Migration window, which runs the two commands above as
+	// a person's calls (origin ui) and takes the migration's answer from job_finished.
+	{
+		migration_window_model::ports ports;
+		ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
+		ports.open_file = [this, &data](const std::string& path) {
+			if (!data.has_value<prj::project_context>()) return;
+			const prj::project_context& project = data.require<prj::project_context>();
+			const std::filesystem::path file = (project.root / std::filesystem::path(std::u8string(path.begin(), path.end()))).lexically_normal();
+			for (const std::filesystem::path& content : project.content_roots) {
+				const std::filesystem::path relative = file.lexically_relative(content.lexically_normal());
+				if (relative.empty() || *relative.begin() == "..") continue;
+				if (!open_asset(res::tag::make(relative.generic_string()), false)) {
+					egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
+				}
+				return;
+			}
+			egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
+		};
+		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));
+		add_panel(m_migration_panel, dock_slot::floating, false);
+		m_registrations.push_back(register_migration_window_action(m_context->actions(),
+			[&data] { return data.has_value<prj::project_context>(); }, [this] { open_migration_window(); }));
+	}
 	m_file_menu->attach_window_close(wnd_sys);
 
 	game_builder_options build_options;
@@ -1507,6 +1533,13 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		draw_play_status();
 		m_live_mode->draw_status();
 	});
+}
+
+void edt::editor_system::open_migration_window()
+{
+	if (m_migration_panel == nullptr) return;
+	m_context->panels().set_open(m_migration_panel->get_id(), true);
+	m_migration_panel->show_and_plan();
 }
 
 void edt::editor_system::open_agents_panel()

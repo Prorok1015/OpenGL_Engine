@@ -57,6 +57,7 @@ namespace edt {
 	class vcs_service;
 	class forge_service;
 	class forge_account_panel;
+	class migration_panel;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -201,6 +202,8 @@ namespace edt {
 		void draw_agent_status();
 		void draw_agent_policy_notice();
 		void open_agents_panel();
+		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
+		void open_migration_window();
 
 	public:
 		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
@@ -233,6 +236,8 @@ namespace edt {
 		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
 		// Git Account (#458 PR-4): the person sets the forge tokens here; floating, closed by default.
 		std::shared_ptr<forge_account_panel>   m_forge_account_panel;
+		// Project Migration (EPIC-58 S8, #761): floating, closed by default.
+		std::shared_ptr<migration_panel>       m_migration_panel;
 		// Owner of the Git Account jobs (token save/remove/probe): not under SNK_HAS_ASSIMP like the import's, so it is here.
 		ds::lifetime                           m_forge_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		// The console's feed from the engine log; removed with the editor system.
