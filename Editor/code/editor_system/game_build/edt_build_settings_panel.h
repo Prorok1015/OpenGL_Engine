@@ -31,12 +31,17 @@ namespace edt
 		{
 			m_model.set_on_settings_applied(std::move(applied));
 		}
-		// build.json was written elsewhere (Build > Live Mode): read the files again unless edits are queued.
-		void refresh_if_clean();
 		// See build_settings_model::set_stop_background.
 		void set_stop_background(std::function<void()> cancel) { m_model.set_stop_background(std::move(cancel)); }
 		// Why live mode cannot be turned on now (empty: it can); null: it always can.
 		void set_live_unavailable_reason(std::function<std::string()> reason) { m_live_unavailable = std::move(reason); }
+		// The live mode switch: what it is now and the person's click on it (live_mode::set_enabled, kept in the
+		// person's own settings, #908), never build.json. Null: the switch is not shown.
+		void set_live_switch(std::function<bool()> enabled, std::function<void(bool)> set)
+		{
+			m_live_enabled = std::move(enabled);
+			m_set_live_enabled = std::move(set);
+		}
 
 	protected:
 		void on_before_begin() override;
@@ -54,6 +59,8 @@ namespace edt
 
 		std::function<std::optional<std::filesystem::path>()> m_project_root;
 		std::function<std::string()> m_live_unavailable;
+		std::function<bool()> m_live_enabled;
+		std::function<void(bool)> m_set_live_enabled;
 		build_settings_model m_model;
 		bool m_estimated = false;
 		bool m_reload_on_open = true;

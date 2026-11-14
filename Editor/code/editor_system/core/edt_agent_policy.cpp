@@ -736,11 +736,8 @@ namespace edt
 		return out;
 	}
 
-	approved_snapshot_location approved_snapshot_for(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root)
+	std::string project_settings_key(const std::filesystem::path& canonical)
 	{
-		std::error_code ec;
-		std::filesystem::path canonical = std::filesystem::weakly_canonical(project_root, ec);
-		if (ec) canonical = project_root.lexically_normal();
 		std::string key = fs_paths::utf8_of(canonical);
 		for (char& ch : key) {
 			if (ch == '\\') ch = '/';
@@ -749,6 +746,23 @@ namespace edt
 #endif
 		}
 		while (key.size() > 1 && key.back() == '/') key.pop_back();
+		return key;
+	}
+
+	std::optional<std::string> canonical_project_settings_key(const std::filesystem::path& project_root)
+	{
+		std::error_code ec;
+		const std::filesystem::path canonical = std::filesystem::weakly_canonical(project_root, ec);
+		if (ec || !canonical.is_absolute()) return std::nullopt;
+		return project_settings_key(canonical);
+	}
+
+	approved_snapshot_location approved_snapshot_for(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root)
+	{
+		std::error_code ec;
+		std::filesystem::path canonical = std::filesystem::weakly_canonical(project_root, ec);
+		if (ec) canonical = project_root.lexically_normal();
+		const std::string key = project_settings_key(canonical);
 		return { personal_settings_dir / "agent_policy_approved" / (std::format("{:016x}", fnv1a_64(key)) + ".json"), key };
 	}
 
