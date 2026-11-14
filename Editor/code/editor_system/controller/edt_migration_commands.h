@@ -4,6 +4,7 @@
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/resource/res_tag.h>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -64,6 +65,15 @@ namespace edt
 		std::function<void(bool open)> show_progress;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
+		// Whether `ticket` was approved by agent_confirmations itself for a retry (agent_confirmations::approved_internally),
+		// not by a person; null: never.
+		std::function<bool(std::string_view ticket)> approved_internally;
+		// What moves whenever the code that migrates can change: the game layer, whose desc types hold the steps, is
+		// replaced (a module loaded, reloaded or taken back). Part of the fingerprint; null: 0.
+		std::function<std::uint64_t()> code_identity;
+		// The migration stopped with an exception: the level was left detached and must not be saved over the half migrated
+		// files; `reason` says how to roll it back.
+		std::function<void(const std::string& reason)> level_left_detached;
 		// Tests only: stands in for prj::migration::apply_migration (one that throws); null: the real one.
 		std::function<prj::migration::apply_outcome(const prj::migration::migration_plan&, const prj::migration::apply_context&)> apply;
 	};

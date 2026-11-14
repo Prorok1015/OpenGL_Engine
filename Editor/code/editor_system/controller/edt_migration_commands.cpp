@@ -29,7 +29,8 @@ namespace {
 	namespace pmg = prj::migration;
 
 	constexpr std::size_t k_max_shown = 32;
-	// What a person was shown lives as long as the question about it.
+	// What a person was shown lives as long as the question about it; an approved plan that met `busy` lives as long again
+	// from that refusal, well past agent_confirmations::busy_wait (5 s), so every retry finds it.
 	constexpr auto k_shown_lifetime = cmd::command_registry::confirmation_lifetime;
 	// How often the job's thread looks at its stop token while it waits for the main thread.
 	constexpr std::chrono::milliseconds k_wait_step{ 50 };
@@ -130,12 +131,13 @@ namespace {
 		return extension == ".desc" || extension == ".resource";
 	}
 
-	// The plan as the answer gives it (every file's steps and warnings, the project steps, what is skipped, the manifest)
-	// and every byte of the project it was made from.
-	std::uint64_t fingerprint_of(const fs::path& root, const pmg::migration_plan& plan)
+	// The plan as the answer gives it (every file's steps and warnings, the project steps, what is skipped, the manifest),
+	// every byte of the project it was made from, and the code that would migrate it.
+	std::uint64_t fingerprint_of(const fs::path& root, const pmg::migration_plan& plan, std::uint64_t code_identity)
 	{
 		const std::uintmax_t max_bytes = pmg::scan_options{}.max_file_bytes;
 		fnv1a_hash hash;
+		hash.add_part(std::to_string(code_identity));
 		hash.add_part(json::serialize(plan_json(plan)));
 		hash.add_file(root, fs_paths::path_from_utf8(prj::k_manifest_file_name), max_bytes, true);
 		std::vector<std::pair<std::string, std::string_view>> files;
@@ -266,7 +268,7 @@ namespace {
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return std::string("This request will be refused: no project is open");
 			const pmg::migration_plan plan = make_plan(*root);
-			remember(key_of(call.from), call.confirmation, fingerprint_of(*root, plan));
+			remember(key_of(call.from), call.confirmation, fingerprint_of(*root, plan, code_identity()));
 
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
 			std::string text = std::format("Migrate the project '{}' in place\n  {}\n  {} files, {} project steps", name,
@@ -301,12 +303,16 @@ namespace {
 			// the confirmation.
 			const bool person = call.from.kind == cmd::origin_kind::ui;
 			const std::string key = key_of(call.from);
-			shown_plan* shown = person ? nullptr : find_shown(key, call.confirmation);
-			if (!person && !shown) return cmd::result::failure(cmd::codes::denied, "the plan was not shown to a person; ask again");
+			const bool retry = m_deps.approved_internally && m_deps.approved_internally(call.confirmation);
+			shown_plan* shown = person ? nullptr : find_shown(key, call.confirmation, retry);
+			if (!person && !shown) {
+				return cmd::result::failure(cmd::codes::denied, retry ? "the plan the person approved is no longer kept; ask again"
+					: "the plan was not shown to a person; ask again");
+			}
 			// Refused for now: a retry (agent_confirmations repeats a `busy` with a fresh ticket, whose description sees the
 			// project as it is then) is still judged by the plan the person approved.
-			const auto refuse = [shown](std::string code, std::string message) {
-				if (shown) shown->approved = true;
+			const auto refuse = [this, shown, &key](std::string code, std::string message) {
+				if (shown) keep_approved(shown, key);
 				return cmd::result::failure(std::move(code), std::move(message));
 			};
 			if (m_running) return refuse(cmd::codes::busy, "a migration of the project is already running");
@@ -346,8 +352,8 @@ namespace {
 		static constexpr const char* k_no_project = "no_project";
 
 		// A plan a person was shown, by caller and by the ticket its question got (empty: described for a call allowed
-		// without a question). `approved`: a run the person approved was refused for now (busy): this record judges the
-		// retries, and a later question of the caller does not replace it.
+		// without a question). `approved`: a run the person approved was refused for now (busy): this record alone judges
+		// the retries, a later question of the caller does not replace it and nothing evicts it.
 		struct shown_plan
 		{
 			std::string key;
@@ -373,21 +379,43 @@ namespace {
 			std::erase_if(m_shown, [&](const shown_plan& shown) { return at - shown.at > k_shown_lifetime; });
 		}
 
-		// A new question of the caller replaces its unanswered one, never an approved one.
+		std::uint64_t code_identity() const
+		{
+			return m_deps.code_identity ? m_deps.code_identity() : 0;
+		}
+
+		// A new question of the caller replaces its unanswered one, never an approved one. When every entry is taken the
+		// oldest unanswered one goes; with only approved ones left nothing is recorded (its call is then denied).
 		void remember(std::string key, std::string ticket, std::uint64_t value)
 		{
 			forget_expired();
 			std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && !shown.approved; });
-			if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
+			if (m_shown.size() >= k_max_shown) {
+				const auto unanswered = std::ranges::find_if(m_shown, [](const shown_plan& shown) { return !shown.approved; });
+				if (unanswered == m_shown.end()) return;
+				m_shown.erase(unanswered);
+			}
 			m_shown.push_back({ std::move(key), std::move(ticket), value, now(), false });
 		}
 
-		// The approved record of the caller first; else the one described for this very ticket.
-		shown_plan* find_shown(const std::string& key, const std::string& ticket)
+		// The run of `shown` was approved and refused for now: it becomes the caller's one approved record, with a lifetime
+		// counted from now.
+		void keep_approved(shown_plan* shown, const std::string& key)
+		{
+			shown->approved = true;
+			shown->at = now();
+			std::erase_if(m_shown, [&](const shown_plan& entry) { return entry.key == key && entry.approved && &entry != shown; });
+		}
+
+		// A retry agent_confirmations approved itself: the caller's approved record only, never one described for the
+		// retry's own ticket. A ticket a person answered: the record of that ticket. No ticket (an answer given in
+		// advance): the approved record first, else the one described for the call.
+		shown_plan* find_shown(const std::string& key, const std::string& ticket, bool retry)
 		{
 			forget_expired();
 			const auto approved = std::ranges::find_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && shown.approved; });
-			if (approved != m_shown.end()) return &*approved;
+			if (retry) return approved != m_shown.end() ? &*approved : nullptr;
+			if (ticket.empty() && approved != m_shown.end()) return &*approved;
 			const auto asked = std::ranges::find_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && shown.ticket == ticket; });
 			return asked != m_shown.end() ? &*asked : nullptr;
 		}
@@ -446,7 +474,7 @@ namespace {
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return stop(run, error_value(cmd::codes::needs_input, *why));
 
 			const pmg::migration_plan plan = make_plan(run.root);
-			if (run.shown && fingerprint_of(run.root, plan) != *run.shown) {
+			if (run.shown && fingerprint_of(run.root, plan, code_identity()) != *run.shown) {
 				return stop(run, error_value(cmd::codes::denied, "the project changed since the question: ask again"));
 			}
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(run.root);
@@ -508,9 +536,11 @@ namespace {
 				// The files on disk may be half migrated: the level stays detached, so neither a load nor a save of the old level
 				// touches them before the rollback.
 				const std::vector<std::string> left = pmg::unfinished_migrations(run.root);
-				run.answer["level"] = level_json(run, false, left.empty()
+				const std::string reason = left.empty()
 					? std::string("the migration stopped: the level is not loaded from disk again")
-					: std::format("the migration stopped: the level is not loaded from disk again; run editor --migrate-rollback {} first", left.front()));
+					: std::format("the migration stopped: the level is not loaded from disk again; run editor --migrate-rollback {} first", left.front());
+				if (m_deps.level_left_detached) m_deps.level_left_detached(reason);
+				run.answer["level"] = level_json(run, false, reason);
 				return stop(run, std::move(run.answer));
 			}
 			if (m_deps.reopen_level) {

@@ -260,6 +260,11 @@ namespace edt {
 		module_swap_gate m_swap_gate{ [this](bool before) { follow_game_layer_change(before); } };
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
+		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
+		std::uint64_t m_game_layer_generation = 0;
+		// Set when a migration stopped with an exception and left the level detached: no save until another level is loaded
+		// or made, so the half migrated files stay as the rollback expects them.
+		std::optional<std::string> m_migration_stopped;
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load

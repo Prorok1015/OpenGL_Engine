@@ -115,7 +115,14 @@ namespace edt
 				return;
 			}
 			request.confirmation = ticket_id;
-			outcome = run_command(command_id, request);
+			m_internal_ticket = ticket_id;
+			try {
+				outcome = run_command(command_id, request);
+			} catch (...) {
+				m_internal_ticket.clear();
+				throw;
+			}
+			m_internal_ticket.clear();
 			// A ticket the registry did not consume is not left waiting for its lifetime.
 			m_commands.discard(ticket_id);
 		}

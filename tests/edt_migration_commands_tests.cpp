@@ -11,13 +11,17 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -103,6 +107,10 @@ struct migration_fixture : test_util::scene_env
 		deps.level_load_in_progress = [this] { return loading; };
 		deps.current_level_tag = [this] { return current_level; };
 		deps.register_implicit = [this](std::string_view id, std::function<bool()> fn) { implicit.emplace_back(std::string(id), std::move(fn)); };
+		deps.now = [this] { return clock; };
+		deps.approved_internally = [this](std::string_view ticket) { return internal_tickets.contains(std::string(ticket)); };
+		deps.code_identity = [this] { return code_identity; };
+		deps.level_left_detached = [this](const std::string& reason) { left_detached = reason; };
 		deps.apply = [this](const pmg::migration_plan& plan, const pmg::apply_context& context) {
 			return apply ? apply(plan, context) : pmg::apply_migration(plan, context);
 		};
@@ -189,6 +197,10 @@ struct migration_fixture : test_util::scene_env
 	std::vector<std::string> signaled;
 	std::vector<std::pair<std::string, std::function<bool()>>> implicit;
 	std::function<pmg::apply_outcome(const pmg::migration_plan&, const pmg::apply_context&)> apply;
+	std::chrono::steady_clock::time_point clock = std::chrono::steady_clock::now();
+	std::set<std::string> internal_tickets;
+	std::uint64_t code_identity = 0;
+	std::optional<std::string> left_detached;
 	std::vector<edt::registration> registrations;
 };
 
@@ -364,8 +376,23 @@ BOOST_AUTO_TEST_CASE(AnApplyThatThrows_IsCode6_AndTheLevelStaysDetached)
 	BOOST_TEST(closed);
 	BOOST_TEST(!attached);
 	BOOST_TEST(!loading);
+	BOOST_REQUIRE(left_detached.has_value());
+	BOOST_TEST(left_detached->find("--migrate-rollback test-stopped") != std::string::npos, *left_detached);
 	BOOST_TEST(rebuilds == 1);
 	BOOST_TEST((std::ranges::find(signaled, std::string{ "res://cameras/cam_v1.desc" }) != signaled.end()));
+}
+
+// The game module swapped between the question and the run: the code that would migrate is not the one asked about.
+BOOST_AUTO_TEST_CASE(ACodeChangeAfterTheQuestion_IsDenied)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = snapshot(copy.root());
+	static_cast<void>(ask());
+	++code_identity;
+	const json::object result = migrate();
+	BOOST_TEST(error_code_of(result) == cmd::codes::denied, json::serialize(result));
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == before));
 }
 
 // A level that does not load again is reported; the migration stands.
@@ -524,6 +551,15 @@ struct policy_fixture : migration_fixture
 		return std::string(asked.value.at("ticket").as_string());
 	}
 
+	// What agent_confirmations::run_approved does for a retry: a fresh ticket, described and approved by itself.
+	std::string retry_ticket()
+	{
+		const std::string ticket = ticket_of(call("project.migrate"));
+		BOOST_REQUIRE(commands.approve(ticket));
+		internal_tickets.insert(ticket);
+		return ticket;
+	}
+
 	cmd::result call_with(const std::string& ticket)
 	{
 		cmd::call request;
@@ -592,12 +628,86 @@ BOOST_AUTO_TEST_CASE(ARetryAfterBusy_IsJudgedByThePlanThePersonApproved)
 	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
 	const auto changed = snapshot(copy.root());
 	busy.reset();
-	const std::string retry = ticket_of(call("project.migrate"));
-	BOOST_REQUIRE(commands.approve(retry));
-	const json::object result = job_result(call_with(retry));
+	const json::object result = job_result(call_with(retry_ticket()));
 	BOOST_TEST(error_code_of(result) == cmd::codes::denied);
 	BOOST_TEST(!closed);
 	BOOST_TEST((snapshot(copy.root()) == changed));
+}
+
+// Approved at the end of the question's life: the approved plan lives on from the refusal, so the retry after the
+// question's lifetime is still judged by it, not by the plan described for the retry.
+BOOST_AUTO_TEST_CASE(AnApprovedPlan_OutlivesItsQuestion_AndJudgesTheRetry)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const std::string approved = ticket_of(call("project.migrate"));
+	clock += std::chrono::seconds(117);
+	BOOST_REQUIRE(commands.approve(approved));
+	busy = "Play is running";
+	BOOST_TEST(call_with(approved).code == cmd::codes::busy);
+
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
+	const auto changed = snapshot(copy.root());
+	clock += std::chrono::seconds(4);
+	busy.reset();
+	const json::object result = job_result(call_with(retry_ticket()));
+	BOOST_TEST(error_code_of(result) == cmd::codes::denied);
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == changed));
+}
+
+// A retry whose approved plan is gone is denied; it never falls back to the plan described for its own ticket.
+BOOST_AUTO_TEST_CASE(ARetryWithoutTheApprovedPlan_IsDenied)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = snapshot(copy.root());
+	const std::string approved = ticket_of(call("project.migrate"));
+	BOOST_REQUIRE(commands.approve(approved));
+	busy = "Play is running";
+	BOOST_TEST(call_with(approved).code == cmd::codes::busy);
+
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
+	const auto changed = snapshot(copy.root());
+	clock += std::chrono::seconds(300);
+	busy.reset();
+	const cmd::result retried = call_with(retry_ticket());
+	BOOST_TEST(retried.code == cmd::codes::denied, retried.error);
+	BOOST_TEST(implicit.empty());
+	BOOST_TEST((snapshot(copy.root()) == changed));
+	BOOST_TEST((snapshot(copy.root()) != before));
+}
+
+// Questions of other sessions fill the records: the approved plan stays, and still judges the retry.
+BOOST_AUTO_TEST_CASE(QuestionsOfOtherSessions_DoNotEvictTheApprovedPlan)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const std::string approved = ticket_of(call("project.migrate"));
+	BOOST_REQUIRE(commands.approve(approved));
+	busy = "Play is running";
+	BOOST_TEST(call_with(approved).code == cmd::codes::busy);
+	for (int i = 0; i < 40; ++i) static_cast<void>(ask(cmd::origin::agent(std::format("other-{}", i))));
+
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
+	const auto changed = snapshot(copy.root());
+	busy.reset();
+	const json::object result = job_result(call_with(retry_ticket()));
+	BOOST_TEST(error_code_of(result) == cmd::codes::denied);
+	BOOST_TEST((snapshot(copy.root()) == changed));
+}
+
+// The same with the project unchanged: the retry migrates, so the approved plan was still there.
+BOOST_AUTO_TEST_CASE(QuestionsOfOtherSessions_LeaveTheApprovedPlanToRun)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const std::string approved = ticket_of(call("project.migrate"));
+	BOOST_REQUIRE(commands.approve(approved));
+	busy = "Play is running";
+	BOOST_TEST(call_with(approved).code == cmd::codes::busy);
+	for (int i = 0; i < 40; ++i) static_cast<void>(ask(cmd::origin::agent(std::format("other-{}", i))));
+
+	busy.reset();
+	const json::object result = job_result(call_with(retry_ticket()));
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
 }
 
 // Headless, the --agent-policy file answers the question in advance; the plan is still described and checked.
