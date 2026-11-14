@@ -371,6 +371,27 @@ BOOST_AUTO_TEST_CASE(Draw_AValueOfTheWrongShapeIsLeftToTheJsonEditor)
 	BOOST_CHECK(desc::json_pointer_get(value, "/offset")->is_string()); // not overwritten
 }
 
+// #773: a tag field holding a {guid, path} reference keeps the tag widget (it shows the path); an object that is not a
+// good reference is left to the JSON editor.
+BOOST_AUTO_TEST_CASE(Draw_AReferenceObjectInATagFieldKeepsTheTagWidget)
+{
+	imgui_ctx imgui;
+	const auto& schema = widget_schema();
+	json::value value = ui::compose(schema, descs->schemas(), {});
+	const json::value reference = json::parse(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://textures/a.png"})");
+	desc::json_pointer_set(value, "/source", reference);
+
+	bool changed = true;
+	const drawn_list drawn = draw_twice(imgui, schema, descs->schemas(), value, &changed);
+	BOOST_CHECK(widget_at(drawn, "/source") == ui::widget::asset);
+	BOOST_CHECK(!changed);
+	BOOST_CHECK(*desc::json_pointer_get(value, "/source") == reference);
+
+	desc::json_pointer_set(value, "/source", json::parse(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","file":"a.png"})"));
+	const drawn_list bad = draw_twice(imgui, schema, descs->schemas(), value, &changed);
+	BOOST_CHECK(widget_at(bad, "/source") == ui::widget::json);
+}
+
 // ---------------------------------------------------------------- what the component has
 
 BOOST_AUTO_TEST_CASE(Compose_LayersTheDefaultsParentAndOverrides)
@@ -996,6 +1017,7 @@ namespace
 				imgui.frame([&] {
 					ImGui::Begin("schema_test");
 					ui::context ctx{ registry, {}, {} };
+					ctx.map_state = &state;
 					ctx.on_target = [this](std::string_view target, float x, float y) { targets[std::string(target)] = ImVec2(x, y); };
 					ui::edit_component_marked(schema, registry, &parent, overrides, "res://p.desc", {},
 						[&](json::value& shown, const ui::field_origin& origin) {
@@ -1020,6 +1042,7 @@ namespace
 		}
 
 		imgui_ctx imgui;
+		ui::map_edit_state state;
 		const desc::type_schema& schema;
 		const desc::schema_registry& registry;
 		json::object parent;
@@ -1298,6 +1321,146 @@ BOOST_AUTO_TEST_CASE(ApplyEdit_OfAMap_RoundTripsThroughTheOverrides)
 		v.at_pointer("/zones/z/max") = 7.0;
 		v.at_pointer("/zones").as_object().emplace("w", parse(R"({ "min": 1.0, "max": 5.0 })"));
 	});
+}
+
+BOOST_AUTO_TEST_CASE(AListPage_FollowsTheItemAndNeverPastTheEnd)
+{
+	BOOST_CHECK_EQUAL(ui::list_page_start(0, 7), 0u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(10, 7), 0u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(200, 0), 0u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(200, 49), 0u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(200, 50), 50u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(200, 199), 150u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(200, 5000), 150u);
+	BOOST_CHECK_EQUAL(ui::list_page_start(51, 50), 50u);
+}
+
+BOOST_AUTO_TEST_CASE(MoveListItem_ShiftsTheItemsBetween_AndRefusesWhatIsOutOfRange)
+{
+	json::array items = json::parse("[0,1,2,3]").as_array();
+	BOOST_CHECK(ui::move_list_item(items, 0, 2));
+	BOOST_CHECK(items == json::parse("[1,2,0,3]").as_array());
+	BOOST_CHECK(ui::move_list_item(items, 3, 0));
+	BOOST_CHECK(items == json::parse("[3,1,2,0]").as_array());
+	const json::array same = items;
+	BOOST_CHECK(!ui::move_list_item(items, 1, 1));
+	BOOST_CHECK(!ui::move_list_item(items, 4, 0));
+	BOOST_CHECK(!ui::move_list_item(items, 0, 4));
+	BOOST_CHECK(items == same);
+}
+
+namespace
+{
+	const desc::type_schema& register_rows(desc::desc_system& registered)
+	{
+		auto& registry = registered.schemas();
+		registered.register_schema(desc::parse_type_schema(parse(R"({
+			"name": "edt.row", "kind": "struct",
+			"fields": [ { "name": "scale", "kind": "f32", "default": 1.0 } ]
+		})")));
+		registered.register_schema(desc::parse_type_schema(parse(R"({
+			"name": "edt.rows", "kind": "component",
+			"fields": [ { "name": "rows", "kind": "array", "element": "structure", "ref_type": "edt.row" } ]
+		})"), &registry));
+		return *registered.find_schema("edt.rows");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AListItemProblem_NamesTheFieldAndWhatItExpects)
+{
+	const desc::type_schema& schema = register_rows(*descs);
+	const desc::field_schema* rows = schema.find_field("/rows");
+	BOOST_REQUIRE(rows != nullptr);
+	const auto& registry = descs->schemas();
+	BOOST_CHECK(ui::list_item_problem(*rows, json::parse(R"({"scale":2.0})"), registry).empty());
+	BOOST_CHECK(ui::list_item_problem(*rows, json::parse("{}"), registry).empty());
+	BOOST_CHECK_EQUAL(ui::list_item_problem(*rows, json::parse(R"({"scale":"wide"})"), registry), "/scale: expected a value of kind f32");
+	BOOST_CHECK_EQUAL(ui::list_item_problem(*rows, json::parse(R"({"gone":1})"), registry), "/gone: no such field");
+	BOOST_CHECK_EQUAL(ui::list_item_problem(*rows, json::parse("5"), registry), "expected an object of 'edt.row'");
+}
+
+BOOST_AUTO_TEST_CASE(TheRowsButtons_MoveAnItem_AsOneEdit)
+{
+	const desc::type_schema& schema = register_rows(*descs);
+	mark_driver driver(schema, descs->schemas(), {}, parse(R"({ "rows": [ { "scale": 1.0 }, { "scale": 2.0 }, { "scale": 3.0 } ] })"));
+	driver.frames(3);
+	driver.click("/rows/0#up");
+	BOOST_CHECK(driver.overrides == parse(R"({ "rows": [ { "scale": 1.0 }, { "scale": 2.0 }, { "scale": 3.0 } ] })"));
+	driver.click("/rows/1#up");
+	BOOST_CHECK(driver.overrides == parse(R"({ "rows": [ { "scale": 2.0 }, { "scale": 1.0 }, { "scale": 3.0 } ] })"));
+	driver.frames(2);
+	driver.click("/rows/1#down");
+	BOOST_CHECK(driver.overrides == parse(R"({ "rows": [ { "scale": 2.0 }, { "scale": 3.0 }, { "scale": 1.0 } ] })"));
+}
+
+BOOST_AUTO_TEST_CASE(AListOfTwoHundredItems_ShowsOnePageAtATime_AndAMoveCrossesThePageEdge)
+{
+	const desc::type_schema& schema = register_rows(*descs);
+	json::array rows;
+	for (int i = 0; i < 200; ++i) {
+		rows.push_back(json::object{ { "scale", static_cast<double>(i) } });
+	}
+	mark_driver driver(schema, descs->schemas(), {}, json::object{ { "rows", rows } });
+	driver.frames(3);
+	BOOST_CHECK(driver.targets.contains("/rows/49#down"));
+	BOOST_CHECK(!driver.targets.contains("/rows/50#down"));
+	BOOST_CHECK(driver.targets.contains("/rows#next"));
+
+	driver.click("/rows#next");
+	driver.targets.clear();
+	driver.frames(2);
+	BOOST_CHECK(!driver.targets.contains("/rows/49#down"));
+	BOOST_CHECK(driver.targets.contains("/rows/50#down"));
+	BOOST_CHECK(driver.overrides.at("rows") == rows);
+
+	driver.click("/rows/50#up");
+	const json::array& moved = driver.overrides.at("rows").as_array();
+	BOOST_REQUIRE_EQUAL(moved.size(), 200u);
+	BOOST_CHECK_EQUAL(moved[49].at("scale").to_number<double>(), 50.0);
+	BOOST_CHECK_EQUAL(moved[50].at("scale").to_number<double>(), 49.0);
+	BOOST_CHECK_EQUAL(moved[51].at("scale").to_number<double>(), 51.0);
+
+	// the page follows the item: it is on the first page now, and the person still sees it
+	driver.targets.clear();
+	driver.frames(2);
+	BOOST_CHECK(driver.targets.contains("/rows/49#up"));
+	BOOST_CHECK(!driver.targets.contains("/rows/50#up"));
+}
+
+BOOST_AUTO_TEST_CASE(AMovedList_InheritedFromTheParent_IsWrittenWhole_AndTheMoveBackLeavesNothing_ResetBringsTheParentsBack)
+{
+	const desc::type_schema& schema = register_rows(*descs);
+	const char* parent_rows = R"({ "rows": [ { "scale": 1.0 }, { "scale": 2.0 }, { "scale": 3.0 } ] })";
+	mark_driver driver(schema, descs->schemas(), parse(parent_rows), {});
+	driver.frames(3);
+	driver.click("/rows/1#up");
+	BOOST_CHECK(driver.overrides == parse(R"({ "rows": [ { "scale": 2.0 }, { "scale": 1.0 }, { "scale": 3.0 } ] })"));
+	driver.frames(2);
+	driver.click("/rows/1#up");
+	BOOST_CHECK(driver.overrides.empty());
+
+	driver.frames(2);
+	driver.click("/rows/2#up");
+	BOOST_CHECK(!driver.overrides.empty());
+	driver.frames(2);
+	driver.click("/rows#mark");
+	driver.frames(2);
+	driver.click("/rows#reset");
+	BOOST_CHECK(driver.overrides.empty());
+}
+
+BOOST_AUTO_TEST_CASE(MapEditState_ForgetsWhatWasTypedButKeepsTheListPages)
+{
+	ui::map_edit_state state;
+	state.new_keys[1] = "key";
+	state.rename_errors[2] = "taken";
+	state.list_pages[3] = 100;
+	state.forget_typed();
+	BOOST_CHECK(state.new_keys.empty());
+	BOOST_CHECK(state.rename_errors.empty());
+	BOOST_CHECK_EQUAL(state.list_pages.at(3), 100u);
+	state.clear();
+	BOOST_CHECK(state.list_pages.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

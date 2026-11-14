@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -85,6 +86,12 @@ namespace edt
 	// Every problem of the desc objects under `root` (the file's content): a root that is no object with a `__type`, an
 	// unknown `__type`, a `__version` other than the current one, a field the type does not have or a value that does not
 	// fit it, found in each object with a `__type` at any depth (a field holding an inline desc, an array of them).
-	// One entry per object at most, `json_path` the JSON pointer of the field in `resource`. Nothing is logged.
-	std::vector<res::diagnostic> validate_desc_tree(const desc::desc_system& descs, const boost::json::value& root, std::string_view resource);
+	// One entry per object at most, `json_path` the JSON pointer of the field in `resource`. Nothing is logged. A reference
+	// is a res:// string or {guid, path} (EPIC-57 section 4.4); `resources` (may be null) tells a guid no file holds.
+	std::vector<res::diagnostic> validate_desc_tree(const desc::desc_system& descs, const boost::json::value& root, std::string_view resource,
+		const res::resource_system* resources = nullptr);
+
+	// The root "__guid" string of a desc file's bytes, as the file has it (not checked as an ID); empty when it has none or
+	// is no JSON object. What a save that replaces the file keeps until the project's migration takes it out (#772).
+	std::string desc_root_guid(std::span<const std::byte> bytes);
 }

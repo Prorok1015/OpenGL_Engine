@@ -6,6 +6,7 @@
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -22,7 +23,8 @@ namespace json = boost::json;
 namespace fs = std::filesystem;
 namespace pmg = prj::migration;
 
-// EPIC-57's step assets.ids in the migration of EPIC-58 (#776 PR 1), on copies of the fixture of old versions (#750).
+// EPIC-57's steps assets.ids (#776 PR 1) and assets.ids_drop_desc_guid (#772) in the migration of EPIC-58, on copies of the
+// fixture of old versions (#750).
 namespace {
 
 constexpr std::string_view k_guid = "00000000-0000-4000-8000-0000000000b1";
@@ -147,7 +149,7 @@ BOOST_AUTO_TEST_CASE(EveryContentFile_GetsAResource_TheSecondRunHasNothingToDo)
 }
 
 // Two copies of one desc carry one __guid: the first by path keeps it as its ID, the other gets a new one, and both are
-// in the report. Neither desc loses its __guid before #772.
+// in the report. assets.ids_drop_desc_guid then takes the __guid out of both (#772), the copy's with a line of its own.
 BOOST_AUTO_TEST_CASE(ADescsGuid_IsItsId_ACopyGetsANewOne_BothAreReported)
 {
 	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
@@ -164,11 +166,92 @@ BOOST_AUTO_TEST_CASE(ADescsGuid_IsItsId_ACopyGetsANewOne_BothAreReported)
 	BOOST_TEST(any_note(outcome.report, std::string("res/worlds/w_v1.desc: ID ") + std::string(k_guid) + " from its __guid"));
 	BOOST_TEST(any_note(outcome.report, std::string("res/worlds/w_v2.desc: its __guid ") + std::string(k_guid) + " is already the ID of res/worlds/w_v1.desc"));
 	for (const std::string_view world : { "worlds/w_v1.desc", "worlds/w_v2.desc" }) {
-		const json::value saved = json::parse(read_text(copy.res() / world));
-		const json::value* guid = saved.as_object().if_contains("__guid");
-		BOOST_REQUIRE(guid != nullptr);
-		BOOST_TEST(guid->as_string() == k_guid);
+		BOOST_TEST(!json::parse(read_text(copy.res() / world)).as_object().contains("__guid"), world);
 	}
+	BOOST_TEST(any_note(outcome.report, std::string("res/worlds/w_v2.desc: its __guid \"") + std::string(k_guid) + "\" is taken out; the ID of the file is " + second));
+	BOOST_TEST(!any_note(outcome.report, "res/worlds/w_v1.desc: its __guid \""));
+}
+
+// #772: after the migration no desc has a __guid; its ID is the .resource, and a rollback puts the __guid back as it was.
+BOOST_AUTO_TEST_CASE(TheGuidOfADesc_IsTakenOutAfterItBecameTheId_ARollbackPutsItBack)
+{
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
+	const auto before = content_of(copy.root());
+	const pmg::migration_plan planned = plan();
+	BOOST_REQUIRE((std::ranges::find(planned.project_steps, "assets.ids_drop_desc_guid", &pmg::planned_project_step::id) != planned.project_steps.end()));
+
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned, context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
+	BOOST_TEST(id_in(copy.res() / "worlds/w_v1.desc.resource") == k_guid);
+	BOOST_TEST(!json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().contains("__guid"));
+	BOOST_TEST(plan().empty());
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// A desc of a lower content root that a higher one covers is not in the index, but has a .resource of its own beside it:
+// that is its ID, and its __guid goes too, so the next plan is empty.
+BOOST_AUTO_TEST_CASE(ACoveredDescOfALowerRoot_LosesItsGuidToItsOwnResource)
+{
+	json::object manifest = json::parse(read_text(copy.root() / "project.snkproj")).as_object();
+	manifest["content_roots"] = json::array{ "res", "base" };
+	write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+	res::asset_meta lower;
+	lower.guid = *res::asset_id_from_text(k_guid);
+	write_text(copy.root() / "base/worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
+	write_text(copy.root() / "base/worlds/w_v1.desc.resource", res::write_asset_meta(lower));
+
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* covered = scan.find("base/worlds/w_v1.desc");
+	BOOST_REQUIRE(covered != nullptr);
+	BOOST_TEST(covered->root_guid);
+	BOOST_TEST(covered->resource_path == "base/worlds/w_v1.desc.resource");
+
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
+	BOOST_TEST(!json::parse(read_text(copy.root() / "base/worlds/w_v1.desc")).as_object().contains("__guid"));
+	BOOST_TEST(id_in(copy.root() / "base/worlds/w_v1.desc.resource") == k_guid);
+	BOOST_TEST(plan().empty());
+}
+
+// A .resource bigger than the asset index reads (res::asset_meta_max_bytes) is invalid to the scan too, with the reason.
+BOOST_AUTO_TEST_CASE(AResourceBiggerThanTheIndexReads_IsInvalidToTheScan)
+{
+	const std::string text = read_text(copy.res() / "textures/with_meta.png.resource");
+	write_text(copy.res() / "textures/with_meta.png.resource", text + std::string(res::asset_meta_max_bytes, ' '));
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* sidecar = scan.find("res/textures/with_meta.png.resource");
+	BOOST_REQUIRE(sidecar != nullptr);
+	BOOST_TEST((sidecar->kind == pmg::file_class::invalid));
+	BOOST_TEST(sidecar->reason.find("too big") != std::string::npos, sidecar->reason);
+}
+
+// A .resource that does not read (two __guid after a bad merge) has no ID for the desc. After a migration, a desc with a
+// __guid and such a .resource does not ask for assets.ids_drop_desc_guid again: the step could not take the __guid out,
+// so it would be asked for on every open. (The .resource itself is invalid to the scan, which refuses a migration.)
+BOOST_AUTO_TEST_CASE(ADescWithAResourceThatDoesNotRead_DoesNotAskForTheStep)
+{
+	BOOST_REQUIRE(pmg::apply_migration(plan(), context()).refused.empty());
+	BOOST_REQUIRE(plan().empty());
+	const std::string id = id_in(copy.res() / "worlds/w_v1.desc.resource");
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), id));
+	write_text(copy.res() / "worlds/w_v1.desc.resource", "{\"__type\": \"resource_meta\", \"__version\": 1, \"__guid\": \"" + id
+		+ "\", \"__guid\": \"" + std::string(k_guid) + "\", \"importer\": \"\", \"settings\": {}, \"flags\": []}");
+
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* desc = scan.find("res/worlds/w_v1.desc");
+	BOOST_REQUIRE(desc != nullptr);
+	BOOST_TEST(desc->root_guid);
+	BOOST_TEST(desc->has_resource);
+	BOOST_TEST(desc->resource_unreadable);
+	const pmg::migration_plan planned = plan();
+	BOOST_TEST((std::ranges::find(planned.project_steps, "assets.ids_drop_desc_guid", &pmg::planned_project_step::id) == planned.project_steps.end()));
 }
 
 // A __guid that an existing .resource already holds is not given twice either.

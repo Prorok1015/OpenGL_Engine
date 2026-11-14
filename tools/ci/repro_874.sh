@@ -53,3 +53,4 @@ echo "::group::ldd"
 ldd "$tool"
 echo "::endgroup::"
 echo "summary: migration_v1 exit $rc, core/res exit $rc2"
+if [ "$rc" -eq 139 ] || [ "$rc2" -eq 139 ]; then echo "::error::desc_resave crashed at exit (#874)"; exit 1; fi

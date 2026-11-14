@@ -30,7 +30,9 @@ namespace edt
 	// edits code would run code without anyone being asked.
 	// A command with `risk` confirm or deny_by_default is at least ask / deny by default, and only an entry for that very
 	// command in the project's file lifts it: an entry for its category does not. `live` is allowed here, but effective_mode
-	// denies it whenever the live mode is off, whatever any layer says.
+	// denies it whenever the live mode is off, whatever any layer says. `project_migrate` is never allowed by a layer: the project
+	// file comes from the repository, so an `allow` there (for the category or for a command of it) is an `ask`, in the
+	// personal layer too (needs_consent_each_call); only a person's answer, or headless the --agent-policy file, runs it.
 	constexpr cmd::policy_mode default_mode(cmd::agent_category category)
 	{
 		using enum cmd::agent_category;
@@ -53,10 +55,18 @@ namespace edt
 		case vcs_push: return policy_mode::allow;
 		// Uses the stored token and the network: asks even for the reads (#458).
 		case vcs_forge: return policy_mode::ask;
+		// Writes every outdated file of the project; a person approves each plan (the command's risk asks anyway).
+		case project_migrate: return policy_mode::ask;
 		case unset:
 		case not_for_agents: break;
 		}
 		return policy_mode::deny;
+	}
+
+	// A layer's `allow` for a call judged by `category` is held to `ask` (project_migrate, see default_mode).
+	constexpr bool needs_consent_each_call(const cmd::command_desc& command, cmd::agent_category category)
+	{
+		return command.category == cmd::agent_category::project_migrate || category == cmd::agent_category::project_migrate;
 	}
 
 	cmd::policy_mode default_mode(const cmd::command_desc& command);

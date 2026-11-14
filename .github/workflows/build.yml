@@ -667,7 +667,6 @@ jobs:
 
       # #874 repro only (wip/874-repro, never merged).
       - name: "#874 repro: desc_resave with project_migration under ASan"
-        continue-on-error: true
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=0
           UBSAN_OPTIONS: print_stacktrace=1
@@ -731,6 +730,10 @@ jobs:
       # #219: what the SDK package refuses of an MSVC consumer (an older MSVC than the engine's, a static runtime).
       - name: Check the SDK's MSVC rule
         run: cmake -P tools/ci/test_sdk_msvc_check.cmake
+
+      # The link graph checks (#874): what a link entry names, and snk_check_engine_copies() on a toy project.
+      - name: Link graph checks self-test
+        run: cmake -P tools/ci/test_link_graph.cmake
 
       # #219: a game module compiles the public headers without /utf-8, in the code page of the user's machine.
       - name: Check the public headers are ASCII
@@ -799,10 +802,19 @@ jobs:
 
       # #874 repro only (wip/874-repro, never merged).
       - name: "#874 repro: desc_resave with project_migration"
-        continue-on-error: true
         run: |
           sudo apt-get install -y gdb > /dev/null
           tools/ci/repro_874.sh build/ci-linux-coverage gdb
+
+      # The shared engine carries config_system: a copy of it in the tool made the engine's cfg variables register into
+      # the tool's registry and crash at exit (#874). snk_check_engine_copies() refuses such a link at configure time;
+      # this checks the binary itself.
+      - name: desc_resave carries no engine component code
+        run: |
+          tool=build/ci-linux-coverage/tools/desc_resave/desc_resave
+          if nm -C --defined-only "$tool" | grep -E ' [TDB] cfg::(registrate_variable|unregistrate_variable|set_variable)\('; then
+            echo "::error::desc_resave defines config_system functions that snk_engine already has (#874)"; exit 1
+          fi
 
       - name: Compiler cache statistics
         if: always()

@@ -138,6 +138,8 @@ include(SnkPch)
 include(SnkInstall)
 # snk_check_mcp_isolation(): the MCP server module stays out of the engine, games and the SDK.
 include(SnkMcpIsolation)
+# snk_check_engine_copies(): a binary that links the shared engine links none of its components again (#874).
+include(SnkEngineCopies)
 # snk_add_game_host(): a shipping executable with its game module compiled in (#592).
 include(SnkGameHost)
 
@@ -242,6 +244,7 @@ snk_pch_create_owner()
 snk_apply_target_defaults()
 # Fails the configure if the engine, a game target or the SDK can reach snk_mcp_server (tools/ci/check_mcp_isolation.sh is the source-level twin).
 snk_check_mcp_isolation()
+snk_check_engine_copies()
 snk_install_sdk()
 
 # Assimp hard-codes /Zi into its Debug C++ flags (lib3dparty/assimp/CMakeLists.txt); sccache then

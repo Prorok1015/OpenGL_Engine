@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/project_migration/pmg_project_steps.h>
 #include <snk/project_migration/pmg_scan.h>
+#include <boost/json/object.hpp>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -103,6 +104,9 @@ namespace prj::migration
 
 	// The report as report.md has it.
 	std::string report_text(const migration_report& report);
+
+	// The report as report.json (the journal) has it.
+	boost::json::object report_to_json(const migration_report& report);
 
 	// Refuses what plan_refusal names; a newer file is left as it is (partial). An empty plan writes nothing (status ok, no id). Otherwise creates the
 	// journal (status in_progress; its folder is taken exclusively, so two processes never share an id) before the first

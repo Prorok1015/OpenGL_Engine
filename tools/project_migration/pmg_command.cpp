@@ -57,18 +57,18 @@ namespace
 		const json::value* status = journal.as_object().if_contains("status");
 		return status && status->is_string() ? std::string(status->as_string()) : std::string{};
 	}
+}
 
-	int exit_code_of(migration_status status)
-	{
-		switch (status) {
-		case migration_status::ok: return k_exit_done;
-		case migration_status::partial: return k_exit_partial;
-		case migration_status::rolled_back: return k_exit_rolled_back;
-		case migration_status::rollback_failed:
-		case migration_status::in_progress: return k_exit_rollback_failed;
-		}
-		return k_exit_rollback_failed;
+int prj::migration::exit_code_of(migration_status status)
+{
+	switch (status) {
+	case migration_status::ok: return k_exit_done;
+	case migration_status::partial: return k_exit_partial;
+	case migration_status::rolled_back: return k_exit_rolled_back;
+	case migration_status::rollback_failed:
+	case migration_status::in_progress: return k_exit_rollback_failed;
 	}
+	return k_exit_rollback_failed;
 }
 
 std::string prj::migration::plan_text(const migration_plan& plan)

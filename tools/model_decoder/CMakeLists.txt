@@ -9,9 +9,11 @@ endif()
 
 # snk_model_decoder is what ships. snk_model_decoder_selftest is the same program built with the --self-test-* flags
 # (sleep, allocate, start a helper copy) for the process tests of the runner; it is never installed.
+# config_system is in snk_engine when it is shared: its headers only, or the binary carries a second registry (#874).
+snk_usage_only(_model_decoder_config snk::config_system)
 foreach(_target snk_model_decoder snk_model_decoder_selftest)
 	add_executable(${_target} main.cpp)
-	target_link_libraries(${_target} PRIVATE snk::model_import snk::engine snk::engine_api snk::config_system snk::sanitizers)
+	target_link_libraries(${_target} PRIVATE snk::model_import snk::engine snk::engine_api ${_model_decoder_config} snk::sanitizers)
 	if(SNK_ENGINE_SHARED AND MSVC)
 		target_link_libraries(${_target} PRIVATE Boost::json)
 	endif()
