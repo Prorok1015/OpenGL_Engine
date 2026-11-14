@@ -2671,6 +2671,18 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 			const git_output attached = run_write(git, { "symbolic-ref", "-m", "checkout: moving to " + attach, "HEAD",
 				"refs/heads/" + attach }, task.stop);
 			if (auto failure = write_failure_of(attached, task)) return std::move(*failure);
+			// A fetch into refs/heads/* may move the branch between the check and the attach: HEAD goes back to the
+			// checked commit, which the index and the work tree already are, so nothing is written to the disk.
+			const git_output after = run_git(git, { "rev-parse", "--verify", "--quiet",
+				"refs/heads/" + attach + "^{commit}" }, task.stop, k_read_cap);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!succeeded(after) || trim(after.out) != checked_oid) {
+				const git_output detached = run_write(git, { "checkout", "-q", "--no-recurse-submodules", "--detach",
+					checked_oid, "--" }, task.stop);
+				if (auto failure = tree_write_failure_of(detached, task)) return std::move(*failure);
+				return error_json("git_failed", std::format("branch '{}' moved during the checkout: the checked "
+					"commit {} is checked out detached", vcs::valid_utf8(attach), checked_oid), out.err, -1);
+			}
 		}
 		if (!upstream.empty()) {
 			// The branch stays when this fails: the checkout is done, only the tracking is missing.

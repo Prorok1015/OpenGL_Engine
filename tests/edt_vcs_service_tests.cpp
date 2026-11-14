@@ -4545,6 +4545,42 @@ BOOST_AUTO_TEST_CASE(AnAgentsPush_UsesAnExplicitRefspec_WhateverTheUpstreamSays)
 	}
 }
 
+// Review of #909: a branch that moves after the checkout is not attached: HEAD goes back to the checked commit,
+// detached, and the job fails.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfABranchThatMovesMeanwhile_StaysDetached)
+{
+	const std::string moved = "2222222222222222222222222222222222222222";
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	edt::vcs_options options = fake_options();
+	int reads = 0;
+	std::string checked;
+	options.run = [inner = options.run, &reads, &checked, moved](const fs::path& git,
+		const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>& on_line, std::stop_token stop) -> platform::process_result {
+		if (!has_arg(args, "refs/heads/side^{commit}")) return inner(git, args, opts, on_line, stop);
+		// The plan and the check before the attach read the checked commit; the read after it, a moved branch.
+		if (++reads <= 2) return inner(git, args, opts, [&checked, &on_line](std::string_view line) {
+			checked = std::string(line);
+			on_line(line);
+		}, stop);
+		on_line(moved + "\n");
+		return exited(0);
+	};
+	make_service(std::move(options));
+
+	const json::value result = finish(service->start_checkout("side", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(result, "git_failed"), json::serialize(result));
+	BOOST_TEST(reads == 3);
+	const auto* checkout = last_call_with(calls, "checkout");
+	BOOST_REQUIRE(checkout);
+	const auto& last = *checkout;
+	BOOST_TEST(has_arg(last, "--detach"));
+	while (!checked.empty() && (checked.back() == '\n' || checked.back() == '\r')) checked.pop_back();
+	BOOST_TEST(has_arg(last, checked));
+	BOOST_TEST(!has_arg(last, moved));
+}
+
 // Review of #909: an open project the service cannot place in the repository is not checked out or pulled into by
 // an agent (nothing tells what would change in it); a person can.
 BOOST_AUTO_TEST_CASE(AGuardedCheckout_WhenTheProjectIsNotInTheRepository_IsDenied)
