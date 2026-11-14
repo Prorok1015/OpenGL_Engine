@@ -160,6 +160,24 @@ bool wait_past(const std::atomic<int>& counter, int above)
 	return true;
 }
 
+// The reader threads of a test: stopped and joined however the test ends, a failed REQUIRE included (a joinable
+// std::thread destroyed would terminate the whole run).
+struct reader_threads
+{
+	~reader_threads() { join(); }
+
+	void join()
+	{
+		stop = true;
+		for (auto& thread : threads) {
+			if (thread.joinable()) thread.join();
+		}
+	}
+
+	std::atomic<bool> stop = false;
+	std::vector<std::thread> threads;
+};
+
 constexpr int k_readers = 4;
 constexpr int k_rounds = 200;
 // Every so many rounds the main thread waits until the readers got through again: they ran during the rounds.
@@ -168,14 +186,13 @@ constexpr int k_rounds_per_check = 20;
 BOOST_AUTO_TEST_CASE(RemountingWhileOtherThreadsRead_NeverReadsAGoneResolver)
 {
 	rs->registrate_resolver<held_resolver>(k_protocol, record);
-	std::atomic<bool> stop = false;
 	std::atomic<int> started = 0;
 	std::atomic<int> answered = 0;
-	std::vector<std::thread> readers;
+	reader_threads readers;
 	for (int i = 0; i < k_readers; ++i) {
-		readers.emplace_back([&] {
+		readers.threads.emplace_back([&] {
 			bool counted = false;
-			while (!stop) {
+			while (!readers.stop) {
 				if (rs->fetch_data(k_tag)) {
 					++answered;
 					if (!counted) {
@@ -195,8 +212,7 @@ BOOST_AUTO_TEST_CASE(RemountingWhileOtherThreadsRead_NeverReadsAGoneResolver)
 			BOOST_REQUIRE(wait_past(answered, answered.load()));
 		}
 	}
-	stop = true;
-	for (auto& reader : readers) reader.join();
+	readers.join();
 
 	BOOST_TEST(record->alive.load() == 1, "every unmounted resolver is gone, the last one is mounted");
 	BOOST_TEST(!record->destroyed_during_call.load());
@@ -204,14 +220,13 @@ BOOST_AUTO_TEST_CASE(RemountingWhileOtherThreadsRead_NeverReadsAGoneResolver)
 
 BOOST_AUTO_TEST_CASE(AddingAndRemovingAnAdapterWhileOtherThreadsLookItUp)
 {
-	std::atomic<bool> stop = false;
 	std::atomic<int> started = 0;
 	std::atomic<int> found = 0;
-	std::vector<std::thread> readers;
+	reader_threads readers;
 	for (int i = 0; i < k_readers; ++i) {
-		readers.emplace_back([&] {
+		readers.threads.emplace_back([&] {
 			bool counted = false;
-			while (!stop) {
+			while (!readers.stop) {
 				if (!rs->registered_extensions(probe_adapter::INFO).empty()) ++found;
 				if (!counted) {
 					counted = true;
@@ -229,8 +244,7 @@ BOOST_AUTO_TEST_CASE(AddingAndRemovingAnAdapterWhileOtherThreadsLookItUp)
 		}
 		rs->unregistrate_adapter(probe_adapter::INFO);
 	}
-	stop = true;
-	for (auto& reader : readers) reader.join();
+	readers.join();
 
 	BOOST_TEST(found.load() > 0);
 	BOOST_TEST(rs->registered_extensions(probe_adapter::INFO).empty());
