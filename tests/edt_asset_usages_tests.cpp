@@ -506,7 +506,7 @@ BOOST_AUTO_TEST_CASE(TheIndex_FindsWhatAWalkOverEveryReferenceFinds)
 		}
 		++asked;
 	}
-	BOOST_TEST(asked >= 6u);
+	BOOST_TEST(asked == 5u, "sky, other, levels/main, levels/second, materials/child");
 	BOOST_TEST(index.builds() == 1u);
 
 	const edt::usage_report child = index.find(*db, nullptr, edt::usage_target{ res::tag::make("materials/child.desc"), std::nullopt });
