@@ -139,7 +139,8 @@ namespace rnd::driver
 		constexpr bool is_invisible_code_point(std::uint32_t cp)
 		{
 			return cp == 0x00AD || cp == 0x061C || (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x2028 && cp <= 0x202E)
-				|| cp == 0x2060 || (cp >= 0x2066 && cp <= 0x2069) || cp == 0xFEFF;
+				|| (cp >= 0x2060 && cp <= 0x2064) || (cp >= 0x2066 && cp <= 0x206F) || cp == 0x180E || cp == 0xFEFF
+				|| (cp >= 0xFFF9 && cp <= 0xFFFB) || cp == 0xE0001 || (cp >= 0xE0020 && cp <= 0xE007F);
 		}
 
 		// Text from a file for an error message: at most max_bytes, cut between code points, with every control,
