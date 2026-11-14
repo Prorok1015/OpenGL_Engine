@@ -31,13 +31,9 @@ struct repo_file {
 	res::tag tag;
 	std::vector<std::byte> bytes;
 	bool is_desc = false;
+	bool of_a_template = false;
+	std::string root_type;
 };
-
-// A project template's res/config holds files of the types its game module declares (#800); the engine alone does not know them.
-bool is_game_type_file_of_a_template(std::string_view protocol, std::string_view relative)
-{
-	return protocol == "edt" && relative.starts_with("templates/projects/") && relative.find("/res/config/") != std::string_view::npos;
-}
 
 // Read once: the images next to the descs (skybox faces) are loaded by descs that reference them.
 const std::vector<repo_file>& repo_files()
@@ -55,13 +51,18 @@ const std::vector<repo_file>& repo_files()
 				if (!entry.is_regular_file()) continue;
 				std::ifstream in(entry.path(), std::ios::binary);
 				std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-				const std::string relative = fs::relative(entry.path(), root).generic_string();
-				if (is_game_type_file_of_a_template(protocol, relative)) continue;
 				repo_file file;
-				file.tag = res::tag{ protocol, relative };
+				file.tag = res::tag{ protocol, fs::relative(entry.path(), root).generic_string() };
 				file.bytes.resize(text.size());
 				std::memcpy(file.bytes.data(), text.data(), text.size());
 				file.is_desc = entry.path().extension() == ".desc";
+				file.of_a_template = protocol == "edt" && file.tag.string().find("templates/projects/") != std::string::npos;
+				if (file.of_a_template && file.is_desc) {
+					json::error_code parse_error;
+					const json::value root = json::parse(std::string_view(text.data(), text.size()), parse_error);
+					const json::value* type = parse_error || !root.is_object() ? nullptr : root.as_object().if_contains("__type");
+					if (type && type->is_string()) file.root_type = std::string{ type->as_string() };
+				}
 				std::erase_if(out, [&](const repo_file& f) { return f.tag == file.tag; });
 				out.push_back(std::move(file));
 			}
@@ -100,6 +101,8 @@ struct repo_fixture : test_util::scene_env
 		std::size_t count = 0;
 		for (const auto& file : repo_files()) {
 			if (!file.is_desc) continue;
+			// A template's own game types are declared by its game module, which this test does not load.
+			if (file.of_a_template && !file.root_type.empty() && !descs->is_registered(file.root_type)) continue;
 			++count;
 			BOOST_TEST_CONTEXT(file.tag.string()) {
 				fn(file.tag, file);
