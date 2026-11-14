@@ -271,12 +271,47 @@ private:
   node_map m_nodes;
 };
 
+struct res::resource_system::held_changes {
+  struct protocol_batch {
+    std::string protocol;
+    std::vector<file_change> changes;
+  };
+
+  std::mutex mutex;
+  std::size_t holds = 0;
+  // From the release of the last hold until deliver_held has handed everything on: new reports queue behind.
+  bool delivering = false;
+  // First-seen order; `signalled` keeps a tag to one entry.
+  std::vector<res::tag> signals;
+  std::unordered_set<res::tag> signalled;
+  std::vector<protocol_batch> batches;
+};
+
+namespace {
+
+// A held change that adds nothing to the last one of its path in the merged batch: the same change again, or a
+// modification of a file that change left there (created, modified, renamed to it).
+bool coalesces(const std::vector<res::file_change> &merged, const res::file_change &change) {
+  const auto last = std::ranges::find_if(merged.rbegin(), merged.rend(), [&](const res::file_change &earlier) {
+    return earlier.tag == change.tag || earlier.old_tag == change.tag;
+  });
+  if (last == merged.rend() || last->tag != change.tag || last->is_directory != change.is_directory) {
+    return false;
+  }
+  if (last->kind == change.kind && last->old_tag == change.old_tag) {
+    return true;
+  }
+  return change.kind == res::change_kind::modified && last->kind != res::change_kind::deleted;
+}
+
+} // namespace
+
 res::resource_system::resource_system(ds::task_system &tasks)
     : resource_system(tasks, config_mount_table()) {}
 
 res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts)
     : m_graph(std::make_unique<wait_graph>()), m_tasks(tasks),
-      m_mounts(std::move(mounts)) {
+      m_mounts(std::move(mounts)), m_held(std::make_unique<held_changes>()) {
   m_gate->self = this;
   for (const auto &mount : m_mounts) {
     register_mount(mount);
@@ -296,26 +331,153 @@ void res::resource_system::register_mount(const mount &mounted) {
   const watch_options watch = watch_files ? mounted.watch : watch_options{};
   auto &resolver = registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access,
                                                       mounted.writable, watch, mounted.file_operations, watch_files);
-  resolver.set_resource_changed_callback(
-      [this](const res::tag &tag) { signal_changed(tag); });
+  // Everything a resolver reports passes hold_changes first, so nothing that consumes changes sees a held one early.
+  resolver.set_resource_changed_callback([this](const res::tag &tag) {
+    if (!hold_signal(tag)) {
+      signal_changed(tag);
+    }
+  });
   if (watch.report_changes) {
     {
       std::lock_guard lock(m_waiting_mutex);
       m_reporting_protocols.emplace(mounted.protocol);
     }
     resolver.set_changes_callback([this, protocol = std::string{mounted.protocol}](std::vector<res::file_change> batch) {
-      // Numbered here, as it is made: a batch already queued for the main thread does not take what goes after it. The
-      // number and the post go together (post_main only queues), so the queue holds batches in number order whichever
-      // thread makes them (the watcher's, or the one of an operation).
-      std::lock_guard order(m_batch_order_mutex);
-      const std::uint64_t number = number_batch(batch);
-      m_tasks.post_main([this, protocol, batch = std::move(batch), number, alive = m_lifetime.token()]() {
-        if (alive.expired()) {
+      if (!hold_batch(protocol, batch)) {
+        post_batch(protocol, std::move(batch));
+      }
+    });
+  }
+}
+
+void res::resource_system::post_batch(const std::string &protocol, std::vector<file_change> batch) {
+  // Numbered here, as it is made: a batch already queued for the main thread does not take what goes after it. The
+  // number and the post go together (post_main only queues), so the queue holds batches in number order whichever
+  // thread makes them (the watcher's, the one of an operation, or the one that delivers what a hold kept).
+  std::lock_guard order(m_batch_order_mutex);
+  const std::uint64_t number = number_batch(batch);
+  m_tasks.post_main([this, protocol, batch = std::move(batch), number, alive = m_lifetime.token()]() {
+    if (alive.expired()) {
+      return;
+    }
+    deliver_changes(protocol, batch, number);
+  });
+}
+
+res::change_hold::~change_hold() { release(); }
+
+void res::change_hold::release() noexcept {
+  if (resource_system *system = std::exchange(m_system, nullptr)) {
+    system->release_hold();
+  }
+}
+
+res::change_hold res::resource_system::hold_changes() {
+  auto &base = root();
+  std::lock_guard lock(base.m_held->mutex);
+  ++base.m_held->holds;
+  return change_hold(base);
+}
+
+bool res::resource_system::changes_held() const {
+  const auto &base = root();
+  std::lock_guard lock(base.m_held->mutex);
+  return base.m_held->holds > 0;
+}
+
+bool res::resource_system::hold_signal(const res::tag &tag) {
+  auto &held = *m_held;
+  std::lock_guard lock(held.mutex);
+  if (held.holds == 0 && !held.delivering) {
+    return false;
+  }
+  if (held.signalled.insert(tag).second) {
+    held.signals.push_back(tag);
+  }
+  return true;
+}
+
+bool res::resource_system::hold_batch(const std::string &protocol, const std::vector<file_change> &batch) {
+  auto &held = *m_held;
+  std::lock_guard lock(held.mutex);
+  if (held.holds == 0 && !held.delivering) {
+    return false;
+  }
+  auto merged = std::ranges::find(held.batches, protocol, &held_changes::protocol_batch::protocol);
+  if (merged == held.batches.end()) {
+    merged = held.batches.insert(held.batches.end(), held_changes::protocol_batch{protocol, {}});
+  }
+  for (const auto &change : batch) {
+    if (!coalesces(merged->changes, change)) {
+      merged->changes.push_back(change);
+    }
+  }
+  return true;
+}
+
+void res::resource_system::release_hold() noexcept {
+  auto &held = *m_held;
+  {
+    std::lock_guard lock(held.mutex);
+    ASSERT_MSG(held.holds > 0, "change_hold released more often than taken");
+    if (held.holds == 0 || --held.holds > 0 || held.delivering) {
+      return;
+    }
+    if (held.signals.empty() && held.batches.empty()) {
+      return;
+    }
+    held.delivering = true;
+  }
+  if (m_tasks.on_main()) {
+    deliver_held();
+    return;
+  }
+  try {
+    m_tasks.post_main([this, alive = m_lifetime.token()]() {
+      if (alive.expired()) {
+        return;
+      }
+      deliver_held();
+    });
+  } catch (const std::exception &e) {
+    egLOG_ERROR("resource/system", "Posting the changes held back to the main thread failed: {}", e.what());
+    std::lock_guard lock(held.mutex);
+    held.delivering = false;
+  }
+}
+
+void res::resource_system::deliver_held() {
+  auto &held = *m_held;
+  try {
+    while (true) {
+      std::vector<res::tag> signals;
+      std::vector<held_changes::protocol_batch> batches;
+      {
+        std::lock_guard lock(held.mutex);
+        // A hold taken meanwhile keeps the rest for its own release.
+        if (held.holds > 0 || (held.signals.empty() && held.batches.empty())) {
+          held.delivering = false;
           return;
         }
-        deliver_changes(protocol, batch, number);
-      });
-    });
+        signals.swap(held.signals);
+        batches.swap(held.batches);
+        held.signalled.clear();
+      }
+      // The order a resolver reports in: the files' signals, then the batch that names them (a gone file waits for
+      // its batch number, number_batch).
+      for (const auto &tag : signals) {
+        signal_changed(tag);
+      }
+      for (auto &batch : batches) {
+        if (!batch.changes.empty()) {
+          post_batch(batch.protocol, std::move(batch.changes));
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    egLOG_ERROR("resource/system", "Delivering the changes held back failed: {}", e.what());
+    std::lock_guard lock(held.mutex);
+    held.delivering = false;
   }
 }
 
@@ -372,7 +534,8 @@ void res::resource_system::collect_cached_tags(std::string_view protocol, std::v
 }
 
 res::resource_system::resource_system(resource_system &parent)
-    : m_graph(std::make_unique<wait_graph>()), m_tasks(parent.m_tasks), m_parent(&parent) {
+    : m_graph(std::make_unique<wait_graph>()), m_tasks(parent.m_tasks), m_parent(&parent),
+      m_held(std::make_unique<held_changes>()) {
   m_gate->self = this;
   std::lock_guard lock(parent.m_layers_mutex);
   parent.m_layers.push_back(this);
