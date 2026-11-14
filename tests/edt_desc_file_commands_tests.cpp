@@ -499,6 +499,57 @@ BOOST_AUTO_TEST_CASE(AnOpenLevelThatCannotBeReadOrParsed_MakesEveryWriteBusy)
 	BOOST_TEST(free.ok);
 }
 
+// #966: the resolver opens these tags as worlds/x.desc, the path rules of the guard reject them.
+BOOST_AUTO_TEST_CASE(AWorldEntryTheGuardCannotRead_MakesEveryWriteBusy)
+{
+	fs::create_directories(res_root / "levels");
+	fs::create_directories(res_root / "worlds");
+	make_material("materials/m.mat.desc");
+	dir.write("res/worlds/x.desc", R"({"__type":"world_desc"})");
+	std::string padded = "res://worlds/";
+	while (padded.size() <= 520) padded += "./";
+	padded += "x.desc";
+
+	for (const std::string& entry : { std::string("res://worlds//x.desc"), std::string("res://worlds/./x.desc"), padded }) {
+		BOOST_TEST_CONTEXT(entry) {
+			open_level.clear();
+			const std::string world_version = version_of("worlds/x.desc");
+			const std::string material_version = version_of("materials/m.mat.desc");
+			const std::string world_before = read_file(res_root / "worlds" / "x.desc");
+			const std::string material_before = read_file(res_root / "materials" / "m.mat.desc");
+			dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":[{"path":")" + entry + R"("}]})");
+			open_level = { "levels/open.desc" };
+
+			const auto world = call("desc.write", write_args("worlds/x.desc", world_version, R"({"__type":"world_desc"})"));
+			BOOST_TEST(world.code == cmd::codes::busy);
+			BOOST_TEST(read_file(res_root / "worlds" / "x.desc") == world_before);
+			const auto other = call("desc.write", write_args("materials/m.mat.desc", material_version, R"({"__type":"material_desc","queue":"opaque"})"));
+			BOOST_TEST(other.code == cmd::codes::busy);
+			BOOST_TEST(read_file(res_root / "materials" / "m.mat.desc") == material_before);
+			const auto created = call("desc.create", desc_args("materials/n.mat.desc", k_material));
+			BOOST_TEST(created.code == cmd::codes::busy);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "n.mat.desc"));
+		}
+	}
+}
+
+// A guid no file holds, without a path: the resolver loads nothing by it, so no file is the level's through it.
+BOOST_AUTO_TEST_CASE(AWorldEntryThatNamesNothing_BlocksNothing)
+{
+	fs::create_directories(res_root / "levels");
+	make_material("materials/m.mat.desc");
+	const std::string version = version_of("materials/m.mat.desc");
+	dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":[{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto written = call("desc.write", write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST_MESSAGE(written.error);
+	BOOST_TEST(written.ok);
+	const auto created = call("desc.create", desc_args("materials/n.mat.desc", k_material));
+	BOOST_TEST_MESSAGE(created.error);
+	BOOST_TEST(created.ok);
+}
+
 BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagField)
 {
 	for (const char* content : {

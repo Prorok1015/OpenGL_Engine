@@ -166,7 +166,8 @@ namespace {
 				for (const json::value& world : worlds->as_array()) {
 					for (const res::tag& world_file : world_files_of(world)) {
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
-						if (named.ok() && same_file(locate(named.path))) return true;
+						// The resolver still opens a tag the path rules reject (`//`, `/./`, an overlong path): everything is busy (#966).
+						if (!named.ok() || same_file(locate(named.path))) return true;
 					}
 				}
 			}
@@ -174,14 +175,16 @@ namespace {
 		}
 
 		// The files an entry of a level's `worlds` names, as a path or as {guid, path}: where the guid is now and what `path`
-		// spells, since the index may have moved the guid while the stale path still names a world (#920). None when inline.
+		// spells, since the index may have moved the guid while the stale path still names a world (#920). None when inline,
+		// and none for an empty tag (a guid no file holds, without a path): the resolver loads nothing by it.
 		std::vector<res::tag> world_files_of(const json::value& world) const
 		{
 			std::vector<res::tag> files;
 			const std::optional<res::reference> reference = res::reference_from_json(world);
 			if (!reference) return files;
-			files.push_back(m_deps.res.resolve_reference(*reference));
-			if (!(reference->path == files.front())) files.push_back(reference->path);
+			const res::tag resolved = m_deps.res.resolve_reference(*reference);
+			if (resolved.is_valid()) files.push_back(resolved);
+			if (reference->path.is_valid() && !(reference->path == resolved)) files.push_back(reference->path);
 			return files;
 		}
 
@@ -206,7 +209,8 @@ namespace {
 				for (const json::value& world : worlds->as_array()) {
 					for (const res::tag& world_file : world_files_of(world)) {
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
-						if (named.ok() && name_key(named.path) == wanted) return true;
+						// As in belongs_to_open_level: a tag the path rules reject may still name this file (#966).
+						if (!named.ok() || name_key(named.path) == wanted) return true;
 					}
 				}
 			}
@@ -389,6 +393,10 @@ namespace {
 			if (found.found) {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
+			}
+			if (m_files.names_open_level(path.relative)) {
+				return cmd::result::failure(cmd::codes::busy,
+					std::format("'res://{}' is a name of the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", path.relative));
 			}
 			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
