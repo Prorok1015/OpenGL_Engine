@@ -4,6 +4,7 @@
 #include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -24,6 +25,10 @@ namespace edt::picker
 		virtual const asset_record* find(const res::tag& path) const = 0;
 		// How many layers res:// has (the lowest layer is the engine's, the highest the project's).
 		virtual std::size_t layer_count() const = 0;
+		// Moves whenever the records change: a list made at an older revision is stale (and its record pointers too).
+		virtual std::uint64_t revision() const = 0;
+		// The records are up to date with the tree: no walk runs. A file that is not a record may still be new.
+		virtual bool settled() const = 0;
 	};
 
 	class database_catalog final : public catalog
@@ -35,6 +40,8 @@ namespace edt::picker
 		void for_each(const std::function<void(const asset_record&)>& visit) const override;
 		const asset_record* find(const res::tag& path) const override { return m_database.find(path); }
 		std::size_t layer_count() const override { return m_database.layers().size(); }
+		std::uint64_t revision() const override { return m_database.revision(); }
+		bool settled() const override { return m_database.walked_once() && !m_database.scanning(); }
 
 	private:
 		const asset_database& m_database;
@@ -48,6 +55,8 @@ namespace edt::picker
 		std::string ref_type;
 		// Extensions ("png,jpg"); empty = any.
 		std::string extensions;
+
+		bool operator==(const filter&) const = default;
 	};
 
 	filter filter_of(const desc::field_schema& field);
@@ -96,6 +105,20 @@ namespace edt::picker
 	// layer covers is not a record of its own, so it is not listed.
 	candidates_page candidates(const catalog& source, const filter& wanted, std::string_view query, std::size_t limit);
 
+	// The page of the last call, kept by whoever draws the list: while the query, the filter and the revision of the catalog stay
+	// what they were, the files are not walked again.
+	struct page_cache
+	{
+		bool valid = false;
+		filter wanted;
+		std::string query;
+		std::size_t limit = 0;
+		std::uint64_t revision = 0;
+		candidates_page page;
+	};
+
+	const candidates_page& cached_candidates(page_cache& cache, const catalog& source, const filter& wanted, std::string_view query, std::size_t limit);
+
 	// What is written into the field for the picked file.
 	boost::json::value reference_value(const asset_record& record);
 
@@ -116,6 +139,7 @@ namespace edt::picker
 	// check speaks of that) and while the tree has not been walked.
 	reference_state judge_text(const filter& wanted, std::string_view text, const catalog& source);
 
-	// A file dropped on the field: `path` is below res://, as the asset browser sends it.
+	// A file dropped on the field: `path` is below res://, as the asset browser sends it. A file the records do not hold yet (just
+	// imported) is `unknown`, not refused: it comes from the browser, so it is there.
 	verdict judge_drop(const filter& wanted, std::string_view path, const catalog* source);
 }
