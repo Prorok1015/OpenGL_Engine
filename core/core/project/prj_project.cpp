@@ -85,11 +85,17 @@ namespace {
 		return out;
 	}
 
-	// `candidate` is `dir` or lies in it: by its parts with letter case folded, and, where `dir` exists, by fs::equivalent
-	// of `dir` and each folder from `candidate` up (another spelling of the same folder: .SNK, a short 8.3 name).
-	bool lies_in(const fs::path& dir, const fs::path& candidate)
+	// `candidate` is `dir` or lies in it: by its parts, with letter case folded below the project `root` only (above it a
+	// case-sensitive file system may hold two folders that differ in case), and, where `dir` exists, by fs::equivalent of
+	// `dir` and each folder from `candidate` up (another spelling of the same folder: .SNK, a short 8.3 name).
+	bool lies_in(const fs::path& dir, const fs::path& candidate, const fs::path& root)
 	{
-		if (fs_paths::is_inside_any_case(dir, candidate)) {
+		if (is_inside(root, dir) && is_inside(root, candidate)) {
+			const fs::path below = dir.lexically_relative(root);
+			if (below == "." || fs_paths::is_inside_any_case(below, candidate.lexically_relative(root))) {
+				return true;
+			}
+		} else if (is_inside(dir, candidate)) {
 			return true;
 		}
 		std::error_code ec;
@@ -107,9 +113,18 @@ namespace {
 		return false;
 	}
 
-	bool overlap(const fs::path& a, const fs::path& b)
+	bool overlap(const fs::path& a, const fs::path& b, const fs::path& root)
 	{
-		return lies_in(a, b) || lies_in(b, a);
+		return lies_in(a, b, root) || lies_in(b, a, root);
+	}
+
+	// A name read from the disk, fit for a message: control characters are shown as '?'.
+	std::string printable(std::string text)
+	{
+		for (char& ch : text) {
+			if (static_cast<unsigned char>(ch) < 0x20 || ch == 0x7f) ch = '?';
+		}
+		return text;
 	}
 
 	// The private dirs as children of the canonical root: project.root may be spelled otherwise.
@@ -157,13 +172,13 @@ namespace {
 			return std::format("'{}' leads outside the project", fs_paths::generic_utf8_of(dir));
 		}
 		for (const auto& content_root : content_roots) {
-			if (overlap(content_root, real)) {
+			if (overlap(content_root, real, root)) {
 				return std::format("the code folder '{}' overlaps the content root '{}': res:// would serve code or code:// assets",
 					fs_paths::generic_utf8_of(dir), fs_paths::generic_utf8_of(content_root));
 			}
 		}
 		for (const auto& private_dir : real_private_dirs(project, root)) {
-			if (overlap(private_dir, real)) {
+			if (overlap(private_dir, real, root)) {
 				return std::format("the code folder '{}' overlaps the project's private folder '{}'", fs_paths::generic_utf8_of(dir),
 					fs_paths::generic_utf8_of(private_dir));
 			}
@@ -193,15 +208,15 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 			return std::format("content root '{}' leads outside the project", fs_paths::generic_utf8_of(dir));
 		}
 		// The real path, symlinks resolved, by the rule the manifest checks the written one with: a link to .git too.
-		const std::string real_relative = fs_paths::generic_utf8_of(content_root.lexically_relative(root));
+		const std::string real_relative = printable(fs_paths::generic_utf8_of(content_root.lexically_relative(root)));
 		if (const auto problem = content_root_error(real_relative)) {
-			const std::string written = fs_paths::generic_utf8_of(dir.lexically_relative(project.root));
+			const std::string written = printable(fs_paths::generic_utf8_of(dir.lexically_relative(project.root)));
 			return written == real_relative ? *problem : std::format("{} (content root '{}' leads there)", *problem, written);
 		}
 		// One file would be reachable under two tags, and a store through the outer root would land in the inner one. The
 		// manifest already refuses roots whose paths overlap (#856); here a link may join two that do not.
 		for (const auto& other : roots) {
-			if (overlap(other, content_root)) {
+			if (overlap(other, content_root, root)) {
 				return std::format("content roots '{}' and '{}' overlap", fs_paths::generic_utf8_of(other), fs_paths::generic_utf8_of(content_root));
 			}
 		}
@@ -215,7 +230,7 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 			return std::format("engine resources '{}' cannot be resolved: {}", fs_paths::utf8_of(engine_base), ec.message());
 		}
 		for (const auto& content_root : roots) {
-			if (overlap(base, content_root)) {
+			if (overlap(base, content_root, root)) {
 				return std::format("content root '{}' overlaps the engine resources '{}'", fs_paths::generic_utf8_of(content_root),
 					fs_paths::generic_utf8_of(base));
 			}
@@ -224,7 +239,7 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 
 	for (const auto& dir : real_private_dirs(project, root)) {
 		for (const auto& content_root : roots) {
-			if (overlap(dir, content_root)) {
+			if (overlap(dir, content_root, root)) {
 				return std::format("content root '{}' overlaps the project's private folder '{}'", fs_paths::generic_utf8_of(content_root),
 					fs_paths::generic_utf8_of(dir));
 			}

@@ -326,7 +326,7 @@ namespace
 				if (!is_safe_relative_dir(text)) {
 					fail(path, "expected a relative directory inside the project");
 				}
-				if (const auto reserved = content_root_error(normalized_dir(text))) {
+				if (const auto reserved = prj::content_root_error(normalized_dir(text))) {
 					fail(path, *reserved);
 				}
 				if (!seen.insert(normalized_dir(text)).second) {

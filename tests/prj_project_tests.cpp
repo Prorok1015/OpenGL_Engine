@@ -256,6 +256,24 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesAContentRootLinkedToAHiddenOrOwnFolder)
 		BOOST_TEST(opened.error.find("'assets' leads there") != std::string::npos, "the refusal names the written root");
 	}
 }
+
+// #911: a private folder that is the content root by another name (here a link, as .SNK would be on Windows or macOS) is
+// found by fs::equivalent, not only by its spelling.
+BOOST_AUTO_TEST_CASE(Verify_FindsAPrivateFolderThatIsTheContentRootByAnotherName)
+{
+	test_util::temp_dir dir("prj_private_alias");
+	fs::create_directories(dir.path() / "assets");
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "assets", dir.path() / ".snk", ec);
+	BOOST_REQUIRE(!ec);
+
+	prj::project_context project;
+	project.root = fs::canonical(dir.path());
+	project.content_roots = { project.root / "assets" };
+	const auto problem = prj::verify_project_mounts(project);
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("private folder") != std::string::npos);
+}
 #endif
 
 BOOST_AUTO_TEST_CASE(ContentRootError_NamesTheRootAndTheRule)

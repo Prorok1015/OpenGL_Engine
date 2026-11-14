@@ -198,9 +198,11 @@ BOOST_AUTO_TEST_CASE(Parse_ContentRootsRefuseHiddenAndTheProjectsOwnFolders)
 			BOOST_TEST(result.error->reason.find("may not be or lie in") != std::string::npos, "and the rule");
 		}
 	}
-	const auto allowed = prj::parse_manifest(minimal_with("content_roots", R"(["assets", "game_code", "res/build", "outdoor"])"));
+	// A '.' only counts at the start of a name.
+	const auto allowed = prj::parse_manifest(minimal_with("content_roots",
+		R"(["assets", "game_code", "res/build", "outdoor", "content.v2", "a/b.c"])"));
 	BOOST_REQUIRE(allowed.data.has_value());
-	BOOST_TEST(allowed.data->content_roots.size() == 4u);
+	BOOST_TEST(allowed.data->content_roots.size() == 6u);
 }
 
 BOOST_AUTO_TEST_CASE(Parse_OverlappingContentRootsAreRejected_NamingBoth)
