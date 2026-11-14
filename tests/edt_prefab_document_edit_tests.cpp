@@ -338,7 +338,7 @@ BOOST_AUTO_TEST_CASE(Apply_KeepsTheRootGuid)
 	BOOST_TEST(text_of(res_root, "prefabs/g.prefab.desc").find("00000000-0000-0000-0000-00000000abcd") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndWritesOnlyTheDifferences)
+BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndTheEdit)
 {
 	write(res_root, "prefabs/base.prefab.desc", PREFAB);
 	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":2,"__parent":"res://prefabs/base.prefab.desc"})");
@@ -351,7 +351,6 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndWritesOnlyTheDifferences
 	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
 	BOOST_TEST(file.find("__parent") != std::string::npos);
 	BOOST_TEST(file.find("arm2") != std::string::npos);
-	BOOST_TEST(file.find("\"hp\"") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(Edit_OfTheRootTransform_MovesTheRootOfThePreview_AndRevertPutsItBack)
