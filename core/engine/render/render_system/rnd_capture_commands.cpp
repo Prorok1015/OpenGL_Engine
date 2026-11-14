@@ -363,7 +363,11 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 				id, size.x, size.y, reference, width, height));
 		}
 
-		const stb_image::Image picture = stb_image::Image::read_from_memory(encoded, encoded_length);
+		// The header is only a claim: a tiny PNG can still inflate to gigabytes, so the decoder gets what this size needs.
+		const stb_image::Image picture = [&] {
+			const stb_image::decode_budget budget(stb_image::decode_budget::for_image(width, height, 4, bytes.size()));
+			return stb_image::Image::read_from_memory(encoded, encoded_length);
+		}();
 		if (picture.data() == nullptr || picture.width() != width || picture.height() != height) {
 			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' cannot be decoded", reference));
 		}
