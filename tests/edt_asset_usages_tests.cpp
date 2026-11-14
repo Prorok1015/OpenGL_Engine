@@ -184,6 +184,12 @@ BOOST_AUTO_TEST_CASE(EveryReferenceToTheAsset_IsFoundWithItsFileAndPointer)
 	BOOST_REQUIRE(by_id.path.has_value());
 	BOOST_TEST(by_id.path->view() == "res://sky.desc");
 	BOOST_TEST(by_id.items.size() == report.items.size());
+
+	const edt::usage_report by_unknown_id = edt::find_usages(*db, nullptr, edt::usage_target{ std::nullopt, res::asset_id_from_text(k_gone_guid) });
+	BOOST_TEST(!by_unknown_id.path.has_value());
+	BOOST_REQUIRE(by_unknown_id.items.size() == 1u);
+	BOOST_TEST(by_unknown_id.items[0].json_pointer == k_node + "/lost/material");
+	BOOST_TEST(by_unknown_id.items[0].by_guid);
 }
 
 BOOST_AUTO_TEST_CASE(AnEditOfTheReferringFile_UpdatesTheUsages)
