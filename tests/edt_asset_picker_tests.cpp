@@ -194,13 +194,54 @@ BOOST_AUTO_TEST_CASE(JudgeText_ABrokenReference_NamesTheFileAndWhatIsWrong)
 	BOOST_CHECK(picker::judge_text(wanted, "res://materials\\wood.desc", source).severity == picker::reference_state::level::ok);
 }
 
+BOOST_AUTO_TEST_CASE(JudgeText_AMissingFile_IsANoteWhileTheListIsBehind_AnErrorOnceItIsSettled)
+{
+	fake_catalog source = sample();
+	const picker::filter wanted = desc_of("scn.material");
+	source.is_settled = false;
+	const picker::reference_state behind = picker::judge_text(wanted, "res://materials/new.desc", source);
+	BOOST_CHECK(behind.severity == picker::reference_state::level::note);
+	BOOST_CHECK_EQUAL(behind.text, "res://materials/new.desc is not in the asset list yet");
+	source.is_settled = true;
+	BOOST_CHECK(picker::judge_text(wanted, "res://materials/new.desc", source).severity == picker::reference_state::level::error);
+}
+
+BOOST_AUTO_TEST_CASE(CachedCandidates_WalkTheFilesOnlyWhenTheQueryTheFilterOrTheRevisionChanged)
+{
+	fake_catalog source = sample();
+	picker::page_cache cache;
+	const picker::filter wanted = desc_of("scn.material");
+	const picker::candidates_page& first = picker::cached_candidates(cache, source, wanted, "", 50);
+	BOOST_CHECK_EQUAL(first.total, 3u);
+	BOOST_CHECK_EQUAL(source.walks, 1);
+	picker::cached_candidates(cache, source, wanted, "", 50);
+	picker::cached_candidates(cache, source, wanted, "", 50);
+	BOOST_CHECK_EQUAL(source.walks, 1);
+
+	BOOST_CHECK_EQUAL(picker::cached_candidates(cache, source, wanted, "wood", 50).total, 1u);
+	BOOST_CHECK_EQUAL(source.walks, 2);
+	picker::cached_candidates(cache, source, desc_of("scn.skybox"), "wood", 50);
+	BOOST_CHECK_EQUAL(source.walks, 3);
+	picker::cached_candidates(cache, source, desc_of("scn.skybox"), "wood", 10);
+	BOOST_CHECK_EQUAL(source.walks, 4);
+
+	// the catalog changed: the list is made again, with the new file
+	source.add("materials/oak.desc", 2, "desc", "scn.material");
+	++source.version;
+	BOOST_CHECK_EQUAL(picker::cached_candidates(cache, source, wanted, "", 50).total, 4u);
+	BOOST_CHECK_EQUAL(source.walks, 5);
+}
+
 BOOST_AUTO_TEST_CASE(JudgeDrop_AFileThatDoesNotFit_IsRefusedWithAReason)
 {
 	const fake_catalog source = sample();
 	const picker::filter wanted = desc_of("scn.material");
 	BOOST_CHECK(picker::judge_drop(wanted, "materials/wood.desc", &source).fits());
 	BOOST_CHECK_EQUAL(picker::judge_drop(wanted, "materials/sky.desc", &source).reason, "is a desc of type 'scn.skybox', expected 'scn.material'");
-	BOOST_CHECK_EQUAL(picker::judge_drop(wanted, "nowhere/a.desc", &source).reason, "is not a file of the resource tree");
+	// a file the records do not hold yet (just imported) is not refused: it comes from the browser, so it is there
+	const picker::verdict unseen = picker::judge_drop(wanted, "nowhere/a.desc", &source);
+	BOOST_CHECK(unseen.outcome == picker::verdict::result::unknown);
+	BOOST_CHECK_EQUAL(unseen.reason, "is not in the asset list yet");
 	BOOST_CHECK(picker::judge_drop(wanted, "materials/pending.desc", &source).outcome == picker::verdict::result::unknown);
 }
 

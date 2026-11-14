@@ -600,11 +600,16 @@ namespace
 
 	// The list a "..." button opens: the files the field accepts, searched by name, the project's first. True when a file was
 	// picked (the value is then its reference).
-	bool draw_picker_popup(const desc::field_schema& field, const std::string& pointer, const edt::picker::catalog& catalog, std::string& query,
-		json::value& value, const context& ctx)
+	bool draw_picker_popup(const desc::field_schema& field, const std::string& pointer, const edt::picker::catalog& catalog,
+		edt::schema_ui::map_edit_state& state, ImGuiID field_id, json::value& value, const context& ctx)
 	{
 		if (!ImGui::BeginPopup("##asset_picker")) {
 			return false;
+		}
+		std::string& query = state.picker_queries[field_id];
+		std::shared_ptr<edt::picker::page_cache>& cache = state.picker_pages[field_id];
+		if (!cache) {
+			cache = std::make_shared<edt::picker::page_cache>();
 		}
 		bool picked = false;
 		if (ImGui::IsWindowAppearing()) {
@@ -617,7 +622,7 @@ namespace
 		if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
 			query = buffer.data();
 		}
-		const edt::picker::candidates_page page = edt::picker::candidates(catalog, edt::picker::filter_of(field), query, k_picker_rows);
+		const edt::picker::candidates_page& page = edt::picker::cached_candidates(*cache, catalog, edt::picker::filter_of(field), query, k_picker_rows);
 		if (page.unread > 0) {
 			ImGui::TextDisabled("%zu files, %zu descs not read yet", page.total, page.unread);
 		} else {
@@ -671,9 +676,14 @@ namespace
 			if (!catalog->ready() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 				ImGui::SetTooltip("the asset list is not ready");
 			}
-			if (draw_picker_popup(field, pointer, *catalog, state.picker_queries[field_id], value, ctx)) {
+			if (draw_picker_popup(field, pointer, *catalog, state, field_id, value, ctx)) {
 				state.drop_refusals.erase(field_id);
+				state.drop_notes.erase(field_id);
 				changed = true;
+			}
+			if (!ImGui::IsPopupOpen("##asset_picker")) {
+				state.picker_pages.erase(field_id);
+				state.picker_queries.erase(field_id);
 			}
 			ImGui::SameLine();
 		}
@@ -683,6 +693,7 @@ namespace
 		if (ImGui::InputText(label, buffer.data(), buffer.size())) {
 			value = json::string(buffer.data());
 			state.drop_refusals.erase(field_id);
+			state.drop_notes.erase(field_id);
 			changed = true;
 		}
 		if (asset && ImGui::BeginDragDropTarget()) {
@@ -690,12 +701,17 @@ namespace
 				// The browser sends the path below res:// with its terminating zero (the viewport turns it into a tag the same way).
 				if (payload->DataSize > 0) {
 					const std::string path(static_cast<const char*>(payload->Data), static_cast<std::size_t>(payload->DataSize) - 1);
-					const edt::picker::verdict answer = edt::picker::judge_drop(edt::picker::filter_of(field), path, catalog);
-					if (answer.outcome == edt::picker::verdict::result::rejected) {
-						state.drop_refusals[field_id] = std::format("'{}' {}", path, answer.reason);
+					const edt::schema_ui::drop_outcome outcome = edt::schema_ui::resolve_drop(field, path, catalog);
+					if (!outcome.value) {
+						state.drop_refusals[field_id] = outcome.refusal;
 					} else {
-						value = json::string(res::tag::make(path).string());
+						value = *outcome.value;
 						state.drop_refusals.erase(field_id);
+						if (outcome.note.empty()) {
+							state.drop_notes.erase(field_id);
+						} else {
+							state.drop_notes[field_id] = outcome.note;
+						}
 						changed = true;
 					}
 				}
@@ -709,6 +725,9 @@ namespace
 			}
 			if (const auto refused = state.drop_refusals.find(field_id); refused != state.drop_refusals.end()) {
 				draw_red(refused->second);
+			}
+			if (const auto noted = state.drop_notes.find(field_id); noted != state.drop_notes.end()) {
+				ImGui::TextDisabled("%s", noted->second.c_str());
 			}
 			if (catalog) {
 				const edt::picker::reference_state verdict = edt::picker::judge_text(edt::picker::filter_of(field), value.as_string(), *catalog);
@@ -1105,6 +1124,21 @@ std::string edt::schema_ui::tag_text_problem(std::string_view text)
 		return {};
 	}
 	return res::no_protocol_reason(tag);
+}
+
+edt::schema_ui::drop_outcome edt::schema_ui::resolve_drop(const desc::field_schema& field, std::string_view path, const edt::picker::catalog* catalog)
+{
+	const edt::picker::verdict answer = edt::picker::judge_drop(edt::picker::filter_of(field), path, catalog);
+	drop_outcome out;
+	if (answer.outcome == edt::picker::verdict::result::rejected) {
+		out.refusal = std::format("'{}' {}", path, answer.reason);
+		return out;
+	}
+	out.value = json::string(res::tag::make(path).string());
+	if (answer.outcome == edt::picker::verdict::result::unknown) {
+		out.note = std::format("'{}' {}", path, answer.reason);
+	}
+	return out;
 }
 
 std::string edt::schema_ui::display_label(const desc::field_schema& field)

@@ -111,14 +111,17 @@ edt::picker::candidates_page edt::picker::candidates(const catalog& source, cons
 	};
 	std::vector<keyed> fitting;
 	source.for_each([&](const asset_record& record) {
+		const verdict answer = judge(wanted, record);
+		if (answer.outcome == verdict::result::rejected) {
+			return;
+		}
 		std::string key = lowered(record.path.relative());
 		if (!needle.empty() && key.find(needle) == std::string::npos) {
 			return;
 		}
-		const verdict answer = judge(wanted, record);
 		if (answer.outcome == verdict::result::unknown) {
 			++page.unread;
-		} else if (answer.fits()) {
+		} else {
 			fitting.push_back({ std::move(key), &record });
 		}
 	});
@@ -137,6 +140,21 @@ edt::picker::candidates_page edt::picker::candidates(const catalog& source, cons
 	return page;
 }
 
+const edt::picker::candidates_page& edt::picker::cached_candidates(page_cache& cache, const catalog& source, const filter& wanted, std::string_view query,
+	std::size_t limit)
+{
+	const std::uint64_t revision = source.revision();
+	if (!cache.valid || cache.revision != revision || cache.limit != limit || !(cache.wanted == wanted) || cache.query != query) {
+		cache.page = candidates(source, wanted, query, limit);
+		cache.wanted = wanted;
+		cache.query = std::string(query);
+		cache.limit = limit;
+		cache.revision = revision;
+		cache.valid = true;
+	}
+	return cache.page;
+}
+
 boost::json::value edt::picker::reference_value(const asset_record& record)
 {
 	return boost::json::string(record.path.string());
@@ -153,6 +171,9 @@ edt::picker::reference_state edt::picker::judge_text(const filter& wanted, std::
 	}
 	const asset_record* record = source.find(tag);
 	if (!record) {
+		if (!source.settled()) {
+			return { reference_state::level::note, std::format("{} is not in the asset list yet", tag.string()) };
+		}
 		return { reference_state::level::error, std::format("file not found: {}", tag.string()) };
 	}
 	const verdict answer = judge(wanted, *record);
@@ -174,7 +195,7 @@ edt::picker::verdict edt::picker::judge_drop(const filter& wanted, std::string_v
 	}
 	const asset_record* record = source->find(res::tag::make(path));
 	if (!record) {
-		return rejected("is not a file of the resource tree");
+		return { verdict::result::unknown, "is not in the asset list yet" };
 	}
 	return judge(wanted, *record);
 }

@@ -6,12 +6,15 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <optional>
 #include <unordered_map>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace edt::picker { class catalog; }
+#include <memory>
+
+namespace edt::picker { class catalog; struct page_cache; }
 
 // The inspector UI generated from a desc::type_schema (DESC_SCHEMA.md 2.5): every field gets the widget its kind and
 // hints ask for, and what the user changes is written back as the JSON pointers that differ, nothing else.
@@ -80,6 +83,17 @@ namespace edt::schema_ui
 	// or the list is no list of structures with a known schema.
 	std::string list_item_problem(const desc::field_schema& field, const boost::json::value& item, const desc::schema_registry& registry);
 
+	// What a file dropped on a reference field comes to: the value to write (a taken drop), why it was refused, or a note to
+	// say beside a taken one. `path` is below res:// as the asset browser sends it; `catalog` may be null.
+	struct drop_outcome
+	{
+		std::optional<boost::json::value> value;
+		std::string refusal;
+		std::string note;
+	};
+
+	drop_outcome resolve_drop(const desc::field_schema& field, std::string_view path, const edt::picker::catalog* catalog);
+
 	// "m_near_distance" -> "Near distance"
 	std::string display_label(const desc::field_schema& field);
 
@@ -118,6 +132,10 @@ namespace edt::schema_ui
 		// refused, by the ID of the field.
 		std::unordered_map<std::uint32_t, std::string> picker_queries;
 		std::unordered_map<std::uint32_t, std::string> drop_refusals;
+		// A drop that was taken but is worth a word (the file is not in the asset list yet).
+		std::unordered_map<std::uint32_t, std::string> drop_notes;
+		// The list a picker popup shows, kept while its query, filter and the catalog's revision stay the same.
+		std::unordered_map<std::uint32_t, std::shared_ptr<edt::picker::page_cache>> picker_pages;
 
 		// What was typed or refused belongs to the content shown; the pages of the lists do not: they stay while the same
 		// document changes under the person (an undo), and `list_page_start` keeps them inside the list.
@@ -127,6 +145,7 @@ namespace edt::schema_ui
 			rename_errors.clear();
 			picker_queries.clear();
 			drop_refusals.clear();
+			drop_notes.clear();
 		}
 
 		void clear()

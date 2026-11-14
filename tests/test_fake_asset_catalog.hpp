@@ -17,6 +17,7 @@ namespace test_util
 		bool ready() const override { return is_ready; }
 		void for_each(const std::function<void(const edt::asset_record&)>& visit) const override
 		{
+			++walks;
 			for (const edt::asset_record& record : records) {
 				visit(record);
 			}
@@ -27,6 +28,8 @@ namespace test_util
 			return found == records.end() ? nullptr : &*found;
 		}
 		std::size_t layer_count() const override { return layers; }
+		std::uint64_t revision() const override { return version; }
+		bool settled() const override { return is_settled; }
 
 		void add(const std::string& path, std::size_t layer, const std::string& type, const char* desc_type = nullptr, bool hashed = true)
 		{
@@ -44,8 +47,11 @@ namespace test_util
 		}
 
 		std::vector<edt::asset_record> records;
+		mutable int walks = 0;
 		std::size_t layers = 3;
 		bool is_ready = true;
+		bool is_settled = true;
+		std::uint64_t version = 1;
 	};
 
 }
