@@ -108,6 +108,18 @@ namespace res
 			return false;
 		}
 
+		void erase(const cache_key& key)
+		{
+			if (m_entries.erase(key) == 0) {
+				return;
+			}
+			auto index = m_types.find(key.tag);
+			std::erase(index->second, key.type);
+			if (index->second.empty()) {
+				m_types.erase(index);
+			}
+		}
+
 		void erase_tag(const tag& tag)
 		{
 			auto index = m_types.find(tag);
