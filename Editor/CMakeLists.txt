@@ -22,7 +22,8 @@ else()
 	add_executable(${PROJECT_NAME} WIN32 "main.cpp")
 endif()
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::sanitizers)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::sanitizers
+	PRIVATE snk::project_migration)
 if(WIN32)
 	# Windows has no rpath: snk_engine.dll must sit next to the executable.
 	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

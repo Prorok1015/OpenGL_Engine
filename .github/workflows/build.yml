@@ -452,6 +452,62 @@ jobs:
           grep -q "module 'game' loaded" headless_out/template/editor.log
           grep -q "editor module 'game_editor' loaded" headless_out/template/editor.log
 
+      # EPIC-58 S6 (#757): the migration command line. The repository's sandbox needs no migration: a check that names
+      # the file, never a rewrite. tests/static_game/project is left out: its module is compiled into the static host
+      # and is not built for the editor here, so its own types would be unknown_type. The template project (its module
+      # built above; engine 0.0.0, so a migration is needed) shows that a dry run with a game module loaded writes
+      # nothing either: the module's copy goes to the run's scratch folder. A copy of the fixture of old versions (#750)
+      # is migrated, checked byte-stable with desc_resave and rolled back to what it was. --dry-run writes nothing: the
+      # hash of the whole tree, hidden folders included, is the same after it.
+      - name: Migration from the command line
+        run: |
+          cmake --build build/ci-linux-gcc-debug --target desc_resave --parallel
+          editor="${GITHUB_WORKSPACE}/build/ci-linux-gcc-debug/Editor/editor"
+          resave="${GITHUB_WORKSPACE}/build/ci-linux-gcc-debug/tools/desc_resave/desc_resave"
+          log="${RUNNER_TEMP}/migration.log"
+          tree_hash() { (cd "$1" && { find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum; find . | LC_ALL=C sort; }) | sha256sum; }
+          expect() {
+            want="$1"; shift
+            rc=0
+            env -u DISPLAY -u WAYLAND_DISPLAY timeout 300 "$editor" --config "${GITHUB_WORKSPACE}/Editor/config/editor.cfg" --headless "$@" \
+              > /dev/null 2> "$log" || rc=$?
+            tail -40 "$log"
+            if [ "$rc" -ne "$want" ]; then echo "::error::editor --headless $* exited with $rc, expected $want"; exit 1; fi
+          }
+
+          before="$(tree_hash projects/sandbox)"
+          expect 0 --project projects/sandbox --migrate --dry-run
+          if [ "$(tree_hash projects/sandbox)" != "$before" ]; then echo "::error::--dry-run wrote into projects/sandbox"; exit 1; fi
+
+          template="${RUNNER_TEMP}/template_project"
+          before="$(tree_hash "$template")"
+          expect 1 --project "$template" --migrate --dry-run
+          grep -q "module 'game' loaded" "$log"
+          if [ "$(tree_hash "$template")" != "$before" ]; then echo "::error::--dry-run wrote into the template project"; exit 1; fi
+
+          fx="${RUNNER_TEMP}/migration_v1"
+          rm -rf "$fx" "${RUNNER_TEMP}/migrated"
+          cp -r tests/data/projects/migration_v1 "$fx"
+          before="$(tree_hash "$fx")"
+          expect 1 --project "$fx" --migrate --dry-run --force
+          expect 2 --project "$fx" --migrate --dry-run
+          if [ "$(tree_hash "$fx")" != "$before" ]; then echo "::error::--dry-run wrote into the fixture"; exit 1; fi
+
+          expect 4 --project "$fx" --migrate --force --report "${RUNNER_TEMP}/migration_report.md"
+          test -s "${RUNNER_TEMP}/migration_report.md"
+          ids=("$fx"/.snk/migrations/*)
+          if [ "${#ids[@]}" -ne 1 ]; then echo "::error::expected one migration in .snk/migrations"; exit 1; fi
+          id="$(basename "${ids[0]}")"
+
+          # The result is what desc_resave writes: both keep the root __guid a file has and make none (#851).
+          # What a migration leaves as it is (unknown_type, newer, invalid) desc_resave cannot load either.
+          cp -r "$fx" "${RUNNER_TEMP}/migrated"
+          rm "${RUNNER_TEMP}/migrated/res/module/unknown.desc" "${RUNNER_TEMP}/migrated/res/newer.desc" "${RUNNER_TEMP}/migrated/res/broken.desc"
+          "$resave" "${RUNNER_TEMP}/migrated/res" --base core/res --check
+
+          expect 0 --project "$fx" --migrate-rollback "$id"
+          diff -r --exclude=.snk tests/data/projects/migration_v1 "$fx"
+
       # #160: the editor as installed (components editor + snake_sdk) finds config/editor.cfg next to its bin/ folder,
       # from another working directory, without --config. #722: and its libraries without LD_LIBRARY_PATH, through
       # the RUNPATH of the executables ($ORIGIN/../lib) and of each installed .so ($ORIGIN).
