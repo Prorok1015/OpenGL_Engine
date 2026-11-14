@@ -3,13 +3,19 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 #include <snk/desc/desc_describe.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include "test_manual_tasks.hpp"
 
@@ -155,6 +161,69 @@ namespace {
 		res::resource_system rs{ tasks };
 		desc::desc_system ds;
 	};
+
+	// Path <-> ID both ways, as the editor's asset database answers.
+	struct ids_index final : res::asset_index
+	{
+		std::map<std::string, res::asset_id, std::less<>> ids;
+		std::map<res::asset_id, res::tag> paths;
+
+		void hold(const res::asset_id& id, std::string_view path)
+		{
+			ids.emplace(std::string(path), id);
+			paths.insert_or_assign(id, res::tag{ std::string(path) });
+		}
+		std::optional<res::asset_id> id_of(const res::tag& tag) const override
+		{
+			const auto found = ids.find(tag.view());
+			return found == ids.end() ? std::nullopt : std::optional{ found->second };
+		}
+		std::optional<res::tag> path_of(const res::asset_id& id) const override
+		{
+			const auto found = paths.find(id);
+			return found == paths.end() ? std::nullopt : std::optional{ found->second };
+		}
+	};
+
+	// Every place a reference can stand in a typed object, and the places a writer must leave alone.
+	void register_reference_schemas(desc::desc_system& ds)
+	{
+		BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(parse(R"({
+			"name": "wr.slot", "kind": "struct",
+			"fields": [ { "name": "image", "kind": "res_tag", "default": "" } ]
+		})"))));
+		desc::schema_registry nested;
+		nested.add(*ds.find_schema("wr.slot"));
+		BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(parse(R"({
+			"name": "wr.thing", "version": 1,
+			"fields": [
+				{ "name": "texture", "kind": "res_tag", "default": "", "read_aliases": ["/tex"] },
+				{ "name": "material", "kind": "desc_ref", "default": "" },
+				{ "name": "list", "kind": "array", "element": "res_tag" },
+				{ "name": "named", "kind": "map", "element": "res_tag" },
+				{ "name": "slot", "kind": "structure", "ref_type": "wr.slot", "default": { "image": "" } },
+				{ "name": "slots", "kind": "array", "element": "structure", "ref_type": "wr.slot" },
+				{ "name": "blob", "kind": "custom" },
+				{ "name": "label", "kind": "string", "default": "" }
+			]
+		})"), &nested)));
+	}
+
+	constexpr std::string_view k_reference_file = R"({
+		"__type": "wr.thing",
+		"__parent": "res://known.png",
+		"texture": "res://known.png",
+		"tex": "res://other_known.png",
+		"material": { "__type": "wr.thing", "texture": "res://known.png", "blob": "res://known.png" },
+		"list": [ "res://known.png", "res://no_id.png", "memory://t/known.png", "" ],
+		"named": { "a": "res://known.png", "b": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://old_place.png" } },
+		"slot": { "image": { "guid": "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6", "path": "res://gone.png" } },
+		"slots": [ { "image": { "path": "res://known.png" } } ],
+		"blob": { "image": "res://known.png" },
+		"label": "res://known.png",
+		"extra": "res://known.png",
+		"schema_less": { "__type": "wr.unknown", "texture": "res://known.png" }
+	})";
 
 }
 
@@ -518,6 +587,57 @@ BOOST_FIXTURE_TEST_CASE(DescsWithoutDescribeStayWithoutSchema, schema_fixture)
 	BOOST_CHECK(ds.is_registered("test.plain"));
 	BOOST_CHECK(ds.find_schema("test.plain") == nullptr);
 	BOOST_TEST(ds.schemas().size() == 0u);
+}
+
+// #773: a writer puts {guid, path} where the target has an ID, keeps a guid the index knows on its current path, and leaves
+// what is not a reference of the schema as it is.
+BOOST_FIXTURE_TEST_CASE(WriteReferences_APathWithAnIdBecomesAGuidAndAPath, schema_fixture)
+{
+	register_reference_schemas(ds);
+	const res::asset_id known = *res::asset_id_from_text("11111111-2222-4333-8444-555555555555");
+	const res::asset_id other = *res::asset_id_from_text("66666666-7777-4888-9999-aaaaaaaaaaaa");
+	const res::asset_id moved = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(known, "res://known.png");
+	index->hold(other, "res://other_known.png");
+	index->hold(moved, "res://new_place.png");
+
+	const json::value original = json::parse(k_reference_file);
+	json::value without_index = original;
+	ds.write_references(without_index);
+	BOOST_TEST(without_index == original, "without an asset index the paths stay strings");
+
+	rs.set_asset_index(index);
+	json::value file = original;
+	ds.write_references(file);
+	const auto at = [&file](std::string_view pointer) { return *desc::json_pointer_get(file, pointer); };
+	const auto ref = [](const res::asset_id& id, std::string_view path) {
+		return json::value(json::object{ { "guid", res::to_text(id) }, { "path", path } });
+	};
+
+	BOOST_TEST(at("/texture") == ref(known, "res://known.png"));
+	BOOST_TEST(at("/tex") == ref(other, "res://other_known.png"), "a read alias is a reference too");
+	BOOST_TEST(at("/material/texture") == ref(known, "res://known.png"), "an inline desc is walked by its own schema");
+	BOOST_TEST(at("/list/0") == ref(known, "res://known.png"));
+	BOOST_TEST(at("/list/1") == json::value("res://no_id.png"), "a file without an ID keeps its path");
+	BOOST_TEST(at("/list/2") == json::value("memory://t/known.png"));
+	BOOST_TEST(at("/list/3") == json::value(""));
+	BOOST_TEST(at("/named/a") == ref(known, "res://known.png"));
+	BOOST_TEST(at("/named/b") == ref(moved, "res://new_place.png"), "a known guid gets the path its file has now");
+	BOOST_TEST(at("/slot/image") == original.at_pointer("/slot/image"), "an unknown guid stays as written");
+	BOOST_TEST(at("/slots/0/image") == ref(known, "res://known.png"), "a path-only reference gets its guid");
+
+	BOOST_TEST(at("/__parent") == json::value("res://known.png"));
+	BOOST_TEST(at("/material/blob") == json::value("res://known.png"), "a custom field is the codec's");
+	BOOST_TEST(at("/blob") == original.at_pointer("/blob"));
+	BOOST_TEST(at("/label") == json::value("res://known.png"), "a string field is no reference");
+	BOOST_TEST(at("/extra") == json::value("res://known.png"), "a key the schema does not know");
+	BOOST_TEST(at("/schema_less") == original.at_pointer("/schema_less"));
+
+	json::value again = file;
+	ds.write_references(again);
+	BOOST_TEST(again == file, "a second pass changes nothing");
+	rs.set_asset_index(nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

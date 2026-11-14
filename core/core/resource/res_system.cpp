@@ -2815,3 +2815,17 @@ bool res::resource_system::has_asset_index() const
 {
 	return current_index() != nullptr;
 }
+
+std::optional<res::asset_id> res::resource_system::asset_id_of(const tag& tag) const
+{
+	const auto index = current_index();
+	if (!index) {
+		return std::nullopt;
+	}
+	std::optional<asset_id> id;
+	{
+		const asset_index_call call;
+		id = index->id_of(tag);
+	}
+	return id && !id->is_nil() ? id : std::nullopt;
+}

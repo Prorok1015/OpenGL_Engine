@@ -2,6 +2,8 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_editor_services.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include "edt_file_menu.h"
@@ -13,8 +15,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 // Saving a level writes through the resource system, never to a path of its own (#394): a Save As path that leaves
@@ -97,6 +102,48 @@ struct level_guid_fixture : level_save_fixture
 
 	boost::json::object saved(const std::string& relative) { return boost::json::parse(read_file(content / relative)).as_object(); }
 };
+
+// Path <-> ID both ways, as the editor's asset database answers.
+struct ids_index final : res::asset_index
+{
+	std::map<std::string, res::asset_id, std::less<>> ids;
+	std::map<res::asset_id, res::tag> paths;
+
+	void hold(const res::asset_id& id, std::string_view path)
+	{
+		ids.emplace(std::string(path), id);
+		paths.insert_or_assign(id, res::tag{ std::string(path) });
+	}
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		const auto found = ids.find(tag.view());
+		return found == ids.end() ? std::nullopt : std::optional{ found->second };
+	}
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
+// The first object under `value` whose "__type" is `type`.
+const boost::json::object* typed_object(const boost::json::value& value, std::string_view type)
+{
+	if (const boost::json::object* object = value.if_object()) {
+		if (const boost::json::value* named = object->if_contains("__type"); named && named->is_string() && named->as_string() == type) {
+			return object;
+		}
+		for (const auto& member : *object) {
+			if (const boost::json::object* found = typed_object(member.value(), type)) return found;
+		}
+	}
+	if (const boost::json::array* items = value.if_array()) {
+		for (const boost::json::value& item : *items) {
+			if (const boost::json::object* found = typed_object(item, type)) return found;
+		}
+	}
+	return nullptr;
+}
 
 }
 
@@ -314,6 +361,36 @@ BOOST_AUTO_TEST_CASE(SaveAs_OverAFileBiggerThan64MiB_IsRefused)
 	BOOST_TEST(state.is_dirty());
 	BOOST_TEST(fs::file_size(content / "levels" / "huge.desc") == size);
 	fs::remove(content / "levels" / "huge.desc");
+}
+
+// #773: a level save writes a reference whose target has an ID as {guid, path}, and the next save gives the same bytes.
+BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
+{
+	scn::prefab_desc::prefab_comp_node sky;
+	sky.type_name = "skybox_desc";
+	sky.overrides["material"] = "res://sky.mat.desc";
+	scn::world_desc world;
+	world.get_root().node_id = 1;
+	world.get_root().components["sky"] = std::move(sky);
+	// No world name: no world is loaded here, so the save has no live transforms to take over.
+	state.world_descs.push_back(std::move(world));
+	state.level_tag = res::tag::make("levels/sky.desc");
+
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(id, "res://sky.mat.desc");
+	rs->set_asset_index(index);
+	const bool first = level_ctrl.quick_save_level();
+	const std::string written = read_file(content / "levels" / "sky.desc");
+	const bool second = level_ctrl.quick_save_level();
+	rs->set_asset_index(nullptr);
+
+	BOOST_REQUIRE(first);
+	const boost::json::object* component = typed_object(boost::json::parse(written), "skybox_desc");
+	BOOST_REQUIRE(component);
+	BOOST_TEST(component->at("material") == boost::json::value(boost::json::object{ { "guid", res::to_text(id) }, { "path", "res://sky.mat.desc" } }));
+	BOOST_REQUIRE(second);
+	BOOST_TEST(read_file(content / "levels" / "sky.desc") == written);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

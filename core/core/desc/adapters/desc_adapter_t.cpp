@@ -133,5 +133,10 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
 		body["__guid"] = desc_res->get_guid();
 	}
 	m_desc_system.stamp_tree(body);
-	return m_desc_system.serialize_to_bytes(json::value{ std::move(body) });
+	json::value file{ std::move(body) };
+	// Only a res:// file is in the asset index; a memory:// copy keeps what it was given.
+	if (tag.protocol() == ::res::tag::default_protocol()) {
+		m_desc_system.write_references(file);
+	}
+	return m_desc_system.serialize_to_bytes(file);
 }

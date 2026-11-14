@@ -265,6 +265,9 @@ namespace res
 		std::optional<tag> asset_path_of(const asset_id& guid) const;
 		// An asset index is set (set_asset_index): asset_path_of can tell an unknown guid.
 		bool has_asset_index() const;
+		// The ID of the file `tag` names by the asset index now; nullopt without an index, for a file without an ID and for
+		// a duplicate. What a writer puts into a {guid, path} reference (EPIC-57 section 4.4, #773).
+		std::optional<asset_id> asset_id_of(const tag& tag) const;
 
 		template<class RESOURCE>
 		auto require(const res::tag& tag) {

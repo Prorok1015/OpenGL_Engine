@@ -717,6 +717,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 		}
 	}
 	descs->stamp_tree(content);
+	descs->write_references(content);
 	const std::vector<std::byte> bytes = descs->serialize_to_bytes(content);
 	if (bytes.size() > k_desc_file_limit) {
 		return save_result::failure(std::format("{} would be {} bytes: a data document holds at most {}", where(m_source), bytes.size(), k_desc_file_limit));

@@ -316,6 +316,7 @@ namespace {
 		json::value stamped = content;
 		if (!kept_guid.empty() && stamped.is_object()) stamped.as_object()["__guid"] = kept_guid;
 		descs.stamp_tree(stamped);
+		descs.write_references(stamped);
 		const std::vector<std::byte> bytes = descs.serialize_to_bytes(stamped);
 		if (bytes.size() > edt::k_desc_file_limit) {
 			out.error = std::format("the file would be {} bytes: at most {} go through desc.* in one call", bytes.size(), edt::k_desc_file_limit);

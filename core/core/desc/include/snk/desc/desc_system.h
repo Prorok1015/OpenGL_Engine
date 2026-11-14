@@ -208,6 +208,13 @@ namespace desc
 		// resource_system::resolve_reference of the system this one loads through.
 		res::tag resolve_reference(const res::reference& ref) const;
 
+		// Writes the references of `root` the way a file keeps them (EPIC-57 section 4.4): in the res_tag and desc_ref fields
+		// of every typed object (in their lists, maps and structures too), a res:// path whose file has an ID becomes
+		// {"guid", "path"}, and a {guid, path} whose guid the asset index knows gets the path the file has now. Without an
+		// asset index, for a file without an ID or an unknown guid, the value stays as it is. "__parent", custom fields, types
+		// without a schema and other protocols are not touched.
+		void write_references(json::value& root) const;
+
 		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
 		// its memory:// copy's diagnostics go to the owner's file at that path (#595).
 		template<typename T>
