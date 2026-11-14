@@ -1388,6 +1388,19 @@ void take_apart(const std::shared_ptr<const scn::prefab_desc>& prefab)
 	root.components.clear();
 }
 
+// Lowers the node budget of one spawn while it lives: the real one takes too long to reach under a sanitizer.
+class node_budget
+{
+public:
+	explicit node_budget(std::size_t nodes) : m_previous(scn::detail::set_spawn_node_limit(nodes)) {}
+	~node_budget() { scn::detail::set_spawn_node_limit(m_previous); }
+	node_budget(const node_budget&) = delete;
+	node_budget& operator=(const node_budget&) = delete;
+
+private:
+	std::size_t m_previous;
+};
+
 }
 
 BOOST_AUTO_TEST_CASE(APrefabWhoseChildInstantiatesIt_IsBuiltOnce_AndTheSpawnEnds)
@@ -1487,12 +1500,14 @@ BOOST_AUTO_TEST_CASE(OnePrefabUnderTwoSiblings_IsNoCircle)
 	}
 }
 
-// Ten children that each instantiate the next prefab, five prefabs deep, ask for 111 110 nodes from five small files.
+// Ten children that each instantiate the next prefab, three prefabs deep, ask for 1110 nodes from three small files.
 BOOST_AUTO_TEST_CASE(AFanOfInstances_IsCutAtTheNodeBudgetOfOneSpawn)
 {
-	constexpr int k_levels = 5;
+	constexpr int k_levels = 3;
 	constexpr int k_width = 10;
-	put("fan6.prefab.desc", prefab_with_children(""));
+	constexpr std::size_t k_budget = 500;
+	const node_budget budget(k_budget);
+	put("fan4.prefab.desc", prefab_with_children(""));
 	for (int level = k_levels; level >= 1; --level) {
 		std::string children;
 		for (int i = 0; i < k_width; ++i) {
@@ -1509,14 +1524,276 @@ BOOST_AUTO_TEST_CASE(AFanOfInstances_IsCutAtTheNodeBudgetOfOneSpawn)
 	auto root = reg.create();
 	scn::assemble_prefab(*assembler, reg, root, *fan, "fan", tag);
 
-	BOOST_TEST(spawned_nodes(reg) < 100'000u);
-	BOOST_TEST(spawned_nodes(reg) > 90'000u);
+	BOOST_TEST(spawned_nodes(reg) < k_budget);
+	BOOST_TEST(spawned_nodes(reg) > k_budget / 2);
 	// What was built before the cut is whole: the first branch goes all the way down.
 	entt::entity at = root;
 	for (int level = 1; level <= k_levels; ++level) {
 		at = child_named(reg, at, "c0");
 		BOOST_REQUIRE(reg.valid(at));
 	}
+}
+
+// ---------------------------------------------------------------- what a prefab is open for (#924)
+
+// The node an outer file hangs below an instance is that file's content, not the prefab's: it may instantiate it too.
+BOOST_AUTO_TEST_CASE(AnInstanceBelowAnInstanceOfTheSamePrefab_IsNoCircle)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto tag = put("stack.prefab.desc", prefab_with_children(
+		R"({"name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"children":[)" + instance_child("m", "leaf.prefab.desc") + "]}"));
+	auto stack = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(stack);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *stack, "stack", tag);
+
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "tip", "m" }));
+	BOOST_TEST(reg.get<scn::prefab_instance>(n).source_prefab == leaf_tag);
+	const auto m = child_named(reg, n, "m");
+	BOOST_REQUIRE(reg.valid(m));
+	BOOST_TEST((child_names(reg, m) == std::vector<std::string>{ "tip" }));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(m));
+	BOOST_TEST(reg.get<scn::prefab_instance>(m).source_prefab == leaf_tag);
+	BOOST_TEST(spawned_nodes(reg) == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(ANodeARecordAddsBelowAnInstance_MayInstantiateTheSamePrefab)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto tag = put("grown.prefab.desc", prefab_with_children(
+		R"({"name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[{"target":[],"op":"add_node","value":)"
+		R"({"__id":"00000000000000e1","name":"added","components":{"ref":"memory://t/leaf.prefab.desc"}}}]})"));
+	auto grown = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(grown);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *grown, "grown", tag);
+
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "tip", "added" }));
+	const auto added = child_named(reg, n, "added");
+	BOOST_REQUIRE(reg.valid(added));
+	BOOST_TEST((child_names(reg, added) == std::vector<std::string>{ "tip" }));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
+	BOOST_TEST(reg.get<scn::prefab_instance>(added).source_prefab == leaf_tag);
+}
+
+// The node an outer file hangs below an instance is still inside that outer file: its reference to the file itself is
+// refused when the file is read (#952), so the node expands nothing.
+BOOST_AUTO_TEST_CASE(ANodeBelowAnInstance_ThatInstantiatesItsOwnFile_IsRefused)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto tag = put("stack.prefab.desc", prefab_with_children(
+		R"({"name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"children":[)" + instance_child("m", "stack.prefab.desc") + "]}"));
+	auto stack = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(stack);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *stack, "stack", tag);
+
+	const auto m = child_named(reg, child_named(reg, root, "n"), "m");
+	BOOST_REQUIRE(reg.valid(m));
+	BOOST_TEST(child_names(reg, m).empty());
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(m));
+	BOOST_TEST(spawned_nodes(reg) == 3u);
+}
+
+// A world, or a prefab spawned as such, is not a level of nesting: sixteen prefabs open one inside another below it.
+BOOST_AUTO_TEST_CASE(SixteenPrefabsNestBelowTheFileASpawnStartsFrom_TheNextOneIsRefused)
+{
+	constexpr int k_last = 17;
+	put("deep" + std::to_string(k_last) + ".prefab.desc", prefab_with_children(R"({"name":"end"})"));
+	for (int level = k_last - 1; level >= 0; --level) {
+		put("deep" + std::to_string(level) + ".prefab.desc",
+			prefab_with_children(instance_child("next", "deep" + std::to_string(level + 1) + ".prefab.desc")));
+	}
+	const auto tag = tag_of("deep0.prefab.desc");
+	auto deep = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(deep);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *deep, "deep", tag);
+
+	entt::entity at = root;
+	for (int level = 1; level < k_last; ++level) {
+		BOOST_TEST_CONTEXT("level " << level) {
+			at = child_named(reg, at, "next");
+			BOOST_REQUIRE(reg.valid(at));
+			BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(at));
+			BOOST_TEST(reg.get<scn::prefab_instance>(at).source_prefab == tag_of("deep" + std::to_string(level) + ".prefab.desc"));
+		}
+	}
+	const auto refused = child_named(reg, at, "next");
+	BOOST_REQUIRE(reg.valid(refused));
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(refused));
+	BOOST_TEST(child_names(reg, refused).empty());
+}
+
+// ---------------------------------------------------------------- hot reload of a circle and of a fan (#924)
+
+// The changed prefab is open while its live instance is rebuilt, as it is while it is spawned.
+BOOST_AUTO_TEST_CASE(HotReload_ACircleBackToTheReloadedPrefab_IsRefused_AndTheLiveNodeIsNoInstanceAnyMore)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto back_tag = put("back.prefab.desc", prefab_with_children(instance_child("again", "leaf.prefab.desc")));
+	const auto tag = put("loop.prefab.desc", prefab_with_children(instance_child("kid", "back.prefab.desc")));
+	auto loop = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(loop);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *loop, "loop", tag);
+
+	const auto kid = child_named(reg, root, "kid");
+	BOOST_REQUIRE(reg.valid(kid));
+	const auto again = child_named(reg, kid, "again");
+	BOOST_REQUIRE(reg.valid(again));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(again));
+	BOOST_TEST(reg.get<scn::prefab_instance>(again).source_prefab == leaf_tag);
+	BOOST_TEST(spawned_nodes(reg) == 3u);
+
+	put("back.prefab.desc", prefab_with_children(instance_child("again", "loop.prefab.desc")));
+	rs->signal_changed(back_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
+
+	BOOST_TEST((child_named(reg, root, "kid") == kid));
+	BOOST_TEST(reg.get<scn::prefab_instance>(kid).source_prefab == back_tag);
+	BOOST_TEST((child_named(reg, kid, "again") == again));
+	BOOST_TEST(child_names(reg, again).empty());
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(again));
+	BOOST_TEST(spawned_nodes(reg) == 2u);
+
+	take_apart(load<scn::prefab_desc>(tag));
+	take_apart(load<scn::prefab_desc>(back_tag));
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_CutAtTheNodeBudget_KeepsTheLiveChildrenItDidNotReach)
+{
+	constexpr int k_width = 6;
+	std::string children;
+	for (int i = 0; i < k_width; ++i) {
+		if (i > 0) children += ",";
+		children += R"({"name":"c)" + std::to_string(i) + R"("})";
+	}
+	const auto tag = put("wide.prefab.desc", prefab_with_children(children));
+	auto wide = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(wide);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *wide, "wide", tag);
+	const auto before = reg.get<scn::children_component>(root).children;
+	BOOST_REQUIRE(before.size() == static_cast<std::size_t>(k_width));
+
+	const node_budget budget(3);
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
+
+	BOOST_TEST((reg.get<scn::children_component>(root).children == before));
+	BOOST_TEST(std::ranges::all_of(before, [&] (entt::entity e) { return reg.valid(e); }));
+}
+
+// The budget is that of one call: two live instances that each fit in it do not get one each.
+BOOST_AUTO_TEST_CASE(HotReload_TwoInstancesShareOneNodeBudget_TheOneNotReachedKeepsItsLiveChildren)
+{
+	const auto tag = put("duo.prefab.desc", prefab_with_children(R"({"name":"old0"},{"name":"old1"})"));
+	auto duo = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(duo);
+
+	entt::registry reg;
+	const entt::entity roots[] = { reg.create(), reg.create() };
+	for (const auto root : roots) {
+		scn::assemble_prefab(*assembler, reg, root, *duo, "duo", tag);
+	}
+	const std::vector<entt::entity> before[] = {
+		reg.get<scn::children_component>(roots[0]).children, reg.get<scn::children_component>(roots[1]).children };
+
+	put("duo.prefab.desc", prefab_with_children(R"({"name":"new0"},{"name":"new1"})"));
+	rs->signal_changed(tag);
+	pump();
+	// A root and its two children: what one instance takes, and all there is for both.
+	const node_budget budget(3);
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
+
+	const std::vector<std::string> rebuilt_names{ "new0", "new1" };
+	std::size_t rebuilt = 0;
+	std::size_t untouched = 0;
+	for (std::size_t i = 0; i < 2; ++i) {
+		if (child_names(reg, roots[i]) == rebuilt_names) {
+			++rebuilt;
+		} else {
+			const bool alive = std::ranges::all_of(before[i], [&] (entt::entity e) { return reg.valid(e); });
+			if (alive && reg.get<scn::children_component>(roots[i]).children == before[i]) ++untouched;
+		}
+	}
+	BOOST_TEST(rebuilt == 1u);
+	BOOST_TEST(untouched == 1u);
+	BOOST_TEST(spawned_nodes(reg) == 4u);
+}
+
+// The live instance is reloaded on its own: what its file is inside is not open, so the circle closes one prefab later
+// than in a spawn from the top, and it does close.
+BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseFileNowComesBackToItselfThroughASecondFile_Ends)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto changed_tag = put("changed.prefab.desc", prefab_with_children(instance_child("again", "leaf.prefab.desc")));
+	const auto second_tag = put("second.prefab.desc", prefab_with_children(instance_child("to_changed", "changed.prefab.desc")));
+	const auto host_tag = put("host.prefab.desc", prefab_with_children(instance_child("kid", "second.prefab.desc")));
+	auto host = load<scn::prefab_desc>(host_tag);
+	BOOST_REQUIRE(host);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *host, "host", host_tag);
+
+	const auto kid = child_named(reg, root, "kid");
+	BOOST_REQUIRE(reg.valid(kid));
+	const auto to_changed = child_named(reg, kid, "to_changed");
+	BOOST_REQUIRE(reg.valid(to_changed));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(to_changed));
+	BOOST_REQUIRE(reg.get<scn::prefab_instance>(to_changed).source_prefab == changed_tag);
+	// An instance node, not the root of a prefab spawned as such: it remembers the node that references the prefab.
+	BOOST_REQUIRE(!reg.get<scn::prefab_instance>(to_changed).local_overrides.components.empty());
+	const auto again = child_named(reg, to_changed, "again");
+	BOOST_REQUIRE(reg.valid(again));
+	BOOST_TEST(spawned_nodes(reg) == 4u);
+
+	put("changed.prefab.desc", prefab_with_children(instance_child("again", "second.prefab.desc")));
+	rs->signal_changed(changed_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(changed_tag));
+
+	BOOST_TEST((child_named(reg, kid, "to_changed") == to_changed));
+	BOOST_TEST(reg.get<scn::prefab_instance>(to_changed).source_prefab == changed_tag);
+	BOOST_TEST((child_names(reg, to_changed) == std::vector<std::string>{ "again" }));
+	// One more level than a spawn of the host builds: the second file is opened once below the reloaded node.
+	BOOST_TEST((child_named(reg, to_changed, "again") == again));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(again));
+	BOOST_TEST(reg.get<scn::prefab_instance>(again).source_prefab == second_tag);
+	BOOST_TEST((child_names(reg, again) == std::vector<std::string>{ "to_changed" }));
+	// The reference back to the changed file is refused there.
+	const auto repeat = child_named(reg, again, "to_changed");
+	BOOST_REQUIRE(reg.valid(repeat));
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(repeat));
+	BOOST_TEST(child_names(reg, repeat).empty());
+	BOOST_TEST(spawned_nodes(reg) == 4u);
+
+	// From the top the host and the second file are open already: the circle closes at `again`.
+	entt::registry fresh;
+	auto fresh_root = fresh.create();
+	scn::assemble_prefab(*assembler, fresh, fresh_root, *host, "host", host_tag);
+	BOOST_TEST(spawned_nodes(fresh) == 3u);
+
+	take_apart(load<scn::prefab_desc>(changed_tag));
+	take_apart(load<scn::prefab_desc>(second_tag));
 }
 
 // ---------------------------------------------------------------- a desc holds no handle to itself (#952)
