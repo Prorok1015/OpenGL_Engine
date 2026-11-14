@@ -2,6 +2,8 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_prefab_document.h"
+#include "edt_inspector_target.h"
+#include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -580,6 +582,66 @@ BOOST_AUTO_TEST_CASE(Apply_WhenTheWriteFails_LeavesTheDocumentEditedAndSaysSo)
 	BOOST_TEST(saved.error.find("could not be written") != std::string::npos);
 	BOOST_TEST(document->is_dirty());
 	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(InspectorEdit_OfAPrefabSelection_GoesToTheDocument_AndNeverCommitsTheLevel)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::scene_document level;
+	const std::uint64_t level_generation = level.generation();
+	edt::inspector_target target;
+	target.select_prefab(document->id(), { 0xa1 }, document->working_replaced());
+	scn::prefab_desc::prefab_node* node = document->working_node(target.path());
+	BOOST_REQUIRE(node);
+	node->name = "arm3";
+
+	BOOST_TEST(edt::route_node_changed(target, document.get(), level));
+
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(preview_has_node_named("arm3"));
+	BOOST_TEST(!level.is_dirty());
+	BOOST_TEST(level.generation() == level_generation);
+}
+
+BOOST_AUTO_TEST_CASE(InspectorEdit_OfALevelSelection_CommitsTheLevel)
+{
+	edt::scene_document level;
+	const std::uint64_t level_generation = level.generation();
+	edt::inspector_target target;
+
+	BOOST_TEST(edt::route_node_changed(target, nullptr, level));
+
+	BOOST_TEST(level.generation() == level_generation + 1);
+}
+
+BOOST_AUTO_TEST_CASE(InspectorEdit_OfAPrefabThatIsGone_GoesNowhere)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::scene_document level;
+	const std::uint64_t level_generation = level.generation();
+	edt::inspector_target target;
+	target.select_prefab(document->id() + 1, {}, 0);
+
+	BOOST_TEST(!edt::route_node_changed(target, document.get(), level));
+	BOOST_TEST(!edt::route_node_changed(target, nullptr, level));
+
+	BOOST_TEST(level.generation() == level_generation);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(WorkingReplaced_MovesWithARevert_SoAStalePointerIsKnown)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	const std::uint64_t replaced = document->working_replaced();
+	BOOST_REQUIRE(rename_arm("arm2"));
+	BOOST_TEST(document->working_replaced() == replaced);
+
+	BOOST_TEST_REQUIRE(document->revert().empty());
+
+	BOOST_TEST(document->working_replaced() > replaced);
 }
 
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)

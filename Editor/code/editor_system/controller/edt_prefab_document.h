@@ -51,6 +51,8 @@ namespace edt
 		const res::tag& source() const override { return m_source_tag; }
 		// Moves with every edit and every revert.
 		std::uint64_t generation() const override { return m_generation; }
+		// Moves when the working copy is replaced as a whole (open, revert): pointers into its nodes are stale after that.
+		std::uint64_t working_replaced() const { return m_replaced; }
 
 		// Apply: writes the working copy over the prefab's file (see save()).
 		bool can_save() const override { return m_open; }
@@ -125,6 +127,7 @@ namespace edt
 		// code_version_of the file's bytes when it was read or last written: an Apply refuses a file that is not this.
 		std::string m_disk_version;
 		std::uint64_t m_generation = 0;
+		std::uint64_t m_replaced = 0;
 		bool m_changed_on_disk = false;
 		bool m_lower_layer = false;
 		res::resource_system* m_watching = nullptr;

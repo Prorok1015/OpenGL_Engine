@@ -147,6 +147,7 @@ void edt::prefab_document::close()
 // copy_to leaves out what names a file (the tag, the __guid, the __parent): the copy is written back over that file.
 void edt::prefab_document::take_from(const scn::prefab_desc& source)
 {
+	++m_replaced;
 	source.copy_to(*m_working);
 	m_working->set_guid(source.get_guid());
 	m_working->set_parent(source.get_parent());

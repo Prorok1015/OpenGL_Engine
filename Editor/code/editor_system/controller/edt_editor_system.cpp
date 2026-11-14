@@ -1976,8 +1976,25 @@ void edt::editor_system::wire_panel_callbacks()
 	});
 
 	m_inspector_panel->set_on_node_changed([this]() {
-		m_state.commit("Edit node");
+		route_node_changed(m_inspector_target, prefab_of(m_context->documents()), m_state);
 	});
+	m_prefab_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_prefab_node(path); });
+	// A level selection takes the Inspector back from the prefab window.
+	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
+		if (!sel.empty()) release_inspector_to_level();
+	}));
+	// The working copy was replaced (Revert, a reload, another prefab): the node pointer the Inspector holds is stale.
+	m_inspector_connections.push_back(m_context->events().document_changed.subscribe([this](document_id id, std::uint64_t) {
+		if (!m_inspector_target.is_prefab() || id != m_inspector_target.prefab()) return;
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab || prefab->id() != id) return;
+		if (prefab->working_replaced() == m_inspector_target.replaced()) return;
+		m_inspector_target.set_replaced(prefab->working_replaced());
+		m_inspector_panel->set_selected_node(prefab->working_node(m_inspector_target.path()));
+	}));
+	m_inspector_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
+		if (m_inspector_target.is_prefab() && id == m_inspector_target.prefab()) release_inspector_to_level();
+	}));
 
 	m_viewport_panel->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
@@ -2444,6 +2461,24 @@ bool edt::editor_system::poll_pending_desc()
 
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
+void edt::editor_system::select_prefab_node(const std::vector<std::uint64_t>& path)
+{
+	prefab_document* prefab = prefab_of(m_context->documents());
+	if (!prefab) return;
+	// The level's selection ends first (its event would otherwise hand the Inspector back to the level).
+	m_context->selection().clear();
+	m_inspector_target.select_prefab(prefab->id(), path, prefab->working_replaced());
+	m_inspector_panel->set_selected_node(prefab->working_node(path));
+}
+
+void edt::editor_system::release_inspector_to_level()
+{
+	if (!m_inspector_target.is_prefab()) return;
+	m_inspector_target.reset();
+	m_inspector_panel->set_selected_node(nullptr);
+	m_prefab_panel->clear_selection();
+}
+
 void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
 {
 	prefab_document* prefab = prefab_of(m_context->documents());
@@ -2484,6 +2519,7 @@ void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 
 void edt::editor_system::open_prefab_now(const res::tag& tag)
 {
+	release_inspector_to_level();
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
 	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
 	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
@@ -2530,6 +2566,8 @@ bool edt::editor_system::person_is_editing() const
 
 void edt::editor_system::close_prefab_editor()
 {
+	// Before the document goes: the Inspector holds a pointer into its working copy.
+	release_inspector_to_level();
 	auto& documents = m_context->documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
 		documents.close(prefab->id());
