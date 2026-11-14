@@ -188,6 +188,19 @@ bool desc::desc_system::is_registered(std::string_view type_name) const
 	return find_factory(type_name) != nullptr;
 }
 
+std::vector<std::string> desc::desc_system::type_names() const
+{
+	std::vector<std::string> names = m_parent ? m_parent->type_names() : std::vector<std::string>{};
+	names.reserve(names.size() + factory_map.size() + m_migrations.size());
+	for (const auto& entry : factory_map) names.push_back(entry.first);
+	for (const auto& entry : m_migrations) names.push_back(entry.first);
+	for (std::string& name : m_schemas.type_names()) names.push_back(std::move(name));
+	std::ranges::sort(names);
+	const auto [first, last] = std::ranges::unique(names);
+	names.erase(first, last);
+	return names;
+}
+
 std::vector<std::string> desc::desc_system::get_component_type_names() const
 {
 	std::vector<std::string> names = m_parent ? m_parent->get_component_type_names() : std::vector<std::string>{};

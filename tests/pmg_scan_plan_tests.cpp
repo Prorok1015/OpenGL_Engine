@@ -4,6 +4,7 @@
 #include <snk/project_migration/pmg_scan.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/resource/res_asset_meta.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -13,6 +14,7 @@
 #include <map>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
@@ -180,6 +182,61 @@ BOOST_AUTO_TEST_CASE(ATypeRegisteredInAChildLayer_IsKnown)
 	const pmg::scan_result scan = pmg::scan_project(copy.root(), layer);
 	BOOST_TEST((kind_of(scan, "res/module/unknown.desc") == pmg::file_class::current));
 	BOOST_TEST((kind_of(scan, "res/worlds/w_v1.desc") == pmg::file_class::outdated));
+}
+
+// #761: the editor scans on a worker thread with a snapshot of the types taken on the main thread. Every file is classified
+// as the game layer classifies its text, and a type registered after the snapshot is not seen by it.
+BOOST_AUTO_TEST_CASE(TheTypeCatalog_ScansAsTheGameLayer)
+{
+	desc::desc_system layer(*rs, descs.get());
+	const pmg::type_catalog catalog = pmg::type_catalog::from(layer);
+	BOOST_TEST(catalog.is_known("camera_desc"));
+	BOOST_TEST(catalog.current_version("camera_desc") == layer.current_version("camera_desc"));
+	BOOST_TEST(!catalog.is_known("migration_fixture_module_desc"));
+	BOOST_TEST(catalog.current_version("no_such_type") == 1);
+	const std::vector<std::string> names = layer.type_names();
+	BOOST_TEST(std::ranges::is_sorted(names));
+	BOOST_TEST((std::ranges::adjacent_find(names) == names.end()));
+
+	const pmg::scan_result by_catalog = pmg::scan_project(copy.root(), catalog);
+	const pmg::scan_result by_layer = pmg::scan_project(copy.root(), layer);
+	BOOST_REQUIRE(by_catalog.files.size() == by_layer.files.size());
+	BOOST_TEST((by_catalog.manifest.kind == by_layer.manifest.kind));
+	std::size_t classified = 0;
+	for (std::size_t i = 0; i < by_catalog.files.size(); ++i) {
+		const pmg::scanned_file& file = by_catalog.files[i];
+		const pmg::scanned_file& other = by_layer.files[i];
+		BOOST_TEST_CONTEXT(file.path) {
+			BOOST_TEST(file.path == other.path);
+			BOOST_TEST((file.kind == other.kind));
+			BOOST_TEST(file.reason == other.reason);
+			BOOST_TEST((file.unknown_types == other.unknown_types));
+			BOOST_TEST(file.has_resource == other.has_resource);
+			BOOST_TEST(file.root_guid == other.root_guid);
+			BOOST_TEST(file.resource_path == other.resource_path);
+			BOOST_REQUIRE(file.objects.size() == other.objects.size());
+			for (std::size_t o = 0; o < file.objects.size(); ++o) {
+				BOOST_TEST(file.objects[o].type == other.objects[o].type);
+				BOOST_TEST(file.objects[o].version == other.objects[o].version);
+				BOOST_TEST(file.objects[o].current == other.objects[o].current);
+				BOOST_TEST(file.objects[o].known == other.objects[o].known);
+			}
+			// A desc of the fixture classifies from its text with the game layer itself as the catalog's scan did.
+			if (file.path.ends_with(".desc") && file.kind != pmg::file_class::invalid) {
+				const pmg::scanned_file direct = pmg::classify_desc(file.path, read_text(copy.root() / file.path), layer);
+				BOOST_TEST((direct.kind == file.kind));
+				++classified;
+			}
+		}
+	}
+	BOOST_TEST(classified > 5u);
+	BOOST_TEST((kind_of(by_catalog, "res/cameras/cam_v1.desc") == pmg::file_class::outdated));
+
+	// A type the layer learns after the snapshot: the snapshot's scan does not know it, a new one does.
+	layer.register_schema(desc::parse_type_schema(json::parse(R"({"name": "migration_fixture_module_desc", "kind": "component",
+		"fields": [{ "name": "hp", "kind": "i32", "default": 0 }]})").as_object()));
+	BOOST_TEST((kind_of(pmg::scan_project(copy.root(), catalog), "res/module/unknown.desc") == pmg::file_class::unknown_type));
+	BOOST_TEST((kind_of(pmg::scan_project(copy.root(), pmg::type_catalog::from(layer)), "res/module/unknown.desc") == pmg::file_class::current));
 }
 
 BOOST_AUTO_TEST_CASE(ABigFileALinkAndASidecar)

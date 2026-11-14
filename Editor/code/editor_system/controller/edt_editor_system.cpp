@@ -92,6 +92,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_start_level.h>
 #include <snk/project/prj_create.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/project/prj_project.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
@@ -119,6 +120,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -1135,6 +1137,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 					|| editor_layer->has_implicit_prefix("edt/load_level");
 				if (settling) return true;
 				offer_migration_rollback(root);
+				start_migration_scan(root);
 				return false;
 			});
 		}
@@ -1611,6 +1614,73 @@ void edt::editor_system::offer_migration_rollback(const std::filesystem::path& r
 		[this, id = offer.id](std::optional<std::size_t> answer) {
 			if (answer && *answer == 0) open_migration_rollback(id);
 		});
+}
+
+void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
+{
+	const auto user_roots = m_res.mount_roots("edt");
+	const std::filesystem::path settings_dir = (user_roots.empty() ? default_user_data_dir() : user_roots.back()) / "settings";
+	const std::filesystem::path settings_file = settings_dir / "migration_notice.json";
+	migration_notice_model::ports ports;
+	ports.load = [settings_file]() -> std::optional<std::string> {
+		std::error_code ec;
+		if (!std::filesystem::is_regular_file(settings_file, ec)) return std::nullopt;
+		std::ifstream in(settings_file, std::ios::binary);
+		if (!in) return std::nullopt;
+		return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	};
+	ports.save = [settings_file](const std::string& text) -> std::optional<std::string> {
+		std::error_code ec;
+		std::filesystem::create_directories(settings_file.parent_path(), ec);
+		return prj::write_text_atomically(settings_file, text);
+	};
+	m_migration_notice = std::make_unique<migration_notice_model>(std::move(ports));
+
+	// The types are read here, on the main thread; the scan reads only files.
+	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation };
+	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs())](ds::task_context&) {
+		prj::migration::project_step_registry steps;
+		prj::migration::register_project_steps(steps);
+		return summarize_scan(prj::migration::scan_project(root, catalog), steps);
+	};
+	m_migration_scan_running = true;
+	m_context->jobs().start(ds::lane::io, ds::task_desc{ "Check the project's format", "project", false }, m_lifetime, std::move(work),
+		[this, ticket](ds::task_result<migration_scan_summary>& result) {
+			m_migration_scan_running = false;
+			if (!result.ok() || result.value == nullptr || m_migration_notice == nullptr) return;
+			// The editor never changes its project; the game layer may have (a module loaded or reloaded meanwhile).
+			const migration_notice_model::scan_ticket now{ ticket.project, m_game_layer_generation };
+			if (m_migration_notice->deliver(ticket, now, std::move(*result.value)) && m_migration_notice->visible()) {
+				egLOG_INFO("project/migrate", "{} Project > Migrate Project... shows the plan.", m_migration_notice->text());
+			}
+		});
+	editor_layer->register_implicit("edt/migration_notice", [this] { return draw_migration_notice(); });
+}
+
+bool edt::editor_system::draw_migration_notice()
+{
+	if (m_migration_notice == nullptr) return false;
+	if (m_migration_scan_running) return true;
+	if (m_migration_running) m_migration_notice->hide();
+	if (!m_migration_notice->visible()) return false;
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	// Above the agent policy's notice, which takes the corner.
+	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 110.f),
+		ImGuiCond_Always, ImVec2(1.f, 1.f));
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
+	if (ImGui::Begin("Project format##migration_notice", nullptr, flags)) {
+		const std::string text = m_migration_notice->text();
+		ImGui::TextUnformatted(text.c_str());
+		if (ImGui::Button("Open Migration...")) {
+			m_migration_notice->open();
+			open_migration_window();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Later")) static_cast<void>(m_migration_notice->later());
+	}
+	ImGui::End();
+	return true;
 }
 
 void edt::editor_system::open_agents_panel()
