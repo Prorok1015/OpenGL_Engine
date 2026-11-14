@@ -253,8 +253,8 @@ namespace desc
 					return m_res_system.refused<T>(reference, std::move(why));
 				}
 				// A desc that held a handle to its own file would keep itself alive for good: the block owns the desc, the
-				// desc the block (#952). The reference is refused like one it may not make.
-				if (reference.is_valid() && reference == owner.get_tag()) {
+				// desc the block (#952). The reference is refused like one it may not make; an alias of the file is the file.
+				if (reference.is_valid() && (reference == owner.get_tag() || m_res_system.resolve_alias(reference) == owner.get_tag())) {
 					std::string why = std::format("'{}' refers to itself", reference.view());
 					res::report_load_warning(res::diagnostic_kind::cycle, json_path, why);
 					return m_res_system.refused<T>(reference, std::move(why));

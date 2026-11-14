@@ -3,10 +3,18 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/level/scn_node_index.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_index.h>
+#include <snk/resource/res_diagnostics.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <boost/json/monotonic_resource.hpp>
+#include <cstddef>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // Behavior of prefab assembly: parse/serialize, hierarchy spawning, override merge for explicit
 // nested instances, and hot reload. Descs live in a RAM resolver; no GPU, window or disk.
@@ -1509,6 +1517,162 @@ BOOST_AUTO_TEST_CASE(AFanOfInstances_IsCutAtTheNodeBudgetOfOneSpawn)
 		at = child_named(reg, at, "c0");
 		BOOST_REQUIRE(reg.valid(at));
 	}
+}
+
+// ---------------------------------------------------------------- a desc holds no handle to itself (#952)
+
+namespace {
+
+// An asset index that knows one file.
+class one_file_index final : public res::asset_index
+{
+public:
+	one_file_index(res::tag file, const res::asset_id& id) : m_file(std::move(file)), m_id(id) {}
+
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		return tag == m_file ? std::optional{ m_id } : std::nullopt;
+	}
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		return id == m_id ? std::optional{ m_file } : std::nullopt;
+	}
+
+private:
+	res::tag m_file;
+	res::asset_id m_id;
+};
+
+// A child whose typed component names its parent desc by `reference`, a JSON value.
+std::string parent_child(std::string_view name, std::string_view reference)
+{
+	return std::string(R"({"name":")") + std::string(name) + R"(","components":{"ref":{"__type":"prefab_desc","__parent":)"
+		+ std::string(reference) + "}}}";
+}
+
+// Where the load behind `handle` reported a reference of a file to itself, sorted.
+std::vector<std::string> self_references(const res::res_handle<desc::desc_base>& handle)
+{
+	res::diagnostics_collector collector;
+	handle.collect_into(collector);
+	std::vector<std::string> paths;
+	for (const auto& item : collector.items()) {
+		if (item.kind == res::diagnostic_kind::cycle && item.reason.find("refers to itself") != std::string::npos) {
+			paths.push_back(item.json_path);
+		}
+	}
+	std::ranges::sort(paths);
+	return paths;
+}
+
+bool reference_refused(const res::res_handle<desc::desc_base>& handle, std::size_t child)
+{
+	const auto prefab = std::dynamic_pointer_cast<scn::prefab_desc>(handle.get());
+	if (!prefab || prefab->get_root().children.size() <= child) return false;
+	const auto& components = prefab->get_root().children[child].components;
+	const auto found = components.find("ref");
+	return found != components.end() && found->second.parent_desc.has_error();
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(APrefabThatRefersToItself_ReportsACycle_AndGoesWithItsLastHandle)
+{
+	const auto tag = put("own.prefab.desc", prefab_with_children(instance_child("again", "own.prefab.desc")));
+	std::weak_ptr<desc::desc_base> watched;
+	{
+		auto handle = require_loaded<desc::desc_base>(tag);
+		BOOST_REQUIRE(handle.is_ready());
+		watched = handle.get();
+		BOOST_TEST(!watched.expired());
+		BOOST_TEST(reference_refused(handle, 0));
+
+		res::diagnostics_collector collector;
+		handle.collect_into(collector);
+		const auto items = collector.items();
+		const auto cycle = std::ranges::find_if(items, [](const res::diagnostic& d) { return d.kind == res::diagnostic_kind::cycle; });
+		BOOST_REQUIRE((cycle != items.end()));
+		BOOST_TEST((cycle->severity == res::diagnostic_severity::warning));
+		BOOST_TEST(cycle->resource == tag.string());
+		BOOST_TEST(cycle->json_path == "/children/0/components/ref");
+		BOOST_TEST(cycle->reason.find("own.prefab.desc") != std::string::npos);
+		BOOST_TEST(self_references(handle).size() == 1u);
+	}
+	pump();
+	BOOST_TEST(watched.expired());
+}
+
+BOOST_AUTO_TEST_CASE(APrefabThatRefersToItselfByGuid_IsRefusedTheSameWay)
+{
+	const auto tag = tag_of("by_guid.prefab.desc");
+	const res::asset_id id{ 0x6f1c0b5200004000ull, 0x8000000000000952ull };
+	rs->set_asset_index(std::make_shared<one_file_index>(tag, id));
+	const std::string guid = res::to_text(id);
+	// The second one carries a path the file no longer has: the guid decides.
+	put("by_guid.prefab.desc", prefab_with_children(
+		parent_child("bare", R"({"guid":")" + guid + R"("})") + ","
+		+ parent_child("moved", R"({"guid":")" + guid + R"(","path":"memory://t/old_name.prefab.desc"})")));
+
+	std::weak_ptr<desc::desc_base> watched;
+	{
+		auto handle = require_loaded<desc::desc_base>(tag);
+		BOOST_REQUIRE(handle.is_ready());
+		watched = handle.get();
+		BOOST_TEST(reference_refused(handle, 0));
+		BOOST_TEST(reference_refused(handle, 1));
+		BOOST_TEST((self_references(handle) == std::vector<std::string>{
+			"/children/0/components/ref/__parent", "/children/1/components/ref/__parent" }));
+	}
+	pump();
+	BOOST_TEST(watched.expired());
+	rs->set_asset_index(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(APrefabThatRefersToItselfThroughAnAlias_IsRefusedTheSameWay)
+{
+	const auto tag = put("named.prefab.desc", prefab_with_children(instance_child("again", "nick.prefab.desc")));
+	rs->register_alias(tag_of("nick.prefab.desc"), tag);
+
+	std::weak_ptr<desc::desc_base> watched;
+	{
+		auto handle = require_loaded<desc::desc_base>(tag);
+		BOOST_REQUIRE(handle.is_ready());
+		watched = handle.get();
+		BOOST_TEST(reference_refused(handle, 0));
+		BOOST_TEST((self_references(handle) == std::vector<std::string>{ "/children/0/components/ref" }));
+	}
+	pump();
+	BOOST_TEST(watched.expired());
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_AFileRewrittenToReferToItself_IsRefusedTheSameWay)
+{
+	const auto tag = put("turn.prefab.desc", prefab_with_children(R"({"name":"again"})"));
+	entt::registry reg;
+	const auto root = reg.create();
+	{
+		auto before = require_loaded<desc::desc_base>(tag);
+		const auto prefab = std::dynamic_pointer_cast<scn::prefab_desc>(before.get());
+		BOOST_REQUIRE(prefab);
+		BOOST_TEST(self_references(before).empty());
+		scn::assemble_prefab(*assembler, reg, root, *prefab, "turn", tag);
+	}
+	BOOST_REQUIRE(reg.valid(child_named(reg, root, "again")));
+
+	put("turn.prefab.desc", prefab_with_children(instance_child("again", "turn.prefab.desc")));
+	rs->signal_changed(tag);
+	pump();
+	auto changed = require_loaded<desc::desc_base>(tag);
+	BOOST_REQUIRE(changed.get_sync());
+	BOOST_TEST(reference_refused(changed, 0));
+	BOOST_TEST((self_references(changed) == std::vector<std::string>{ "/children/0/components/ref" }));
+
+	scn::trigger_hot_reload(*assembler, reg, changed);
+
+	const auto again = child_named(reg, root, "again");
+	BOOST_REQUIRE(reg.valid(again));
+	BOOST_TEST(child_names(reg, again).empty());
+	BOOST_TEST(spawned_nodes(reg) == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
