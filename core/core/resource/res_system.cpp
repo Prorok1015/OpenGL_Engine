@@ -1756,6 +1756,8 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
     const auto it = remap.find(key);
     return it == remap.end() ? key : it->second;
   };
+  // Moved watchers of keys with a signal still queued: the queued delivery looks under the old key (#940).
+  std::unordered_map<res::tag, std::vector<watch_key>> redeliver;
   for (const auto &[old_key, new_key] : remap) {
     // A live entry already under the new key wins (the other spelling's block): requests get it. The one that loses
     // stays under the key, displaced (#858). One pin per node and type (#869): a pin the new key has stays, else the
@@ -1800,12 +1802,24 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
       auto moving = std::move(watched->second);
       m_watchers.erase(watched);
       auto &into = m_watchers[new_key];
+      const bool undelivered = m_undelivered.contains(old_key);
       for (auto &[key, entry] : moving) {
         // Watching the new key from now on: a signal of it queued before the move is not theirs.
         entry.epoch = ++m_watch_epoch;
-        into.try_emplace(key, std::move(entry));
+        if (into.try_emplace(key, std::move(entry)).second && undelivered) {
+          redeliver[new_key].push_back(key);
+        }
       }
     }
+  }
+  // Once per moved key, however many signals of the old one wait: one reload brings them up to date.
+  for (auto &moved : redeliver) {
+    const std::uint64_t epoch = ++m_watch_epoch;
+    m_tasks.post_main([this, node = moved.first, owners = std::move(moved.second), epoch, alive = m_lifetime.token()]() {
+      if (!alive.expired()) {
+        deliver_to_watchers(node, epoch, &owners);
+      }
+    });
   }
   std::unordered_map<res::tag, res::tag> alias_edges;
   for (const auto &[original, alias] : m_alias_edges) {
@@ -1899,6 +1913,9 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     batch = changed_batch(tag);
     evict_batch_locked(batch, alias_nodes);
     epoch = ++m_watch_epoch;
+    for (const auto &changed : batch) {
+      ++m_undelivered[changed];
+    }
   }
 
   // Every tag of the batch reaches the layers: a layer's resource may be built from any of them (a layer prefab on a
@@ -1911,6 +1928,7 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     }
     for (const auto &changed : batch) {
       deliver_to_watchers(changed, epoch);
+      signal_delivered(changed);
     }
   });
 
@@ -2124,14 +2142,33 @@ void res::resource_system::forget_erased(const res::tag &tag) {
   }
 }
 
-void res::resource_system::deliver_to_watchers(const res::tag &node,
-                                               std::uint64_t signal_epoch) {
+void res::resource_system::signal_delivered(const res::tag &node) {
+  std::unique_lock lock(m_cache_mutex);
+  if (const auto it = m_undelivered.find(node); it != m_undelivered.end() && --it->second == 0) {
+    m_undelivered.erase(it);
+  }
+}
+
+std::size_t res::resource_system::undelivered_signal_count() const {
+  std::shared_lock lock(m_cache_mutex);
+  std::size_t out = 0;
+  for (const auto &[node, count] : m_undelivered) {
+    out += count;
+  }
+  return out;
+}
+
+void res::resource_system::deliver_to_watchers(const res::tag &node, std::uint64_t signal_epoch,
+                                               const std::vector<std::pair<void *, std::string>> *only) {
   // Only watchers registered before the signal: a load that follows a signal registers its own watcher.
   std::vector<std::pair<watch_key, std::uint64_t>> targets;
   {
     std::shared_lock lock(m_cache_mutex);
     if (auto it = m_watchers.find(node); it != m_watchers.end()) {
       for (const auto &[key, entry] : it->second) {
+        if (only && std::ranges::find(*only, key) == only->end()) {
+          continue;
+        }
         if (entry.epoch < signal_epoch) {
           targets.emplace_back(key, entry.epoch);
         }

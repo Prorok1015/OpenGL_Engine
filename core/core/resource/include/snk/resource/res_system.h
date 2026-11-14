@@ -278,6 +278,9 @@ namespace res
 		// Read-only: how many sweeps of the hot reload graph have run. For tests and diagnostics.
 		std::size_t edge_sweep_count() const;
 
+		// Read-only: the signals queued for the main thread and not delivered yet, over all keys. For tests.
+		std::size_t undelivered_signal_count() const;
+
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
 			std::shared_ptr<T> made = std::make_unique<T>(prt, std::forward<ARGS>(args)...);
@@ -555,7 +558,11 @@ namespace res
 
 		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
-		void deliver_to_watchers(const res::tag& node, std::uint64_t signal_epoch);
+		// `only`: these owners' watchers of `node` (by watch key), not all of them.
+		void deliver_to_watchers(const res::tag& node, std::uint64_t signal_epoch,
+			const std::vector<std::pair<void*, std::string>>* only = nullptr);
+		// A queued signal of `node` was delivered: it no longer counts in m_undelivered.
+		void signal_delivered(const res::tag& node);
 		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
 		// lands in between still reaches `dependent`. A load that was evicted meanwhile (`block` is no longer cached
 		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
@@ -746,6 +753,10 @@ namespace res
 		std::vector<change_subscription> m_change_subscriptions;
 		std::uint64_t m_next_subscription = 0;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
+		// How many signals of each key are queued for the main thread and not delivered yet, guarded by m_cache_mutex. A
+		// rebind that moves the watchers of such a key delivers to them again under the new key: the queued delivery
+		// looks under the old one and finds nobody (#940).
+		std::unordered_map<res::tag, std::uint32_t> m_undelivered;
 
 		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it
 		// (what signal_changed follows) and tag -> its dependencies (to replace them when the tag loads again).
