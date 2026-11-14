@@ -1413,6 +1413,24 @@ BOOST_AUTO_TEST_CASE(AReset_TakesTheRecordsOut_InOneRecord_AndAnUndoPutsThemBack
 	BOOST_TEST(!document.own().contains("speed"));
 }
 
+BOOST_AUTO_TEST_CASE(AMoveOfAListItem_IsOneRecordOfTheHistory_AndUndoPutsTheOrderBack)
+{
+	const res::tag tag = put("list.desc", R"({"__type":"test.config","__guid":"g1","goals":[1,2,3,4]})");
+	edt::data_document doc = make();
+	BOOST_REQUIRE(doc.open(tag).opened);
+	const json::object before = doc.own();
+	BOOST_REQUIRE(doc.edit([](json::value& shown) {
+		return edt::schema_ui::move_list_item(shown.as_object().at("goals").as_array(), 0, 2);
+	}));
+	doc.commit_pending();
+	BOOST_TEST(doc.history().size() == 1u);
+	BOOST_TEST((doc.own().at("goals") == json::parse("[2,3,1,4]")));
+	BOOST_REQUIRE(doc.undo());
+	BOOST_TEST((doc.own() == before));
+	BOOST_REQUIRE(doc.redo());
+	BOOST_TEST((doc.own().at("goals") == json::parse("[2,3,1,4]")));
+}
+
 BOOST_AUTO_TEST_CASE(AnUnset_OfAnInheritedOptional_WritesANull_OfAnOwnOne_TakesTheRecordOut_BothUndo)
 {
 	put("parent.desc", R"({"__type":"test.config","speed":2.0,"extra":2.5})");
