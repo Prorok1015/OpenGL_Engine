@@ -738,6 +738,8 @@ class window_panel final : public edt::panel_base
 {
 public:
 	window_panel(std::string_view id, std::string_view title) : panel_base(id, title) {}
+	// The prefab editor registers under one title and shows another one (its document, a [*]) after that.
+	void show_title(std::string title) { m_title = std::move(title); }
 
 protected:
 	void on_render() override {}
@@ -813,10 +815,11 @@ BOOST_AUTO_TEST_CASE(ThePrefabWindowWithItsDocumentAndMarkInTheTitle_StillGivesI
 	const edt::registration kind_registration = context->asset_kinds().add_preview(std::move(kind));
 	edt::previewable_document* preview = documents.open_preview("test.preview", res::tag::make("a.preview"));
 	BOOST_REQUIRE(preview != nullptr);
-	auto prefab_window = std::make_shared<window_panel>("prefab_editor", "Prefab: arm [*]###prefab_editor");
+	auto prefab_window = std::make_shared<window_panel>("prefab_editor", "Prefab Editor");
 	const edt::registration prefab_registration = context->panels().add({
 		.id = "prefab_editor", .title = "Prefab Editor", .slot = edt::dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = prefab_window });
+	prefab_window->show_title("Prefab: arm [*]###prefab_editor");
 
 	const auto frame = [&] {
 		ImGui::NewFrame();
