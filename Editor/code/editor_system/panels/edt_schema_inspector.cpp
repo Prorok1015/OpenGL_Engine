@@ -622,7 +622,8 @@ namespace
 		if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
 			query = buffer.data();
 		}
-		const edt::picker::candidates_page& page = edt::picker::cached_candidates(*cache, catalog, edt::picker::filter_of(field), query, k_picker_rows);
+		const edt::picker::filter wanted = edt::picker::filter_of(field);
+		const edt::picker::candidates_page& page = edt::picker::cached_candidates(*cache, catalog, wanted, query, k_picker_rows);
 		if (page.unread > 0) {
 			ImGui::TextDisabled("%zu files, %zu descs not read yet", page.total, page.unread);
 		} else {
