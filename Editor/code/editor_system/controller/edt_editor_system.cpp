@@ -66,6 +66,8 @@
 #include "edt_curl_transport.h"
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
+#include "edt_live_consent.h"
+#include "edt_settings.h"
 #include "edt_play_commands.h"
 #include "edt_runtime_commands.h"
 #include "edt_bus_commands.h"
@@ -1336,6 +1338,12 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 {
 	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
 		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
+	std::optional<std::string> project_key;
+	if (snk_dir) {
+		std::error_code ec;
+		const std::filesystem::path root = std::filesystem::weakly_canonical(snk_dir->parent_path(), ec);
+		project_key = fs_paths::generic_utf8_of(ec ? snk_dir->parent_path() : root);
+	}
 	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
 
 	live_mode_options live;
@@ -1373,11 +1381,13 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
 	};
-	if (snk_dir) {
-		live.store_enabled = [this, dir = *snk_dir](bool enabled) {
-			auto problem = update_build_settings(dir,[enabled](build_settings& settings) { settings.live_enabled = enabled; });
-			m_build_settings_panel->refresh_if_clean();
-			return problem;
+	if (project_key) {
+		live.store_enabled = [this, key = *project_key](bool enabled) -> std::optional<std::string> {
+			const std::string text = with_live_consent(read_setting(m_res, k_live_mode_settings), key, enabled);
+			if (!write_setting(m_res, k_live_mode_settings, text)) {
+				return std::format("edt://settings/{} cannot be written", k_live_mode_settings);
+			}
+			return std::nullopt;
 		};
 	}
 	live.on_toggled = [this] {
@@ -1393,13 +1403,18 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	};
 	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
 	m_live_mode->watch(m_res);
-	m_build_settings_panel->set_on_settings_applied([this](const build_settings& settings) { m_live_mode->follow_settings(settings); });
 	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
+	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this](bool enabled) {
+		if (auto refused = m_live_mode->set_enabled(enabled, true)) {
+			egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+		}
+	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
-	if (snk_dir && load_build_settings(*snk_dir).live_enabled) {
+	if (snk_dir && project_key
+		&& live_mode_at_open(load_build_settings(*snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
 		if (auto refused = m_live_mode->set_enabled(true, false)) {
-			egLOG_WARN("editor/build", "live mode is on in .snk/build.json but stays off: {}", *refused);
+			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
 		}
 	}
 }
