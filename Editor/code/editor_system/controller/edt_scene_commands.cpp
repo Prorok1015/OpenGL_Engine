@@ -1,5 +1,6 @@
 #include "edt_scene_commands.h"
 #include "edt_override_edit.h"
+#include "edt_reference.h"
 #include "edt_scene_document.h"
 #include "edt_scene_ref.h"
 #include "edt_document_cast.h"
@@ -119,6 +120,25 @@ namespace {
 		std::string why;
 	};
 
+	// A {guid, path} reference (EPIC-57 section 4.4) is held to the rule of #697 where it leads: the file that holds its
+	// guid, else its path. One that leads nowhere (no file has the guid, no path) is refused.
+	std::optional<reference_issue> reference_object_refusal(const json::value& value, const res::resource_system* resources,
+		std::string_view owner_protocol)
+	{
+		if (std::string why = edt::reference_object_problem(value.as_object()); !why.empty()) return reference_issue{ {}, std::move(why) };
+		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
+		if (!target) return reference_issue{ {}, "not a reference" };
+		if (target->unknown_id && target->tag.view().empty()) {
+			return reference_issue{ {}, std::format("no file has the ID {} and the reference has no path", res::to_text(target->reference.guid)) };
+		}
+		// The written path is what a game without an asset index loads: it follows the rule too, wherever the guid leads.
+		if (const std::string written = edt::reference_path_text(value.as_object()); !written.empty()) {
+			if (std::string why = reference_refusal(json::string(written), owner_protocol); !why.empty()) return reference_issue{ "path", std::move(why) };
+		}
+		if (std::string why = reference_refusal(json::string(target->tag.view()), owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+		return std::nullopt;
+	}
+
 	std::optional<reference_issue> under(std::optional<reference_issue> issue, std::string_view step)
 	{
 		if (issue) issue->path = issue->path.empty() ? std::string(step) : std::format("{}/{}", step, issue->path);
@@ -130,7 +150,7 @@ namespace {
 
 	// The walk goes over the patch; `merged` is the same place in the component as it will be after the patch (null when
 	// it has none), which names the type of an inline desc a partial patch leaves out (#740).
-	std::optional<reference_issue> references_of(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& data,
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, const res::resource_system* resources, const desc::type_schema& schema, const json::value& data,
 		const json::value* merged, std::string_view owner_protocol, int depth);
 
 	const json::value* merged_at(const json::value* merged, std::string_view pointer)
@@ -152,9 +172,10 @@ namespace {
 		return type && type->is_string() ? type : nullptr;
 	}
 
-	// A tag, or a desc written inline: then its __parent and the references its own schema names, since the desc_system
-	// loads them as it reads the inline copy. An inline desc of a type without a schema cannot be checked, so it is refused.
-	std::optional<reference_issue> reference_of(const desc::desc_system& descs, const json::value& value, const json::value* merged,
+	// A tag, a {guid, path} reference, or a desc written inline: then its __parent and the references its own schema names,
+	// since the desc_system loads them as it reads the inline copy. An inline desc of a type without a schema cannot be
+	// checked, so it is refused.
+	std::optional<reference_issue> reference_of(const desc::desc_system& descs, const res::resource_system* resources, const json::value& value, const json::value* merged,
 		std::string_view owner_protocol, int depth)
 	{
 		if (const auto* text = value.if_string()) {
@@ -163,14 +184,16 @@ namespace {
 		}
 		const json::object* inline_desc = value.if_object();
 		if (!inline_desc) return std::nullopt;
-		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
+		// An object that names no type, nor does the component it patches (#740), is a {guid, path} reference.
 		const json::value* type = type_of_inline(*inline_desc, merged);
-		const desc::type_schema* schema = type ? descs.find_schema(std::string_view(type->as_string())) : nullptr;
+		if (!type) return reference_object_refusal(value, resources, owner_protocol);
+		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
+		const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()));
 		if (!schema) return reference_issue{ {}, "an inline desc of a type without a schema: its references cannot be checked" };
 		if (const json::value* parent = inline_desc->if_contains("__parent")) {
-			if (auto issue = reference_of(descs, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
+			if (auto issue = reference_of(descs, resources, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
 		}
-		return references_of(descs, *schema, value, merged, owner_protocol, depth + 1);
+		return references_of(descs, resources, *schema, value, merged, owner_protocol, depth + 1);
 	}
 
 	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
@@ -197,28 +220,28 @@ namespace {
 		return std::nullopt;
 	}
 
-	std::optional<reference_issue> structure_references(const desc::desc_system& descs, const desc::field_schema& field, const json::value& value,
+	std::optional<reference_issue> structure_references(const desc::desc_system& descs, const res::resource_system* resources, const desc::field_schema& field, const json::value& value,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
 		const desc::type_schema* nested = value.is_object() ? descs.find_schema(field.ref_type) : nullptr;
 		if (!nested) return std::nullopt;
 		if (depth >= k_max_inline_depth) return reference_issue{ {}, "structures nested too deep" };
-		return references_of(descs, *nested, value, merged, owner_protocol, depth + 1);
+		return references_of(descs, resources, *nested, value, merged, owner_protocol, depth + 1);
 	}
 
-	std::optional<reference_issue> field_references(const desc::desc_system& descs, const desc::field_schema& field, const json::value& value,
+	std::optional<reference_issue> field_references(const desc::desc_system& descs, const res::resource_system* resources, const desc::field_schema& field, const json::value& value,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
-		if (is_tag_kind(field.kind)) return reference_of(descs, value, merged, owner_protocol, depth);
-		if (field.kind == desc::field_kind::structure) return structure_references(descs, field, value, merged, owner_protocol, depth);
+		if (is_tag_kind(field.kind)) return reference_of(descs, resources, value, merged, owner_protocol, depth);
+		if (field.kind == desc::field_kind::structure) return structure_references(descs, resources, field, value, merged, owner_protocol, depth);
 		if (field.kind == desc::field_kind::custom) return tags_in(value, owner_protocol);
 		if (field.kind == desc::field_kind::map) {
 			const json::object* entries = value.if_object();
 			if (!entries) return std::nullopt;
 			for (const auto& entry : *entries) {
 				std::optional<reference_issue> issue;
-				if (is_tag_kind(field.element)) issue = reference_of(descs, entry.value(), nullptr, owner_protocol, depth);
-				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, field, entry.value(), nullptr, owner_protocol, depth);
+				if (is_tag_kind(field.element)) issue = reference_of(descs, resources, entry.value(), nullptr, owner_protocol, depth);
+				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, resources, field, entry.value(), nullptr, owner_protocol, depth);
 				else if (field.element == desc::field_kind::custom) issue = tags_in(entry.value(), owner_protocol);
 				if (issue) return under(std::move(issue), res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
 			}
@@ -228,8 +251,8 @@ namespace {
 		if (field.kind != desc::field_kind::array || !items) return std::nullopt;
 		for (std::size_t i = 0; i < items->size(); ++i) {
 			std::optional<reference_issue> issue;
-			if (is_tag_kind(field.element)) issue = reference_of(descs, (*items)[i], merged_item(merged, i), owner_protocol, depth);
-			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, field, (*items)[i], merged_item(merged, i), owner_protocol, depth);
+			if (is_tag_kind(field.element)) issue = reference_of(descs, resources, (*items)[i], merged_item(merged, i), owner_protocol, depth);
+			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, resources, field, (*items)[i], merged_item(merged, i), owner_protocol, depth);
 			else if (field.element == desc::field_kind::custom) issue = tags_in((*items)[i], owner_protocol);
 			if (issue) return under(std::move(issue), std::to_string(i));
 		}
@@ -243,7 +266,7 @@ namespace {
 
 	// Every reference `data` (a patch or a whole component of `schema`) holds, in its own fields and through structures,
 	// arrays and inline descs, read where the desc reads it: the field's key or one of its read aliases.
-	std::optional<reference_issue> references_of(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& data,
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, const res::resource_system* resources, const desc::type_schema& schema, const json::value& data,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
 		for (const desc::field_schema& field : schema.fields) {
@@ -252,7 +275,7 @@ namespace {
 			for (const std::string& pointer : pointers) {
 				const json::value* value = desc::json_pointer_get(data, pointer);
 				if (!value || value->is_null()) continue;
-				if (auto issue = field_references(descs, field, *value, merged_at(merged, pointer), owner_protocol, depth)) {
+				if (auto issue = field_references(descs, resources, field, *value, merged_at(merged, pointer), owner_protocol, depth)) {
 					return under(std::move(issue), std::string_view(pointer).substr(1));
 				}
 			}
@@ -260,12 +283,73 @@ namespace {
 		return std::nullopt;
 	}
 
+	// A {guid, path} reference a patch puts into a reference field: no __type, and good as a reference.
+	bool is_patch_reference(const json::value& value)
+	{
+		return edt::is_reference_object(value) && edt::reference_object_problem(value.as_object()).empty();
+	}
+
+	// A value the patch gives a reference field replaces what is there whole when either is a {guid, path} reference
+	// (EPIC-57 section 4.4): a reference merged into an inline desc would keep its __type and the old desc would load, into
+	// another reference it would keep the old guid, and an inline desc merged into a reference would mix the two. The form
+	// of the patch, of the base and the kind of the field decide. `patch` is the part of the patch at `at`; `base` and
+	// `edited` are whole components.
+	void replace_references(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& patch, const json::value& base,
+		json::value& edited, const std::string& at, int depth)
+	{
+		if (depth >= k_max_inline_depth) return;
+		const auto replaces = [&](const json::value& given, const std::string& where) {
+			if (is_patch_reference(given)) return true;
+			const json::value* was = desc::json_pointer_get(base, where);
+			return was && is_patch_reference(*was) && given.as_object().contains("__type");
+		};
+		for (const desc::field_schema& field : schema.fields) {
+			std::vector<std::string> pointers{ pointer_of(field.key) };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			for (const std::string& pointer : pointers) {
+				const json::value* value = desc::json_pointer_get(patch, pointer);
+				if (!value || !value->is_object()) continue;
+				const std::string where = at + pointer;
+				if (is_tag_kind(field.kind)) {
+					if (replaces(*value, where)) {
+						desc::json_pointer_set(edited, where, *value);
+					} else if (const json::value* type = type_of_inline(value->as_object(), desc::json_pointer_get(edited, where))) {
+						if (const desc::type_schema* nested = descs.find_schema(std::string_view(type->as_string()))) {
+							replace_references(descs, *nested, *value, base, edited, where, depth + 1);
+						}
+					}
+				} else if (field.kind == desc::field_kind::structure) {
+					if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) replace_references(descs, *nested, *value, base, edited, where, depth + 1);
+				} else if (field.kind == desc::field_kind::map) {
+					const desc::type_schema* nested = field.element == desc::field_kind::structure ? descs.find_schema(field.ref_type) : nullptr;
+					for (const auto& entry : value->as_object()) {
+						if (!entry.value().is_object()) continue;
+						const std::string item = where + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size()));
+						if (is_tag_kind(field.element)) {
+							if (replaces(entry.value(), item)) desc::json_pointer_set(edited, item, entry.value());
+						} else if (nested) {
+							replace_references(descs, *nested, entry.value(), base, edited, item, depth + 1);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// `base` with `patch` applied (RFC 7386, merge_patch), a reference in it replacing what was there (replace_references).
+	json::object patched_fields(const desc::desc_system& descs, const std::string& type, const json::object& base, const json::object& patch)
+	{
+		json::value edited = merge_patch(base, patch);
+		if (const desc::type_schema* schema = descs.find_schema(type)) replace_references(descs, *schema, json::value(patch), json::value(base), edited, {}, 0);
+		return std::move(edited.as_object());
+	}
+
 	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it. The schema
 	// publishes leaves ("/transform/position") and a patch nests them as objects; the check descends through those and
 	// through structure fields, quietly, and names the full path of the first field that does not fit. Every reference in
 	// it, nested ones and those of inline descs included, follows the rule of #697 for a desc of `owner_protocol` (the
 	// level's), as it would when loaded.
-	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const std::string& type, const json::object& patch,
+	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const res::resource_system* resources, const std::string& type, const json::object& patch,
 		const json::object& edited, std::string_view owner_protocol)
 	{
 		const desc::type_schema* schema = descs.find_schema(type);
@@ -280,7 +364,7 @@ namespace {
 				expected.empty() ? "" : ": expected ", expected));
 		}
 		const json::value whole(edited);
-		if (auto issue = references_of(descs, *schema, json::value(patch), &whole, owner_protocol, 0)) {
+		if (auto issue = references_of(descs, resources, *schema, json::value(patch), &whole, owner_protocol, 0)) {
 			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, issue->path, issue->why));
 		}
 		return std::nullopt;
@@ -481,7 +565,7 @@ namespace {
 			json::object kept = fields;
 			strip_nulls(kept);
 			if (!kept.empty()) {
-				if (auto bad = check_fields(*sources.services.descs(), type, kept, kept, owner_protocol)) return bad;
+				if (auto bad = check_fields(*sources.services.descs(), sources.services.resources(), type, kept, kept, owner_protocol)) return bad;
 			}
 			out.type_name = type;
 			out.overrides = std::move(kept);
@@ -694,8 +778,8 @@ namespace {
 				if (component == at.owner->components.end()) {
 					return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
 				}
-				json::object edited = merge_patch(component->second.overrides, patch).as_object();
-				if (auto bad = check_fields(*descs, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+				json::object edited = patched_fields(*descs, type_of(component->second), component->second.overrides, patch);
+				if (auto bad = check_fields(*descs, ctx.sources.services.resources(), type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
 				if (edited == component->second.overrides) return cmd::result::success();
 				changing();
 				component->second.overrides = std::move(edited);
@@ -713,11 +797,11 @@ namespace {
 			}
 			const json::object base_json = edt::override_edit::component_json(component->second);
 			const json::object effective = edt::override_edit::effective_component(*at.owner, at.target, key, base_json);
-			json::object edited = merge_patch(effective, patch).as_object();
-			if (auto bad = check_fields(*descs, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+			json::object edited = patched_fields(*descs, type_of(component->second), effective, patch);
+			if (auto bad = check_fields(*descs, ctx.sources.services.resources(), type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
 			if (edited == effective) return cmd::result::success();
 			changing();
-			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited);
+			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited, descs, descs->find_schema(type_of(component->second)));
 			return cmd::result::success();
 		});
 	}

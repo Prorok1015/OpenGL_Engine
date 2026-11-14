@@ -711,7 +711,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 	}
 
 	json::value content(m_own);
-	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view())) {
+	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view(), reader)) {
 		if (item.severity == res::diagnostic_severity::error) {
 			return save_result::failure(std::format("{}: {}", where(m_source, item.json_path), item.reason));
 		}

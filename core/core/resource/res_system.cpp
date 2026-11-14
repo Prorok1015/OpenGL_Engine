@@ -3003,3 +3003,17 @@ res::tag res::resource_system::resolve_reference(const reference& ref) const
 	}
 	return ref.path;
 }
+
+std::optional<res::tag> res::resource_system::asset_path_of(const asset_id& guid) const
+{
+	if (guid.is_nil()) {
+		return std::nullopt;
+	}
+	const auto index = current_index();
+	return index ? path_in(*index, guid) : std::nullopt;
+}
+
+bool res::resource_system::has_asset_index() const
+{
+	return current_index() != nullptr;
+}

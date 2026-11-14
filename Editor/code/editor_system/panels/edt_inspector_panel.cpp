@@ -360,7 +360,8 @@ namespace edt
 			}
 
 			if (edited) {
-				oe::write_component(*m_owner, m_target, key, base_json, scratch.overrides);
+				oe::write_component(*m_owner, m_target, key, base_json, scratch.overrides, descs(),
+					descs() && !effective_type.empty() ? descs()->find_schema(effective_type) : nullptr);
 				changed = true;
 			}
 			if (oe::has_record(*m_owner, m_target, key) && ImGui::SmallButton("Reset to base")) {

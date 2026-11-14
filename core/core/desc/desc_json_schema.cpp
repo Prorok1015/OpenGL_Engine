@@ -31,6 +31,18 @@ namespace {
 		return boost::json::object{ { "type", boost::json::string(type) } };
 	}
 
+	// The reference of EPIC-57 section 4.4: a guid (a UUID), a path (a tag), or both; nothing else.
+	boost::json::object reference_object()
+	{
+		auto guid = typed("string");
+		guid["pattern"] = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
+		auto out = typed("object");
+		out["properties"] = boost::json::object{ { "guid", std::move(guid) }, { "path", typed("string") } };
+		out["additionalProperties"] = false;
+		out["minProperties"] = 1;
+		return out;
+	}
+
 	boost::json::object object_schema(const desc::type_schema& schema, const desc::schema_registry& resolve, int depth, int& budget);
 
 	boost::json::object value_schema(desc::field_kind kind, const std::string& ref_type, const desc::schema_registry& resolve, int depth, int& budget)
@@ -60,8 +72,15 @@ namespace {
 			out["maxItems"] = components_of(kind);
 			return out;
 		}
-		case field_kind::string:
-		case field_kind::res_tag: return typed("string");
+		case field_kind::string: return typed("string");
+		case field_kind::res_tag: {
+			boost::json::array forms;
+			forms.emplace_back(typed("string"));
+			forms.emplace_back(reference_object());
+			boost::json::object out{ { "oneOf", std::move(forms) } };
+			out["description"] = "a res:// tag, or the {guid, path} reference the editor writes for a file with an ID";
+			return out;
+		}
 		case field_kind::node_ref: {
 			auto out = typed("string");
 			out["pattern"] = "^[0-9a-f]{16}$";
@@ -84,7 +103,7 @@ namespace {
 			types.emplace_back("object");
 			boost::json::object out;
 			out["type"] = std::move(types);
-			out["description"] = "a tag of a desc, or an inline desc object with a string __type";
+			out["description"] = "a tag of a desc, a {guid, path} reference (an object without __type), or an inline desc object with a string __type";
 			return out;
 		}
 		case field_kind::structure: {

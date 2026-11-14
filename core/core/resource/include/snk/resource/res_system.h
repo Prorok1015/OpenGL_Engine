@@ -311,6 +311,11 @@ namespace res
 		// path. The layers resolve the tag as for any request, so a project file over an engine asset's path wins for a
 		// reference with an ID too (R28). A guid the index does not know and no path give the empty tag, with a warning.
 		tag resolve_reference(const reference& ref) const;
+		// The file that holds `guid` by the asset index now; nullopt without an index or when no file holds it. What tells a
+		// reference's stale path or unknown ID apart from a good one (EPIC-57 section 4.4, #773).
+		std::optional<tag> asset_path_of(const asset_id& guid) const;
+		// An asset index is set (set_asset_index): asset_path_of can tell an unknown guid.
+		bool has_asset_index() const;
 
 		template<class RESOURCE>
 		auto require(const res::tag& tag) {
