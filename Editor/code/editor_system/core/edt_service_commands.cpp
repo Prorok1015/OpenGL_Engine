@@ -1,5 +1,5 @@
 #include "edt_service_commands.h"
-#include "edt_agent_log_filter.h"
+#include "edt_agent_job_result.h"
 #include <snk/command/cmd_json_schema.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
