@@ -1800,7 +1800,7 @@ BOOST_FIXTURE_TEST_CASE(ListsAndStructuresInsideAnItemAreCheckedToo_TheLoadLogCa
 	})").as_object());
 	desc::schema_registry registry;
 	registry.add(desc::parse_type_schema(json::parse(R"({
-		"name": "ops.row", "kind": "structure",
+		"name": "ops.row", "kind": "struct",
 		"fields": [
 			{ "name": "title", "kind": "string" },
 			{ "name": "cells", "kind": "array", "element": "structure", "ref_type": "ops.inner" },
