@@ -1,7 +1,6 @@
 {
     "__type" : "level_desc",
     "__version" : 2,
-    "__guid" : "f836219d-0909-41b4-9e48-657c8e69fa6d",
     "name" : "test_level",
     "worlds" : [
         {
