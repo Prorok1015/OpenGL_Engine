@@ -70,6 +70,8 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
       auto *va = context.geometry(packet.geometry_of(dc));
       if (!va)
         continue;
+      if (!context.draw_fits(packet.geometry_of(dc), dc.indices_count, dc.vx_begin, dc.ind_begin))
+        continue;
 
       // The variant comes from the instance, not from the draw: the instance may have been compiled again after the draw was made.
       const rnd::variant_id source = context.material(dc.material).opaque;

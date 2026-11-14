@@ -118,6 +118,7 @@
 // (layout_revision 7). Pad bindings take an optional threshold in actions.desc.
 // #797: desc::override_expectation and desc::override_owner are new exports (no type changes: the layout key stays).
 // #759: cmd::command_desc gains describe_before_allowed_invoke at its end and joins the layout key (layout_revision 10).
+// #927: rnd::render_context::draw_fits is added at the end of the vtable, the functions before it keep their places (minor: the layout key stays).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

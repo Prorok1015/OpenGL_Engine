@@ -1,8 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_index.h>
 #include <boost/json.hpp>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -13,6 +16,20 @@
 namespace json = boost::json;
 
 namespace {
+
+// One ID that has moved: what a stale path of a {guid, path} reference finds.
+struct moved_material_index final : res::asset_index
+{
+	res::asset_id id = *res::asset_id_from_text("f90d3c03-865c-4193-aa09-cb2f98315634");
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		return tag.view() == "res://materials/moved.desc" ? std::optional{ id } : std::nullopt;
+	}
+	std::optional<res::tag> path_of(const res::asset_id& asked) const override
+	{
+		return asked == id ? std::optional{ res::tag{ "res://materials/moved.desc" } } : std::nullopt;
+	}
+};
 
 json::object parse(const std::string& text)
 {
@@ -83,6 +100,32 @@ BOOST_AUTO_TEST_CASE(AFieldOfTheWrongType_KeepsItsDefault)
 	mesh->deserialize(*descs, parse(R"({"vx_end":4,"visible":"no"})"));
 	BOOST_TEST(mesh->visible);
 	BOOST_TEST(mesh->vx_end == 4u);
+}
+
+// A save and the migration write a reference as {guid, path} (#773, #776): the mesh reads it as the file it names, also
+// as a component of a level (an untagged copy).
+BOOST_AUTO_TEST_CASE(AReferenceAsGuidAndPath_IsReadAsTheFileItNames)
+{
+	auto mesh = std::dynamic_pointer_cast<scn::mesh_node_desc>(descs->create_instance("mesh_node_desc", res::tag{}));
+	BOOST_REQUIRE(mesh);
+	mesh->deserialize(*descs, parse(R"({"vx_end":4,"ind_end":6,
+		"geometry":{"guid":"5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93","path":"res://bench/bench_quad.desc"},
+		"material":{"guid":"f90d3c03-865c-4193-aa09-cb2f98315634","path":"res://base_material.desc"}})"));
+	BOOST_TEST(mesh->geometry.get_tag().view() == "res://bench/bench_quad.desc");
+	BOOST_TEST(mesh->material.get_tag().view() == "res://base_material.desc");
+	BOOST_TEST(mesh->ind_end == 6u);
+}
+
+// The guid wins over a stale path, as for every other desc_ref (resolve_reference).
+BOOST_AUTO_TEST_CASE(AStalePathOfAKnownGuid_IsReadAsTheFileThatHoldsTheGuidNow)
+{
+	rs->set_asset_index(std::make_shared<moved_material_index>());
+	auto mesh = std::dynamic_pointer_cast<scn::mesh_node_desc>(descs->create_instance("mesh_node_desc", res::tag{}));
+	BOOST_REQUIRE(mesh);
+	mesh->deserialize(*descs, parse(R"({"vx_end":4,"ind_end":6,
+		"material":{"guid":"f90d3c03-865c-4193-aa09-cb2f98315634","path":"res://base_material.desc"}})"));
+	BOOST_TEST(mesh->material.get_tag().view() == "res://materials/moved.desc");
+	rs->set_asset_index(nullptr);
 }
 
 // The assembler reads a component into a desc without a tag; the importer writes the material inline (the robot of

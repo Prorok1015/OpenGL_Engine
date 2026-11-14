@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
+#include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/res_tag_json.h>
 #include <snk/desc/desc_base.hpp>
@@ -74,6 +75,36 @@ namespace desc
 		std::string_view m_file;
 		std::vector<migration_warning>* m_sink = nullptr;
 	};
+
+	// The asset index a writer of references asks (write_references_with): the ID of the file a res:// path names (none
+	// for a file without one or a duplicate), and the file that holds an ID now. An empty function answers none.
+	struct reference_ids
+	{
+		std::function<std::optional<res::asset_id>(const res::tag&)> id_of;
+		std::function<std::optional<res::tag>(const res::asset_id&)> path_of;
+	};
+
+	// What a write of references changed.
+	struct reference_counts
+	{
+		// A path (a string, or an object without a guid) that became {"guid", "path"}.
+		std::size_t ids_written = 0;
+		// A {guid, path} whose path became the one its guid's file has now.
+		std::size_t paths_repaired = 0;
+
+		std::size_t total() const { return ids_written + paths_repaired; }
+	};
+
+	// The schema of a type by its name; nullptr for a type without one.
+	using schema_lookup = std::function<const type_schema*(std::string_view type_name)>;
+
+	// The rule of desc_system::write_references (EPIC-57 section 4.4) with the index `ids` and the schemas of `schema_of`:
+	// what the editor's save writes and what the migration step assets.refs writes into a project's files (#776). There
+	// is no replaced file here: a path whose file `ids` gives no ID stays as it is. Returns what changed in `root`.
+	SNK_API reference_counts write_references_with(json::value& root, const schema_lookup& schema_of, const reference_ids& ids);
+
+	// `resources`' asset index as reference_ids (asset_id_of, asset_path_of): what write_references asks.
+	SNK_API reference_ids asset_index_ids(const res::resource_system& resources);
 
 	class SNK_API desc_system
 	{
@@ -230,6 +261,9 @@ namespace desc
 		// record has no "__type", the component it applies to gives the schema. `merged_into` (the base value at `pointer`,
 		// may be null): where it holds an object, a path stays a string, since the record's value is merged into it.
 		void write_references(const type_schema& schema, std::string_view pointer, json::value& value, const json::value* merged_into = nullptr) const;
+		// desc::write_references_with with the schemas of this system and the index `ids` (another one than the resource
+		// system's: a migration's index of the project on the disk).
+		reference_counts write_references_with(json::value& root, const reference_ids& ids) const;
 
 		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
 		// its memory:// copy's diagnostics go to the owner's file at that path (#595).

@@ -39,6 +39,9 @@ namespace edt
 		std::filesystem::path git;
 		// The open project's root; nullopt (or null): no project.
 		std::function<std::optional<std::filesystem::path>()> project_root;
+		// Live mode is on: it builds and loads every change of code:// at once, so an agent's checkout or pull must not
+		// bring code in meanwhile (#909). Null: off.
+		std::function<bool()> live_mode_on;
 		process_runner run = platform::run_process;
 		// The environment git runs in, before the vcs variables are added; nullopt: this process's.
 		std::optional<std::vector<std::string>> environment;
@@ -351,6 +354,11 @@ namespace edt
 		void probe_repository(const std::optional<std::filesystem::path>& project);
 		void set_probe_timeout();
 		started unavailable() const;
+		// The open project's folder in the repository, '/'-separated: empty for the repository's root, else with a
+		// trailing '/'. Nullopt when it is not in the repository (or either is unknown).
+		std::optional<std::string> project_prefix() const;
+		// The open project's folder on the disk, canonical; empty when there is none or it cannot be told.
+		std::filesystem::path project_dir() const;
 		// The scratch folder with an empty hooks folder in it, made on first use; the error text when it cannot be.
 		std::optional<std::string> ensure_scratch();
 		// Defined in the .cpp, its only user. `write`: nullopt for a read, whose caller is `reader` (not ui: the
