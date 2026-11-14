@@ -81,6 +81,11 @@ namespace edt
 		// Changes the working copy: `change` gets it and says whether it changed anything; the preview follows (reconcile by
 		// node id), the document is dirty when the result differs from the file. False: closed, locked, or nothing changed.
 		bool edit(const std::function<bool(scn::prefab_desc&)>& change);
+		// A node of the working copy by its node ids from the root (empty path: the root); null when the document is closed,
+		// locked (Play) or the path leads nowhere. The Inspector changes it in place, then calls notify_edited().
+		scn::prefab_desc::prefab_node* working_node(const std::vector<std::uint64_t>& path);
+		// The copy was changed through working_node(): the preview follows and the dirty mark is judged again. False: closed or locked.
+		bool notify_edited();
 		// Revert: the working copy comes from the file again (fresh bytes, not the cache), the preview follows. The error
 		// text, empty when it worked; nothing changes on an error.
 		std::string revert();
