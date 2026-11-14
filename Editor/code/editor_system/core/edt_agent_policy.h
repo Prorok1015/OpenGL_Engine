@@ -53,6 +53,8 @@ namespace edt
 		case vcs_push: return policy_mode::allow;
 		// Uses the stored token and the network: asks even for the reads (#458).
 		case vcs_forge: return policy_mode::ask;
+		// Writes every outdated file of the project; a person approves each plan (the command's risk asks anyway).
+		case project_migrate: return policy_mode::ask;
 		case unset:
 		case not_for_agents: break;
 		}

@@ -37,6 +37,7 @@ namespace edt
 			cmd::agent_category::play,
 			cmd::agent_category::vcs_read, cmd::agent_category::vcs_commit, cmd::agent_category::vcs_branch,
 			cmd::agent_category::vcs_sync, cmd::agent_category::vcs_push, cmd::agent_category::vcs_forge,
+			cmd::agent_category::project_migrate,
 		};
 
 		cmd::policy_mode mode_of_risk(cmd::danger risk)

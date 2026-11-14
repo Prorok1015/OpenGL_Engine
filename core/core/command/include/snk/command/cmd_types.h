@@ -61,6 +61,7 @@ namespace cmd
 		vcs_sync,       // fetch, pull (fast-forward only)
 		vcs_push,       // push to a remote
 		vcs_forge,      // the code host's pull requests (create, status, list): uses the token and the network
+		project_migrate, // migrating the open project's data in place (project.migrate, EPIC-58)
 	};
 
 	constexpr const char* to_string(agent_category category)
@@ -83,6 +84,7 @@ namespace cmd
 		case agent_category::vcs_sync: return "vcs_sync";
 		case agent_category::vcs_push: return "vcs_push";
 		case agent_category::vcs_forge: return "vcs_forge";
+		case agent_category::project_migrate: return "project_migrate";
 		}
 		return "unset";
 	}

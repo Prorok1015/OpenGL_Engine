@@ -43,6 +43,7 @@
 #include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
+#include "edt_migration_commands.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -719,6 +720,94 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		desc_files.open_level_files = std::move(layout.open_level_files);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
+			m_registrations.push_back(std::move(command));
+		}
+	}
+	// EPIC-58 S7 (#759): the plan of migrating the project and the migration in place, on the main thread.
+	{
+		migration_deps migration{ m_context->jobs() };
+		migration.project_root = [&data]() -> std::optional<std::filesystem::path> {
+			if (!data.has_value<prj::project_context>()) return std::nullopt;
+			return data.require<prj::project_context>().root;
+		};
+		migration.project_name = [&data] {
+			return data.has_value<prj::project_context>() ? data.require<prj::project_context>().data.name : std::string{};
+		};
+		migration.content_roots = [&data] {
+			return data.has_value<prj::project_context>() ? data.require<prj::project_context>().content_roots : std::vector<std::filesystem::path>{};
+		};
+		migration.descs = [this]() -> desc::desc_system& { return *m_services.descs(); };
+		migration.resources = [this]() -> res::resource_system& { return *m_services.resources(); };
+		migration.busy_reason = [this]() -> std::optional<std::string> {
+			if (m_play && m_play->active()) return std::string{ "Play is running: stop it first" };
+			if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
+			if (auto loading = load_in_progress()) return loading;
+			if (m_game_builder && m_game_builder->is_building()) return std::string{ "a game build is running" };
+			if (editor_layer->has_implicit_prefix(game_reloader::k_reload_frame_id) || editor_layer->has_implicit_prefix(live_mode::k_reload_frame_id)) {
+				return std::string{ "a reload of the game module is waiting" };
+			}
+			if (m_agent_import && m_agent_import->running()) return std::string{ "a model import asked for by an agent is running" };
+#if SNK_HAS_ASSIMP
+			if (m_importing) return std::string{ "a model import is running" };
+#endif
+			return std::nullopt;
+		};
+		migration.unsaved_reason = [this]() -> std::optional<std::string> {
+			if (m_state.is_dirty()) return std::string{ "the level has unsaved changes: save or discard them first" };
+			std::optional<std::string> dirty;
+			m_context->documents().for_each([&dirty](document& open) {
+				if (!dirty && open.is_dirty()) dirty = std::format("'{}' has unsaved changes: save or discard them first", open.title());
+			});
+			return dirty;
+		};
+		migration.close_documents_and_detach_level = [this] {
+			close_prefab_editor();
+			std::vector<document_id> data_documents;
+			m_context->documents().for_each([this, &data_documents](document& open) {
+				if (open.kind() == "data" && m_data_documents->owns(open.id())) data_documents.push_back(open.id());
+			});
+			for (const document_id id : data_documents) m_data_documents->close(id);
+			const res::tag level = current_level_tag();
+			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
+			m_pending_desc_handle = {};
+			if (m_loading_level) abandon_level_load();
+			m_level_ctrl.detach_from_game_layer();
+			return level;
+		};
+		migration.pause_watch = [this] { m_level_ctrl.unwatch_level(); };
+		// Through the base system: it reaches the game layer's too.
+		migration.signal_changed = [this](const res::tag& tag) { m_res.signal_changed(tag); };
+		migration.rebuild_assets = [this] {
+			if (m_assets) m_assets->rebuild();
+		};
+		migration.reopen_level = [this](const res::tag& level, std::function<void(bool)> loaded) -> std::optional<std::string> {
+			m_level_ctrl.attach_to_game_layer();
+			if (!level.is_valid()) return std::nullopt;
+			if (!begin_level_load(level)) return "'" + std::string(level.view()) + "' did not start loading again";
+			editor_layer->register_implicit("edt/load_level", [this, loaded = std::move(loaded)] {
+				bool done = false;
+				const bool loading = poll_level_load(&done);
+				if (!loading && loaded) loaded(done);
+				return loading;
+			});
+			return std::nullopt;
+		};
+		migration.level_load_in_progress = [this] { return m_loading_level; };
+		migration.current_level_tag = [this] { return current_level_tag(); };
+		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
+		migration.show_progress = [](bool open) {
+			constexpr const char* title = "Migrating Project##edt_migrate";
+			ImGui::OpenPopup(title);
+			if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar)) {
+				if (open) {
+					ImGui::Text("Migrating project...");
+				} else {
+					ImGui::CloseCurrentPopup();
+				}
+				ImGui::EndPopup();
+			}
+		};
+		for (auto& command : register_migration_commands(m_context->actions().commands(), std::move(migration))) {
 			m_registrations.push_back(std::move(command));
 		}
 	}

@@ -79,6 +79,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersTable_ForEveryCategory)
 	BOOST_TEST((edt::default_mode(agent_category::vcs_sync) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_push) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_forge) == policy_mode::ask));
+	BOOST_TEST((edt::default_mode(agent_category::project_migrate) == policy_mode::ask));
 	BOOST_TEST((edt::default_mode(agent_category::unset) == policy_mode::deny));
 	BOOST_TEST((edt::default_mode(agent_category::not_for_agents) == policy_mode::deny));
 }
@@ -318,6 +319,8 @@ BOOST_AUTO_TEST_CASE(TheVcsCategories_AreSettableByName)
 	}
 	BOOST_TEST(std::string_view(cmd::to_string(agent_category::vcs_push)) == "vcs_push");
 	BOOST_TEST(std::string_view(cmd::to_string(agent_category::vcs_forge)) == "vcs_forge");
+	BOOST_TEST(std::string_view(cmd::to_string(agent_category::project_migrate)) == "project_migrate");
+	BOOST_TEST((edt::parse_settable_category("project_migrate") == agent_category::project_migrate));
 	const auto parsed = edt::parse_policy_layer(R"({"categories":{"vcs_push":"ask","vcs_sync":"deny","vcs_forge":"allow"}})");
 	BOOST_TEST(parsed.error.empty());
 	BOOST_TEST((parsed.layer.categories.at(agent_category::vcs_push) == policy_mode::ask));
