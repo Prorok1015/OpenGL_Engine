@@ -88,6 +88,7 @@ if(SNK_ENGINE_SHARED)
 		endforeach()
 		target_link_options(snk_engine PRIVATE "LINKER:--whole-archive" ${_snk_wa_files} "LINKER:--no-whole-archive")
 	endif()
-	# What a binary that links snk_engine must not link again (snk_check_engine_copies, #874).
+	# What a binary that links snk_engine must not link again (snk_check_engine_copies, #874). Without assimp on MSVC on
+	# purpose: the DLL exports only SNK_API, so its consumers link their own copy of assimp (editor_system, model_import).
 	set_property(GLOBAL PROPERTY SNK_ENGINE_CARRIED ${_snk_whole_archive})
 endif()
