@@ -131,6 +131,13 @@ BOOST_AUTO_TEST_CASE(Create_FromATemplateWithoutTheIgnoreLines_AddsThem)
 	BOOST_REQUIRE_MESSAGE(partial.error.empty(), partial.error);
 	BOOST_TEST((lines_of(read_text(dir.path() / "game_partial" / ".gitignore"))
 		== std::vector<std::string>{ "# ours", "*.log", "/.cache", ".snk/mcp.json", "build/" }));
+
+	// A template written with CRLF gets its new lines with CRLF too.
+	fs::copy(k_empty_template, dir.path() / "crlf", fs::copy_options::recursive);
+	dir.write("crlf/.gitignore", "# ours\r\n.cache/\r\n");
+	const auto crlf = prj::create_project(dir.path() / "crlf", dir.path() / "game_crlf", "Crlf");
+	BOOST_REQUIRE_MESSAGE(crlf.error.empty(), crlf.error);
+	BOOST_TEST(read_text(dir.path() / "game_crlf" / ".gitignore") == "# ours\r\n.cache/\r\n.snk/mcp.json\r\nbuild/\r\n");
 }
 
 BOOST_AUTO_TEST_CASE(Create_IntoAnEmptyFolder_FillsIt)
