@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -197,7 +198,7 @@ BOOST_AUTO_TEST_CASE(AStopFromACallback_DoesNotArmTheTimerAgain)
 	BOOST_TEST(calls == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(KeepUnread_KeepsWhatWasKnownAtAndBelowAnUnreadPath)
+BOOST_AUTO_TEST_CASE(KeepUnread_HoldsBackOnlyDeletionsBelowAnUnreadPath)
 {
 	const fs::path root = fs::path("root");
 	const fs::path other = fs::path("rooted");
@@ -207,16 +208,25 @@ BOOST_AUTO_TEST_CASE(KeepUnread_KeepsWhatWasKnownAtAndBelowAnUnreadPath)
 	before.files[root / "sub" / "b.txt"] = { {}, 2 };
 	before.files[other / "c.txt"] = { {}, 3 };
 
-	// The scan of `root` stopped after a.txt, which it saw changed; `other` was read in full and lost c.txt.
+	// The scan of `root` stopped after a.txt, which it saw changed, and a new file; `other` was read in full and
+	// lost c.txt.
 	res::detail::watch_snapshot cut_short;
 	cut_short.files[root / "a.txt"] = { {}, 10 };
+	cut_short.files[root / "new.txt"] = { {}, 4 };
 	cut_short.dirs = { other / "sub" };
 	res::detail::keep_unread(before, { root }, cut_short);
-	BOOST_TEST(cut_short.files.size() == 2u);
-	BOOST_TEST(cut_short.files.at(root / "a.txt").size == 1u);
+	BOOST_TEST(cut_short.files.size() == 3u);
+	BOOST_TEST(cut_short.files.at(root / "a.txt").size == 10u);
+	BOOST_TEST(cut_short.files.at(root / "new.txt").size == 4u);
 	BOOST_TEST(cut_short.files.at(root / "sub" / "b.txt").size == 2u);
 	BOOST_TEST(cut_short.dirs.size() == 2u);
-	BOOST_TEST(res::detail::diff_snapshots(before, cut_short).size() == 1u);
+	// c.txt deleted, new.txt created, a.txt modified; nothing about sub/b.txt, which the scan did not reach.
+	const auto changes = res::detail::diff_snapshots(before, cut_short);
+	BOOST_REQUIRE(changes.size() == 3u);
+	for (const auto& change : changes) {
+		BOOST_TEST((change.path != root / "sub" / "b.txt"));
+		BOOST_TEST((change.path != root / "sub"));
+	}
 
 	// One file that could not be asked about keeps its old state; one that was never known stays unknown.
 	res::detail::watch_snapshot one_unread;
@@ -228,6 +238,103 @@ BOOST_AUTO_TEST_CASE(KeepUnread_KeepsWhatWasKnownAtAndBelowAnUnreadPath)
 
 	BOOST_TEST(res::detail::is_at_or_below(root / "sub", fs::path("root/")));
 	BOOST_TEST(!res::detail::is_at_or_below(other, root));
+}
+
+BOOST_AUTO_TEST_CASE(AdoptFirstRead_TakesWhatTheFirstScanMissedAsKnown)
+{
+	const fs::path root = fs::path("root");
+	res::detail::watch_snapshot known;
+	known.files[root / "a.txt"] = { {}, 1 };
+
+	res::detail::watch_snapshot found;
+	found.dirs = { root / "sub" };
+	found.files[root / "a.txt"] = { {}, 1 };
+	found.files[root / "sub" / "b.txt"] = { {}, 2 };
+	found.files[root / "new.txt"] = { {}, 3 };
+
+	// `sub` was unread at the start and is read now: it becomes known, new.txt beside it is still a creation.
+	const auto still = res::detail::adopt_first_read({ root / "sub" }, {}, found, known);
+	BOOST_TEST(still.empty());
+	BOOST_TEST(known.dirs.contains(root / "sub"));
+	BOOST_TEST(known.files.contains(root / "sub" / "b.txt"));
+	const auto changes = res::detail::diff_snapshots(known, found);
+	BOOST_REQUIRE(changes.size() == 1u);
+	BOOST_TEST((changes.front().path == root / "new.txt"));
+
+	// Still unread, as a whole or in a part: that is what waits for its first read.
+	res::detail::watch_snapshot scratch;
+	const auto whole = res::detail::adopt_first_read({ root / "sub" }, { root }, found, scratch);
+	BOOST_TEST((whole == std::set<fs::path>{ root / "sub" }));
+	const auto part = res::detail::adopt_first_read({ root }, { root / "sub" }, found, scratch);
+	BOOST_TEST((part == std::set<fs::path>{ root / "sub" }));
+}
+
+// The scan of the root fails on every poll: what it did find is reported, only the deletion waits.
+BOOST_AUTO_TEST_CASE(ARootUnreadOnEveryPoll_StillReportsACreatedFile_BatchMode)
+{
+	dir.write("old.txt", "x");
+	const fs::path root = dir.path();
+
+	std::vector<res::raw_change> reported;
+	res::file_watcher watcher(io);
+	watcher.add_path(root);
+	res::watch_options options;
+	options.report_changes = true;
+	watcher.report_changes(options, [&](std::vector<res::raw_change> batch) {
+		reported.insert(reported.end(), batch.begin(), batch.end());
+	});
+	watcher.start();
+	// After the start: a root unread by the first scan is a baseline still to be read, not a change.
+	watcher.fail_reads_for_test([&](const fs::path& path) { return path == root; });
+
+	std::error_code ec;
+	fs::remove(root / "old.txt", ec);
+	dir.write("new.txt", "12");
+	BOOST_TEST(run_until([&] { return !reported.empty(); }));
+	io.restart();
+	io.run_for(700ms);
+	BOOST_REQUIRE(reported.size() == 1u);
+	BOOST_TEST((reported.front().path == root / "new.txt"));
+	BOOST_TEST((reported.front().kind == res::change_kind::created));
+
+	watcher.stop();
+	io.restart();
+	io.run_for(50ms);
+}
+
+BOOST_AUTO_TEST_CASE(WhatTheFirstScanCouldNotRead_IsNotReportedAsCreated_BatchMode)
+{
+	dir.write("late.txt", "x");
+	const fs::path root = dir.path();
+
+	bool fail = true;
+	std::vector<res::raw_change> reported;
+	res::file_watcher watcher(io);
+	watcher.add_path(root);
+	res::watch_options options;
+	options.report_changes = true;
+	watcher.report_changes(options, [&](std::vector<res::raw_change> batch) {
+		reported.insert(reported.end(), batch.begin(), batch.end());
+	});
+	watcher.fail_reads_for_test([&](const fs::path& path) { return fail && path == root / "late.txt"; });
+	watcher.start();
+	fail = false;
+
+	dir.write("new.txt", "12");
+	BOOST_TEST(run_until([&] { return !reported.empty(); }));
+	BOOST_REQUIRE(reported.size() == 1u);
+	BOOST_TEST((reported.front().path == root / "new.txt"));
+
+	// Known since its first read: a later change of it is reported as any other.
+	dir.write("late.txt", "a longer text");
+	BOOST_TEST(run_until([&] { return reported.size() >= 2u; }));
+	BOOST_REQUIRE(reported.size() >= 2u);
+	BOOST_TEST((reported.back().path == root / "late.txt"));
+	BOOST_TEST((reported.back().kind == res::change_kind::modified));
+
+	watcher.stop();
+	io.restart();
+	io.run_for(50ms);
 }
 
 // A folder removed while it is listed cuts the scan short where the iterator reports that (and is only a deletion
