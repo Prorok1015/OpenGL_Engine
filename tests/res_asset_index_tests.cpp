@@ -1305,6 +1305,25 @@ BOOST_FIXTURE_TEST_CASE(AnAliasCopyWhileTheAliasReloads_IsNotOverwritten, index_
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
+// #869: a walk that sees a move before the move's batch takes the old tag out of an ID the file still holds: that is the
+// file moved, not owners split, so the pin stays with the ID and nothing is reloaded.
+BOOST_FIXTURE_TEST_CASE(AMoveSeenBeforeItsBatch_KeepsThePinWithTheId, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag b = tag_of("b.txt");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+
+	ram->files[b] = ram->files.at(a);
+	ram->files.erase(a);
+	index->move(a, b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 0u);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(b) == "pinned a");
+}
+
 // #869: register_alias copies a pin with no owner, so the alias' unpin takes the copy away; where the alias' node has a
 // pin of its own owners, the copy does not replace it and the alias' unpin leaves it to them.
 BOOST_FIXTURE_TEST_CASE(APinCopiedToAnAlias_GoesWithTheAliasUnpin_UnlessOthersOwnTheAliasPin, index_fixture)

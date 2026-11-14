@@ -2651,9 +2651,13 @@ void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res
 		owned.insert(pinned);
 		std::vector<cache_key> homes;
 		bool split = false;
+		// An ID a file still holds keeps its entries (rebind_all): a tag that left it for a tag key is that file moved
+		// away (a walk ahead of the move's batch), so its owner stays with the pin and follow_move renames it.
+		const bool held_id = asset_of_node(pinned.tag) && !remap.contains(key.tag);
 		for (const res::tag& tag : tags) {
 			const auto node = fresh.find(tag);
-			const cache_key home{ node != fresh.end() ? node->second : pinned.tag, key.type };
+			const res::tag& now = node != fresh.end() ? node->second : pinned.tag;
+			const cache_key home{ held_id && !asset_of_node(now) ? pinned.tag : now, key.type };
 			owners[home].insert(tag);
 			homes.push_back(home);
 			split = split || home != pinned;
