@@ -2,7 +2,6 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_editor_services.h>
-#include <snk/resource/res_mount_table.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include "edt_file_menu.h"
@@ -77,15 +76,14 @@ struct level_save_fixture : test_util::scene_env
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
 };
 
-// res:// as a project mounts it (add_mount): a lower layer under the project's content, so the save can read the file it
-// replaces in whichever layer res:// reads it from.
+// res:// as a project mounts it (its mount moved onto a lower layer and the project's content), so the save can read the
+// file it replaces in whichever layer res:// reads it from.
 struct level_guid_fixture : level_save_fixture
 {
 	level_guid_fixture()
 	{
 		fs::create_directories(lower);
-		rs->unregistrate_resolver(res::tag::default_protocol());
-		rs->add_mount(res::mount{ res::tag::default_protocol(), { lower, content } });
+		BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), { lower, content }));
 	}
 
 	void write(const std::string& relative, const std::string& text, const fs::path& layer = {})
