@@ -368,7 +368,8 @@ namespace edt {
 		std::shared_ptr<platform::secret_store> m_secrets;
 		// Pull requests (#458); its commands are in m_registrations, removed before it; after the vcs service it asks.
 		std::unique_ptr<edt::forge_service> m_forge;
-		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds it.
+		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
+		// it.
 		std::weak_ptr<edt::project_trust_service> m_trust;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;

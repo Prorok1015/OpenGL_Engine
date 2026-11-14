@@ -7,6 +7,7 @@
 #include <snk/game/gs_input_actions.h>
 #include "edt_editor_system.h"
 #include "edt_data_protocol.h"
+#include "edt_project_trust_service.h"
 #include <snk/common/fs_paths.h>
 #include <snk/config/cfg_variables.h>
 #include <filesystem>
@@ -37,6 +38,18 @@ void editor::apply_default_settings()
 		return;
 	}
 	cfg::set_variable("gui/layout_file", fs_paths::utf8_of(user_data / "settings" / "layout_settings.ini"));
+}
+
+std::function<bool(std::string_view, const std::filesystem::path&)> editor::project_trust_gate(
+	ds::app_data_storage& data, bool trust_flag)
+{
+	if (data.has_value<edt::project_trust_service>()) {
+		data.require<edt::project_trust_service>().set_flag_trust(trust_flag);
+	}
+	return [&data, trust_flag](std::string_view name, const std::filesystem::path& copy) {
+		if (!data.has_value<edt::project_trust_service>()) return trust_flag;
+		return data.require<edt::project_trust_service>().allow_library(name, copy);
+	};
 }
 
 void editor::editor_module::register_services(ds::app_data_storage& data)
