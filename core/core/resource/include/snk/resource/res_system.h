@@ -424,6 +424,11 @@ namespace res
 		void pin_bound(const cache_key& key, std::shared_ptr<resource_handle> block, bool always_cache);
 		// The node's pins and their owners, whoever pinned: a file that is gone (forget_erased).
 		void unpin_node(const res::tag& node);
+		// The owners of `key` (an owner's tag, a type) get the file loaded and pinned again, asynchronously; a file that
+		// is not there, or fails to load, takes their pin away. No lock held.
+		void reload_pin(const cache_key& key);
+		// The reloads a rebind queued, here and in the layers. No lock held.
+		void refresh_pins();
 		// apply_rebind, after rekey_locked (its locks held): each owner goes to its own tag's node, the pin with it.
 		void rehome_pin_owners_locked(const std::unordered_map<res::tag, res::tag>& fresh,
 			const std::unordered_map<res::tag, res::tag>& remap);
@@ -617,6 +622,13 @@ namespace res
 		// pin goes with the last. An owner follows its tag: to the tag's node after a rebind, to the new name after a move.
 		// A pin without an entry is unpinned at once. Under m_pinning_mutex.
 		tag_keyed_map<std::unordered_set<res::tag>> m_pin_owners;
+		// The owner whose pin_resource put the pinned block, by the pin's key: that block is its data, not the file of the
+		// others. When it leaves the pin (unpin, a rebind to another node) the owners left get their file loaded and
+		// pinned again (m_pins_to_refresh, refresh_pins). A warmup's block is the file's: no supplier. Under
+		// m_pinning_mutex.
+		tag_keyed_map<res::tag> m_pin_suppliers;
+		// (owner tag, type) to load and pin again once the rebind's locks are gone. Under m_pinning_mutex.
+		std::vector<cache_key> m_pins_to_refresh;
 
 		struct watcher {
 			reload_callback callback;

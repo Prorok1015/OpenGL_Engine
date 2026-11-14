@@ -944,6 +944,7 @@ BOOST_FIXTURE_TEST_CASE(PinsOfTwoSpellingsInALayer_AreOwnedApartFromTheRoot, ind
 	BOOST_TEST(layer.pinned_count() == 1u);
 
 	layer.unpin_resource(spelled);
+	pump();
 	BOOST_TEST(layer.pinned_count() == 1u);
 	rs->unpin_resource(a);
 	BOOST_TEST(rs->pinned_count() == 0u);
@@ -971,40 +972,86 @@ BOOST_FIXTURE_TEST_CASE(OwnersArePerType_AnUnpinTakesOnlyTheTypesItsTagPinned, i
 // #869: a rebind back to tags (the index goes) takes each owner to its own tag's node, with a pin each.
 BOOST_FIXTURE_TEST_CASE(ARebindBackToTags_GivesEachSpellingItsOwnPin, index_fixture)
 {
-	const res::tag a = put("a.txt", "A");
-	const res::tag spelled = put("A.txt", "A");
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
 	index->put(a, k_a);
 	index->spell(spelled, k_a);
-	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
-	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
 	BOOST_TEST(rs->pinned_count() == 1u);
 
+	// spelled pinned last: its data goes with it; a gets its own file.
 	rs->set_asset_index(nullptr);
+	pump();
 	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	BOOST_TEST(text(spelled) == "pinned spelled");
 	rs->unpin_resource(spelled);
 	BOOST_TEST(rs->pinned_count() == 1u);
 	rs->unpin_resource(a);
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
-// #869: a spelling that gets another ID while a file still holds the old one takes its owner to the new ID, with a pin.
-BOOST_FIXTURE_TEST_CASE(ASpellingThatGetsAnotherId_TakesItsOwnerAndAPinThere, index_fixture)
+// #869: a spelling that gets another ID while a file still holds the old one: its pin goes with it, its data too; the
+// old ID's owners get their own file back, not the data the other spelling pinned.
+BOOST_FIXTURE_TEST_CASE(ASpellingThatGetsAnotherId_TakesItsPinAlong_AndTheOthersGetTheirFile, index_fixture)
 {
-	const res::tag a = put("a.txt", "A");
-	const res::tag spelled = put("A.txt", "A");
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
 	index->put(a, k_a);
 	index->spell(spelled, k_a);
-	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
-	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
 	BOOST_TEST(rs->pinned_count() == 1u);
 
 	index->spell(spelled, k_b);
 	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 1u);
+	pump();
 	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	BOOST_TEST(text(spelled) == "pinned spelled");
 	rs->unpin_resource(spelled);
 	BOOST_TEST(rs->pinned_count() == 1u);
-	// Both pinned one node, so its pin is the block pinned last (as for two pins of one tag); the old ID keeps it.
-	BOOST_TEST(text(a) == "spelled");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: the spelling whose pin_resource put the node's block unpins while another still owns the pin: the other gets its
+// file loaded and pinned, not the data that was pinned for the one that left.
+BOOST_FIXTURE_TEST_CASE(TheSupplierUnpins_TheOtherOwnerGetsItsFilePinned, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pending_loads() == 1u);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: when the owner left has no file, its pin goes: no empty pin stays behind.
+BOOST_FIXTURE_TEST_CASE(TheSupplierUnpins_AnOwnerLeftWithoutAFileLosesThePin, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	ram->files.erase(a);
+
+	rs->unpin_resource(spelled);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(rs->pending_loads() == 0u);
 	rs->unpin_resource(a);
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
