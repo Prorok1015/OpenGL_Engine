@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <chrono>
 #include <cstdint>
+#include <exception>
+#include <format>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -98,6 +100,29 @@ namespace res {
         std::ranges::move(changed, std::back_inserter(batch));
         return batch;
     }
+
+    // Compared by path elements: "root/sub" is not above "root/subway", and a root may end with a separator.
+    inline bool is_at_or_below(const fs::path& path, const fs::path& top) {
+        if (top.empty()) return false;
+        const auto mismatch = std::mismatch(top.begin(), top.end(), path.begin(), path.end());
+        if (mismatch.first == top.end()) return true;
+        return mismatch.first->empty() && std::next(mismatch.first) == top.end();
+    }
+
+    // What a scan could not read keeps what was known at and below it: a listing cut short would report the files
+    // it did not reach as deleted, and as created again by the next poll.
+    inline void keep_unread(const watch_snapshot& before, const std::vector<fs::path>& unread, watch_snapshot& after) {
+        for (const auto& top : unread) {
+            std::erase_if(after.files, [&top](const auto& item) { return is_at_or_below(item.first, top); });
+            std::erase_if(after.dirs, [&top](const fs::path& dir) { return is_at_or_below(dir, top); });
+            for (const auto& [path, state] : before.files) {
+                if (is_at_or_below(path, top)) after.files.insert_or_assign(path, state);
+            }
+            for (const auto& dir : before.dirs) {
+                if (is_at_or_below(dir, top)) after.dirs.insert(dir);
+            }
+        }
+    }
     }
 
     class file_watcher {
@@ -129,7 +154,7 @@ namespace res {
         void start() {
             if (m_batch_mode) {
                 std::lock_guard lock(m_state_mutex);
-                m_snapshot = scan_all();
+                m_snapshot = scan_all().found;
             }
             else {
                 for (const auto& root : watch_paths) {
@@ -211,6 +236,7 @@ namespace res {
 
                 // Whatever one poll throws (the file system, a callback of whoever watches), the next one is scheduled:
                 // an exception that left this handler used to end the watching for good, without a word (#939).
+                m_poll_failed = false;
                 try {
                     if (m_batch_mode) {
                         poll_changes();
@@ -220,7 +246,7 @@ namespace res {
                             update_state(root, true);
                         }
                     }
-                    m_last_poll_error.clear();
+                    if (!m_poll_failed) m_last_poll_error.clear();
                 }
                 catch (const std::exception& e) {
                     report_poll_error(e.what());
@@ -228,61 +254,100 @@ namespace res {
                 catch (...) {
                     report_poll_error("unknown exception");
                 }
-                schedule_timer();
+                // A callback of this very poll may have called stop(): the timer is not armed again after it.
+                if (!m_stopped) schedule_timer();
             });
         }
 
+        struct scan_result {
+            detail::watch_snapshot found;
+            // Roots, folders and files the scan could not read (detail::keep_unread).
+            std::vector<fs::path> unread;
+        };
+
         // Every accepted regular file and every folder below the roots, without entering ignored folders and without
         // following links: a link is neither a file nor a folder here.
-        detail::watch_snapshot scan_all() const {
-            detail::watch_snapshot found;
+        scan_result scan_all() {
+            scan_result result;
             for (const auto& root : watch_paths) {
                 std::error_code ec;
-                if (!fs::is_directory(root, ec)) continue;
+                const auto root_status = fs::status(root, ec);
+                if (!fs::is_directory(root_status)) {
+                    // A root that is gone or is no folder has nothing to list; one that cannot be asked about is unread.
+                    if (!fs::status_known(root_status)) result.unread.push_back(root);
+                    continue;
+                }
+                ec.clear();
                 fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
                 const fs::recursive_directory_iterator end;
                 for (; !ec && it != end; it.increment(ec)) {
                     std::error_code entry_ec;
                     const auto status = it->symlink_status(entry_ec);
-                    if (entry_ec) continue;
+                    if (entry_ec) {
+                        result.unread.push_back(it->path());
+                        it.disable_recursion_pending();
+                        continue;
+                    }
                     const std::string name = fs_paths::utf8_of(it->path().filename());
                     if (fs::is_directory(status)) {
                         if (m_options.ignore_dir && m_options.ignore_dir(name)) {
                             it.disable_recursion_pending();
                             continue;
                         }
-                        found.dirs.insert(it->path());
+                        result.found.dirs.insert(it->path());
                     }
                     else if (fs::is_regular_file(status) && (!m_options.accept_file || m_options.accept_file(name))) {
                         const auto state = state_of(it->path(), entry_ec);
-                        if (!entry_ec) found.files.emplace(it->path(), state);
+                        if (entry_ec) result.unread.push_back(it->path());
+                        else result.found.files.emplace(it->path(), state);
                     }
                 }
+                if (ec) {
+                    result.unread.push_back(root);
+                    report_poll_error(std::format("the scan of '{}' was cut short: {}",
+                        fs_paths::utf8_of(root), ec.message()));
+                }
             }
-            return found;
+            return result;
         }
 
         void poll_changes() {
-            detail::watch_snapshot now = scan_all();
+            scan_result scan = scan_all();
             std::vector<raw_change> batch;
             {
                 std::lock_guard lock(m_state_mutex);
-                batch = detail::diff_snapshots(m_snapshot, now);
-                m_snapshot = std::move(now);
+                detail::keep_unread(m_snapshot, scan.unread, scan.found);
+                batch = detail::diff_snapshots(m_snapshot, scan.found);
+                m_snapshot = std::move(scan.found);
             }
             for (const auto& change : batch) {
                 if (m_notify_cb && !change.is_directory
                     && (change.kind == change_kind::created || change.kind == change_kind::modified)) {
-                    m_notify_cb(change.path);
+                    deliver(m_notify_cb, change.path);
                 }
             }
             if (m_batch_cb && !batch.empty()) {
-                m_batch_cb(std::move(batch));
+                deliver(m_batch_cb, std::move(batch));
+            }
+        }
+
+        // A callback that throws loses its own change only: the rest of the poll is still delivered.
+        template <typename Callback, typename Arg>
+        void deliver(const Callback& callback, Arg&& arg) {
+            try {
+                callback(std::forward<Arg>(arg));
+            }
+            catch (const std::exception& e) {
+                egLOG_ERROR("resource", "a callback of the file watcher threw: {}", e.what());
+            }
+            catch (...) {
+                egLOG_ERROR("resource", "a callback of the file watcher threw an unknown exception");
             }
         }
 
         // Once per distinct failure, not twice a second for as long as it lasts.
         void report_poll_error(std::string_view what) {
+            m_poll_failed = true;
             if (m_last_poll_error == what) return;
             m_last_poll_error = what;
             egLOG_WARN("resource", "a poll of the watched files failed and is tried again: {}", what);
@@ -327,7 +392,7 @@ namespace res {
             }
 
             for (const auto& path : changed) {
-                m_notify_cb(path);
+                deliver(m_notify_cb, path);
             }
         }
 
@@ -335,6 +400,7 @@ namespace res {
         boost::asio::steady_timer timer;
         std::atomic<bool> m_stopped{ false };
         std::string m_last_poll_error;
+        bool m_poll_failed = false;
         std::vector<fs::path> watch_paths;
         std::mutex m_state_mutex;
         std::unordered_map<fs::path, fs::file_time_type> file_states;
