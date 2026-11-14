@@ -7,8 +7,8 @@
 #include <string_view>
 #include <vector>
 
-// resource_system::warn_on_sync_require (#925): a require_sync of a tag whose adapter can block the main thread for
-// seconds (the editor's models, parsed in the decoder process) warns once per tag.
+// resource_system::warn_on_sync_require (#925): a require_sync that has to wait for a tag whose adapter can block the
+// main thread for seconds (the editor's models, parsed in the decoder process) warns once per tag.
 
 namespace {
 
@@ -59,6 +59,18 @@ BOOST_AUTO_TEST_CASE(ARequireSyncOfAnExtensionThatCanBlock_WarnsOncePerTag)
 BOOST_AUTO_TEST_CASE(WithoutExtensionsThatCanBlock_NothingWarns)
 {
 	const res::tag robot = put("robot.glb", "model");
+	warnings logs;
+	rs->require_sync<res::text_resource>(robot);
+	BOOST_TEST(logs.count("blocks the main thread") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ARequireSyncOfAModelAlreadyLoaded_DoesNotWarn)
+{
+	rs->warn_on_sync_require({ "glb" });
+	const res::tag robot = put("robot.glb", "model");
+	auto handle = rs->require<res::text_resource>(robot);
+	pump();
+	BOOST_REQUIRE(handle.is_ready());
 	warnings logs;
 	rs->require_sync<res::text_resource>(robot);
 	BOOST_TEST(logs.count("blocks the main thread") == 0u);

@@ -11,18 +11,23 @@ namespace fs = std::filesystem;
 
 namespace {
 
-void erase_memory_folder(res::resource_system& resources, const std::string& folder)
+// The tag of a file that is still there afterwards, if any.
+std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder)
 {
 	const std::vector<fs::path> roots = resources.mount_roots(res::tag::memory);
-	if (roots.empty()) return;
+	if (roots.empty()) return std::nullopt;
 	const fs::path dir = roots.back() / fs_paths::path_from_utf8(folder);
 	std::error_code ec;
-	if (!fs::is_directory(dir, ec)) return;
+	if (!fs::is_directory(dir, ec)) return std::nullopt;
 	std::vector<res::tag> found;
 	for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
 		if (it->is_regular_file(ec)) found.emplace_back(res::tag::memory, folder + fs_paths::generic_utf8_of(it->path().lexically_relative(dir)));
 	}
 	for (const res::tag& tag : found) resources.erase(tag);
+	for (const res::tag& tag : found) {
+		if (resources.exists(tag)) return tag;
+	}
+	return std::nullopt;
 }
 
 }
@@ -58,7 +63,7 @@ std::optional<edt::model_location> edt::decoded_model_adapter::locate(const std:
 
 std::string edt::decoded_model_adapter::memory_folder_of(const res::tag& tag)
 {
-	const std::string below = res::sanitize_relative_path(std::string(tag.path()) + std::string(tag.pure_name()));
+	const std::string below = res::sanitize_relative_path(std::string(tag.path()) + std::string(tag.name()));
 	return "__models/" + std::string(tag.protocol()) + "/" + below + "/";
 }
 
@@ -92,7 +97,11 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 	if (!found.ok()) throw refuse(found.error);
 	source.allowed = &found.files;
 
-	erase_memory_folder(m_resources, source.memory_folder);
+	const std::shared_ptr<std::mutex> lock = folder_lock(source.memory_folder);
+	const std::lock_guard folder_guard(*lock);
+	if (const std::optional<res::tag> left = erase_memory_folder(m_resources, source.memory_folder)) {
+		throw refuse(std::format("'{}', left in memory:// by an earlier load of the model, cannot be removed", left->view()));
+	}
 	source.deadline = std::chrono::steady_clock::now() + k_deadline;
 	import_intermediate imported = step([&] { return m_decoder.import(source, nullptr); });
 	if (!imported.error.empty()) throw refuse(imported.error);
@@ -102,6 +111,14 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 	instance->deserialize(m_descs, imported.prefab_json);
 	m_resources.register_alias(tag, imported.prefab_tag);
 	return instance;
+}
+
+std::shared_ptr<std::mutex> edt::decoded_model_adapter::folder_lock(const std::string& folder) const
+{
+	const std::lock_guard guard(m_folder_locks_mutex);
+	std::shared_ptr<std::mutex>& lock = m_folder_locks[folder];
+	if (!lock) lock = std::make_shared<std::mutex>();
+	return lock;
 }
 
 std::vector<std::byte> edt::decoded_model_adapter::serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>&) const

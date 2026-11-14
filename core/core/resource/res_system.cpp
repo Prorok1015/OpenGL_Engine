@@ -745,6 +745,9 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
     start_loading(tag, block, std::move(found));
   }
   if (sync) {
+    if (!is_finished(*block)) {
+      warn_sync_wait(tag);
+    }
     wait_for_block(block);
   }
   return block;
@@ -3119,13 +3122,17 @@ ds::task_system* res::resource_system::handle_tasks()
 	return &m_tasks;
 }
 
-void res::resource_system::check_sync_require(const res::tag& tag) const
+void res::resource_system::check_sync_require([[maybe_unused]] const res::tag& tag) const
 {
 	ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
 		"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
+}
+
+void res::resource_system::warn_sync_wait(const res::tag& tag) const
+{
 	const resource_system& top = root();
+	if (!top.m_sync_warnings_on.load(std::memory_order_acquire)) return;
 	std::lock_guard lock(top.m_sync_warning_mutex);
-	if (top.m_slow_sync_extensions.empty()) return;
 	std::string extension(tag.extension());
 	std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 	if (!top.m_slow_sync_extensions.contains(extension) || !top.m_sync_warned.insert(std::string(tag.view())).second) return;
@@ -3137,6 +3144,7 @@ void res::resource_system::warn_on_sync_require(std::vector<std::string> extensi
 	resource_system& top = root();
 	std::lock_guard lock(top.m_sync_warning_mutex);
 	top.m_slow_sync_extensions = std::unordered_set<std::string>(std::make_move_iterator(extensions.begin()), std::make_move_iterator(extensions.end()));
+	top.m_sync_warnings_on.store(!top.m_slow_sync_extensions.empty(), std::memory_order_release);
 }
 
 res::tag res::resource_system::resolve_reference(const reference& ref) const

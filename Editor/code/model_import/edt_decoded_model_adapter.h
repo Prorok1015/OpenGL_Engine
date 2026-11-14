@@ -11,8 +11,10 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace edt {
@@ -53,15 +55,20 @@ namespace edt {
 		// The file of `tag` in the highest of `roots` (lowest priority first, as resource_system::mount_roots lists them)
 		// that holds it; nullopt when none does.
 		static std::optional<model_location> locate(const std::vector<std::filesystem::path>& roots, const res::tag& tag);
-		// "__models/<protocol>/<folder of the tag><stem>/": one memory:// folder per model, apart from the "<stem>/" of an
-		// import. Each load empties it first: the decoder overwrites nothing, and memory:// is on the disk, so an earlier
-		// run of the editor left the files of its load there.
+		// "__models/<protocol>/<folder of the tag><file name>/": one memory:// folder per model file (x.glb and x.fbx apart),
+		// apart from the "<stem>/" of an import. Each load empties it first: the decoder overwrites nothing, and memory://
+		// is on the disk, so an earlier run of the editor left the files of its load there.
 		static std::string memory_folder_of(const res::tag& tag);
 
 	private:
+		// Held from emptying a model's folder until its import is in: two loads of one model do not erase each other.
+		std::shared_ptr<std::mutex> folder_lock(const std::string& folder) const;
+
 		desc::desc_system& m_descs;
 		res::resource_system& m_resources;
 		decoder_steps m_decoder;
+		mutable std::mutex m_folder_locks_mutex;
+		mutable std::unordered_map<std::string, std::shared_ptr<std::mutex>> m_folder_locks;
 	};
 
 } // namespace edt

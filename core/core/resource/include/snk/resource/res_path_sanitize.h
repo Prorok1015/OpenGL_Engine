@@ -130,11 +130,11 @@ namespace res
 		return out;
 	}
 
-	// Resolves `rel` against `dir` and accepts it only when the canonical result stays inside the
-	// canonical `dir` (compared by path components, symlinks resolved). Absolute `rel` is accepted
-	// only with `allow_absolute`, and then it still has to be inside `dir`.
-	inline std::optional<std::filesystem::path> path_within_dir(
-		const std::filesystem::path& dir, std::string_view rel_text, const bool allow_absolute = false)
+	// Resolves `rel` against `base` (a folder inside `dir`) and accepts it only when the canonical result stays inside
+	// the canonical `dir` (compared by path components, symlinks resolved). Absolute `rel` is accepted only with
+	// `allow_absolute`, and then it still has to be inside `dir`.
+	inline std::optional<std::filesystem::path> path_within_dir_from(const std::filesystem::path& dir,
+		const std::filesystem::path& base, std::string_view rel_text, const bool allow_absolute = false)
 	{
 		namespace fs = std::filesystem;
 
@@ -170,7 +170,11 @@ namespace res
 		if (ec) {
 			return std::nullopt;
 		}
-		fs::path candidate = fs::weakly_canonical(absolute ? rel : canon_dir / rel, ec);
+		const fs::path canon_base = base == dir ? canon_dir : fs::weakly_canonical(base, ec);
+		if (ec) {
+			return std::nullopt;
+		}
+		fs::path candidate = fs::weakly_canonical(absolute ? rel : canon_base / rel, ec);
 		if (ec) {
 			return std::nullopt;
 		}
@@ -185,6 +189,13 @@ namespace res
 			}
 		}
 		return candidate;
+	}
+
+	// path_within_dir_from with `rel` read from `dir` itself.
+	inline std::optional<std::filesystem::path> path_within_dir(
+		const std::filesystem::path& dir, std::string_view rel_text, const bool allow_absolute = false)
+	{
+		return path_within_dir_from(dir, dir, rel_text, allow_absolute);
 	}
 
 	// Reads a regular file of at most `max_bytes`. Refuses directories, FIFOs and devices (which

@@ -299,10 +299,11 @@ BOOST_AUTO_TEST_CASE(ABoundary_LetsTheModelReadFromItsContentRoot_ButNotBeyondIt
 
 	const auto shared = access.resolve("../textures/skin.png", edt::model_file_kind::texture);
 	BOOST_REQUIRE(shared.found());
-	BOOST_CHECK_EQUAL(access.relative_name(shared), "__root/textures/skin.png");
+	BOOST_CHECK_EQUAL(access.relative_name(shared), "textures/skin.png");
 	const auto near = access.resolve("near.png", edt::model_file_kind::texture);
 	BOOST_REQUIRE(near.found());
-	BOOST_CHECK_EQUAL(access.relative_name(near), "near.png");
+	// Named from the boundary too: models/near.png and a textures/near.png can never share a name.
+	BOOST_CHECK_EQUAL(access.relative_name(near), "models/near.png");
 
 	const auto beyond = access.resolve("../../outside.png", edt::model_file_kind::texture);
 	BOOST_CHECK(beyond.error.find("outside the content root of the model") != std::string::npos);

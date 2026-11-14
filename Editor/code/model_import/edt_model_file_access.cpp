@@ -69,10 +69,7 @@ edt::model_file_access::model_file_access(fs::path root_file, model_file_limits 
 		fs::path wide = fs::weakly_canonical(boundary, ec);
 		if (ec) wide = boundary.lexically_normal();
 		const fs::path below = m_dir.lexically_relative(wide);
-		if (!below.empty() && *below.begin() != "..") {
-			m_boundary = wide;
-			if (below != ".") m_dir_below_boundary = below.generic_string();
-		}
+		if (!below.empty() && *below.begin() != "..") m_boundary = wide;
 	}
 }
 
@@ -87,14 +84,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	};
 
 	const char* const outside = m_boundary == m_dir ? "outside the folder of the model" : "outside the content root of the model";
-	// A relative reference is read from the model's folder, then has to stay inside the boundary; a rooted one is passed as
-	// it is, so path_within_dir refuses or checks it the same way with and without a boundary.
-	std::string text(reference);
-	std::replace(text.begin(), text.end(), '\\', '/');
-	const fs::path as_given(text);
-	const bool rooted = as_given.has_root_name() || as_given.has_root_directory();
-	const std::string within = rooted || m_dir_below_boundary.empty() ? text : m_dir_below_boundary + "/" + text;
-	const auto inside = res::path_within_dir(m_boundary, within, kind == model_file_kind::side_file);
+	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
 	if (!inside) return refuse(outside);
 	std::error_code ec;
 	const fs::path relative = inside->lexically_relative(m_boundary);
@@ -190,8 +180,6 @@ void edt::model_file_access::hash_listed(const resolved_reference& file)
 
 std::string edt::model_file_access::relative_name(const resolved_reference& file) const
 {
-	const fs::path in_dir = file.path.lexically_relative(m_dir);
-	if (!in_dir.empty() && *in_dir.begin() != "..") return in_dir.generic_string();
-	// Outside the model's folder but in its boundary: kept apart from a file of the same name in the folder.
-	return "__root/" + file.path.lexically_relative(m_boundary).generic_string();
+	// With a boundary every name is taken from it, so a file in the model's folder and one elsewhere never share a name.
+	return file.path.lexically_relative(m_boundary).generic_string();
 }

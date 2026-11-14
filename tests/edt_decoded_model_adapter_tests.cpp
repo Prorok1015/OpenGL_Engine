@@ -22,7 +22,7 @@ namespace {
 namespace fs = std::filesystem;
 
 const res::tag k_model("res://models/m.obj");
-const res::tag k_prefab("memory://__models/res/models/m/m.prefab.desc");
+const res::tag k_prefab("memory://__models/res/models/m.obj/m.prefab.desc");
 
 struct adapter_env
 {
@@ -118,9 +118,10 @@ BOOST_AUTO_TEST_CASE(TheModelIsFoundInTheHighestRootThatHasIt)
 
 BOOST_AUTO_TEST_CASE(EachModelPathHasAMemoryFolderOfItsOwn)
 {
-	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("res://objects/robot/gen_robot.glb")) == "__models/res/objects/robot/gen_robot/");
-	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("res://gen_robot.glb")) == "__models/res/gen_robot/");
-	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("engine://a/gen_robot.glb")) == "__models/engine/a/gen_robot/");
+	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("res://objects/robot/gen_robot.glb")) == "__models/res/objects/robot/gen_robot.glb/");
+	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("res://objects/robot/gen_robot.fbx")) == "__models/res/objects/robot/gen_robot.fbx/");
+	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("res://gen_robot.glb")) == "__models/res/gen_robot.glb/");
+	BOOST_TEST(edt::decoded_model_adapter::memory_folder_of(res::tag("engine://a/gen_robot.glb")) == "__models/engine/a/gen_robot.glb/");
 }
 
 BOOST_AUTO_TEST_CASE(TheDecoderGetsTheContentRootAndItsOwnTimeLimit_AndItsAnswerIsThePrefab)
@@ -133,7 +134,7 @@ BOOST_AUTO_TEST_CASE(TheDecoderGetsTheContentRootAndItsOwnTimeLimit_AndItsAnswer
 	BOOST_REQUIRE(imported.has_value());
 	BOOST_TEST(fs::equivalent(scanned->path, dir.path() / "content" / "models" / "m.obj"));
 	BOOST_TEST(fs::equivalent(scanned->boundary, dir.path() / "content"));
-	BOOST_TEST(scanned->memory_folder == "__models/res/models/m/");
+	BOOST_TEST(scanned->memory_folder == "__models/res/models/m.obj/");
 	BOOST_TEST((scanned->preloaded == &model));
 	BOOST_TEST((scanned->allowed == nullptr));
 	BOOST_TEST((scanned->deadline > scanned_at && scanned->deadline <= scanned_at + edt::decoded_model_adapter::k_deadline));
@@ -206,14 +207,14 @@ BOOST_AUTO_TEST_CASE(WhatTheDecoderRefusesOrFailsOn_FailsTheLoadNamingTheModel)
 	BOOST_TEST((rs->resolve_alias(k_model) == k_model));
 }
 
-BOOST_AUTO_TEST_CASE(WhatAnEarlierLoadLeftInTheModelsMemoryFolder_IsGoneBeforeTheImport)
+BOOST_AUTO_TEST_CASE(WhatAnEarlierLoadLeftInTheModelsMemoryFolder_IsGoneBeforeTheImport_AndAModelOfTheSameStemKeepsItsOwn)
 {
-	dir.write("memory/__models/res/models/m/m.prefab.desc", "{}");
-	dir.write("memory/__models/res/models/m/textures/old.png", "png");
-	dir.write("memory/__models/res/models/other/other.prefab.desc", "{}");
-	const res::tag old_prefab("memory://__models/res/models/m/m.prefab.desc");
-	const res::tag old_texture("memory://__models/res/models/m/textures/old.png");
-	const res::tag other("memory://__models/res/models/other/other.prefab.desc");
+	dir.write("memory/__models/res/models/m.obj/m.prefab.desc", "{}");
+	dir.write("memory/__models/res/models/m.obj/textures/old.png", "png");
+	dir.write("memory/__models/res/models/m.fbx/m.prefab.desc", "{}");
+	const res::tag old_prefab("memory://__models/res/models/m.obj/m.prefab.desc");
+	const res::tag old_texture("memory://__models/res/models/m.obj/textures/old.png");
+	const res::tag other("memory://__models/res/models/m.fbx/m.prefab.desc");
 	BOOST_REQUIRE(rs->exists(old_prefab));
 	BOOST_REQUIRE(rs->exists(old_texture));
 

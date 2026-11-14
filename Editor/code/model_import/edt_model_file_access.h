@@ -79,9 +79,8 @@ namespace edt {
 	private:
 		std::filesystem::path m_root_file;
 		std::filesystem::path m_dir;
+		// m_dir, or the folder around it the import may read from.
 		std::filesystem::path m_boundary;
-		// The model's folder below m_boundary, generic, "" when they are the same.
-		std::string m_dir_below_boundary;
 		std::string m_root_extension;
 		model_file_limits m_limits;
 		const std::vector<referenced_file>* m_allowed;

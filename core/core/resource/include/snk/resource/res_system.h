@@ -533,6 +533,8 @@ namespace res
 		ds::task_system* handle_tasks();
 		// require_sync's check, in the engine.
 		void check_sync_require(const res::tag& tag) const;
+		// warn_on_sync_require's warning, for a require_sync that has to wait for `tag`.
+		void warn_sync_wait(const res::tag& tag) const;
 		void serialize_pinned(const res::tag& tag, std::shared_ptr<resource_handle> block, adapter ad);
 
 		struct await_state;
@@ -835,7 +837,8 @@ namespace res
 		std::uint64_t m_delivering_batch = 0;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
-		// Root only (warn_on_sync_require).
+		// Root only (warn_on_sync_require). The flag spares every other require_sync the lock.
+		std::atomic<bool> m_sync_warnings_on{ false };
 		mutable std::mutex m_sync_warning_mutex;
 		std::unordered_set<std::string> m_slow_sync_extensions;
 		mutable std::unordered_set<std::string> m_sync_warned;
