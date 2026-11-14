@@ -3,6 +3,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_override_edit.h"
 #include "edt_schema_inspector.h"
+#include "edt_version_notice.h"
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/common/logger/engine_log.h>
@@ -738,6 +739,9 @@ edt::save_result edt::data_document::write_checked(bool over)
 		return save_result::failure(std::format("{} could not be written", where(m_source)));
 	}
 	writer->signal_changed(m_source);
+	if (m_file_version < m_current_version) {
+		egLOG_WARN("Editor/Save", "{}", version_upgrade_text(m_source.view(), m_file_version, m_current_version));
+	}
 
 	m_own = std::move(content.as_object());
 	m_saved_own = m_own;

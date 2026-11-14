@@ -14,7 +14,9 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <iterator>
+#include <limits>
 #include <chrono>
 #include <format>
 #include <memory>
@@ -766,4 +768,22 @@ std::string edt::desc_root_guid(std::span<const std::byte> bytes)
 	if (ec || !parsed.is_object()) return {};
 	const json::value* guid = parsed.as_object().if_contains("__guid");
 	return guid && guid->is_string() ? std::string(guid->as_string().data(), guid->as_string().size()) : std::string{};
+}
+
+int edt::desc_root_version(std::span<const std::byte> bytes)
+{
+	boost::system::error_code ec;
+	const json::value parsed = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec);
+	if (ec || !parsed.is_object()) return 0;
+	const json::value* version = parsed.as_object().if_contains("__version");
+	if (version == nullptr) return 1;
+	if (version->is_int64()) {
+		const std::int64_t value = version->as_int64();
+		return value >= 1 && value <= std::numeric_limits<int>::max() ? static_cast<int>(value) : 0;
+	}
+	if (version->is_uint64()) {
+		const std::uint64_t value = version->as_uint64();
+		return value >= 1 && value <= static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ? static_cast<int>(value) : 0;
+	}
+	return 0;
 }

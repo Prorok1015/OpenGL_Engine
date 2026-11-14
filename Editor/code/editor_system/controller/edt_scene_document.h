@@ -40,6 +40,9 @@ namespace edt
 		std::string level_guid;
 		// __parent of the level file read; a save writes it and only what differs from it (#812). Invalid: none.
 		res::tag level_parent;
+		// The root __version of the level file as it was loaded (0: none, a new level): a save over an older one says that
+		// older editors will not open it any more (#761, R26).
+		int level_file_version = 0;
 
 		// Multi-world state
 		std::vector<scn::world_desc> world_descs;

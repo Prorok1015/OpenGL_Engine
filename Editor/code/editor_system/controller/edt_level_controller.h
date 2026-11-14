@@ -140,6 +140,8 @@ namespace edt
 		// The worlds of the level were replaced or dropped (a new level, a game layer change, a hot reload): what is
 		// derived from their plans has to be read again.
 		std::function<void()> on_worlds_replaced;
+		// A save wrote the level over a file of an older version; the text says so (it is in the log as a WARN already).
+		std::function<void(const std::string&)> on_file_upgraded;
 
 	private:
 		scene_document& m_state;

@@ -1583,6 +1583,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
+	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
 	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
@@ -1600,6 +1601,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		draw_agent_status();
 		draw_play_status();
+		draw_save_notice();
 		m_live_mode->draw_status();
 	});
 }
@@ -1803,6 +1805,13 @@ void edt::editor_system::draw_play_status()
 	const bool paused = m_play->state() == play_state::paused;
 	ImGui::TextColored(paused ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f) : ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
 		paused ? "Play: paused" : "Play: playing");
+}
+
+void edt::editor_system::draw_save_notice()
+{
+	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
+	if (!text) return;
+	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
 
 void edt::editor_system::create_panels(bool capture_log)
