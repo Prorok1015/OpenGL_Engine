@@ -1083,7 +1083,9 @@ BOOST_AUTO_TEST_CASE(a_reference_in_an_override_record_is_written_with_its_guid)
 		for (const json::value& record : records->as_array()) {
 			const json::value* component = record.as_object().if_contains("component");
 			const json::value* at = record.as_object().if_contains("path");
-			if (component && *component == "mesh" && at && *at == path) return record.as_object().if_contains("value");
+			const bool same_component = component && component->is_string() && component->as_string() == "mesh";
+			const bool same_path = at && at->is_string() && std::string_view(at->as_string().data(), at->as_string().size()) == path;
+			if (same_component && same_path) return record.as_object().if_contains("value");
 		}
 		return nullptr;
 	};
