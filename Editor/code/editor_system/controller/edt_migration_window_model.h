@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_migration_commands.h"
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace edt
@@ -16,8 +18,9 @@ namespace edt
 
 	// The Project Migration window (EPIC-58 S8, #761) without ImGui: it asks project.migration_plan for the plan, shows it,
 	// runs project.migrate as a person's call (origin ui) and shows the report its job answers with (job_finished). A
-	// migration left unfinished (or one that failed) is rolled back the same way, with project.migrate_rollback {id}.
-	// Main thread only.
+	// migration left unfinished (or one that failed) is rolled back the same way, with project.migrate_rollback {id}, but
+	// only after the person saw its question (ask_roll_back: the migration, its backup and every file it puts back or
+	// deletes, #910) and confirmed it. Main thread only.
 	class migration_window_model
 	{
 	public:
@@ -27,6 +30,18 @@ namespace edt
 			std::function<cmd::result(std::string_view id, boost::json::value args)> invoke;
 			// Opens a file of the plan; `path` is relative to the project root, as the plan names it.
 			std::function<void(const std::string& path)> open_file;
+			// What a rollback of migration `id` would do (edt::rollback_listing_of of the open project); null: no rollback can
+			// be shown, so none is confirmed.
+			std::function<rollback_listing(const std::string& id)> listing_of;
+		};
+
+		// The question "Roll back migration <id>?" (#910): what the rollback would do, one path per line; `refused`: why it
+		// would be refused, and then it cannot be confirmed.
+		struct rollback_question
+		{
+			std::string id;
+			std::string text;
+			std::string refused;
 		};
 
 		// idle: nothing asked yet (or Close); planning: the plan is asked for on the next tick(); plan_shown; running: the
@@ -107,8 +122,19 @@ namespace edt
 		// else the plan's first unfinished one; empty: none.
 		std::string rollback_id() const;
 		bool can_roll_back() const { return !rollback_id().empty(); }
-		// project.migrate_rollback {id}; refused at once, the view stays as it was with the reason.
+		// project.migrate_rollback {id}; refused at once, the view stays as it was with the reason. The window calls it only
+		// through confirm_roll_back.
 		void roll_back(const std::string& id);
+		// Reads what a rollback of `id` would do and arms its question ("Roll Back..." and the startup's Roll Back): nothing
+		// runs until confirm_roll_back. Ignored while a job runs.
+		void ask_roll_back(const std::string& id);
+		const std::optional<rollback_question>& question() const { return m_question; }
+		// True once after each ask_roll_back: the window opens the question then.
+		bool take_question_request() { return std::exchange(m_question_requested, false); }
+		bool can_confirm_roll_back() const { return m_question && m_question->refused.empty() && m_phase != phase::running; }
+		// The person's Roll Back in the question: roll_back of the question's id; the question goes either way.
+		void confirm_roll_back();
+		void cancel_roll_back();
 		// The job that runs is a rollback.
 		bool rolling_back() const { return m_rolling_back; }
 		// Back to idle; ignored while the migration runs.
@@ -149,6 +175,10 @@ namespace edt
 		std::string m_error_hint;
 		std::string m_notice;
 		bool m_rolling_back = false;
+		std::optional<rollback_question> m_question;
+		// The id the question was asked for, as given (rollback_question::id is cleaned for the screen).
+		std::string m_rollback_target;
+		bool m_question_requested = false;
 		// Last: gone before the state its slot touches.
 		connection m_finished;
 	};

@@ -5,8 +5,10 @@
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/platform/plt_beneath.h>
+#include <snk/project/prj_code.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
+#include <snk/project/prj_project.h>
 #include <snk/project/prj_version.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
@@ -208,6 +210,115 @@ namespace
 		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", path);
 		if (!tag_of(path, content_roots)) return std::format("'{}' is not inside a content root", path);
 		return std::nullopt;
+	}
+
+	constexpr std::size_t k_max_shown_path_bytes = 200;
+
+	// One code point of `text` at `at`: its value and length; nullopt for a byte that starts no valid UTF-8 sequence.
+	std::optional<std::pair<char32_t, std::size_t>> code_point_at(std::string_view text, std::size_t at)
+	{
+		const auto byte = [&text](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+		const unsigned char lead = byte(at);
+		if (lead < 0x80) return std::pair{ static_cast<char32_t>(lead), std::size_t{ 1 } };
+		std::size_t length = 0;
+		std::uint32_t value = 0;
+		std::uint32_t least = 0;
+		if ((lead & 0xe0) == 0xc0) {
+			length = 2;
+			value = lead & 0x1fu;
+			least = 0x80;
+		} else if ((lead & 0xf0) == 0xe0) {
+			length = 3;
+			value = lead & 0x0fu;
+			least = 0x800;
+		} else if ((lead & 0xf8) == 0xf0) {
+			length = 4;
+			value = lead & 0x07u;
+			least = 0x10000;
+		} else {
+			return std::nullopt;
+		}
+		if (at + length > text.size()) return std::nullopt;
+		for (std::size_t i = 1; i < length; ++i) {
+			if ((byte(at + i) & 0xc0) != 0x80) return std::nullopt;
+			value = (value << 6) | (byte(at + i) & 0x3fu);
+		}
+		if (value < least || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return std::nullopt;
+		return std::pair{ static_cast<char32_t>(value), length };
+	}
+
+	// What could forge or hide a part of a line a person reads: controls (C0, DEL, C1), bidi controls, line and paragraph
+	// separators, invisible and zero-width characters.
+	bool is_hidden_code_point(char32_t c)
+	{
+		return c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == 0xad || c == 0x61c || c == 0x180e || (c >= 0x200b && c <= 0x200f)
+			|| (c >= 0x2028 && c <= 0x202e) || (c >= 0x2060 && c <= 0x2064) || (c >= 0x2066 && c <= 0x2069) || c == 0xfeff;
+	}
+
+	// The first component of a journal path, or the path itself.
+	std::string_view first_component(std::string_view path)
+	{
+		return path.substr(0, path.find('/'));
+	}
+
+	std::string ascii_lowered(std::string_view text)
+	{
+		std::string out(text);
+		for (char& c : out) {
+			if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+		}
+		return out;
+	}
+
+	// The names, below the project root, of the folders a migration never writes into: the code folder and every private
+	// or writable folder of prj::project_context.
+	std::vector<std::string> reserved_top_names(const prj::project_context& project)
+	{
+		std::vector<fs::path> dirs{ project.code_dir(), project.snk_dir() };
+		for (fs::path& dir : project.private_dirs()) dirs.push_back(std::move(dir));
+		for (fs::path& dir : project.writable_dirs()) dirs.push_back(std::move(dir));
+		std::vector<std::string> names;
+		for (const fs::path& dir : dirs) {
+			const fs::path relative = dir.lexically_relative(project.root);
+			if (relative.empty() || *relative.begin() == "..") continue;
+			names.push_back(ascii_lowered(fs_paths::generic_utf8_of(*relative.begin())));
+		}
+		return names;
+	}
+
+	// Why a rollback must not touch `path` of a journal; nullopt when it may. `manifest_allowed`: project.snkproj passes
+	// (files[], never created_files).
+	std::optional<std::string> journal_path_error(std::string_view path, bool manifest_allowed, const prj::project_context& project,
+		const std::vector<std::string>& reserved)
+	{
+		const std::string shown = journal_path_text(path);
+		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", shown);
+		if (manifest_allowed && path == k_manifest_path) return std::nullopt;
+		const std::string_view top = first_component(path);
+		if (prj::is_code_ignored_dir(top) || std::ranges::find(reserved, ascii_lowered(top)) != reserved.end()) {
+			return std::format("'{}' is in '{}', where a migration never writes", shown, journal_path_text(top));
+		}
+		if (!tag_of(std::string(path), project.data.content_roots)) return std::format("'{}' is not inside a content root of the project", shown);
+		return std::nullopt;
+	}
+
+	journal_paths paths_of(const json::object& journal)
+	{
+		journal_paths out;
+		if (const json::value* backup = journal.if_contains("backup"); backup && backup->is_string()) out.backup = std::string(backup->as_string());
+		if (const json::value* list = journal.if_contains("files"); list && list->is_array()) {
+			for (const json::value& item : list->as_array()) {
+				if (!item.is_object()) continue;
+				const json::value* path = item.as_object().if_contains("path");
+				out.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
+			}
+		}
+		if (const json::value* list = journal.if_contains("created_files"); list && list->is_array()) {
+			for (const json::value& item : list->as_array()) {
+				if (item.is_string()) out.created.emplace_back(item.as_string());
+			}
+		}
+		return out;
 	}
 
 	// Removes a file the migration created without following a link below the root (platform::beneath).
@@ -1118,6 +1229,59 @@ std::vector<std::string> prj::migration::unfinished_migrations(const fs::path& r
 	return ids;
 }
 
+std::string prj::migration::journal_path_text(std::string_view path)
+{
+	std::string out;
+	out.reserve(path.size() < k_max_shown_path_bytes ? path.size() : k_max_shown_path_bytes);
+	for (std::size_t at = 0; at < path.size();) {
+		const auto point = code_point_at(path, at);
+		std::string unit;
+		if (!point) unit = std::format("\\x{:02X}", static_cast<unsigned char>(path[at]));
+		else if (is_hidden_code_point(point->first)) unit = std::format("\\u{{{:04X}}}", static_cast<std::uint32_t>(point->first));
+		else if (point->first == U'\\') unit = "\\\\";
+		else unit = std::string(path.substr(at, point->second));
+		if (out.size() + unit.size() > k_max_shown_path_bytes) {
+			out += "...";
+			break;
+		}
+		out += unit;
+		at += point ? point->second : 1;
+	}
+	return out;
+}
+
+std::optional<std::string> prj::migration::check_journal_paths(const fs::path& root, std::string_view id, const journal_paths& journal)
+{
+	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos) return std::format("'{}' does not name a migration", journal_path_text(id));
+	// Exactly what apply_migration writes: a journal may not point the backup at another folder of the project.
+	const std::string backup = std::format("{}/{}/backup", k_migrations_dir, id);
+	if (journal.backup != backup) return std::format("the backup '{}' is not {}", journal_path_text(journal.backup), backup);
+	const prj::open_result project = prj::open_project(root);
+	if (!project.context) {
+		return std::format("the project does not pass the checks it gets when it is opened, so its content roots are unknown: {}",
+			journal_path_text(project.error));
+	}
+	const std::vector<std::string> reserved = reserved_top_names(*project.context);
+	for (const std::string& path : journal.files) {
+		if (auto error = journal_path_error(path, true, *project.context, reserved)) return error;
+	}
+	for (const std::string& path : journal.created) {
+		if (auto error = journal_path_error(path, false, *project.context, reserved)) return std::format("created file {}", *error);
+	}
+	return std::nullopt;
+}
+
+std::optional<std::string> prj::migration::check_journal(const fs::path& root, std::string_view id)
+{
+	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos) return std::format("'{}' does not name a migration", journal_path_text(id));
+	const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format("{}/{}/report.json", k_migrations_dir, id)));
+	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", id, text.error.empty() ? "" : ": " + text.error);
+	boost::system::error_code error;
+	const json::value journal = json::parse(text.text, error, {}, parse_options());
+	if (error || !journal.is_object()) return std::format("the journal of migration {} cannot be read", id);
+	return check_journal_paths(root, id, paths_of(journal.as_object()));
+}
+
 std::optional<std::string> prj::migration::rollback_migration(const fs::path& root, std::string_view id, const rollback_context& context)
 {
 	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos) return std::format("'{}' does not name a migration", id);
@@ -1136,7 +1300,11 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		const json::value* value = from.if_contains(key);
 		return value && value->is_string() ? std::string(value->as_string()) : std::string{};
 	};
-	const std::string backup = string_of(object, "backup");
+	const journal_paths named = paths_of(object);
+	if (auto why = check_journal_paths(root, id, named)) {
+		return std::format("migration {} cannot be rolled back, nothing was written: {}", id, *why);
+	}
+	const std::string& backup = named.backup;
 
 	std::vector<std::string> project_steps;
 	if (const json::value* list = object.if_contains("project_steps"); list && list->is_array()) {
@@ -1154,8 +1322,8 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 			if (!item.is_object()) continue;
 			const json::object& file = item.as_object();
 			entry next{ string_of(file, "path"), string_of(file, "hash_before"), string_of(file, "hash_after"), file_state::changed, false };
-			if (!is_plain_relative(next.path) || next.hash_before.empty()) {
-				refused.push_back(std::format("'{}' (not a relative path inside the project, or no hash)", next.path));
+			if (next.hash_before.empty()) {
+				refused.push_back(std::format("'{}' (no hash)", journal_path_text(next.path)));
 				continue;
 			}
 			next.state = state_of(root, next.path, next.hash_before, next.hash_after);
@@ -1163,19 +1331,16 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 				if (next.path == k_manifest_path && !next.hash_after.empty()) {
 					next.unstamp = true;
 				} else {
-					refused.push_back(next.path);
+					refused.push_back(journal_path_text(next.path));
 				}
 			}
 			files.push_back(std::move(next));
 		}
 	}
-	const bool restores = std::ranges::any_of(files, [](const entry& file) { return file.state == file_state::migrated || file.unstamp; });
-	if (restores && !is_plain_relative(backup)) refused.push_back(std::format("the backup '{}' (not a relative path inside the project)", backup));
-
 	// The new project.snkproj is worked out before anything is written, so a manifest that cannot be read refuses the
 	// whole rollback.
 	std::optional<std::string> unstamped;
-	if (const auto manifest = std::ranges::find_if(files, &entry::unstamp); manifest != files.end() && is_plain_relative(backup)) {
+	if (const auto manifest = std::ranges::find_if(files, &entry::unstamp); manifest != files.end()) {
 		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(manifest->path), k_max_file_bytes);
 		const prj::project_file_text saved = prj::read_project_file(root, fs_paths::path_from_utf8(backup + "/" + manifest->path), k_max_file_bytes);
 		try {
@@ -1188,22 +1353,7 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		}
 	}
 
-	std::vector<std::string> created;
-	if (const json::value* list = object.if_contains("created_files"); list && list->is_array()) {
-		for (const json::value& item : list->as_array()) {
-			if (item.is_string()) created.emplace_back(item.as_string());
-		}
-	}
-	if (!created.empty()) {
-		const prj::manifest_result manifest = prj::load_manifest(root);
-		for (const std::string& path : created) {
-			if (!manifest.data) {
-				refused.push_back(std::format("'{}' (project.snkproj cannot be read, so its content roots are unknown)", path));
-			} else if (auto why = created_file_error(path, manifest.data->content_roots)) {
-				refused.push_back(*why);
-			}
-		}
-	}
+	const std::vector<std::string>& created = named.created;
 	if (!refused.empty()) {
 		std::string list;
 		for (const std::string& path : refused) list += (list.empty() ? "" : ", ") + path;

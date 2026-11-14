@@ -257,13 +257,33 @@ namespace {
 	// What the journal of a migration says it changed, as a rollback would put it back.
 	struct journal_view
 	{
-		// Why there is nothing to roll back (no journal, one that does not read); empty: it reads.
+		// Why there is nothing to roll back (no journal, one that does not read, one that fails
+		// prj::migration::check_journal_paths, one too long to show); empty: it may be rolled back.
 		std::string error;
 		std::string bytes;
 		// files[].path, then created_files: what a rollback restores or deletes.
 		std::vector<std::string> restored;
 		std::vector<std::string> created;
+		// What a person is shown before the rollback runs (rollback_listing_of); empty with an error.
+		std::string listing;
 	};
+
+	// The listing of a rollback, every path on its own line: past this it is not shown, and the rollback is refused.
+	constexpr std::size_t k_max_listing_bytes = std::size_t{ 64 } * 1024;
+	constexpr std::string_view k_listing_too_long = "the journal lists too many files to show";
+
+	std::string listing_of(std::string_view id, const pmg::journal_paths& paths)
+	{
+		std::string out = std::format("  Migration {}: .snk/migrations/{}/\n", id, id);
+		out += std::format("  Backup: {}\n", pmg::journal_path_text(paths.backup));
+		out += std::format("  Puts back from its backup ({}):\n", paths.files.size());
+		for (const std::string& path : paths.files) out += "    " + pmg::journal_path_text(path) + "\n";
+		if (!paths.created.empty()) {
+			out += std::format("  Deletes the files it created ({}):\n", paths.created.size());
+			for (const std::string& path : paths.created) out += "    " + pmg::journal_path_text(path) + "\n";
+		}
+		return out;
+	}
 
 	journal_view read_journal(const fs::path& root, std::string_view id)
 	{
@@ -286,17 +306,34 @@ namespace {
 			return out;
 		}
 		const json::object& object = journal.as_object();
+		pmg::journal_paths paths;
+		if (const json::value* backup = object.if_contains("backup"); backup && backup->is_string()) paths.backup = std::string(backup->as_string());
 		if (const json::value* files = object.if_contains("files"); files && files->is_array()) {
 			for (const json::value& file : files->as_array()) {
-				const json::value* path = file.is_object() ? file.as_object().if_contains("path") : nullptr;
-				if (path && path->is_string()) out.restored.emplace_back(path->as_string());
+				if (!file.is_object()) continue;
+				const json::value* path = file.as_object().if_contains("path");
+				paths.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
 			}
 		}
 		if (const json::value* created = object.if_contains("created_files"); created && created->is_array()) {
 			for (const json::value& path : created->as_array()) {
-				if (path.is_string()) out.created.emplace_back(path.as_string());
+				if (path.is_string()) paths.created.emplace_back(path.as_string());
 			}
 		}
+		// The same check rollback_migration makes before its first write: what is shown is what may run.
+		if (auto refused = pmg::check_journal_paths(root, id, paths)) {
+			out.error = std::format("migration {} cannot be rolled back: {}", id, *refused);
+			return out;
+		}
+		// A journal that cannot be shown whole is not rolled back: describe and the run both read it here.
+		std::string listing = listing_of(id, paths);
+		if (listing.size() > k_max_listing_bytes) {
+			out.error = std::string(k_listing_too_long);
+			return out;
+		}
+		out.listing = std::move(listing);
+		out.restored = std::move(paths.files);
+		out.created = std::move(paths.created);
 		return out;
 	}
 
@@ -309,23 +346,6 @@ namespace {
 		hash.add_part(journal.error);
 		hash.add_part(journal.bytes);
 		return hash.value();
-	}
-
-	// At most k_max_listed paths of a journal, each cut short and without control characters: a journal is a file anyone
-	// can edit, and a line break in a path must not forge a line of the question a person reads.
-	std::string listed(const std::vector<std::string>& paths)
-	{
-		std::string out;
-		for (std::size_t i = 0; i < paths.size() && i < k_max_listed; ++i) {
-			std::string path = paths[i].size() > 200 ? paths[i].substr(0, 200) + "..." : paths[i];
-			std::ranges::replace_if(path, [](char c) {
-				const auto byte = static_cast<unsigned char>(c);
-				return byte < 0x20 || byte == 0x7f;
-			}, '?');
-			out += (i == 0 ? " " : ", ") + path;
-		}
-		if (paths.size() > k_max_listed) out += ", ...";
-		return out;
 	}
 
 	std::string unfinished_refusal(const std::vector<std::string>& unfinished)
@@ -752,9 +772,7 @@ namespace {
 				text += "  This request will be refused: " + journal.error + "\n";
 				return text;
 			}
-			text += std::format("  Migration {}: .snk/migrations/{}/\n", id, id);
-			text += std::format("  Puts back from its backup ({}):{}\n", journal.restored.size(), listed(journal.restored));
-			if (!journal.created.empty()) text += std::format("  Deletes the files it created ({}):{}\n", journal.created.size(), listed(journal.created));
+			text += journal.listing;
 			text += "A file changed since the migration wrote it refuses the whole rollback; nothing is written then. "
 				"Open documents are closed, and the level is closed and opened again from disk.";
 			return text;
@@ -1365,4 +1383,10 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	rollback.describe_before_allowed_invoke = true;
 	if (registration added = commands.add(std::move(rollback)); added.active()) out.push_back(std::move(added));
 	return out;
+}
+
+edt::rollback_listing edt::rollback_listing_of(const std::filesystem::path& root, std::string_view id)
+{
+	journal_view journal = read_journal(root, id);
+	return rollback_listing{ std::move(journal.error), std::move(journal.listing) };
 }

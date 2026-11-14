@@ -96,5 +96,18 @@ namespace edt
 	// '.' (apply_migration makes "<UTC>-<engine version>", "-2"...).
 	[[nodiscard]] bool valid_migration_id(std::string_view id);
 
+	// What a rollback of migration `id` would do, as project.migrate_rollback's question and the Project Migration window
+	// show it (#910): `text` names the migration, its backup and, one per line, every file it puts back and every file it
+	// deletes, each through prj::migration::journal_path_text. `refused` (and no text) when the journal is missing, does
+	// not read, fails prj::migration::check_journal_paths or is too long to show whole (64 KiB): the rollback's run reads
+	// the journal the same way and is refused for the same reason.
+	struct rollback_listing
+	{
+		std::string refused;
+		std::string text;
+	};
+
+	[[nodiscard]] rollback_listing rollback_listing_of(const std::filesystem::path& root, std::string_view id);
+
 	[[nodiscard]] std::vector<registration> register_migration_commands(cmd::command_registry& commands, migration_deps deps);
 }

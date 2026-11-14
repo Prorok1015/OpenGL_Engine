@@ -550,6 +550,128 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileOutsideTheContentRoots)
 	BOOST_TEST((content_of(copy.root()) == after));
 }
 
+namespace {
+
+// Every file below the root, .snk included: a refused rollback writes nothing anywhere, not even its journal.
+std::map<std::string, std::string> everything_of(const fs::path& root)
+{
+	std::map<std::string, std::string> files;
+	for (const auto& entry : fs::recursive_directory_iterator(root)) {
+		if (entry.is_regular_file()) files[fs::relative(entry.path(), root).generic_string()] = read_text(entry.path());
+	}
+	return files;
+}
+
+// The journal of the fixture's migration, edited by `edit`, then a rollback: it must be refused with nothing written.
+template <class edit_fn>
+void expect_refused(const fs::path& root, edit_fn&& edit, std::string_view why)
+{
+	const fs::path journal_path = root / ".snk/migrations/test-migration/report.json";
+	const std::string original = read_text(journal_path);
+	json::value journal = json::parse(original);
+	edit(journal.as_object());
+	write_text(journal_path, json::serialize(journal));
+	const auto before = everything_of(root);
+	const auto error = pmg::rollback_migration(root, "test-migration");
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("nothing was written") != std::string::npos, *error);
+	BOOST_TEST(error->find(why) != std::string::npos, *error);
+	BOOST_TEST((everything_of(root) == before));
+	BOOST_TEST(pmg::check_journal(root, "test-migration").has_value());
+	write_text(journal_path, original);
+}
+
+}
+
+// #910: the backup is exactly the folder apply_migration writes, whether or not anything is restored.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesABackupAnywhereElse)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.root() / ".snk/migrations/other/backup/res/cameras/cam_v1.desc", "{}");
+	for (const std::string& backup : std::vector<std::string>{ ".git", "../x", ".snk/migrations/other/backup", "",
+			 ".snk/migrations/test-migration/backup/" }) {
+		BOOST_TEST_CONTEXT(backup) {
+			expect_refused(copy.root(), [&backup](json::object& journal) { journal["backup"] = backup; }, "the backup");
+		}
+	}
+	// Nothing to restore: a wrong backup is refused all the same.
+	expect_refused(copy.root(), [](json::object& journal) {
+		journal["backup"] = ".git";
+		journal["files"] = json::array{};
+		journal["created_files"] = json::array{};
+	}, "the backup '.git'");
+}
+
+// #910: a file of files[] is project.snkproj or lies inside a content root, never below a hidden, build, code or private
+// folder; a hash_after "removed" outside them would otherwise create the file from a backup the journal chose.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAFileOutsideTheContentRoots_AndCreatesNothing)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const std::string payload = "#!/bin/sh\necho owned\n";
+	const fs::path absolute = copy.root().parent_path() / (copy.root().filename().string() + "-absolute.txt");
+	for (const std::string& path : std::vector<std::string>{ ".git/hooks/pre-commit", ".snk/build.json", "code/a.cpp", "CODE/a.cpp",
+			 "build/x", "Build/x", ".cache/x", ".github/x", "other/x.desc", absolute.generic_string(), "..", "res/../x" }) {
+		BOOST_TEST_CONTEXT(path) {
+			if (path.find("..") == std::string::npos && !fs::path(path).is_absolute()) {
+				write_text(copy.root() / ".snk/migrations/test-migration/backup" / path, payload);
+			}
+			expect_refused(copy.root(), [&path, &payload](json::object& journal) {
+				journal["files"].as_array().push_back(json::object{ { "path", path }, { "hash_before", pmg::journal_hash(payload) },
+					{ "hash_after", "removed" }, { "written_as", "json" } });
+			}, "'" + pmg::journal_path_text(path) + "'");
+			BOOST_TEST(!fs::exists(copy.root() / path));
+			BOOST_TEST(!fs::exists(absolute));
+		}
+	}
+}
+
+// #910: a created file is checked as files[] are (project.snkproj is no created file): it is refused and stays.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileInAReservedFolder)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	for (const std::string& path : std::vector<std::string>{ ".git/config", "code/CMakeLists.txt", "build/x", ".snk/agent_policy.json",
+			 "project.snkproj" }) {
+		BOOST_TEST_CONTEXT(path) {
+			if (path != "project.snkproj") write_text(copy.root() / path, "keep");
+			expect_refused(copy.root(), [&path](json::object& journal) { journal["created_files"] = json::array{ json::string(path) }; },
+				"created file");
+			BOOST_TEST(fs::exists(copy.root() / path));
+		}
+	}
+}
+
+// #910: the content roots come from a project that passes the checks of an opened one; otherwise nothing is rolled back.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAProjectThatFailsItsChecks)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	// A writable folder that is a file: open_project refuses the project.
+	write_text(copy.root() / ".cache", "not a folder");
+	expect_refused(copy.root(), [](json::object&) {}, "checks it gets when it is opened");
+	fs::remove(copy.root() / ".cache");
+
+	const std::string manifest = read_text(copy.root() / "project.snkproj");
+	write_text(copy.root() / "project.snkproj", "{");
+	expect_refused(copy.root(), [](json::object&) {}, "checks it gets when it is opened");
+	write_text(copy.root() / "project.snkproj", manifest);
+	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+}
+
+// #910: what a message or a question shows of a journal's path: no character that could forge or hide a part of a line,
+// an escape in its place, and a cut that splits neither a code point nor an escape.
+BOOST_AUTO_TEST_CASE(AJournalPath_IsShownWithItsHiddenCharactersEscaped)
+{
+	BOOST_TEST(pmg::journal_path_text("res/a.desc") == "res/a.desc");
+	BOOST_TEST(pmg::journal_path_text("a\nb\xE2\x80\xAE" "c\xE2\x80\x8B" "d") == "a\\u{000A}b\\u{202E}c\\u{200B}d");
+	BOOST_TEST(pmg::journal_path_text("\xC2\x85\xC2\xAD\xEF\xBB\xBF\xE2\x80\xA8\xE2\x81\xA6\xD8\x9C\x7F") ==
+		"\\u{0085}\\u{00AD}\\u{FEFF}\\u{2028}\\u{2066}\\u{061C}\\u{007F}");
+	BOOST_TEST(pmg::journal_path_text("a\xFF" "b\xC3") == "a\\xFFb\\xC3");
+	BOOST_TEST(pmg::journal_path_text("a\\b") == "a\\\\b");
+	BOOST_TEST(pmg::journal_path_text("caf\xC3\xA9") == "caf\xC3\xA9");
+	BOOST_TEST(pmg::journal_path_text(std::string(199, 'a') + "\xC3\xA9") == std::string(199, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(195, 'a') + "\n") == std::string(195, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(200, 'a')) == std::string(200, 'a'));
+}
+
 BOOST_AUTO_TEST_CASE(TheProjectTemplate_KeepsMigrationsOutOfGit_ButNotTheAgentPolicy)
 {
 	std::ifstream in(fs::path{ SNK_EDITOR_DATA_DIR } / "templates/projects/empty/.gitignore");

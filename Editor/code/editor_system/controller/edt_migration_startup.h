@@ -13,9 +13,11 @@
 namespace edt
 {
 	// What the editor does about migrations a project was left with (EPIC-58 S8, #761) once the project is open and its
-	// start level settled: a person is asked whether to roll the first one back now; headless nobody is asked, a WARN names
-	// the command line that does it. A folder name that is no migration id (valid_migration_id) is not offered for a
-	// rollback: the person is told why (`inform`). No ImGui.
+	// start level settled: a person is asked whether to roll the first one back now (Roll Back opens the Project Migration
+	// window with the rollback's full listing and its question; nothing runs before the person confirms there); headless
+	// nobody is asked, a WARN names the command line that does it. A folder name that is no migration id
+	// (valid_migration_id), or a journal that fails prj::migration::check_journal (#910: a backup elsewhere, a path outside
+	// the content roots...), is not offered for a rollback: the person is told why (`inform`). No ImGui.
 	struct journal_offer
 	{
 		enum class kind : std::uint8_t { none, ask, inform, warn };
@@ -30,8 +32,10 @@ namespace edt
 	inline constexpr std::string_view k_journal_offer_roll_back = "Roll Back";
 	inline constexpr std::string_view k_journal_offer_later = "Later";
 
-	// `unfinished`: prj::migration::unfinished_migrations of the project's root.
-	journal_offer decide_journal_offer(const std::vector<std::string>& unfinished, bool headless);
+	// `unfinished`: prj::migration::unfinished_migrations of the project's root. `refused`: why the journal of the first one
+	// must not be rolled back (prj::migration::check_journal); nullopt: it may.
+	journal_offer decide_journal_offer(const std::vector<std::string>& unfinished, bool headless,
+		const std::optional<std::string>& refused = std::nullopt);
 
 	// The save block of a migration (or a rollback) that stopped half way (#761): it holds for the whole project, whatever
 	// level is loaded meanwhile, until `rolled_back()` says that migration was rolled back. No ImGui.
@@ -72,6 +76,9 @@ namespace edt
 			std::function<bool()> settled;
 			// prj::migration::unfinished_migrations of the project.
 			std::function<std::vector<std::string>()> unfinished;
+			// prj::migration::check_journal of a migration id: why its journal must not be rolled back; nullopt (or null):
+			// it may.
+			std::function<std::optional<std::string>(const std::string& id)> journal_refusal;
 			// Asks the person (an `ask` or an `inform` offer).
 			std::function<void(const journal_offer& offer)> ask;
 			std::function<void(const std::string& text)> warn;
