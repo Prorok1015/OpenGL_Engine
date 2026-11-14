@@ -987,6 +987,27 @@ BOOST_FIXTURE_TEST_CASE(ARebindBackToTags_GivesEachSpellingItsOwnPin, index_fixt
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
+// #869: a spelling that gets another ID while a file still holds the old one takes its owner to the new ID, with a pin.
+BOOST_FIXTURE_TEST_CASE(ASpellingThatGetsAnotherId_TakesItsOwnerAndAPinThere, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	BOOST_TEST(rs->pinned_count() == 1u);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(a) == "a");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
 // #869: register_alias copies a pin with no owner, so the alias' unpin takes the copy away; where the alias' node has a
 // pin of its own owners, the copy does not replace it and the alias' unpin leaves it to them.
 BOOST_FIXTURE_TEST_CASE(APinCopiedToAnAlias_GoesWithTheAliasUnpin_UnlessOthersOwnTheAliasPin, index_fixture)

@@ -407,7 +407,7 @@ res::resource_system::~resource_system() {
     {
       std::unique_lock lock(m_pinning_mutex);
       m_pinned_resources = {};
-      m_pin_owners.clear();
+      m_pin_owners = {};
     }
     if (const std::size_t live = live_resources(); live > 0) {
       constexpr std::size_t k_named = 8;
@@ -2535,7 +2535,7 @@ void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res
 		return it == remap.end() ? key : it->second;
 	};
 	// rekey_locked moved the pins, not the owners: the pin of an owner record now sits under its old key mapped.
-	tag_keyed_map<std::unordered_set<res::tag>> owners;
+	std::vector<std::pair<cache_key, res::tag>> homes; // where each owner goes
 	std::vector<std::pair<cache_key, cache_key>> copies; // to, from
 	std::unordered_set<cache_key> owned;
 	m_pin_owners.for_each_entry([&](const cache_key& key, const std::unordered_set<res::tag>& tags) {
@@ -2544,7 +2544,7 @@ void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res
 		for (const res::tag& tag : tags) {
 			const auto node = fresh.find(tag);
 			const cache_key home{ node != fresh.end() ? node->second : pinned.tag, key.type };
-			owners[home].insert(tag);
+			homes.emplace_back(home, tag);
 			if (home != pinned) {
 				copies.emplace_back(home, pinned);
 			}
@@ -2562,6 +2562,13 @@ void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res
 			block = std::move(held);
 		}
 		m_pinned_resources[to] = std::move(block);
+	}
+	// An owner only where a pin is: one with nothing to own would never let anything go.
+	tag_keyed_map<std::unordered_set<res::tag>> owners;
+	for (const auto& [home, tag] : homes) {
+		if (const auto* pin = m_pinned_resources.find(home); pin && *pin) {
+			owners[home].insert(tag);
+		}
 	}
 	// A pin whose owners all went to other nodes goes.
 	for (const cache_key& key : owned) {
