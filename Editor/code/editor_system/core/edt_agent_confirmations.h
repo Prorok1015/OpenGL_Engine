@@ -55,7 +55,8 @@ namespace edt
 		std::string args;
 		std::string session;
 		cmd::agent_category category = cmd::agent_category::unset;
-		// command_desc::describe of the call (the registry bound it to the ticket), sanitized; empty: none.
+		// command_desc::describe of the call (the registry bound it to the ticket) as confirmation_detail_text made it:
+		// whole, its line breaks kept; empty: none.
 		std::string detail;
 		// false: the command has a risk, so the window offers no "until the end of this agent session".
 		bool can_grant_session = false;
@@ -123,8 +124,10 @@ namespace edt
 		using finish = std::function<void(cmd::result)>;
 
 		static constexpr std::chrono::seconds timeout{ 60 };
-		// The longest description of a call a question shows.
-		static constexpr std::size_t k_max_detail = 512;
+		// The longest description of a call a question shows. A longer one refuses the call: a person must never
+		// approve a ticket whose description was cut where they could not see it (#932).
+		static constexpr std::size_t k_max_detail = 32 * 1024;
+		static constexpr std::size_t k_max_detail_lines = 512;
 		// How long a call that finds a person in the middle of a gesture (`busy`) is tried again, once per tick(), before
 		// the agent is told. Also for a call a person has just allowed: that answer belongs to this very call, so it is
 		// not asked again, and the command itself still checks the state it finds (expected_generation, refs).
@@ -220,6 +223,12 @@ namespace edt
 		// The ticket run_approved made and approved, while its command runs.
 		std::string m_internal_ticket;
 	};
+
+	// The text of command_desc::describe as the window shows it: line breaks kept ("\r\n" and "\r" become "\n"), a tab
+	// becomes spaces, and within a line what edt::forge::sanitize_text replaces is replaced (control, bidi and invisible
+	// characters, invalid UTF-8); empty lines at the end go. Nothing is cut: nullopt when the result is longer than
+	// k_max_detail bytes or k_max_detail_lines lines.
+	std::optional<std::string> confirmation_detail_text(std::string_view described);
 
 	// Whether the font draws every letter of the window's buttons. The built-in ImGui font has no Cyrillic and shows '?',
 	// so a person would answer buttons they cannot read: without the glyphs nobody is asked (ask = deny).

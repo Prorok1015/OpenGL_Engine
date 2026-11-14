@@ -86,6 +86,21 @@ struct confirmations_fixture
 		registrations.push_back(commands.add(std::move(desc)));
 	}
 
+	void add_described(std::string id, std::string text)
+	{
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.category = agent_category::vcs_forge;
+		desc.summary = "does " + desc.id;
+		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.describe = [text = std::move(text)](const cmd::call&) -> std::optional<std::string> { return text; };
+		desc.invoke = [this](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		registrations.push_back(commands.add(std::move(desc)));
+	}
+
 	cmd::call agent_call(std::string session = "s1") const
 	{
 		cmd::call request;
@@ -317,6 +332,68 @@ BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_IsShownSanitized_AndBoundToTheQuestio
 	const auto asked = confirmations->pending();
 	BOOST_REQUIRE(asked.size() == 1u);
 	BOOST_TEST(asked[0].detail == "in github.com/o/r   end");
+}
+
+// #932: the description reaches the person whole, line by line; one too long to show refuses the call.
+BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_KeepsItsLines_AndIsMadePlainLineByLine)
+{
+	add_described("import.described", "Import the model\r\n  a.png  3 bytes\r  b\tc\n\n\x07x\xE2\x80\xAEy \xFF\n\n\n");
+
+	run("import.described", "s1");
+
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].detail == "Import the model\n  a.png  3 bytes\n  b    c\n\n x y \xEF\xBF\xBD");
+}
+
+BOOST_AUTO_TEST_CASE(ADescriptionAtTheLimit_IsShownWhole_OneByteOrLineMore_RefusesTheCall)
+{
+	const std::size_t bytes = edt::agent_confirmations::k_max_detail;
+	const std::size_t lines = edt::agent_confirmations::k_max_detail_lines;
+	std::string many_lines;
+	for (std::size_t i = 0; i < lines; ++i) many_lines += i == 0 ? "x" : "\nx";
+	add_described("fits.bytes", std::string(bytes, 'a'));
+	add_described("fits.lines", many_lines);
+	add_described("long.bytes", std::string(bytes + 1, 'a'));
+	add_described("long.lines", many_lines + "\nx");
+
+	run("fits.bytes", "s1");
+	run("fits.lines", "s2");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+	BOOST_TEST(asked[0].detail.size() == bytes);
+	BOOST_TEST(asked[1].detail == many_lines);
+	BOOST_TEST(finished.empty());
+	const std::size_t tickets = commands.pending_confirmations();
+
+	for (const char* id : { "long.bytes", "long.lines" }) {
+		BOOST_TEST_CONTEXT(id) {
+			finished.clear();
+			run(id, "s3");
+			BOOST_REQUIRE(finished.size() == 1u);
+			BOOST_TEST(finished[0].code == cmd::codes::denied);
+			BOOST_TEST(finished[0].error.find("too long to show") != std::string::npos);
+			BOOST_TEST(confirmations->pending().size() == 2u);
+			BOOST_TEST(commands.pending_confirmations() == tickets);
+		}
+	}
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(TheTextOfADescription_IsNeverCut)
+{
+	BOOST_TEST(edt::confirmation_detail_text("").value_or("?") == "");
+	BOOST_TEST(edt::confirmation_detail_text("one").value_or("?") == "one");
+	BOOST_TEST(edt::confirmation_detail_text("a\r\nb\rc\nd").value_or("?") == "a\nb\nc\nd");
+	BOOST_TEST(edt::confirmation_detail_text("a\n\n\r\n").value_or("?") == "a");
+	// Characters that become one space: the text that is left is what counts against the limit.
+	std::string invisible;
+	for (std::size_t i = 0; i < edt::agent_confirmations::k_max_detail; ++i) invisible += "\xE2\x80\x8B";
+	const auto shown = edt::confirmation_detail_text(invisible);
+	BOOST_REQUIRE(shown.has_value());
+	BOOST_TEST(shown->size() == edt::agent_confirmations::k_max_detail);
+	BOOST_TEST(!edt::confirmation_detail_text(invisible + "x").has_value());
+	BOOST_TEST(!edt::confirmation_detail_text(std::string(edt::agent_confirmations::k_max_detail * 4 + 1, 'a')).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(ADescriptionThatThrows_RefusesTheCall_WithNobodyAsked)
