@@ -13,6 +13,7 @@
 #include <snk/application/app_loop_service.h>
 #include <snk/application/application.h>
 #include <snk/command/cmd_registry.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/config/cfg_variables.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
@@ -31,12 +32,15 @@
 #include <snk/scene/scn_registration_scope.h>
 #include <snk/scene/scn_scene_service_init.h>
 #include <snk/window/wnd_null_window_system.h>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <optional>
 #include <string>
+#include <utility>
 
 #ifndef SNK_TEST_PROJECT_DIR
 #error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
@@ -53,6 +57,26 @@ namespace test_util {
 namespace fs = std::filesystem;
 
 namespace vl = rnd::driver::validation;
+
+// How long a part of a case takes, in the log as "test/timing": where the null-backend suites spend their time on a
+// slow runner (#898).
+class phase_timer
+{
+public:
+	explicit phase_timer(std::string phase) : m_phase(std::move(phase)) {}
+	phase_timer(const phase_timer&) = delete;
+	phase_timer& operator=(const phase_timer&) = delete;
+	~phase_timer()
+	{
+		using std::chrono::milliseconds;
+		const auto took = std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - m_start);
+		egLOG_INFO("test/timing", "{}: {} ms", m_phase, took.count());
+	}
+
+private:
+	std::string m_phase;
+	std::chrono::steady_clock::time_point m_start = std::chrono::steady_clock::now();
+};
 
 inline void set_render_validate(bool on)
 {
@@ -92,6 +116,7 @@ struct null_engine_fixture
 {
 	explicit null_engine_fixture(bool validate = true)
 	{
+		const phase_timer whole("fixture setup");
 		fs::create_directories("./res"); // resource_system's vfs root
 		fs::create_directories("./sandbox");
 
@@ -100,8 +125,11 @@ struct null_engine_fixture
 		rs.unregistrate_resolver(res::tag::memory);
 		rs.registrate_resolver<test_util::ram_resolver>(res::tag::memory);
 		rs.unregistrate_resolver(res::tag::default_protocol());
-		mount_repo_res(rs.registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol()));
-		mount_dir(rs.registrate_resolver<test_util::ram_resolver>("edt"), SNK_EDITOR_DATA_DIR, "edt");
+		{
+			const phase_timer mount("mount res:// and edt://");
+			mount_repo_res(rs.registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol()));
+			mount_dir(rs.registrate_resolver<test_util::ram_resolver>("edt"), SNK_EDITOR_DATA_DIR, "edt");
+		}
 
 		auto& descs = storage.construct<desc::desc_system>(std::ref(rs));
 		rs.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(rs), std::ref(descs));
@@ -124,15 +152,20 @@ struct null_engine_fixture
 		// The process-wide registry core_module makes: render_init registers viewport.capture into it.
 		storage.construct<cmd::command_registry>();
 		set_render_validate(validate);
-		engine::render::render_init(storage);
-		scn::scene_init(storage);
+		{
+			const phase_timer init("render_init + scene_init");
+			engine::render::render_init(storage);
+			scn::scene_init(storage);
+		}
 		gs::register_scene_frame_stages(stages);
 		gs::register_platform_frame_stages(stages);
 		scene_types.emplace(scn::register_scene_types(descs, storage.require<scn::ecs_assembler>(), storage.require<rnd::skinning_manager>()));
+		m_ready = std::chrono::steady_clock::now();
 	}
 
 	~null_engine_fixture()
 	{
+		const phase_timer whole("fixture teardown");
 		unregister_scene_types();
 		scn::scene_term(storage);
 		engine::render::render_term(storage);
@@ -176,6 +209,12 @@ struct null_engine_fixture
 	// Runs `frames` frames through application::run: a stage after `present` counts them and stops the loop.
 	int run_frames(int frames)
 	{
+		// What the case did before its frames: the level's load in most cases.
+		using std::chrono::milliseconds;
+		const auto before = std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - m_ready);
+		egLOG_INFO("test/timing", "before run_frames({}): {} ms since the setup or the last run_frames", frames,
+			before.count());
+		const phase_timer timer(std::format("run_frames({})", frames));
 		int done = 0;
 		auto& stages = storage.require<app::frame_stage_registry>();
 		stages.add_stage("test_frame_counter", app::builtin_stage::present, app::stage_side::after,
@@ -187,12 +226,17 @@ struct null_engine_fixture
 		app::application application;
 		BOOST_TEST(application.run(storage) == 0);
 		stages.remove_stage("test_frame_counter");
+		m_ready = std::chrono::steady_clock::now();
 		return done;
 	}
 
 	ds::task_system tasks{ test_util::manual_tasks() }; // outlives the services in `storage`
 	ds::app_data_storage storage;
 	std::optional<scn::registration_scope> scene_types;
+
+private:
+	// The end of the setup or of the last run_frames.
+	std::chrono::steady_clock::time_point m_ready = std::chrono::steady_clock::now();
 };
 
 }
