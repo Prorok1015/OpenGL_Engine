@@ -102,6 +102,10 @@ namespace {
 		if (ec || real == real_root || !fs_paths::is_inside(real_root, real)) {
 			return std::string{ "the play profile is not really inside the project folder: it is not used" };
 		}
+		// Inside is not enough: a folder that exists has to be the one at its own place, not another one reached by a link.
+		if (fs::exists(real, ec) && !fs::equivalent(real, real_root / relative, ec)) {
+			return std::string{ "the play profile is not at its own place in the project folder: it is not used" };
+		}
 		return std::nullopt;
 	}
 

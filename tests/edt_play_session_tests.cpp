@@ -1864,6 +1864,7 @@ BOOST_AUTO_TEST_CASE(play_profile_checks_the_project_root_a_link_a_file_and_no_r
 
 	// Without a project folder the profile cannot be checked, so it is not emptied.
 	BOOST_TEST(!starts({}, base / "unchecked_profile"));
+	BOOST_TEST(!std::filesystem::exists(base / "unchecked_profile"));
 	fs::remove_all(base);
 }
 
