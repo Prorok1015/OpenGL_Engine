@@ -40,8 +40,6 @@ namespace {
 	constexpr std::chrono::milliseconds k_wait_step{ 50 };
 	// A wait for the other side of a run (a hop, the end of the apply) logs a warning this often and goes on waiting.
 	constexpr std::chrono::seconds k_wait_warning{ 10 };
-	// A job stopped after the main thread took the apply's result waits this long for the answer being made.
-	constexpr std::chrono::seconds k_answer_grace{ 2 };
 	constexpr std::size_t k_max_listed = 5;
 
 	constexpr std::string_view k_no_args_schema = R"json({"type":"object","properties":{},"additionalProperties":false})json";
@@ -283,6 +281,7 @@ namespace {
 		{
 			std::lock_guard lock(m_mutex);
 			m_closed = true;
+			m_stop_seen = true;
 			for (const auto& item : m_hops) item->done.set_value(false);
 			m_hops.clear();
 		}
@@ -302,11 +301,34 @@ namespace {
 			return m_job_gone && !m_over && !m_running;
 		}
 
-		// The main thread took the result and is making the answer.
-		bool answer_coming()
+		// apply_context::stop_requested, on the io lane. A false answer at `commit` commits the migration: from then on a
+		// cancel is refused (cancel_veto) and the job ends with the answer.
+		bool stop_requested(pmg::apply_checkpoint where)
 		{
 			std::lock_guard lock(m_mutex);
-			return m_result_taken;
+			if (m_stop_seen) return true;
+			if (where == pmg::apply_checkpoint::commit) m_committed = true;
+			return false;
+		}
+
+		// job_service's veto of a cancel (main thread): refused once committed, and noted for the answer. A cancel let
+		// through is seen by the next checkpoint at once, before the stop token reaches the job, so it cannot slip past the
+		// commit.
+		std::optional<std::string> cancel_veto()
+		{
+			std::lock_guard lock(m_mutex);
+			if (m_committed) {
+				m_cancel_ignored = true;
+				return std::string{ "the migration was committed: it ends and reports what it wrote" };
+			}
+			m_stop_seen = true;
+			return std::nullopt;
+		}
+
+		bool cancel_ignored()
+		{
+			std::lock_guard lock(m_mutex);
+			return m_cancel_ignored;
 		}
 
 		// The job saw its stop token: true when nothing was handed over yet, and then nothing ever will be.
@@ -365,7 +387,6 @@ namespace {
 		std::optional<apply_result> take_result()
 		{
 			std::lock_guard lock(m_mutex);
-			if (m_result) m_result_taken = true;
 			return std::exchange(m_result, std::nullopt);
 		}
 
@@ -375,6 +396,7 @@ namespace {
 		{
 			std::unique_lock lock(m_mutex);
 			m_closed = true;
+			m_stop_seen = true;
 			for (const auto& item : m_hops) item->done.set_value(false);
 			m_hops.clear();
 			if (m_apply) {
@@ -401,7 +423,9 @@ namespace {
 		bool m_running = false;
 		bool m_over = false;
 		bool m_job_gone = false;
-		bool m_result_taken = false;
+		bool m_stop_seen = false;
+		bool m_committed = false;
+		bool m_cancel_ignored = false;
 		std::function<apply_result()> m_apply;
 		std::optional<apply_result> m_result;
 		std::deque<std::shared_ptr<hop>> m_hops;
@@ -577,8 +601,6 @@ namespace {
 								throw ds::task_cancelled{};
 							}
 							if (handoff->apply_over()) {
-								// The main thread is answering (announcing, opening the level again): its answer, if it comes soon.
-								if (handoff->answer_coming() && future.wait_for(k_answer_grace) == std::future_status::ready) return future.get();
 								return error_value(cmd::codes::failed, "the migration ended without an answer (the job was cancelled or the editor "
 									"stopped): see .snk/migrations");
 							}
@@ -590,6 +612,8 @@ namespace {
 				}
 			};
 			const std::uint64_t job = m_deps.jobs.start_with_result(ds::lane::io, ds::task_desc{ "Migrate project", "project", true }, m_lifetime, std::move(work));
+			// Before the commit a cancel rolls the migration back; after it the cancel is refused and the answer says so.
+			m_deps.jobs.set_cancel_veto(job, [handoff = run->handoff] { return handoff->cancel_veto(); });
 			m_running = run;
 			egLOG_INFO("project/migrate", "migration of {} started (job {})", fs_paths::generic_utf8_of(*root), job);
 			m_deps.register_implicit(edt::k_migration_frame_id, [weak = weak_from_this(), run] {
@@ -776,10 +800,14 @@ namespace {
 			}
 			say_running(run, true);
 			// The engine's loads of a desc hop to the main thread (this callback pumps them every frame); the rest runs on io.
-			pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), {}, {}, {}, {}, &m_steps, {} };
+			pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), {}, {}, {}, {}, &m_steps, {}, {} };
 			context.on_main = [weak = std::weak_ptr<apply_handoff>(run.handoff)](const std::function<void()>& fn) {
 				const auto handoff = weak.lock();
 				return handoff && handoff->run_on_main(fn);
+			};
+			context.stop_requested = [weak = std::weak_ptr<apply_handoff>(run.handoff)](pmg::apply_checkpoint where) {
+				const auto handoff = weak.lock();
+				return !handoff || handoff->stop_requested(where);
 			};
 			run.handoff->hand([apply = m_deps.apply, plan = run.plan, context]() {
 				apply_result result;
@@ -800,8 +828,6 @@ namespace {
 		bool after_apply(const std::shared_ptr<migration_run>& current, apply_result result)
 		{
 			migration_run& run = *current;
-			// Before the announcement: what the mounts reported meanwhile goes first, coalesced, then every written file.
-			run.hold.release();
 			const pmg::migration_plan& plan = *run.plan;
 			const bool writes = run.writes;
 			const pmg::apply_outcome& outcome = result.outcome;
@@ -835,6 +861,15 @@ namespace {
 				for (const pmg::applied_file& file : report.files) written.push_back(file.path);
 				written.insert(written.end(), report.created_files.begin(), report.created_files.end());
 				announce_changes(run.root, written);
+			}
+			// Announced under the hold: a file the mounts reported meanwhile is told once (signal_changed drops its held
+			// signal); the rest of what they reported goes now, coalesced.
+			run.hold.release();
+			if (run.handoff->cancel_ignored()) {
+				run.answer["cancel_ignored"] = true;
+				const json::value* text = run.answer.if_contains("text");
+				run.answer["text"] = std::string(text && text->is_string() ? std::string_view(text->as_string()) : std::string_view{})
+					+ "\nThe cancel arrived after the migration was committed: the migration was not cancelled.";
 			}
 
 			if (!writes) {

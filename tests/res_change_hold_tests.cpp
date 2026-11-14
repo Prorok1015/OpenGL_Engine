@@ -326,4 +326,53 @@ BOOST_FIXTURE_TEST_CASE(AHoldTakenThroughALayer_HoldsTheRoot, hold_fixture)
 	rs->unwatch(x, &log);
 }
 
+// signal_changed called by code during a hold tells the watchers now and drops the held signal of that tag: it is told
+// once, not again at the release.
+BOOST_FIXTURE_TEST_CASE(ASignalFromCodeDuringAHold_TakesTheHeldOneOfItsTag, hold_fixture)
+{
+	const res::tag x = mem("x.txt");
+	const res::tag y = mem("y.txt");
+	put(x, "x1");
+	put(y, "y1");
+	pump();
+	watch_log log;
+	log.watch(*rs, x);
+	log.watch(*rs, y);
+	{
+		const auto hold = rs->hold_changes();
+		put(x, "x2");
+		put(y, "y2");
+		rs->signal_changed(x);
+		pump();
+		BOOST_TEST(log.told == names({ x }));
+	}
+	pump();
+	BOOST_TEST(log.told == names({ x, y }));
+	rs->unwatch(x, &log);
+	rs->unwatch(y, &log);
+}
+
+// evict_cached drops what the cache holds and tells no watcher; the change is told when its signal comes.
+BOOST_FIXTURE_TEST_CASE(EvictCached_DropsTheEntry_AndTellsNoWatcher, hold_fixture)
+{
+	const res::tag x = mem("x.txt");
+	put(x, "x1");
+	pump();
+	const auto before = rs->require_sync<res::text_resource>(x);
+	watch_log log;
+	log.watch(*rs, x);
+	{
+		const auto hold = rs->hold_changes();
+		put(x, "x2");
+		rs->evict_cached(x);
+		pump();
+		BOOST_TEST(log.told.empty());
+		BOOST_TEST(rs->require_sync<res::text_resource>(x).get_control_block() != before.get_control_block());
+		BOOST_TEST(text(x) == "x2");
+	}
+	pump();
+	BOOST_TEST(log.told == names({ x }));
+	rs->unwatch(x, &log);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

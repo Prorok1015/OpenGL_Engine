@@ -603,6 +603,104 @@ BOOST_AUTO_TEST_CASE(AJobCancelledBeforeItStarted_EndsTheRunWithoutWriting)
 	BOOST_TEST((info->status == edt::job_status::cancelled));
 }
 
+// The project's own files: what a rollback must leave as it was (the journal and the backup under .snk/ stay).
+std::map<std::string, std::string> project_files(const std::map<std::string, std::string>& files)
+{
+	std::map<std::string, std::string> out;
+	for (const auto& [path, content] : files) {
+		if (!path.starts_with(".snk")) out.emplace(path, content);
+	}
+	return out;
+}
+
+// A cancel before the commit point (job.cancel goes through the job's veto) is seen by the next checkpoint of the apply:
+// the migration rolls back, the job ends cancelled, the editor gets its level back.
+BOOST_AUTO_TEST_CASE(ACancelBeforeTheCommit_RollsTheMigrationBack)
+{
+	fs::remove(copy.res() / "broken.desc");
+	current_level = res::tag::make("levels/old.desc");
+	const auto before = project_files(snapshot(copy.root()));
+	std::atomic<bool> entered{ false };
+	std::atomic<bool> cancel_sent{ false };
+	pmg::migration_status status = pmg::migration_status::in_progress;
+	apply = [&](const pmg::migration_plan& plan, const pmg::apply_context& context) {
+		entered = true;
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!cancel_sent && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		pmg::apply_outcome outcome = pmg::apply_migration(plan, context);
+		status = outcome.report.status;
+		return outcome;
+	};
+	static_cast<void>(ask());
+	const cmd::result started = call("project.migrate");
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const auto job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (!entered && std::chrono::steady_clock::now() < deadline) {
+		run_frame();
+		std::this_thread::sleep_for(std::chrono::microseconds(200));
+	}
+	BOOST_REQUIRE(entered.load());
+	BOOST_TEST(!jobs.cancel_refusal(job).has_value());
+	BOOST_TEST(jobs.cancel(job));
+	cancel_sent = true;
+	run_frames();
+	settle_jobs();
+	BOOST_TEST((status == pmg::migration_status::rolled_back));
+	BOOST_TEST((project_files(snapshot(copy.root())) == before));
+	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST((running_said == std::vector<bool>{ true, false }));
+	BOOST_TEST(attached);
+	const auto info = jobs.info(job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_TEST((info->status == edt::job_status::cancelled));
+}
+
+// After the commit point a cancel is refused: the job ends with the migration's answer, which says the cancel came late.
+BOOST_AUTO_TEST_CASE(ACancelAfterTheCommit_IsRefused_AndTheAnswerSaysSo)
+{
+	fs::remove(copy.res() / "broken.desc");
+	std::atomic<bool> committed{ false };
+	std::atomic<bool> cancel_tried{ false };
+	apply = [&](const pmg::migration_plan& plan, const pmg::apply_context& context) {
+		pmg::apply_context gated = context;
+		gated.stop_requested = [&, inner = context.stop_requested](pmg::apply_checkpoint where) {
+			const bool stop = inner && inner(where);
+			if (where == pmg::apply_checkpoint::commit && !stop) {
+				committed = true;
+				const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+				while (!cancel_tried && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return stop;
+		};
+		return pmg::apply_migration(plan, gated);
+	};
+	static_cast<void>(ask());
+	const cmd::result started = call("project.migrate");
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const auto job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (!committed && std::chrono::steady_clock::now() < deadline) {
+		run_frame();
+		std::this_thread::sleep_for(std::chrono::microseconds(200));
+	}
+	BOOST_REQUIRE(committed.load());
+	BOOST_TEST(jobs.cancel_refusal(job).has_value());
+	BOOST_TEST(!jobs.cancel(job));
+	cancel_tried = true;
+	run_frames();
+	settle_jobs();
+	const auto info = jobs.info(job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_REQUIRE((info->status == edt::job_status::done));
+	BOOST_REQUIRE(info->result && info->result->is_object());
+	const json::object& result = info->result->as_object();
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
+	BOOST_TEST(result.at("cancel_ignored").as_bool());
+	BOOST_TEST(std::string(result.at("text").as_string()).find("after the migration was committed") != std::string::npos);
+}
+
 // The game module swapped between the question and the run: the code that would migrate is not the one asked about.
 BOOST_AUTO_TEST_CASE(ACodeChangeAfterTheQuestion_IsDenied)
 {

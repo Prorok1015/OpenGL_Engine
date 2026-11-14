@@ -134,7 +134,7 @@ int prj::migration::run_migrate(const migrate_command& command, const command_co
 		return skipped_by(plan).empty() ? k_exit_done : k_exit_partial;
 	}
 
-	apply_context apply{ context.root, context.descs, context.resources, {}, {}, context.write, context.make_id, context.project_steps, {} };
+	apply_context apply{ context.root, context.descs, context.resources, {}, {}, context.write, context.make_id, context.project_steps, {}, {} };
 	const apply_outcome outcome = apply_migration(plan, apply);
 	if (!outcome.refused.empty()) {
 		print_error(context, std::format("refused: {}", outcome.refused));

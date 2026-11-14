@@ -46,6 +46,13 @@ namespace
 		return std::format("{:016x}", desc::schema_id(bytes));
 	}
 
+	void stop_at(const apply_context& context, apply_checkpoint where)
+	{
+		if (context.stop_requested && context.stop_requested(where)) {
+			throw std::runtime_error("the migration was cancelled before it was committed");
+		}
+	}
+
 	// apply_context::on_main refused: the migration fails (rolled back), never falls back to the migrated JSON.
 	struct main_thread_refused : std::runtime_error
 	{
@@ -764,11 +771,11 @@ namespace
 			if (std::optional<res::tag> tag = tag_of(relative, m_content_roots)) m_stale.push_back(std::move(*tag));
 		}
 
-		// signal_changed called by code is never held (resource_system::hold_changes), so a parent this migration wrote is
-		// read again from the disk by the next load, not taken from the cache as it was before.
+		// Out of the cache only (no watcher is told mid-run; the caller announces the files after the apply), so a parent this
+		// migration wrote is read again from the disk by the next load, not taken from the cache as it was before.
 		void evict_written()
 		{
-			for (const res::tag& tag : m_stale) m_context.resources.signal_changed(tag);
+			for (const res::tag& tag : m_stale) m_context.resources.evict_cached(tag);
 			m_stale.clear();
 		}
 
@@ -1032,8 +1039,10 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 			if (!manifest_json.is_object()) throw std::runtime_error("project.snkproj: the root is not a JSON object");
 
 			const std::size_t planned_files = plan.files.size();
+			stop_at(context, apply_checkpoint::file);
 			apply.run_project_steps(plan, project_phase::pre, manifest_json.as_object(), planned_files);
 			for (std::size_t i = 0; i < planned_files; ++i) {
+				stop_at(context, apply_checkpoint::file);
 				const std::optional<std::string> input = apply.input_of(i);
 				if (!input) continue;
 				applied_file& file = report.files[i];
@@ -1044,7 +1053,10 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 				apply.check(file, text);
 				apply.wrote(file.path, std::move(text));
 			}
+			stop_at(context, apply_checkpoint::post_steps);
 			apply.run_project_steps(plan, project_phase::post, manifest_json.as_object(), planned_files);
+			// The point of no return: what follows is the write of project.snkproj and its check.
+			stop_at(context, apply_checkpoint::commit);
 
 			applied_file& manifest_file = report.files.back();
 			const bool complete = report.skipped.empty();

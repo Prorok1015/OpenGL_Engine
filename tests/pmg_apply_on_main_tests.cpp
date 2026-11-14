@@ -15,6 +15,7 @@
 #include <functional>
 #include <future>
 #include <iterator>
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -151,7 +152,7 @@ struct manual_fixture : test_util::scene_env
 
 	pmg::apply_context context_for(const fs::path& root)
 	{
-		pmg::apply_context context{ root, *descs, *rs, {}, {}, {}, {}, nullptr, {} };
+		pmg::apply_context context{ root, *descs, *rs, {}, {}, {}, {}, nullptr, {}, {} };
 		context.make_id = [] { return std::string{ "test-migration" }; };
 		return context;
 	}
@@ -208,7 +209,7 @@ struct threaded_env
 
 pmg::apply_context threaded_context(threaded_env& env, const fs::path& root)
 {
-	pmg::apply_context context{ root, *env.descs, *env.rs, {}, {}, {}, {}, nullptr, {} };
+	pmg::apply_context context{ root, *env.descs, *env.rs, {}, {}, {}, {}, nullptr, {}, {} };
 	context.make_id = [] { return std::string{ "test-migration" }; };
 	return context;
 }
@@ -316,6 +317,71 @@ BOOST_FIXTURE_TEST_CASE(AParentWrittenByTheMigration_IsNotTakenFromTheCacheByThe
 	// The world that instances it (worlds/w_v2.desc) is formed and checked after it.
 	BOOST_TEST(after_write > 0);
 	BOOST_TEST(stale == 0);
+}
+
+// apply_context::stop_requested: a stop before the commit point rolls the migration back after something was written.
+BOOST_FIXTURE_TEST_CASE(AStopBeforeTheCommit_RollsBack, manual_fixture)
+{
+	const auto before = content_of(copy.root());
+	pmg::apply_context context = context_for(copy.root());
+	std::vector<std::string> content_writes;
+	context.write = [&content_writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (!relative.generic_string().starts_with(".snk/")) content_writes.push_back(relative.generic_string());
+		return prj::write_project_file(root, relative, text);
+	};
+	int file_checks = 0;
+	std::size_t written_before_stop = 0;
+	context.stop_requested = [&](pmg::apply_checkpoint where) {
+		if (where != pmg::apply_checkpoint::file || ++file_checks < 3) return false;
+		written_before_stop = content_writes.size();
+		return true;
+	};
+	const pmg::apply_outcome outcome = apply(copy.root(), context);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(written_before_stop > 0u);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("cancelled") != std::string::npos, outcome.report.error);
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// The commit checkpoint is the last question: after a false answer there nothing asks again, and the migration ends.
+BOOST_FIXTURE_TEST_CASE(NothingIsAskedAfterTheCommit, manual_fixture)
+{
+	pmg::apply_context context = context_for(copy.root());
+	std::vector<pmg::apply_checkpoint> asked;
+	context.stop_requested = [&asked](pmg::apply_checkpoint where) {
+		asked.push_back(where);
+		return false;
+	};
+	const pmg::apply_outcome outcome = apply(copy.root(), context);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST((outcome.report.status == pmg::migration_status::partial));
+	BOOST_REQUIRE(!asked.empty());
+	BOOST_TEST((asked.back() == pmg::apply_checkpoint::commit));
+	BOOST_TEST(std::ranges::count(asked, pmg::apply_checkpoint::commit) == 1);
+	BOOST_TEST(std::ranges::count(asked, pmg::apply_checkpoint::post_steps) == 1);
+	BOOST_TEST(std::ranges::count(asked, pmg::apply_checkpoint::file) > 1);
+}
+
+// The apply's eviction tells no watcher: a watcher of a file it wrote hears of it only when the caller announces it.
+BOOST_FIXTURE_TEST_CASE(TheEvictionOfWrittenFiles_TellsNoWatcher, manual_fixture)
+{
+	const res::tag camera = res::tag::make("cameras/cam_v1.desc");
+	const auto before = rs->require_sync<desc::desc_base>(camera);
+	BOOST_REQUIRE(before.get_sync());
+	int told = 0;
+	int owner = 0;
+	rs->watch(camera, &owner, [&told](const res::tag&) { ++told; });
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE(outcome.refused.empty());
+	pump();
+	BOOST_TEST(told == 0);
+	// Evicted all the same: the next request reads the migrated file.
+	BOOST_TEST(rs->require_sync<desc::desc_base>(camera).get_control_block() != before.get_control_block());
+	rs->signal_changed(camera);
+	pump();
+	BOOST_TEST(told == 1);
+	rs->unwatch(camera, &owner);
 }
 
 // The deadlock the editor must not have: the job's io worker waits for the main thread while the main thread waits for

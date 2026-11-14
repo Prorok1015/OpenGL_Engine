@@ -68,6 +68,10 @@ namespace prj::migration
 	using project_writer = std::function<std::optional<std::string>(const std::filesystem::path& root, const std::filesystem::path& relative,
 		std::string_view text)>;
 
+	// Where apply_migration asks apply_context::stop_requested: before each planned file (and the pre steps), before the
+	// post steps, and last before project.snkproj (`commit`).
+	enum class apply_checkpoint { file, post_steps, commit };
+
 	struct apply_context
 	{
 		std::filesystem::path root;
@@ -86,6 +90,10 @@ namespace prj::migration
 		// which fails the migration like a failed write. Only the engine's load and save of a desc go through it (they
 		// wait on resource handles, a main-thread call). Empty: they run on the calling thread.
 		std::function<bool(const std::function<void()>& fn)> on_main;
+		// True: the migration is cancelled there and rolled back like a failed write. The `commit` answer is the last:
+		// after a false one the migration is committed and no stop is asked again (a later failure still rolls back).
+		// Empty: never stopped.
+		std::function<bool(apply_checkpoint where)> stop_requested;
 	};
 
 	struct apply_outcome

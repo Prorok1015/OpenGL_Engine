@@ -4,7 +4,9 @@
 #include <snk/common/logger/engine_log.h>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
+#include <format>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -19,7 +21,11 @@ public:
 		: m_thread([this, what = std::move(what), limit] {
 			std::unique_lock lock(m_mutex);
 			if (!m_finished.wait_for(lock, limit, [this] { return m_done; })) {
-				egLOG_ERROR("test", "still running after {} s, aborting: {}", limit.count(), what);
+				const std::string message = std::format("still running after {} s, aborting: {}", limit.count(), what);
+				egLOG_ERROR("test", "{}", message);
+				// An asynchronous log sink may never write the line above: stderr, flushed, before the abort.
+				std::fputs(("test watchdog: " + message + "\n").c_str(), stderr);
+				std::fflush(stderr);
 				std::abort();
 			}
 		})

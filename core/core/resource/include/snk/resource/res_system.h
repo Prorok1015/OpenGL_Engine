@@ -207,12 +207,16 @@ namespace res
 		// With an asset index, a file with an ID is signalled under its ID; one that is gone from disk (deleted, renamed
 		// away) waits for the index owner's batch (apply_asset_batch), so a rename keeps what was loaded.
 		void signal_changed(const res::tag& tag);
+		// Any thread. Drops the cache entries of the tag and of what is built from it (as signal_changed, here and in the
+		// layers) without telling any watcher: the next request reads the file again; the caller signals it later.
+		void evict_cached(const res::tag& tag);
 
 		// Any thread (the root's holds; a layer takes them there). While a hold is alive (holds nest) what the mounts'
 		// resolvers report, the watcher's finds and the operations done through them, waits and is not lost: a tag
 		// signalled several times is signalled once, the batches of a protocol become one in the order found. When the
 		// last hold goes, it goes the usual way (signal_changed, then a numbered batch to subscribe_changes), on the main
-		// thread: posted there when released on another one. signal_changed called by code is never held.
+		// thread: posted there when released on another one. signal_changed called by code is never held, and it drops a
+		// held signal of that tag (it was just told what is on disk now).
 		// The system outlives its holds.
 		[[nodiscard]] change_hold hold_changes();
 		// Read-only: whether a hold is alive. For tests and diagnostics.
@@ -497,6 +501,9 @@ namespace res
 		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
 		void signal_changed_local(const res::tag& tag);
+		void evict_cached_local(const res::tag& tag);
+		// signal_changed from code: the held signal of `tag` is not delivered again at the release.
+		void drop_held_signal(const res::tag& tag);
 		// erase(): drops the pin and the alias mappings of the tag here and in every layer.
 		void forget_erased(const res::tag& tag);
 

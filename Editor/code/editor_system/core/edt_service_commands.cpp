@@ -117,6 +117,9 @@ std::vector<edt::registration> edt::register_job_commands(cmd::command_registry&
 		const auto parsed = id_of(request);
 		if (!parsed) return bad_id();
 		const std::uint64_t id = *parsed;
+		if (std::optional<std::string> why = jobs.cancel_refusal(id)) {
+			return cmd::result::failure(cmd::codes::failed, std::format("job {} is not cancelled: {}", id, *why));
+		}
 		if (jobs.cancel(id)) {
 			return cmd::result::success(json::object{ { "id", static_cast<std::int64_t>(id) }, { "cancelled", true } });
 		}

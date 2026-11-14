@@ -1288,6 +1288,7 @@ void res::resource_system::signal_changed(const res::tag &tag) {
     root().signal_changed(tag);
     return;
   }
+  drop_held_signal(tag);
   // Under its key first; what sits under the tag itself (a duplicate, an entry made before the index knew the file)
   // goes as before.
   const std::uint64_t generation = m_index_generation.load(std::memory_order_acquire);
@@ -1916,6 +1917,44 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     for (const auto &changed : for_layers) {
       layer->signal_changed_local(changed);
     }
+  }
+}
+
+void res::resource_system::evict_cached(const res::tag &tag) {
+  if (m_parent) {
+    root().evict_cached(tag);
+    return;
+  }
+  // Under its key and under the tag, as signal_changed; a gone file is not waited for: nothing is told here.
+  if (const res::tag node = node_of(tag); node != tag) {
+    evict_cached_local(node);
+  }
+  evict_cached_local(tag);
+}
+
+void res::resource_system::evict_cached_local(const res::tag &tag) {
+  std::vector<res::tag> batch;
+  {
+    std::unique_lock lock(m_cache_mutex);
+    batch = changed_batch(tag);
+    for (const auto &changed : batch) {
+      m_cache.erase_tag(changed);
+      m_displaced.erase(changed);
+    }
+  }
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    for (const auto &changed : batch) {
+      layer->evict_cached_local(changed);
+    }
+  }
+}
+
+void res::resource_system::drop_held_signal(const res::tag &tag) {
+  auto &held = *m_held;
+  std::lock_guard lock(held.mutex);
+  if (held.signalled.erase(tag) > 0) {
+    std::erase(held.signals, tag);
   }
 }
 
