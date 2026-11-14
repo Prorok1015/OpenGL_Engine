@@ -1048,7 +1048,7 @@ BOOST_FIXTURE_TEST_CASE(ASpellingThatGetsAnotherId_EachNodeGetsItsOwnFilePinned,
 	BOOST_TEST(rs->pinned_count() == 2u);
 	BOOST_TEST(text(a) == "file a");
 	BOOST_TEST(text(spelled) == "file A");
-	BOOST_TEST(std::ranges::find(log.told, names({ spelled }).front()) != log.told.end());
+	BOOST_TEST(std::ranges::count(log.told, names({ spelled }).front()) >= 1);
 	rs->unwatch(spelled, &log);
 	rs->unpin_resource(spelled);
 	BOOST_TEST(rs->pinned_count() == 1u);
