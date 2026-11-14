@@ -11,8 +11,15 @@
 #include "texture/rnd_texture_cubemap_desc.h"
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
+#include <algorithm>
+#include <format>
+#include <memory>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <vector>
 
 namespace {
 	// The renderer as the passes of one frame see it: every call goes to the manager that owns the thing, the
@@ -90,6 +97,65 @@ void rnd::render_system::begin_frame(frame_context& context)
 	context.materials = m_instances.get();
 }
 
+namespace {
+
+	// The pixels of a decoded picture as a driver takes them: rows one after another without padding, in a format of
+	// exactly as many channels as the picture has. `data` is the picture's own, or `converted` when it had to be made.
+	struct upload_pixels
+	{
+		rnd::driver::texture_header::TYPE format = rnd::driver::texture_header::TYPE::RGBA8;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		const unsigned char* data = nullptr;
+		std::vector<unsigned char> converted;
+	};
+
+	// None for a picture a driver cannot be given: the format must say how many bytes a pixel has, or the driver reads
+	// past the picture (#926). Two channels (grey and alpha) have no format here and become four.
+	std::optional<upload_pixels> pixels_of(const res::picture_resource& picture)
+	{
+		if (picture.size().x <= 0 || picture.size().y <= 0 || picture.data() == nullptr) return std::nullopt;
+		upload_pixels out;
+		out.width = static_cast<uint32_t>(picture.size().x);
+		out.height = static_cast<uint32_t>(picture.size().y);
+		out.data = picture.data();
+		switch (picture.channels()) {
+		case 1: out.format = rnd::driver::texture_header::TYPE::R8; return out;
+		case 3: out.format = rnd::driver::texture_header::TYPE::RGB8; return out;
+		case 4: out.format = rnd::driver::texture_header::TYPE::RGBA8; return out;
+		case 2: {
+			const std::size_t count = static_cast<std::size_t>(out.width) * out.height;
+			out.converted.resize(count * 4);
+			for (std::size_t i = 0; i < count; ++i) {
+				const unsigned char grey = picture.data()[i * 2];
+				out.converted[i * 4 + 0] = grey;
+				out.converted[i * 4 + 1] = grey;
+				out.converted[i * 4 + 2] = grey;
+				out.converted[i * 4 + 3] = picture.data()[i * 2 + 1];
+			}
+			out.format = rnd::driver::texture_header::TYPE::RGBA8;
+			out.data = out.converted.data();
+			return out;
+		}
+		default: return std::nullopt;
+		}
+	}
+
+	uint32_t full_mip_chain(uint32_t width, uint32_t height)
+	{
+		uint32_t levels = 1;
+		for (uint32_t side = std::max(width, height); side > 1; side /= 2) ++levels;
+		return levels;
+	}
+
+	void warn_once(std::unordered_set<std::string>& told, const res::tag& texture, std::string_view why)
+	{
+		if (!told.emplace(texture.view()).second) return;
+		egLOG_WARN("render/texture", "texture '{}' is not loaded: {}", texture.view(), why);
+	}
+
+}
+
 rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d, res::resource_system& res_sys)
 	: drv(std::move(driver))
 	, m_textures(std::make_unique<rnd::texture_manager>(drv.get(), d, res_sys))
@@ -101,7 +167,9 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
 {
 	auto& texture_manager = *m_textures;
-	texture_manager.register_loader("texture_2d_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
+	// A loader that gives nothing is asked again every frame: what it could not load is said once.
+	const auto told = std::make_shared<std::unordered_set<std::string>>();
+	texture_manager.register_loader("texture_2d_desc", [told](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
 		auto picture_handle = tex_2d_desc.get_picture_handle();
 		if (!picture_handle.is_ready()) {
@@ -112,36 +180,27 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 			return {};
 		}
 		auto picture = picture_handle.get();
-		rnd::driver::texture_header header = desc.get_header();
-		header.data.extent.width = picture->size().x;
-		header.data.extent.height = picture->size().y;
-		header.data.initial_data = picture->data();
-		switch (picture->channels()) {
-			case 1: {
-				if (header.data.format != driver::texture_header::TYPE::R8) {
-					header.data.format = driver::texture_header::TYPE::R8;
-				}
-			}break;
-			case 3: {
-				if (header.data.format != driver::texture_header::TYPE::RGB8) {
-					header.data.format = driver::texture_header::TYPE::RGB8;
-				}
-			}break;
-			case 4: {
-				if (header.data.format != driver::texture_header::TYPE::RGBA8) {
-					header.data.format = driver::texture_header::TYPE::RGBA8;
-				}
-			}break;
-			default:
-				break;
+		const std::optional<upload_pixels> pixels = pixels_of(*picture);
+		if (!pixels) {
+			warn_once(*told, desc.get_tag(), "its picture has no pixels the driver takes (1 to 4 channels, a size above zero)");
+			return {};
 		}
+		// The file says how the texture is sampled; what it is made of comes from the picture alone. A type, a depth or a
+		// layer count from the file would make the driver read that many pictures out of the one buffer (#926).
+		rnd::driver::texture_header header = desc.get_header();
+		header.type = rnd::driver::TEXTURE_TYPE::TEXTURE_2D;
+		header.usage = rnd::driver::texture_usage::sampled; // the desc file may say none or a render target: a loaded picture is only sampled
+		header.data.extent = rnd::driver::texture_header::texture_extent{ .width = pixels->width, .height = pixels->height };
+		header.data.format = pixels->format;
+		header.data.mip_levels = std::clamp<uint32_t>(header.data.mip_levels, 1, full_mip_chain(pixels->width, pixels->height));
+		header.data.initial_data = pixels->data;
 		return rnd::driver::make_texture(*drv, header);
 
 	});
 
 	rnd::get_gpu_profiler().init(*drv.get());
 
-	texture_manager.register_loader("texture_cubemap_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
+	texture_manager.register_loader("texture_cubemap_desc", [told](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
 		const auto& tex_cubmap_desc = static_cast<const rnd::texture_cubemap_desc&>(desc);
 
 		if (tex_cubmap_desc.get_source_type() == rnd::texture_cubemap_desc::SOURCE_TYPE::SINGLE_FILE) {
@@ -160,32 +219,34 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 			}
 		}
 
-		rnd::driver::texture_header header;
-
-		auto load_face_data = [] (res::res_handle<res::picture_resource> res) 
-			-> std::tuple<std::vector<unsigned char>, rnd::driver::texture_header::TYPE, uint32_t, uint32_t> 
-		{
-			rnd::driver::texture_header::TYPE format;
-			switch (res->channels()) {
-				case 1: format = rnd::driver::texture_header::TYPE::R8; break;
-				case 3: format = rnd::driver::texture_header::TYPE::RGB8; break;
-				case 4: format = rnd::driver::texture_header::TYPE::RGBA8; break;
-				default:
-					throw std::runtime_error("Unsupported number of channels in cubemap texture");
-			}
-
-			std::vector<unsigned char> data(res->size().x * res->size().y * res->channels());
-			std::copy(res->data(), res->data() + data.size(), data.begin());
-
-			return std::make_tuple(std::move(data), format, res->size().x, res->size().y);
-		};
-
+		// Every face is uploaded with the size and the format of the texture: one that differs would be read past its end.
 		const auto& faces = tex_cubmap_desc.get_faces();
-		auto [right_data, right_format, right_width, right_height] = load_face_data(faces.right);
-		header.data.extent.width = right_width;
-		header.data.extent.height = right_height;
-		header.data.format = right_format;
-		header.data.extent.faces = 6;  // Important: 6 faces for cubemap
+		std::vector<upload_pixels> sides;
+		sides.reserve(6);
+		for (const auto* face : { &faces.right, &faces.left, &faces.bottom, &faces.top, &faces.front, &faces.back }) {
+			std::optional<upload_pixels> pixels = pixels_of(*face->get());
+			if (!pixels) {
+				warn_once(*told, desc.get_tag(), std::format("its face '{}' has no pixels the driver takes", face->get_tag().view()));
+				return {};
+			}
+			if (pixels->width != pixels->height) {
+				warn_once(*told, desc.get_tag(), std::format("its face '{}' is {}x{}: a face of a cubemap is square", face->get_tag().view(),
+					pixels->width, pixels->height));
+				return {};
+			}
+			if (!sides.empty() && (pixels->width != sides.front().width || pixels->format != sides.front().format)) {
+				warn_once(*told, desc.get_tag(), std::format("its face '{}' has another size or number of channels than '{}'",
+					face->get_tag().view(), faces.right.get_tag().view()));
+				return {};
+			}
+			sides.push_back(std::move(*pixels));
+		}
+
+		rnd::driver::texture_header header;
+		header.data.extent.width = sides.front().width;
+		header.data.extent.height = sides.front().height;
+		header.data.format = sides.front().format;
+		header.data.extent.faces = 6;
 
 		header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_EDGE;
 		header.min = rnd::driver::texture_header::FILTERING::LINEAR;
@@ -195,23 +256,10 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		header.data.mip_levels = 1;
 
 		auto texture = rnd::driver::make_texture(*drv, header);
-		auto update_face = [&] (res::res_handle<res::picture_resource> pic, uint32_t face) {
-			if (!pic.is_ready()) {
-				egLOG_WARN("render/texture", "Failed to load cubemap texture: picture resource with tag is not ready");
-				return;
-
-			}
-			auto [data, format, width, height] = load_face_data(pic);
-			// face parameter is crucial here!
-			drv->update_texture(texture.handle(), data.data(), rnd::driver::texture_region{ .width = width, .height = height, .face = face });
-		};
-
-		update_face(faces.right, 0); // Right
-		update_face(faces.left, 1); // Left
-		update_face(faces.bottom, 2); // Bottom
-		update_face(faces.top, 3); // Top
-		update_face(faces.front, 4); // Front
-		update_face(faces.back, 5); // Back
+		for (uint32_t face = 0; face < sides.size(); ++face) {
+			drv->update_texture(texture.handle(), sides[face].data,
+				rnd::driver::texture_region{ .width = sides[face].width, .height = sides[face].height, .face = face });
+		}
 		return texture;
 	});
 }

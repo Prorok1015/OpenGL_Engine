@@ -273,7 +273,10 @@ namespace edt
 		if (m_needs_refresh)
 			refresh_entries();
 
-		if (ImGui::BeginChild("##asset_files", ImVec2(0.f, 0.f), ImGuiChildFlags_None)) {
+		// Room under the list for "Used by" of the picked file.
+		const bool shows_usages = !m_selected_rel.empty() && m_usages.has_source();
+		const float usages_height = shows_usages ? ImGui::GetTextLineHeightWithSpacing() * 10.f : 0.f;
+		if (ImGui::BeginChild("##asset_files", ImVec2(0.f, -usages_height), ImGuiChildFlags_None)) {
 			// ".." back button (disabled at root)
 			{
 				bool at_root = m_current_rel.empty();
@@ -292,7 +295,7 @@ namespace edt
 				const bool from_lower_layer = e.src.layer != top_layer;
 				if (from_lower_layer)
 					ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-				ImGui::Selectable(e.label.c_str());
+				const bool picked = ImGui::Selectable(e.label.c_str(), !e.src.is_dir && e.src.relative == m_selected_rel);
 				if (m_ui_probe) {
 					if (ImGui::IsItemVisible()) {
 						const ImVec2 item_min = ImGui::GetItemRectMin();
@@ -316,6 +319,8 @@ namespace edt
 						ImGui::EndPopup();
 					}
 				} else {
+					if (picked)
+						m_selected_rel = e.src.relative;
 					// Double-click on file
 					if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 						if (m_on_file_double_clicked)
@@ -356,8 +361,82 @@ namespace edt
 		}
 		ImGui::EndChild();
 
+		draw_usages();
+
 		ImGui::Columns(1);
 
 		draw_create_window();
+	}
+}
+
+void edt::asset_browser_panel::draw_usages()
+{
+	if (m_selected_rel.empty() || !m_usages.has_source())
+		return;
+	ImGui::Separator();
+	if (ImGui::BeginChild("##asset_usages", ImVec2(0.f, 0.f), ImGuiChildFlags_None))
+		draw_usage_rows();
+	ImGui::EndChild();
+}
+
+void edt::asset_browser_panel::draw_usage_rows()
+{
+	const std::string selected = fs_paths::generic_utf8_of(m_selected_rel);
+	ImGui::Text("Used by: %s", selected.c_str());
+	ImGui::SameLine();
+	ImGui::TextDisabled("(saved files)");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Found in the files as they are on the disk: an unsaved change is not counted.");
+
+	const usage_report* report = m_usages.report_for(res::tag::make(selected));
+	if (!report) {
+		ImGui::TextDisabled("No asset database: no project is open.");
+		return;
+	}
+	if (report->complete && !report->found) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("(missing)");
+	}
+	if (!report->complete)
+		ImGui::TextDisabled("Still reading files: the list may grow.");
+	if (report->items.empty())
+		ImGui::TextDisabled("Nothing refers to it.");
+	const std::vector<std::string>& rows = m_usages.rows();
+	ImGuiListClipper clipper;
+	clipper.Begin(static_cast<int>(rows.size()));
+	while (clipper.Step()) {
+		for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
+			const asset_usage& usage = report->items[static_cast<std::size_t>(index)];
+			// The row is drawn as plain text over an unnamed selectable: a "##" in a file name or a JSON key stays text.
+			const ImVec2 row_start = ImGui::GetCursorPos();
+			ImGui::PushID(index);
+			ImGui::Selectable("##usage");
+			ImGui::PopID();
+			const bool hovered = ImGui::IsItemHovered();
+			const bool opened = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+			ImGui::SetCursorPos(row_start);
+			// Found by its text, not through a field of a schema: it may be no reference at all.
+			const bool loose = usage.kind == usage_kind::loose;
+			if (loose)
+				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+			ImGui::TextUnformatted(rows[static_cast<std::size_t>(index)].c_str());
+			if (loose)
+				ImGui::PopStyleColor();
+			if (hovered)
+				ImGui::SetTooltip("%s", loose ? "Not a field of a schema (a custom field, the record of a prefab instance): found by its text."
+					: usage.by_guid ? "Refers to it by its ID." : "Refers to it by its path.");
+			constexpr std::string_view protocol = "res://";
+			if (opened && m_on_file_double_clicked && usage.file.starts_with(protocol))
+				m_on_file_double_clicked(fs_paths::path_from_utf8(std::string_view(usage.file).substr(protocol.size())));
+		}
+	}
+	if (!report->skipped.empty()) {
+		ImGui::TextDisabled("%zu file(s) too large to read for references", report->skipped.size());
+		if (ImGui::IsItemHovered()) {
+			std::string names;
+			for (const std::string& file : report->skipped)
+				names += file + '\n';
+			ImGui::SetTooltip("%s", names.c_str());
+		}
 	}
 }

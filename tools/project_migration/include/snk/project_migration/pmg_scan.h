@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/desc/desc_system.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/project/prj_version.h>
 #include <snk/resource/res_asset_meta.h>
 #include <cstddef>
@@ -41,6 +42,16 @@ namespace prj::migration
 		bool known = true;
 	};
 
+	struct scanned_file;
+
+	// The files assets.ids gives a .resource: no .resource pairs with it and it is not invalid. assets.refs counts a
+	// reference to such a file as one with an ID.
+	bool gets_resource_from_ids(const scanned_file& file);
+	// A desc assets.refs reads (and the scan counts): not invalid, newer or unknown_type.
+	bool reads_references(const scanned_file& file);
+	// The text holds a res:// path or a "guid" key: every reference assets.refs changes does.
+	bool may_hold_references(std::string_view text);
+
 	struct scanned_file
 	{
 		// Relative to the project root, with '/'.
@@ -59,6 +70,14 @@ namespace prj::migration
 		std::string resource_path;
 		// The .resource that pairs with the file does not read (has_resource is true): it has no ID to replace a __guid.
 		bool resource_unreadable = false;
+		// The references of a desc that assets.refs changes (#776), by desc::write_references_with over the scan's index: a
+		// res:// path whose file has an ID, or gets one from assets.ids, and a {guid, path} whose path is stale. Read from
+		// the file as it is, with the current schemas.
+		std::size_t reference_fixes = 0;
+		// An outdated desc that holds a reference anywhere (a res:// string under any key but "__parent", or an object with
+		// a "guid"): its type migration may move one into a tag field, which reference_fixes, read by the current schemas
+		// from the file as it is, cannot see. assets.refs is planned for it, so one run is enough.
+		bool outdated_references = false;
 	};
 
 	struct manifest_state
@@ -82,6 +101,9 @@ namespace prj::migration
 		std::int64_t resource_meta_version = res::asset_meta_version;
 		// Asked before each entry of a folder: true stops the scan there (scan_result::incomplete). Empty: never stopped.
 		std::function<bool()> stop;
+		// The layers of res:// below the project, lowest first (prj::migration::read_only_layers, taken on the main
+		// thread): their .resource files give IDs to references, nothing in them is scanned or written (#776).
+		std::vector<std::filesystem::path> read_only_layers;
 	};
 
 	struct scan_result
@@ -90,6 +112,8 @@ namespace prj::migration
 		std::vector<scanned_file> files;
 		// scan_options::stop ended the scan early: the files are only part of the project.
 		bool incomplete = false;
+		// Every .resource of scan_options::read_only_layers, by layer and path: the plan's fingerprint stats them (#759).
+		std::vector<read_only_resource> read_only_resources;
 
 		std::size_t count(file_class kind) const;
 		const scanned_file* find(std::string_view path) const;
@@ -109,9 +133,9 @@ namespace prj::migration
 	void migrate_sidecar(const desc::desc_system& game_layer, json::object& root, std::string_view file,
 		std::vector<desc::migration_warning>* warnings = nullptr);
 
-	// The game layer's types as a scan asks about them (known: registered or with a schema; current_version), taken on the
-	// main thread so that a scan can run on another one (#761). A type it does not list is unknown, at version 1, as the
-	// game layer answers for it.
+	// The game layer's types as a scan asks about them (known: registered or with a schema; current_version; the schema),
+	// taken on the main thread so that a scan can run on another one (#761). A type it does not list is unknown, at
+	// version 1, without a schema, as the game layer answers for it.
 	class type_catalog
 	{
 	public:
@@ -128,8 +152,13 @@ namespace prj::migration
 		int current_version(std::string_view type) const;
 		const std::map<std::string, entry, std::less<>>& types() const { return m_types; }
 
+		// A copy of the schema `type` names: what the scan reads references by (assets.refs, #776).
+		void add_schema(std::string type, desc::type_schema schema);
+		const desc::type_schema* find_schema(std::string_view type) const;
+
 	private:
 		std::map<std::string, entry, std::less<>> m_types;
+		std::map<std::string, desc::type_schema, std::less<>> m_schemas;
 	};
 
 	// Reads project.snkproj under `root` and every file of its content roots (not the engine's layer; hidden folders,
@@ -200,6 +229,8 @@ namespace prj::migration
 		std::int64_t resource_meta_version = res::asset_meta_version;
 		// plan_options::force.
 		bool force = false;
+		// scan_options::read_only_layers of the plan: the index of the project steps reads them too.
+		std::vector<std::filesystem::path> read_only_layers;
 
 		// An older engine_version keeps the version dialog.
 		bool manifest_outdated() const { return scan.manifest.kind == file_class::outdated; }

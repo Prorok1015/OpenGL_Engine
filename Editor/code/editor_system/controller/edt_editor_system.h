@@ -4,6 +4,7 @@
 #include "edt_play_preflight.h"
 #include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
+#include "edt_version_notice.h"
 #include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
@@ -200,6 +201,8 @@ namespace edt {
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
+		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
+		void draw_save_notice();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
@@ -309,12 +312,15 @@ namespace edt {
 		ds::lifetime m_scan_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
+		timed_notice m_save_notice;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
 		// succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused). Every load has a
 		// working copy of its own (`memory://editor/loading/<n>/<name>.desc`), so one that is abandoned never overwrites
 		// the copy of the level being edited, whatever the two files are called.
 		res::tag m_loading_level_tag;
 		res::tag m_loading_editor_tag;
+		// The root __version of the bytes the load read (0: unknown).
+		int m_loading_file_version = 0;
 		std::uint32_t m_load_serial = 0;
 		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
 		void abandon_level_load();

@@ -622,6 +622,7 @@ struct agent_fixture : model_fixture
 	edt::agent_access access{ commands, policy_dir.path() / "project.json", policy_dir.path() / "personal.json" };
 	edt::mcp_bridge_host bridge{ commands, tasks, access };
 	std::optional<fs::path> project;
+	bool live_on = false;
 	std::vector<cmd::registration> registrations;
 
 	~agent_fixture()
@@ -635,6 +636,7 @@ struct agent_fixture : model_fixture
 		edt::build_settings_command_options options;
 		options.project_root = [this] { return project; };
 		options.estimate = [] { return edt::jobs_estimate{ 4, 8, 16 * edt::k_gib, edt::compiler_family::gnu }; };
+		options.live_enabled = [this] { return live_on; };
 		registrations = edt::register_build_settings_commands(commands, std::move(options));
 		access.set_questions_routed(true);
 	}
@@ -692,15 +694,22 @@ BOOST_AUTO_TEST_CASE(AnAgentSeesAndCallsIt)
 	BOOST_TEST((live.at("jobs").as_int64() == 0));
 }
 
+// #908: `enabled` is live mode as it is, by the person's consent; build.json's live_enabled is not it.
 BOOST_AUTO_TEST_CASE(Live_IsReported)
 {
 	with_settings(R"({"live_enabled":true,"live_quiet_ms":500,"live_jobs":4})");
-	const mcp::call_result result = call("build_settings_get");
+	mcp::call_result result = call("build_settings_get");
 	BOOST_REQUIRE(!result.is_error);
-	const json::object& live = result.structured.as_object().at("live").as_object();
-	BOOST_TEST(live.at("enabled").as_bool());
+	json::object live = result.structured.as_object().at("live").as_object();
+	BOOST_TEST(!live.at("enabled").as_bool());
 	BOOST_TEST((live.at("quiet_ms").as_int64() == 500));
 	BOOST_TEST((live.at("jobs").as_int64() == 4));
+
+	live_on = true;
+	result = call("build_settings_get");
+	BOOST_REQUIRE(!result.is_error);
+	live = result.structured.as_object().at("live").as_object();
+	BOOST_TEST(live.at("enabled").as_bool());
 }
 
 BOOST_AUTO_TEST_CASE(AJobsValueBelowOne_IsLeftOut)
