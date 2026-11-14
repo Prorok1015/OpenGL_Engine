@@ -84,6 +84,9 @@ namespace edt
 		void inject_camera(entt::registry& reg);
 		// The bytes the working copy would be written as (the adapter's form: header, references, pretty JSON).
 		std::vector<std::byte> working_bytes() const;
+		// The same state as a string for the dirty test; no references are resolved, no file is read.
+		std::string working_form() const;
+		void take_from(const scn::prefab_desc& source);
 		void sync_preview();
 		void announce();
 
@@ -93,7 +96,7 @@ namespace edt
 		std::function<bool()> m_locked;
 		std::unique_ptr<scn::prefab_desc> m_working;
 		entt::entity m_root = entt::null;
-		std::vector<std::byte> m_saved_bytes;
+		std::string m_saved_form;
 		// code_version_of the file's bytes when it was read or last written: an Apply refuses a file that is not this.
 		std::string m_disk_version;
 		std::uint64_t m_generation = 0;
