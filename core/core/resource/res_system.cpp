@@ -1858,14 +1858,37 @@ void res::resource_system::pin_bound(const cache_key &key, std::shared_ptr<resou
   }
 }
 
-void res::resource_system::signal_changed_local(const res::tag &tag) {
-  std::vector<res::tag> batch;
-  std::uint64_t epoch = 0;
-  const auto alias_nodes = alias_value_nodes();
+void res::resource_system::evict_batch_locked(const std::vector<res::tag> &batch,
+                                              const std::unordered_map<res::tag, res::tag> &alias_nodes) {
   const auto alias_node = [&](const res::tag &alias) {
     const auto known = alias_nodes.find(alias);
     return known != alias_nodes.end() ? known->second : node_locked(alias);
   };
+  for (const auto &changed : batch) {
+    m_cache.erase_tag(changed);
+    m_displaced.erase(changed);
+  }
+  // A changed original has to run its adapter again (it stores fresh data and registers the alias anew), so its
+  // alias goes with its edge; the alias entry itself was evicted above as a dependent. The alias lock is taken inside
+  // the cache lock, the order prune_released_edges(), register_alias and rebind_all use too. A mapping that a
+  // concurrent register_alias has replaced meanwhile is a different one and stays.
+  std::unique_lock alias_lock(m_alias_mutex);
+  for (const auto &changed : batch) {
+    const auto edge = m_alias_edges.find(changed);
+    if (edge == m_alias_edges.end()) {
+      continue;
+    }
+    if (const auto mapped = m_aliases.find(changed); mapped != m_aliases.end() && alias_node(mapped->second) == edge->second) {
+      m_aliases.erase(mapped);
+    }
+    m_alias_edges.erase(edge);
+  }
+}
+
+void res::resource_system::signal_changed_local(const res::tag &tag) {
+  std::vector<res::tag> batch;
+  std::uint64_t epoch = 0;
+  const auto alias_nodes = alias_value_nodes();
   {
     std::unique_lock lock(m_cache_mutex);
     // A small graph is swept every time (cheap, and a released tag is then never evicted or delivered). A large one only
@@ -1874,27 +1897,7 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
       sweep_edges();
     }
     batch = changed_batch(tag);
-    for (const auto &changed : batch) {
-      m_cache.erase_tag(changed);
-      m_displaced.erase(changed);
-    }
-    // A changed original has to run its adapter again (it stores fresh data and registers the alias anew), so its
-    // alias goes with its edge; the alias entry itself was evicted above as a dependent. The alias lock is taken inside
-    // the cache lock, the order prune_released_edges(), register_alias and rebind_all use too. A mapping that a
-    // concurrent register_alias has replaced meanwhile is a different one and stays.
-    {
-      std::unique_lock alias_lock(m_alias_mutex);
-      for (const auto &changed : batch) {
-        const auto edge = m_alias_edges.find(changed);
-        if (edge == m_alias_edges.end()) {
-          continue;
-        }
-        if (const auto mapped = m_aliases.find(changed); mapped != m_aliases.end() && alias_node(mapped->second) == edge->second) {
-          m_aliases.erase(mapped);
-        }
-        m_alias_edges.erase(edge);
-      }
-    }
+    evict_batch_locked(batch, alias_nodes);
     epoch = ++m_watch_epoch;
   }
 
@@ -1934,13 +1937,11 @@ void res::resource_system::evict_cached(const res::tag &tag) {
 
 void res::resource_system::evict_cached_local(const res::tag &tag) {
   std::vector<res::tag> batch;
+  const auto alias_nodes = alias_value_nodes();
   {
     std::unique_lock lock(m_cache_mutex);
     batch = changed_batch(tag);
-    for (const auto &changed : batch) {
-      m_cache.erase_tag(changed);
-      m_displaced.erase(changed);
-    }
+    evict_batch_locked(batch, alias_nodes);
   }
   std::lock_guard layers_lock(m_layers_mutex);
   for (resource_system *layer : m_layers) {

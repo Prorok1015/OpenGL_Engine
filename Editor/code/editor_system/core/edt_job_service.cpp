@@ -11,7 +11,7 @@
 namespace {
 	// The vetoes of each service, kept here rather than as a member: job_service's layout stays as editor code built
 	// against it expects. Main thread, like the service; the mutex only guards the map against two services' threads.
-	using veto_fn = std::function<std::optional<std::string>()>;
+	using veto_fn = std::function<std::optional<std::string>(bool decide)>;
 	std::mutex g_vetoes_mutex;
 	std::unordered_map<const edt::job_service*, std::unordered_map<edt::job_service::job_id, veto_fn>> g_vetoes;
 
@@ -46,7 +46,7 @@ edt::job_service::~job_service()
 	drop_veto(this, std::nullopt);
 }
 
-void edt::job_service::set_cancel_veto(job_id id, std::function<std::optional<std::string>()> veto)
+void edt::job_service::set_cancel_veto(job_id id, std::function<std::optional<std::string>(bool decide)> veto)
 {
 	if (!m_jobs.contains(id)) return;
 	std::lock_guard lock(g_vetoes_mutex);
@@ -57,15 +57,16 @@ std::optional<std::string> edt::job_service::cancel_refusal(job_id id) const
 {
 	if (!m_jobs.contains(id)) return std::nullopt;
 	const veto_fn veto = veto_of(this, id);
-	return veto ? veto() : std::nullopt;
+	return veto ? veto(false) : std::nullopt;
 }
 
 bool edt::job_service::cancel(job_id id)
 {
 	const auto found = m_jobs.find(id);
 	if (found == m_jobs.end()) return false;
+	// The decision: the job acts on the veto's answer (a migration marks its stop, or notes the refused cancel).
 	if (const veto_fn veto = veto_of(this, id)) {
-		if (std::optional<std::string> why = veto()) {
+		if (std::optional<std::string> why = veto(true)) {
 			egLOG_INFO("edt/job", "job {} is not cancelled: {}", id, *why);
 			return false;
 		}

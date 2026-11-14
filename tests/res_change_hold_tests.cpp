@@ -375,4 +375,21 @@ BOOST_FIXTURE_TEST_CASE(EvictCached_DropsTheEntry_AndTellsNoWatcher, hold_fixtur
 	rs->unwatch(x, &log);
 }
 
+// evict_cached drops an original's alias as signal_changed does: its adapter runs again and registers it anew.
+BOOST_FIXTURE_TEST_CASE(EvictCached_OfAnAliasedOriginal_DropsTheMappingAndTheEdge, hold_fixture)
+{
+	const res::tag original = mem("model.txt");
+	const res::tag generated = mem("model_generated.txt");
+	put(original, "src");
+	put(generated, "gen");
+	pump();
+	rs->register_alias(original, generated);
+	BOOST_REQUIRE((rs->resolve_alias(original) == generated));
+	BOOST_REQUIRE(rs->alias_edge_count() == 1u);
+	rs->evict_cached(original);
+	BOOST_TEST((rs->resolve_alias(original) == original));
+	BOOST_TEST(rs->alias_edge_count() == 0u);
+	BOOST_TEST(text(original) == "src");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

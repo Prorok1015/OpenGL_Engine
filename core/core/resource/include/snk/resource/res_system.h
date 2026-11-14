@@ -507,6 +507,9 @@ namespace res
 		// signal_changed() on this system and, through m_layers, on its layers.
 		void signal_changed_local(const res::tag& tag);
 		void evict_cached_local(const res::tag& tag);
+		// Under m_cache_mutex: drops the batch's cache entries and the alias mappings and edges of the originals in it
+		// (`alias_nodes` read before the lock, alias_value_nodes()). signal_changed and evict_cached share it.
+		void evict_batch_locked(const std::vector<res::tag>& batch, const std::unordered_map<res::tag, res::tag>& alias_nodes);
 		// signal_changed from code: the held signal of `tag` is not delivered again at the release.
 		void drop_held_signal(const res::tag& tag);
 		// erase(): drops the pin and the alias mappings of the tag here and in every layer.

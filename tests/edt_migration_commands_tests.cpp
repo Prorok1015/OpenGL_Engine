@@ -656,6 +656,42 @@ BOOST_AUTO_TEST_CASE(ACancelBeforeTheCommit_RollsTheMigrationBack)
 	BOOST_TEST((info->status == edt::job_status::cancelled));
 }
 
+// job_service::cancel_refusal is a question only: asking it during the run stops nothing.
+BOOST_AUTO_TEST_CASE(AskingWhetherACancelWouldBeRefused_CancelsNothing)
+{
+	fs::remove(copy.res() / "broken.desc");
+	std::atomic<bool> entered{ false };
+	std::atomic<bool> asked{ false };
+	apply = [&](const pmg::migration_plan& plan, const pmg::apply_context& context) {
+		entered = true;
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!asked && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		return pmg::apply_migration(plan, context);
+	};
+	static_cast<void>(ask());
+	const cmd::result started = call("project.migrate");
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const auto job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (!entered && std::chrono::steady_clock::now() < deadline) {
+		run_frame();
+		std::this_thread::sleep_for(std::chrono::microseconds(200));
+	}
+	BOOST_REQUIRE(entered.load());
+	BOOST_TEST(!jobs.cancel_refusal(job).has_value());
+	BOOST_TEST(!jobs.cancel_refusal(job).has_value());
+	asked = true;
+	run_frames();
+	settle_jobs();
+	const auto info = jobs.info(job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_REQUIRE((info->status == edt::job_status::done));
+	const json::object& result = info->result->as_object();
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
+	BOOST_TEST(!result.contains("cancel_ignored"));
+}
+
 // After the commit point a cancel is refused: the job ends with the migration's answer, which says the cancel came late.
 BOOST_AUTO_TEST_CASE(ACancelAfterTheCommit_IsRefused_AndTheAnswerSaysSo)
 {

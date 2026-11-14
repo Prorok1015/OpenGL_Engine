@@ -336,17 +336,17 @@ namespace {
 			return false;
 		}
 
-		// job_service's veto of a cancel (main thread): refused once committed, and noted for the answer. A cancel let
-		// through is seen by the next checkpoint at once, before the stop token reaches the job, so it cannot slip past the
-		// commit.
-		std::optional<std::string> cancel_veto()
+		// job_service's veto of a cancel (main thread): refused once committed. Only when `decide` (cancel() itself) is the
+		// answer acted on: a refused cancel is noted for the answer, one let through is seen by the next checkpoint at once,
+		// before the stop token reaches the job, so it cannot slip past the commit.
+		std::optional<std::string> cancel_veto(bool decide)
 		{
 			std::lock_guard lock(m_mutex);
 			if (m_committed) {
-				m_cancel_ignored = true;
+				if (decide) m_cancel_ignored = true;
 				return std::string{ "the migration was committed: it ends and reports what it wrote" };
 			}
-			m_stop_seen = true;
+			if (decide) m_stop_seen = true;
 			return std::nullopt;
 		}
 
@@ -653,7 +653,7 @@ namespace {
 			};
 			const std::uint64_t job = m_deps.jobs.start_with_result(ds::lane::io, ds::task_desc{ "Migrate project", "project", true }, m_lifetime, std::move(work));
 			// Before the commit a cancel rolls the migration back; after it the cancel is refused and the answer says so.
-			m_deps.jobs.set_cancel_veto(job, [handoff = run->handoff] { return handoff->cancel_veto(); });
+			m_deps.jobs.set_cancel_veto(job, [handoff = run->handoff](bool decide) { return handoff->cancel_veto(decide); });
 			m_running = run;
 			egLOG_INFO("project/migrate", "migration of {} started (job {})", fs_paths::generic_utf8_of(*root), job);
 			m_deps.register_implicit(edt::k_migration_frame_id, [weak = weak_from_this(), run] {
