@@ -386,7 +386,8 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 	rs->set_asset_index(nullptr);
 
 	BOOST_REQUIRE(first);
-	const boost::json::object* component = typed_object(boost::json::parse(written), "skybox_desc");
+	const boost::json::value file = boost::json::parse(written);
+	const boost::json::object* component = typed_object(file, "skybox_desc");
 	BOOST_REQUIRE(component);
 	BOOST_TEST(component->at("material") == boost::json::value(boost::json::object{ { "guid", res::to_text(id) }, { "path", "res://sky.mat.desc" } }));
 	BOOST_REQUIRE(second);
