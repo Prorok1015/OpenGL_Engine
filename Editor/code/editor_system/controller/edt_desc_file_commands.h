@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -46,6 +47,9 @@ namespace edt
 		std::function<std::vector<std::string>()> open_level_files;
 		// agent_action after each change an agent made; null: none.
 		editor_events* events = nullptr;
+		// Why nothing may be written into the project now (a migration runs, or one stopped half way and is not rolled back,
+		// #761): desc.create and desc.write answer busy with it. Null or nullopt: they write.
+		std::function<std::optional<std::string>()> write_blocker;
 	};
 
 	[[nodiscard]] std::vector<registration> register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps);
@@ -57,6 +61,9 @@ namespace edt
 		std::function<std::filesystem::path()> top_layer;
 		std::function<std::vector<std::filesystem::path>()> layers;
 		std::function<std::vector<std::string>()> open_level_files;
+		// Why nothing may be written into the project now (a migration that runs, or one that stopped half way and is not
+		// rolled back yet, #761): a data document's save refuses with it. Null or nullopt: it writes.
+		std::function<std::optional<std::string>()> write_blocker = {};
 	};
 
 	// A desc file read the way desc.read does, with what desc.write asks before it replaces one: `tag` must be a res://

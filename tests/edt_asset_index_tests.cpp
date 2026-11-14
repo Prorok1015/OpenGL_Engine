@@ -591,9 +591,9 @@ BOOST_AUTO_TEST_CASE(the_link_refreshes_the_whole_snapshot_after_a_walk_only)
 	BOOST_TEST((link.index().path_of(*res::asset_id_from_text(k_guid_c)) == std::optional{ res::tag{ "res://c.txt" } }));
 }
 
-// #866: a change without a batch (a hash pass) before a watcher's batch in one frame is left to poll(): the batch does
-// not take its revision step, and the next poll takes the whole snapshot again.
-BOOST_AUTO_TEST_CASE(a_revision_step_without_a_batch_is_left_to_the_next_poll)
+// #885: a hash pass changes no answer of the index: poll() takes no whole snapshot after it, and a watcher's batch
+// that follows is taken batch by batch.
+BOOST_AUTO_TEST_CASE(a_hash_pass_takes_no_full_refresh)
 {
 	project.write("res/a.txt", "a");
 	project.write("res/a.txt.resource", meta_text(k_guid_a));
@@ -609,16 +609,18 @@ BOOST_AUTO_TEST_CASE(a_revision_step_without_a_batch_is_left_to_the_next_poll)
 	link.poll();
 	const std::size_t synced = link.index().full_refreshes();
 	const std::uint64_t before_hash = assets->revision();
-	// The new file is hashed in the background: a revision step that comes with no batch.
+	const std::uint64_t ids_before_hash = assets->id_revision();
 	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
 	BOOST_REQUIRE(assets->revision() > before_hash);
+	BOOST_TEST(assets->id_revision() == ids_before_hash);
+	link.poll();
+	BOOST_TEST(link.index().full_refreshes() == synced);
 
 	project.write("res/b.txt", "b");
 	project.write("res/b.txt.resource", meta_text(k_guid_b));
 	apply({ change("b.txt", res::change_kind::created), change("b.txt.resource", res::change_kind::created) });
-	BOOST_TEST(link.index().full_refreshes() == synced);
 	link.poll();
-	BOOST_TEST(link.index().full_refreshes() == synced + 1);
+	BOOST_TEST(link.index().full_refreshes() == synced);
 	BOOST_TEST((link.index().path_of(*res::asset_id_from_text(k_guid_b)) == std::optional{ res::tag{ "res://b.txt" } }));
 }
 

@@ -49,6 +49,7 @@
 #include "edt_migration_commands.h"
 #include "edt_migration_window_model.h"
 #include "edt_migration_panel.h"
+#include "edt_migration_startup.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -92,7 +93,10 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_start_level.h>
 #include <snk/project/prj_create.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/project/prj_project.h>
+#include <snk/project_migration/pmg_apply.h>
+#include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
@@ -119,6 +123,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -508,7 +513,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			[this] { return m_services.descs(); },
 			[this] { return m_services.writable_resources(); },
 			[this] { return m_res.get_resource_layers(); },
-			[this] { return migration_blocker(); } }),
+			[this] { return project_write_blocker(); } }),
 		[this](const res::tag& tag) { open_asset(tag, false); });
 	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open_asset(res::tag::make(res_rel.generic_string()), false);
@@ -664,14 +669,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
 		if (auto migrating = migration_blocker()) return migrating;
 		if (m_loading_level) return std::string{ "a level is loading" };
-		if (m_migration_stopped) {
-			if (m_migration_stopped->rolled_back && m_migration_stopped->rolled_back()) {
-				m_migration_stopped.reset();
-			} else {
-				return m_migration_stopped->reason;
-			}
-		}
-		return std::nullopt;
+		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
+		std::optional<std::string> stopped = m_migration_stopped.reason();
+		if (m_level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
+		return stopped;
 	};
 	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
 	// its level (#518). A person has no menu or shortcut then.
@@ -751,6 +752,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		desc_files.top_layer = std::move(layout.top_layer);
 		desc_files.layers = std::move(layout.layers);
 		desc_files.open_level_files = std::move(layout.open_level_files);
+		desc_files.write_blocker = std::move(layout.write_blocker);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
@@ -816,7 +818,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
 			m_pending_desc_handle = {};
 			if (m_loading_level) abandon_level_load();
-			m_level_ctrl.detach_from_game_layer();
+			// A level a stopped migration left detached stays as it was kept (a second detach would keep the empty worlds).
+			if (!m_level_ctrl.is_detached()) m_level_ctrl.detach_from_game_layer();
 			return level;
 		};
 		migration.pause_watch = [this] { m_level_ctrl.unwatch_level(); };
@@ -826,6 +829,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_assets) m_assets->rebuild();
 		};
 		migration.reopen_level = [this](const res::tag& level, std::function<void(bool)> loaded) -> std::optional<std::string> {
+			// The files are still half migrated (a rollback refused): the level stays detached, as the stopped migration left it.
+			if (std::optional<std::string> stopped = m_migration_stopped.reason()) return stopped;
 			m_level_ctrl.attach_to_game_layer();
 			if (!level.is_valid()) return std::nullopt;
 			if (!begin_level_load(level)) return "'" + std::string(level.view()) + "' did not start loading again";
@@ -843,12 +848,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		migration.code_identity = [this] { return m_game_layer_generation; };
 		migration.level_left_detached = [this](const res::tag& level, std::function<bool()> rolled_back, const std::string& reason) {
-			m_migration_stopped = stopped_migration{ level, std::move(rolled_back),
-				"the level was left detached by a migration that stopped: roll the migration back first (" + reason + ")" };
+			static_cast<void>(level);
+			m_migration_stopped.hold(std::move(rolled_back),
+				"a migration of the project stopped half way: roll the migration back first (" + reason + ")");
 		};
 		migration.current_level_tag = [this] { return current_level_tag(); };
 		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
-		migration.running_changed = [this](bool running) { m_migration_running = running; };
+		migration.running_changed = [this](bool running) {
+			m_migration_running = running;
+			if (running) ++m_migration_runs;
+		};
+		// The save block of a stopped migration goes with its rollback (its rolled_back() sees the journal too).
+		migration.migration_rolled_back = [this](const std::string&) {
+			static_cast<void>(m_migration_stopped.reason());
+		};
 		migration.show_progress = [](bool open) {
 			constexpr const char* title = "Migrating Project##edt_migrate";
 			ImGui::OpenPopup(title);
@@ -1121,6 +1134,26 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				if (start_in_game && m_modes) m_modes->finish_startup(loaded, static_cast<bool>(m_stop_after_level_loaded));
 				return false;
 			}));
+	}
+
+	// #761: a migration the project was left with is offered for a rollback once the start level settled; headless nobody
+	// is asked (a WARN names the command line), and nothing waits for an answer.
+	if (!project_held && data.has_value<prj::project_context>()) {
+		const std::filesystem::path root = data.require<prj::project_context>().root;
+		migration_startup::ports startup_ports;
+		startup_ports.settled = [this] {
+			return !(m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
+				|| editor_layer->has_implicit_prefix("edt/load_level"));
+		};
+		startup_ports.unfinished = [root] { return prj::migration::unfinished_migrations(root); };
+		startup_ports.warn = [](const std::string& text) { egLOG_WARN("project/migrate", "{}", text); };
+		startup_ports.ask = [this](const journal_offer& offer) { offer_migration_rollback(offer); };
+		startup_ports.start_scan = [this, root] { start_migration_scan(root); };
+		auto startup = std::make_shared<migration_startup>(std::move(startup_ports), headless);
+		// Headless: the WARN only, now in init (no question, no scan). With a person never in init, even with nothing to
+		// wait for: the project's game modules load after it (#428), and the scan's types are theirs.
+		if (headless) static_cast<void>(startup->tick());
+		else editor_layer->register_implicit("edt/migration_journal", [startup] { return startup->tick(); });
 	}
 
 	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
@@ -1576,6 +1609,99 @@ void edt::editor_system::open_migration_window()
 	if (m_migration_panel == nullptr) return;
 	m_context->panels().set_open(m_migration_panel->get_id(), true);
 	m_migration_panel->show_and_plan();
+}
+
+void edt::editor_system::open_migration_rollback(const std::string& id)
+{
+	if (m_migration_panel == nullptr) return;
+	m_context->panels().set_open(m_migration_panel->get_id(), true);
+	m_migration_panel->show_and_roll_back(id);
+}
+
+void edt::editor_system::offer_migration_rollback(const journal_offer& offer)
+{
+	if (offer.what == journal_offer::kind::inform) {
+		m_context->dialogs().choose(offer.title, offer.text, { std::string("OK") }, [](std::optional<std::size_t>) {});
+		return;
+	}
+	if (offer.what != journal_offer::kind::ask) return;
+	m_context->dialogs().choose(offer.title, offer.text, { std::string(k_journal_offer_roll_back), std::string(k_journal_offer_later) },
+		[this, id = offer.id](std::optional<std::size_t> answer) {
+			if (answer && *answer == 0) open_migration_rollback(id);
+		});
+}
+
+void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
+{
+	const std::filesystem::path settings_file = migration_notice_file(m_res.mount_roots("edt"), default_user_data_dir());
+	const std::filesystem::path settings_dir = settings_file.parent_path();
+	migration_notice_model::ports ports;
+	ports.load = [settings_file]() -> std::optional<std::string> {
+		std::error_code ec;
+		if (!std::filesystem::is_regular_file(settings_file, ec)) return std::nullopt;
+		std::ifstream in(settings_file, std::ios::binary);
+		if (!in) return std::nullopt;
+		return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	};
+	ports.save = [settings_file](const std::string& text) -> std::optional<std::string> {
+		std::error_code ec;
+		std::filesystem::create_directories(settings_file.parent_path(), ec);
+		return prj::write_text_atomically(settings_file, text);
+	};
+	m_migration_notice = std::make_unique<migration_notice_model>(std::move(ports));
+
+	// The types are read here, on the main thread; the scan reads only files.
+	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation, m_migration_runs };
+	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
+	// dropped, never shown.
+	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs())](ds::task_context& task) {
+		prj::migration::scan_options options;
+		options.stop = [&task] { return task.stop.stop_requested(); };
+		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
+		if (scan.incomplete) throw ds::task_cancelled{};
+		prj::migration::project_step_registry steps;
+		prj::migration::register_project_steps(steps);
+		migration_scan_summary summary = summarize_scan(scan, steps);
+		summary.unfinished = prj::migration::unfinished_migrations(root);
+		return summary;
+	};
+	m_migration_scan_job = m_context->jobs().start(ds::lane::io, ds::task_desc{ "Check the project's format", "project", false }, m_scan_lifetime,
+		std::move(work), [this, ticket](ds::task_result<migration_scan_summary>& result) {
+			if (!result.ok() || result.value == nullptr || m_migration_notice == nullptr) return;
+			// The editor never changes its project; the game layer may have (a module loaded or reloaded meanwhile), and a
+			// migration or rollback that started since changes the files the scan read.
+			const migration_notice_model::scan_ticket now{ ticket.project, m_game_layer_generation, m_migration_runs };
+			if (m_migration_notice->deliver(ticket, now, std::move(*result.value)) && m_migration_notice->visible()) {
+				egLOG_INFO("project/migrate", "{} Project > Migrate Project... shows the plan.", m_migration_notice->text());
+			}
+		});
+	editor_layer->register_implicit("edt/migration_notice", [this] { return draw_migration_notice(); });
+}
+
+bool edt::editor_system::draw_migration_notice()
+{
+	if (m_migration_notice == nullptr) return false;
+	if (m_migration_scan_job != 0 && m_context->jobs().is_running(m_migration_scan_job)) return true;
+	if (m_migration_running) m_migration_notice->hide();
+	if (!m_migration_notice->visible()) return false;
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	// Above the agent policy's notice, which takes the corner.
+	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 110.f),
+		ImGuiCond_Always, ImVec2(1.f, 1.f));
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
+	if (ImGui::Begin("Project format##migration_notice", nullptr, flags)) {
+		const std::string text = m_migration_notice->text();
+		ImGui::TextUnformatted(text.c_str());
+		if (ImGui::Button("Open Migration...")) {
+			m_migration_notice->open();
+			open_migration_window();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Later")) static_cast<void>(m_migration_notice->later());
+	}
+	ImGui::End();
+	return true;
 }
 
 void edt::editor_system::open_agents_panel()
@@ -2096,7 +2222,6 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
 		m_loading_level_tag, level_locator(m_loading_level_handle, m_loading_editor_tag, m_loading_level_tag));
 	if (loaded) {
-		if (m_migration_stopped && m_migration_stopped->level != m_state.level_tag) m_migration_stopped.reset();
 		// The previous level's working copy has no user left: the level set was rebuilt from the new one.
 		release_level_load();
 		if (editor_tag_before != m_state.editor_tag) erase_loading_copy(editor_tag_before);
@@ -2222,6 +2347,12 @@ std::optional<std::string> edt::editor_system::migration_blocker() const
 	return std::nullopt;
 }
 
+std::optional<std::string> edt::editor_system::project_write_blocker()
+{
+	if (auto migrating = migration_blocker()) return migrating;
+	return m_migration_stopped.reason();
+}
+
 std::optional<std::string> edt::editor_system::load_in_progress() const
 {
 	if (m_loading_level) return std::string{ "a level is loading" };
@@ -2299,6 +2430,7 @@ edt::desc_file_layout edt::editor_system::desc_layout()
 		}
 		return open;
 	};
+	layout.write_blocker = [this] { return project_write_blocker(); };
 	return layout;
 }
 
