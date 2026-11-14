@@ -85,6 +85,20 @@ BOOST_AUTO_TEST_CASE(AFieldOfTheWrongType_KeepsItsDefault)
 	BOOST_TEST(mesh->vx_end == 4u);
 }
 
+// A save and the migration write a reference as {guid, path} (#773, #776): the mesh reads it as the file it names, also
+// as a component of a level (an untagged copy).
+BOOST_AUTO_TEST_CASE(AReferenceAsGuidAndPath_IsReadAsTheFileItNames)
+{
+	auto mesh = std::dynamic_pointer_cast<scn::mesh_node_desc>(descs->create_instance("mesh_node_desc", res::tag{}));
+	BOOST_REQUIRE(mesh);
+	mesh->deserialize(*descs, parse(R"({"vx_end":4,"ind_end":6,
+		"geometry":{"guid":"5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93","path":"res://bench/bench_quad.desc"},
+		"material":{"guid":"f90d3c03-865c-4193-aa09-cb2f98315634","path":"res://base_material.desc"}})"));
+	BOOST_TEST(mesh->geometry.get_tag().view() == "res://bench/bench_quad.desc");
+	BOOST_TEST(mesh->material.get_tag().view() == "res://base_material.desc");
+	BOOST_TEST(mesh->ind_end == 6u);
+}
+
 // The assembler reads a component into a desc without a tag; the importer writes the material inline (the robot of
 // smoke_level). The generic reader refuses an inline desc for an untagged owner, the mesh keeps the material.
 BOOST_AUTO_TEST_CASE(AnUntaggedMesh_KeepsTheInlineMaterialOfAnImportedModel)
