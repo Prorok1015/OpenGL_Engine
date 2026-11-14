@@ -730,6 +730,7 @@ BOOST_AUTO_TEST_CASE(AnAllow_IsTakenOnlyAfterTheButtonStoodStillForTheGuard)
 	const std::uint64_t id = only_pending_id();
 
 	test_util::show_confirmations(*confirmations);
+	test_util::show_confirmations(*confirmations);
 	current += edt::agent_confirmations::input_guard - 1ms;
 	test_util::show_confirmations(*confirmations);
 	BOOST_TEST(!confirmations->pending().front().can_allow);
@@ -754,7 +755,7 @@ BOOST_AUTO_TEST_CASE(TheFirstFrameThatShowsARequest_TakesNoAllow_HoweverOldTheRe
 	test_util::show_confirmations(*confirmations);
 	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
 
-	// A second frame right away is still no time to read it: the guard counts from the first frame shown.
+	// A second frame right away is still no time to read it: the guard counts from the frame that proves it was shown.
 	test_util::show_confirmations(*confirmations);
 	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
 	BOOST_TEST(runs == 0);
@@ -846,6 +847,7 @@ BOOST_AUTO_TEST_CASE(AButtonThatMovedSidewaysOrWithTheScroll_WaitsAgain_ThoughNo
 		confirmations->note_shown(frame);
 	};
 	show_at(at);
+	show_at(at);
 	current += edt::agent_confirmations::input_guard;
 	show_at(at);
 	BOOST_TEST(confirmations->pending().front().can_allow);
@@ -853,6 +855,7 @@ BOOST_AUTO_TEST_CASE(AButtonThatMovedSidewaysOrWithTheScroll_WaitsAgain_ThoughNo
 	for (const edt::shown_rect& moved : { edt::shown_rect{ 230.f, 40.f, 330.f, 60.f }, edt::shown_rect{ 10.f, 180.f, 110.f, 200.f } }) {
 		show_at(moved);
 		BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+		show_at(moved);
 		current += edt::agent_confirmations::input_guard;
 		show_at(moved);
 		BOOST_TEST(confirmations->pending().front().can_allow);
@@ -932,10 +935,20 @@ BOOST_AUTO_TEST_CASE(ASession_HasAFewRequestsWaitingAtMost_OneMoreIsRefusedWithN
 	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit));
 	BOOST_TEST(commands.pending_confirmations() == tickets);
 
+	// The same call again while the session is at its limit is the question that already waits: its ticket stays, and the
+	// person's "allow" still runs it.
+	finished.clear();
+	ask("greedy", 0);
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].error.find("already waiting") != std::string::npos);
+	BOOST_TEST(commands.pending_confirmations() == tickets);
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->answer(confirmations->pending().front().id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+
 	// Another session is not held back by it, and an answered request frees a place.
 	ask("modest", 0);
-	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit) + 1u);
-	BOOST_TEST(confirmations->answer(confirmations->pending().front().id, edt::confirmation_answer::deny));
+	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit));
 	ask("greedy", limit);
 	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit) + 1u);
 }
@@ -955,7 +968,7 @@ namespace {
 
 }
 
-BOOST_AUTO_TEST_CASE(AButton_IsSteadyFromTheFirstOfTwoFramesAtOnePlace)
+BOOST_AUTO_TEST_CASE(AButton_IsSteadyFromTheSecondOfTwoFramesAtOnePlace)
 {
 	const layout_time start{};
 	edt::confirmation_layout layout;
@@ -964,9 +977,9 @@ BOOST_AUTO_TEST_CASE(AButton_IsSteadyFromTheFirstOfTwoFramesAtOnePlace)
 	layout.settle(frame, start);
 	BOOST_TEST(!layout.steady_since(1).has_value());
 	layout.settle(frame, start + 1s);
-	BOOST_TEST((layout.steady_since(1) == start));
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
 	layout.settle(frame, start + 2s);
-	BOOST_TEST((layout.steady_since(1) == start));
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
 	BOOST_TEST(!layout.steady_since(2).has_value());
 }
 
@@ -982,21 +995,21 @@ BOOST_AUTO_TEST_CASE(AButtonThatMoved_StartsAgain_TheOthersKeepTheirTime)
 	const std::vector<edt::shown_request> inserted{ shown_at(1, 10.f, 0.f), shown_at(4, 10.f, 100.f), shown_at(2, 10.f, 200.f),
 		shown_at(3, 10.f, 300.f) };
 	layout.settle(inserted, start + 2s);
-	BOOST_TEST((layout.steady_since(1) == start));
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
 	BOOST_TEST(!layout.steady_since(2).has_value());
 	BOOST_TEST(!layout.steady_since(3).has_value());
 	BOOST_TEST(!layout.steady_since(4).has_value());
 	layout.settle(inserted, start + 3s);
-	BOOST_TEST((layout.steady_since(2) == start + 2s));
-	BOOST_TEST((layout.steady_since(4) == start + 2s));
+	BOOST_TEST((layout.steady_since(2) == start + 3s));
+	BOOST_TEST((layout.steady_since(4) == start + 3s));
 
 	// The first one left: everything is drawn a row higher.
 	const std::vector<edt::shown_request> removed{ shown_at(4, 10.f, 0.f), shown_at(2, 10.f, 100.f), shown_at(3, 10.f, 200.f) };
 	layout.settle(removed, start + 4s);
 	layout.settle(removed, start + 5s);
 	BOOST_TEST(!layout.steady_since(1).has_value());
-	BOOST_TEST((layout.steady_since(2) == start + 4s));
-	BOOST_TEST((layout.steady_since(3) == start + 4s));
+	BOOST_TEST((layout.steady_since(2) == start + 5s));
+	BOOST_TEST((layout.steady_since(3) == start + 5s));
 }
 
 BOOST_AUTO_TEST_CASE(ARequestNotDrawnForAFrame_OrForgotten_StartsAgain)
@@ -1010,14 +1023,14 @@ BOOST_AUTO_TEST_CASE(ARequestNotDrawnForAFrame_OrForgotten_StartsAgain)
 
 	layout.settle(first_only, start + 2s);
 	layout.settle(both, start + 3s);
-	BOOST_TEST((layout.steady_since(1) == start));
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
 	BOOST_TEST(!layout.steady_since(2).has_value());
 
 	layout.forget(1);
 	BOOST_TEST(!layout.steady_since(1).has_value());
 	layout.settle(both, start + 4s);
 	BOOST_TEST(!layout.steady_since(1).has_value());
-	BOOST_TEST((layout.steady_since(2) == start + 3s));
+	BOOST_TEST((layout.steady_since(2) == start + 4s));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

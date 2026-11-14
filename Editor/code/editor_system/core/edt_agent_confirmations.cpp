@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <algorithm>
 #include <exception>
 #include <cstdint>
@@ -53,7 +54,9 @@ namespace edt
 			const auto before = std::find_if(m_slots.begin(), m_slots.end(), [&shown](const slot& s) { return s.id == shown.id; });
 			if (before != m_slots.end() && before->allow == shown.allow) {
 				next.push_back(*before);
-				++next.back().frames;
+				// Only the second frame proves the first was on screen: built is not shown, and a hang between the two
+				// must not count as time a person had to read it.
+				if (++next.back().frames == min_frames) next.back().since = now;
 			} else {
 				next.push_back(slot{ shown.id, shown.allow, now, 1 });
 			}
@@ -187,6 +190,13 @@ namespace edt
 		}
 
 		const std::string ticket_id(ticket->as_string());
+		// The same question asked again while it waits is the ticket already in the list: one question to the person.
+		if (std::any_of(m_waiting.begin(), m_waiting.end(), [&ticket_id](const waiting& w) { return w.ticket == ticket_id; })) {
+			done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the same request is already waiting for a person's answer", command_id)));
+			return;
+		}
+		// After the duplicate above: its ticket is the waiting question's own, and discarding it here would leave a person
+		// approving a ticket that is gone.
 		const std::string_view asking_session = request.from.session;
 		const auto of_session = std::count_if(m_waiting.begin(), m_waiting.end(),
 			[asking_session](const waiting& w) { return w.request.session == asking_session; });
@@ -194,11 +204,6 @@ namespace edt
 			m_commands.discard(ticket_id);
 			done(cmd::result::failure(cmd::codes::denied, std::format(
 				"'{}' was refused: {} requests of this agent session already wait for a person's answer", command_id, max_waiting_per_session)));
-			return;
-		}
-		// The same question asked again while it waits is the ticket already in the list: one question to the person.
-		if (std::any_of(m_waiting.begin(), m_waiting.end(), [&ticket_id](const waiting& w) { return w.ticket == ticket_id; })) {
-			done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the same request is already waiting for a person's answer", command_id)));
 			return;
 		}
 		// What the person reads is what the registry bound to the ticket, never text the agent chose.
@@ -476,6 +481,9 @@ namespace edt
 		const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 			| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking;
 		if (ImGui::Begin("Agent request##agent_confirmations", nullptr, flags)) {
+			// Above every other window, every frame: a panel opened over this corner and closed again (an agent's command
+			// can do both) would otherwise uncover a button that counted as shown all the while. The focus stays where it is.
+			ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 			for (const confirmation_request& request : requests) {
 				ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(request.id)));
 				ImGui::PushTextWrapPos(0.f);

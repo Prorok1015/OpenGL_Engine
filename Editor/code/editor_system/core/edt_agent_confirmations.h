@@ -96,7 +96,7 @@ namespace edt
 		// `frame`: every request the window drew this frame. One that is not in it starts again when it is drawn.
 		void settle(std::span<const shown_request> frame, time_point now);
 		void forget(std::uint64_t id);
-		// The first of at least min_frames frames in a row that drew the button where the last one did; else nullopt.
+		// When the min_frames-th frame in a row drew the button at one place (it stands there since); else nullopt.
 		std::optional<time_point> steady_since(std::uint64_t id) const;
 
 	private:

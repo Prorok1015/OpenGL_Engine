@@ -27,6 +27,7 @@ namespace test_util
 	inline void show_confirmations_and_wait(edt::agent_confirmations& confirmations, std::chrono::steady_clock::time_point& clock)
 	{
 		show_confirmations(confirmations);
+		show_confirmations(confirmations);
 		clock += edt::agent_confirmations::input_guard;
 		show_confirmations(confirmations);
 	}
