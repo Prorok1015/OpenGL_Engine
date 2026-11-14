@@ -866,5 +866,99 @@ BOOST_FIXTURE_TEST_CASE(ARebindAwayFromTheId_KeepsTheDisplacedBlock, index_fixtu
 	pump();
 }
 
+// #869: two spellings of one file, each pinned: one pin of the node, and each spelling takes only its own share away.
+BOOST_FIXTURE_TEST_CASE(PinsOfTwoSpellings_AreOnePin_AndEachUnpinTakesItsOwnShare, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	BOOST_TEST(rs->pinned_count() == 2u);
+
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(spelled) == "pinned a");
+
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(a) == "pinned a");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: the pin of a spelling that meets the node's live block holds that block, not the displaced one.
+BOOST_FIXTURE_TEST_CASE(APinOfTheOtherSpelling_HoldsTheLiveBlock, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	auto live = std::make_optional(rs->require_sync<res::text_resource>(a));
+	std::weak_ptr live_block = live->get_control_block();
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pinned_count() == 1u);
+	live.reset();
+	pump();
+
+	BOOST_REQUIRE(!live_block.expired());
+	BOOST_TEST(rs->require_sync<res::text_resource>(spelled).get_control_block() == live_block.lock());
+	BOOST_TEST(rs->displaced_count() == 0u);
+	BOOST_TEST(text(spelled) == "A");
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a warmup is a pin of its spelling too; it goes with that spelling's unpin only.
+BOOST_FIXTURE_TEST_CASE(AWarmupOfOneSpelling_GoesWithItsOwnUnpinOnly, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->warmup<res::text_resource>(a);
+	rs->warmup<res::text_resource>(spelled);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a pin in a layer and one in its root are each their own.
+BOOST_FIXTURE_TEST_CASE(APinInALayer_AndOneInTheRoot_AreEachTheirOwn, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	index->put(a, k_a);
+	res::resource_system layer{ *rs };
+	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("layer")));
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("root")));
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(layer.pinned_count() == 1u);
+	layer.unpin_resource(a);
+	BOOST_TEST(layer.pinned_count() == 0u);
+}
+
+// #869: a file erased is gone under every spelling: the node's pin goes whoever pinned it.
+BOOST_FIXTURE_TEST_CASE(ErasingAFile_TakesThePinOfEverySpellingAway, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(rs->erase(a));
+	pump();
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
+
 

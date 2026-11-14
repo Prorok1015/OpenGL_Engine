@@ -422,6 +422,8 @@ namespace res
 		// warmup / pin_resource: the block pinned (and cached: always, or in a layer when nothing live is) under the key the
 		// tag of `key` is bound to.
 		void pin_bound(const cache_key& key, std::shared_ptr<resource_handle> block, bool always_cache);
+		// The node's pins and their owners, whoever pinned: a file that is gone (forget_erased).
+		void unpin_node(const res::tag& node);
 		const resource_system& root() const;
 		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
@@ -608,6 +610,9 @@ namespace res
 		// holders let go. Under m_cache_mutex.
 		std::unordered_map<res::tag, std::vector<cache_entry>> m_displaced;
 		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
+		// The tags (spellings, as pinned) that hold the pins of a node (#869): unpin_resource takes one away and the pin
+		// goes with the last. A node without an entry is unpinned at once. Under m_pinning_mutex.
+		std::unordered_map<res::tag, std::unordered_set<res::tag>> m_pin_owners;
 
 		struct watcher {
 			reload_callback callback;
