@@ -243,9 +243,13 @@ void edt::asset_index_link::on_batch(const asset_batch& batch)
 	// A walk's batch can name every file: the whole snapshot is taken again. A watcher's touches a few IDs.
 	if (batch.from_walk) {
 		m_index->refresh(m_assets);
+		m_revision = m_assets.revision();
 	} else {
 		m_index->apply_batch(m_assets, batch);
+		// Only this batch's step is taken: a change that came without a batch since the last poll is left to it.
+		if (m_assets.revision() == m_revision + 1) {
+			m_revision = m_assets.revision();
+		}
 	}
-	m_revision = m_assets.revision();
 	apply(batch.moved);
 }
