@@ -77,21 +77,25 @@ struct level_save_fixture : test_util::scene_env
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
 };
 
-
-// res:// as a project mounts it (add_mount), so the save can read the file it replaces in the top folder.
+// res:// as a project mounts it (add_mount): a lower layer under the project's content, so the save can read the file it
+// replaces in whichever layer res:// reads it from.
 struct level_guid_fixture : level_save_fixture
 {
 	level_guid_fixture()
 	{
+		fs::create_directories(lower);
 		rs->unregistrate_resolver(res::tag::default_protocol());
-		rs->add_mount(res::mount{ res::tag::default_protocol(), { content } });
+		rs->add_mount(res::mount{ res::tag::default_protocol(), { lower, content } });
 	}
 
-	void write(const std::string& relative, const std::string& text)
+	void write(const std::string& relative, const std::string& text, const fs::path& layer = {})
 	{
-		fs::create_directories((content / relative).parent_path());
-		std::ofstream(content / relative, std::ios::binary) << text;
+		const fs::path file = (layer.empty() ? content : layer) / relative;
+		fs::create_directories(file.parent_path());
+		std::ofstream(file, std::ios::binary) << text;
 	}
+
+	const fs::path lower = dir.path() / "lower";
 
 	boost::json::object saved(const std::string& relative) { return boost::json::parse(read_file(content / relative)).as_object(); }
 };
@@ -276,6 +280,23 @@ BOOST_AUTO_TEST_CASE(SaveAs_OverAnotherFile_KeepsThatFilesGuid)
 
 	BOOST_REQUIRE(level_ctrl.save_level_as("levels/plain.desc"));
 	BOOST_TEST(!saved("levels/plain.desc").contains("__guid"));
+}
+
+// A file of a lower layer is replaced by a copy in the project's own folder, which pairs with the same .resource.
+BOOST_AUTO_TEST_CASE(SaveAs_OverAFileOfALowerLayer_KeepsItsGuid)
+{
+	write("levels/base.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"base","worlds":[]})", lower);
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/base.desc"));
+	BOOST_TEST(saved("levels/base.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+}
+
+// No size limit turns the rule off: the __guid of a big file is kept too.
+BOOST_AUTO_TEST_CASE(SaveAs_OverABigFile_KeepsItsGuid)
+{
+	const std::string padding(2 * 1024 * 1024, 'x');
+	write("levels/big.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"big","pad":")" + padding + R"(","worlds":[]})");
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/big.desc"));
+	BOOST_TEST(saved("levels/big.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

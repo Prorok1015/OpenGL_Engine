@@ -406,7 +406,7 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		}
 		if (*what == blob_kind::desc) {
 			if (std::string why = desc_blob_problem(blob, created); !why.empty()) {
-				problem = std::move(why);
+				problem = "'" + cleaned(relative) + "': " + why;
 				return std::nullopt;
 			}
 		}

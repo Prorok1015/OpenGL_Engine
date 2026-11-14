@@ -275,7 +275,7 @@ struct project_step {
   - ID — корневой `__guid` desc, если это валидный id и его не держит ни один файл индекса (сироты тоже) и ни один выданный в этом прогоне; иначе новый. Обе строки повтора — в отчёте: первый файл «ID … from its __guid», следующий «its __guid … is already the ID of …».
   - `__guid` в desc шаг оставляет: его снимает `assets.ids_drop_desc_guid` (`post`, #772) после типовых миграций.
 - **`assets.ids_drop_desc_guid` (`post`, #772).**
-  - `needed`: в скане есть не-invalid desc с корневым `__guid` (`scanned_file::root_guid`).
+  - `needed`: в скане есть не-invalid desc с корневым `__guid` (`scanned_file::root_guid`), у которого `.resource` читается или его нет (его даст `assets.ids` той же миграции). Нечитаемый `.resource` (`scanned_file::resource_unreadable`) шаг не требует: иначе проект просил бы миграцию на каждом открытии, а сам такой `.resource` invalid для скана, и миграция отказывает до его исправления.
   - `apply`: у каждого такого desc, у которого индекс (перестроенный после `pre`) видит `.resource` с ID, корневой `__guid` снимается (`context.files.write`, стиль `desc::pretty_json_bytes`). Desc без `.resource` держит `__guid` и даёт строку в отчёт.
   - Обратно `__guid` не вернётся: сохранения редактора и движка держат `__guid` файла и не придумывают новый (#772).
   - Перекрытый файл нижнего content root тоже получает `.resource`: скан видит каждый корень, иначе шаг был бы нужен всегда.

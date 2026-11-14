@@ -211,6 +211,36 @@ BOOST_AUTO_TEST_CASE(ADescWithoutAResource_KeepsItsGuid)
 	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
 	BOOST_TEST(json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().at("__guid").as_string() == k_guid);
 	BOOST_TEST(any_note(outcome.report, "res/worlds/w_v1.desc: keeps its __guid, it has no .resource with an ID"));
+
+	// With assets.ids (as register_project_steps always has it) the next migration gives the ID and takes the __guid out.
+	const pmg::apply_outcome next = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE_MESSAGE(next.refused.empty(), next.refused);
+	BOOST_REQUIRE((next.report.status == pmg::migration_status::ok));
+	BOOST_TEST(id_in(copy.res() / "worlds/w_v1.desc.resource") == k_guid);
+	BOOST_TEST(!json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().contains("__guid"));
+	BOOST_TEST(plan().empty());
+}
+
+// A .resource that does not read (two __guid after a bad merge) has no ID for the desc. After a migration, a desc with a
+// __guid and such a .resource does not ask for assets.ids_drop_desc_guid again: the step could not take the __guid out,
+// so it would be asked for on every open. (The .resource itself is invalid to the scan, which refuses a migration.)
+BOOST_AUTO_TEST_CASE(ADescWithAResourceThatDoesNotRead_DoesNotAskForTheStep)
+{
+	BOOST_REQUIRE(pmg::apply_migration(plan(), context()).refused.empty());
+	BOOST_REQUIRE(plan().empty());
+	const std::string id = id_in(copy.res() / "worlds/w_v1.desc.resource");
+	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), id));
+	write_text(copy.res() / "worlds/w_v1.desc.resource", "{\"__type\": \"resource_meta\", \"__version\": 1, \"__guid\": \"" + id
+		+ "\", \"__guid\": \"" + std::string(k_guid) + "\", \"importer\": \"\", \"settings\": {}, \"flags\": []}");
+
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* desc = scan.find("res/worlds/w_v1.desc");
+	BOOST_REQUIRE(desc != nullptr);
+	BOOST_TEST(desc->root_guid);
+	BOOST_TEST(desc->has_resource);
+	BOOST_TEST(desc->resource_unreadable);
+	const pmg::migration_plan planned = plan();
+	BOOST_TEST((std::ranges::find(planned.project_steps, "assets.ids_drop_desc_guid", &pmg::planned_project_step::id) == planned.project_steps.end()));
 }
 
 // A __guid that an existing .resource already holds is not given twice either.

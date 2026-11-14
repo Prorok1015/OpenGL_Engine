@@ -224,6 +224,9 @@ BOOST_AUTO_TEST_CASE(ADescOfAnImportWithAGuid_IsRefused)
 	};
 	BOOST_CHECK(refused(R"json({"__type":"material_desc","__guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})json"));
 	BOOST_TEST(problem.find("__guid") != std::string::npos);
+	BOOST_TEST_MESSAGE(problem);
+	BOOST_TEST(problem.starts_with("'"));
+	BOOST_TEST(problem.find(".desc': a desc of the import has the key '__guid'") != std::string::npos);
 	BOOST_CHECK(refused(R"json({"__type":"material_desc","inner":{"__type":"texture_desc","__guid":"x"}})json"));
 }
 

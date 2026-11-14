@@ -78,9 +78,17 @@ namespace
 		context.warn(std::format("{} .resource files created", created));
 	}
 
+	// What drop_guid_apply takes a __guid out of: a desc whose .resource reads, or one without a .resource, which assets.ids
+	// gives one in the same migration. One whose .resource does not read keeps its __guid and asks for no migration: that
+	// .resource is invalid to the scan, which refuses any migration until it is fixed (the editor's Problems shows it).
+	bool drops_guid_of(const scanned_file& file)
+	{
+		return file.root_guid && file.kind != file_class::invalid && !file.resource_unreadable;
+	}
+
 	bool drop_guid_needed(const scan_result& scan)
 	{
-		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return file.root_guid && file.kind != file_class::invalid; });
+		return std::ranges::any_of(scan.files, drops_guid_of);
 	}
 
 	void drop_guid_apply(project_step_context& context)

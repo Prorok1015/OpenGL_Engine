@@ -679,6 +679,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		const auto listed = assets.assets().find(file.path);
 		if (listed == assets.assets().end()) continue;
 		file.has_resource = listed->second.has_meta;
+		file.resource_unreadable = listed->second.has_meta && !listed->second.id;
 		if (file.kind == file_class::current || file.kind == file_class::missing_resource) {
 			if (lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) != ".desc") {
 				file.kind = file.has_resource ? file_class::current : file_class::missing_resource;

@@ -15,6 +15,10 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <format>
+#include <limits>
+#include <optional>
+#include <system_error>
+#include <vector>
 #include <snk/common/logger/engine_log.h>
 
 edt::level_controller::level_controller(
@@ -80,13 +84,21 @@ namespace {
 		level_json = std::move(file);
 	}
 
-	// The root __guid of the file a save replaces in the folder res:// writes into; empty when there is none there.
-	std::string root_guid_on_disk(const res::resource_system& resources, const std::string& rel_path)
+	// The root __guid of the file a save replaces: the one res:// reads, from the highest layer that has it (a lower
+	// layer's file is replaced by a copy in the top one, which keeps its .resource). Empty when there is none; nullopt
+	// when it is there but does not read, whatever its size: its __guid would be lost.
+	std::optional<std::string> root_guid_of_replaced(const res::resource_system& resources, const std::string& rel_path)
 	{
-		const std::filesystem::path top = resources.get_resources_path();
-		if (top.empty()) return {};
-		const auto bytes = res::read_file_within_dir(top, rel_path, edt::k_desc_file_limit);
-		return bytes ? edt::desc_root_guid(*bytes) : std::string{};
+		const std::vector<std::filesystem::path> layers = resources.get_resource_layers();
+		for (auto layer = layers.rbegin(); layer != layers.rend(); ++layer) {
+			const std::optional<std::filesystem::path> path = res::path_within_dir(*layer, rel_path);
+			std::error_code ec;
+			if (!path || !std::filesystem::is_regular_file(*path, ec)) continue;
+			const auto bytes = res::read_regular_file_capped(*path, std::numeric_limits<std::uintmax_t>::max());
+			if (!bytes) return std::nullopt;
+			return edt::desc_root_guid(*bytes);
+		}
+		return std::string{};
 	}
 
 	// Tells the coordinator that the worlds were replaced, on every way out of the function.
@@ -335,7 +347,16 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	// it out, and makes none up (#772). Save As to a new file writes none, the asset database gives the file a new ID;
 	// Save As over another file keeps that file's.
 	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
-	const std::string guid = same_file ? m_state.level_guid : root_guid_on_disk(*m_services.writable_resources(), rel_path);
+	std::string guid = m_state.level_guid;
+	if (!same_file) {
+		const std::optional<std::string> replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
+		if (!replaced) {
+			egLOG_ERROR("Editor/Save", "Level not saved: '{}' is there but could not be read, so its __guid would be lost",
+				res::tag::make(rel_path).view());
+			return false;
+		}
+		guid = *replaced;
+	}
 
 	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
 	if (m_state.level_parent.is_valid()) {
