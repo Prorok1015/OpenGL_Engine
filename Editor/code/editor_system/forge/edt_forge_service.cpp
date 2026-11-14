@@ -392,7 +392,7 @@ std::optional<std::string> edt::forge_service::describe_create_pr(const create_r
 	}
 	return describe("Create a draft PR in ", request.remote,
 		call_key(caller, "create_pr", { request.remote, request.base, request.head, request.title, request.body }), caller,
-		std::format(": {} -> {}", request.head, request.base), std::move(refusal));
+		std::format(": {} -> {}", escaped_text(request.head, 256), escaped_text(request.base, 256)), std::move(refusal));
 }
 
 std::optional<std::string> edt::forge_service::describe_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller)
