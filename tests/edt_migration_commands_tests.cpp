@@ -22,6 +22,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 // project.migration_plan / project.migrate (#759, EPIC-58 S7) over fake editor hooks, on copies of the fixture of old
 // versions (#750): the plan writes nothing, the migration runs only after the plan a person was shown, never with
@@ -141,7 +144,12 @@ struct migration_fixture : test_util::scene_env
 	// Starts project.migrate, runs the frames and the job; the job's result.
 	json::object migrate(cmd::origin from = cmd::origin::agent("s1"))
 	{
-		const cmd::result started = call("project.migrate", {}, std::move(from));
+		return job_result(call("project.migrate", {}, std::move(from)));
+	}
+
+	// The frames and the job of a project.migrate that started.
+	json::object job_result(const cmd::result& started)
+	{
 		BOOST_REQUIRE_MESSAGE(started.ok, started.code << ": " << started.error);
 		const std::uint64_t job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
 		run_frames();
@@ -419,6 +427,145 @@ BOOST_AUTO_TEST_CASE(AContentRootLinkedOutOfTheProject_IsRefused)
 	BOOST_TEST(!closed);
 	BOOST_TEST((snapshot(copy.root()) == inside));
 	BOOST_TEST((snapshot(outside.path()) == out));
+}
+
+// A link to /dev/zero and a FIFO in the project: the plan and the question are made without reading either (the test
+// finishing is the check).
+BOOST_AUTO_TEST_CASE(ALinkToADeviceAndAFifo_AreNotRead)
+{
+#ifdef _WIN32
+	BOOST_TEST_MESSAGE("no /dev/zero or FIFO on Windows");
+#else
+	std::error_code link_error;
+	fs::create_symlink("/dev/zero", copy.res() / "zero.desc", link_error);
+	BOOST_REQUIRE_MESSAGE(!link_error, link_error.message());
+	BOOST_REQUIRE(::mkfifo((copy.res() / "pipe.desc").c_str(), 0600) == 0);
+	BOOST_TEST(!ask().empty());
+	const cmd::result planned = call("project.migration_plan");
+	BOOST_TEST(planned.ok);
+	BOOST_TEST(planned.value.at("code").as_int64() == pmg::k_exit_refused);
+#endif
+}
+
+// No byte changed, but the plan did (another step of a type after the question): the person approved another plan.
+BOOST_AUTO_TEST_CASE(APlanThatChangedWithoutAByteChanged_IsDenied)
+{
+	fs::remove(copy.res() / "broken.desc");
+	static_cast<void>(ask());
+	const auto before = snapshot(copy.root());
+	descs->register_migration("camera_desc", descs->current_version("camera_desc"), [](json::object&) {});
+	const json::object result = migrate();
+	BOOST_TEST(error_code_of(result) == cmd::codes::denied);
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// The real agent policy behind the registry: project.migrate runs only after a person's answer (or, headless, the
+// --agent-policy file), never because the project's file says allow.
+struct policy_fixture : migration_fixture
+{
+	policy_fixture()
+	{
+		gate->set_can_ask(true);
+		commands.set_policy_gate(gate);
+	}
+
+	~policy_fixture()
+	{
+		commands.set_policy_gate(nullptr);
+	}
+
+	void write_project(std::string_view text)
+	{
+		policy_dir.write("project/.snk/agent_policy.json", text);
+		policy.set_approval_allowed(true);
+		policy.refresh();
+		BOOST_REQUIRE(!policy.approve_project_layer(policy.project()).has_value());
+	}
+
+	std::string ticket_of(const cmd::result& asked)
+	{
+		BOOST_REQUIRE_MESSAGE(asked.code == cmd::codes::confirmation_required, asked.code << ": " << asked.error);
+		return std::string(asked.value.at("ticket").as_string());
+	}
+
+	cmd::result call_with(const std::string& ticket)
+	{
+		cmd::call request;
+		request.args = json::object{};
+		request.from = cmd::origin::agent("s1");
+		request.confirmation = ticket;
+		return commands.invoke("project.migrate", request);
+	}
+
+	test_util::temp_dir policy_dir{ "edt_migration_commands_policy" };
+	edt::agent_policy policy{ policy_dir.path() / "project" / ".snk" / "agent_policy.json", policy_dir.path() / "personal.json" };
+	std::shared_ptr<edt::agent_policy_gate> gate = std::make_shared<edt::agent_policy_gate>(policy);
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtMigrationCommandsPolicy, policy_fixture)
+
+BOOST_AUTO_TEST_CASE(TheProjectsFile_CannotAllowTheMigration_ItStillAsks)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = snapshot(copy.root());
+	for (const char* text : { R"({"categories":{"project_migrate":"allow"}})", R"({"commands":{"project.migrate":"allow"}})" }) {
+		BOOST_TEST_CONTEXT(text) {
+			write_project(text);
+			BOOST_TEST((policy.effective(*commands.find("project.migrate")).mode == cmd::policy_mode::ask));
+			const cmd::result asked = call("project.migrate");
+			BOOST_TEST(asked.code == cmd::codes::confirmation_required);
+			BOOST_TEST(implicit.empty());
+		}
+	}
+	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+// The person says no: nothing runs, the ticket is spent, and the next call is a new question.
+BOOST_AUTO_TEST_CASE(ADeclinedQuestion_RunsNothing_AndIsNotReused)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = snapshot(copy.root());
+	const std::string declined = ticket_of(call("project.migrate"));
+	commands.discard(declined);
+	BOOST_TEST(call_with(declined).code == cmd::codes::denied);
+	BOOST_TEST(implicit.empty());
+	BOOST_TEST((snapshot(copy.root()) == before));
+
+	const std::string asked = ticket_of(call("project.migrate"));
+	BOOST_TEST(asked != declined);
+	BOOST_REQUIRE(commands.approve(asked));
+	const json::object result = job_result(call_with(asked));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
+	// The plan was taken by that run: another run needs another question.
+	BOOST_TEST(call_with(asked).code == cmd::codes::denied);
+}
+
+// Headless, the --agent-policy file answers the question in advance; the plan is still described and checked.
+BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_RunsIt_WithThePlanDescribed)
+{
+	fs::remove(copy.res() / "broken.desc");
+	// The project is its own worktree: the answers lie outside it.
+	fs::create_directories(copy.root() / ".git");
+	gate->set_can_ask(false);
+	policy.set_headless(true);
+	policy_dir.write("answers.json", R"({"commands":{"project.migrate":"allow"}})");
+	policy.set_preanswers_file(policy_dir.path() / "answers.json", copy.root());
+	BOOST_REQUIRE(policy.preanswers_error().empty());
+	const json::object result = migrate();
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
+
+	// Without the answer, headless nobody is asked: denied.
+	policy_dir.write("none.json", R"({})");
+	policy.set_preanswers_file(policy_dir.path() / "none.json", copy.root());
+	BOOST_TEST(call("project.migrate").code == cmd::codes::denied);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

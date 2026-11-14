@@ -240,6 +240,21 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 				return t.id == request.confirmation && t.command == command.id && t.args == args && t.session == request.from.session;
 			});
 		}
+		// A call with a risk that runs without a question (an answer given in advance) is still described, as a ticket would
+		// be: the command may hold on to what was described (project.migrate checks its plan against it). Invalid
+		// arguments are left to the schema check that follows.
+		const bool described_by_ticket = !request.confirmation.empty();
+		if (command.risk != danger::none && command.describe && !described_by_ticket && !json_schema::validate(command.args_schema, request.args)) {
+			try {
+				if (auto text = command.describe(request)) egLOG_INFO("command", "'{}' runs without a question: {}", command.id, *text);
+			} catch (const std::exception& e) {
+				egLOG_WARN("command", "the description of a call of '{}' could not be made ({}): it is refused", command.id, e.what());
+				return denied("what it would do could not be told");
+			} catch (...) {
+				egLOG_WARN("command", "the description of a call of '{}' could not be made: it is refused", command.id);
+				return denied("what it would do could not be told");
+			}
+		}
 		return std::nullopt;
 	}
 

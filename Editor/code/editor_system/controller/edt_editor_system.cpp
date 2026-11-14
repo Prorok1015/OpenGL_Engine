@@ -747,12 +747,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				return std::string{ "a reload of the game module is waiting" };
 			}
 			if (m_agent_import && m_agent_import->running()) return std::string{ "a model import asked for by an agent is running" };
+			if (m_export_dialog_active) return std::string{ "the asset export dialog is open" };
+			if (m_vcs && m_vcs->running_writes() > 0) return std::string{ "a git operation (pull, checkout, commit...) is running" };
 #if SNK_HAS_ASSIMP
 			if (m_importing) return std::string{ "a model import is running" };
 #endif
 			return std::nullopt;
 		};
 		migration.unsaved_reason = [this]() -> std::optional<std::string> {
+			if (person_is_editing()) return std::string{ "a person is editing a value (an inspector field or a gizmo drag): commit it first" };
 			if (m_state.is_dirty()) return std::string{ "the level has unsaved changes: save or discard them first" };
 			std::optional<std::string> dirty;
 			m_context->documents().for_each([&dirty](document& open) {
@@ -762,11 +765,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		migration.close_documents_and_detach_level = [this] {
 			close_prefab_editor();
-			std::vector<document_id> data_documents;
-			m_context->documents().for_each([this, &data_documents](document& open) {
-				if (open.kind() == "data" && m_data_documents->owns(open.id())) data_documents.push_back(open.id());
+			// Every document but the scene, a module's or an extension's too: each through whoever owns its window.
+			document_manager& documents = m_context->documents();
+			std::vector<document_id> open_documents;
+			documents.for_each([&documents, &open_documents](document& open) {
+				if (&open != &documents.scene()) open_documents.push_back(open.id());
 			});
-			for (const document_id id : data_documents) m_data_documents->close(id);
+			for (const document_id id : open_documents) {
+				if (m_data_documents->owns(id)) m_data_documents->close(id);
+				else if (documents.find(id)) documents.close(id);
+			}
 			const res::tag level = current_level_tag();
 			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
 			m_pending_desc_handle = {};

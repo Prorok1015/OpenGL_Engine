@@ -4,6 +4,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
@@ -16,7 +17,6 @@
 #include <cstdint>
 #include <exception>
 #include <format>
-#include <fstream>
 #include <future>
 #include <iterator>
 #include <memory>
@@ -28,7 +28,8 @@ namespace {
 	namespace pmg = prj::migration;
 
 	constexpr std::size_t k_max_shown = 32;
-	constexpr std::chrono::minutes k_shown_lifetime{ 5 };
+	// What a person was shown lives as long as the question about it.
+	constexpr auto k_shown_lifetime = cmd::command_registry::confirmation_lifetime;
 	// How often the job's thread looks at its stop token while it waits for the main thread.
 	constexpr std::chrono::milliseconds k_wait_step{ 50 };
 	constexpr std::size_t k_max_listed = 5;
@@ -77,14 +78,39 @@ namespace {
 			add(bytes);
 		}
 
-		void add_file(const fs::path& file)
+		// Never follows a link and reads only a regular file up to `max_bytes`, through prj::read_project_file: a link to
+		// /dev/zero or a FIFO in the project (or one swapped in after the check) must not hang the editor. Anything else
+		// stands in by what it is, its size and its time.
+		void add_file(const fs::path& root, const fs::path& relative, std::uintmax_t max_bytes)
 		{
-			std::ifstream in(file, std::ios::binary);
-			if (!in) {
+			const fs::path file = root / relative;
+			std::error_code ec;
+			const fs::file_status status = fs::symlink_status(file, ec);
+			if (ec || status.type() == fs::file_type::not_found) {
 				add_part("<missing>");
 				return;
 			}
-			add_part(std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() });
+			if (fs::is_symlink(status)) {
+				add_part("<link>");
+				add_part(fs_paths::generic_utf8_of(fs::read_symlink(file, ec)));
+				return;
+			}
+			const std::uintmax_t size = fs::is_regular_file(status) ? fs::file_size(file, ec) : 0;
+			if (!fs::is_regular_file(status) || ec || size > max_bytes) {
+				std::error_code time_error;
+				const auto modified = fs::last_write_time(file, time_error);
+				add_part(std::format("<{}> {} {}", static_cast<int>(status.type()), ec ? std::uintmax_t{ 0 } : size,
+					time_error ? 0LL : static_cast<long long>(modified.time_since_epoch().count())));
+				return;
+			}
+			const prj::project_file_text text = prj::read_project_file(root, relative, max_bytes);
+			if (!text.exists || !text.error.empty()) {
+				add_part("<unreadable> " + text.error);
+				return;
+			}
+			add(std::to_string(text.text.size()));
+			add(":");
+			add(text.text);
 		}
 
 		std::uint64_t value() const { return m_hash; }
@@ -93,20 +119,25 @@ namespace {
 		std::uint64_t m_hash = 0xcbf29ce484222325ull;
 	};
 
-	// Any byte of the project the plan read, and the project steps it plans.
+	json::object plan_json(const pmg::migration_plan& plan);
+
+	// The plan as the answer gives it (every file's steps and warnings, the project steps, what is skipped, the manifest)
+	// and every byte of the project it was made from.
 	std::uint64_t fingerprint_of(const fs::path& root, const pmg::migration_plan& plan)
 	{
+		const std::uintmax_t max_bytes = pmg::scan_options{}.max_file_bytes;
 		fnv1a_hash hash;
-		hash.add_file(root / fs_paths::path_from_utf8(prj::k_manifest_file_name));
-		std::vector<std::string> paths;
-		paths.reserve(plan.scan.files.size());
-		for (const pmg::scanned_file& file : plan.scan.files) paths.push_back(file.path);
-		std::ranges::sort(paths);
-		for (const std::string& path : paths) {
+		hash.add_part(json::serialize(plan_json(plan)));
+		hash.add_file(root, fs_paths::path_from_utf8(prj::k_manifest_file_name), max_bytes);
+		std::vector<std::pair<std::string, std::string_view>> files;
+		files.reserve(plan.scan.files.size());
+		for (const pmg::scanned_file& file : plan.scan.files) files.emplace_back(file.path, pmg::to_string(file.kind));
+		std::ranges::sort(files);
+		for (const auto& [path, kind] : files) {
 			hash.add_part(path);
-			hash.add_file(root / fs_paths::path_from_utf8(path));
+			hash.add_part(kind);
+			hash.add_file(root, fs_paths::path_from_utf8(path), max_bytes);
 		}
-		for (const pmg::planned_project_step& step : plan.project_steps) hash.add_part(step.id);
 		return hash.value();
 	}
 
@@ -257,6 +288,8 @@ namespace {
 		{
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return cmd::result::failure(k_no_project, "no project is open");
+			// A person's own call needs no plan shown, as Play and the forge calls of a person: the person in the editor is
+			// the confirmation.
 			const bool person = call.from.kind == cmd::origin_kind::ui;
 			const std::string key = key_of(call.from);
 			if (!person && !peek(key)) return cmd::result::failure(cmd::codes::denied, "the plan was not shown to a person; ask again");
@@ -403,14 +436,24 @@ namespace {
 			// Nothing is written for an empty plan: the documents and the level stay as they are.
 			if (writes) run.level = m_deps.close_documents_and_detach_level ? m_deps.close_documents_and_detach_level() : res::tag{};
 			pmg::apply_outcome outcome;
+			std::optional<std::string> stopped;
 			try {
 				const pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), m_deps.pause_watch, {}, {}, {}, &m_steps };
 				outcome = pmg::apply_migration(plan, context);
 			} catch (const std::exception& e) {
-				outcome.refused = std::format("the migration stopped: {}", e.what());
+				stopped = e.what();
 			}
 
-			if (!outcome.refused.empty()) {
+			if (stopped) {
+				// What was written is not known: as a rollback that did not finish.
+				const std::vector<std::string> left = pmg::unfinished_migrations(run.root);
+				std::string error = std::format("the migration stopped: {}; the state of the project is unknown", *stopped);
+				if (!left.empty()) error += std::format(": run editor --migrate-rollback {}", left.front());
+				run.answer = json::object{ { "code", pmg::k_exit_rollback_failed }, { "status", pmg::to_string(pmg::migration_status::rollback_failed) },
+					{ "error", error }, { "text", pmg::plan_text(plan) } };
+				if (!left.empty()) run.answer["unfinished"] = strings_of(left);
+				egLOG_ERROR("project/migrate", "{}", error);
+			} else if (!outcome.refused.empty()) {
 				run.answer = json::object{ { "code", pmg::k_exit_refused }, { "refused", outcome.refused }, { "text", pmg::plan_text(plan) } };
 				egLOG_WARN("project/migrate", "refused: {}", outcome.refused);
 			} else {
