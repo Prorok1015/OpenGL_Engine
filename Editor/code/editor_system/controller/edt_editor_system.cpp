@@ -513,7 +513,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			[this] { return m_services.descs(); },
 			[this] { return m_services.writable_resources(); },
 			[this] { return m_res.get_resource_layers(); },
-			[this] { return migration_blocker(); } }),
+			[this] { return project_write_blocker(); } }),
 		[this](const res::tag& tag) { open_asset(tag, false); });
 	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open_asset(res::tag::make(res_rel.generic_string()), false);
@@ -2346,6 +2346,12 @@ std::optional<std::string> edt::editor_system::migration_blocker() const
 	return std::nullopt;
 }
 
+std::optional<std::string> edt::editor_system::project_write_blocker()
+{
+	if (auto migrating = migration_blocker()) return migrating;
+	return m_migration_stopped.reason();
+}
+
 std::optional<std::string> edt::editor_system::load_in_progress() const
 {
 	if (m_loading_level) return std::string{ "a level is loading" };
@@ -2423,6 +2429,7 @@ edt::desc_file_layout edt::editor_system::desc_layout()
 		}
 		return open;
 	};
+	layout.write_blocker = [this] { return project_write_blocker(); };
 	return layout;
 }
 

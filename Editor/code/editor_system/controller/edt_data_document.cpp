@@ -679,6 +679,9 @@ edt::save_result edt::data_document::write_checked(bool over)
 	if (!over && !is_dirty() && !migrated()) {
 		return save_result::ok();
 	}
+	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+		return save_result::failure(*why);
+	}
 	if (!over && m_changed_on_disk) {
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}

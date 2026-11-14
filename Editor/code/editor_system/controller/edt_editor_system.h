@@ -287,6 +287,8 @@ namespace edt {
 		// and quitting are refused until it ended (migration_blocker).
 		bool m_migration_running = false;
 		std::optional<std::string> migration_blocker() const;
+		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.
+		std::optional<std::string> project_write_blocker();
 		// The notice of a project in an old format (#761) and whether its scan still runs.
 		std::unique_ptr<migration_notice_model> m_migration_notice;
 		std::uint64_t m_migration_scan_job = 0;
