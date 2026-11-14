@@ -52,6 +52,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 
 ### Module ABI: layout of listed engine types = major bump
 - **What:** changing the size or alignment of a type in `gs::module_layout_key()` (`snk/game/gs_module_layout.h`) is a major bump of `SNK_MODULE_API_VERSION`; add a type there when module code constructs, copies or allocates it (an engine template instantiated in the module). Engine-created types a module only reads (`scene_layer`, `world_context`, `module_context`...) stay out: append fields at their end (minor), never reorder or remove (major). The key does not catch a reorder of fields of one size or a vtable change (`bus_slot`, `bus_type`, `module_interface`): those are a major bump by hand
+- **Frozen by size (#922):** engine components, the ctx types and events a module reads (`scn::delta_time`, `inp::action_state`, `inp::action_event`...), channel types and structs passed by value are in the key too: a new field changes the key. A new engine component = register it and add it to `scn_engine_component_list.h` (the `EngineComponentCatalog` test fails otherwise)
 - **Why:** a `game.dll` allocates those types itself; the host refuses a module with another layout key (#614), but modules older than 3.6 carry no key
 - **Ref:** `docs/roadmap/design/MODULE_LAYER.md` (Ключ раскладки модуля), comment above `SNK_MODULE_API_VERSION`
 

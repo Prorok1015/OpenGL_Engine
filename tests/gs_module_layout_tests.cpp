@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/application/app_module_entry.h>
 #include <snk/game/gs_module_layout.h>
+#include <snk/scene/scn_engine_component_list.h>
 #include <cstdint>
 #include <string>
 
@@ -39,6 +40,18 @@ BOOST_AUTO_TEST_CASE(a_size_or_alignment_change_of_a_listed_type_changes_the_key
 	BOOST_TEST(gs::detail::layout_of<std::uint64_t>() != gs::detail::layout_of<grown>());
 	BOOST_TEST((gs::detail::layout_of<std::uint32_t, std::uint64_t>() != gs::detail::layout_of<std::uint64_t, std::uint32_t>()));
 	BOOST_TEST(gs::detail::layout_of<std::uint64_t>() == gs::detail::layout_of<std::uint64_t>());
+}
+
+// #922: the engine components enter the key as one scn::type_list.
+BOOST_AUTO_TEST_CASE(a_type_added_to_a_listed_type_list_changes_the_key)
+{
+	struct stand_in { std::uint64_t a = 0; };
+	using before = scn::type_list<std::uint32_t>;
+	using after = scn::type_list<std::uint32_t, stand_in>;
+	static_assert(gs::detail::layout_of<std::uint16_t, before>() != gs::detail::layout_of<std::uint16_t, after>());
+	static_assert(gs::detail::layout_of<std::uint16_t, after>() == gs::detail::layout_of<std::uint16_t, std::uint32_t, stand_in>());
+	static_assert(gs::detail::layout_of<std::uint16_t, scn::type_list<>>() == gs::detail::layout_of<std::uint16_t>());
+	BOOST_TEST((gs::detail::layout_of<before>() != gs::detail::layout_of<after>()));
 }
 
 BOOST_AUTO_TEST_CASE(the_host_refuses_another_key_and_lets_the_same_or_an_unknown_one_through)

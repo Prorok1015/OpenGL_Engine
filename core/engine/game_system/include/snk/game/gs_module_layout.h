@@ -1,27 +1,44 @@
 #pragma once
 #include <snk/command/cmd_types.h>
+#include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_channel.hpp>
+#include <snk/ecs/ecs_command_buffer.hpp>
+#include <snk/ecs/ecs_component_registry.hpp>
+#include <snk/ecs/ecs_entity_changer.hpp>
+#include <snk/ecs/ecs_random.hpp>
 #include <snk/ecs/ecs_signal.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/game/gs_input_stack_handle.h>
+#include <snk/input/inp_action_state.h>
+#include <snk/input/inp_events.hpp>
 #include <snk/input/inp_input_stack.h>
+#include <snk/input/inp_user_bindings.h>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
+#include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/scn_animation.h>
+#include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_engine_component_list.h>
 #include <snk/scene/scn_event_subscriptions.h>
+#include <snk/scene/scn_time.h>
 #include <cstddef>
 #include <cstdint>
 
 // The layout key of a module binary (#614): a module built against headers in which one of these types has another
 // size or alignment is refused by the host before it is created ("rebuild the project"). The list holds the types
 // whose size is compiled into module code: a module constructs, copies or allocates them through engine templates
-// (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION). A type the engine creates and a module only reads through
+// (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION), walks their storage (the engine components) or reads them
+// whole from registry.ctx() and the bus (#922). A type the engine creates and a module only reads through
 // inline accessors (scene_layer, context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
 // moves nothing a module reads and is a minor change, while a reorder or removal there is a major bump by hand, or in
 // the window of 4.0 (#758) a new layout_revision. world_context has no inline accessor since #802: its layout is the
@@ -55,13 +72,35 @@ namespace gs
 		// module code builds too, join the list (#861).
 		// 10: cmd::command_desc, which a module builds for gs::game_module::add_command, gains describe_before_allowed_invoke
 		// and joins the list (#759).
-		inline constexpr std::uint64_t layout_revision = 10;
+		// 11: the engine components (scn::engine_component_types), the ctx types and events a module reads, the channel
+		// types, app_data_storage and the structs passed by value join the list (#922); no type changes.
+		inline constexpr std::uint64_t layout_revision = 11;
+
+		template<class T>
+		struct layout_part
+		{
+			static constexpr std::uint64_t mix(std::uint64_t hash) noexcept
+			{
+				return mix_layout(mix_layout(hash, sizeof(T)), alignof(T));
+			}
+		};
+
+		// A scn::type_list in the list stands for its types, in order: the key is the same as with them written out.
+		template<class... Types>
+		struct layout_part<scn::type_list<Types...>>
+		{
+			static constexpr std::uint64_t mix(std::uint64_t hash) noexcept
+			{
+				((hash = layout_part<Types>::mix(hash)), ...);
+				return hash;
+			}
+		};
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
 		{
 			std::uint64_t hash = mix_layout(0xcbf29ce484222325ull, layout_revision);
-			((hash = mix_layout(mix_layout(hash, sizeof(Types)), alignof(Types))), ...);
+			((hash = layout_part<Types>::mix(hash)), ...);
 			return hash;
 		}
 	}
@@ -97,7 +136,31 @@ namespace gs
 			// ecs_invoker's reg.ctx().emplace<T>(), so the module allocates and destroys it.
 			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::action_binding,
 			// game_module::add_command takes the command a module describes.
-			cmd::command_desc>();
+			cmd::command_desc,
+			// A module's systems walk view<T>/storage<T> of the engine's components inline, a step of sizeof(T) each.
+			scn::engine_component_types,
+			// ctx resources a module's system takes by reference from registry.ctx() and reads or writes inline.
+			scn::delta_time, scn::fixed_time, scn::update_alpha, scn::world_time, ecs::rng, ecs::entity_changer,
+			ecs::entity_spawner, inp::action_state, inp::fixed_action_state, inp::action_map_ref, inp::action_trace,
+			inp::input_capture, scn::node_index,
+			// Engine events a module's event_reader<T> copies out of the bus.
+			inp::action_event, scn::animation_finished,
+			// All inline: module code runs find_entry over its members.
+			ds::app_data_storage,
+			// register_desc_spawner builds the pair and inserts it into the assembler's map in module code;
+			// component_registry is inline too.
+			scn::ecs_assembler, scn::ecs_assembler::spawner_pair, ecs::component_registry,
+			// A module sends and reads set mail through outbox<T>/inbox<T>; channel_type_impl<T>::make_slot makes the
+			// slot of its message type in module code. <int> stands for every T, whose own size the key does not see.
+			ecs::address, ecs::entity_ref, ecs::envelope<int>, ecs::outbox<int>, ecs::inbox<int>,
+			ecs::detail::channel_slot_impl<int>,
+			// Passed by value between a module and the engine's exports or callbacks.
+			desc::override_failure, desc::read_context, cmd::call, cmd::result, desc::enum_item, desc::enum_schema,
+			scn::blackboard_type,
+			// task_system::run makes the task's state in module code and then_main hands its callback the result.
+			ds::task_result<void>, ds::detail::task_state<void>,
+			// gs::input_actions' inline accessors copy or hand out these members.
+			inp::gamepad_config, inp::user_bindings>();
 	}
 
 	// module_layout_key() as the engine was built: what the host compares a module's key with.
