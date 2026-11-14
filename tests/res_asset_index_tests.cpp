@@ -1003,7 +1003,8 @@ BOOST_FIXTURE_TEST_CASE(ASpellingThatGetsAnotherId_TakesItsOwnerAndAPinThere, in
 	BOOST_TEST(rs->pinned_count() == 2u);
 	rs->unpin_resource(spelled);
 	BOOST_TEST(rs->pinned_count() == 1u);
-	BOOST_TEST(text(a) == "a");
+	// Both pinned one node, so its pin is the block pinned last (as for two pins of one tag); the old ID keeps it.
+	BOOST_TEST(text(a) == "spelled");
 	rs->unpin_resource(a);
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
