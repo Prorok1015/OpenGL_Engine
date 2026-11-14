@@ -70,6 +70,41 @@ void edt::play_session::abandon()
 	m_state = play_state::stopped;
 }
 
+namespace {
+
+	// Why the play profile may not be emptied and mounted as user://, or nothing. A project is a folder someone else may
+	// have made: with `.cache` or `.cache/play_profile` a link, emptying the profile would delete, and Play would write,
+	// outside the project (#936). Every folder on the way must be a plain folder, and the profile must really be where
+	// its name says (which also catches what a look at each name misses).
+	std::optional<std::string> profile_problem(const std::filesystem::path& project_root, const std::filesystem::path& profile)
+	{
+		namespace fs = std::filesystem;
+		std::error_code ec;
+		const fs::path real_root = fs::canonical(project_root, ec);
+		if (ec) return std::string{ "the project folder cannot be resolved" };
+		const fs::path relative = profile.lexically_normal().lexically_relative(project_root.lexically_normal());
+		if (relative.empty() || *relative.begin() == fs::path{ ".." } || relative == fs::path{ "." }) {
+			return std::string{ "the play profile is not inside the project folder" };
+		}
+		fs::path at = project_root;
+		for (const fs::path& part : relative) {
+			at /= part;
+			const fs::file_status status = fs::symlink_status(at, ec);
+			if (status.type() == fs::file_type::not_found) break;
+			if (ec || !fs::is_directory(status)) {
+				return std::format("'{}' of the project is not a plain folder (a link?): the play profile under it is not used",
+					at.lexically_relative(project_root).generic_string());
+			}
+		}
+		const fs::path real = fs::weakly_canonical(profile, ec);
+		if (ec || real != real_root / relative) {
+			return std::string{ "the play profile is not really inside the project folder: it is not used" };
+		}
+		return std::nullopt;
+	}
+
+}
+
 std::optional<std::string> edt::play_session::start_refusal() const
 {
 	if (active()) return std::string{ "Play is running already" };
@@ -77,6 +112,9 @@ std::optional<std::string> edt::play_session::start_refusal() const
 	if (!m_services.ctx_manager.lock()) return std::string{ "there is no context manager" };
 	if (!m_document.editor_tag.is_valid() || m_document.world_descs.empty()) return std::string{ "no level with a world to play" };
 	if (!m_services.assembler() || !m_services.sfactory()) return std::string{ "the scene services are missing" };
+	if (m_options.profile_resources && !m_options.play_profile.empty() && !m_options.project_root.empty()) {
+		if (auto why = profile_problem(m_options.project_root, m_options.play_profile)) return why;
+	}
 	if (m_options.start_blocker) return m_options.start_blocker();
 	return std::nullopt;
 }

@@ -1771,6 +1771,57 @@ BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 	fs::remove_all(base);
 }
 
+// #936: the profile is emptied at every start and Play writes into it. A project whose .cache or play_profile is a link
+// would send both outside the project.
+BOOST_AUTO_TEST_CASE(play_is_refused_when_the_play_profile_is_behind_a_link)
+{
+	open_level();
+	namespace fs = std::filesystem;
+	const fs::path base = fs::temp_directory_path() / "snk_edt_play_profile_link_tests";
+	fs::remove_all(base);
+	const fs::path editor_profile = base / "user_profile";
+	const fs::path outside = base / "outside";
+	fs::create_directories(editor_profile);
+	fs::create_directories(outside / "play_profile");
+	std::ofstream(outside / "play_profile" / "keep.txt") << "not the project's";
+	std::ofstream(outside / "keep.txt") << "not the project's";
+
+	const auto starts = [&](const fs::path& project) {
+		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
+		edt::play_session session(state, services, world_ctrl, selection, events,
+			{ .profile_resources = &profile_rs, .play_profile = project / ".cache" / "play_profile", .editor_profile = { editor_profile },
+				.project_root = project });
+		const bool started = session.start();
+		if (started) session.stop();
+		else BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ editor_profile }));
+		return started;
+	};
+
+	// A plain project: the profile is made and used.
+	const fs::path plain = base / "plain";
+	fs::create_directories(plain);
+	BOOST_TEST(starts(plain));
+	BOOST_TEST(fs::is_directory(plain / ".cache" / "play_profile"));
+
+	std::error_code no_links;
+	const fs::path cache_linked = base / "cache_linked";
+	fs::create_directories(cache_linked);
+	fs::create_directory_symlink(outside, cache_linked / ".cache", no_links);
+	const fs::path profile_linked = base / "profile_linked";
+	fs::create_directories(profile_linked / ".cache");
+	if (!no_links) fs::create_directory_symlink(outside, profile_linked / ".cache" / "play_profile", no_links);
+	if (no_links) {
+		// No right to make links here (Windows without developer mode): nothing to check.
+		BOOST_TEST_MESSAGE("links cannot be made here: " << no_links.message());
+	} else {
+		BOOST_TEST(!starts(cache_linked));
+		BOOST_TEST(!starts(profile_linked));
+		BOOST_TEST(fs::exists(outside / "play_profile" / "keep.txt"));
+		BOOST_TEST(fs::exists(outside / "keep.txt"));
+	}
+	fs::remove_all(base);
+}
+
 BOOST_AUTO_TEST_CASE(play_is_refused_without_a_level)
 {
 	BOOST_TEST(play.start_refusal().has_value());
