@@ -3007,6 +3007,7 @@ BOOST_AUTO_TEST_CASE(with_play_on_ask_a_persons_yes_to_the_toggle_is_enough_to_s
 	const auto waiting = access.confirmations().pending();
 	BOOST_REQUIRE(waiting.size() == 1u);
 	BOOST_TEST(waiting.front().command == "editor.mode.toggle");
+	now += edt::agent_confirmations::input_guard;
 	BOOST_REQUIRE(access.confirmations().answer(waiting.front().id, edt::confirmation_answer::allow_once));
 	pump();
 	BOOST_REQUIRE(outcome.has_value());

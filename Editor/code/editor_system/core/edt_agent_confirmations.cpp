@@ -45,6 +45,25 @@ namespace edt
 		std::erase_if(m_grants, [session](const auto& grant) { return grant.first == session; });
 	}
 
+	void confirmation_layout::settle(std::span<const std::uint64_t> order, time_point now)
+	{
+		std::vector<slot> next;
+		next.reserve(order.size());
+		bool same_above = true;
+		for (std::size_t i = 0; i < order.size(); ++i) {
+			same_above = same_above && i < m_slots.size() && m_slots[i].id == order[i];
+			next.push_back(same_above ? m_slots[i] : slot{ order[i], now });
+		}
+		m_slots = std::move(next);
+	}
+
+	std::optional<confirmation_layout::time_point> confirmation_layout::steady_since(std::uint64_t id) const
+	{
+		const auto found = std::find_if(m_slots.begin(), m_slots.end(), [id](const slot& s) { return s.id == id; });
+		if (found == m_slots.end()) return std::nullopt;
+		return found->since;
+	}
+
 	agent_confirmations::agent_confirmations(cmd::command_registry& commands, session_grants& grants, clock_function now)
 		: m_commands(commands), m_grants(grants), m_clock(std::move(now))
 	{
@@ -191,6 +210,23 @@ namespace edt
 		entry.request.asked_at = now();
 		entry.request.deadline = entry.request.asked_at + timeout;
 		m_waiting.push_back(std::move(entry));
+		settle_layout();
+	}
+
+	void agent_confirmations::settle_layout()
+	{
+		std::vector<std::uint64_t> order;
+		order.reserve(m_waiting.size());
+		for (const waiting& w : m_waiting) {
+			order.push_back(w.request.id);
+		}
+		m_layout.settle(order, now());
+	}
+
+	bool agent_confirmations::stood_still(std::uint64_t id) const
+	{
+		const std::optional<time_point> since = m_layout.steady_since(id);
+		return since && now() >= *since + input_guard;
 	}
 
 	void agent_confirmations::finish_waiting(std::uint64_t id, std::optional<confirmation_answer> what, std::string_view why_not)
@@ -199,6 +235,7 @@ namespace edt
 		if (found == m_waiting.end()) return;
 		waiting entry = std::move(*found);
 		m_waiting.erase(found);
+		settle_layout();
 
 		// A yes after the deadline is no yes, whoever asks: the answer itself, or a grant that settles the ones still waiting.
 		std::string late_text;
@@ -256,18 +293,20 @@ namespace edt
 
 	bool agent_confirmations::answer(std::uint64_t id, confirmation_answer what)
 	{
+		// Whether or not tick() has run yet: a late yes is no yes, and a request that has timed out above this one has
+		// already moved it.
+		expire_late();
 		const auto found = std::find_if(m_waiting.begin(), m_waiting.end(), [id](const waiting& w) { return w.request.id == id; });
 		if (found == m_waiting.end()) return false;
-		// Whether or not tick() has run yet: a late yes is no yes.
-		if (found->request.deadline <= now()) {
-			finish_waiting(id, std::nullopt, std::format("nobody answered within {} seconds", timeout.count()));
+		if (what != confirmation_answer::deny && !stood_still(id)) {
+			egLOG_INFO("editor/agent", "an answer to '{}' came right after the request moved in the window: not taken", found->command_id);
 			return false;
 		}
 		finish_waiting(id, what, {});
 		return true;
 	}
 
-	void agent_confirmations::tick()
+	void agent_confirmations::expire_late()
 	{
 		const auto current = now();
 		std::vector<std::uint64_t> late;
@@ -283,6 +322,11 @@ namespace edt
 				egLOG_ERROR("agent", "an answer to an agent could not be delivered");
 			}
 		}
+	}
+
+	void agent_confirmations::tick()
+	{
+		expire_late();
 
 		std::vector<retrying> due;
 		due.swap(m_retrying);
@@ -349,7 +393,9 @@ namespace edt
 		out.reserve(m_waiting.size());
 		const auto current = now();
 		for (const waiting& w : m_waiting) {
-			if (w.request.deadline > current) out.push_back(w.request);
+			if (w.request.deadline <= current) continue;
+			out.push_back(w.request);
+			out.back().can_allow = stood_still(w.request.id);
 		}
 		return out;
 	}
@@ -422,6 +468,7 @@ namespace edt
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());
 				}
 				ImGui::EndChild();
+				ImGui::BeginDisabled(!request.can_allow);
 				if (ImGui::Button(utf8(label_allow_once))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_once);
 				}
@@ -431,6 +478,7 @@ namespace edt
 						chosen.emplace_back(request.id, confirmation_answer::allow_session);
 					}
 				}
+				ImGui::EndDisabled();
 				ImGui::SameLine();
 				if (ImGui::Button(utf8(label_deny))) {
 					chosen.emplace_back(request.id, confirmation_answer::deny);

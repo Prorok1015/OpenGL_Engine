@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -60,6 +61,30 @@ namespace edt
 		bool can_grant_session = false;
 		std::chrono::steady_clock::time_point asked_at{};
 		std::chrono::steady_clock::time_point deadline{};
+		// false: the request has just appeared or moved in the window, and an "allow" is not taken yet (input_guard).
+		bool can_allow = false;
+	};
+
+	// Since when each waiting request has stood where the window draws it. A request stands still only while everything
+	// above it is the same: a click aimed at what was under the cursor a moment ago must not land on the "allow" of a
+	// request that has just moved there (#913). Any change of order counts, not only a request leaving.
+	class confirmation_layout
+	{
+	public:
+		using time_point = std::chrono::steady_clock::time_point;
+
+		// `order`: the ids of the requests, top to bottom, as the window shows them from `now` on.
+		void settle(std::span<const std::uint64_t> order, time_point now);
+		std::optional<time_point> steady_since(std::uint64_t id) const;
+
+	private:
+		struct slot
+		{
+			std::uint64_t id = 0;
+			time_point since{};
+		};
+
+		std::vector<slot> m_slots;
 	};
 
 	// The non-modal question to a person behind every `ask` of the policy (A6b #293): runs a call from an agent through
@@ -80,6 +105,9 @@ namespace edt
 		// the agent is told. Also for a call a person has just allowed: that answer belongs to this very call, so it is
 		// not asked again, and the command itself still checks the state it finds (expected_generation, refs).
 		static constexpr std::chrono::seconds busy_wait{ 5 };
+		// How long a request must have stood still in the window before an "allow" for it is taken. Each request waits
+		// for itself: one clock for the whole list would let an agent that keeps asking hold every answer back.
+		static constexpr std::chrono::milliseconds input_guard{ 750 };
 
 		agent_confirmations(cmd::command_registry& commands, session_grants& grants, clock_function now = {});
 		~agent_confirmations();
@@ -90,8 +118,10 @@ namespace edt
 		// confirmed one or one that waited for a gesture to end.
 		void invoke(std::string_view command_id, cmd::call request, finish done);
 
-		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped). Allowing
-		// runs the command, so call it from the frame's update, never from inside an ImGui window.
+		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped), and
+		// for an "allow" while the request has not stood still for input_guard (it keeps waiting). A "deny" is taken at
+		// any time: a misplaced one runs nothing. Allowing runs the command, so call it from the frame's update, never
+		// from inside an ImGui window.
 		bool answer(std::uint64_t id, confirmation_answer what);
 
 		// Once per frame, from the editor's per-frame update, not from drawing the window: times out what waited too long.
@@ -137,6 +167,9 @@ namespace edt
 
 		std::chrono::steady_clock::time_point now() const;
 		void finish_waiting(std::uint64_t id, std::optional<confirmation_answer> what, std::string_view why_not);
+		void expire_late();
+		void settle_layout();
+		bool stood_still(std::uint64_t id) const;
 		using time_point = std::chrono::steady_clock::time_point;
 		cmd::result run_command(std::string_view command_id, const cmd::call& request);
 		// One try of a call nobody has been asked about yet (a person may be asked now).
@@ -152,6 +185,7 @@ namespace edt
 		clock_function m_clock;
 		std::uint64_t m_next_id = 1;
 		std::vector<waiting> m_waiting;
+		confirmation_layout m_layout;
 		std::vector<retrying> m_retrying;
 		// The ticket run_approved made and approved, while its command runs.
 		std::string m_internal_ticket;

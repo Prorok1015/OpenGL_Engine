@@ -1015,6 +1015,7 @@ BOOST_AUTO_TEST_CASE(AnAskedCall_WaitsForAPerson_ThenRunsOnce)
 	BOOST_TEST(waiting[0].command == "code.create");
 	BOOST_TEST(waiting[0].session == "session-1");
 
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(answered.has_value());
 	BOOST_TEST(!answered->is_error);
@@ -1112,6 +1113,7 @@ BOOST_FIXTURE_TEST_CASE(AModelImportAsksAboutExactlyThatFile_AndANoReadsNothing,
 BOOST_FIXTURE_TEST_CASE(AModelImportThePersonAllows_StartsOneJobForThatFile, import_question_fixture)
 {
 	ask_for_import();
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(answered.has_value());
 	BOOST_TEST(!answered->is_error);
@@ -1205,6 +1207,7 @@ BOOST_AUTO_TEST_CASE(ABusyCommandAfterAnApproval_IsTriedAgainWithoutAskingTheSec
 		return attempts == 1 ? cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit") : cmd::result::success();
 	});
 	start_call("code_create");
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 
 	BOOST_TEST(!answered.has_value());
@@ -1226,6 +1229,7 @@ BOOST_AUTO_TEST_CASE(ABusyCommandAfterAnApproval_GivesUpAfterFiveSeconds)
 {
 	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
 	start_call("code_create");
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 
 	current += std::chrono::seconds(2);
@@ -1299,6 +1303,7 @@ BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_NeverSpendsTheTicketOfAnIdenticalQuesti
 		return attempts == 1 ? cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit") : cmd::result::success();
 	});
 	start_call("code_create");
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(!answered.has_value());
 
@@ -1316,6 +1321,7 @@ BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_NeverSpendsTheTicketOfAnIdenticalQuesti
 	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
 
 	// The person's click on the second question still works.
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(second.has_value());
 	BOOST_TEST(!second->is_error);
@@ -1332,6 +1338,7 @@ BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_IsDeniedIfThePolicyTurnsToDenyBeforeThe
 {
 	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
 	start_call("code_create");
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(!answered.has_value());
 
@@ -1348,6 +1355,7 @@ BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_IsDeniedIfNobodyCanBeAskedAnyMore)
 {
 	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
 	start_call("code_create");
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(!answered.has_value());
 
@@ -1416,6 +1424,7 @@ BOOST_AUTO_TEST_CASE(ACallJudgedByAnotherCategory_AsksForThatCategory_AndTheGran
 	BOOST_TEST((waiting[0].category == cmd::agent_category::cmake_presets));
 
 	// "Allow until the end of the session" is for the category that asked; the call is busy once and runs on the next tick.
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_session));
 	BOOST_TEST(!cmake.has_value());
 	BOOST_TEST(access.confirmations().pending().empty());
@@ -1442,6 +1451,7 @@ BOOST_AUTO_TEST_CASE(ASessionGrant_AllowsTheNextCallOfThatCategoryWithoutAQuesti
 {
 	add_code_command();
 	start_call("code_create");
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_session));
 	BOOST_REQUIRE(answered.has_value());
 
@@ -1632,7 +1642,8 @@ BOOST_AUTO_TEST_CASE(ABridgeGoneBeforeThePersonAnswers_StillDeliversTheAnswerOnc
 	};
 	cmd::registration registration = commands.add(std::move(desc));
 
-	edt::agent_access access(commands, dir.path() / "project.json", dir.path() / "personal.json");
+	std::chrono::steady_clock::time_point current{};
+	edt::agent_access access(commands, dir.path() / "project.json", dir.path() / "personal.json", [&current] { return current; });
 	access.set_questions_routed(true);
 	access.set_person_present(true);
 	auto bridge = std::make_unique<edt::mcp_bridge_host>(commands, tasks, access);
@@ -1645,6 +1656,7 @@ BOOST_AUTO_TEST_CASE(ABridgeGoneBeforeThePersonAnswers_StillDeliversTheAnswerOnc
 
 	const auto waiting = access.confirmations().pending();
 	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE_EQUAL(answers.size(), 1u);
 	BOOST_TEST(!answers[0].is_error);
@@ -1993,6 +2005,7 @@ BOOST_AUTO_TEST_CASE(ACancelBeforeTheCallIsHeld_CancelsTheJob_AndAnswersNothing)
 	held_bridge.cancel_request("session-1", json::value(5));
 	drain();
 
+	current += edt::agent_confirmations::input_guard;
 	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(last_job != 0);
 	BOOST_TEST(jobs.info(last_job)->cancel_requested);
