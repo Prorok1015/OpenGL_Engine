@@ -1,5 +1,6 @@
 #include "edt_editor_system.h"
 #include "edt_asset_database.h"
+#include "edt_asset_index.h"
 #include "edt_asset_problems.h"
 #include "edt_begin_then_poll.h"
 #include <algorithm>
@@ -863,6 +864,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return m_vcs ? m_vcs->cached_state().git_dir : std::nullopt;
 		});
 		m_assets->rebuild();
+		m_asset_index = std::make_unique<asset_index_link>(*m_assets, m_res);
 		m_asset_problems = std::make_unique<asset_problem_publisher>();
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
@@ -1192,6 +1194,9 @@ void edt::editor_system::tick_asset_problems()
 	}
 	// New files waiting for an ID: a git operation that held them back may have ended (#765).
 	m_assets->poll();
+	if (m_asset_index) {
+		m_asset_index->poll();
+	}
 	m_asset_problems->publish(m_context->problems(), *m_assets);
 }
 

@@ -74,11 +74,8 @@ void edt::asset_problem_publisher::publish(problem_list& problems, const asset_d
 		if (holders.size() < 2) {
 			continue;
 		}
-		// The lowest layer's file is the original (the engine's ID is what others refer to), then the oldest, then the
-		// smaller path.
-		std::ranges::sort(holders, [](const asset_record* a, const asset_record* b) {
-			return std::tie(a->layer, a->mtime, a->path.string()) < std::tie(b->layer, b->mtime, b->path.string());
-		});
+		// The one that keeps the ID is the original; the asset index serves it too.
+		std::ranges::sort(holders, [](const asset_record* a, const asset_record* b) { return holds_id_before(*a, *b); });
 		const std::string& original = holders.front()->path.string();
 		// Only the project's own files can be changed here: a group wholly below it is a warning without a fix.
 		const bool fixable = std::ranges::any_of(holders, [top](const asset_record* holder) { return holder->layer == top; });
