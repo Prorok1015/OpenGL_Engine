@@ -117,7 +117,8 @@ namespace prj::migration
 	// The report as report.json (the journal) has it.
 	boost::json::object report_to_json(const migration_report& report);
 
-	// Refuses what plan_refusal names; a newer file is left as it is (partial). An empty plan writes nothing (status ok, no id). Otherwise creates the
+	// Refuses what plan_refusal names, and content roots its own rollback would refuse (check_journal_paths' rule); a newer
+	// file is left as it is (partial). An empty plan writes nothing (status ok, no id). Otherwise creates the
 	// journal (status in_progress; its folder is taken exclusively, so two processes never share an id) before the first
 	// change and backs every file up, project.snkproj included. Then the pre project steps, the files, the post project
 	// steps, and last project.snkproj with engine_version and migrated_with of this engine and the steps added to
@@ -148,10 +149,11 @@ namespace prj::migration
 	std::string journal_hash(std::string_view bytes);
 
 	// A path (or any text) of a journal as a message or a question shows it: a journal is a file anyone can edit, so what
-	// could forge or hide a part of a line (C0/C1 controls, DEL, bidi controls, U+2028/U+2029, zero-width and invisible
-	// characters) becomes an escape (a backslash, 'u', the code point in hex in braces), a byte that is no valid UTF-8 a
-	// backslash, 'x' and two hex digits, a backslash two of them; cut at 200 bytes, never inside a code point or an escape
-	// ("..." then).
+	// could forge or hide a part of a line (C0/C1 controls, DEL, bidi controls, U+2028/U+2029, zero-width, invisible and
+	// fill characters, variation selectors, tags, spaces other than U+0020) becomes an escape (a backslash, 'u', the code
+	// point in hex in braces), a byte that is no valid UTF-8 a backslash, 'x' and two hex digits, a backslash two of them;
+	// cut at 8 KiB, never inside a code point or an escape ("..." then). check_journal_paths refuses a path over 1024
+	// bytes, so a journal's path is always shown whole.
 	std::string journal_path_text(std::string_view path);
 
 	// The paths a journal (.snk/migrations/<id>/report.json) names, as a rollback reads them.
@@ -171,8 +173,9 @@ namespace prj::migration
 	//   rollback is a recovery tool: the project need not open); neither reads as a manifest: refused, naming the backup
 	//   to restore by hand. Each root is a relative folder inside the project, not the root itself, and its first folder
 	//   is no reserved one (below);
-	// - every path is a chain of plain names below the root; a file of files[] is project.snkproj or lies inside a content
-	//   root of that manifest, a created file lies inside a content root;
+	// - every path is at most 1024 bytes and a chain of plain names below the root; a file of files[] is project.snkproj or
+	//   lies inside a content root of that manifest, a created file lies inside a content root;
+	// - no component of a path, a root or the id looks like a Windows short (8.3) alias ('~' and a digit), on any system;
 	// - and none lies below a first folder prj::is_code_ignored_dir refuses (any '.' name, build, out, ...) or one of
 	//   prj::own_top_dir_names (code, .snk, .cache, build), whatever a content root says.
 	std::optional<std::string> check_journal_paths(const std::filesystem::path& root, std::string_view id, const journal_paths& journal);

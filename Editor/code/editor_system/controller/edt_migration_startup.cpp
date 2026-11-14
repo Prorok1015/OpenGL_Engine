@@ -73,8 +73,7 @@ edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unf
 		// A journal anyone could have edited: it is never offered, even as a question, and the reason names what is wrong.
 		offer.what = headless ? journal_offer::kind::warn : journal_offer::kind::inform;
 		offer.title = "An unfinished migration";
-		offer.text = std::format("the journal .snk/migrations/{}/report.json says a migration did not finish, but it cannot be rolled "
-			"back: {}. It may have been edited by hand; look at it and restore its backup by hand{}", id, *refused, others);
+		offer.text = std::format("migration {} did not finish{}, but it is not offered for a rollback here: {}", id, others, *refused);
 		return offer;
 	}
 	if (headless) {

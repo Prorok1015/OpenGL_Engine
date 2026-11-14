@@ -1177,7 +1177,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				|| editor_layer->has_implicit_prefix("edt/load_level"));
 		};
 		startup_ports.unfinished = [root] { return prj::migration::unfinished_migrations(root); };
-		startup_ports.journal_refusal = [root](const std::string& id) { return prj::migration::check_journal(root, id); };
+		startup_ports.journal_refusal = [root](const std::string& id) -> std::optional<std::string> {
+			rollback_listing listing = rollback_listing_of(root, id);
+			if (listing.refused.empty()) return std::nullopt;
+			return std::move(listing.refused);
+		};
 		startup_ports.warn = [](const std::string& text) { egLOG_WARN("project/migrate", "{}", text); };
 		startup_ports.ask = [this](const journal_offer& offer) { offer_migration_rollback(offer); };
 		startup_ports.start_scan = [this, root] { start_migration_scan(root); };

@@ -917,6 +917,12 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 			return last_error_text("not a regular file", path);
 		}
 	}
+	// As write_beneath and rename_beneath: a short (8.3) name or any other alias of a folder or of the leaf would
+	// delete a file elsewhere than the names say.
+	if (!lies_at(file.get(), chain.front().get(), *parts, leaf)) {
+		::SetLastError(ERROR_CANT_ACCESS_FILE);
+		return last_error_text("the file was not found below the root under these names", path);
+	}
 	if (!set_delete_on_close(file.get())) {
 		return last_error_text("cannot remove", path);
 	}
@@ -1034,6 +1040,11 @@ namespace {
 		}
 		if (::GetFileType(file_out.get()) != FILE_TYPE_DISK) {
 			return { read_status::not_regular, {} };
+		}
+		// A short (8.3) name or any other alias would read a file elsewhere than the names say.
+		if (!lies_at(file_out.get(), chain.front().get(), *parts, request.leaf)) {
+			::SetLastError(ERROR_CANT_ACCESS_FILE);
+			return { read_status::failed, last_error_text("the file was not found below the root under these names", path) };
 		}
 		const std::uint64_t size = (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
 		if (size > request.max_bytes) {

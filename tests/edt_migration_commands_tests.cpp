@@ -1309,7 +1309,9 @@ BOOST_AUTO_TEST_CASE(AJournalTooLongToShow_IsRefused_InTheQuestionAndTheRun)
 
 	const std::string text = ask_rollback(id);
 	BOOST_TEST(text.find("This request will be refused: the journal lists too many files to show") != std::string::npos, text);
-	BOOST_TEST(!edt::rollback_listing_of(copy.root(), id).refused.empty());
+	// The command line has no such limit: the refusal names it.
+	const std::string refused = edt::rollback_listing_of(copy.root(), id).refused;
+	BOOST_TEST(refused.find("editor --migrate-rollback " + id) != std::string::npos, refused);
 	const json::object result = roll_back(id);
 	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_refused, json::serialize(result));
 	BOOST_TEST(std::string(result.at("refused").as_string()).find("too many files to show") != std::string::npos, json::serialize(result));

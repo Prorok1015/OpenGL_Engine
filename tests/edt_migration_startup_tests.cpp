@@ -182,7 +182,7 @@ BOOST_AUTO_TEST_CASE(AForgedJournal_IsNotOffered_ThePersonIsToldWhy)
 	BOOST_TEST((checked == std::vector<std::string>{ "20260101T000000Z-0.1.0" }));
 	BOOST_REQUIRE(offers.size() == 1u);
 	BOOST_TEST((offers[0].what == edt::journal_offer::kind::inform));
-	BOOST_TEST(offers[0].text.find("cannot be rolled back") != std::string::npos, offers[0].text);
+	BOOST_TEST(offers[0].text.find("not offered for a rollback") != std::string::npos, offers[0].text);
 	BOOST_TEST(offers[0].text.find("the backup '.git'") != std::string::npos, offers[0].text);
 	BOOST_REQUIRE(warnings.size() == 1u);
 	BOOST_TEST(warnings[0] == offers[0].text);
@@ -195,6 +195,16 @@ BOOST_AUTO_TEST_CASE(AForgedJournal_IsNotOffered_ThePersonIsToldWhy)
 	BOOST_REQUIRE(offers.size() == 1u);
 	BOOST_TEST((offers[0].what == edt::journal_offer::kind::ask));
 	BOOST_TEST(offers[0].text.find("runs only once you confirm") != std::string::npos, offers[0].text);
+
+	// A journal too long to show: told, with the command line that rolls it back, not asked into a dead end.
+	offers.clear();
+	refusal = std::string("the journal lists too many files to show; roll it back from the command line: editor --migrate-rollback "
+		"20260101T000000Z-0.1.0");
+	edt::migration_startup too_long{ ports(), false };
+	BOOST_TEST(!too_long.tick());
+	BOOST_REQUIRE(offers.size() == 1u);
+	BOOST_TEST((offers[0].what == edt::journal_offer::kind::inform));
+	BOOST_TEST(offers[0].text.find("editor --migrate-rollback 20260101T000000Z-0.1.0") != std::string::npos, offers[0].text);
 
 	refusal = std::string("a path outside the content roots");
 	BOOST_TEST((edt::decide_journal_offer({ "20260101T000000Z-0.1.0" }, true, refusal).what == edt::journal_offer::kind::warn));

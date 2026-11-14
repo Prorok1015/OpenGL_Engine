@@ -271,7 +271,6 @@ namespace {
 
 	// The listing of a rollback, every path on its own line: past this it is not shown, and the rollback is refused.
 	constexpr std::size_t k_max_listing_bytes = std::size_t{ 64 } * 1024;
-	constexpr std::string_view k_listing_too_long = "the journal lists too many files to show";
 
 	std::string listing_of(std::string_view id, const pmg::journal_paths& paths)
 	{
@@ -329,7 +328,8 @@ namespace {
 		// A journal that cannot be shown whole is not rolled back: describe and the run both read it here.
 		std::string listing = listing_of(id, paths);
 		if (listing.size() > k_max_listing_bytes) {
-			out.error = std::string(k_listing_too_long);
+			// The command line shows nothing and has no such limit: the way out is named.
+			out.error = std::format("the journal lists too many files to show; roll it back from the command line: editor --migrate-rollback {}", id);
 			return out;
 		}
 		out.listing = std::move(listing);

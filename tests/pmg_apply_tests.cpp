@@ -8,6 +8,7 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
+#include <snk/platform/plt_beneath.h>
 #include <algorithm>
 #include <filesystem>
 #include <format>
@@ -18,7 +19,18 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #ifndef SNK_EDITOR_DATA_DIR
 #error "SNK_EDITOR_DATA_DIR must point at Editor/data"
@@ -731,9 +743,114 @@ BOOST_AUTO_TEST_CASE(AJournalPath_IsShownWithItsHiddenCharactersEscaped)
 	BOOST_TEST(pmg::journal_path_text("a\xFF" "b\xC3") == "a\\xFFb\\xC3");
 	BOOST_TEST(pmg::journal_path_text("a\\b") == "a\\\\b");
 	BOOST_TEST(pmg::journal_path_text("caf\xC3\xA9") == "caf\xC3\xA9");
-	BOOST_TEST(pmg::journal_path_text(std::string(199, 'a') + "\xC3\xA9") == std::string(199, 'a') + "...");
-	BOOST_TEST(pmg::journal_path_text(std::string(195, 'a') + "\n") == std::string(195, 'a') + "...");
-	BOOST_TEST(pmg::journal_path_text(std::string(200, 'a')) == std::string(200, 'a'));
+	BOOST_TEST(pmg::journal_path_text(std::string(8191, 'a') + "\xC3\xA9") == std::string(8191, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(8187, 'a') + "\n") == std::string(8187, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(8192, 'a')) == std::string(8192, 'a'));
+	// The longest path a journal may name, every byte escaped, is still shown whole.
+	std::string escaped_whole;
+	for (int i = 0; i < 1024; ++i) escaped_whole += "\\u{0001}";
+	BOOST_TEST(pmg::journal_path_text(std::string(1024, '\x01')) == escaped_whole);
+}
+
+// #910 review: fill characters, variation selectors, tags and spaces that look like U+0020 are escaped too.
+BOOST_AUTO_TEST_CASE(AJournalPath_EscapesFillersSelectorsTagsAndOtherSpaces)
+{
+	const std::vector<std::pair<std::string, std::string>> cases{
+		{ "\xE2\x81\xAA", "206A" }, { "\xE2\x81\xAF", "206F" }, { "\xE1\x85\x9F", "115F" }, { "\xE1\x85\xA0", "1160" },
+		{ "\xE3\x85\xA4", "3164" }, { "\xEF\xBE\xA0", "FFA0" }, { "\xEF\xB8\x80", "FE00" }, { "\xEF\xB8\x8F", "FE0F" },
+		{ "\xF3\xA0\x80\x81", "E0001" }, { "\xF3\xA0\x80\xA0", "E0020" }, { "\xF3\xA0\x81\xBF", "E007F" }, { "\xC2\xA0", "00A0" },
+		{ "\xE2\x80\x80", "2000" }, { "\xE2\x80\x8A", "200A" }, { "\xE2\x80\xAF", "202F" }, { "\xE2\x81\x9F", "205F" },
+		{ "\xE3\x80\x80", "3000" },
+	};
+	for (const auto& [text, code] : cases) {
+		BOOST_TEST_CONTEXT(code) {
+			BOOST_TEST(pmg::journal_path_text("a" + text + "b") == "a\\u{" + code + "}b");
+		}
+	}
+	// A letter of another script stays as it is.
+	BOOST_TEST(pmg::journal_path_text("\xD0\xB6") == "\xD0\xB6");
+}
+
+// #910 review: a journal's path longer than 1024 bytes is refused, so every path a question lists is shown whole.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAPathTooLongToShow)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const std::string path = "res/" + std::string(1100, 'x') + ".desc";
+	expect_refused(copy.root(), [&path](json::object& journal) {
+		journal["files"].as_array().push_back(json::object{ { "path", path }, { "hash_before", "0" }, { "hash_after", "removed" } });
+	}, "longer than 1024 bytes");
+	expect_refused(copy.root(), [&path](json::object& journal) { journal["created_files"] = json::array{ json::string(path) }; },
+		"longer than 1024 bytes");
+}
+
+// #910 review: a name that could be a Windows short (8.3) alias reaches a folder its letters do not name ("SNK~1" is
+// .snk): refused on every system, in a content root and in a path, and nothing is deleted.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesShortNameAliases)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.root() / ".snk/x", "keep");
+	const fs::path saved = copy.root() / ".snk/migrations/test-migration/backup/project.snkproj";
+	const std::string original = read_text(saved);
+	json::value manifest = json::parse(original);
+	manifest.as_object()["content_roots"] = json::array{ "res", "SNK~1" };
+	write_text(saved, json::serialize(manifest));
+	expect_refused(copy.root(), [](json::object& journal) { journal["created_files"] = json::array{ "SNK~1/x" }; }, "short name");
+	write_text(saved, original);
+	expect_refused(copy.root(), [](json::object& journal) { journal["created_files"] = json::array{ "res/GIT~1/x" }; }, "short name");
+	BOOST_TEST(read_text(copy.root() / ".snk/x") == "keep");
+	// A '~' without a digit after it is no alias.
+	write_text(copy.res() / "a~b.desc", "{}");
+	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	journal.as_object()["created_files"] = json::array{ "res/a~b.desc" };
+	write_text(journal_path, json::serialize(journal));
+	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+}
+
+#ifdef _WIN32
+// #910 review: on Windows the no-follow primitives refuse an alias themselves: a delete or a read through the short name
+// of .snk does not reach .snk.
+BOOST_AUTO_TEST_CASE(TheBeneathPrimitives_RefuseAShortNameAlias)
+{
+	write_text(copy.root() / ".snk/x", "keep");
+	const fs::path full = fs::canonical(copy.root() / ".snk");
+	std::wstring buffer(MAX_PATH + 1, L'\0');
+	const DWORD length = ::GetShortPathNameW(full.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
+	if (length == 0 || length >= buffer.size()) {
+		BOOST_TEST_MESSAGE("no short name for .snk here: skipped");
+		return;
+	}
+	buffer.resize(length);
+	const fs::path alias = fs::path(buffer).filename();
+	if (alias == full.filename()) {
+		BOOST_TEST_MESSAGE("8.3 names are off on this volume: skipped");
+		return;
+	}
+	const prj::project_file_text read = prj::read_project_file(copy.root(), alias / "x");
+	BOOST_TEST((!read.exists || !read.error.empty()));
+	platform::beneath::pinned_root pinned{ fs::canonical(copy.root()) };
+	BOOST_TEST(!platform::beneath::remove_beneath(pinned, alias, "x", true).empty());
+	BOOST_TEST(read_text(copy.root() / ".snk/x") == "keep");
+}
+#endif
+
+// #910 review: a project whose content roots its own rollback would refuse is not migrated at all.
+BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
+{
+	const std::string manifest_text = read_text(copy.root() / "project.snkproj");
+	for (const std::string& extra : std::vector<std::string>{ "out", ".content", "code/assets" }) {
+		BOOST_TEST_CONTEXT(extra) {
+			json::value manifest = json::parse(manifest_text);
+			manifest.as_object()["content_roots"] = json::array{ "res", json::string(extra) };
+			write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+			fs::create_directories(copy.root() / extra);
+			const auto before = content_of(copy.root());
+			const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+			BOOST_TEST(outcome.refused.find("could not be rolled back") != std::string::npos, outcome.refused);
+			BOOST_TEST((content_of(copy.root()) == before));
+			BOOST_TEST(!fs::exists(copy.root() / ".snk/migrations"));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(TheProjectTemplate_KeepsMigrationsOutOfGit_ButNotTheAgentPolicy)
