@@ -167,6 +167,12 @@ add_subdirectory(apps/game)
 add_subdirectory(tools/project_migration)
 add_subdirectory(tools/desc_resave)
 add_subdirectory(tools/model_decoder)
+# The editor loads the models descs refer to through the decoder, which it starts from its own folder (#925): so in the
+# build tree too the decoder sits next to it, and building the editor builds it.
+if(TARGET snk_model_decoder AND TARGET editor)
+	add_dependencies(editor snk_model_decoder)
+	set_target_properties(snk_model_decoder PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:editor>")
+endif()
 snk_isolate_third_party_warnings()
 
 enable_testing()
@@ -175,7 +181,7 @@ file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp")
 if(NOT SNK_WITH_ASSIMP)
     # These drive the assimp importers, or load the shipped levels that reference models.
-    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|edt_import_export_format_tests|edt_agent_model_scan_tests|desc_repo_roundtrip_tests)\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|edt_import_export_format_tests|edt_agent_model_scan_tests|edt_decoded_model_adapter_tests|desc_repo_roundtrip_tests)\\.cpp$")
 endif()
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})

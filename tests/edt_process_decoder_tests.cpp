@@ -356,6 +356,49 @@ BOOST_AUTO_TEST_CASE(AScanAnswer_WithFilesInTheFolderOfTheModel_IsAccepted_ElseR
 	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a.mtl"), file_at(k_models / "a.mtl") }), request, problem).has_value());
 }
 
+BOOST_AUTO_TEST_CASE(AScanAnswer_WithABoundary_TakesFilesFromAnywhereInIt_ButNotBeyond)
+{
+	auto request = request_in();
+	request.boundary = k_models.parent_path();
+	std::string problem;
+	const auto good = edt::accept_scan_answer(scan_answer({ file_at(k_models.parent_path() / "other" / "a.mtl") }), request, problem);
+	BOOST_REQUIRE_MESSAGE(good.has_value(), problem);
+	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models.parent_path().parent_path() / "a.mtl") }), request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("content root") != std::string::npos, problem);
+}
+
+BOOST_AUTO_TEST_CASE(AnImportAnswer_GoesToTheMemoryFolderTheRequestNamed_AndNowhereElse)
+{
+	auto request = request_in();
+	request.memory_folder = "__models/res/a/m/";
+	const res::tag prefab("memory://__models/res/a/m/m.prefab.desc");
+	const res::tag geom("memory://__models/res/a/m/m.geom.desc");
+	edt::import_intermediate imported;
+	imported.prefab_tag = prefab;
+	imported.geom_tag = geom;
+	imported.created_tags = { prefab, geom };
+	imported.all_tags = imported.created_tags;
+	edt::decode_bundle bundle;
+	bundle.manifest["kind"] = "import";
+	bundle.manifest["import"] = edt::to_json(imported);
+	bundle.blobs.push_back(blob_of(prefab, text_bytes(R"json({"__type":"prefab_desc","geometry":"memory://__models/res/a/m/m.geom.desc"})json")));
+	bundle.blobs.push_back(blob_of(geom, text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})json")));
+	std::string problem;
+	BOOST_REQUIRE_MESSAGE(edt::accept_import_answer(bundle, request, problem).has_value(), problem);
+
+	// The folder of the model's stem is not where this request puts the import.
+	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
+
+	for (const char* folder : { "__models/res/a/m", "__models//m/", "__models/../m/", "__models/con/m/" }) {
+		BOOST_TEST_CONTEXT(folder) {
+			request.memory_folder = folder;
+			problem.clear();
+			BOOST_CHECK(!edt::accept_import_answer(bundle, request, problem).has_value());
+			BOOST_CHECK_MESSAGE(problem.find("cannot be the folder of an import") != std::string::npos, problem);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(AScanAnswer_OverTheLimitsOfTheRequest_OrWithResources_IsRefused)
 {
 	auto request = request_in();

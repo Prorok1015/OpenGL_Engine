@@ -55,10 +55,13 @@ namespace edt {
 	// beside an .obj; a bounded number of files and bytes. Without `allowed` it only collects what the model refers to
 	// (the scan the person is shown); with `allowed` it refuses everything the person was not shown, or whose size or
 	// modification time changed. `read` checks again what it read, down to its bytes.
+	// `boundary` (a folder that holds the model's folder) widens "its own folder" to that folder: a res:// model of the
+	// project may read side files anywhere in its content root (#925). Empty, or not around the model: the model's folder.
 	class model_file_access
 	{
 	public:
-		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr);
+		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr,
+			const std::filesystem::path& boundary = {});
 
 		// Nothing found and no error: the file is not there (the importer skips such a texture).
 		resolved_reference resolve(std::string_view reference, model_file_kind kind);
@@ -76,6 +79,9 @@ namespace edt {
 	private:
 		std::filesystem::path m_root_file;
 		std::filesystem::path m_dir;
+		std::filesystem::path m_boundary;
+		// The model's folder below m_boundary, generic, "" when they are the same.
+		std::string m_dir_below_boundary;
 		std::string m_root_extension;
 		model_file_limits m_limits;
 		const std::vector<referenced_file>* m_allowed;

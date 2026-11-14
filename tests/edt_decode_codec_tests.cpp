@@ -128,6 +128,8 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	request.limits.max_file_bytes = 18446744073709551000ull;
 	request.deadline_ms = 90000;
 	request.memory_limit_bytes = 2147483648ull;
+	request.boundary = std::filesystem::path("some") / "content";
+	request.memory_folder = "__models/res/some/model/";
 
 	const auto back = edt::decode_request_from_json(edt::to_json(request));
 	BOOST_REQUIRE(back.has_value());
@@ -139,6 +141,8 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	BOOST_CHECK_EQUAL(back->limits.max_file_bytes, request.limits.max_file_bytes);
 	BOOST_CHECK_EQUAL(back->deadline_ms, 90000u);
 	BOOST_CHECK_EQUAL(back->memory_limit_bytes, request.memory_limit_bytes);
+	BOOST_CHECK(back->boundary == request.boundary);
+	BOOST_CHECK_EQUAL(back->memory_folder, request.memory_folder);
 
 	boost::json::object bad_mode = edt::to_json(request);
 	bad_mode["mode"] = "run";
@@ -149,6 +153,12 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	boost::json::object number_limit = edt::to_json(request);
 	number_limit["deadline_ms"] = 5;
 	BOOST_CHECK(!edt::decode_request_from_json(number_limit).has_value());
+	boost::json::object no_folder = edt::to_json(request);
+	no_folder.erase("memory_folder");
+	BOOST_CHECK(!edt::decode_request_from_json(no_folder).has_value());
+	boost::json::object no_boundary = edt::to_json(request);
+	no_boundary.erase("boundary");
+	BOOST_CHECK(!edt::decode_request_from_json(no_boundary).has_value());
 	BOOST_CHECK(!edt::decode_request_from_json(boost::json::value(3)).has_value());
 }
 

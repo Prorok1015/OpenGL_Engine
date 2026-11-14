@@ -627,7 +627,7 @@ edt::model_file_scan edt::model_importer::scan_files(const import_source& source
 		scan.error = "the model file was not read";
 		return scan;
 	}
-	model_file_access access(source.path, source.limits);
+	model_file_access access(source.path, source.limits, nullptr, source.boundary);
 	Assimp::Importer importer;
 	importer.SetProgressHandler(new stop_progress_handler(ctx, source.deadline));
 	importer.SetIOHandler(new edt::filesystem_assimp_io(source.path, *source.preloaded, &access));
@@ -677,7 +677,7 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	import_tags tags{ im.all_tags, created_tags };
 	std::optional<model_file_access> access;
 	if (source.allowed) {
-		access.emplace(abs_path, source.limits, source.allowed);
+		access.emplace(abs_path, source.limits, source.allowed, source.boundary);
 		tags.files = &*access;
 	}
 	stored_tags_guard cleanup(m_res, created_tags);
@@ -737,7 +737,7 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 
 	// 3. Determine memory:// prefix for this import
 	std::string model_name = abs_path.stem().string();
-	std::string mem_prefix = model_name + "/";
+	std::string mem_prefix = source.memory_folder.empty() ? model_name + "/" : source.memory_folder;
 
 	// 4. Setup geometry
 	rnd::geometry_desc geometry;

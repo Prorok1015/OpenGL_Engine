@@ -289,4 +289,34 @@ BOOST_AUTO_TEST_CASE(TheBytesThatAreRead_AreCheckedAgainAsAnImage)
 	BOOST_CHECK_THROW(access.read(swapped), std::runtime_error);
 }
 
+BOOST_AUTO_TEST_CASE(ABoundary_LetsTheModelReadFromItsContentRoot_ButNotBeyondItOrHiddenFiles)
+{
+	dir.write("content/models/robot.gltf", "{}");
+	dir.write("content/models/near.png", png_bytes);
+	dir.write("content/textures/skin.png", png_bytes);
+	dir.write("content/.hidden/skin.png", png_bytes);
+	edt::model_file_access access(dir.path() / "content" / "models" / "robot.gltf", {}, nullptr, dir.path() / "content");
+
+	const auto shared = access.resolve("../textures/skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(shared.found());
+	BOOST_CHECK_EQUAL(access.relative_name(shared), "__root/textures/skin.png");
+	const auto near = access.resolve("near.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(near.found());
+	BOOST_CHECK_EQUAL(access.relative_name(near), "near.png");
+
+	const auto beyond = access.resolve("../../outside.png", edt::model_file_kind::texture);
+	BOOST_CHECK(beyond.error.find("outside the content root of the model") != std::string::npos);
+	BOOST_CHECK(!access.resolve("../.hidden/skin.png", edt::model_file_kind::texture).error.empty());
+	BOOST_CHECK(!access.resolve((dir.path() / "outside.png").string(), edt::model_file_kind::texture).error.empty());
+	BOOST_CHECK_EQUAL(access.files().size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ABoundaryThatDoesNotHoldTheModel_KeepsItToItsFolder)
+{
+	edt::model_file_access access(root, {}, nullptr, dir.path() / "elsewhere");
+	BOOST_CHECK(access.resolve("skin.png", edt::model_file_kind::texture).found());
+	const auto outside = access.resolve("../outside.png", edt::model_file_kind::texture);
+	BOOST_CHECK(outside.error.find("outside the folder of the model") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

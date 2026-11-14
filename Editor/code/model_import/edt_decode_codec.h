@@ -42,6 +42,10 @@ namespace edt {
 		std::uint64_t deadline_ms = 0;
 		// Zero: none. The child's address space limit on POSIX; the Windows job limit is set by the editor.
 		std::uint64_t memory_limit_bytes = 0;
+		// Empty: the model's folder. The folder side files may come from (import_source::boundary, #925).
+		std::filesystem::path boundary;
+		// Empty: "<stem>/". The memory:// folder of the import (import_source::memory_folder).
+		std::string memory_folder;
 	};
 
 	boost::json::object to_json(const decode_request& request);

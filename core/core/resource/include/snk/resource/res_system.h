@@ -304,6 +304,10 @@ namespace res
 
 		void unregistrate_adapter(extension extension);
 
+		// A require_sync of a tag with one of these extensions (lower case) logs a warning, once per tag: its adapter may
+		// block the main thread for seconds (the editor's models, parsed in the decoder process, #925). Kept by the root.
+		void warn_on_sync_require(std::vector<std::string> extensions);
+
 		data fetch_data(const tag& tag) const;
 
 		// The tag a reference read from a file loads: the file that holds its guid now, by the asset index; otherwise its
@@ -831,6 +835,10 @@ namespace res
 		std::uint64_t m_delivering_batch = 0;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
+		// Root only (warn_on_sync_require).
+		mutable std::mutex m_sync_warning_mutex;
+		std::unordered_set<std::string> m_slow_sync_extensions;
+		mutable std::unordered_set<std::string> m_sync_warned;
 		// Root only (hold_changes). Last, so the members inline code reads keep their offsets.
 		std::unique_ptr<held_changes> m_held;
 	};

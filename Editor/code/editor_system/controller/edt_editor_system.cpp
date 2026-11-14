@@ -35,6 +35,10 @@
 #include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
 #include "edt_process_decoder.h"
+#if SNK_HAS_ASSIMP
+#include "edt_decoded_model_adapter.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#endif
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
@@ -335,6 +339,10 @@ edt::editor_system::~editor_system()
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
 	m_session_connections.clear();
+#if SNK_HAS_ASSIMP
+	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
+	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
+#endif
 	m_agent_access.reset();
 	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
 	// The layer may outlive this system: no game layout drawn through it any more.
@@ -419,15 +427,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			edt::decode_runner_config decoder_config;
 			decoder_config.memory_limit_bytes = edt::decoder_memory_limit(static_cast<std::int64_t>(*cfg_import_decoder_memory_mb), memory_warning);
 			if (!memory_warning.empty()) egLOG_WARN("Editor/Import", "{}", memory_warning);
-			m_process_decoder = std::make_unique<edt::process_decoder>(m_res, std::move(decoder_config));
+			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config));
 		}
+		// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
+		// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
+		if (const std::string why = m_process_decoder->unavailable_reason(); !why.empty()) {
+			egLOG_WARN("Editor/Import", "{}: .glb/.gltf/.obj/.fbx models will not load", why);
+		}
+		m_res.registrate_adapter<edt::decoded_model_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(m_res),
+			edt::decoded_model_adapter::steps_of(m_process_decoder));
+		m_model_adapter_registered = true;
+		m_res.warn_on_sync_require(scn::model_importer_adapter::INFO.extensions);
 		import_options.import = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->import(source, task);
 		};
 		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->scan(source, task);
 		};
-		import_options.unavailable_reason = [decoder = m_process_decoder.get()] { return decoder->unavailable_reason(); };
+		import_options.unavailable_reason = [decoder = m_process_decoder.get()] {
+			const std::string why = decoder->unavailable_reason();
+			return why.empty() ? why : "model import for agents is not available: " + why;
+		};
 #endif
 		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
 		import_options.resources_path = [this] { return m_res.get_resources_path(); };
