@@ -42,6 +42,15 @@ void core::res::detail::then_on_main(const std::shared_ptr<res_resource_block>& 
 namespace {
 constexpr std::size_t k_max_dependency_depth = 32;
 
+// Runs `run` when the scope ends, an exception included.
+template <class F>
+struct scope_exit {
+  F run;
+  ~scope_exit() { run(); }
+};
+template <class F>
+scope_exit(F) -> scope_exit<F>;
+
 // The resolvers this thread is calling into (resolver_lease): unmounting one of them here would wait for itself.
 thread_local std::vector<const core::res::res_resolver_interface *> t_resolvers_in_call;
 
@@ -1845,12 +1854,16 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
     }
   }
   // Once per moved key, however many signals of the old one wait: one reload brings them up to date.
+  // Counted like a signal, so that a second rebind before the queue runs (ID1 -> ID2) carries it on too.
   for (auto &moved : redeliver) {
     const std::uint64_t epoch = ++m_watch_epoch;
+    ++m_undelivered[moved.first];
     m_tasks.post_main([this, node = moved.first, owners = std::move(moved.second), epoch, alive = m_lifetime.token()]() {
-      if (!alive.expired()) {
-        deliver_to_watchers(node, epoch, &owners);
+      if (alive.expired()) {
+        return;
       }
+      const scope_exit settle{ [&] { signal_delivered(node); } };
+      deliver_to_watchers(node, epoch, &owners);
     });
   }
   std::unordered_map<res::tag, res::tag> alias_edges;
@@ -1958,9 +1971,16 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     if (alive.expired()) {
       return;
     }
-    for (const auto &changed : batch) {
-      deliver_to_watchers(changed, epoch);
-      signal_delivered(changed);
+    // A watcher that throws ends the task (run_guarded catches it): what it did not deliver still stops counting.
+    std::size_t next = 0;
+    const scope_exit settle{ [&] {
+      for (; next < batch.size(); ++next) {
+        signal_delivered(batch[next]);
+      }
+    } };
+    for (; next < batch.size(); ++next) {
+      deliver_to_watchers(batch[next], epoch);
+      signal_delivered(batch[next]);
     }
   });
 
