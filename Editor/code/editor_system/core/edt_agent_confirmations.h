@@ -226,7 +226,8 @@ namespace edt
 
 	// The text of command_desc::describe as the window shows it: line breaks kept ("\r\n" and "\r" become "\n"), a tab
 	// becomes spaces, and within a line what edt::forge::sanitize_text replaces is replaced (control, bidi and invisible
-	// characters, invalid UTF-8); empty lines at the end go. Nothing is cut: nullopt when the result is longer than
+	// characters, invalid UTF-8); lines left empty or with spaces only go at the start and at the end, and a run of them
+	// between two lines becomes one empty line. No other text is cut: nullopt when the result is longer than
 	// k_max_detail bytes or k_max_detail_lines lines.
 	std::optional<std::string> confirmation_detail_text(std::string_view described);
 
