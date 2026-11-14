@@ -112,12 +112,21 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	panel->set_on_close([this, id] { request_close(id); });
 	panel->set_on_save([this, id] { request_save(id); });
 	panel->set_has_project_migration([this] { return m_context.actions().contains("project.migrate"); });
+	panel->set_asset_source(m_asset_source);
 	panel->set_on_reload([this, id] { request_reload(id); });
 	panel->set_on_overwrite([this, id] { request_overwrite(id); });
 	registration registered = m_context.panels().add({
 		.id = panel->get_id(), .title = panel->get_title(), .slot = dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = panel });
 	m_windows.emplace(id, window{ std::move(panel), &data, std::move(registered) });
+}
+
+void edt::data_document_host::set_asset_source(std::function<const picker::catalog*()> source)
+{
+	m_asset_source = std::move(source);
+	for (auto& [id, open] : m_windows) {
+		open.panel->set_asset_source(m_asset_source);
+	}
 }
 
 void edt::data_document_host::request_close(document_id id)

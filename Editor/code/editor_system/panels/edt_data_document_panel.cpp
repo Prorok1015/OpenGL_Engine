@@ -115,6 +115,7 @@ void edt::data_document_panel::on_render()
 				},
 				{} };
 			context.map_state = &m_map_state;
+			context.assets = m_asset_source ? m_asset_source() : nullptr;
 			m_document.edit_marked([&](boost::json::value& shown, const schema_ui::field_origin& origin) {
 				context.origin = &origin;
 				return schema_ui::draw_fields(*schema, shown, context);

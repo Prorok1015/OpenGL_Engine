@@ -44,6 +44,7 @@ namespace cmd  { class command_registry; }
 
 namespace edt {
 	class asset_database;
+	namespace picker { class database_catalog; }
 	class asset_index_link;
 	class asset_problem_publisher;
 	class agent_server;
@@ -332,6 +333,8 @@ namespace edt {
 		std::unique_ptr<edt::vcs::repository_watcher> m_repo_watcher;
 		// The asset database (#760): follows res:// from init, writes its cache when it goes.
 		std::unique_ptr<edt::asset_database> m_assets;
+		// What the reference pickers choose from; reads m_assets, so it goes first.
+		std::unique_ptr<edt::picker::database_catalog> m_asset_catalog;
 		// resource_system's asset index over m_assets (S57-7, #770); after it, so it detaches before the database goes.
 		std::unique_ptr<edt::asset_index_link> m_asset_index;
 		// Forge tokens (#458): the OS store, shared with the forge service (and the settings UI later). Its calls block: only jobs

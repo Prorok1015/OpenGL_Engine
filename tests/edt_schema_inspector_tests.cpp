@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "edt_inspector_panel.h"
 #include "edt_schema_inspector.h"
+#include "test_fake_asset_catalog.hpp"
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
@@ -1018,6 +1019,7 @@ namespace
 					ImGui::Begin("schema_test");
 					ui::context ctx{ registry, {}, {} };
 					ctx.map_state = &state;
+					ctx.assets = assets;
 					ctx.on_target = [this](std::string_view target, float x, float y) { targets[std::string(target)] = ImVec2(x, y); };
 					ui::edit_component_marked(schema, registry, &parent, overrides, "res://p.desc", {},
 						[&](json::value& shown, const ui::field_origin& origin) {
@@ -1043,6 +1045,7 @@ namespace
 
 		imgui_ctx imgui;
 		ui::map_edit_state state;
+		const edt::picker::catalog* assets = nullptr;
 		const desc::type_schema& schema;
 		const desc::schema_registry& registry;
 		json::object parent;
@@ -1461,6 +1464,115 @@ BOOST_AUTO_TEST_CASE(MapEditState_ForgetsWhatWasTypedButKeepsTheListPages)
 	BOOST_CHECK_EQUAL(state.list_pages.at(3), 100u);
 	state.clear();
 	BOOST_CHECK(state.list_pages.empty());
+}
+
+namespace
+{
+	const desc::type_schema& register_picker_fields(desc::desc_system& registered)
+	{
+		registered.register_schema(desc::parse_type_schema(parse(R"({
+			"name": "edt.picker_fields", "kind": "component",
+			"fields": [
+				{ "name": "texture", "kind": "res_tag", "default": "", "filter": "png" },
+				{ "name": "mesh", "kind": "res_tag", "default": "" }
+			]
+		})"), &registered.schemas()));
+		return *registered.find_schema("edt.picker_fields");
+	}
+
+	test_util::fake_catalog picker_files()
+	{
+		test_util::fake_catalog files;
+		files.add("textures/a.png", 2, "texture");
+		files.add("textures/b.png", 2, "texture");
+		files.add("engine/c.png", 0, "texture");
+		files.add("models/m.glb", 2, "model");
+		return files;
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ThePickerButton_ListsTheFilesTheFieldAccepts_APickWritesTheReference)
+{
+	const desc::type_schema& schema = register_picker_fields(*descs);
+	const test_util::fake_catalog files = picker_files();
+	mark_driver driver(schema, descs->schemas(), {}, {});
+	driver.assets = &files;
+	driver.frames(3);
+	BOOST_REQUIRE(driver.targets.contains("/texture#pick"));
+	driver.click("/texture#pick");
+	driver.frames(3);
+	BOOST_CHECK(driver.targets.contains("/texture#pick/textures/a.png"));
+	BOOST_CHECK(driver.targets.contains("/texture#pick/engine/c.png"));
+	// a model is no texture: the field's filter keeps it out
+	BOOST_CHECK(!driver.targets.contains("/texture#pick/models/m.glb"));
+	BOOST_CHECK(driver.overrides.empty());
+
+	driver.click("/texture#pick/textures/b.png");
+	BOOST_CHECK(driver.overrides == parse(R"({ "texture": "res://textures/b.png" })"));
+}
+
+BOOST_AUTO_TEST_CASE(ResolveDrop_AFileThatDoesNotFit_IsRefusedWithItsReason_AndWritesNothing)
+{
+	const desc::type_schema& schema = register_picker_fields(*descs);
+	const desc::field_schema& texture = *schema.find_field("/texture");
+	const test_util::fake_catalog files = picker_files();
+
+	const ui::drop_outcome refused = ui::resolve_drop(texture, "models/m.glb", &files);
+	BOOST_CHECK(!refused.value.has_value());
+	BOOST_CHECK_EQUAL(refused.refusal, "'models/m.glb' does not match the filter 'png'");
+	BOOST_CHECK(refused.note.empty());
+
+	const ui::drop_outcome taken = ui::resolve_drop(texture, "textures/a.png", &files);
+	BOOST_REQUIRE(taken.value.has_value());
+	BOOST_CHECK_EQUAL(std::string(taken.value->as_string()), "res://textures/a.png");
+	BOOST_CHECK(taken.refusal.empty());
+	BOOST_CHECK(taken.note.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ResolveDrop_AFileTheListHasNotSeen_IsTakenWithANote_WithoutACatalogOnlyTheExtensionCounts)
+{
+	const desc::type_schema& schema = register_picker_fields(*descs);
+	const desc::field_schema& texture = *schema.find_field("/texture");
+	const test_util::fake_catalog files = picker_files();
+
+	const ui::drop_outcome fresh = ui::resolve_drop(texture, "textures/just_imported.png", &files);
+	BOOST_REQUIRE(fresh.value.has_value());
+	BOOST_CHECK_EQUAL(std::string(fresh.value->as_string()), "res://textures/just_imported.png");
+	BOOST_CHECK_EQUAL(fresh.note, "'textures/just_imported.png' is not in the asset list yet");
+
+	BOOST_CHECK(ui::resolve_drop(texture, "textures/x.png", nullptr).value.has_value());
+	BOOST_CHECK(!ui::resolve_drop(texture, "models/x.glb", nullptr).value.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ThePickerOfAFieldWithoutAFilter_ListsEveryFile)
+{
+	const desc::type_schema& schema = register_picker_fields(*descs);
+	const test_util::fake_catalog files = picker_files();
+	mark_driver driver(schema, descs->schemas(), {}, {});
+	driver.assets = &files;
+	driver.frames(3);
+	driver.click("/mesh#pick");
+	driver.frames(3);
+	BOOST_CHECK(driver.targets.contains("/mesh#pick/models/m.glb"));
+	BOOST_CHECK(driver.targets.contains("/mesh#pick/textures/a.png"));
+}
+
+BOOST_AUTO_TEST_CASE(ThePickerButton_IsNotThereWithoutACatalog_AndDoesNothingBeforeTheFirstWalk)
+{
+	const desc::type_schema& schema = register_picker_fields(*descs);
+	mark_driver without(schema, descs->schemas(), {}, {});
+	without.frames(3);
+	BOOST_CHECK(!without.targets.contains("/texture#pick"));
+
+	test_util::fake_catalog files = picker_files();
+	files.is_ready = false;
+	mark_driver early(schema, descs->schemas(), {}, {});
+	early.assets = &files;
+	early.frames(3);
+	BOOST_REQUIRE(early.targets.contains("/texture#pick"));
+	early.click("/texture#pick");
+	early.frames(3);
+	BOOST_CHECK(!early.targets.contains("/texture#pick/textures/a.png"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

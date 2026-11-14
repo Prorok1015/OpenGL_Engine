@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
+#include "test_fake_asset_catalog.hpp"
 #include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
 #include "edt_data_document_view.h"
@@ -36,6 +37,11 @@ constexpr const char* k_config_schema = R"({
 	]
 })";
 
+constexpr const char* k_tagged_schema = R"({
+	"name": "test.tagged", "kind": "desc", "is_document": true,
+	"fields": [ { "name": "source", "kind": "res_tag", "default": "", "filter": "png" } ]
+})";
+
 constexpr const char* k_plain_schema = R"({
 	"name": "test.plain", "kind": "desc",
 	"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 } ]
@@ -53,6 +59,7 @@ struct document_fixture : test_util::scene_env
 			res::mount_access::read_write, res::write_policy::allow_all());
 		descs->register_schema(desc::parse_type_schema(json::parse(k_config_schema).as_object()));
 		descs->register_schema(desc::parse_type_schema(json::parse(k_plain_schema).as_object()));
+		descs->register_schema(desc::parse_type_schema(json::parse(k_tagged_schema).as_object()));
 		services.base_descs = descs.get();
 		services.base_resources = rs.get();
 	}
@@ -1377,6 +1384,27 @@ BOOST_AUTO_TEST_CASE(AReset_TakesTheRecordsOut_InOneRecord_AndAnUndoPutsThemBack
 	BOOST_TEST((document.own() == before));
 	BOOST_REQUIRE(document.redo());
 	BOOST_TEST(!document.own().contains("speed"));
+}
+
+BOOST_AUTO_TEST_CASE(APickedFile_IsOneRecordOfTheHistory_AndUndoTakesTheReferenceOut)
+{
+	const res::tag tag = put("tagged.desc", R"({"__type":"test.tagged","__guid":"g1"})");
+	edt::data_document doc = make();
+	BOOST_REQUIRE(doc.open(tag).opened);
+	test_util::fake_catalog files;
+	files.add("textures/a.png", 2, "texture");
+	const json::object before = doc.own();
+	BOOST_REQUIRE(doc.edit([&](json::value& shown) {
+		shown.as_object()["source"] = edt::picker::reference_value(files.records.front());
+		return true;
+	}));
+	doc.commit_pending();
+	BOOST_TEST(doc.history().size() == 1u);
+	BOOST_TEST((doc.own().at("source") == json::value("res://textures/a.png")));
+	BOOST_REQUIRE(doc.undo());
+	BOOST_TEST((doc.own() == before));
+	BOOST_REQUIRE(doc.redo());
+	BOOST_TEST((doc.own().at("source") == json::value("res://textures/a.png")));
 }
 
 BOOST_AUTO_TEST_CASE(AMoveOfAListItem_IsOneRecordOfTheHistory_AndUndoPutsTheOrderBack)
