@@ -326,6 +326,80 @@ BOOST_AUTO_TEST_CASE(Revert_TakesTheFileAsItIsNow_NotTheCachedRead)
 	BOOST_TEST(document->save().saved);
 }
 
+BOOST_AUTO_TEST_CASE(DisplayTitle_MarksUnappliedEdits)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(document->display_title() == document->title());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	BOOST_TEST(document->display_title() == document->title() + " [*]");
+	BOOST_TEST(document->save().saved);
+	BOOST_TEST(document->display_title() == document->title());
+}
+
+BOOST_AUTO_TEST_CASE(HotReloadOfThePrefab_DoesNotWipeTheEdits)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	rs->signal_changed(tag);
+	pump();
+	hot->tick();
+	BOOST_TEST(preview_has_node_named("arm2"));
+	BOOST_TEST(arm_name() == "arm2");
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileEdited_IsFlagged_AndReloadTakesIt)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(arm_name() == "arm2");
+	BOOST_TEST(!document->save().saved);
+
+	BOOST_TEST(document->reload().empty());
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(arm_name() == "outside");
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileEdited_OverwriteWritesTheEdits)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+	BOOST_REQUIRE(document->changed_on_disk());
+
+	const edt::save_result saved = document->overwrite();
+
+	BOOST_TEST_REQUIRE(saved.saved, saved.error);
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("arm2") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileClean_IsTakenWithoutAsking)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(arm_name() == "outside");
+	BOOST_TEST(preview_has_node_named("outside"));
+}
+
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)
 {
 	document->open(tag);

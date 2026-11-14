@@ -75,7 +75,41 @@ namespace edt
 			}
 		}
 
+		ImGui::SameLine();
+		ImGui::TextUnformatted(m_ctx->display_title().c_str());
+
+		render_disk_banner();
 		ImGui::Separator();
+	}
+
+	void prefab_editor_panel::render_disk_banner()
+	{
+		if (!m_ctx || !m_ctx->changed_on_disk()) {
+			m_banner_later = false;
+			return;
+		}
+		if (m_banner_later) {
+			return;
+		}
+		ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
+		if (ImGui::Button("Reload")) {
+			m_error = m_ctx->reload();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Overwrite")) {
+			if (const save_result saved = m_ctx->overwrite(); !saved.saved) {
+				m_error = saved.error;
+			} else {
+				m_error.clear();
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Later")) {
+			m_banner_later = true;
+		}
+		if (!m_error.empty()) {
+			ImGui::TextWrapped("%s", m_error.c_str());
+		}
 	}
 
 	void prefab_editor_panel::render_viewport()

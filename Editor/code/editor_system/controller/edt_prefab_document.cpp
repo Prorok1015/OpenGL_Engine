@@ -26,7 +26,10 @@ edt::prefab_document::prefab_document(editor_services& services)
 {
 }
 
-edt::prefab_document::~prefab_document() = default;
+edt::prefab_document::~prefab_document()
+{
+	unwatch_source();
+}
 
 void edt::prefab_document::open(const res::tag& prefab_tag)
 {
@@ -95,18 +98,22 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// Load the prefab into the world
 	m_root = reg.create();
-	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_working, m_working->get_root().name, prefab_tag);
+	// Not under the prefab's own tag: a hot reload of that tag rebuilds an instance from the file and would wipe the edits.
+	// The file is watched by the document itself (changed_on_disk).
+	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_working, m_working->get_root().name, res::tag{ k_working_tag });
 
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
 	m_open = true;
 	m_dirty = false;
+	m_changed_on_disk = false;
 	m_saved_bytes = working_bytes();
 	m_disk_version.clear();
 	if (m_files.top_layer) {
 		m_disk_version = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, prefab_tag).version;
 	}
 
+	watch_source();
 	egLOG("Editor/PrefabCtx", "Opened prefab '{}' for editing", prefab_tag.view());
 }
 
@@ -114,12 +121,14 @@ void edt::prefab_document::close()
 {
 	if (!m_open) return;
 
+	unwatch_source();
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->destroy_preview(m_source_tag.view());
 	}
 
 	m_open = false;
 	m_dirty = false;
+	m_changed_on_disk = false;
 	m_working.reset();
 	m_root = entt::null;
 	m_saved_bytes.clear();
@@ -230,8 +239,79 @@ edt::save_result edt::prefab_document::save()
 	m_saved_bytes = bytes;
 	m_disk_version = code_version_of(bytes);
 	m_dirty = false;
+	m_changed_on_disk = false;
 	announce();
 	return save_result::ok();
+}
+
+edt::save_result edt::prefab_document::overwrite()
+{
+	if (!m_open || !m_working) {
+		return save_result::failure("the prefab is not open");
+	}
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	if (!descs || !reader || !m_files.top_layer) {
+		return save_result::failure("the project files are not known: nothing was written");
+	}
+	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
+	if (!on_disk.error.empty() && !on_disk.located) {
+		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_source_tag.view(), on_disk.error));
+	}
+	m_disk_version = on_disk.version;
+	const save_result saved = save();
+	if (!saved.saved) {
+		m_changed_on_disk = true;
+	}
+	return saved;
+}
+
+void edt::prefab_document::watch_source()
+{
+	unwatch_source();
+	m_watching = m_services.writable_resources();
+	if (m_watching) {
+		m_watching->watch(m_source_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
+	}
+}
+
+void edt::prefab_document::unwatch_source()
+{
+	if (m_watching) {
+		m_watching->unwatch(m_source_tag, this);
+		m_watching = nullptr;
+	}
+}
+
+void edt::prefab_document::on_source_changed(const res::tag& changed)
+{
+	if (!m_open || changed != m_source_tag || !m_files.top_layer) {
+		return;
+	}
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	if (!descs || !reader) {
+		return;
+	}
+	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
+	if (on_disk.version == m_disk_version) {
+		if (m_changed_on_disk) {
+			m_changed_on_disk = false;
+			announce();
+		}
+		return;
+	}
+	if (!m_dirty && !edits_locked()) {
+		if (const std::string error = revert(); error.empty()) {
+			return;
+		} else {
+			egLOG_WARN("editor", "{}", error);
+		}
+	}
+	if (!m_changed_on_disk) {
+		m_changed_on_disk = true;
+		announce();
+	}
 }
 
 std::string edt::prefab_document::revert()
@@ -268,6 +348,7 @@ std::string edt::prefab_document::revert()
 	m_saved_bytes = working_bytes();
 	m_disk_version = std::move(version);
 	m_dirty = false;
+	m_changed_on_disk = false;
 	announce();
 	return {};
 }

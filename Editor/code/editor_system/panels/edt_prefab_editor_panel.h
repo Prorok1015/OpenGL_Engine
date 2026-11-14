@@ -3,6 +3,7 @@
 #include "edt_input_binding.h"
 #include <functional>
 #include <memory>
+#include <string>
 #include <glm/glm.hpp>
 
 namespace rnd { class render_system; }
@@ -29,6 +30,7 @@ namespace edt
 
 	private:
 		void render_toolbar();
+		void render_disk_banner();
 		void render_viewport();
 		void update_camera_viewport(float width, float height);
 
@@ -37,5 +39,7 @@ namespace edt
 		prefab_document* m_ctx = nullptr;
 		std::function<void()> m_on_close;
 		inp::input_router* m_router = nullptr;
+		bool m_banner_later = false;
+		std::string m_error;
 	};
 }

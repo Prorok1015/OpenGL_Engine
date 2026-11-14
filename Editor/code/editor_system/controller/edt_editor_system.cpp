@@ -491,7 +491,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
-	m_prefab_panel->set_on_close([this] { close_prefab_editor(); });
+	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
 	m_prefab_panel->set_input_router(m_input_router);
 
 	asset_kind_hooks asset_hooks;
@@ -2422,7 +2422,45 @@ bool edt::editor_system::poll_pending_desc()
 
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
+void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
+{
+	prefab_document* prefab = prefab_of(m_context->documents());
+	if (!prefab || !prefab->is_dirty()) {
+		proceed();
+		return;
+	}
+	// The window stays while the question is open (closing it asked, nothing was decided).
+	m_prefab_panel->set_open(true);
+	m_context->dialogs().confirm_unsaved([this, id = prefab->id(), proceed = std::move(proceed), alive = std::weak_ptr<int>(m_prefab_alive)](unsaved_choice choice) {
+		if (!alive.lock() || choice == unsaved_choice::cancel) return;
+		prefab_document* open = prefab_of(m_context->documents());
+		if (!open || open->id() != id) return;
+		if (choice == unsaved_choice::save) {
+			if (const save_result saved = open->save(); !saved.saved) {
+				egLOG_WARN("editor", "{}", saved.error);
+				m_context->dialogs().message(message_level::error, std::format("'{}' was not applied and stays open:\n{}", open->title(), saved.error));
+				return;
+			}
+		}
+		proceed();
+	});
+}
+
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
+{
+	prefab_document* current = prefab_of(m_context->documents());
+	if (current && current->is_open() && current->is_dirty()) {
+		if (current->source_tag() == tag) {
+			m_prefab_panel->set_open(true);
+			return;
+		}
+		confirm_prefab_close([this, tag] { open_prefab_now(tag); });
+		return;
+	}
+	open_prefab_now(tag);
+}
+
+void edt::editor_system::open_prefab_now(const res::tag& tag)
 {
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
 	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
