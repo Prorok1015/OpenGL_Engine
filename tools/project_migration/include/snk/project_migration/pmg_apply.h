@@ -82,6 +82,10 @@ namespace prj::migration
 		std::function<std::string()> make_id;
 		// Where the plan's project steps are found; a plan with project steps is refused without them.
 		const project_step_registry* project_steps = nullptr;
+		// Runs `fn` on the main thread and returns once it ran; false when the main thread refuses (it is going away),
+		// which fails the migration like a failed write. Only the engine's load and save of a desc go through it (they
+		// wait on resource handles, a main-thread call). Empty: they run on the calling thread.
+		std::function<bool(const std::function<void()>& fn)> on_main;
 	};
 
 	struct apply_outcome
@@ -111,7 +115,7 @@ namespace prj::migration
 	// steps, and last project.snkproj with engine_version and migrated_with of this engine and the steps added to
 	// applied_steps (EPIC-58 4.1); each written file is checked again from the disk. Any failure puts back every file it
 	// wrote, checked by its hash, and deletes the created files: rolled_back, or rollback_failed when one could not be
-	// put back.
+	// put back. With context.on_main it may run on a worker thread (everything else it does is safe there, EPIC-58 4.5).
 	apply_outcome apply_migration(const migration_plan& plan, const apply_context& context);
 
 	// Ids of the migrations a person has to look at: the journal still says in_progress (the process stopped in the

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <exception>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
@@ -44,6 +45,12 @@ namespace
 	{
 		return std::format("{:016x}", desc::schema_id(bytes));
 	}
+
+	// apply_context::on_main refused: the migration fails (rolled back), never falls back to the migrated JSON.
+	struct main_thread_refused : std::runtime_error
+	{
+		using std::runtime_error::runtime_error;
+	};
 
 	std::string text_of(const std::vector<std::byte>& bytes)
 	{
@@ -525,7 +532,8 @@ namespace
 				why_json = "not under a content root";
 			} else {
 				try {
-					std::string saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original)));
+					std::string saved;
+					on_main(file.path, [&] { saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original))); });
 					json::value written = json::parse(saved, {}, parse_options());
 					why_json = lost_parent(migrated, &written, {});
 					if (why_json.empty()) {
@@ -535,6 +543,8 @@ namespace
 						}
 						return saved;
 					}
+				} catch (const main_thread_refused&) {
+					throw;
 				} catch (const std::exception& e) {
 					why_json = std::format("the engine cannot load it: {}", e.what());
 				}
@@ -564,7 +574,9 @@ namespace
 			const std::optional<res::tag> tag = tag_of(file.path, m_content_roots);
 			if (!tag) return;
 			try {
-				load_from(*tag, on_disk);
+				on_main(file.path, [&] { load_from(*tag, on_disk); });
+			} catch (const main_thread_refused&) {
+				throw;
 			} catch (const std::exception& e) {
 				throw std::runtime_error(std::format("{}: does not load after the migration: {}", file.path, e.what()));
 			}
@@ -739,6 +751,25 @@ namespace
 			m_originals.insert(m_originals.begin() + static_cast<std::ptrdiff_t>(index), std::move(original));
 			journal();
 			return index;
+		}
+
+		// The engine's load and save wait on resource handles: on the main thread when the caller runs elsewhere.
+		void on_main(const std::string& path, const std::function<void()>& work) const
+		{
+			if (!m_context.on_main) {
+				work();
+				return;
+			}
+			std::exception_ptr failed;
+			const bool ran = m_context.on_main([&] {
+				try {
+					work();
+				} catch (...) {
+					failed = std::current_exception();
+				}
+			});
+			if (!ran) throw main_thread_refused(std::format("{}: the main thread did not load it (the editor is going away)", path));
+			if (failed) std::rethrow_exception(failed);
 		}
 
 		std::shared_ptr<res::resource_entry> load_from(const res::tag& tag, std::string_view text) const

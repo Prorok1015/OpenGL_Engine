@@ -496,7 +496,7 @@ namespace {
 			pmg::apply_outcome outcome;
 			std::optional<std::string> stopped;
 			try {
-				const pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), m_deps.pause_watch, {}, {}, {}, &m_steps };
+				const pmg::apply_context context{ run.root, m_deps.descs(), m_deps.resources(), m_deps.pause_watch, {}, {}, {}, &m_steps, {} };
 				outcome = m_deps.apply ? m_deps.apply(plan, context) : pmg::apply_migration(plan, context);
 			} catch (const std::exception& e) {
 				stopped = e.what();
