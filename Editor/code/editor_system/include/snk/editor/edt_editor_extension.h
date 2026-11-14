@@ -4,7 +4,7 @@
 #include "edt_registration_scope.h"
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
-#include <snk/game/gs_module_layout.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <cstdint>
 #include <functional>
 #include <memory>

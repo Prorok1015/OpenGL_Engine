@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/application/app_module_entry.h>
-#include <snk/game/gs_module_layout.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <snk/scene/scn_engine_component_list.h>
 #include <cstdint>
 #include <string>
