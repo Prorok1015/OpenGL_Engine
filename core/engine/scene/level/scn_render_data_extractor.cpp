@@ -14,6 +14,7 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_time.h>
 #include <snk/common/eng_profiler.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/common/mem_allocator.h>
 
 namespace {
@@ -125,6 +126,12 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 // of a draw call, would wrap into a range nobody meant (#927).
                 constexpr std::size_t k_draw_limit = std::numeric_limits<uint32_t>::max();
                 if (mesh.mesh.ind_end < mesh.mesh.ind_begin || mesh.mesh.ind_end > k_draw_limit || mesh.mesh.vx_begin > k_draw_limit) {
+                    // Bounded: past the cap a bad range is still left out, without a line.
+                    constexpr std::size_t k_warned_cap = 1024;
+                    if (m_warned_ranges.size() < k_warned_cap && m_warned_ranges.insert(geom.geom_tag).second) {
+                        egLOG_WARN("scene", "a mesh of '{}' is not drawn: its range of indices {}..{} from vertex {} runs backwards or does not fit 32 bits",
+                            geom.geom_tag.view(), mesh.mesh.ind_begin, mesh.mesh.ind_end, mesh.mesh.vx_begin);
+                    }
                     continue;
                 }
 
