@@ -1656,7 +1656,7 @@ void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
 		summary.unfinished = prj::migration::unfinished_migrations(root);
 		return summary;
 	};
-	m_migration_scan_job = m_context->jobs().start(ds::lane::io, ds::task_desc{ "Check the project's format", "project", false }, m_lifetime,
+	m_migration_scan_job = m_context->jobs().start(ds::lane::io, ds::task_desc{ "Check the project's format", "project", false }, m_scan_lifetime,
 		std::move(work), [this, ticket](ds::task_result<migration_scan_summary>& result) {
 			if (!result.ok() || result.value == nullptr || m_migration_notice == nullptr) return;
 			// The editor never changes its project; the game layer may have (a module loaded or reloaded meanwhile), and a

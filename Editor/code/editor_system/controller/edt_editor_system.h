@@ -292,6 +292,9 @@ namespace edt {
 		std::uint64_t m_migration_scan_job = 0;
 		// Migration and rollback runs started so far: a format check made before one is stale.
 		std::uint64_t m_migration_runs = 0;
+		// Owner of the format check's callback: declared after what it touches, so it dies (and cancels) first. Not the
+		// import's m_lifetime, which exists only with assimp.
+		ds::lifetime m_scan_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
