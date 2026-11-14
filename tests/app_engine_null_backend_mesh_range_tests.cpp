@@ -15,7 +15,10 @@ struct mesh_range_fixture : test_util::null_engine_fixture
 {
 	rnd::driver::null::driver& gpu()
 	{
-		return dynamic_cast<rnd::driver::null::driver&>(*storage.require<rnd::render_system>().get_driver());
+		// The fixture knows the null driver behind the validating one (render/validate is on in the tests).
+		rnd::driver::null::driver* found = driver();
+		BOOST_REQUIRE(found != nullptr);
+		return *found;
 	}
 
 	std::size_t draws_of_a_frame()
