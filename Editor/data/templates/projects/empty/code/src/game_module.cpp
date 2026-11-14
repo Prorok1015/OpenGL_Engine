@@ -47,11 +47,13 @@ class game_config_reader final : public ecs::system_interface
 public:
 	explicit game_config_reader(res::resource_system& resources) : m_resources(resources) {}
 
-	// Ask for the handle every frame: while the file is unchanged it is a hit of the cache. A save in the editor makes the
-	// next request load the file again; until it is ready the system keeps the previous value.
+	// Ask for the handle every frame and keep it: while the file is unchanged it is a hit of the cache (a block nobody holds is
+	// dropped, and the load would start over each frame). A save in the editor makes the next request load the file again;
+	// until it is ready the system keeps the previous value.
 	void run(game_config_state& state)
 	{
-		const std::shared_ptr<game_config> config = m_resources.require<game_config>(res::tag{ std::string{ "res://config/game.desc" } }).get();
+		m_handle = m_resources.require<game_config>(res::tag{ std::string{ "res://config/game.desc" } });
+		const std::shared_ptr<game_config> config = m_handle.get();
 		if (!config) return;
 		state.player_speed = config->player_speed;
 		state.goal = config->goal;
@@ -59,6 +61,7 @@ public:
 
 private:
 	res::resource_system& m_resources;
+	res::res_handle<game_config> m_handle;
 };
 
 class project_game_module final : public gs::game_module
