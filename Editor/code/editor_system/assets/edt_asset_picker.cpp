@@ -104,31 +104,56 @@ edt::picker::candidates_page edt::picker::candidates(const catalog& source, cons
 	const std::string needle = lowered(query);
 	const std::size_t layers = source.layer_count();
 	candidates_page page;
-	std::vector<const asset_record*> fitting;
+	// The sort key is made once per file, not at every comparison.
+	struct keyed
+	{
+		std::string key;
+		const asset_record* record = nullptr;
+	};
+	std::vector<keyed> fitting;
 	source.for_each([&](const asset_record& record) {
-		if (!needle.empty() && lowered(record.path.relative()).find(needle) == std::string::npos) {
+		const verdict answer = judge(wanted, record);
+		if (answer.outcome == verdict::result::rejected) {
 			return;
 		}
-		const verdict answer = judge(wanted, record);
+		std::string key = lowered(record.path.relative());
+		if (!needle.empty() && key.find(needle) == std::string::npos) {
+			return;
+		}
 		if (answer.outcome == verdict::result::unknown) {
 			++page.unread;
-		} else if (answer.fits()) {
-			fitting.push_back(&record);
+		} else {
+			fitting.push_back({ std::move(key), &record });
 		}
 	});
-	std::ranges::sort(fitting, [](const asset_record* a, const asset_record* b) {
-		if (a->layer != b->layer) {
-			return a->layer > b->layer;
+	std::ranges::sort(fitting, [](const keyed& a, const keyed& b) {
+		if (a.record->layer != b.record->layer) {
+			return a.record->layer > b.record->layer;
 		}
-		return lowered(a->path.relative()) < lowered(b->path.relative());
+		return a.key < b.key;
 	});
 	page.total = fitting.size();
 	const std::size_t shown = std::min(limit, fitting.size());
 	page.items.reserve(shown);
 	for (std::size_t i = 0; i < shown; ++i) {
-		page.items.push_back({ fitting[i], layer_label(fitting[i]->layer, layers) });
+		page.items.push_back({ fitting[i].record, layer_label(fitting[i].record->layer, layers) });
 	}
 	return page;
+}
+
+const edt::picker::candidates_page& edt::picker::cached_candidates(page_cache& cache, const catalog& source, const filter& wanted, std::string_view query,
+	std::size_t limit)
+{
+	const std::uint64_t revision = source.revision();
+	if (!cache.valid || cache.revision != revision || cache.limit != limit || !(cache.wanted == wanted) || cache.query != query) {
+		cache.page = candidates(source, wanted, query, limit);
+		cache.wanted = wanted;
+		cache.query = std::string(query);
+		cache.limit = limit;
+		cache.revision = revision;
+		cache.valid = true;
+	}
+	return cache.page;
 }
 
 boost::json::value edt::picker::reference_value(const asset_record& record)
@@ -150,6 +175,9 @@ edt::picker::reference_state edt::picker::judge_text(const filter& wanted, std::
 	}
 	const asset_record* record = source.find(tag);
 	if (!record) {
+		if (!source.settled()) {
+			return { reference_state::level::note, std::format("{} is not in the asset list yet", tag.string()) };
+		}
 		return { reference_state::level::error, std::format("file not found: {}", tag.string()) };
 	}
 	const verdict answer = judge(wanted, *record);
@@ -171,7 +199,7 @@ edt::picker::verdict edt::picker::judge_drop(const filter& wanted, std::string_v
 	}
 	const asset_record* record = source->find(res::tag::make(path));
 	if (!record) {
-		return rejected("is not a file of the resource tree");
+		return { verdict::result::unknown, "is not in the asset list yet" };
 	}
 	return judge(wanted, *record);
 }

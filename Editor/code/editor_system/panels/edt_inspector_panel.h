@@ -13,6 +13,7 @@
 namespace desc { class desc_system; struct type_schema; }
 namespace edt  { class inspector_registry; }
 namespace edt::override_edit { class view_cache; }
+namespace edt::picker { class catalog; }
 
 namespace edt
 {
@@ -38,6 +39,8 @@ namespace edt
 		void set_desc_system(desc::desc_system* desc_system);
 		// The desc system asked for at each use: the game layer's, which changes when a game module loads or unloads.
 		void set_desc_source(std::function<desc::desc_system*()> source);
+		// The files a reference field may point at, asked for at each use (null: no picker; the asset database exists only with a project).
+		void set_asset_source(std::function<const picker::catalog*()> source) { m_asset_source = std::move(source); }
 		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		// The desc under the cache changed: the next frame composes again.
@@ -78,6 +81,7 @@ namespace edt
 		std::vector<uint64_t>          m_target;
 		inspector_registry*            m_inspectors     = nullptr;
 		std::function<desc::desc_system*()> m_desc_source;
+		std::function<const picker::catalog*()> m_asset_source;
 		desc::desc_system* descs() const { return m_desc_source ? m_desc_source() : nullptr; }
 		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;

@@ -29,6 +29,8 @@ namespace edt
 		void set_on_overwrite(std::function<void()> on_overwrite) { m_on_overwrite = std::move(on_overwrite); }
 		// Whether the editor has a project migration the badge of an outdated file may point to (S56-6; the action of #761).
 		void set_has_project_migration(std::function<bool()> has) { m_has_project_migration = std::move(has); }
+		// The files a reference field may point at, asked for at each frame (null: no picker).
+		void set_asset_source(std::function<const picker::catalog*()> source) { m_asset_source = std::move(source); }
 		// The message under the Save button (what the last save said); empty clears it.
 		void set_error(std::string error) { m_error = std::move(error); }
 		// The window comes to the front at its next frame.
@@ -49,6 +51,7 @@ namespace edt
 		document_id m_id;
 		std::function<void()> m_on_close;
 		std::function<bool()> m_has_project_migration;
+		std::function<const picker::catalog*()> m_asset_source;
 		std::function<void()> m_on_save;
 		std::function<void()> m_on_reload;
 		std::function<void()> m_on_overwrite;

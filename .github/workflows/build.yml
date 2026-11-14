@@ -722,6 +722,10 @@ jobs:
       - name: Check the SDK's MSVC rule
         run: cmake -P tools/ci/test_sdk_msvc_check.cmake
 
+      # The link graph checks (#874): what a link entry names, and snk_check_engine_copies() on a toy project.
+      - name: Link graph checks self-test
+        run: cmake -P tools/ci/test_link_graph.cmake
+
       # #219: a game module compiles the public headers without /utf-8, in the code page of the user's machine.
       - name: Check the public headers are ASCII
         run: |
@@ -786,6 +790,16 @@ jobs:
       # --check lists every file whose re-serialized bytes differ and exits 1 if there is any.
       - name: Build desc_resave
         run: cmake --build build/ci-linux-coverage --target desc_resave --parallel
+
+      # The shared engine carries config_system: a copy of it in the tool made the engine's cfg variables register into
+      # the tool's registry and crash at exit (#874). snk_check_engine_copies() refuses such a link at configure time;
+      # this checks the binary itself.
+      - name: desc_resave carries no engine component code
+        run: |
+          tool=build/ci-linux-coverage/tools/desc_resave/desc_resave
+          if nm -C --defined-only "$tool" | grep -E ' [TDB] cfg::(registrate_variable|unregistrate_variable|set_variable)\('; then
+            echo "::error::desc_resave defines config_system functions that snk_engine already has (#874)"; exit 1
+          fi
 
       - name: Compiler cache statistics
         if: always()

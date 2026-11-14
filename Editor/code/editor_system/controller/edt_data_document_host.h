@@ -16,6 +16,7 @@ namespace edt
 	class data_document;
 	class data_document_panel;
 	class editor_context;
+	namespace picker { class catalog; }
 	struct editor_services;
 
 	// The data documents that are open (EPIC-56, #793): each is owned by the document_manager (adopt) and shown in a
@@ -45,6 +46,9 @@ namespace edt
 		void request_reload(document_id id);
 		void request_overwrite(document_id id);
 		bool owns(document_id id) const { return m_windows.contains(id); }
+		// The files a reference field of any window may point at, asked for at each frame (null: no picker). Set once, also
+		// for the windows already open.
+		void set_asset_source(std::function<const picker::catalog*()> source);
 
 		std::vector<document_id> dirty() const;
 		// Saves every dirty one; the first that cannot be saved is told to the person and stops it (false). A file that
@@ -62,6 +66,8 @@ namespace edt
 		void follow_focus();
 
 	private:
+		std::function<const picker::catalog*()> m_asset_source;
+
 		struct window
 		{
 			std::shared_ptr<data_document_panel> panel;
