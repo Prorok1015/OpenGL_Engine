@@ -1,4 +1,8 @@
 #include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/resource/res_diagnostics.h>
+#include <format>
+#include <string>
+#include <string_view>
 #include <boost/json.hpp>
 
 namespace rnd::driver
@@ -128,6 +132,17 @@ namespace rnd::driver
 			return "unknown";
 		}
 
+		// The value comes from a file: a name this build does not know fails the load of that file. It never asserts (an
+		// abort in Debug) and never goes on with a format nobody asked for (#930).
+		[[noreturn]] void unknown_value(std::string_view json_path, std::string_view what, std::string_view value)
+		{
+			std::string shown(value.substr(0, 64));
+			for (char& c : shown) {
+				if (static_cast<unsigned char>(c) < 0x20 || c == 0x7F) c = '?';
+			}
+			throw res::load_error(res::diagnostic_kind::load, json_path, std::format("unknown texture {} '{}'", what, shown));
+		}
+
 		texture_header::TYPE txm_data_type_from_string(const std::string_view& type)
 		{
 			if (type == "R8") return texture_header::TYPE::R8;
@@ -148,8 +163,7 @@ namespace rnd::driver
 			if (type == "S1") return texture_header::TYPE::S1;
 			if (type == "S4") return texture_header::TYPE::S4;
 			if (type == "S8") return texture_header::TYPE::S8;
-			ASSERT_FAIL("Unknown texture type");
-			return texture_header::TYPE::RGB8;
+			unknown_value("/header/data/format", "format", type);
 		}
 
 		std::string txm_type_to_string(TEXTURE_TYPE type)
@@ -176,8 +190,7 @@ namespace rnd::driver
 			if (type == "texture_cube_map") return TEXTURE_TYPE::TEXTURE_CUBE_MAP;
 			if (type == "texture_cube_array") return TEXTURE_TYPE::TEXTURE_CUBE_ARRAY;
 			if (type == "renderbuffer") return TEXTURE_TYPE::RENDERBUFFER;
-			ASSERT_FAIL("Unknown texture type");
-			return TEXTURE_TYPE::TEXTURE_2D;
+			unknown_value("/header/type", "type", type);
 		}
 	}
 

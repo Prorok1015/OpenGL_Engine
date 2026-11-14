@@ -1,5 +1,6 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/common/eng_profiler.h>
 
 std::string_view shader_data_type_to_string(rnd::driver::SHADER_DATA_TYPE type)
@@ -84,17 +85,15 @@ namespace std
 
 	std::byte tag_invoke(json::value_to_tag<std::byte>, const json::value& jv)
 	{
-		if (jv.is_uint64()) {
-			auto val = jv.as_uint64();
-			return std::byte(val);
+		// From a file: a value that is no byte fails the load. It is never cut down to one (256 read as 0) and never
+		// asserted on (#930).
+		if (jv.is_uint64() && jv.as_uint64() <= 255) {
+			return std::byte(jv.as_uint64());
 		}
-		if (jv.is_int64()) {
-			auto val = jv.as_int64();
-			return std::byte(val);
+		if (jv.is_int64() && jv.as_int64() >= 0 && jv.as_int64() <= 255) {
+			return std::byte(jv.as_int64());
 		}
-
-		ASSERT_FAIL("rnd::geometry_desc::serialize: Invalid type for byte");
-		return std::byte(0);
+		throw res::load_error(res::diagnostic_kind::load, {}, "a byte of geometry data is not an integer from 0 to 255");
 	}
 }
 
@@ -109,13 +108,22 @@ namespace ds {
 
 	ds::bbox tag_invoke(json::value_to_tag<ds::bbox>, const json::value& jv)
 	{
-		auto arr = jv.as_array();
-		ASSERT_MSG(arr.size() == 2, "Invalid bbox array size");
+		const json::array* arr = jv.if_array();
+		const auto point = [](const json::value& v, const char* key) -> const json::value* {
+			const json::object* object = v.if_object();
+			const json::value* found = object ? object->if_contains(key) : nullptr;
+			return found && found->is_number() ? found : nullptr;
+		};
+		const bool fits = arr && arr->size() == 2 && point((*arr)[0], "x") && point((*arr)[0], "y") && point((*arr)[1], "x")
+			&& point((*arr)[1], "y");
+		if (!fits) {
+			throw res::load_error(res::diagnostic_kind::load, {}, "a bounding box is not an array of two points {x, y}");
+		}
 		ds::bbox box;
-		box.min.x = json::value_to<float>(arr[0].as_object().at("x"));
-		box.min.y = json::value_to<float>(arr[0].as_object().at("y"));
-		box.max.x = json::value_to<float>(arr[1].as_object().at("x"));
-		box.max.y = json::value_to<float>(arr[1].as_object().at("y"));
+		box.min.x = json::value_to<float>(*point((*arr)[0], "x"));
+		box.min.y = json::value_to<float>(*point((*arr)[0], "y"));
+		box.max.x = json::value_to<float>(*point((*arr)[1], "x"));
+		box.max.y = json::value_to<float>(*point((*arr)[1], "y"));
 		return box;
 	}
 }
