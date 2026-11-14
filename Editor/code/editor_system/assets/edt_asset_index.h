@@ -2,6 +2,7 @@
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_tag.h>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,7 @@ namespace edt
 {
 	class asset_database;
 	struct asset_batch;
+	struct asset_record;
 
 	// The asset database as res::asset_index (EPIC-57 section 5, S57-7): an immutable snapshot of its records, swapped on
 	// the main thread and read from any thread (pool threads request dependencies) without waiting for it.
@@ -36,6 +38,11 @@ namespace edt
 		// then the oldest, then the smaller path, as in Problems) and the others answer none: they load as files of their
 		// own. Each such copy is warned about once per (ID, path).
 		bool refresh(const asset_database& assets);
+		// Main thread: as refresh, for the IDs `batch` touches only: the ID each of its paths held here and the one its
+		// record carries now. Their holders are taken from `assets` as it is now, so a later batch that moved a path
+		// again is answered as well. Copies the snapshot only when an answer changes (#866).
+		bool apply_batch(const asset_database& assets, const asset_batch& batch);
+		std::size_t full_refreshes() const { return m_full_refreshes; }
 
 	private:
 		struct data
@@ -50,10 +57,12 @@ namespace edt
 
 		std::shared_ptr<const data> current() const;
 		static std::string key_of(const res::tag& tag, bool case_insensitive);
+		void warn_copy(const asset_record& copy, const asset_record& holder);
 
 		mutable std::mutex m_mutex;
 		std::shared_ptr<const data> m_data = std::make_shared<const data>();
 		std::set<std::pair<res::asset_id, std::string>> m_warned;
+		std::size_t m_full_refreshes = 0;
 	};
 
 	// Keeps resource_system's asset index in step with the asset database: attached once the database has walked the
