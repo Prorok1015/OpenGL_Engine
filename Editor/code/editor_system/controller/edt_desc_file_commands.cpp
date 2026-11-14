@@ -300,16 +300,6 @@ namespace {
 		}
 	}
 
-	// The root __guid of a file on disk; empty when it has none (or is not a JSON object).
-	std::string guid_of(std::span<const std::byte> bytes)
-	{
-		boost::system::error_code ec;
-		const json::value parsed = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec);
-		if (ec || !parsed.is_object()) return {};
-		const json::value* guid = parsed.as_object().if_contains("__guid");
-		return guid && guid->is_string() ? std::string(view_of(guid->as_string())) : std::string{};
-	}
-
 	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID.
 	prepared_file prepare(const desc::desc_system& descs, const std::string& relative, const json::value& content, const std::string& kept_guid = {})
 	{
@@ -405,7 +395,7 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), guid_of(current.bytes));
+			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			const res::tag tag = desc_files::tag_of(path.relative);
@@ -432,7 +422,7 @@ namespace {
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
 				return refused("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), guid_of(current.bytes));
+			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));
@@ -723,4 +713,13 @@ edt::desc_file_read edt::read_desc_file(res::resource_system& resources, const d
 	out.bytes = std::move(read.bytes);
 	out.version = edt::code_version_of(out.bytes);
 	return out;
+}
+
+std::string edt::desc_root_guid(std::span<const std::byte> bytes)
+{
+	boost::system::error_code ec;
+	const json::value parsed = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec);
+	if (ec || !parsed.is_object()) return {};
+	const json::value* guid = parsed.as_object().if_contains("__guid");
+	return guid && guid->is_string() ? std::string(guid->as_string().data(), guid->as_string().size()) : std::string{};
 }

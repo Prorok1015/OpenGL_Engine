@@ -345,7 +345,7 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsGuid_AndGetsNoneItDidNotHave)
 }
 
 // desc_resave and a migration write one form (#851): after the engine's save keep_root_guid leaves the root __guid as
-// the file has it, so the save of a desc without one adds none.
+// the file has it. Since #772 the engine's save itself makes none up, so for a desc without one there is nothing to undo.
 BOOST_AUTO_TEST_CASE(KeepRootGuid_TheEnginesSave_AddsNoGuid_AndKeepsTheFilesOne)
 {
 	constexpr std::string_view guid = "00000000-0000-4000-8000-0000000000c1";
@@ -361,9 +361,9 @@ BOOST_AUTO_TEST_CASE(KeepRootGuid_TheEnginesSave_AddsNoGuid_AndKeepsTheFilesOne)
 	};
 
 	json::value none = saved_of("none");
-	BOOST_REQUIRE(none.as_object().contains("__guid"));
+	BOOST_TEST(!none.as_object().contains("__guid"));
 	const json::value none_file = json::parse(read_text(copy.res() / "guid/none.desc"));
-	BOOST_TEST(desc::keep_root_guid(none.as_object(), none_file.as_object()));
+	BOOST_TEST(!desc::keep_root_guid(none.as_object(), none_file.as_object()));
 	BOOST_TEST(!none.as_object().contains("__guid"));
 
 	json::value kept = saved_of("kept");

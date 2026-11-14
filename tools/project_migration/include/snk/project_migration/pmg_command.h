@@ -46,6 +46,9 @@ namespace prj::migration
 		std::function<std::optional<std::string>(const std::filesystem::path& file, std::string_view text)> write_report;
 	};
 
+	// The exit code of a migration that ended with `status`.
+	int exit_code_of(migration_status status);
+
 	// The plan as --dry-run prints it.
 	std::string plan_text(const migration_plan& plan);
 

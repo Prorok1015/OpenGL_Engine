@@ -324,8 +324,8 @@ BOOST_AUTO_TEST_CASE(AMigratedDesc_KeepsItsGuid_AndGetsNoneItDidNotHave)
 	BOOST_TEST(guid_in(read_text(copy.res() / "worlds/w_v2.desc")) == "none");
 }
 
-// The case of #851: a pre step takes the __guid away (as assets.ids will once #772 is done), the type migration that
-// follows must not bring a new one back.
+// The case of #851: a pre step takes the __guid away, the type migration that follows must not bring a new one back
+// (the engine's save makes none up since #772; assets.ids_drop_desc_guid takes it out after the type migrations).
 BOOST_AUTO_TEST_CASE(AGuidAPreStepTookAway_DoesNotComeBack)
 {
 	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), json::string(k_new_guid)));

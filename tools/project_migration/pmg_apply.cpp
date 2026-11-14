@@ -81,7 +81,7 @@ namespace
 		return json::object{ { "type", step.type }, { "from", step.from_version }, { "summary", step.summary }, { "objects", step.objects } };
 	}
 
-	json::value report_json(const migration_report& report)
+	json::object report_json(const migration_report& report)
 	{
 		json::array files;
 		for (const applied_file& file : report.files) {
@@ -476,7 +476,7 @@ namespace
 
 		std::string journal_text() const
 		{
-			return prj::to_indented_json(report_json(m_report));
+			return prj::to_indented_json(report_to_json(m_report));
 		}
 
 		void journal()
@@ -513,10 +513,9 @@ namespace
 				file.written_as = "json";
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
-			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
-			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
-			// .resource's (EPIC-57 4.2).
-			// The file before the type migrations, for its root __guid.
+			// A migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
+			// .resource's (EPIC-57 4.2). The engine's save keeps the __guid it loaded and makes none up (#772);
+			// desc::keep_root_guid puts the root __guid back where the file had it.
 			const json::object file_root = migrated.is_object() ? migrated.as_object() : json::object{};
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
@@ -879,6 +878,11 @@ std::vector<prj::migration::skipped_file> prj::migration::skipped_by(const migra
 std::string prj::migration::report_text(const migration_report& report)
 {
 	return report_markdown(report);
+}
+
+json::object prj::migration::report_to_json(const migration_report& report)
+{
+	return report_json(report);
 }
 
 prj::migration::apply_outcome prj::migration::apply_migration(const migration_plan& plan, const apply_context& context)

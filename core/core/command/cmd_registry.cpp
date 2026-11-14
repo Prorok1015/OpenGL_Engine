@@ -240,6 +240,20 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 				return t.id == request.confirmation && t.command == command.id && t.args == args && t.session == request.from.session;
 			});
 		}
+		// A command that keeps what it described (project.migrate) is described here too when it runs without a question (an
+		// answer given in advance). Invalid arguments are left to the schema check that follows.
+		if (command.describe_before_allowed_invoke && command.risk != danger::none && command.describe && request.confirmation.empty()
+			&& !json_schema::validate(command.args_schema, request.args)) {
+			try {
+				static_cast<void>(command.describe(request));
+			} catch (const std::exception& e) {
+				egLOG_WARN("command", "the description of a call of '{}' could not be made ({}): it is refused", command.id, e.what());
+				return denied("what it would do could not be told");
+			} catch (...) {
+				egLOG_WARN("command", "the description of a call of '{}' could not be made: it is refused", command.id);
+				return denied("what it would do could not be told");
+			}
+		}
 		return std::nullopt;
 	}
 
@@ -287,11 +301,23 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 	if (m_tickets.size() >= max_pending_confirmations) {
 		return denied("too many confirmations are waiting for a person");
 	}
+	// The ticket is a secret between the registry and whoever asks: 128 bits straight from the system's source.
+	std::random_device entropy;
+	const auto word = [&entropy] {
+		const std::uint64_t high = entropy();
+		return (high << 32) | entropy();
+	};
+	const std::uint64_t first = word();
+	const std::uint64_t second = word();
+	const std::string ticket_id = std::format("{:016x}{:016x}", first, second);
 	std::string detail;
 	if (command.describe) {
-		// Before the ticket exists: a description that cannot be made is a call nobody can be told about.
+		// Before the ticket exists: a description that cannot be made is a call nobody can be told about. A command that keeps
+		// what it described is told the ticket, so it binds that to the answer; no other command sees it.
+		call described = request;
+		if (command.describe_before_allowed_invoke) described.confirmation = ticket_id;
 		try {
-			if (auto text = command.describe(request)) detail = std::move(*text);
+			if (auto text = command.describe(described)) detail = std::move(*text);
 		} catch (const std::exception& e) {
 			egLOG_WARN("command", "the description of a call of '{}' could not be made ({}): it is refused", command.id, e.what());
 			return denied("what it would do could not be told to a person");
@@ -300,16 +326,8 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 			return denied("what it would do could not be told to a person");
 		}
 	}
-	// The ticket is a secret between the registry and whoever asks: 128 bits straight from the system's source.
-	std::random_device entropy;
-	const auto word = [&entropy] {
-		const std::uint64_t high = entropy();
-		return (high << 32) | entropy();
-	};
 	confirmation_ticket ticket;
-	const std::uint64_t first = word();
-	const std::uint64_t second = word();
-	ticket.id = std::format("{:016x}{:016x}", first, second);
+	ticket.id = ticket_id;
 	ticket.command = command.id;
 	ticket.args = args;
 	ticket.session = request.from.session;

@@ -1,4 +1,5 @@
 #include "edt_level_controller.h"
+#include "edt_desc_file_commands.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
@@ -8,12 +9,16 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/desc/desc_system.h>
-#include <snk/desc/desc_guid.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <boost/json.hpp>
+#include <cstdint>
 #include <filesystem>
 #include <format>
+#include <optional>
+#include <system_error>
+#include <vector>
 #include <snk/common/logger/engine_log.h>
 
 edt::level_controller::level_controller(
@@ -77,6 +82,36 @@ namespace {
 		}
 		descs.stamp_tree(file);
 		level_json = std::move(file);
+	}
+
+	// A level file this big is no level a save replaces: Save As over it is refused rather than read.
+	constexpr std::uintmax_t k_replaced_level_limit = std::uintmax_t{ 64 } << 20;
+
+	struct replaced_guid
+	{
+		std::string guid;
+		// Why the save must not go on: the file is there, but its __guid cannot be read and would be lost.
+		std::string error;
+	};
+
+	// The root __guid of the file a save replaces: the one res:// reads, from the highest layer that has it (a lower
+	// layer's file is replaced by a copy in the top one, which keeps its .resource). Empty when there is none.
+	replaced_guid root_guid_of_replaced(const res::resource_system& resources, const std::string& rel_path)
+	{
+		const std::vector<std::filesystem::path> layers = resources.get_resource_layers();
+		for (auto layer = layers.rbegin(); layer != layers.rend(); ++layer) {
+			const std::optional<std::filesystem::path> path = res::path_within_dir(*layer, rel_path);
+			std::error_code ec;
+			if (!path || !std::filesystem::is_regular_file(*path, ec)) continue;
+			const std::uintmax_t size = std::filesystem::file_size(*path, ec);
+			if (!ec && size > k_replaced_level_limit) {
+				return { {}, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
+			}
+			const auto bytes = res::read_regular_file_capped(*path, k_replaced_level_limit);
+			if (!bytes) return { {}, "it could not be read" };
+			return { edt::desc_root_guid(*bytes), {} };
+		}
+		return {};
 	}
 
 	// Tells the coordinator that the worlds were replaced, on every way out of the function.
@@ -321,9 +356,19 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	const std::string stem = frel.stem().string();
 	const std::string level_name = stem.empty() ? m_state.level_name : stem;
 
-	// Saving the same file keeps its guid; saving to another path (Save As) writes a new file, which gets a new guid.
+	// The level's ID is its .resource (EPIC-57): a save keeps the __guid the file had until the project's migration takes
+	// it out, and makes none up (#772). Save As to a new file writes none, the asset database gives the file a new ID;
+	// Save As over another file keeps that file's.
 	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
-	const std::string guid = (same_file && !m_state.level_guid.empty()) ? m_state.level_guid : desc::generate_guid();
+	std::string guid = m_state.level_guid;
+	if (!same_file) {
+		replaced_guid replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
+		if (!replaced.error.empty()) {
+			egLOG_ERROR("Editor/Save", "Level not saved over '{}': {}, so its __guid would be lost", res::tag::make(rel_path).view(), replaced.error);
+			return false;
+		}
+		guid = std::move(replaced.guid);
+	}
 
 	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
 	if (m_state.level_parent.is_valid()) {
