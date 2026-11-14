@@ -122,4 +122,32 @@ BOOST_AUTO_TEST_CASE(Prefab_AComponentWrittenAsOneReference_TakesAGuidAndAPath)
 	BOOST_TEST(!components.at("stat_desc").parent_desc.is_valid());
 }
 
+// An override record that gives a component whole, as one reference.
+BOOST_AUTO_TEST_CASE(Prefab_ARecordThatReplacesAComponentWithAReference_TakesAGuidAndAPath)
+{
+	const std::string text = "{ \"__type\": \"prefab_desc\", \"__version\": 4, \"components\": {"
+		" \"swapped\": \"memory://t/plain.desc\", \"swapped_by_path\": \"memory://t/plain.desc\" },"
+		" \"overrides\": ["
+		" { \"target\": [], \"component\": \"swapped\", \"path\": \"\", \"value\": " + test_util::reference_text(k_moved_guid, "memory://t/old_place.desc") + " },"
+		" { \"target\": [], \"component\": \"swapped_by_path\", \"path\": \"\", \"value\": \"memory://t/only_path.desc\" },"
+		" { \"target\": [], \"component\": \"added\", \"path\": \"\", \"value\": " + test_util::reference_text(k_unknown_guid, "memory://t/kept.desc") + " }"
+		" ] }";
+	scn::prefab_desc prefab;
+	prefab.deserialize(*descs, parse_migrated(text));
+
+	scn::prefab_desc::prefab_node built;
+	res::tag source;
+	BOOST_REQUIRE(scn::expand_instance(*assembler, prefab.get_root(), built, source));
+	BOOST_REQUIRE(built.components.size() == 3u);
+	BOOST_TEST(built.components.at("swapped").parent_desc.get_tag().view() == "memory://t/new_place.desc");
+	BOOST_TEST(built.components.at("swapped_by_path").parent_desc.get_tag().view() == "memory://t/only_path.desc");
+	BOOST_TEST(built.components.at("added").parent_desc.get_tag().view() == "memory://t/kept.desc");
+	for (const char* key : { "swapped", "swapped_by_path", "added" }) {
+		BOOST_TEST_CONTEXT(key) {
+			BOOST_TEST(built.components.at(key).overrides.empty());
+			BOOST_TEST(built.components.at(key).edits.empty());
+		}
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

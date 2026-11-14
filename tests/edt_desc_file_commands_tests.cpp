@@ -421,6 +421,32 @@ BOOST_AUTO_TEST_CASE(WhileTheProjectMayNotBeWritten_CreateAndWriteAreBusy_WithIt
 	make_material("materials/n.mat.desc");
 }
 
+// #920: a world the open level names as {guid, path} is the level's as much as one named by a path.
+BOOST_AUTO_TEST_CASE(AWorldFileTheOpenLevelNamesAsAGuidAndAPath_IsBusyToo)
+{
+	fs::create_directories(res_root / "levels");
+	fs::create_directories(res_root / "worlds");
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://worlds/main.desc"},{"path":"res://worlds/second.desc"}]})");
+	dir.write("res/worlds/main.desc", R"({"__type":"world_desc"})");
+	dir.write("res/worlds/second.desc", R"({"__type":"world_desc"})");
+	open_level = { "levels/open.desc" };
+
+	for (const char* world : { "worlds/main.desc", "worlds/second.desc" }) {
+		BOOST_TEST_CONTEXT(world) {
+			const std::string before = read_file(res_root / world);
+			const auto written = call("desc.write", write_args(world, version_of(world), R"({"__type":"world_desc"})"));
+			BOOST_TEST(written.code == cmd::codes::busy);
+			BOOST_TEST(read_file(res_root / world) == before);
+		}
+	}
+	// A name no file has yet, which the level lists: a new file there would be the level's.
+	dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":[{"path":"res://worlds/planned.desc"}]})");
+	const auto created = call("desc.create", desc_args("worlds/planned.desc", R"({"__type":"world_desc"})"));
+	BOOST_TEST(created.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "worlds" / "planned.desc"));
+}
+
 BOOST_AUTO_TEST_CASE(AnOpenLevelThatCannotBeReadOrParsed_MakesEveryWriteBusy)
 {
 	fs::create_directories(res_root / "levels");

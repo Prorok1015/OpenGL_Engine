@@ -3,6 +3,7 @@
 #include "edt_file_menu.h"
 #include "edt_reference.h"
 #include "edt_tag_text.h"
+#include <snk/resource/res_reference.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -162,12 +163,23 @@ namespace {
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
-					if (!world.is_string()) continue;
-					const edt::agent_level_path named = edt::check_agent_folder(view_of(world.as_string()));
+					const std::optional<res::tag> world_file = world_file_of(world);
+					if (!world_file) continue;
+					const edt::agent_level_path named = edt::check_agent_folder(world_file->view());
 					if (named.ok() && same_file(locate(named.path))) return true;
 				}
 			}
 			return false;
+		}
+
+		// The file an entry of a level's `worlds` names, in either form a reference is written: a path, or {guid, path}
+		// where the guid says where the file is now. An entry read only as a string let a world written as {guid, path}
+		// slip past the two guards here (#920). None for a world written inline.
+		std::optional<res::tag> world_file_of(const json::value& world) const
+		{
+			const std::optional<res::reference> reference = res::reference_from_json(world);
+			if (!reference) return std::nullopt;
+			return m_deps.res.resolve_reference(*reference);
 		}
 
 		// The same question for a path no file has: it is the open level's own name or one of the names in its `worlds`, so a
@@ -189,8 +201,9 @@ namespace {
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
-					if (!world.is_string()) continue;
-					const edt::agent_level_path named = edt::check_agent_folder(view_of(world.as_string()));
+					const std::optional<res::tag> world_file = world_file_of(world);
+					if (!world_file) continue;
+					const edt::agent_level_path named = edt::check_agent_folder(world_file->view());
 					if (named.ok() && name_key(named.path) == wanted) return true;
 				}
 			}

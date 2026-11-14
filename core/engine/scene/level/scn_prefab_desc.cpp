@@ -534,7 +534,11 @@ namespace {
 			}
 			return;
 		}
-		if (record.path.empty() && record.value.is_string()) {
+		// A reference in either form a file writes it; under the key of a registered type an object is that type's fields
+		// (parse_component reads it the same way).
+		const bool whole_reference = record.value.is_string()
+			|| (!desc_system.is_registered(record.component) && res::reference_from_json(record.value));
+		if (record.path.empty() && whole_reference) {
 			// a plain reference to a desc replaces the component whole
 			it->second = scn::parse_component(desc_system, owner, record.value, record.component);
 			return;

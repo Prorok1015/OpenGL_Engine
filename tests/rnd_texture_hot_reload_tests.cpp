@@ -437,6 +437,14 @@ BOOST_AUTO_TEST_CASE(CubemapData_AGuidAndAPath_IsOnePicture_FoundByItsGuid)
 		}
 	}
 
+	// A 2D texture reads its picture the same way.
+	const res::tag flat{ "memory://reload/flat_by_guid.desc" };
+	description(flat, { { "__type", "texture_2d_desc" },
+		{ "data", json::parse(test_util::reference_text(guid, "memory://reload/sky_old_place.raw")) } });
+	const auto flat_desc = material(flat);
+	settle(flat_desc);
+	expect_pixels(textures.binding(textures.id_of(flat)).handle, 0, 42);
+
 	resources().set_asset_index(nullptr);
 }
 

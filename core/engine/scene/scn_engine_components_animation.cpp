@@ -1,4 +1,5 @@
 #include "scn_engine_components_detail.h"
+#include <snk/resource/res_reference.h>
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_animation_clip_desc.h>
@@ -116,8 +117,11 @@ bool desc::json_codec<std::unordered_map<std::string, scn::tracked_component_inf
 		if (const auto* type = info->if_contains("type_name"); type && type->is_string()) {
 			item.type_name = std::string{ type->as_string() };
 		}
-		if (const auto* source = info->if_contains("source_desc"); source && source->is_string() && !source->as_string().empty()) {
-			item.source_desc = res::tag{ std::string_view{ source->as_string() } };
+		// Written as a path here; read in either form a reference has, so a file a later writer made still loads (#920).
+		if (const auto* source = info->if_contains("source_desc")) {
+			if (const auto reference = res::reference_from_json(*source); reference && !reference->path.view().empty()) {
+				item.source_desc = reference->path;
+			}
 		}
 		if (const auto* overrides = info->if_contains("local_overrides"); overrides && overrides->is_object()) {
 			item.local_overrides = overrides->as_object();
