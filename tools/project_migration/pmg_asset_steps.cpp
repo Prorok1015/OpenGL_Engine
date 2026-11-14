@@ -1,11 +1,13 @@
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_pretty_json.h>
+#include <snk/desc/desc_system.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cstddef>
 #include <format>
 #include <map>
 #include <optional>
@@ -141,6 +143,53 @@ namespace
 		}
 		context.warn(std::format("{} desc files without their __guid", dropped));
 	}
+
+	// What refs_apply reads: a desc the scan does not call invalid, newer or unknown_type (scanned_file::reference_fixes
+	// counts the same files).
+	bool refs_readable(const scanned_file& file)
+	{
+		return is_desc_path(file.path) && (file.kind == file_class::current || file.kind == file_class::outdated);
+	}
+
+	bool refs_needed(const scan_result& scan)
+	{
+		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return refs_readable(file) && file.reference_fixes > 0; });
+	}
+
+	// The rule of the editor's save (desc::write_references_with) over the index of the project as the pre steps left it, so
+	// the IDs assets.ids made are there. A path without an ID stays a string, an unknown guid stays as it is.
+	void refs_apply(project_step_context& context)
+	{
+		if (!context.descs) throw std::runtime_error("assets.refs: no game layer to read the references by");
+		desc::reference_ids ids;
+		ids.id_of = [&context](const res::tag& tag) { return context.assets.id_of(tag); };
+		ids.path_of = [&context](const res::asset_id& id) { return context.assets.path_of(id); };
+
+		desc::reference_counts total;
+		std::size_t files = 0;
+		for (const scanned_file& file : context.scan.files) {
+			if (!refs_readable(file)) continue;
+			const std::string read = context.files.read(file.path);
+			std::string_view text = read;
+			if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
+			if (text.find("res://") == std::string_view::npos) continue;
+			boost::system::error_code error;
+			json::parse_options options;
+			options.max_depth = 128;
+			json::value root = json::parse(text, error, {}, options);
+			if (error || !root.is_object()) throw std::runtime_error(std::format("{}: no JSON object after the migration of its types", file.path));
+			const desc::reference_counts counts = context.descs->write_references_with(root, ids);
+			if (counts.total() == 0) continue;
+			const std::vector<std::byte> bytes = desc::pretty_json_bytes(root);
+			context.files.write(file.path, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+			context.warn(std::format("{}: {} references turned into {{guid, path}}, {} paths repaired", file.path, counts.ids_written, counts.paths_repaired));
+			total.ids_written += counts.ids_written;
+			total.paths_repaired += counts.paths_repaired;
+			++files;
+		}
+		context.warn(std::format("{} references turned into {{guid, path}}, {} paths repaired, in {} desc files", total.ids_written,
+			total.paths_repaired, files));
+	}
 }
 
 std::optional<res::asset_id> prj::migration::desc_root_guid(std::string_view text)
@@ -173,6 +222,14 @@ void prj::migration::register_asset_project_steps(project_step_registry& registr
 	drop_guid.needed = &drop_guid_needed;
 	drop_guid.apply = &drop_guid_apply;
 	registry.add(std::move(drop_guid));
+
+	project_step refs;
+	refs.id = "assets.refs";
+	refs.phase = project_phase::post;
+	refs.summary = "res:// references of the descs to {guid, path}, stale paths of {guid, path} repaired";
+	refs.needed = &refs_needed;
+	refs.apply = &refs_apply;
+	registry.add(std::move(refs));
 }
 
 void prj::migration::register_project_steps(project_step_registry& registry)

@@ -59,6 +59,10 @@ namespace prj::migration
 		std::string resource_path;
 		// The .resource that pairs with the file does not read (has_resource is true): it has no ID to replace a __guid.
 		bool resource_unreadable = false;
+		// The references of a desc that assets.refs changes (#776), by desc::write_references_with over the scan's index: a
+		// res:// path whose file has an ID, or gets one from assets.ids, and a {guid, path} whose path is stale. Read from
+		// the file as it is, with the current schemas.
+		std::size_t reference_fixes = 0;
 	};
 
 	struct manifest_state
@@ -109,9 +113,9 @@ namespace prj::migration
 	void migrate_sidecar(const desc::desc_system& game_layer, json::object& root, std::string_view file,
 		std::vector<desc::migration_warning>* warnings = nullptr);
 
-	// The game layer's types as a scan asks about them (known: registered or with a schema; current_version), taken on the
-	// main thread so that a scan can run on another one (#761). A type it does not list is unknown, at version 1, as the
-	// game layer answers for it.
+	// The game layer's types as a scan asks about them (known: registered or with a schema; current_version; the schema),
+	// taken on the main thread so that a scan can run on another one (#761). A type it does not list is unknown, at
+	// version 1, without a schema, as the game layer answers for it.
 	class type_catalog
 	{
 	public:
@@ -128,8 +132,13 @@ namespace prj::migration
 		int current_version(std::string_view type) const;
 		const std::map<std::string, entry, std::less<>>& types() const { return m_types; }
 
+		// A copy of the schema `type` names: what the scan reads references by (assets.refs, #776).
+		void add_schema(std::string type, desc::type_schema schema);
+		const desc::type_schema* find_schema(std::string_view type) const;
+
 	private:
 		std::map<std::string, entry, std::less<>> m_types;
+		std::map<std::string, desc::type_schema, std::less<>> m_schemas;
 	};
 
 	// Reads project.snkproj under `root` and every file of its content roots (not the engine's layer; hidden folders,

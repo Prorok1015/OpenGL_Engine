@@ -2,6 +2,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/resource/res_asset_walk.h>
 #include <format>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -18,6 +19,8 @@ void prj::migration::project_assets::rebuild()
 	m_assets.clear();
 	m_orphans.clear();
 	m_problems.clear();
+	m_by_name.clear();
+	m_unique_ids.clear();
 
 	// Lowest first, as res:// stacks them: the first content root of project.snkproj is the highest layer.
 	std::vector<fs::path> layers;
@@ -72,6 +75,14 @@ void prj::migration::project_assets::rebuild()
 		m_problems.push_back(std::format("{}: a .resource without its file", meta.path));
 		m_orphans.insert_or_assign(meta.path, std::move(meta));
 	}
+
+	std::set<res::asset_id> duplicated;
+	for (const auto& [path, asset] : m_assets) {
+		m_by_name.emplace(res::asset_name_key(asset.res_path, res::asset_names_case_insensitive), path);
+		if (!asset.id || asset.id->is_nil()) continue;
+		if (!m_unique_ids.emplace(*asset.id, path).second) duplicated.insert(*asset.id);
+	}
+	for (const res::asset_id& id : duplicated) m_unique_ids.erase(id);
 }
 
 std::optional<res::asset_id> prj::migration::project_assets::id_of(std::string_view path) const
@@ -87,4 +98,22 @@ std::vector<std::string> prj::migration::project_assets::paths_of(const res::ass
 		if (asset.id == id) paths.push_back(path);
 	}
 	return paths;
+}
+
+std::optional<res::asset_id> prj::migration::project_assets::id_of(const res::tag& tag) const
+{
+	if (tag.protocol() != res::tag::default_protocol()) return std::nullopt;
+	const std::string_view res_path = tag.view().substr(tag.protocol().size() + 3);
+	const auto named = m_by_name.find(res::asset_name_key(res_path, res::asset_names_case_insensitive));
+	if (named == m_by_name.end()) return std::nullopt;
+	const std::optional<res::asset_id> id = id_of(std::string_view(named->second));
+	if (!id || !m_unique_ids.contains(*id)) return std::nullopt;
+	return id;
+}
+
+std::optional<res::tag> prj::migration::project_assets::path_of(const res::asset_id& id) const
+{
+	const auto found = m_unique_ids.find(id);
+	if (found == m_unique_ids.end()) return std::nullopt;
+	return res::tag::make(m_assets.at(found->second).res_path);
 }

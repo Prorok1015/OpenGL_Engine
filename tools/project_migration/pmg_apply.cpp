@@ -645,7 +645,7 @@ namespace
 				if (planned.phase != to_string(phase)) continue;
 				const project_step* step = m_context.project_steps->find(planned.id);
 				m_step = planned.id;
-				project_step_context step_context{ m_context.root, plan.scan, manifest, m_report.project_notes, *this, m_assets, m_step };
+				project_step_context step_context{ m_context.root, plan.scan, manifest, m_report.project_notes, *this, m_assets, m_step, &m_context.descs };
 				step->apply(step_context);
 				m_report.project_steps.push_back(planned.id);
 			}

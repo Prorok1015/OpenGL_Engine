@@ -16,6 +16,10 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -620,6 +624,57 @@ namespace
 	}
 }
 
+namespace
+{
+	// A desc whose references assets.refs reads: what the step skips (invalid, newer, unknown_type) is not counted either.
+	bool refs_readable(const prj::migration::scanned_file& file)
+	{
+		return (file.kind == file_class::current || file.kind == file_class::outdated)
+			&& lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) == ".desc";
+	}
+
+	// scanned_file::reference_fixes of every desc, by the walker of the editor's save (desc::write_references_with) over
+	// `assets`. A file assets.ids gives a .resource in the same migration (listed without one, not invalid) answers an ID
+	// as well: its references change in that migration, so the step is planned for them. The ID itself is never written.
+	void count_reference_fixes(prj::migration::scan_result& result, const fs::path& project, const prj::migration::type_catalog& types,
+		const prj::migration::project_assets& assets, const prj::migration::scan_options& options)
+	{
+		std::map<std::string_view, file_class> kinds;
+		for (const prj::migration::scanned_file& file : result.files) kinds.emplace(file.path, file.kind);
+		std::set<std::string> gets_id;
+		for (const auto& [path, asset] : assets.assets()) {
+			if (asset.has_meta) continue;
+			const auto scanned = kinds.find(path);
+			if (scanned != kinds.end() && scanned->second != file_class::invalid) {
+				gets_id.insert(res::asset_name_key(asset.res_path, res::asset_names_case_insensitive));
+			}
+		}
+		const res::asset_id will_get_one{ 0, 1 };
+		desc::reference_ids ids;
+		ids.id_of = [&](const res::tag& tag) -> std::optional<res::asset_id> {
+			if (std::optional<res::asset_id> id = assets.id_of(tag)) return id;
+			if (tag.protocol() != res::tag::default_protocol()) return std::nullopt;
+			const std::string_view res_path = tag.view().substr(tag.protocol().size() + 3);
+			return gets_id.contains(res::asset_name_key(res_path, res::asset_names_case_insensitive)) ? std::optional{ will_get_one } : std::nullopt;
+		};
+		ids.path_of = [&assets](const res::asset_id& id) { return assets.path_of(id); };
+		const desc::schema_lookup schema_of = [&types](std::string_view type) { return types.find_schema(type); };
+
+		for (prj::migration::scanned_file& file : result.files) {
+			if (!refs_readable(file)) continue;
+			if (!result.incomplete && options.stop && options.stop()) result.incomplete = true;
+			if (result.incomplete) return;
+			const read_result read = read_file(project, project / fs_paths::path_from_utf8(file.path), options.max_file_bytes);
+			// Every reference the walker changes holds a res:// path.
+			if (!read.error.empty() || read.text.find("res://") == std::string::npos) continue;
+			boost::system::error_code error;
+			json::value root = parse_desc_json(read.text, error);
+			if (error || !root.is_object()) continue;
+			file.reference_fixes = desc::write_references_with(root, schema_of, ids).total();
+		}
+	}
+}
+
 std::string_view prj::migration::to_string(file_class kind)
 {
 	switch (kind) {
@@ -694,7 +749,9 @@ prj::migration::type_catalog prj::migration::type_catalog::from(const desc::desc
 	type_catalog catalog;
 	for (std::string& type : game_layer.type_names()) {
 		// As is_known of the scan (a member of the same name hides it here).
-		const entry value{ game_layer.is_registered(type) || game_layer.find_schema(type) != nullptr, game_layer.current_version(type) };
+		const desc::type_schema* schema = game_layer.find_schema(type);
+		const entry value{ game_layer.is_registered(type) || schema != nullptr, game_layer.current_version(type) };
+		if (schema) catalog.add_schema(type, *schema);
 		catalog.add(std::move(type), value);
 	}
 	return catalog;
@@ -715,6 +772,17 @@ int prj::migration::type_catalog::current_version(std::string_view type) const
 {
 	const auto found = m_types.find(type);
 	return found == m_types.end() ? 1 : found->second.current_version;
+}
+
+void prj::migration::type_catalog::add_schema(std::string type, desc::type_schema schema)
+{
+	m_schemas.insert_or_assign(std::move(type), std::move(schema));
+}
+
+const desc::type_schema* prj::migration::type_catalog::find_schema(std::string_view type) const
+{
+	const auto found = m_schemas.find(type);
+	return found == m_schemas.end() ? nullptr : &found->second;
 }
 
 prj::migration::scan_result prj::migration::scan_project(const fs::path& root, const desc::desc_system& game_layer, const scan_options& options)
@@ -763,6 +831,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 			}
 		}
 	}
+	count_reference_fixes(result, project, types, assets, options);
 	return result;
 }
 

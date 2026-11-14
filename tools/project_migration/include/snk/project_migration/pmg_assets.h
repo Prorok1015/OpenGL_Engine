@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_tag.h>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -38,6 +39,12 @@ namespace prj::migration
 		// listed, as the editor does not list it.
 		const std::map<std::string, indexed_asset>& assets() const { return m_assets; }
 		std::optional<res::asset_id> id_of(std::string_view path) const;
+		// resource_system::asset_id_of over this index: the ID of the file a res:// tag names, of the first content root that
+		// has it, the name compared as res::asset_names_case_insensitive says. None for another protocol, a file without an
+		// ID (no .resource, or one that does not read) and an ID two listed files carry.
+		std::optional<res::asset_id> id_of(const res::tag& tag) const;
+		// The res:// tag of the one listed file that carries `id`; none for an unknown or duplicated ID.
+		std::optional<res::tag> path_of(const res::asset_id& id) const;
 		// The listed files that carry `id`: more than one is a duplicate ID, which the editor reports too.
 		std::vector<std::string> paths_of(const res::asset_id& id) const;
 		// .resource files no listed file pairs with, by path; `id` when it could be read.
@@ -50,6 +57,10 @@ namespace prj::migration
 		std::vector<std::filesystem::path> m_content_roots;
 		std::map<std::string, indexed_asset> m_assets;
 		std::map<std::string, indexed_asset> m_orphans;
+		// res::asset_name_key of a listed file's res_path -> its path.
+		std::map<std::string, std::string> m_by_name;
+		// The ID of exactly one listed file -> its path.
+		std::map<res::asset_id, std::string> m_unique_ids;
 		std::vector<std::string> m_problems;
 	};
 }
