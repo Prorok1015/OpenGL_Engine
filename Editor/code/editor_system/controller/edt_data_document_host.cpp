@@ -80,7 +80,10 @@ void edt::data_document_host::follow_focus()
 		return;
 	}
 	const std::vector<panel_info> panels = m_context.panels().panels();
-	const auto taken = std::find_if(panels.begin(), panels.end(), [name](const panel_info& panel) { return panel.title == name; });
+	// A window whose text changes keeps its ImGui id after "###" (the prefab editor shows its document and its [*] in the title).
+	const std::string_view stable_id = name.find("###") != std::string_view::npos ? name.substr(name.find("###") + 3) : std::string_view{};
+	const auto taken = std::find_if(panels.begin(), panels.end(),
+		[name, stable_id](const panel_info& panel) { return panel.title == name || (!stable_id.empty() && panel.id == stable_id); });
 	if (taken != panels.end() && taken->id == "prefab_editor" && manager.preview() != nullptr) {
 		manager.set_active(manager.preview()->id());
 		return;

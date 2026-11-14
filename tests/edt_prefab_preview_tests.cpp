@@ -180,7 +180,7 @@ BOOST_AUTO_TEST_CASE(PreviewDrag_KeepsWindowStillAndRoutesOnlyToPreview_TitleDra
 	panel.render();
 	ImGui::EndFrame();
 	frame();
-	auto* window = ImGui::FindWindowByName("Prefab Editor");
+	auto* window = ImGui::FindWindowByName("###prefab_editor");
 	BOOST_REQUIRE(window);
 	BOOST_REQUIRE(!window->DockIsActive);
 	const ImVec2 initial = window->Pos;
