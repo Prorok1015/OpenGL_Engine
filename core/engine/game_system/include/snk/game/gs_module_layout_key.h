@@ -104,7 +104,9 @@ namespace gs
 			// task_result<void> is an explicit specialization: <int> stands for the primary template.
 			ds::task_result<void>, ds::task_result<int>, ds::detail::task_state<void>,
 			// gs::input_actions' inline accessors copy or hand out these members.
-			inp::gamepad_config, inp::user_bindings>();
+			inp::gamepad_config, inp::user_bindings,
+			// Returned by value from the exports of user_bindings; rng::save and rng::load are inline.
+			inp::rebind_result, inp::binding_conflict, ecs::rng::position>();
 	}
 
 	namespace detail
