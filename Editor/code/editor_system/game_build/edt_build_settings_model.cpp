@@ -544,7 +544,7 @@ std::vector<edt::registration> edt::register_build_settings_commands(cmd::comman
 			{ "reload_after_build", settings.reload_after_build },
 			{ "log_verbosity", json::string(log_verbosity_name(settings.log_verbosity)) },
 			{ "live", json::object{
-				{ "enabled", settings.live_enabled },
+				{ "enabled", options.live_enabled && options.live_enabled() },
 				{ "quiet_ms", settings.live_quiet_ms },
 				{ "jobs", settings.live_jobs } } },
 			{ "configurations", std::move(configurations) },

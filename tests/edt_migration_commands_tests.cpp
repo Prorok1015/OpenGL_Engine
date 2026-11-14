@@ -9,7 +9,9 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/project/prj_json_text.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/project_migration/pmg_command.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -828,6 +830,35 @@ BOOST_AUTO_TEST_CASE(APersonsRun_WithTheFingerprintOfAnOlderPlan_IsRefusedAsPlan
 	const json::object result = job_result(call("project.migrate", { { "plan_fingerprint", fingerprint } }, cmd::origin::ui()));
 	BOOST_TEST(error_code_of(result) == "plan_changed", json::serialize(result));
 	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+// #776: the IDs assets.refs writes may come from a read-only layer below the project (the engine's core/res). A .resource
+// there that changes while the window shows the plan changes the fingerprint: the run is refused as plan_changed.
+BOOST_AUTO_TEST_CASE(AResourceOfAReadOnlyLayerChanged_TheRunIsRefusedAsPlanChanged)
+{
+	fs::remove(copy.res() / "broken.desc");
+	test_util::temp_dir engine("migration_read_only_layer");
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text("00000000-0000-4000-8000-0000000000e1");
+	engine.write("shaders/lit.png", "png");
+	engine.write("shaders/lit.png.resource", res::write_asset_meta(meta));
+	BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), { engine.path(), copy.res() }));
+	BOOST_REQUIRE((pmg::read_only_layers(*rs, copy.root()) == std::vector<fs::path>{ engine.path() }));
+
+	const cmd::result planned = call("project.migration_plan", {}, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(planned.ok, planned.error);
+	const std::string fingerprint(planned.value.at("fingerprint").as_string());
+	const cmd::result again = call("project.migration_plan", {}, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST(std::string(again.value.at("fingerprint").as_string()) == fingerprint, "nothing changed: the same fingerprint");
+
+	// The engine's .resource gets another ID while the window shows the plan.
+	meta.guid = *res::asset_id_from_text("00000000-0000-4000-8000-0000000000e2");
+	engine.write("shaders/lit.png.resource", res::write_asset_meta(meta) + "\n");
+	const auto before = snapshot(copy.root());
+	const json::object result = job_result(call("project.migrate", { { "plan_fingerprint", fingerprint } }, cmd::origin::ui()));
+	BOOST_TEST(error_code_of(result) == "plan_changed", json::serialize(result));
 	BOOST_TEST((snapshot(copy.root()) == before));
 }
 

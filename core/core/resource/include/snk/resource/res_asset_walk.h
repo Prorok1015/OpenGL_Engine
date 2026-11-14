@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 #include <snk/common/snk_api.h>
 #include <snk/resource/res_asset_meta.h>
@@ -84,6 +85,23 @@ namespace res
 	// file system filter keeps in place (a OneDrive placeholder is the file itself). An entry that cannot be inspected
 	// redirects too (a warning names it).
 	SNK_API bool asset_entry_redirects(const std::filesystem::directory_entry& entry);
+
+	// A file that carries an ID, as holds_id_before orders it: its layer (lowest first), the ticks of its
+	// std::filesystem::file_time_type and its res:// tag text.
+	struct asset_id_claim
+	{
+		std::size_t layer = 0;
+		std::int64_t mtime = 0;
+		std::string_view path;
+	};
+
+	// Of files that carry one ID, whether `a` keeps it before `b` (EPIC-57 section 10): the lowest layer (an engine asset
+	// is what others refer to), then the oldest, then the smaller path. The editor's asset index and Problems and the
+	// project migration's index all go by it; the others carry no ID there.
+	inline bool holds_id_before(const asset_id_claim& a, const asset_id_claim& b)
+	{
+		return std::tie(a.layer, a.mtime, a.path) < std::tie(b.layer, b.mtime, b.path);
+	}
 
 	// One file of the merged tree of `layers` (lowest first): the entry of the highest layer wins a name.
 	struct asset_walk_file
