@@ -39,9 +39,9 @@ namespace edt
 
 		// "Used by" of the file picked by a click (#774, EPIC-57 section 6.3): its usages as saved on the disk. Without a
 		// source the section is not drawn.
-		void set_usages(usage_list::report_source report, std::function<std::uint64_t()> revision)
+		void set_usages(usage_list::report_source report, std::function<usage_stamp()> stamp)
 		{
-			m_usages.set_source(std::move(report), std::move(revision));
+			m_usages.set_source(std::move(report), std::move(stamp));
 		}
 
 		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
