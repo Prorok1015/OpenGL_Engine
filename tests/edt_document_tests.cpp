@@ -143,7 +143,7 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_AddsAPreviewAndMakesItActive)
 	BOOST_TEST(prefab.id() != 0u);
 	BOOST_TEST(prefab.id() != scene.id());
 	BOOST_TEST(prefab.kind() == "prefab");
-	BOOST_TEST(!prefab.can_save());
+	BOOST_TEST(prefab.can_save());
 	BOOST_TEST(!prefab.is_dirty());
 	BOOST_TEST((prefab.source() == prefab_a));
 	BOOST_TEST(documents.preview() == &prefab);
@@ -153,12 +153,12 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_AddsAPreviewAndMakesItActive)
 		"opened:" + std::to_string(prefab.id()), "activated:" + std::to_string(prefab.id()) }));
 }
 
-BOOST_AUTO_TEST_CASE(PrefabDocument_CannotBeSaved)
+BOOST_AUTO_TEST_CASE(PrefabDocument_CleanApplyWritesNothing_AndSaveAsIsRefused)
 {
 	auto& prefab = edt::open_prefab(documents, prefab_a);
 	BOOST_REQUIRE(prefab.is_open());
 
-	BOOST_TEST(!prefab.save().saved);
+	BOOST_TEST(prefab.save().saved);
 	BOOST_TEST(!prefab.save_as(prefab_b).saved);
 }
 
@@ -373,7 +373,7 @@ BOOST_AUTO_TEST_CASE(MarkClean_ClearsTheDirtyFlag)
 	BOOST_TEST(!scene.is_dirty());
 }
 
-BOOST_AUTO_TEST_CASE(PreviewDocument_IsNeverDirtyAndItsCommitsAreTheScenesAlone)
+BOOST_AUTO_TEST_CASE(PreviewDocument_IsNotDirtiedByTheScenesCommits)
 {
 	auto& prefab = edt::open_prefab(documents, prefab_a);
 	scene.commit("Create world", edt::commit_mode::state_only);

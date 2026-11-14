@@ -2,6 +2,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_json_body.h>
 #include <algorithm>
 #include <format>
 #include <optional>
@@ -40,13 +41,6 @@ std::optional<::res::tag> read_parent(const ::res::tag& tag, const json::object&
 	return parent_tag;
 }
 
-json::object parse_body(const std::vector<std::byte>& data)
-{
-	std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
-	json::parse_options options;
-	options.max_depth = 128;
-	return json::parse(json_data, {}, options).as_object();
-}
 }
 
 std::vector<::res::res_dep> core::desc::desc_adapter_t::collect_dependencies(const ::res::tag& tag, const std::vector<std::byte>& data) const
@@ -58,7 +52,7 @@ std::vector<::res::res_dep> core::desc::desc_adapter_t::collect_dependencies(con
 		return {};
 	}
 
-	if (const auto parent_tag = read_parent(tag, parse_body(data))) {
+	if (const auto parent_tag = read_parent(tag, ::res::parse_json_body(tag.view(), data))) {
 		auto dep = ::res::make_dep<::desc::desc_base>(*parent_tag);
 		dep.failure_kind = ::res::diagnostic_kind::missing_parent;
 		dep.json_path = "/__parent";
@@ -74,7 +68,7 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 
 std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
 {
-	auto json_body = parse_body(data);
+	auto json_body = ::res::parse_json_body(tag.view(), data);
 
 	auto fail = [&tag](std::string_view kind, std::string_view json_path, const std::string& reason) {
 		throw ::res::load_error(kind, json_path, std::format("desc '{}': {}", tag.view(), reason));

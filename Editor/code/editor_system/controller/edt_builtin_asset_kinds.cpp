@@ -17,7 +17,12 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 	out.push_back(registry.add_preview({
 		.id = std::string(k_prefab_preview_id),
 		.suffix = ".prefab.desc",
-		.make_preview = [](editor_services& services) -> std::unique_ptr<previewable_document> { return std::make_unique<prefab_document>(services); },
+		.make_preview = [layout = hooks.desc_layout, locked = hooks.edits_locked](editor_services& services) -> std::unique_ptr<previewable_document> {
+			auto document = std::make_unique<prefab_document>(services);
+			if (layout) document->set_files(layout());
+			document->set_lock_source(locked);
+			return document;
+		},
 	}));
 	// Empty suffix: every dropped asset is added through its desc, as before the registry existed.
 	out.push_back(registry.add({
