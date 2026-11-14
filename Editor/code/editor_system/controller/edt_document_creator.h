@@ -41,11 +41,13 @@ namespace edt
 		// The desc types that are documents, by name.
 		std::vector<std::string> types() const;
 
-		// "a" -> "a.desc"; a name that has the extension (any letter case) is left alone.
+		// "a" -> "a.desc", "A.DESC" -> "A.desc": the extension is always `.desc`.
 		static std::string file_name(std::string_view name);
 
 		// Why `name` cannot be the name of a new document in `folder` (below res://, '/' separated, empty = the root): empty
-		// when it can. A name taken in any layer is refused naming the layer, so a new file never hides one below it.
+		// when it can. A name taken in any layer is refused naming the layer, so a new file never hides one below it; so is a
+		// name whose `.resource` is still there (a deleted file's label: its ID would pass to the new file).
+		// Walks the folder in every layer: call it when the name changes, not every frame.
 		std::string check(std::string_view folder, std::string_view name) const;
 
 		// Writes `{"__type", "__version"}` and nothing else (the fields read as the schema's defaults, the ID of the file is
@@ -64,8 +66,6 @@ namespace edt
 		explicit document_create_form(const document_creator& creator) : m_creator(creator) {}
 
 		void open(std::string folder);
-		void close() { m_open = false; }
-		bool is_open() const { return m_open; }
 		const std::string& folder() const { return m_folder; }
 
 		const std::vector<std::string>& types() const { return m_types; }
@@ -75,22 +75,23 @@ namespace edt
 		const std::string& name() const { return m_name; }
 		void set_name(std::string name);
 
-		// What is wrong with the name; empty while nothing is typed yet.
-		std::string problem() const;
-		bool can_submit() const { return !m_types.empty() && !m_name.empty() && problem().empty(); }
+		// What is wrong with the name as of the last change of it (the folders are walked then, not at every frame); empty while
+		// nothing is typed yet.
+		const std::string& problem() const { return m_problem; }
+		bool can_submit() const { return !m_types.empty() && !m_name.empty() && m_problem.empty(); }
 		// What the last submit said when it failed.
 		const std::string& error() const { return m_error; }
 
-		// Makes the document; on success the form closes and the tag comes back.
+		// Makes the document (the name is checked again, fresh); the tag comes back on success, else error() says why.
 		std::optional<res::tag> submit();
 
 	private:
 		const document_creator& m_creator;
-		bool m_open = false;
 		std::string m_folder;
 		std::vector<std::string> m_types;
 		std::size_t m_type_index = 0;
 		std::string m_name;
+		std::string m_problem;
 		std::string m_error;
 	};
 }

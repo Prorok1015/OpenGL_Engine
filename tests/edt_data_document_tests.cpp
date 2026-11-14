@@ -1537,11 +1537,11 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Types_AreTheDocumentTypesOnly)
 	BOOST_TEST((creator.types() == std::vector<std::string>{ "test.config", "test.tagged" }));
 }
 
-BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_AddsTheExtensionOnlyWhenItIsMissing)
+BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_MakesTheExtensionDotDesc)
 {
 	BOOST_TEST(edt::document_creator::file_name("a") == "a.desc");
 	BOOST_TEST(edt::document_creator::file_name("a.desc") == "a.desc");
-	BOOST_TEST(edt::document_creator::file_name("A.DESC") == "A.DESC");
+	BOOST_TEST(edt::document_creator::file_name("A.DESC") == "A.desc");
 	BOOST_TEST(edt::document_creator::file_name("a.b") == "a.b.desc");
 }
 
@@ -1600,9 +1600,29 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Check_RefusesWhatIsNotAName)
 	BOOST_TEST(creator.check("", "a/b").size() > 0u);
 	BOOST_TEST(creator.check("", "..").size() > 0u);
 	BOOST_TEST(creator.check("", ".hidden").size() > 0u);
+	for (const char* bad : { "a\\b", "C:x", "res://x", "CON", "a.", "a ", ".desc" }) {
+		BOOST_TEST_CONTEXT("name: " << bad) BOOST_TEST(creator.check("", bad).size() > 0u);
+	}
 	BOOST_TEST(creator.check("../outside", "a").size() > 0u);
 	BOOST_TEST(creator.check("", "fine").empty());
 	BOOST_TEST(creator.check("some/folder", "fine").empty());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverTheLabelOfADeletedFile)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	put("gone.desc.resource", "{}");
+	const edt::document_creation own = creator.create("", "test.config", "gone");
+	BOOST_TEST(!own.ok());
+	BOOST_TEST(own.error.find("project layer") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "gone.desc"));
+
+	write(lower, "old.desc.resource", "{}");
+	const edt::document_creation below = creator.create("", "test.config", "old");
+	BOOST_TEST(!below.ok());
+	BOOST_TEST(below.error.find("engine layer") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "old.desc"));
 }
 
 BOOST_AUTO_TEST_CASE(DocumentCreator_Create_OfATypeThatIsNoDocument_IsRefusedAndWritesNothing)
@@ -1620,9 +1640,7 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
 		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
 	edt::document_create_form form(creator);
-	BOOST_TEST(!form.is_open());
 	form.open("configs");
-	BOOST_TEST(form.is_open());
 	BOOST_TEST(form.folder() == "configs");
 	BOOST_TEST(form.types().size() == 2u);
 	BOOST_TEST(!form.can_submit());
@@ -1639,7 +1657,6 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	const std::optional<res::tag> made = form.submit();
 	BOOST_REQUIRE(made.has_value());
 	BOOST_TEST(made->string() == "res://configs/game.desc");
-	BOOST_TEST(!form.is_open());
 	const json::object content = json::parse(text_of("configs/game.desc")).as_object();
 	BOOST_TEST(std::string(content.at("__type").as_string()) == "test.tagged");
 

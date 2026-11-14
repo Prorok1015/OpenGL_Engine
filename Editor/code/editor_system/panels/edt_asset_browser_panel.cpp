@@ -135,7 +135,6 @@ namespace edt
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Cancel")) {
-			form.close();
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
@@ -274,85 +273,88 @@ namespace edt
 		if (m_needs_refresh)
 			refresh_entries();
 
-		// ".." back button (disabled at root)
-		{
-			bool at_root = m_current_rel.empty();
-			if (at_root) ImGui::BeginDisabled();
-			if (ImGui::Selectable("[/] .."))
-				navigate_to(m_current_rel.parent_path());
-			if (at_root) ImGui::EndDisabled();
-		}
-
-		if (m_ui_probe)
-			m_ui_probe->begin_pass("asset_browser");
-
-		const size_t top_layer = m_layers.size() - 1;
-		for (const auto& e : m_entries) {
-			// Entries that come from a lower layer are dimmed; the tooltip names the layer root.
-			const bool from_lower_layer = e.src.layer != top_layer;
-			if (from_lower_layer)
-				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-			ImGui::Selectable(e.label.c_str());
-			if (m_ui_probe) {
-				if (ImGui::IsItemVisible()) {
-					const ImVec2 item_min = ImGui::GetItemRectMin();
-					const ImVec2 item_max = ImGui::GetItemRectMax();
-					m_ui_probe->report("asset_browser", e.src.name, item_min.x, item_min.y, item_max.x, item_max.y);
-				} else {
-					m_ui_probe->report_hidden("asset_browser", e.src.name);
-				}
+		if (ImGui::BeginChild("##asset_files", ImVec2(0.f, 0.f), ImGuiChildFlags_None)) {
+			// ".." back button (disabled at root)
+			{
+				bool at_root = m_current_rel.empty();
+				if (at_root) ImGui::BeginDisabled();
+				if (ImGui::Selectable("[/] .."))
+					navigate_to(m_current_rel.parent_path());
+				if (at_root) ImGui::EndDisabled();
 			}
-			if (from_lower_layer)
-				ImGui::PopStyleColor();
-			if (ImGui::IsItemHovered() && m_layers.size() > 1)
-				ImGui::SetTooltip("layer %zu: %s", e.src.layer, fs_paths::utf8_of(m_layers[e.src.layer]).c_str());
 
-			if (e.src.is_dir) {
-				// Navigate into folder on click
-				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-					navigate_to(e.src.relative);
-				if (m_create_form && ImGui::BeginPopupContextItem()) {
-					draw_create_menu_item(e.src.relative);
-					ImGui::EndPopup();
-				}
-			} else {
-				// Double-click on file
-				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-					if (m_on_file_double_clicked)
-						m_on_file_double_clicked(e.src.relative);
-				}
+			if (m_ui_probe)
+				m_ui_probe->begin_pass("asset_browser");
 
-				// Drag source: path relative to res:// (the physical path would be wrong for lower layers)
-				if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-					const std::string full = fs_paths::generic_utf8_of(e.src.relative);
-					ImGui::SetDragDropPayload("ASSET_PATH", full.c_str(), full.size() + 1);
-					ImGui::TextUnformatted(e.label.c_str());
-					ImGui::EndDragDropSource();
-				}
-
-				// Context menu
-				if (ImGui::BeginPopupContextItem()) {
-					if (ImGui::MenuItem("Copy path"))
-						ImGui::SetClipboardText(fs_paths::utf8_of(e.src.path).c_str());
-					if (ImGui::MenuItem("Copy relative path")) {
-						ImGui::SetClipboardText(fs_paths::generic_utf8_of(e.src.relative).c_str());
+			const size_t top_layer = m_layers.size() - 1;
+			for (const auto& e : m_entries) {
+				// Entries that come from a lower layer are dimmed; the tooltip names the layer root.
+				const bool from_lower_layer = e.src.layer != top_layer;
+				if (from_lower_layer)
+					ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+				ImGui::Selectable(e.label.c_str());
+				if (m_ui_probe) {
+					if (ImGui::IsItemVisible()) {
+						const ImVec2 item_min = ImGui::GetItemRectMin();
+						const ImVec2 item_max = ImGui::GetItemRectMax();
+						m_ui_probe->report("asset_browser", e.src.name, item_min.x, item_min.y, item_max.x, item_max.y);
+					} else {
+						m_ui_probe->report_hidden("asset_browser", e.src.name);
 					}
-					ImGui::EndPopup();
+				}
+				if (from_lower_layer)
+					ImGui::PopStyleColor();
+				if (ImGui::IsItemHovered() && m_layers.size() > 1)
+					ImGui::SetTooltip("layer %zu: %s", e.src.layer, fs_paths::utf8_of(m_layers[e.src.layer]).c_str());
+
+				if (e.src.is_dir) {
+					// Navigate into folder on click
+					if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+						navigate_to(e.src.relative);
+					if (m_create_form && ImGui::BeginPopupContextItem()) {
+						draw_create_menu_item(e.src.relative);
+						ImGui::EndPopup();
+					}
+				} else {
+					// Double-click on file
+					if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+						if (m_on_file_double_clicked)
+							m_on_file_double_clicked(e.src.relative);
+					}
+
+					// Drag source: path relative to res:// (the physical path would be wrong for lower layers)
+					if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+						const std::string full = fs_paths::generic_utf8_of(e.src.relative);
+						ImGui::SetDragDropPayload("ASSET_PATH", full.c_str(), full.size() + 1);
+						ImGui::TextUnformatted(e.label.c_str());
+						ImGui::EndDragDropSource();
+					}
+
+					// Context menu
+					if (ImGui::BeginPopupContextItem()) {
+						if (ImGui::MenuItem("Copy path"))
+							ImGui::SetClipboardText(fs_paths::utf8_of(e.src.path).c_str());
+						if (ImGui::MenuItem("Copy relative path")) {
+							ImGui::SetClipboardText(fs_paths::generic_utf8_of(e.src.relative).c_str());
+						}
+						ImGui::EndPopup();
+					}
 				}
 			}
+
+			if (m_ui_probe)
+				m_ui_probe->end_pass("asset_browser");
+
+			if (m_entries.empty())
+				ImGui::TextDisabled("(empty)");
+
+			// The blank of the open folder.
+			if (m_create_form && ImGui::BeginPopupContextWindow("##asset_browser_blank", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+				draw_create_menu_item(m_current_rel);
+				ImGui::EndPopup();
+			}
 		}
-
-		if (m_ui_probe)
-			m_ui_probe->end_pass("asset_browser");
-
-		if (m_entries.empty())
-			ImGui::TextDisabled("(empty)");
-
-		// The blank of the open folder.
-		if (m_create_form && ImGui::BeginPopupContextWindow("##asset_browser_blank", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-			draw_create_menu_item(m_current_rel);
-			ImGui::EndPopup();
-		}
+		ImGui::EndChild();
 
 		ImGui::Columns(1);
 
