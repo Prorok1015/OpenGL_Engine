@@ -2,6 +2,7 @@
 #include "test_fixture_project.hpp"
 #include "test_scene_env.hpp"
 #include <snk/project_migration/pmg_apply.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
@@ -58,7 +59,8 @@ struct apply_fixture : test_util::scene_env
 {
 	apply_fixture()
 	{
-		// The fixture without its newer and broken files, which a migration refuses (S6 adds --force).
+		// The fixture without its newer and broken files: a migration leaves the newer one (partial) and refuses the
+		// broken one without --force (S6, pmg_command_tests).
 		fs::remove(copy.res() / "newer.desc");
 		fs::remove(copy.res() / "broken.desc");
 		mount(copy.res());
@@ -140,9 +142,11 @@ BOOST_AUTO_TEST_CASE(AMigratedFile_IsWhatTheEngineSaves)
 	BOOST_TEST(read_text(copy.res() / "cameras/cam_v1.desc") == std::string(reinterpret_cast<const char*>(expected.data()), expected.size()));
 }
 
-BOOST_AUTO_TEST_CASE(ANewerOrBrokenFile_RefusesTheMigration_NothingIsWritten)
+BOOST_AUTO_TEST_CASE(ABrokenFile_RefusesTheMigration_NothingIsWritten)
 {
 	test_util::fixture_copy full{ "migration_v1" };
+	// A newer file alone is left as it is (pmg_command_tests): only the invalid one refuses here.
+	fs::remove(full.res() / "newer.desc");
 	mount(full.res());
 	const auto before = content_of(full.root());
 	const pmg::apply_outcome outcome = apply(full.root(), context_for(full.root()));
@@ -338,6 +342,34 @@ BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsGuid_AndGetsNoneItDidNotHave)
 	const json::value plain = json::parse(read_text(copy.res() / "derive/plain.desc"));
 	BOOST_TEST(plain.at("__parent").as_string() == "res://derive/base_unit.desc");
 	BOOST_TEST((keys_of(plain) == std::set<std::string>{ "__type", "__version", "__parent", "hp", "armor" }));
+}
+
+// desc_resave and a migration write one form (#851): after the engine's save keep_root_guid leaves the root __guid as
+// the file has it, so the save of a desc without one adds none.
+BOOST_AUTO_TEST_CASE(KeepRootGuid_TheEnginesSave_AddsNoGuid_AndKeepsTheFilesOne)
+{
+	constexpr std::string_view guid = "00000000-0000-4000-8000-0000000000c1";
+	write_text(copy.res() / "guid/none.desc", R"({"__type":"camera_desc","__version":2,"fov":40})");
+	write_text(copy.res() / "guid/kept.desc", std::format(R"({{"__type":"camera_desc","__version":2,"__guid":"{}","fov":40}})", guid));
+	core::desc::desc_adapter_t adapter(*rs, *descs);
+	const auto saved_of = [&](std::string_view name) {
+		const res::tag tag = res::tag::make(std::format("guid/{}.desc", name));
+		auto loaded = rs->require_sync<desc::desc_base>(tag).get_sync();
+		BOOST_REQUIRE(loaded);
+		const std::vector<std::byte> bytes = adapter.serialize(tag, loaded);
+		return json::parse(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+	};
+
+	json::value none = saved_of("none");
+	BOOST_REQUIRE(none.as_object().contains("__guid"));
+	const json::value none_file = json::parse(read_text(copy.res() / "guid/none.desc"));
+	BOOST_TEST(desc::keep_root_guid(none.as_object(), none_file.as_object()));
+	BOOST_TEST(!none.as_object().contains("__guid"));
+
+	json::value kept = saved_of("kept");
+	const json::value kept_file = json::parse(read_text(copy.res() / "guid/kept.desc"));
+	BOOST_TEST(!desc::keep_root_guid(kept.as_object(), kept_file.as_object()));
+	BOOST_TEST(kept.as_object().at("__guid").as_string() == guid);
 }
 
 // A value the migration gives the child that equals the parent's is the parent's: the engine form leaves it out (#812).

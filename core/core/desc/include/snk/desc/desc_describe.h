@@ -259,6 +259,7 @@ namespace desc
 				}
 				if constexpr (detail::optional_traits<member_type>::value) {
 					field.optional = true;
+					field.nullable = true;
 				}
 				if constexpr (kind_of<member_type> == field_kind::enumeration) {
 					if (field.ref_type.empty()) {

@@ -143,6 +143,10 @@ namespace edt
 	// The kind of asset of a path by its suffix (lowercase compare).
 	std::string asset_type_of(std::string_view path);
 
+	// Of files that carry one ID, whether `a` keeps it before `b` (EPIC-57 section 10): the lowest layer (an engine asset
+	// is what others refer to), then the oldest, then the smaller path. Problems and the asset index both go by it.
+	bool holds_id_before(const asset_record& a, const asset_record& b);
+
 	// Walks `layers` (lowest first, as resource_system::get_resource_layers gives them) merged as the asset browser merges
 	// them (an upper layer shadows a name below, case folded when `case_insensitive`), and reads every file's .resource. In
 	// every layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are
@@ -206,8 +210,18 @@ namespace edt
 		// Names merged with their letter case folded (default: the platform's). Set before the first rebuild(); for tests
 		// of the Windows rules on any system.
 		void set_case_insensitive(bool value) { m_case_insensitive = value; }
+		bool case_insensitive() const { return m_case_insensitive; }
 		// A walk is running.
 		bool scanning() const { return m_scanning; }
+		// The first walk has given its result: the records are the tree's, not only the cache's.
+		bool walked_once() const { return m_walked_once; }
+		// Walks whose result was applied: the records are the tree's as of then.
+		std::uint64_t walks_applied() const { return m_walks_applied; }
+		// Grows whenever changes waiting behind a walk were dropped (more than the limit): what they said is known only
+		// after the next walk, so nothing may be decided by them until then.
+		std::uint64_t changes_dropped() const { return m_changes_dropped; }
+		// Tests only: the limit of changes waiting behind a walk (max_deferred_changes).
+		void set_max_deferred_for_tests(std::size_t limit) { m_max_deferred = limit; }
 		// Files whose hash is not known yet (queued or running).
 		std::size_t pending_hashes() const;
 		// This database holds the lock of the cache and writes it.
@@ -232,6 +246,9 @@ namespace edt
 		// Called after each batch with what it did, and after each walk but the first with what it changed (S57-7 puts
 		// the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
+		// The number (resource_system::delivering_batch) of the last batch from attach()'s resource_system the records hold:
+		// a batch that waits behind a walk counts once it is applied after it. For resource_system::apply_asset_batch.
+		std::uint64_t applied_through() const { return m_applied_through; }
 
 		// New files get an ID (#765, EPIC-57 section 6.1): a file of the top layer without a .resource in any layer that
 		// a batch after the first walk reports as created, or a later walk adds, gets <file>.resource with a new ID (a
@@ -346,6 +363,12 @@ namespace edt
 		bool m_scanning = false;
 		// A walk's result was applied: m_records is what the layers hold, not m_cached.
 		bool m_walked_once = false;
+		// The last batch received from attach()'s resource_system, and the last one applied (applied_through).
+		std::uint64_t m_received_through = 0;
+		std::uint64_t m_applied_through = 0;
+		std::uint64_t m_walks_applied = 0;
+		std::uint64_t m_changes_dropped = 0;
+		std::size_t m_max_deferred = max_deferred_changes;
 		// A folder changed during a walk: one more walk follows it.
 		bool m_walk_again = false;
 		// The last walk was cancelled and started again; cleared by an applied walk.

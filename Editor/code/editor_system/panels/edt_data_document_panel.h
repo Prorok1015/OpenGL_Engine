@@ -27,6 +27,8 @@ namespace edt
 		void set_on_save(std::function<void()> on_save) { m_on_save = std::move(on_save); }
 		void set_on_reload(std::function<void()> on_reload) { m_on_reload = std::move(on_reload); }
 		void set_on_overwrite(std::function<void()> on_overwrite) { m_on_overwrite = std::move(on_overwrite); }
+		// Whether the editor has a project migration the badge of an outdated file may point to (S56-6; the action of #761).
+		void set_has_project_migration(std::function<bool()> has) { m_has_project_migration = std::move(has); }
 		// The message under the Save button (what the last save said); empty clears it.
 		void set_error(std::string error) { m_error = std::move(error); }
 		// The window comes to the front at its next frame.
@@ -46,6 +48,7 @@ namespace edt
 		editor_services& m_services;
 		document_id m_id;
 		std::function<void()> m_on_close;
+		std::function<bool()> m_has_project_migration;
 		std::function<void()> m_on_save;
 		std::function<void()> m_on_reload;
 		std::function<void()> m_on_overwrite;
