@@ -96,7 +96,8 @@ BOOST_AUTO_TEST_CASE(Copy_DoesNotInheritGuid)
 	BOOST_TEST(is_guid_v4(src.get_guid()));
 }
 
-BOOST_AUTO_TEST_CASE(ResFile_WithoutGuidLoadsAndSaveGeneratesOne)
+// #772: the ID of a file is its .resource; a save never makes up a __guid.
+BOOST_AUTO_TEST_CASE(ResFile_WithoutGuid_SavesWithoutOne)
 {
 	const auto tag = res_tag();
 	auto inst = std::dynamic_pointer_cast<desc::desc_base>(
@@ -104,21 +105,21 @@ BOOST_AUTO_TEST_CASE(ResFile_WithoutGuidLoadsAndSaveGeneratesOne)
 	BOOST_REQUIRE(inst);
 	BOOST_TEST(inst->get_guid().empty());
 
-	const auto first = save(tag, inst);
-	BOOST_REQUIRE(first.contains("__guid"));
-	const auto guid = guid_of(first);
-	BOOST_TEST(is_guid_v4(guid));
-	BOOST_TEST(inst->get_guid() == guid);
+	BOOST_TEST(!save(tag, inst).contains("__guid"));
+	BOOST_TEST(inst->get_guid().empty());
+	BOOST_TEST(!save(tag, descs->create_instance("camera_desc", tag)).contains("__guid"));
 }
 
+// #772: a file that has a __guid keeps it until the project's migration takes it out.
 BOOST_AUTO_TEST_CASE(ResFile_GuidSurvivesSaveReloadSave)
 {
 	const auto tag = res_tag();
+	const std::string guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 	auto inst = std::dynamic_pointer_cast<desc::desc_base>(
-		adapter.deserialize(tag, to_bytes(R"({"__type":"camera_desc","fov":45.0})")));
+		adapter.deserialize(tag, to_bytes(R"({"__type":"camera_desc","__guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","fov":45.0})")));
 	BOOST_REQUIRE(inst);
 
-	const auto guid = guid_of(save(tag, inst));
+	BOOST_TEST(guid_of(save(tag, inst)) == guid);
 	BOOST_TEST(guid_of(save(tag, inst)) == guid); // second save of the same instance
 
 	auto reloaded = std::dynamic_pointer_cast<desc::desc_base>(
@@ -135,7 +136,7 @@ BOOST_AUTO_TEST_CASE(MemoryFile_NeverWritesGuid)
 	BOOST_REQUIRE(inst);
 
 	BOOST_TEST(!save(tag, inst).contains("__guid"));
-	BOOST_TEST(inst->get_guid().empty()); // not generated for memory:// either
+	BOOST_TEST(inst->get_guid().empty());
 
 	// Even an instance that already carries a guid (for example, a copy of a res file) writes none under memory://.
 	inst->set_guid(desc::generate_guid());
@@ -156,9 +157,7 @@ BOOST_AUTO_TEST_CASE(ParentGuid_IsNotInheritedByChild)
 	BOOST_REQUIRE(child);
 	BOOST_TEST(child->get_guid().empty());
 
-	const auto guid = guid_of(save(tag, child));
-	BOOST_TEST(is_guid_v4(guid));
-	BOOST_TEST(guid != k_parent_guid);
+	BOOST_TEST(!save(tag, child).contains("__guid"));
 }
 
 BOOST_AUTO_TEST_CASE(LevelBuildJson_WritesGivenGuidOnly)

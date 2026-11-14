@@ -9,6 +9,7 @@
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
+#include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -73,6 +74,28 @@ struct level_save_fixture : test_util::scene_env
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
+};
+
+// res:// as a project mounts it (its mount moved onto a lower layer and the project's content), so the save can read the
+// file it replaces in whichever layer res:// reads it from.
+struct level_guid_fixture : level_save_fixture
+{
+	level_guid_fixture()
+	{
+		fs::create_directories(lower);
+		BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), { lower, content }));
+	}
+
+	void write(const std::string& relative, const std::string& text, const fs::path& layer = {})
+	{
+		const fs::path file = (layer.empty() ? content : layer) / relative;
+		fs::create_directories(file.parent_path());
+		std::ofstream(file, std::ios::binary) << text;
+	}
+
+	const fs::path lower = dir.path() / "lower";
+
+	boost::json::object saved(const std::string& relative) { return boost::json::parse(read_file(content / relative)).as_object(); }
 };
 
 }
@@ -213,6 +236,84 @@ BOOST_AUTO_TEST_CASE(ALevelWithAParent_IsSavedWithItsParentAndOnlyItsOwnFields)
 	const auto again = boost::json::parse(read_file(content / "levels" / "saved.desc")).as_object();
 	BOOST_TEST(again.at("__parent").as_string() == "res://levels/base.desc");
 	BOOST_TEST(!again.contains("worlds"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// #772: the ID of a level is its .resource. A save keeps the __guid its file had until the project's migration takes it
+// out, and never makes one up; Save As over another file keeps that file's.
+BOOST_FIXTURE_TEST_SUITE(EdtLevelGuidTests, level_guid_fixture)
+
+BOOST_AUTO_TEST_CASE(SaveAs_ToANewFile_WritesNoGuid)
+{
+	state.level_tag = res::tag::make("levels/mine.desc");
+	state.level_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/copy.desc"));
+	BOOST_TEST(!saved("levels/copy.desc").contains("__guid"));
+	BOOST_TEST(state.level_guid.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Save_KeepsTheGuidTheFileHad_AndMakesNoneUp)
+{
+	state.level_tag = res::tag::make("levels/mine.desc");
+	state.level_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	BOOST_TEST(saved("levels/mine.desc").at("__guid").as_string() == "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+
+	state.level_guid.clear();
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	BOOST_TEST(!saved("levels/mine.desc").contains("__guid"));
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_OverAnotherFile_KeepsThatFilesGuid)
+{
+	write("levels/other.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"other","worlds":[]})");
+	write("levels/plain.desc", R"({"__type":"level_desc","name":"plain","worlds":[]})");
+	state.level_tag = res::tag::make("levels/mine.desc");
+	state.level_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/other.desc"));
+	BOOST_TEST(saved("levels/other.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+	BOOST_TEST(state.level_guid == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/plain.desc"));
+	BOOST_TEST(!saved("levels/plain.desc").contains("__guid"));
+}
+
+// A file of a lower layer is replaced by a copy in the project's own folder, which pairs with the same .resource.
+BOOST_AUTO_TEST_CASE(SaveAs_OverAFileOfALowerLayer_KeepsItsGuid)
+{
+	write("levels/base.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"base","worlds":[]})", lower);
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/base.desc"));
+	BOOST_TEST(saved("levels/base.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+}
+
+// The size limit of desc.* calls does not turn the rule off: the __guid of a big file is kept too.
+BOOST_AUTO_TEST_CASE(SaveAs_OverABigFile_KeepsItsGuid)
+{
+	const std::string padding(2 * 1024 * 1024, 'x');
+	write("levels/big.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"big","pad":")" + padding + R"(","worlds":[]})");
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/big.desc"));
+	BOOST_TEST(saved("levels/big.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+}
+
+// A file too big to be a level is not read for its __guid: Save As over it is refused and the file stays as it was.
+BOOST_AUTO_TEST_CASE(SaveAs_OverAFileBiggerThan64MiB_IsRefused)
+{
+	{
+		fs::create_directories(content / "levels");
+		std::ofstream out(content / "levels" / "huge.desc", std::ios::binary);
+		out << R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","pad":")";
+		const std::string chunk(1 << 20, 'x');
+		for (int i = 0; i < 65; ++i) out << chunk;
+		out << R"("})";
+	}
+	const auto size = fs::file_size(content / "levels" / "huge.desc");
+	state.commit("edit", edt::commit_mode::state_only);
+	BOOST_TEST(!level_ctrl.save_level_as("levels/huge.desc"));
+	BOOST_TEST(state.is_dirty());
+	BOOST_TEST(fs::file_size(content / "levels" / "huge.desc") == size);
+	fs::remove(content / "levels" / "huge.desc");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
