@@ -428,6 +428,18 @@ BOOST_AUTO_TEST_CASE(Cli_McpStdioTurnsOnTheStdioTransportOnly)
 	BOOST_TEST(!static_cast<bool>(mcp_stdio));
 }
 
+BOOST_AUTO_TEST_CASE(Cli_OpenMigrationSetsTheEditorsSwitch)
+{
+	// Stands in for the editor's variable of the same name (#761).
+	cfg::variable<bool> open_migration{ "editor/open_migration", false };
+	BOOST_TEST(run_cli({}) == 1);
+	BOOST_TEST(!static_cast<bool>(open_migration));
+	BOOST_TEST(run_cli({ "--open-migration" }) == 1);
+	BOOST_TEST(static_cast<bool>(open_migration));
+	run_cli({ "-s", "editor/open_migration", "false" });
+	BOOST_TEST(!static_cast<bool>(open_migration));
+}
+
 BOOST_AUTO_TEST_CASE(Cli_AgentPolicyIsAPathRelativeToTheWorkingDirectory)
 {
 	// Stands in for the editor's variable of the same name for the length of the test.

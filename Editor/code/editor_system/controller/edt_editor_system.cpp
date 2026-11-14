@@ -175,7 +175,9 @@ namespace {
 
 	// Switching projects restarts the editor (EPIC-42 #158): the same program and config file, the other project.
 	// Overrides given with --set are not carried over.
-	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch)
+	// --open-migration (#761): the new editor opens the Project Migration window once the project is open.
+	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch,
+		bool open_migration)
 	{
 		const std::filesystem::path program = platform::current_executable();
 		if (program.empty()) {
@@ -188,6 +190,9 @@ namespace {
 		args.insert(args.end(), { "--project", utf8_of(manifest_file) });
 		if (allow_engine_version_mismatch) {
 			args.push_back("--allow-engine-version-mismatch");
+		}
+		if (open_migration) {
+			args.push_back("--open-migration");
 		}
 		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", utf8_of(manifest_file));
 		auto started = platform::spawn_detached(program, args);
@@ -216,6 +221,9 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
 	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
 	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
+	// --open-migration (#761): once the project is open and the start level settled, the Project Migration window opens
+	// with a fresh plan ("Migrate..." of the engine version question restarts the editor with it). Ignored headless.
+	CFG_VAR_DEF_BOOL(cfg_open_migration, "editor/open_migration", false);
 	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
 	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
@@ -1049,13 +1057,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	const bool project_held = data.has_value<prj::held_project>();
 	if (project_held) {
 		auto& held = data.require<prj::held_project>();
-		ask_about_held_project(m_context->dialogs(), held, m_exit_action, [this, manifest = held.manifest_file] {
+		// Open Anyway, and Migrate... (#761): the same restart, the new editor opening the Project Migration window.
+		const auto restart_on = [this, manifest = held.manifest_file](bool open_migration) {
 			const auto outcome = m_context->actions().invoke("file.open_project", boost::json::object{
-				{ "path", utf8_of(manifest) }, { "allow_engine_version_mismatch", true }, { "discard_unsaved", true } });
+				{ "path", utf8_of(manifest) }, { "allow_engine_version_mismatch", true }, { "discard_unsaved", true },
+				{ "open_migration", open_migration } });
 			if (!outcome.ok) {
 				m_context->dialogs().message(message_level::error, std::format("The project was not opened: {}.", outcome.error));
 			}
-		});
+		};
+		ask_about_held_project(m_context->dialogs(), held, m_exit_action, [restart_on] { restart_on(false); },
+			[restart_on] { restart_on(true); });
 	}
 
 	std::string startup_level = scn::start_level_name(data, *cfg_startup_level);
@@ -1095,6 +1107,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				if (start_in_game && m_modes) m_modes->finish_startup(loaded, static_cast<bool>(m_stop_after_level_loaded));
 				return false;
 			}));
+	}
+
+	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
+		editor_layer->register_implicit("edt/open_migration", [this] {
+			const bool settling = m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
+				|| editor_layer->has_implicit_prefix("edt/load_level");
+			if (settling) return true;
+			open_migration_window();
+			return false;
+		});
 	}
 
 	bool stdio = cfg_mcp_stdio;

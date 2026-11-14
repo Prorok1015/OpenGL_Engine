@@ -62,9 +62,10 @@ namespace {
 			hooks.discard_other_documents = [this] { other_dirty = false; other_discarded = true; };
 			hooks.load_level = [](const fs::path&) {};
 			hooks.exit = [this] { ++exits; };
-			hooks.open_project = [this](const fs::path& manifest, bool allow) -> std::optional<std::string> {
+			hooks.open_project = [this](const fs::path& manifest, bool allow, bool migration) -> std::optional<std::string> {
 				started.push_back(manifest);
 				allowed_mismatch = allow;
+				open_migration = migration;
 				return start_error;
 			};
 			hooks.create_project = [](const fs::path& folder, const std::string& name) {
@@ -101,6 +102,7 @@ namespace {
 		int exits = 0;
 		std::vector<fs::path> started;
 		bool allowed_mismatch = false;
+		bool open_migration = false;
 		std::optional<std::string> start_error;
 	};
 
@@ -222,6 +224,16 @@ BOOST_AUTO_TEST_CASE(OpenProject_PassesTheMismatchFlagOn)
 
 	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game", R"(,"allow_engine_version_mismatch":true)")).ok);
 	BOOST_TEST(allowed_mismatch);
+	BOOST_TEST(!open_migration);
+}
+
+BOOST_AUTO_TEST_CASE(OpenProject_PassesTheMigrationWindowFlagOn)
+{
+	make_project("game");
+
+	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game", R"(,"allow_engine_version_mismatch":true,"open_migration":true)")).ok);
+	BOOST_TEST(allowed_mismatch);
+	BOOST_TEST(open_migration);
 }
 
 BOOST_AUTO_TEST_CASE(NewProject_IsMadeFromTheTemplateAndOpened)
