@@ -417,6 +417,83 @@ BOOST_AUTO_TEST_CASE(ApplyBlocker_ALowerLayerPrefab_IsReadOnly)
 	BOOST_TEST(document->apply_blocker().find("lower layer") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(Apply_KeepsTheRootGuid)
+{
+	write(res_root, "prefabs/g.prefab.desc", R"({"__type":"prefab_desc","__version":2,"__guid":"00000000-0000-0000-0000-00000000abcd","children":[{"__id":"00000000000000a1","name":"arm"}]})");
+	document->open(res::tag::make("prefabs/g.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+
+	BOOST_TEST_REQUIRE(document->save().saved);
+
+	BOOST_TEST(text_of(res_root, "prefabs/g.prefab.desc").find("00000000-0000-0000-0000-00000000abcd") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndWritesOnlyTheDifferences)
+{
+	write(res_root, "prefabs/base.prefab.desc", PREFAB);
+	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":2,"__parent":"res://prefabs/base.prefab.desc"})");
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+
+	BOOST_TEST_REQUIRE(document->save().saved);
+
+	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
+	BOOST_TEST(file.find("__parent") != std::string::npos);
+	BOOST_TEST(file.find("arm2") != std::string::npos);
+	BOOST_TEST(file.find("\"hp\"") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Edit_OfTheRootTransform_ReachesThePreview)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
+		prefab.get_root().has_transform = true;
+		prefab.get_root().position = { 4.f, 5.f, 6.f };
+		return true;
+	}));
+	entt::registry* reg = document->get_registry();
+	BOOST_REQUIRE(reg);
+	bool found = false;
+	for (auto&& [entity, placed] : reg->view<scn::local_transform>().each()) {
+		if (placed.local[3].x == 4.f && placed.local[3].y == 5.f && placed.local[3].z == 6.f) found = true;
+	}
+	BOOST_TEST(found);
+}
+
+BOOST_AUTO_TEST_CASE(Apply_OfTheOpenLevelsFile_IsRefused)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::desc_file_layout files = layout();
+	files.open_level_files = [] { return std::vector<std::string>{ "prefabs/a.prefab.desc" }; };
+	document->set_files(files);
+	BOOST_REQUIRE(rename_arm("arm2"));
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+
+	const edt::save_result saved = document->save();
+
+	BOOST_TEST(!saved.saved);
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(Revert_OfADeletedFile_ReportsItAndKeepsTheEdits)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	fs::remove(res_root / "prefabs/a.prefab.desc");
+
+	const std::string error = document->revert();
+
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(arm_name() == "arm2");
+	BOOST_TEST(document->is_dirty());
+}
+
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)
 {
 	document->open(tag);

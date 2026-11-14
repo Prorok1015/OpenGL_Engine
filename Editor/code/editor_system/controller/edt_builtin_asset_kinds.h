@@ -18,7 +18,8 @@ namespace edt
 		// written. The members have initializers: a test that builds the hooks with only the first two keeps compiling.
 		std::function<desc_file_layout()> desc_layout = {};
 		// Play runs: the prefab cannot be edited or applied. Null: never.
-		std::function<bool()> edits_locked = {};	};
+		std::function<bool()> edits_locked = {};
+	};
 
 	// The id of the preview that makes the prefab_document (open_prefab names it, so a module's preview with a longer suffix
 	// cannot take its place).

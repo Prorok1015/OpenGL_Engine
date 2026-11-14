@@ -94,7 +94,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// The preview shows the working copy: an edit changes it, never the desc the resource cache holds.
 	m_working = std::make_unique<scn::prefab_desc>();
-	prefab_handle->copy_to(*m_working);
+	take_from(*prefab_handle);
 
 	// Load the prefab into the world
 	m_root = reg.create();
@@ -107,7 +107,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	m_open = true;
 	m_dirty = false;
 	m_changed_on_disk = false;
-	m_saved_bytes = working_bytes();
+	m_saved_form = working_form();
 	m_disk_version.clear();
 	m_lower_layer = false;
 	if (m_files.top_layer) {
@@ -134,13 +134,36 @@ void edt::prefab_document::close()
 	m_changed_on_disk = false;
 	m_working.reset();
 	m_root = entt::null;
-	m_saved_bytes.clear();
+	m_saved_form.clear();
 	m_disk_version.clear();
 	m_set_name.clear();
 	m_source_tag = res::tag::null;
 	m_prefab_name.clear();
 
 	egLOG("Editor/PrefabCtx", "Closed prefab editor");
+}
+
+// copy_to leaves out what names a file (the tag, the __guid, the __parent): the copy is written back over that file.
+void edt::prefab_document::take_from(const scn::prefab_desc& source)
+{
+	source.copy_to(*m_working);
+	m_working->set_guid(source.get_guid());
+	m_working->set_parent(source.get_parent());
+}
+
+// What the copy holds, without a file read: the "is it edited" test runs on every edit, an Apply builds the bytes.
+std::string edt::prefab_document::working_form() const
+{
+	if (!m_working) {
+		return {};
+	}
+	namespace json = boost::json;
+	json::object body;
+	m_working->serialize(body);
+	body["__type"] = std::string(scn::prefab_desc::__type);
+	body["__guid"] = m_working->get_guid();
+	body["__parent"] = std::string(m_working->get_parent().view());
+	return json::serialize(body);
 }
 
 std::vector<std::byte> edt::prefab_document::working_bytes() const
@@ -170,6 +193,14 @@ void edt::prefab_document::sync_preview()
 	scn::ecs_assembler* assembler = m_services.assembler();
 	if (reg && assembler && m_working && m_root != entt::null && reg->valid(m_root)) {
 		scn::reconcile(*assembler, *reg, m_root, m_working->get_root(), scn::reconcile_mode::reload);
+		// reconcile moves the children only: the root's own transform is placed here.
+		const scn::prefab_desc::prefab_node& root = m_working->get_root();
+		if (root.has_transform) {
+			reg->emplace_or_replace<scn::local_transform>(m_root, root.get_local_transform());
+			if (reg->ctx().contains<ecs::event<scn::transform_updated>>()) {
+				reg->ctx().get<ecs::event<scn::transform_updated>>().emit(m_root);
+			}
+		}
 	}
 }
 
@@ -190,7 +221,7 @@ bool edt::prefab_document::edit(const std::function<bool(scn::prefab_desc&)>& ch
 	}
 	++m_generation;
 	sync_preview();
-	m_dirty = working_bytes() != m_saved_bytes;
+	m_dirty = working_form() != m_saved_form;
 	announce();
 	return true;
 }
@@ -249,7 +280,7 @@ edt::save_result edt::prefab_document::save()
 		return save_result::failure(std::format("{} could not be written", m_source_tag.view()));
 	}
 	writer->signal_changed(m_source_tag);
-	m_saved_bytes = bytes;
+	m_saved_form = working_form();
 	m_disk_version = code_version_of(bytes);
 	m_dirty = false;
 	m_changed_on_disk = false;
@@ -350,15 +381,15 @@ std::string edt::prefab_document::revert()
 		version = on_disk.version;
 	}
 	// The cache may hold an older read of the file: drop it, then take the prefab fresh.
-	writer->signal_changed(m_source_tag);
+	writer->evict_cached(m_source_tag);
 	auto handle = reader->require_sync<scn::prefab_desc>(m_source_tag);
 	if (!handle.is_ready()) {
 		return std::format("{} could not be loaded", m_source_tag.view());
 	}
-	handle->copy_to(*m_working);
+	take_from(*handle);
 	++m_generation;
 	sync_preview();
-	m_saved_bytes = working_bytes();
+	m_saved_form = working_form();
 	m_disk_version = std::move(version);
 	m_dirty = false;
 	m_changed_on_disk = false;
