@@ -58,11 +58,21 @@ namespace edt
 
 	void prefab_editor_panel::render_toolbar()
 	{
-		// Apply and Revert buttons — disabled in Phase 1
-		ImGui::BeginDisabled(true);
-		ImGui::Button("Apply");
+		const std::string blocker = m_ctx->apply_blocker();
+		const bool can_apply = blocker.empty() && m_ctx->is_dirty() && !m_ctx->changed_on_disk();
+		ImGui::BeginDisabled(!can_apply);
+		if (ImGui::Button("Apply") && m_on_apply) {
+			m_on_apply();
+		}
+		ImGui::EndDisabled();
+		if (!blocker.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::SetTooltip("%s", blocker.c_str());
+		}
 		ImGui::SameLine();
-		ImGui::Button("Revert");
+		ImGui::BeginDisabled(m_ctx->edits_locked());
+		if (ImGui::Button("Revert") && m_on_revert) {
+			m_on_revert();
+		}
 		ImGui::EndDisabled();
 
 		ImGui::SameLine();

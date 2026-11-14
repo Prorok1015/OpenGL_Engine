@@ -109,8 +109,11 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	m_changed_on_disk = false;
 	m_saved_bytes = working_bytes();
 	m_disk_version.clear();
+	m_lower_layer = false;
 	if (m_files.top_layer) {
-		m_disk_version = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, prefab_tag).version;
+		const desc_file_read on_disk = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, prefab_tag);
+		m_disk_version = on_disk.version;
+		m_lower_layer = on_disk.located && !on_disk.top_layer;
 	}
 
 	watch_source();
@@ -190,6 +193,16 @@ bool edt::prefab_document::edit(const std::function<bool(scn::prefab_desc&)>& ch
 	m_dirty = working_bytes() != m_saved_bytes;
 	announce();
 	return true;
+}
+
+std::string edt::prefab_document::apply_blocker() const
+{
+	if (!m_open) return "the prefab is not open";
+	if (edits_locked()) return "Stop Play to apply the prefab";
+	if (!m_files.top_layer) return "the project files are not known";
+	if (m_lower_layer) return "this prefab belongs to a lower layer (the engine or a package): it cannot be written from the project";
+	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) return *why;
+	return {};
 }
 
 edt::save_result edt::prefab_document::save()

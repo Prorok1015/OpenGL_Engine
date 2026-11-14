@@ -58,6 +58,8 @@ namespace edt
 		// a lower layer or changed on disk since it was read, and when the file cannot be checked; on success the preview's
 		// source is signalled as changed (the levels that use the prefab reload it) and the working copy is the save point.
 		save_result save() override;
+		// Why Apply is off right now (empty: it can be pressed): Play, a file of a lower layer, a project that may not be written.
+		std::string apply_blocker() const;
 		bool edits_locked() const override { return m_locked && m_locked(); }
 		void bind_events(editor_events* events) override { m_events = events; }
 
@@ -116,6 +118,7 @@ namespace edt
 		std::string m_disk_version;
 		std::uint64_t m_generation = 0;
 		bool m_changed_on_disk = false;
+		bool m_lower_layer = false;
 		res::resource_system* m_watching = nullptr;
 
 		res::tag m_source_tag;

@@ -19,6 +19,8 @@ namespace edt
 		prefab_editor_panel(rnd::render_system& rnd, gui::gui_system& gui);
 
 		void set_context(prefab_document* ctx) { m_ctx = ctx; }
+		void set_on_apply(std::function<void()> cb) { m_on_apply = std::move(cb); }
+		void set_on_revert(std::function<void()> cb) { m_on_revert = std::move(cb); }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
 		void set_input_router(inp::input_router* router) { m_router = router; }
 
@@ -38,6 +40,8 @@ namespace edt
 		gui::gui_system& m_gui;
 		prefab_document* m_ctx = nullptr;
 		std::function<void()> m_on_close;
+		std::function<void()> m_on_apply;
+		std::function<void()> m_on_revert;
 		inp::input_router* m_router = nullptr;
 		bool m_banner_later = false;
 		std::string m_error;

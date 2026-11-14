@@ -492,6 +492,28 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
 	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
+	m_prefab_panel->set_on_apply([this] {
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab) return;
+		if (const save_result saved = prefab->save(); !saved.saved) {
+			egLOG_WARN("editor", "{}", saved.error);
+			m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
+		}
+	});
+	m_prefab_panel->set_on_revert([this] {
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab) return;
+		m_context->dialogs().choose("Revert prefab", std::format("Drop the edits of '{}' and take the file again?", prefab->title()), { "Revert", "Cancel" },
+			[this, id = prefab->id(), alive = std::weak_ptr<int>(m_prefab_alive)](std::optional<std::size_t> choice) {
+				if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
+				prefab_document* open = prefab_of(m_context->documents());
+				if (!open || open->id() != id) return;
+				if (const std::string error = open->revert(); !error.empty()) {
+					egLOG_WARN("editor", "{}", error);
+					m_context->dialogs().message(message_level::error, std::format("'{}' was not reverted:\n{}", open->title(), error));
+				}
+			});
+	});
 	m_prefab_panel->set_input_router(m_input_router);
 
 	asset_kind_hooks asset_hooks;

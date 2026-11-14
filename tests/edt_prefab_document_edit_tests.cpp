@@ -400,6 +400,23 @@ BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileClean_IsTakenWithoutAsking)
 	BOOST_TEST(preview_has_node_named("outside"));
 }
 
+BOOST_AUTO_TEST_CASE(ApplyBlocker_NamesWhyApplyIsOff)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(document->apply_blocker().empty());
+	document->set_lock_source([] { return true; });
+	BOOST_TEST(!document->apply_blocker().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ApplyBlocker_ALowerLayerPrefab_IsReadOnly)
+{
+	write(lower, "prefabs/low.prefab.desc", PREFAB);
+	document->open(res::tag::make("prefabs/low.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(document->apply_blocker().find("lower layer") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)
 {
 	document->open(tag);
