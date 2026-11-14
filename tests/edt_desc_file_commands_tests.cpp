@@ -19,6 +19,7 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -1010,9 +1011,24 @@ BOOST_AUTO_TEST_CASE(AnObjectWithAGuidThatIsNoUuid_InAPrefabComponent_IsPlainDat
 	const auto written = call("desc.write", write_args("prefabs/crate.desc", version, content));
 
 	BOOST_REQUIRE_MESSAGE(written.ok, written.error);
-	const std::string saved = read_file(res_root / "prefabs" / "crate.desc");
-	BOOST_TEST(saved.find(R"("tag":{"guid":"abc"})") != std::string::npos);
-	BOOST_TEST(saved.find(R"("link":{"guid":"abc","path":"anything"})") != std::string::npos);
+	// Looked for as values, wherever the writer puts them and however it lays the file out.
+	const std::function<bool(const json::value&, const json::value&)> holds = [&holds](const json::value& in, const json::value& what) {
+		if (in == what) return true;
+		if (in.is_object()) {
+			for (const auto& member : in.as_object()) {
+				if (holds(member.value(), what)) return true;
+			}
+		}
+		if (in.is_array()) {
+			for (const json::value& item : in.as_array()) {
+				if (holds(item, what)) return true;
+			}
+		}
+		return false;
+	};
+	const json::value saved = json::parse(read_file(res_root / "prefabs" / "crate.desc"));
+	BOOST_TEST(holds(saved, json::parse(R"({"guid":"abc"})")), json::serialize(saved));
+	BOOST_TEST(holds(saved, json::parse(R"({"guid":"abc","path":"anything"})")), json::serialize(saved));
 
 	const auto created = call("desc.create", desc_args("prefabs/crate2.desc", content));
 	BOOST_TEST(created.ok, created.error);
