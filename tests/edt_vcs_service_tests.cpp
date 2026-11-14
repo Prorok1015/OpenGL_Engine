@@ -1530,6 +1530,12 @@ BOOST_AUTO_TEST_CASE(AnAgentStagesOnlyTheProjectsOwnFiles)
 	const json::value own = finish(service->start_stage({ "game/res" }, cmd::origin_kind::agent));
 	BOOST_TEST(!own.as_object().contains("error"), json::serialize(own));
 	BOOST_TEST((staged_files(repo) == std::vector<std::string>{ "game/res/a.txt" }));
+#ifdef _WIN32
+	// A name that only looks short is the file's own: it resolves to no private folder.
+	write(project / "notes~1.txt", "n\n");
+	const json::value tilde = finish(service->start_stage({ "game/notes~1.txt" }, cmd::origin_kind::agent));
+	BOOST_TEST(!tilde.as_object().contains("error"), json::serialize(tilde));
+#endif
 
 	const json::value by_person = finish(service->start_stage({ "." }, cmd::origin_kind::ui));
 	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
@@ -1597,6 +1603,70 @@ BOOST_AUTO_TEST_CASE(AnAgentsCommitAndPush_RefuseThePersonsOwnFiles)
 	const json::value pushed = finish(service->start_push("origin", "agent/work", false, cmd::origin_kind::agent));
 	BOOST_TEST(is_error(pushed, "path_outside_project"), json::serialize(pushed));
 	BOOST_TEST(git_text(remote, { "branch", "--list", "agent/work" }).empty());
+}
+
+// Review of #917: the project's policy file is committed by the template, so an agent's commit and its first push
+// carry it; its stage of the file is still refused.
+BOOST_AUTO_TEST_CASE(AnAgentsCommitAndFirstPush_CarryTheCommittedPolicyFile)
+{
+	isolate_config();
+	const fs::path remote = make_bare("policy_remote.git");
+	const fs::path repo = make_plain_repository("policy_push");
+	write(repo / ".snk" / "agent_policy.json", "{}\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a new project" });
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	make_service(real_options(repo));
+
+	write(repo / ".snk" / "agent_policy.json", "{\"vcs\":{}}\n");
+	const json::value staged = finish(service->start_stage({ ".snk/agent_policy.json" }, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(staged, "path_outside_project"), json::serialize(staged));
+	finish(service->start_stage({ ".snk/agent_policy.json" }, cmd::origin_kind::ui));
+	const json::value committed = finish(service->start_commit("by an agent", cmd::origin_kind::agent));
+	BOOST_TEST(!committed.as_object().contains("error"), json::serialize(committed));
+
+	// The file transport is refused to a guarded push later (network_refusal): only the files check is this test's.
+	git(repo, { "checkout", "-q", "-b", "agent/first" });
+	const json::value pushed = finish(service->start_push("origin", "agent/first", false, cmd::origin_kind::agent));
+	BOOST_TEST(!is_error(pushed, "path_outside_project"), json::serialize(pushed));
+	BOOST_TEST(!is_error(pushed, "denied"), json::serialize(pushed));
+}
+
+// Review of #917: what another remote already has is still checked for the remote pushed to, and a merge commit's
+// own changes count (an evil merge that adds the token).
+BOOST_AUTO_TEST_CASE(AnAgentsPush_ChecksWhatThisRemoteLacks_MergesToo)
+{
+	isolate_config();
+	const fs::path origin = make_bare("lacks_origin.git");
+	const fs::path backup = make_bare("lacks_backup.git");
+	const fs::path repo = make_plain_repository("lacks_push");
+	git(repo, { "remote", "add", "origin", file_url(origin) });
+	git(repo, { "remote", "add", "backup", file_url(backup) });
+	git(repo, { "push", "-q", "origin", "main" });
+	git(repo, { "push", "-q", "backup", "main" });
+	make_service(real_options(repo));
+
+	git(repo, { "checkout", "-q", "-b", "agent/backed_up" });
+	write(repo / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a person's commit of the token" });
+	git(repo, { "push", "-q", "backup", "agent/backed_up" });
+	const json::value backed_up = finish(service->start_push("origin", "agent/backed_up", false,
+		cmd::origin_kind::agent));
+	BOOST_TEST(is_error(backed_up, "path_outside_project"), json::serialize(backed_up));
+
+	git(repo, { "checkout", "-q", "-b", "side", "main" });
+	write(repo / "side.txt", "s\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "side" });
+	git(repo, { "push", "-q", "origin", "side" });
+	git(repo, { "checkout", "-q", "-b", "agent/merged", "main" });
+	git(repo, { "merge", "-q", "--no-ff", "--no-commit", "side" });
+	write(repo / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "merge side" });
+	const json::value merged = finish(service->start_push("origin", "agent/merged", false, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(merged, "path_outside_project"), json::serialize(merged));
 }
 
 // Owner decision (#454): an agent's commit runs no hook of the repository; a person's does.
@@ -2776,78 +2846,6 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesTheProjectsBuildInputs_IsDenied
 	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
 }
 
-// #909: the same rule for an agent's pull: a fetched commit that changes the project's .snk/build.json is not merged.
-BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheProjectsBuildInputs_IsDenied)
-{
-	isolate_config();
-	const fs::path remote = make_bare("protected_remote.git");
-	const fs::path repo = make_plain_repository("protected_pull");
-	git(repo, { "remote", "add", "origin", file_url(remote) });
-	git(repo, { "push", "-q", "-u", "origin", "main" });
-	const fs::path other = base / "protected_other";
-	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(other) });
-	git(other, { "config", "user.name", "Other User" });
-	git(other, { "config", "user.email", "other@example.com" });
-	write(other / ".snk" / "build.json", "{\"live_enabled\":true}\n");
-	git(other, { "add", "-A" });
-	git(other, { "commit", "-q", "-m", "their build settings" });
-	git(other, { "push", "-q", "origin", "main" });
-	const std::string before = head_of(repo);
-	make_service(real_options(repo));
-
-	const json::value refused = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
-	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
-	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find(".snk/build.json")
-		!= std::string::npos);
-	BOOST_TEST(head_of(repo) == before);
-
-	const json::value by_person = finish(service->start_pull({}, {}, cmd::origin_kind::ui));
-	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
-	BOOST_TEST(head_of(repo) != before);
-}
-
-// Review of #909: a pull that changes code/ while live mode is on, or the project's .snk/ spelled in other letter
-// case where the file system ignores it.
-BOOST_AUTO_TEST_CASE(AGuardedPull_OfCodeWhileLiveOrOfAnotherSpelling_IsDenied)
-{
-	isolate_config();
-	const fs::path remote = make_bare("protected_code_remote.git");
-	const fs::path repo = make_plain_repository("protected_code_pull");
-	git(repo, { "remote", "add", "origin", file_url(remote) });
-	git(repo, { "push", "-q", "-u", "origin", "main" });
-	const fs::path other = base / "protected_code_other";
-	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(other) });
-	git(other, { "config", "user.name", "Other User" });
-	git(other, { "config", "user.email", "other@example.com" });
-	const auto push_change = [&](const std::string& file) {
-		write(other / path_of(file), "changed\n");
-		git(other, { "add", "-A" });
-		git(other, { "commit", "-q", "-m", "change " + file });
-		git(other, { "push", "-q", "origin", "main" });
-	};
-	push_change("code/src/a.cpp");
-	bool live = true;
-	edt::vcs_options options = real_options(repo);
-	options.live_mode_on = [&live] { return live; };
-	make_service(std::move(options));
-
-	const std::string before = head_of(repo);
-	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "denied"));
-	BOOST_TEST(head_of(repo) == before);
-	live = false;
-	const json::value allowed = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
-	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
-	BOOST_TEST(head_of(repo) != before);
-
-#if defined(_WIN32) || defined(__APPLE__)
-	push_change(".SNK/build.json");
-	const std::string pulled = head_of(repo);
-	const json::value refused = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
-	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
-	BOOST_TEST(head_of(repo) == pulled);
-#endif
-}
-
 // Review of #909: a link or a submodule in the project is denied wherever it points, a folder of the project
 // spelled otherwise is the folder, and before the first commit every file of the target counts.
 BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDenied)
@@ -2861,6 +2859,8 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDen
 	git(repo, { "add", "-A" });
 	git(repo, { "commit", "-q", "-m", "a project" });
 	const std::string main_head = head_of(repo);
+	// The person's own .snk/ on the disk (untracked): its short name is what a target's "SNK~1" would reach.
+	write(project / ".snk" / "local.json", "{}\n");
 	write(base / "link_target.txt", "../../elsewhere");
 	std::string link_blob = git_text(repo, { "hash-object", "-w", "--", edt::utf8_of(base / "link_target.txt") });
 	while (!link_blob.empty() && (link_blob.back() == '\n' || link_blob.back() == '\r')) link_blob.pop_back();
@@ -2889,6 +2889,12 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDen
 	}
 	branch_with("outside", "120000", link_blob, "docs/link");
 	branch_with("named", "100644", link_blob, "game/res/\xC3\xA9t\xC3\xA9.txt");
+	std::vector<const char*> allowed{ "outside", "named" };
+#ifdef _WIN32
+	// Only looks short: it names no folder on the disk.
+	branch_with("tilde", "100644", link_blob, "game/notes~1.txt");
+	allowed.push_back("tilde");
+#endif
 
 	bool live = false;
 	edt::vcs_options options = real_options(project);
@@ -2905,7 +2911,7 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDen
 		}
 	}
 	live = false;
-	for (const char* branch : { "outside", "named" }) {
+	for (const char* branch : allowed) {
 		BOOST_TEST_CONTEXT(branch) {
 			const json::value allowed = finish(service->start_checkout(branch, cmd::origin_kind::agent));
 			BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
@@ -4073,19 +4079,24 @@ BOOST_AUTO_TEST_CASE(Cancel_StopsTheRunningGit)
 // not switched off (a refusal handles them). A person's write keeps git's own behaviour.
 BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 {
-	command = [](const std::vector<std::string>&, const platform::process_options&,
-		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	command = [](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "ls-files")) on_line("a.txt\0"s);
+		return exited(0);
+	};
 	auto options = fake_options();
 	options.environment->push_back("GIT_ASKPASS=/usr/bin/evil-askpass");
 	options.environment->push_back("SSH_ASKPASS=/usr/bin/evil-askpass");
 	make_service(std::move(options));
 
 	finish(service->start_stage({ "a.txt", "-rf" }, cmd::origin_kind::agent));
-	const auto agent = calls.back();
-	BOOST_REQUIRE(agent.size() >= 4u);
-	BOOST_TEST(agent[agent.size() - 4] == "add");
-	BOOST_TEST(agent[agent.size() - 3] == "--");
-	BOOST_TEST(agent.back() == "-rf");
+	const auto* add = last_call_with(calls, "add");
+	BOOST_REQUIRE(add);
+	const auto agent = *add;
+	// The listed files go through a NUL-separated file, so "-rf" never reaches git as an argument.
+	BOOST_TEST(!arg_starting_with(agent, "--pathspec-from-file=").empty());
+	BOOST_TEST(agent.back() == "--pathspec-file-nul");
+	BOOST_TEST(!has_arg(agent, "-rf"));
 	BOOST_TEST(has_arg(agent, "core.askPass="));
 	BOOST_TEST(has_arg(agent, "core.sshCommand=ssh -oBatchMode=yes"));
 	BOOST_TEST(has_arg(agent, "core.fsmonitor=false"));
@@ -4707,6 +4718,59 @@ BOOST_AUTO_TEST_CASE(AnOmittedRemote_IsResolvedOnce_AsGitWould_AndNamedToGit)
 	BOOST_TEST(fetches().size() == 2u);
 }
 
+// #909: an agent's pull of a commit that changes the project's .snk/ (another letter case where the file system
+// ignores it), or code/ while live mode is on, is not merged. A guarded fetch reaches only https and ssh, so the
+// fake git answers.
+BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheProjectsBuildInputs_IsDenied)
+{
+	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
+	std::string changed;
+	command = [&changed](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "symbolic-ref")) on_line("main\n");
+		if (has_arg(args, "branch.main.merge")) on_line("refs/heads/main\n");
+		if (has_arg(args, "diff-tree") && !has_arg(args, "--quiet")) {
+			on_line(":100644 100644 3333333333333333333333333333333333333333 "
+				"4444444444444444444444444444444444444444 M\0"s + changed + '\0');
+		}
+		return exited(0);
+	};
+	bool live = false;
+	auto options = fake_options();
+	options.live_mode_on = [&live] { return live; };
+	make_service(std::move(options));
+	const auto merged = [this] {
+		return std::ranges::any_of(calls, [](const std::vector<std::string>& call) { return has_arg(call, "merge"); });
+	};
+	const auto pull = [this] { return finish(service->start_pull({}, {}, cmd::origin_kind::agent)); };
+
+	changed = ".snk/build.json";
+	const json::value refused = pull();
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find(".snk/build.json")
+		!= std::string::npos);
+	BOOST_TEST(!merged());
+
+	changed = "code/src/a.cpp";
+	live = true;
+	BOOST_TEST(is_error(pull(), "denied"));
+	BOOST_TEST(!merged());
+	live = false;
+	const json::value allowed = pull();
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST(merged());
+
+#if defined(_WIN32) || defined(__APPLE__)
+	calls.clear();
+	changed = ".SNK/build.json";
+	BOOST_TEST(is_error(pull(), "denied"));
+	BOOST_TEST(!merged());
+#endif
+	calls.clear();
+	BOOST_TEST(!finish(service->start_pull({}, {}, cmd::origin_kind::ui)).as_object().contains("error"));
+	BOOST_TEST(merged());
+}
+
 // Security review of #481: a guarded pull whose fetched commit changes the policy file is denied before the merge;
 // on a branch without commits, a target that holds the file is denied too.
 BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheAgentPolicyFile_IsDenied)
@@ -4742,6 +4806,7 @@ BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheAgentPolicyFile_IsDenied)
 	const auto diff = std::find_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "diff-tree"); });
 	BOOST_REQUIRE(diff != calls.end());
 	BOOST_TEST(has_arg(*diff, "2222222222222222222222222222222222222222"));
+	BOOST_TEST(has_arg(*diff, "-r"));
 	BOOST_TEST(diff->back() == ".snk/agent_policy.json");
 
 	changes_policy = false;
