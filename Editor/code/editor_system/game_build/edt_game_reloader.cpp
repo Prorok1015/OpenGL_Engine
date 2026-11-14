@@ -1,4 +1,5 @@
 #include "edt_game_reloader.h"
+#include "edt_project_trust_service.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/common/logger/engine_log.h>
@@ -52,6 +53,9 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 	command.risk = cmd::danger::deny_by_default;
 	command.enabled = [this] { return disabled_reason().empty(); };
 	command.invoke = [this](const cmd::call& request) {
+		if (request.from.kind != cmd::origin_kind::ui && m_options.trusted && !m_options.trusted()) {
+			return action_result::failure(cmd::codes::denied, std::string(k_untrusted_project_error));
+		}
 		if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
 		std::string module;
 		if (const json::value* chosen = request.args.as_object().if_contains("module")) module = std::string(chosen->as_string());

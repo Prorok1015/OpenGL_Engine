@@ -65,6 +65,9 @@ namespace edt
 		// Runs right before the swap, after every check (HOT_RELOAD_PLAY.md 3.1): Play takes its snapshot here.
 		// Returns why Play is restarted instead of kept; empty: kept, or not running. Null: nothing runs.
 		std::function<std::string(const std::string& module)> before_reload;
+		// Whether the person trusts the project (#921): untrusted, build.reload_game_module is denied to every caller
+		// but the person (the host still asks its trust_library for every copy). Null: trusted.
+		std::function<bool()> trusted;
 	};
 
 	// Reloads the game module from its new build (#435): Build > Reload Game Module (action build.reload_game_module)

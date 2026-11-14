@@ -4,6 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/application/app_frame_stage.h>
 #include "edt_camera_redirect.h"
+#include "edt_project_trust_service.h"
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -85,6 +86,10 @@ namespace components {
 		}
 		// Order matters: ~editor_system releases the scene document (and closes the preview) in the context's document_manager.
 		data.destruct<edt::editor_system>();
+		// Constructed by editor_system::init (#921); main's trust_library falls back to --trust-project without it.
+		if (data.has_value<edt::project_trust_service>()) {
+			data.destruct<edt::project_trust_service>();
+		}
 		// Registered by editor_system::init, after the system itself.
 		if (data.has_value<edt::editor_context>()) {
 			data.destruct<edt::editor_context>();

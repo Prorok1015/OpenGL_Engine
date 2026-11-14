@@ -67,6 +67,7 @@
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_live_consent.h"
+#include "edt_project_trust_service.h"
 #include "edt_agent_policy.h"
 #include "edt_settings.h"
 #include "edt_play_commands.h"
@@ -453,6 +454,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		nobody.warn_headless = true;
 		m_context->dialogs().set_auto_answer(nobody);
 	}
+	// #921: main's trust_library of the project's modules finds it in the storage; build.* and live mode ask it.
+	if (!data.has_value<project_trust_service>()) {
+		const std::optional<std::string> trust_key = data.has_value<prj::project_context>()
+			? canonical_project_settings_key(data.require<prj::project_context>().root) : std::nullopt;
+		data.construct<project_trust_service>(m_res, trust_key);
+	}
+	m_trust = data.require_shared<project_trust_service>();
+	m_registrations.push_back(m_context->actions().add({ .id = "project.trust", .label = "Trust Project Modules...",
+		.menu_path = "Project", .disabled_tooltip = "Open a project first",
+		.execute = no_args([this, &data] { ask_trust(data, nullptr); }),
+		.expose_as_tool = false,
+		.enabled = [this] {
+			const auto trust = m_trust.lock();
+			return trust && trust->has_project();
+		},
+		// Only the person grants trust: an agent never sees or answers this question.
+		.category = cmd::agent_category::not_for_agents }));
 	// The panels own input routing: whichever scene image is hovered feeds its context, nothing else does.
 	m_input_router = &data.require<inp::input_router>();
 	m_input_router->set_default_target(std::nullopt);
@@ -937,6 +955,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	build_options.events = &m_context->events();
 	build_options.auto_jobs = [] { return estimate_jobs().jobs; };
 	build_options.start_blocker = [this] { return migration_blocker(); };
+	build_options.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	build_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
+	build_options.own_build = [this](std::string_view module, std::string_view sha256) {
+		if (const auto trust = m_trust.lock()) trust->record_own_build_hash(module, sha256);
+	};
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
@@ -988,6 +1014,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
 	reload_options.stop_background = [this] { stop_live_build(); };
 	reload_options.events = &m_context->events();
+	reload_options.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
 			fn();
@@ -1188,6 +1218,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// wait for: the project's game modules load after it (#428), and the scan's types are theirs.
 		if (headless) static_cast<void>(startup->tick());
 		else editor_layer->register_implicit("edt/migration_journal", [startup] { return startup->tick(); });
+	}
+
+	// #921: main loads the project's modules after init, so the first frame knows which wait for the person's answer.
+	// Headless nobody is asked: they stay unloaded unless --trust-project was given.
+	if (!project_held) {
+		editor_layer->register_implicit("edt/project_trust", [this, &data, headless] {
+			const auto trust = m_trust.lock();
+			if (!trust || !trust->waiting()) return false;
+			if (headless) {
+				egLOG_WARN("editor/trust", "not loaded: {}: project modules are not trusted: pass --trust-project",
+					module_list(trust->waiting_modules()));
+			} else {
+				ask_trust(data, nullptr);
+			}
+			return false;
+		});
 	}
 
 	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
@@ -1400,6 +1446,11 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 			return store_live_consent(m_res, key, enabled);
 		};
 	}
+	live.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	live.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
 	live.on_toggled = [this] {
 		if (m_agent_server) m_agent_server->notify_tools_changed();
 	};
@@ -1414,10 +1465,17 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
 	m_live_mode->watch(m_res);
 	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
-	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this](bool enabled) {
-		if (auto refused = m_live_mode->set_enabled(enabled, true)) {
-			egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this, &data](bool enabled) {
+		const auto apply = [this, enabled] {
+			if (auto refused = m_live_mode->set_enabled(enabled, true)) {
+				egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+			}
+		};
+		if (enabled && !m_live_mode->enabled() && !m_live_mode->trusted()) {
+			ask_trust(data, apply);
+			return;
 		}
+		apply();
 	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
@@ -1427,6 +1485,61 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
 		}
 	}
+}
+
+void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted)
+{
+	const auto answered = [this, &data, on_trusted = std::move(on_trusted)](trust_answer answer) {
+		const auto trust = m_trust.lock();
+		if (answer == trust_answer::trusted) {
+			if (trust && trust->waiting()) load_waiting_modules(data);
+			if (on_trusted) on_trusted();
+			return;
+		}
+		if (trust && trust->waiting()) {
+			egLOG_WARN("editor/trust", "the project runs without its modules ({}): you did not trust it",
+				module_list(trust->waiting_modules()));
+		}
+		if (m_live_mode && m_live_mode->enabled()) {
+			// Not stored: the person's switch comes back once they trust the project again.
+			static_cast<void>(m_live_mode->set_enabled(false, false));
+			egLOG_WARN("editor/trust", "live mode is off: {}", k_untrusted_project_error);
+		}
+	};
+	edt::ask_project_trust(m_context->dialogs(), m_trust, answered);
+}
+
+void edt::editor_system::load_waiting_modules(ds::app_data_storage& data)
+{
+	// Not inside the dialog's answer, nor under a level load, a migration or Play: the game layer changes with it.
+	editor_layer->register_implicit("edt/project_trust/load", [this, &data, logged = std::make_shared<std::string>()] {
+		std::string reason;
+		if (auto migrating = migration_blocker()) {
+			reason = *migrating;
+		} else if (auto loading = load_in_progress()) {
+			reason = *loading;
+		} else if (m_play && m_play->active()) {
+			reason = "Play runs";
+		}
+		if (!reason.empty()) {
+			if (*logged != reason) {
+				*logged = reason;
+				egLOG_INFO("editor/trust", "the project's modules load once this ends: {}", reason);
+			}
+			return true;
+		}
+		if (!data.has_value<core::project_module_host>()) return false;
+		if (const auto trust = m_trust.lock()) trust->clear_waiting();
+		const core::project_modules_report report = data.require<core::project_module_host>().load_waiting();
+		if (!report.loaded.empty()) {
+			egLOG_INFO("editor/trust", "trusted modules loaded: {}", module_list(report.loaded));
+		}
+		if (!report.refused.empty() || !report.untrusted.empty() || !report.missing_required.empty()) {
+			egLOG_WARN("editor/trust", "modules not loaded after trust: refused {}; untrusted {}; missing {}",
+				module_list(report.refused), module_list(report.untrusted), module_list(report.missing_required));
+		}
+		return false;
+	});
 }
 
 void edt::editor_system::tick_live_mode()

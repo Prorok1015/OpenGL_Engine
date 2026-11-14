@@ -124,6 +124,14 @@ namespace edt
 		// Why no build may start now (a project migration writes the project, #761): start() answers `busy` with it.
 		// Null or nullopt: builds start.
 		std::function<std::optional<std::string>()> start_blocker;
+		// Whether the person trusts the project (#921): its build runs its own CMake. Untrusted, build.game_module is
+		// denied to every caller but the person, and Build Game asks `ask_trust` first, building only once `then` runs.
+		// Null: trusted.
+		std::function<bool()> trusted;
+		std::function<void(std::function<void()> then)> ask_trust;
+		// On the main thread after a successful build, before game_module_built: the SHA-256 of each module file it
+		// produced, hashed on the build's thread (null: none).
+		std::function<void(std::string_view module, std::string_view sha256)> own_build;
 	};
 
 	// What one build produced; filled on the worker thread.
@@ -143,6 +151,8 @@ namespace edt
 			// Absolute; the first of module_file_names that exists, else the first of them.
 			std::filesystem::path path;
 			bool exists = false;
+			// Of the file as the build left it; nullopt: no file, a failed build, or it could not be read.
+			std::optional<std::string> sha256;
 		};
 		// The files the manifest's modules were built into (<root>/build/bin/<file>).
 		std::vector<module_file> modules;
