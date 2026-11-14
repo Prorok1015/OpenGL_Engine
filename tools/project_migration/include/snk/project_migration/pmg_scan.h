@@ -142,6 +142,8 @@ namespace prj::migration
 		scan_options scan;
 		// The project steps to plan (pmg_project_steps.h); none without it.
 		const project_step_registry* project_steps = nullptr;
+		// --force (S6): an invalid file is left as it is and reported, instead of refusing the whole migration.
+		bool force = false;
 	};
 
 	struct planned_project_step
@@ -164,6 +166,8 @@ namespace prj::migration
 		std::string refused;
 		// scan_options::resource_meta_version of the plan: what apply checks a migrated sidecar against.
 		std::int64_t resource_meta_version = res::asset_meta_version;
+		// plan_options::force.
+		bool force = false;
 
 		// An older engine_version keeps the version dialog.
 		bool manifest_outdated() const { return scan.manifest.kind == file_class::outdated; }

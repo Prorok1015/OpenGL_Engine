@@ -15,12 +15,7 @@
 CFG_VAR_DEF_PATH(cfg_res_user_path, "resource/user_path", "");
 
 namespace {
-	// memory:// of a read-only project: this run's own folder, removed by resource_term.
-	struct scratch_folder
-	{
-		explicit scratch_folder(std::filesystem::path folder) : path(std::move(folder)) {}
-		std::filesystem::path path;
-	};
+	using scratch_folder = core::res::run_scratch_folder;
 
 	void create_folder(const prj::project_context& project, const std::filesystem::path& dir)
 	{

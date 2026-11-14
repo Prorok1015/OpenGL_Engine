@@ -11,6 +11,7 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
@@ -32,6 +33,11 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+	std::string_view as_text(const std::vector<std::byte>& bytes)
+	{
+		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
+	}
 
 	std::vector<std::byte> read_file(const fs::path& path)
 	{
@@ -142,8 +148,18 @@ int main(int argc, char** argv)
 			continue;
 		}
 
-		const auto written = adapter.serialize(tag, loaded);
-		if (written == read_file(path)) {
+		auto written = adapter.serialize(tag, loaded);
+		const std::vector<std::byte> original = read_file(path);
+		// One form with a migration (#851): the root __guid stays as the file has it, none is made.
+		boost::system::error_code before_error;
+		boost::system::error_code after_error;
+		const json::value before = json::parse(as_text(original), before_error);
+		json::value after = json::parse(as_text(written), after_error);
+		if (!before_error && !after_error && before.is_object() && after.is_object()
+			&& desc::keep_root_guid(after.as_object(), before.as_object())) {
+			written = desc_sys.serialize_to_bytes(after);
+		}
+		if (written == original) {
 			continue;
 		}
 		++changed;

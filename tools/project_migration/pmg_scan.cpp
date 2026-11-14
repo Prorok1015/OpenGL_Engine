@@ -711,6 +711,7 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 	migration_plan plan;
 	plan.scan = scan;
 	plan.resource_meta_version = options.scan.resource_meta_version;
+	plan.force = options.force;
 	if (const int steps_to = game_layer.current_version(res::asset_meta_type); steps_to != options.scan.resource_meta_version) {
 		plan.refused = std::format("the steps of {} lead to version {}, but the engine reads version {}: a step must raise "
 			"res::asset_meta_version with it", res::asset_meta_type, steps_to, options.scan.resource_meta_version);

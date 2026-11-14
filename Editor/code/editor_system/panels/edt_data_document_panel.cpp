@@ -44,13 +44,19 @@ void edt::data_document_panel::on_hidden()
 
 void edt::data_document_panel::on_render()
 {
-	const data_document_status status = status_of(m_document);
+	const data_document_status status = status_of(m_document, m_has_project_migration && m_has_project_migration());
 	ImGui::TextDisabled("%s", status.path.c_str());
 	if (!status.parents.empty()) {
 		ImGui::TextDisabled("inherits: %s", status.parents.c_str());
 	}
 	if (!status.chain_problem.empty()) {
 		ImGui::TextColored(k_warning, "A parent could not be read, the last good values are shown: %s", status.chain_problem.c_str());
+	}
+	if (status.migrated) {
+		ImGui::TextColored(k_warning, "%s", status.migration_note.c_str());
+		if (!status.migration_details.empty() && ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("%s", status.migration_details.c_str());
+		}
 	}
 	if (!status.changed_on_disk) {
 		m_dismissed = false;
@@ -69,7 +75,8 @@ void edt::data_document_panel::on_render()
 		}
 	}
 
-	ImGui::BeginDisabled(!status.dirty || !status.can_save);
+	// An outdated file can be saved as it is (the new version, after a question), even before any edit.
+	ImGui::BeginDisabled(!(status.dirty || status.migrated) || !status.can_save);
 	if (ImGui::Button("Save")) {
 		if (m_on_save) {
 			m_on_save();

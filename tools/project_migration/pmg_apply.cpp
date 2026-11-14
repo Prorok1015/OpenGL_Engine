@@ -2,6 +2,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/platform/plt_beneath.h>
 #include <snk/project/prj_json_text.h>
@@ -354,35 +355,6 @@ namespace
 		return {};
 	}
 
-	struct root_guid
-	{
-		json::value value;
-		std::size_t position = 0;
-	};
-
-	// Puts the root __guid of a saved desc back to what the file had: the same value, or none. One the save dropped
-	// goes back at the position it had in the file. Whether anything changed.
-	bool restore_guid(json::object& saved, const std::optional<root_guid>& before)
-	{
-		json::value* now = saved.if_contains("__guid");
-		if (!before) return now && saved.erase("__guid") > 0;
-		if (now) {
-			if (*now == before->value) return false;
-			*now = before->value;
-			return true;
-		}
-		json::object ordered;
-		ordered.reserve(saved.size() + 1);
-		std::size_t index = 0;
-		for (auto& member : saved) {
-			if (index++ == before->position) ordered.emplace("__guid", before->value);
-			ordered.emplace(member.key(), std::move(member.value()));
-		}
-		if (!ordered.contains("__guid")) ordered.emplace("__guid", before->value);
-		saved = std::move(ordered);
-		return true;
-	}
-
 	bool is_desc_path(std::string_view path)
 	{
 		constexpr std::string_view suffix = ".desc";
@@ -542,17 +514,9 @@ namespace
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
 			// A migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
-			// .resource's (EPIC-57 4.2). The engine's save keeps the __guid it loaded and makes none up (#772); restore_guid
-			// puts the root __guid back where the file had it.
-			std::optional<root_guid> guid_before;
-			if (migrated.is_object()) {
-				const json::object& root = migrated.as_object();
-				for (auto member = root.begin(); member != root.end(); ++member) {
-					if (member->key() != "__guid") continue;
-					guid_before = root_guid{ member->value(), static_cast<std::size_t>(member - root.begin()) };
-					break;
-				}
-			}
+			// .resource's (EPIC-57 4.2). The engine's save keeps the __guid it loaded and makes none up (#772);
+			// desc::keep_root_guid puts the root __guid back where the file had it.
+			const json::object file_root = migrated.is_object() ? migrated.as_object() : json::object{};
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);
 
@@ -566,7 +530,7 @@ namespace
 					why_json = lost_parent(migrated, &written, {});
 					if (why_json.empty()) {
 						file.written_as = "engine";
-						if (written.is_object() && restore_guid(written.as_object(), guid_before)) {
+						if (written.is_object() && desc::keep_root_guid(written.as_object(), file_root)) {
 							return text_of(m_context.descs.serialize_to_bytes(written));
 						}
 						return saved;
@@ -886,27 +850,47 @@ std::string_view prj::migration::to_string(migration_status status)
 	return "in_progress";
 }
 
+std::string prj::migration::plan_refusal(const migration_plan& plan)
+{
+	const manifest_state& manifest = plan.scan.manifest;
+	if (manifest.kind == file_class::newer || manifest.kind == file_class::invalid) {
+		return std::format("project.snkproj: {} {}", to_string(manifest.kind), manifest.reason);
+	}
+	if (!plan.force) {
+		for (const scanned_file& file : plan.scan.files) {
+			if (file.kind == file_class::invalid) return std::format("{}: {} {} (--force leaves it as it is)", file.path, to_string(file.kind), file.reason);
+		}
+	}
+	return plan.refused;
+}
+
+std::vector<prj::migration::skipped_file> prj::migration::skipped_by(const migration_plan& plan)
+{
+	std::vector<skipped_file> skipped;
+	for (const scanned_file& file : plan.scan.files) {
+		const bool left = file.kind == file_class::unknown_type || file.kind == file_class::newer
+			|| (file.kind == file_class::invalid && plan.force);
+		if (left) skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
+	}
+	return skipped;
+}
+
+std::string prj::migration::report_text(const migration_report& report)
+{
+	return report_markdown(report);
+}
+
 prj::migration::apply_outcome prj::migration::apply_migration(const migration_plan& plan, const apply_context& context)
 {
 	apply_outcome outcome;
 	migration_report& report = outcome.report;
 
 	const manifest_state& manifest = plan.scan.manifest;
-	if (manifest.kind == file_class::newer || manifest.kind == file_class::invalid) {
-		outcome.refused = std::format("project.snkproj: {} {}", to_string(manifest.kind), manifest.reason);
+	if (std::string why = plan_refusal(plan); !why.empty()) {
+		outcome.refused = std::move(why);
 		return outcome;
 	}
-	for (const scanned_file& file : plan.scan.files) {
-		if (file.kind == file_class::newer || file.kind == file_class::invalid) {
-			outcome.refused = std::format("{}: {} {}", file.path, to_string(file.kind), file.reason);
-			return outcome;
-		}
-		if (file.kind == file_class::unknown_type) report.skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
-	}
-	if (!plan.refused.empty()) {
-		outcome.refused = plan.refused;
-		return outcome;
-	}
+	report.skipped = skipped_by(plan);
 	if (const int steps_to = context.descs.current_version(res::asset_meta_type); steps_to != plan.resource_meta_version) {
 		outcome.refused = std::format("the steps of {} lead to version {}, but the engine reads version {}", res::asset_meta_type, steps_to,
 			plan.resource_meta_version);

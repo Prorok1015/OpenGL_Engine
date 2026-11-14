@@ -38,6 +38,17 @@ int snk::game_host::run(int argc, char* argv[], std::map<std::string, app::modul
 	}
 	engine::init_logger(log_to_stderr ? engine::console_target::stderr_ : engine::console_target::stdout_);
 
+	// The shared parser knows the editor's migration flags (EPIC-58 S6); a game migrates nothing.
+	for (int i = 1; i < argc; ++i) {
+		const std::string_view arg{ argv[i] };
+		for (const std::string_view flag : { "--migrate", "--migrate-rollback", "--dry-run", "--force", "--report" }) {
+			if (arg == flag || (arg.starts_with(flag) && arg.size() > flag.size() && arg[flag.size()] == '=')) {
+				egLOG_ERROR("app", "{}: a project is migrated by the editor (editor --headless --project <dir> --migrate)", flag);
+				return 2;
+			}
+		}
+	}
+
 	try {
 		if (!cfg::initialize_configs(argc, argv)) {
 			return -1;

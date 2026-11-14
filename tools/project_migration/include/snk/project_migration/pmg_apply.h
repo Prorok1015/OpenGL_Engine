@@ -90,7 +90,18 @@ namespace prj::migration
 		migration_report report;
 	};
 
-	// Refuses a plan with newer or invalid files. An empty plan writes nothing (status ok, no id). Otherwise creates the
+	// Why apply_migration refuses `plan` before writing anything: a project.snkproj that is newer or invalid, an invalid
+	// file without plan.force, or plan.refused. Empty when it may run.
+	std::string plan_refusal(const migration_plan& plan);
+
+	// The files a migration of `plan` leaves as they are and reports: unknown_type and newer ones (never migrated), and
+	// the invalid ones plan.force passes over.
+	std::vector<skipped_file> skipped_by(const migration_plan& plan);
+
+	// The report as report.md has it.
+	std::string report_text(const migration_report& report);
+
+	// Refuses what plan_refusal names; a newer file is left as it is (partial). An empty plan writes nothing (status ok, no id). Otherwise creates the
 	// journal (status in_progress; its folder is taken exclusively, so two processes never share an id) before the first
 	// change and backs every file up, project.snkproj included. Then the pre project steps, the files, the post project
 	// steps, and last project.snkproj with engine_version and migrated_with of this engine and the steps added to

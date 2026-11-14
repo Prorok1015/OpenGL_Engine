@@ -7,6 +7,8 @@
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_modules.h>
 #include <snk/project/prj_project.h>
+#include <snk/resource/res_shipping_dirs.h>
+#include <snk/resource/res_system.h>
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -159,8 +161,18 @@ namespace {
 		return folder_inside(project.root, module_cache_dir(project), out);
 	}
 
+	// A read-only project (a shipped game, a migration: #593, #757) gets nothing written into it: the copies go to the
+	// run's scratch folder, which resource_term removes. Null for a project the editor writes into.
+	const fs::path* run_scratch(ds::app_data_storage& data)
+	{
+		if (!::res::resource_system::read_only_project() || !data.has_value<core::res::run_scratch_folder>()) {
+			return nullptr;
+		}
+		return &data.require<core::res::run_scratch_folder>().path;
+	}
+
 	// Empty string on success; on failure nothing of the copy is left.
-	std::string copy_library(const prj::project_context& project, const fs::path& found, module_copy& out)
+	std::string copy_library(const prj::project_context& project, const fs::path* scratch, const fs::path& found, module_copy& out)
 	{
 		fs::path output;
 		if (std::string why = folder_inside(project.root, build_output_dir(project), output); !why.empty()) {
@@ -171,7 +183,14 @@ namespace {
 			return why;
 		}
 		fs::path cache;
-		if (std::string why = cache_folder(project, cache); !why.empty()) {
+		if (scratch) {
+			std::error_code made;
+			cache = *scratch / "modules";
+			fs::create_directories(cache, made);
+			if (made) return std::format("cannot make '{}': {}", utf8(cache), made.message());
+		} else if (::res::resource_system::read_only_project()) {
+			return "a read-only project has no folder for the copies of its modules";
+		} else if (std::string why = cache_folder(project, cache); !why.empty()) {
 			return why;
 		}
 
@@ -378,8 +397,8 @@ bool core::project_module_host::is_current(const std::string& name) const
 
 void core::project_module_host::remove_unused_copies() const
 {
-	// A static host makes no copies and writes nothing into the project.
-	if (m_options.compiled_only) {
+	// A static host makes no copies and writes nothing into the project; a read-only one keeps them outside it.
+	if (m_options.compiled_only || ::res::resource_system::read_only_project()) {
 		return;
 	}
 	if (!m_data.has_value<prj::project_context>()) {
@@ -457,7 +476,7 @@ core::project_modules_report core::project_module_host::load_all()
 			if (const auto it = m_options.compiled_in.find(ref.name); it != m_options.compiled_in.end()) {
 				source = std::make_unique<app::modules::static_module_source>(ref.name, it->second);
 			} else if (const auto found = build_output(ref.name)) {
-				if (std::string why = copy_library(project, *found, copy); !why.empty()) {
+				if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
 					return why;
 				}
 				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
@@ -535,7 +554,7 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	}
 	remove_unused_copies();
 	module_copy copy;
-	if (std::string why = guarded([&] { return copy_library(project, *found, copy); }); !why.empty()) {
+	if (std::string why = guarded([&] { return copy_library(project, run_scratch(m_data), *found, copy); }); !why.empty()) {
 		return refused(std::move(why));
 	}
 
@@ -774,7 +793,7 @@ core::reload_report core::project_module_host::reload_editor_module(const std::s
 	}
 	remove_unused_copies();
 	module_copy copy;
-	if (std::string why = guarded([&] { return copy_library(project, *found, copy); }); !why.empty()) {
+	if (std::string why = guarded([&] { return copy_library(project, run_scratch(m_data), *found, copy); }); !why.empty()) {
 		return refused(std::move(why));
 	}
 	std::function<std::unique_ptr<app::modules::module_source>()> previous;
@@ -960,7 +979,7 @@ core::project_modules_report core::project_module_host::load_editor_modules()
 			} else if (m_options.compiled_only) {
 				return "the static host loads only compiled-in modules";
 			} else if (const auto found = find_library(project, ref.name)) {
-				if (std::string why = copy_library(project, *found, copy); !why.empty()) {
+				if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
 					return why;
 				}
 				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
