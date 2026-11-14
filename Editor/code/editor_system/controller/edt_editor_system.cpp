@@ -723,7 +723,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_registrations.push_back(std::move(command));
 		}
 	}
-	// EPIC-58 S7 (#759): the plan of migrating the project and the migration in place, on the main thread.
+	// EPIC-58 S7 (#759): project.migration_plan and project.migrate (in place, on the main thread). Refused while Play, a load,
+	// a build or a module reload, an import, the export dialog or a git write runs (busy), and with an uncommitted edit or
+	// any dirty document (needs_input). The migration closes every document but the scene, lets go of the level, writes,
+	// then attaches the level and loads it again from disk.
 	{
 		migration_deps migration{ m_context->jobs() };
 		migration.project_root = [&data]() -> std::optional<std::filesystem::path> {
@@ -765,7 +768,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		migration.close_documents_and_detach_level = [this] {
 			close_prefab_editor();
-			// Every document but the scene, a module's or an extension's too: each through whoever owns its window.
+			// Every document but the scene: the prefab editor through its panel, data documents through their host, any other
+			// (a module's, an extension's) through document_manager::close, which announces it to whoever shows it.
 			document_manager& documents = m_context->documents();
 			std::vector<document_id> open_documents;
 			documents.for_each([&documents, &open_documents](document& open) {

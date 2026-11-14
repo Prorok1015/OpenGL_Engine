@@ -547,6 +547,28 @@ BOOST_AUTO_TEST_CASE(ADeclinedQuestion_RunsNothing_AndIsNotReused)
 	BOOST_TEST(call_with(asked).code == cmd::codes::denied);
 }
 
+// What agent_confirmations does after a person's yes that met `busy`: a retry with a fresh ticket, whose question sees the
+// project as it is then. The plan the person approved still judges it: a project changed meanwhile is denied.
+BOOST_AUTO_TEST_CASE(ARetryAfterBusy_IsJudgedByThePlanThePersonApproved)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const std::string approved = ticket_of(call("project.migrate"));
+	BOOST_REQUIRE(commands.approve(approved));
+	busy = "Play is running";
+	BOOST_TEST(call_with(approved).code == cmd::codes::busy);
+	BOOST_TEST(implicit.empty());
+
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
+	const auto changed = snapshot(copy.root());
+	busy.reset();
+	const std::string retry = ticket_of(call("project.migrate"));
+	BOOST_REQUIRE(commands.approve(retry));
+	const json::object result = job_result(call_with(retry));
+	BOOST_TEST(error_code_of(result) == cmd::codes::denied);
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == changed));
+}
+
 // Headless, the --agent-policy file answers the question in advance; the plan is still described and checked.
 BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_RunsIt_WithThePlanDescribed)
 {

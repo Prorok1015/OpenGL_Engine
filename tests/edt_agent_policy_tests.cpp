@@ -1857,3 +1857,33 @@ BOOST_AUTO_TEST_CASE(AGitListEntry_WithControlInvisibleOrCommaCharacters_OrTooLo
 
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// #759: project_migrate is never allowed by a layer, project or personal: an allow there stays a question.
+BOOST_AUTO_TEST_SUITE(EdtAgentPolicyProjectMigrate)
+
+BOOST_AUTO_TEST_CASE(AnAllowOfAnyLayer_ForTheCategoryOrTheCommand_StaysAsk)
+{
+	const cmd::command_desc migrate = command_of("project.migrate", agent_category::project_migrate, cmd::danger::confirm);
+	const auto category_allow = layer_with(agent_category::project_migrate, policy_mode::allow);
+	const auto command_allow = layer_with("project.migrate", policy_mode::allow);
+	BOOST_TEST((edt::effective_mode(migrate, category_allow, {}).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, command_allow, {}).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, {}, category_allow).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, {}, command_allow).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, command_allow, command_allow).mode == policy_mode::ask));
+	// A deny still denies.
+	BOOST_TEST((edt::effective_mode(migrate, layer_with("project.migrate", policy_mode::deny), {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode(migrate, {}, layer_with(agent_category::project_migrate, policy_mode::deny)).mode == policy_mode::deny));
+	// A command of the category without a risk is held the same way.
+	const cmd::command_desc plain = command_of("project.other", agent_category::project_migrate);
+	BOOST_TEST((edt::effective_mode(plain, category_allow, {}).mode == policy_mode::ask));
+}
+
+// An allow of the category changes nothing, so it is no loosening that waits for a person's approval.
+BOOST_AUTO_TEST_CASE(AnAllowOfTheCategory_IsNoLoosening)
+{
+	BOOST_TEST(edt::find_loosenings({}, layer_with(agent_category::project_migrate, policy_mode::allow), {}).empty());
+	BOOST_TEST(edt::find_loosenings({}, layer_with(agent_category::project_migrate, policy_mode::ask), {}).empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

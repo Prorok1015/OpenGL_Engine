@@ -148,8 +148,9 @@ namespace cmd
 		// code_edit). Pure; called only with arguments that match args_schema (category_of_call). Null: `category`.
 		std::function<agent_category(const call&)> category_of;
 		// What a person is told about one call besides its arguments when the policy asks (the repository a pull request
-		// goes to). Called on the main thread when a ticket is issued, and before a call of a command with a `risk` that the
-		// policy allows without a question, with arguments that match args_schema; it may
+		// goes to). Called on the main thread when a ticket is issued, and with describe_before_allowed_invoke (whose
+		// call then carries the ticket's id in `confirmation`) also before a call the policy allows without one,
+		// with arguments that match args_schema; it may
 		// read for a bounded time. Plain text, not trusted by the registry's callers: the confirmation UI sanitizes it. A
 		// throw refuses the call. Null or nullopt: nothing more to say.
 		std::function<std::optional<std::string>(const call&)> describe;
@@ -167,5 +168,9 @@ namespace cmd
 		std::function<bool()> enabled;
 		// Why the command is disabled right now, for the error of a call that is refused for it. Null: no reason given.
 		std::function<std::string()> disabled_reason;
+		// A command with a `risk` whose `describe` must also run when the policy allows an agent's call without a question
+		// (an answer given in advance): the command keeps what was described (project.migrate checks its plan against it).
+		// A throw refuses the call. Last: a module built before keeps the offsets of the fields above.
+		bool describe_before_allowed_invoke = false;
 	};
 }

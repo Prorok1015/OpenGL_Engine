@@ -13,6 +13,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -80,8 +81,8 @@ namespace {
 
 		// Never follows a link and reads only a regular file up to `max_bytes`, through prj::read_project_file: a link to
 		// /dev/zero or a FIFO in the project (or one swapped in after the check) must not hang the editor. Anything else
-		// stands in by what it is, its size and its time.
-		void add_file(const fs::path& root, const fs::path& relative, std::uintmax_t max_bytes)
+		// stands in by what it is, its size and its time; so does a file the migration never rewrites (`by_content` false).
+		void add_file(const fs::path& root, const fs::path& relative, std::uintmax_t max_bytes, bool by_content)
 		{
 			const fs::path file = root / relative;
 			std::error_code ec;
@@ -96,7 +97,7 @@ namespace {
 				return;
 			}
 			const std::uintmax_t size = fs::is_regular_file(status) ? fs::file_size(file, ec) : 0;
-			if (!fs::is_regular_file(status) || ec || size > max_bytes) {
+			if (!fs::is_regular_file(status) || ec || size > max_bytes || !by_content) {
 				std::error_code time_error;
 				const auto modified = fs::last_write_time(file, time_error);
 				add_part(std::format("<{}> {} {}", static_cast<int>(status.type()), ec ? std::uintmax_t{ 0 } : size,
@@ -121,6 +122,14 @@ namespace {
 
 	json::object plan_json(const pmg::migration_plan& plan);
 
+	// What a migration writes: descs and .resource sidecars (and project.snkproj). Textures and models are only stat'ed.
+	bool rewritten_by_migration(std::string_view path)
+	{
+		std::string extension = fs_paths::utf8_of(fs_paths::path_from_utf8(path).extension());
+		std::ranges::transform(extension, extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return extension == ".desc" || extension == ".resource";
+	}
+
 	// The plan as the answer gives it (every file's steps and warnings, the project steps, what is skipped, the manifest)
 	// and every byte of the project it was made from.
 	std::uint64_t fingerprint_of(const fs::path& root, const pmg::migration_plan& plan)
@@ -128,7 +137,7 @@ namespace {
 		const std::uintmax_t max_bytes = pmg::scan_options{}.max_file_bytes;
 		fnv1a_hash hash;
 		hash.add_part(json::serialize(plan_json(plan)));
-		hash.add_file(root, fs_paths::path_from_utf8(prj::k_manifest_file_name), max_bytes);
+		hash.add_file(root, fs_paths::path_from_utf8(prj::k_manifest_file_name), max_bytes, true);
 		std::vector<std::pair<std::string, std::string_view>> files;
 		files.reserve(plan.scan.files.size());
 		for (const pmg::scanned_file& file : plan.scan.files) files.emplace_back(file.path, pmg::to_string(file.kind));
@@ -136,7 +145,7 @@ namespace {
 		for (const auto& [path, kind] : files) {
 			hash.add_part(path);
 			hash.add_part(kind);
-			hash.add_file(root, fs_paths::path_from_utf8(path), max_bytes);
+			hash.add_file(root, fs_paths::path_from_utf8(path), max_bytes, rewritten_by_migration(path));
 		}
 		return hash.value();
 	}
@@ -257,7 +266,7 @@ namespace {
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return std::string("This request will be refused: no project is open");
 			const pmg::migration_plan plan = make_plan(*root);
-			remember(key_of(call.from), fingerprint_of(*root, plan));
+			remember(key_of(call.from), call.confirmation, fingerprint_of(*root, plan));
 
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
 			std::string text = std::format("Migrate the project '{}' in place\n  {}\n  {} files, {} project steps", name,
@@ -292,14 +301,24 @@ namespace {
 			// the confirmation.
 			const bool person = call.from.kind == cmd::origin_kind::ui;
 			const std::string key = key_of(call.from);
-			if (!person && !peek(key)) return cmd::result::failure(cmd::codes::denied, "the plan was not shown to a person; ask again");
-			if (m_running) return cmd::result::failure(cmd::codes::busy, "a migration of the project is already running");
-			if (auto why = m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt) return cmd::result::failure(cmd::codes::busy, *why);
-			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return cmd::result::failure(cmd::codes::needs_input, *why);
+			shown_plan* shown = person ? nullptr : find_shown(key, call.confirmation);
+			if (!person && !shown) return cmd::result::failure(cmd::codes::denied, "the plan was not shown to a person; ask again");
+			// Refused for now: a retry (agent_confirmations repeats a `busy` with a fresh ticket, whose description sees the
+			// project as it is then) is still judged by the plan the person approved.
+			const auto refuse = [shown](std::string code, std::string message) {
+				if (shown) shown->approved = true;
+				return cmd::result::failure(std::move(code), std::move(message));
+			};
+			if (m_running) return refuse(cmd::codes::busy, "a migration of the project is already running");
+			if (auto why = m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt) return refuse(cmd::codes::busy, *why);
+			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return refuse(cmd::codes::needs_input, *why);
 
 			auto run = std::make_shared<migration_run>();
 			run->root = *root;
-			if (!person) run->shown = take(key);
+			if (shown) {
+				run->shown = shown->fingerprint;
+				std::erase_if(m_shown, [&key](const shown_plan& entry) { return entry.key == key; });
+			}
 			auto work = [future = run->promise.get_future().share(), abandoned = run->abandoned](ds::task_context& task) -> json::value {
 				try {
 					while (future.wait_for(k_wait_step) != std::future_status::ready) {
@@ -326,11 +345,16 @@ namespace {
 	private:
 		static constexpr const char* k_no_project = "no_project";
 
+		// A plan a person was shown, by caller and by the ticket its question got (empty: described for a call allowed
+		// without a question). `approved`: a run the person approved was refused for now (busy): this record judges the
+		// retries, and a later question of the caller does not replace it.
 		struct shown_plan
 		{
 			std::string key;
+			std::string ticket;
 			std::uint64_t fingerprint = 0;
 			std::chrono::steady_clock::time_point at;
+			bool approved = false;
 		};
 
 		std::chrono::steady_clock::time_point now() const
@@ -343,28 +367,29 @@ namespace {
 			return std::format("{}|{}", static_cast<int>(from.kind), from.session);
 		}
 
-		void remember(std::string key, std::uint64_t value)
-		{
-			const auto at = now();
-			std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key || at - shown.at > k_shown_lifetime; });
-			if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
-			m_shown.push_back({ std::move(key), value, at });
-		}
-
-		bool peek(const std::string& key)
+		void forget_expired()
 		{
 			const auto at = now();
 			std::erase_if(m_shown, [&](const shown_plan& shown) { return at - shown.at > k_shown_lifetime; });
-			return std::ranges::any_of(m_shown, [&](const shown_plan& shown) { return shown.key == key; });
 		}
 
-		std::optional<std::uint64_t> take(const std::string& key)
+		// A new question of the caller replaces its unanswered one, never an approved one.
+		void remember(std::string key, std::string ticket, std::uint64_t value)
 		{
-			const auto found = std::ranges::find_if(m_shown, [&](const shown_plan& shown) { return shown.key == key; });
-			if (found == m_shown.end()) return std::nullopt;
-			const std::uint64_t value = found->fingerprint;
-			m_shown.erase(found);
-			return value;
+			forget_expired();
+			std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && !shown.approved; });
+			if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
+			m_shown.push_back({ std::move(key), std::move(ticket), value, now(), false });
+		}
+
+		// The approved record of the caller first; else the one described for this very ticket.
+		shown_plan* find_shown(const std::string& key, const std::string& ticket)
+		{
+			forget_expired();
+			const auto approved = std::ranges::find_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && shown.approved; });
+			if (approved != m_shown.end()) return &*approved;
+			const auto asked = std::ranges::find_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && shown.ticket == ticket; });
+			return asked != m_shown.end() ? &*asked : nullptr;
 		}
 
 		pmg::migration_plan make_plan(const fs::path& root) const
@@ -381,7 +406,7 @@ namespace {
 			if (m_deps.show_progress) m_deps.show_progress(open);
 		}
 
-		// Ends a run that wrote nothing.
+		// Ends a run that loads no level again.
 		bool stop(migration_run& run, json::value answer)
 		{
 			show_progress(false);
@@ -453,6 +478,11 @@ namespace {
 					{ "error", error }, { "text", pmg::plan_text(plan) } };
 				if (!left.empty()) run.answer["unfinished"] = strings_of(left);
 				egLOG_ERROR("project/migrate", "{}", error);
+				// Which of them were written is not known: every file the plan names is announced.
+				std::vector<std::string> planned;
+				planned.reserve(plan.files.size());
+				for (const pmg::file_plan& file : plan.files) planned.push_back(file.path);
+				announce_changes(run.root, planned);
 			} else if (!outcome.refused.empty()) {
 				run.answer = json::object{ { "code", pmg::k_exit_refused }, { "refused", outcome.refused }, { "text", pmg::plan_text(plan) } };
 				egLOG_WARN("project/migrate", "refused: {}", outcome.refused);
@@ -462,7 +492,11 @@ namespace {
 					{ "id", report.id }, { "text", report.id.empty() ? pmg::plan_text(plan) : pmg::report_text(report) } };
 				run.answer["report"] = pmg::report_to_json(report);
 				egLOG_INFO("project/migrate", "migration {} of {}: {}", report.id, fs_paths::generic_utf8_of(run.root), pmg::to_string(report.status));
-				announce_changes(run.root, report);
+				std::vector<std::string> written;
+				written.reserve(report.files.size() + report.created_files.size());
+				for (const pmg::applied_file& file : report.files) written.push_back(file.path);
+				written.insert(written.end(), report.created_files.begin(), report.created_files.end());
+				announce_changes(run.root, written);
 			}
 
 			if (!writes) {
@@ -470,6 +504,15 @@ namespace {
 				return stop(run, std::move(run.answer));
 			}
 			if (m_deps.rebuild_assets) m_deps.rebuild_assets();
+			if (stopped) {
+				// The files on disk may be half migrated: the level stays detached, so neither a load nor a save of the old level
+				// touches them before the rollback.
+				const std::vector<std::string> left = pmg::unfinished_migrations(run.root);
+				run.answer["level"] = level_json(run, false, left.empty()
+					? std::string("the migration stopped: the level is not loaded from disk again")
+					: std::format("the migration stopped: the level is not loaded from disk again; run editor --migrate-rollback {} first", left.front()));
+				return stop(run, std::move(run.answer));
+			}
 			if (m_deps.reopen_level) {
 				run.reopen_error = m_deps.reopen_level(run.level, [weak_run = std::weak_ptr<migration_run>(current)](bool loaded) {
 					if (const auto ended = weak_run.lock()) {
@@ -482,15 +525,13 @@ namespace {
 			return true;
 		}
 
-		void announce_changes(const fs::path& root, const pmg::migration_report& report) const
+		void announce_changes(const fs::path& root, const std::vector<std::string>& paths) const
 		{
 			if (!m_deps.signal_changed) return;
 			const std::vector<fs::path> roots = m_deps.content_roots ? m_deps.content_roots() : std::vector<fs::path>{};
-			const auto announce = [&](std::string_view path) {
+			for (const std::string& path : paths) {
 				if (const std::optional<res::tag> tag = tag_below_content_root(root, roots, path)) m_deps.signal_changed(*tag);
-			};
-			for (const pmg::applied_file& file : report.files) announce(file.path);
-			for (const std::string& created : report.created_files) announce(created);
+			}
 		}
 
 		static json::object level_json(const migration_run& run, bool reopened, std::string_view reason)
@@ -552,6 +593,8 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	migrate.starts_job = true;
 	migrate.invoke = [impl](const cmd::call& call) { return impl->migrate(call); };
 	migrate.describe = [impl](const cmd::call& call) { return impl->describe(call); };
+	// The plan is recorded on every path that runs it, the --agent-policy answer too.
+	migrate.describe_before_allowed_invoke = true;
 	if (registration added = commands.add(std::move(migrate)); added.active()) out.push_back(std::move(added));
 	return out;
 }

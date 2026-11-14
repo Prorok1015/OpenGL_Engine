@@ -4,6 +4,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
@@ -12,7 +13,6 @@
 #include <cctype>
 #include <exception>
 #include <format>
-#include <fstream>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -66,21 +66,19 @@ namespace
 		std::string error;
 	};
 
-	read_result read_file(const fs::path& path, std::uintmax_t max_bytes)
+	// `path` below `root`. Through prj::read_project_file: no link is followed on the way and a FIFO or a device is never
+	// opened (the plan is made for an agent's call too). A file over `max_bytes` is not read.
+	read_result read_file(const fs::path& root, const fs::path& path, std::uintmax_t max_bytes)
 	{
 		std::error_code ec;
-		const std::uintmax_t size = fs::file_size(path, ec);
-		if (ec) return { {}, std::format("cannot read its size: {}", ec.message()) };
-		if (size > max_bytes) return { {}, std::format("too big ({} bytes, at most {})", size, max_bytes) };
-		std::ifstream in(path, std::ios::binary);
-		if (!in) return { {}, "cannot be opened" };
-		// At most one byte past the limit: a file that grew since its size was read is still refused, not read whole.
-		std::string text(static_cast<std::size_t>(std::min<std::uintmax_t>(size, max_bytes) + 1), '\0');
-		in.read(text.data(), static_cast<std::streamsize>(text.size()));
-		if (in.bad()) return { {}, "cannot be read" };
-		text.resize(static_cast<std::size_t>(in.gcount()));
-		if (text.size() > max_bytes) return { {}, std::format("too big (more than {} bytes)", max_bytes) };
-		return { std::move(text), {} };
+		if (fs::is_regular_file(fs::symlink_status(path, ec))) {
+			const std::uintmax_t size = fs::file_size(path, ec);
+			if (!ec && size > max_bytes) return { {}, std::format("too big ({} bytes, at most {})", size, max_bytes) };
+		}
+		prj::project_file_text read = prj::read_project_file(root, path.lexically_relative(root), max_bytes);
+		if (!read.error.empty()) return { {}, std::move(read.error) };
+		if (!read.exists) return { {}, "is gone" };
+		return { std::move(read.text), {} };
 	}
 
 	// The depth the desc loader allows (desc_adapter_t), so a file the engine loads is not refused here.
@@ -170,9 +168,9 @@ namespace
 	}
 
 	// Reads and parses a desc file; on a refusal `file` is invalid and the result is null.
-	json::value read_desc(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes)
+	json::value read_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, std::uintmax_t max_bytes)
 	{
-		read_result read = read_file(path, max_bytes);
+		read_result read = read_file(project, path, max_bytes);
 		if (!read.error.empty()) {
 			set_invalid(file, std::move(read.error));
 			return {};
@@ -226,9 +224,10 @@ namespace
 		file.kind = kind;
 	}
 
-	void scan_desc(prj::migration::scanned_file& file, const fs::path& path, const desc::desc_system& descs, std::uintmax_t max_bytes)
+	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const desc::desc_system& descs,
+		std::uintmax_t max_bytes)
 	{
-		const json::value root = read_desc(file, path, max_bytes);
+		const json::value root = read_desc(file, project, path, max_bytes);
 		if (root.is_object()) classify(file, root.as_object(), descs);
 	}
 
@@ -254,9 +253,10 @@ namespace
 		return root;
 	}
 
-	json::value read_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes, std::string& text)
+	json::value read_sidecar(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, std::uintmax_t max_bytes,
+		std::string& text)
 	{
-		read_result read = read_file(path, max_bytes);
+		read_result read = read_file(project, path, max_bytes);
 		if (!read.error.empty()) {
 			set_invalid(file, std::move(read.error));
 			return {};
@@ -303,11 +303,11 @@ namespace
 		}
 	}
 
-	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& path, const desc::desc_system& descs,
+	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const desc::desc_system& descs,
 		const prj::migration::scan_options& options)
 	{
 		std::string text;
-		const json::value root = read_sidecar(file, path, options.max_file_bytes, text);
+		const json::value root = read_sidecar(file, project, path, options.max_file_bytes, text);
 		if (root.is_object()) classify_sidecar_root(file, root.as_object(), text, descs, options.resource_meta_version);
 	}
 
@@ -364,11 +364,11 @@ namespace
 			file.path = fs_paths::generic_utf8_of(path.lexically_relative(project));
 			const std::string extension = lower(fs_paths::utf8_of(path.extension()));
 			if (extension == ".resource") {
-				scan_sidecar(file, path, descs, options);
+				scan_sidecar(file, project, path, descs, options);
 			} else {
 				file.has_resource = owners.contains(res::asset_name_key(name, res::asset_names_case_insensitive));
 				if (extension == ".desc") {
-					scan_desc(file, path, descs, options.max_file_bytes);
+					scan_desc(file, project, path, descs, options.max_file_bytes);
 				} else {
 					file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
 				}
@@ -430,7 +430,7 @@ namespace
 	{
 		prj::migration::manifest_state state;
 		const fs::path path = root / fs_paths::path_from_utf8(prj::k_manifest_file_name);
-		read_result read = read_file(path, std::uintmax_t{ 1 } << 20);
+		read_result read = read_file(root, path, std::uintmax_t{ 1 } << 20);
 		if (!read.error.empty()) {
 			state.kind = file_class::invalid;
 			state.reason = std::format("project.snkproj {}", read.error);
@@ -712,11 +712,11 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 		const bool sidecar = res::is_asset_meta_name(file.path);
 		if (sidecar) {
 			std::string text;
-			before = read_sidecar(file, path, options.scan.max_file_bytes, text);
+			before = read_sidecar(file, root, path, options.scan.max_file_bytes, text);
 			if (!before.is_object()) continue;
 			classify_sidecar_root(file, before.as_object(), text, game_layer, options.scan.resource_meta_version);
 		} else {
-			before = read_desc(file, path, options.scan.max_file_bytes);
+			before = read_desc(file, root, path, options.scan.max_file_bytes);
 			if (!before.is_object()) continue;
 			classify(file, before.as_object(), game_layer);
 		}
