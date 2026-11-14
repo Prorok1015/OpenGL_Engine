@@ -105,7 +105,7 @@ void edt::data_document_panel::on_render()
 			// Keys typed or refused for the content shown before are of no use to the content shown now; the window's own
 			// edits move the generation too, and are taken in below.
 			if (m_document.generation() != m_state_generation) {
-				m_map_state.clear();
+				m_map_state.forget_typed();
 				m_state_generation = m_document.generation();
 			}
 			schema_ui::context context{ descs->schemas(),

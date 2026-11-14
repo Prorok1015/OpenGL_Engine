@@ -513,10 +513,9 @@ namespace
 				file.written_as = "json";
 				return text_of(m_context.descs.serialize_to_bytes(migrated));
 			}
-			// The engine's save makes a __guid for a res:// desc that has none or an empty one (desc_adapter_t::serialize);
-			// a migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
-			// .resource's (EPIC-57 4.2).
-			// The file before the type migrations, for its root __guid.
+			// A migration writes the root __guid exactly as the file had it, or none (#851): the ID of a file is its
+			// .resource's (EPIC-57 4.2). The engine's save keeps the __guid it loaded and makes none up (#772);
+			// desc::keep_root_guid puts the root __guid back where the file had it.
 			const json::object file_root = migrated.is_object() ? migrated.as_object() : json::object{};
 			m_context.descs.migrate_tree(migrated.as_object(), file.path);
 			m_context.descs.stamp_tree(migrated);

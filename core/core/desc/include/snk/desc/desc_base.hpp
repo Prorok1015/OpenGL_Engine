@@ -43,7 +43,8 @@ namespace desc
 		std::string_view get_type() const { return type; }
 		std::string_view kind_name() const override { return type; }
 
-		// UUID v4 in lowercase; empty for files without __guid (memory://, inline, not yet saved).
+		// The root __guid the file was read with, written back by a save of a res:// file; empty for a file without one.
+		// Not the asset's ID (that is its .resource, EPIC-57): a project's migration takes it out, nothing makes one up.
 		const std::string& get_guid() const { return m_guid; }
 		void set_guid(std::string guid) { m_guid = std::move(guid); }
 

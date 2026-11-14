@@ -212,6 +212,24 @@ BOOST_AUTO_TEST_CASE(ADescWithAParentThatIsNotABaseResource_OrAForbiddenKey_OrBa
 	BOOST_CHECK(refused("[1,2]"));
 }
 
+// #772: the ID of an imported file is the .resource the editor gives it; an importer that writes one is refused, at any depth.
+BOOST_AUTO_TEST_CASE(ADescOfAnImportWithAGuid_IsRefused)
+{
+	const auto request = request_in();
+	std::string problem;
+	const auto refused = [&](const char* text) {
+		auto bundle = import_answer();
+		bundle.blobs[2].bytes = text_bytes(text);
+		return !edt::accept_import_answer(bundle, request, problem).has_value();
+	};
+	BOOST_CHECK(refused(R"json({"__type":"material_desc","__guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})json"));
+	BOOST_TEST(problem.find("__guid") != std::string::npos);
+	BOOST_TEST_MESSAGE(problem);
+	BOOST_TEST(problem.starts_with("'"));
+	BOOST_TEST(problem.find(".desc': a desc of the import has the key '__guid'") != std::string::npos);
+	BOOST_CHECK(refused(R"json({"__type":"material_desc","inner":{"__type":"texture_desc","__guid":"x"}})json"));
+}
+
 BOOST_AUTO_TEST_CASE(ThePrefabJsonOfAnImport_IsHeldToTheSameRules)
 {
 	const auto request = request_in();
