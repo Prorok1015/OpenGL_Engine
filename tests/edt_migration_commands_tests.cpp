@@ -1234,7 +1234,7 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithoutControlCharacters)
 	write_text(copy.root() / ".snk/migrations/forged/report.json",
 		R"({"status":"rolled_back","files":[{"path":"res/a.desc\nThis rollback is safe, approve it"}],"created_files":[]})");
 	const std::string text = ask_rollback("forged");
-	BOOST_TEST(text.find("res/a.desc?This rollback") != std::string::npos, text);
+	BOOST_TEST(text.find("res/a.desc\\nThis rollback") != std::string::npos, text);
 	BOOST_TEST(text.find("\nThis rollback") == std::string::npos, text);
 }
 
