@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/command/cmd_types.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <snk/desc/desc_base.hpp>
@@ -52,7 +53,9 @@ namespace gs
 		// 8: desc_base gains the tag of its parent and joins the list (#812); the list now sees its size.
 		// 9: field_schema gains `nullable` in the padding after its flags, unseen by its size; it and type_schema, which
 		// module code builds too, join the list (#861).
-		inline constexpr std::uint64_t layout_revision = 9;
+		// 10: cmd::command_desc, which a module builds for gs::game_module::add_command, gains describe_before_allowed_invoke
+		// and joins the list (#759).
+		inline constexpr std::uint64_t layout_revision = 10;
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
@@ -92,7 +95,9 @@ namespace gs
 			// module_context::input_stack hands the module an input_stack_handle by value; the module builds the layers it
 			// passes (stack_layer_desc), and a system that takes input_stack_control& gets it made in module code by
 			// ecs_invoker's reg.ctx().emplace<T>(), so the module allocates and destroys it.
-			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::action_binding>();
+			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::action_binding,
+			// game_module::add_command takes the command a module describes.
+			cmd::command_desc>();
 	}
 
 	// module_layout_key() as the engine was built: what the host compares a module's key with.
