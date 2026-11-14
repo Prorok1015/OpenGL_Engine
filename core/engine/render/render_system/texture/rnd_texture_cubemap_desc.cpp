@@ -1,12 +1,15 @@
 #include "rnd_texture_cubemap_desc.h"
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_reference.h>
 
 void rnd::texture_cubemap_desc::deserialize(desc::desc_system& system, const boost::json::object& resource)
 {
 	texture_desc::deserialize(system, resource);
 
 	if (auto const* p = resource.if_contains("data")) {
-		if (p->is_string()) {
+		// A reference in either form a file writes it: a path, or {guid, path}. An object with the faces' keys is no
+		// reference (reference_from_json takes "guid" and "path" only), so the two objects cannot be confused (#920).
+		if (res::reference_from_json(*p)) {
 			mode = SOURCE_TYPE::SINGLE_FILE;
 			single_image = system.get_field_desc<res::picture_resource>(*this, *p);
 		} else if (p->is_object()) {
