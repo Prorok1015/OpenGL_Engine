@@ -4,6 +4,7 @@
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
 #include "edt_data_document_host.h"
+#include "edt_document_creator.h"
 #include "edt_data_document_panel.h"
 #include "edt_data_document_view.h"
 #include "edt_scene_document.h"
@@ -163,6 +164,27 @@ BOOST_AUTO_TEST_CASE(Open_OfAFileThatIsOpen_FocusesItAndMakesNoSecondDocument)
 
 	BOOST_TEST(open_documents() == 2u);
 	BOOST_TEST(context->documents().active() == &first);
+}
+
+BOOST_AUTO_TEST_CASE(Open_OfAFreshlyCreatedDocument_MakesItTheActiveOneWithAnEmptyHistory)
+{
+	auto& descs = storage.require<desc::desc_system>();
+	auto& resources = storage.require<res::resource_system>();
+	const edt::document_creator creator{ { [&descs] { return &descs; }, [&resources] { return &resources; },
+		[this] { return std::vector<fs::path>{ res_root }; } } };
+	const edt::document_creation made = creator.create("", "test.config", "fresh");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+
+	host->open(made.tag, false);
+
+	edt::document* active = context->documents().active();
+	BOOST_REQUIRE(active != nullptr);
+	BOOST_TEST(active == context->documents().find_by_source(made.tag));
+	BOOST_TEST(host->owns(active->id()));
+	const auto& data = static_cast<const edt::data_document&>(*active);
+	BOOST_TEST(!data.history().can_undo());
+	BOOST_TEST(!data.history().can_redo());
+	BOOST_TEST(!active->is_dirty());
 }
 
 BOOST_AUTO_TEST_CASE(Open_OfAFileThatIsNoDataDocument_OpensNothingAndOnlyLogsIt)
