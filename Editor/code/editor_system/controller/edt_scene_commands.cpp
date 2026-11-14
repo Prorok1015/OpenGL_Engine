@@ -274,8 +274,10 @@ namespace {
 		}
 		const desc::override_failure bad = desc::check_override_object(*schema, patch, &edited, &descs.schemas());
 		if (bad.status != desc::override_status::valid) {
-			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, std::string_view(bad.pointer).substr(1),
-				bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"));
+			const std::string expected = desc::override_expectation(*schema, bad, &descs.schemas());
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({}){}{}", type, std::string_view(bad.pointer).substr(1),
+				bad.status == desc::override_status::stale ? "no such field" : "the value does not fit",
+				expected.empty() ? "" : ": expected ", expected));
 		}
 		const json::value whole(edited);
 		if (auto issue = references_of(descs, *schema, json::value(patch), &whole, owner_protocol, 0)) {

@@ -195,9 +195,11 @@ namespace {
 				}
 				const desc::override_failure bad = desc::check_override_object(*schema, fields, nullptr, &services.descs->schemas());
 				if (bad.status != desc::override_status::valid) {
-					add(edt::problem_severity::error, "schema", std::format("component '{}' ({}): {} ({})", key, type,
+					const std::string expected = desc::override_expectation(*schema, bad, &services.descs->schemas());
+					add(edt::problem_severity::error, "schema", std::format("component '{}' ({}): {} ({}){}{}", key, type,
 						std::string_view(bad.pointer).substr(bad.pointer.empty() ? 0 : 1),
-						bad.status == desc::override_status::stale ? "no such field" : "the value does not fit"), path, json_path + bad.pointer);
+						bad.status == desc::override_status::stale ? "no such field" : "the value does not fit",
+						expected.empty() ? "" : ": expected ", expected), path, json_path + bad.pointer);
 				}
 			}
 			if (services.assembler && !services.assembler->has_spawner(type)) {
