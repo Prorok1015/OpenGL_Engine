@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_manual_tasks.hpp"
+#include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_access.h"
 #include "edt_mcp_bridge_host.h"
@@ -274,7 +275,7 @@ BOOST_AUTO_TEST_CASE(SessionClosed_ForgetsTheSessionsGrants)
 {
 	person_arrives();
 	ask_as("s1");
-	current += edt::agent_confirmations::input_guard;
+	test_util::show_confirmations_and_wait(access->confirmations(), current);
 	access->confirmations().answer(access->confirmations().pending().front().id, edt::confirmation_answer::allow_session);
 	BOOST_TEST(access->grants().has("s1", agent_category::code_files));
 
