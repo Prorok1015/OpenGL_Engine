@@ -11,7 +11,9 @@
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <algorithm>
+#include <cstdint>
 #include <format>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -38,6 +40,36 @@ namespace
 	std::string where(const res::tag& file, std::string_view pointer = {})
 	{
 		return std::format("'{}'{}{}", file.view(), pointer.empty() ? "" : " ", pointer);
+	}
+
+	// An object typed inside the tree whose version is below the engine's (the traversal of migrate_tree: numeric arrays hold no
+	// descs). The root is judged apart.
+	bool has_outdated_typed(const desc::desc_system& descs, const json::value& value, bool is_root)
+	{
+		if (value.is_object()) {
+			const json::object& object = value.as_object();
+			if (!is_root) {
+				if (const json::value* type = object.if_contains("__type"); type && type->is_string()) {
+					int version = 1;
+					if (const json::value* stored = object.if_contains("__version"); stored && stored->is_int64()) {
+						version = static_cast<int>(std::clamp<std::int64_t>(stored->as_int64(), 1, std::numeric_limits<int>::max()));
+					}
+					if (version < descs.current_version(std::string{ type->as_string() })) {
+						return true;
+					}
+				}
+			}
+			for (const auto& member : object) {
+				if (has_outdated_typed(descs, member.value(), false)) return true;
+			}
+		} else if (value.is_array()) {
+			const json::array& array = value.as_array();
+			if (!array.empty() && array.front().is_number()) return false;
+			for (const json::value& element : array) {
+				if (has_outdated_typed(descs, element, false)) return true;
+			}
+		}
+		return false;
 	}
 
 	std::optional<res::tag> parent_of(const json::object& body, const res::tag& file, std::string& error)
@@ -134,7 +166,8 @@ const desc::type_schema* edt::data_document::schema() const
 	return descs ? descs->find_schema(m_type) : nullptr;
 }
 
-edt::open_result edt::data_document::read_file(const res::tag& file, json::object& out, std::string& version, desc_file_read* checks) const
+edt::open_result edt::data_document::read_file(const res::tag& file, json::object& out, std::string& version, desc_file_read* checks,
+	loaded* migration) const
 {
 	res::resource_system* resources = m_services.resources();
 	desc::desc_system* descs = m_services.descs();
@@ -160,13 +193,42 @@ edt::open_result edt::data_document::read_file(const res::tag& file, json::objec
 	if (parse_error || !parsed.is_object()) {
 		return open_result::failure(std::format("{} is not a JSON object{}{}", where(file), parse_error ? ": " : "", parse_error ? parse_error.message() : std::string{}));
 	}
+	std::vector<desc::migration_warning> warnings;
 	try {
-		descs->migrate_tree(parsed.as_object(), file.view());
+		// A file newer than this editor is not opened: what it holds that the engine does not know would be hidden, and a save
+		// would drop it. The message names the pointer and both versions; the nested objects are judged by migrate_tree.
+		const json::object& root = parsed.as_object();
+		const json::value* type = root.if_contains("__type");
+		int raw = 1;
+		if (const json::value* stored = root.if_contains("__version")) {
+			if (stored->is_int64() && stored->as_int64() >= 1 && stored->as_int64() <= std::numeric_limits<int>::max()) {
+				raw = static_cast<int>(stored->as_int64());
+			} else if (stored->is_uint64() && stored->as_uint64() <= static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+				raw = static_cast<int>(stored->as_uint64());
+			}
+		}
+		if (type && type->is_string()) {
+			const std::string type_name{ type->as_string() };
+			if (const int current = descs->current_version(type_name); raw > current) {
+				return open_result::failure(std::format("{} version {} is newer than this editor knows ({}) for '{}': update the editor",
+					where(file, "/__version"), raw, current, type_name));
+			}
+		}
+		if (migration) {
+			migration->file_version = raw;
+			migration->nested_outdated = has_outdated_typed(*descs, parsed, true);
+		}
+		descs->migrate_tree(parsed.as_object(), file.view(), warnings);
 	} catch (const std::exception& e) {
 		return open_result::failure(std::format("{}: {}", where(file), e.what()));
 	}
 	out = std::move(parsed.as_object());
 	version = code_version_of(read.bytes);
+	if (migration) {
+		for (const desc::migration_warning& warning : warnings) {
+			migration->notes.push_back(std::format("{} v{} -> v{}: {}", warning.type, warning.from_version, warning.from_version + 1, warning.message));
+		}
+	}
 	return open_result::ok();
 }
 
@@ -178,7 +240,7 @@ edt::open_result edt::data_document::load(const res::tag& file, loaded& out) con
 	}
 
 	desc_file_read checks;
-	if (open_result read = read_file(file, out.own, out.version, &checks); !read.opened) {
+	if (open_result read = read_file(file, out.own, out.version, &checks, &out); !read.opened) {
 		return read;
 	}
 	if (!checks.top_layer) {
@@ -192,6 +254,7 @@ edt::open_result edt::data_document::load(const res::tag& file, loaded& out) con
 		return open_result::not_a_document(std::format("{} /__type: missing or not a string", where(file)));
 	}
 	out.type = std::string{ type_field->as_string() };
+	out.current_version = descs->current_version(out.type);
 	const desc::type_schema* type_schema = descs->find_schema(out.type);
 	if (!type_schema) {
 		return open_result::not_a_document(std::format("{} /__type: '{}' has no schema, so it cannot be edited as data", where(file), out.type));
@@ -270,6 +333,11 @@ void edt::data_document::apply(const res::tag& file, loaded&& state)
 	m_inherited = std::move(state.inherited);
 	m_version = std::move(state.version);
 	m_parents = std::move(state.parents);
+	m_nested_outdated = state.nested_outdated;
+	m_file_version = state.file_version;
+	m_current_version = state.current_version;
+	m_migration_notes = std::move(state.notes);
+	m_version_confirmed = false;
 	m_parent_layers = std::move(state.layers);
 	m_chain_problem.clear();
 	m_changed_on_disk = false;
@@ -586,12 +654,22 @@ edt::save_result edt::data_document::save()
 
 edt::save_result edt::data_document::write(bool over)
 {
+	const save_result result = write_checked(over);
+	// The yes of the person is for this one save: a failure (the file changed, a validation, the disk) asks again next time.
+	if (!result.saved) {
+		m_version_confirmed = false;
+	}
+	return result;
+}
+
+edt::save_result edt::data_document::write_checked(bool over)
+{
 	if (!m_open) {
 		return save_result::failure("the document is not open");
 	}
 	commit_pending();
 	// An overwrite writes the document even when it has no edits: the file on disk is what the person chose to replace.
-	if (!over && !is_dirty()) {
+	if (!over && !is_dirty() && !migrated()) {
 		return save_result::ok();
 	}
 	if (!over && m_changed_on_disk) {
@@ -626,6 +704,12 @@ edt::save_result edt::data_document::write(bool over)
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 
+	// After the checks of the file on disk: a conflict is asked about first, the version second.
+	if (needs_version_confirmation()) {
+		return save_result::failure(std::format("{} is version {} and would be written as version {}: it needs a yes first, nothing was written",
+			where(m_source), m_file_version, m_current_version));
+	}
+
 	json::value content(m_own);
 	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view())) {
 		if (item.severity == res::diagnostic_severity::error) {
@@ -649,5 +733,9 @@ edt::save_result edt::data_document::write(bool over)
 	m_version = code_version_of(bytes);
 	m_changed_on_disk = false;
 	m_flagged_version.clear();
+	m_file_version = m_current_version;
+	m_nested_outdated = false;
+	m_migration_notes.clear();
+	m_version_confirmed = false;
 	return save_result::ok();
 }

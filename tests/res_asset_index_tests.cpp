@@ -4,6 +4,7 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_binary.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <algorithm>
 #include <atomic>
@@ -84,6 +85,22 @@ res::asset_id id_number(std::uint64_t n)
 
 const res::asset_id k_a = id_number(1);
 const res::asset_id k_b = id_number(2);
+
+// A file that is there and does not load.
+class broken_resolver : public test_util::ram_resolver
+{
+public:
+	using ram_resolver::ram_resolver;
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		block->set_error("broken file: " + tag.string());
+		return block;
+	}
+
+	bool exists(const res::tag&) const override { return true; }
+};
 
 using moves = std::vector<std::pair<res::tag, res::tag>>;
 
@@ -866,5 +883,488 @@ BOOST_FIXTURE_TEST_CASE(ARebindAwayFromTheId_KeepsTheDisplacedBlock, index_fixtu
 	pump();
 }
 
+// #869: two spellings of one file, each pinned: one pin of the node, and each spelling takes only its own share away.
+BOOST_FIXTURE_TEST_CASE(PinsOfTwoSpellings_AreOnePin_AndEachUnpinTakesItsOwnShare, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	BOOST_TEST(rs->pinned_count() == 2u);
+
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(spelled) == "pinned a");
+
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(a) == "pinned a");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: the pin of a spelling that meets the node's live block holds that block, not the displaced one.
+BOOST_FIXTURE_TEST_CASE(APinOfTheOtherSpelling_HoldsTheLiveBlock, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	auto live = std::make_optional(rs->require_sync<res::text_resource>(a));
+	std::weak_ptr live_block = live->get_control_block();
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pinned_count() == 1u);
+	live.reset();
+	pump();
+
+	BOOST_REQUIRE(!live_block.expired());
+	BOOST_TEST(rs->require_sync<res::text_resource>(spelled).get_control_block() == live_block.lock());
+	BOOST_TEST(rs->displaced_count() == 0u);
+	BOOST_TEST(text(spelled) == "A");
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a warmup is a pin of its spelling too; it goes with that spelling's unpin only.
+BOOST_FIXTURE_TEST_CASE(AWarmupOfOneSpelling_GoesWithItsOwnUnpinOnly, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->warmup<res::text_resource>(a);
+	rs->warmup<res::text_resource>(spelled);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: in a layer (a module's) the spellings own their shares the same way, and the root's pins are apart.
+BOOST_FIXTURE_TEST_CASE(PinsOfTwoSpellingsInALayer_AreOwnedApartFromTheRoot, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	res::resource_system layer{ *rs };
+	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
+	layer.pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("root")));
+	BOOST_TEST(layer.pinned_count() == 1u);
+
+	layer.unpin_resource(spelled);
+	pump();
+	BOOST_TEST(layer.pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(layer.pinned_count() == 1u);
+	layer.unpin_resource(a);
+	BOOST_TEST(layer.pinned_count() == 0u);
+}
+
+// #869: owners are per pin, so per type: a spelling takes away only the pins of the types it pinned.
+BOOST_FIXTURE_TEST_CASE(OwnersArePerType_AnUnpinTakesOnlyTheTypesItsTagPinned, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("text")));
+	rs->pin_resource(spelled, res::binary_resource(spelled, test_util::to_bytes("bytes")));
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: one node is one file: the spelling that pinned last put the node's data, and its unpin takes only its share, the
+// data stays for the other owner; nothing is loaded.
+BOOST_FIXTURE_TEST_CASE(TheSpellingThatPinnedLastUnpins_TheDataStaysForTheOther, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(a) == "pinned spelled");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a rebind back to tags (the index goes) splits the owners: a file change for each, its own file loaded and pinned.
+BOOST_FIXTURE_TEST_CASE(ARebindBackToTags_GivesEachSpellingItsOwnFilePinned, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	BOOST_TEST(rs->pinned_count() == 1u);
+
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	BOOST_TEST(text(spelled) == "file A");
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a spelling that gets another ID while a file still holds the old one: both nodes lose the pin and get their own
+// file loaded and pinned, counted while it loads; a watcher of either spelling is told.
+BOOST_FIXTURE_TEST_CASE(ASpellingThatGetsAnotherId_EachNodeGetsItsOwnFilePinned, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	watch_log log;
+	log.watch(*rs, spelled);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(rs->pending_loads() == 2u);
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	BOOST_TEST(text(spelled) == "file A");
+	BOOST_TEST(std::ranges::count(log.told, names({ spelled }).front()) >= 1);
+	rs->unwatch(spelled, &log);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a pin_resource while the split's reload loads is newer: the reload does not overwrite it.
+BOOST_FIXTURE_TEST_CASE(APinWhileTheReloadLoads_IsNotOverwritten, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned again")));
+	pump();
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "pinned again");
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: an unpin while the split's reload loads is final: the reload pins nothing for owners that left.
+BOOST_FIXTURE_TEST_CASE(AnUnpinWhileTheReloadLoads_LeavesNoPin, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	rs->unpin_resource(a);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: an owner a split leaves without a file loses its pin: no empty pin stays behind.
+BOOST_FIXTURE_TEST_CASE(ASplitOwnerWithoutAFile_LosesThePin, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	ram->files.erase(a);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a split in a layer (a module's) reloads the layer's pins the same way, apart from the root's.
+BOOST_FIXTURE_TEST_CASE(ASplitInALayer_GivesEachSpellingItsOwnFilePinned, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	res::resource_system layer{ *rs };
+	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	layer.pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	BOOST_TEST(layer.pinned_count() == 1u);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+	BOOST_TEST(layer.pinned_count() == 2u);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	const auto layer_text = [&layer](const res::tag& tag) {
+		const auto ptr = layer.require_sync<res::text_resource>(tag).get_sync();
+		return ptr ? ptr->str() : std::string{ "<failed>" };
+	};
+	BOOST_TEST(layer_text(a) == "file a");
+	BOOST_TEST(layer_text(spelled) == "file A");
+	layer.unpin_resource(a);
+	layer.unpin_resource(spelled);
+	BOOST_TEST(layer.pinned_count() == 0u);
+}
+
+// #869: a second split while the first one's reload loads: the first reload is stale, the second pins each file once.
+BOOST_FIXTURE_TEST_CASE(TwoSplitsBeforeTheReloadSettles_PinEachFileOnce, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	BOOST_TEST(text(spelled) == "file A");
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: an owner whose reload still loads moves to another ID without a split: the reload starts again where it is now,
+// so the owner is not left without a pin.
+BOOST_FIXTURE_TEST_CASE(AnOwnerMovedWhileItsReloadLoads_GetsItsPinWhereItIsNow, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	index->put(a, id_number(3));
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a split owner whose file fails to load loses its pin (with a warning): no empty pin stays behind.
+BOOST_FIXTURE_TEST_CASE(ASplitOwnerWhoseFileFailsToLoad_LosesThePin, index_fixture)
+{
+	rs->registrate_resolver<broken_resolver>("broken");
+	const res::tag a{ "broken://t/a.txt" };
+	const res::tag spelled{ "broken://t/A.txt" };
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a split of one file in the root and in a layer: one change signal per node, and the layer's reload shares the
+// root's load.
+BOOST_FIXTURE_TEST_CASE(ASplitInTheRootAndALayer_SignalsOnceAndLoadsOnce, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	res::resource_system layer{ *rs };
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("root a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("root spelled")));
+	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("layer a")));
+	layer.pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("layer spelled")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 2u);
+	pump();
+	BOOST_TEST(std::ranges::count(log.told, names({ a }).front()) == 1);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(layer.pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(layer.pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unwatch(a, &log);
+	layer.unpin_resource(a);
+	layer.unpin_resource(spelled);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	BOOST_TEST(layer.pinned_count() == 0u);
+}
+
+// #869: a batch about another file while a split's reload loads leaves that reload alone: one load, one change signal.
+BOOST_FIXTURE_TEST_CASE(ABatchAboutAnotherFile_LeavesTheReloadRunning, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	const res::tag other = put("other.txt", "other");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	index->put(other, id_number(3));
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 2u);
+	pump();
+	BOOST_TEST(std::ranges::count(log.told, names({ a }).front()) == 1);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unwatch(a, &log);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a pin register_alias copies onto a key whose reload still loads is newer: the reload does not overwrite it.
+BOOST_FIXTURE_TEST_CASE(AnAliasCopyWhileTheAliasReloads_IsNotOverwritten, index_fixture)
+{
+	const res::tag original = put("o.txt", "O");
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(original, res::text_resource(original, test_util::to_bytes("pinned original")));
+	std::weak_ptr original_block = rs->require_sync<res::text_resource>(original).get_control_block();
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	rs->register_alias(original, a);
+	rs->unpin_resource(original);
+	pump();
+	// Only the alias' pin holds the original's block now.
+	BOOST_TEST(!original_block.expired());
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a walk that sees a move before the move's batch takes the old tag out of an ID the file still holds: that is
+// the file moved, not owners split, so the pin stays with the ID and nothing is reloaded.
+BOOST_FIXTURE_TEST_CASE(AMoveSeenBeforeItsBatch_KeepsThePinWithTheId, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag b = tag_of("b.txt");
+	index->put(a, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+
+	ram->files[b] = ram->files.at(a);
+	ram->files.erase(a);
+	index->move(a, b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 0u);
+	pump();
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(text(b) == "pinned a");
+}
+
+// #869: register_alias copies a pin with no owner, so the alias' unpin takes the copy away; where the alias' node has a
+// pin of its own owners, the copy does not replace it and the alias' unpin leaves it to them.
+BOOST_FIXTURE_TEST_CASE(APinCopiedToAnAlias_GoesWithTheAliasUnpin_UnlessOthersOwnTheAliasPin, index_fixture)
+{
+	const res::tag original = put("o.txt", "O");
+	const res::tag alias = put("al.txt", "AL");
+	rs->pin_resource(original, res::text_resource(original, test_util::to_bytes("pinned")));
+	rs->register_alias(original, alias);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(alias);
+	BOOST_TEST(rs->pinned_count() == 1u);
+
+	const res::tag other = put("other.txt", "X");
+	const res::tag owned_alias = put("owned.txt", "Y");
+	index->put(other, k_b);
+	index->spell(owned_alias, k_b);
+	rs->pin_resource(other, res::text_resource(other, test_util::to_bytes("other")));
+	rs->register_alias(original, owned_alias);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(owned_alias);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(other);
+	rs->unpin_resource(original);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// Regression guard (#869): a file erased is gone under every spelling, so the node's pin goes whoever pinned it.
+BOOST_FIXTURE_TEST_CASE(ErasingAFile_TakesThePinOfEverySpellingAway, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("spelled")));
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(rs->erase(a));
+	pump();
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
+
 

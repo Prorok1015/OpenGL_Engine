@@ -407,6 +407,9 @@ res::resource_system::~resource_system() {
     {
       std::unique_lock lock(m_pinning_mutex);
       m_pinned_resources = {};
+      m_pin_owners = {};
+      m_pin_generations = {};
+      m_pins_to_refresh.clear();
     }
     if (const std::size_t live = live_resources(); live > 0) {
       constexpr std::size_t k_named = 8;
@@ -1332,6 +1335,7 @@ void res::resource_system::set_asset_index(std::shared_ptr<const asset_index> in
   m_rebind_epoch.fetch_add(1, std::memory_order_acq_rel);
   const auto remap = rebind_all();
   evict_waiting(std::move(flushed), remap);
+  refresh_pins();
 }
 
 std::uint64_t res::resource_system::delivering_batch() const {
@@ -1369,6 +1373,7 @@ void res::resource_system::apply_asset_batch(std::uint64_t through,
   m_rebind_epoch.fetch_add(1, std::memory_order_acq_rel);
   const auto remap = rebind_all();
   evict_waiting(std::move(evicted), remap);
+  refresh_pins();
 }
 
 std::size_t res::resource_system::waiting_for_index_count() const {
@@ -1393,6 +1398,16 @@ void res::resource_system::follow_move(const res::tag &node, const res::tag &fro
     for (auto &[original, alias] : m_aliases) {
       if (alias == from) {
         alias = to;
+      }
+    }
+    // A pin's owner is the moved file by its new name: unpin_resource(to) takes it away (#869).
+    std::unique_lock pin_lock(m_pinning_mutex);
+    std::vector<cache_key> keys;
+    m_pin_owners.for_each_of_tag(node, [&keys](const cache_key &key, const auto &) { keys.push_back(key); });
+    for (const cache_key &key : keys) {
+      auto &owners = *m_pin_owners.find(key);
+      if (owners.erase(from) > 0) {
+        owners.insert(to);
       }
     }
   }
@@ -1438,6 +1453,12 @@ void res::resource_system::collect_bindings(std::vector<std::pair<res::tag, res:
   {
     std::shared_lock lock(m_pinning_mutex);
     m_pinned_resources.for_each_tag(add_key);
+    // An owner's own node, so a rebind takes each owner where its tag goes (#869).
+    m_pin_owners.for_each_entry([&out](const cache_key &key, const std::unordered_set<res::tag> &owners) {
+      for (const auto &owner : owners) {
+        out.emplace_back(owner, key.tag);
+      }
+    });
   }
   {
     std::lock_guard lock(m_layer_needs_mutex);
@@ -1512,6 +1533,9 @@ void res::resource_system::apply_rebind(const std::unordered_map<res::tag, res::
       add_key(key);
     }
     m_pinned_resources.for_each_tag(add_key);
+    m_pin_owners.for_each([&tags](const std::unordered_set<res::tag> &owners) {
+      tags.insert(tags.end(), owners.begin(), owners.end());
+    });
     for (const auto &[key, watchers] : m_watchers) {
       add_key(key);
     }
@@ -1519,6 +1543,7 @@ void res::resource_system::apply_rebind(const std::unordered_map<res::tag, res::
       add_key(key);
     }
     rekey_locked(remap);
+    rehome_pin_owners_locked(fresh, remap);
     std::unordered_set<res::tag> alias_nodes;
     for (const auto &[original, alias] : m_alias_edges) {
       alias_nodes.insert(original);
@@ -1569,7 +1594,8 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
   };
   for (const auto &[old_key, new_key] : remap) {
     // A live entry already under the new key wins (the other spelling's block): requests get it. The one that loses
-    // stays under the key, displaced (#858). A pin the new key has stays; else the old key's pin moves, as before.
+    // stays under the key, displaced (#858). One pin per node and type (#869): a pin the new key has stays, else the
+    // pin holds the new key's live block; a displaced block holds none. Its owners go home afterwards.
     m_cache.for_each_of_tag(old_key, [&](const cache_key &key, const cache_entry &entry) {
       const auto block = entry.lock();
       if (!block) {
@@ -1586,8 +1612,21 @@ void res::resource_system::rekey_locked(const std::unordered_map<res::tag, res::
     }
     m_cache.copy_tag(old_key, new_key, [](const cache_entry &entry) { return !entry.expired(); });
     m_cache.erase_tag(old_key);
-    m_pinned_resources.copy_tag(old_key, new_key, [](const auto &entry) { return entry != nullptr; });
+    std::vector<std::pair<cache_key, std::shared_ptr<resource_handle>>> pins;
+    m_pinned_resources.for_each_of_tag(old_key, [&](const cache_key &key, const auto &pinned) {
+      const cache_key moved{new_key, key.type};
+      const auto *kept = m_pinned_resources.find(moved);
+      if (!pinned || (kept && *kept)) {
+        return;
+      }
+      const cache_entry *live = m_cache.find(moved);
+      auto block = live ? live->lock() : nullptr;
+      pins.emplace_back(moved, block ? std::move(block) : pinned);
+    });
     m_pinned_resources.erase_tag(old_key);
+    for (auto &[key, block] : pins) {
+      m_pinned_resources[key] = std::move(block);
+    }
     if (const auto alias = m_aliases.find(old_key); alias != m_aliases.end()) {
       res::tag target = alias->second;
       m_aliases.erase(alias);
@@ -1640,6 +1679,8 @@ void res::resource_system::pin_bound(const cache_key &key, std::shared_ptr<resou
   {
     std::unique_lock pin_lock(m_pinning_mutex);
     m_pinned_resources[bound] = block;
+    m_pin_owners[bound].insert(key.tag);
+    bump_pin_generation_locked(bound);
   }
   if (always_cache) {
     m_cache[bound] = block;
@@ -1861,7 +1902,7 @@ void res::resource_system::deliver_changes(const std::string &protocol, const st
 }
 
 void res::resource_system::forget_erased(const res::tag &tag) {
-  unpin_resource(tag);
+  unpin_node(node_of(tag));
   {
     const res::tag node = node_of(tag);
     const auto alias_nodes = alias_value_nodes();
@@ -1939,6 +1980,17 @@ void res::resource_system::register_alias(const res::tag &original,
   m_alias_edges.insert_or_assign(original_node, alias_node);
   std::unique_lock pin_lock(m_pinning_mutex);
   m_pinned_resources.copy_tag(original_node, alias_node, [](const auto &entry) { return entry != nullptr; });
+  // The copy is a newer pin of the alias' owners: a reload of theirs still loading must not put its file over it.
+  std::vector<cache_key> copied;
+  m_pinned_resources.for_each_of_tag(alias_node, [&](const cache_key &key, const auto &pinned) {
+    const auto *original_pin = m_pinned_resources.find(cache_key{original_node, key.type});
+    if (pinned && original_pin && *original_pin == pinned && m_pin_generations.find(key)) {
+      copied.push_back(key);
+    }
+  });
+  for (const cache_key &key : copied) {
+    bump_pin_generation_locked(key);
+  }
 }
 
 std::filesystem::path res::resource_system::get_resources_path() const {
@@ -2467,7 +2519,180 @@ void res::resource_system::unpin_resource(const res::tag& tag)
 {
 	const res::tag node = node_of(tag);
 	std::unique_lock lock(m_pinning_mutex);
+	// Another spelling of the node that pinned the same type keeps that pin: one node is one file (#869).
+	std::vector<cache_key> keys;
+	const auto add = [&keys](const cache_key& key, const auto&) {
+		if (std::ranges::find(keys, key) == keys.end()) {
+			keys.push_back(key);
+		}
+	};
+	m_pinned_resources.for_each_of_tag(node, add);
+	m_pin_owners.for_each_of_tag(node, add);
+	for (const cache_key& key : keys) {
+		if (auto* owners = m_pin_owners.find(key)) {
+			owners->erase(tag);
+			if (!owners->empty()) {
+				continue;
+			}
+		}
+		m_pinned_resources.erase(key);
+		m_pin_owners.erase(key);
+		m_pin_generations.erase(key);
+	}
+}
+
+void res::resource_system::unpin_node(const res::tag& node)
+{
+	std::unique_lock lock(m_pinning_mutex);
+	m_pin_owners.erase_tag(node);
+	m_pin_generations.erase_tag(node);
 	m_pinned_resources.erase_tag(node);
+}
+
+std::uint64_t res::resource_system::bump_pin_generation_locked(const cache_key& key)
+{
+	return m_pin_generations[key] = ++m_pin_generation;
+}
+
+void res::resource_system::reload_pin(const pin_reload& reload)
+{
+	if (!exists(reload.file)) {
+		egLOG_WARN("res/pin", "{}: no file to pin again after its spellings split over two IDs, the pin goes",
+			reload.file.string());
+		apply_pin_reload(reload, nullptr);
+		return;
+	}
+	const ds::type_id chain[] = { reload.pinned.type };
+	const auto block = require_block(reload.file, chain, false);
+	block->on_settled([gate = m_gate, weak = std::weak_ptr<resource_handle>(block), reload](auto&) {
+		gate->with([&](resource_system& self) { self.apply_pin_reload(reload, weak.lock()); });
+	});
+}
+
+void res::resource_system::apply_pin_reload(const pin_reload& reload, const std::shared_ptr<resource_handle>& block)
+{
+	std::unique_lock lock(m_pinning_mutex);
+	// Pinned again, evicted again or let go meanwhile: not this reload's any more.
+	const auto* generation = m_pin_generations.find(reload.pinned);
+	auto* owners = m_pin_owners.find(reload.pinned);
+	if (!generation || *generation != reload.generation || !owners || owners->empty()) {
+		return;
+	}
+	if (!block || block->has_error()) {
+		if (block) {
+			egLOG_WARN("res/pin", "{}: could not be loaded to pin again, the pin goes", reload.file.string());
+		}
+		m_pin_owners.erase(reload.pinned);
+		m_pin_generations.erase(reload.pinned);
+		m_pinned_resources.erase(reload.pinned);
+		return;
+	}
+	m_pinned_resources[reload.pinned] = block;
+	bump_pin_generation_locked(reload.pinned);
+}
+
+void res::resource_system::refresh_pins()
+{
+	ASSERT_MSG(!m_parent, "refresh_pins: the root only, it takes the layers' reloads too");
+	ASSERT_MSG(m_tasks.on_main(), "refresh_pins: main thread only");
+	std::vector<std::pair<resource_system*, pin_reload>> pending;
+	take_pin_reloads(pending);
+	// The spellings now name another file: what was loaded or pinned under the old one is a change for them. Once per
+	// node, before any reload: a layer's signal reaches the root, and a later one would evict what the root reloaded.
+	std::unordered_set<res::tag> signalled;
+	for (const auto& [system, reload] : pending) {
+		if (signalled.insert(node_of(reload.file)).second) {
+			signal_changed(reload.file);
+		}
+	}
+	for (const auto& [system, reload] : pending) {
+		system->reload_pin(reload);
+	}
+}
+
+void res::resource_system::take_pin_reloads(std::vector<std::pair<resource_system*, pin_reload>>& out)
+{
+	{
+		std::unique_lock lock(m_pinning_mutex);
+		for (pin_reload& reload : m_pins_to_refresh) {
+			out.emplace_back(this, std::move(reload));
+		}
+		m_pins_to_refresh.clear();
+	}
+	std::vector<resource_system*> layers;
+	{
+		std::lock_guard layers_lock(m_layers_mutex);
+		layers = m_layers;
+	}
+	// Called on a copy, outside m_layers_mutex. Safe: refresh_pins runs on the main thread, where layers are made and
+	// destroyed (a module's load and unload), so none goes before its reloads are started.
+	for (resource_system* layer : layers) {
+		layer->take_pin_reloads(out);
+	}
+}
+
+void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res::tag, res::tag>& fresh,
+	const std::unordered_map<res::tag, res::tag>& remap)
+{
+	const auto mapped = [&remap](const res::tag& key) -> const res::tag& {
+		const auto it = remap.find(key);
+		return it == remap.end() ? key : it->second;
+	};
+	// rekey_locked moved the pins, not the owners: an owner record's pin now sits under its old key mapped. Owners that
+	// all stay together keep it. Owners a rebind split over nodes (another ID for some spellings, the index gone) name
+	// other files now: each node they go to loses the pin and gets its owners' file loaded and pinned again (#869).
+	// Generations go with the owners, so a reload started before still meets its own.
+	tag_keyed_map<std::unordered_set<res::tag>> owners;
+	tag_keyed_map<std::uint64_t> generations;
+	std::unordered_set<cache_key> reload;
+	std::unordered_set<cache_key> owned;
+	m_pin_owners.for_each_entry([&](const cache_key& key, const std::unordered_set<res::tag>& tags) {
+		const cache_key pinned{ mapped(key.tag), key.type };
+		owned.insert(pinned);
+		std::vector<cache_key> homes;
+		bool split = false;
+		// An ID a file still holds keeps its entries (rebind_all): a tag that left it for a tag key is that file moved
+		// away (a walk ahead of the move's batch), so its owner stays with the pin and follow_move renames it.
+		const bool held_id = asset_of_node(pinned.tag) && !remap.contains(key.tag);
+		for (const res::tag& tag : tags) {
+			const auto node = fresh.find(tag);
+			const res::tag& now = node != fresh.end() ? node->second : pinned.tag;
+			const cache_key home{ held_id && !asset_of_node(now) ? pinned.tag : now, key.type };
+			owners[home].insert(tag);
+			homes.push_back(home);
+			split = split || home != pinned;
+		}
+		// No pin under the key: an earlier rebind's reload is still loading it. Owners that stayed under the same key
+		// keep it running; owners that moved have it started again where they are now.
+		const auto* pin = m_pinned_resources.find(pinned);
+		const bool loading = !pin || !*pin;
+		if (split || (loading && pinned != key)) {
+			reload.insert(homes.begin(), homes.end());
+			reload.insert(pinned);
+		} else if (const auto* generation = m_pin_generations.find(key)) {
+			generations[pinned] = *generation;
+		}
+	});
+	for (const cache_key& key : reload) {
+		m_pinned_resources.erase(key);
+		const auto* left = owners.find(key);
+		if (!left || left->empty()) {
+			continue;
+		}
+		const std::uint64_t generation = ++m_pin_generation;
+		generations[key] = generation;
+		// The same spelling in the root and its layers, whatever order the sets keep.
+		const res::tag& file = *std::ranges::min_element(*left, {}, &res::tag::string);
+		m_pins_to_refresh.push_back(pin_reload{ file, key, generation });
+	}
+	// A pin whose owners all went to other nodes goes.
+	for (const cache_key& key : owned) {
+		if (!owners.find(key)) {
+			m_pinned_resources.erase(key);
+		}
+	}
+	m_pin_generations = std::move(generations);
+	m_pin_owners = std::move(owners);
 }
 
 res::tag res::resource_system::resolve_alias(const res::tag& tag) const

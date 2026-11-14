@@ -351,6 +351,139 @@ BOOST_AUTO_TEST_CASE(SaveAll_OfAFileThatChangedOnDisk_AsksAndDoesNotLetTheExitGo
 	BOOST_TEST(read_text("config.desc").find("4.0") != std::string::npos);
 }
 
+namespace {
+
+constexpr const char* k_old_config = R"({"__type":"test.config","velocity":4.0})";
+
+void register_rename(desc::desc_system& descs)
+{
+	descs.register_migration("test.config", 1, "velocity is now speed", [](json::object& object, desc::migration_context&) {
+		if (const auto found = object.find("velocity"); found != object.end()) {
+			json::value moved = found->value(); // the insert below may reallocate: the iterator and its value go first
+			object.erase(found);
+			object["speed"] = std::move(moved);
+		}
+	});
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(ASaveOfAnOutdatedFile_AsksFirst_EvenWhenClean_AndWritesTheNewVersionOnYes)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	const edt::document_id id = open->id();
+	BOOST_TEST(!open->is_dirty());
+
+	host->request_save(id);
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().list().front().kind == "choice");
+	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
+	BOOST_TEST(read_text("old.desc") == k_old_config);
+
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+	BOOST_TEST(read_text("old.desc") == k_old_config); // Cancel writes nothing
+
+	host->request_save(id);
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
+
+	host->request_save(id);
+	BOOST_TEST(context->dialogs().list().empty()); // written: nothing to ask any more
+}
+
+BOOST_AUTO_TEST_CASE(ASaveOfAnOutdatedFileThatChangedOnDisk_AsksAboutTheConflictFirst_ThenAboutTheVersion)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	const edt::document_id id = open->id();
+	put("old.desc", R"({"__type":"test.config","velocity":5.0})");
+
+	host->request_save(id);
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("changed on disk") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok); // Overwrite
+
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
+}
+
+BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFile_Save_AsksTheVersion_AndClosesOnYes)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	make_dirty(*open);
+	const std::size_t before = open_documents();
+
+	host->request_close(open->id());
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
+	BOOST_TEST(open_documents() == before - 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ClosingADirtyOutdatedFileChangedOnDisk_Overwrite_ThenTheVersion_ClosesTheWindow)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	make_dirty(*open);
+	const std::size_t before = open_documents();
+	put("old.desc", R"({"__type":"test.config","velocity":9.0})");
+
+	host->request_close(open->id());
+	answer_unsaved("save");
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("changed on disk") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok); // Overwrite
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("version 2") != std::string::npos);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
+	BOOST_TEST(open_documents() == before - 1u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_WithADirtyOutdatedFile_AsksTheVersion_AndTheNextOneGoesThrough)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* open = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(open != nullptr);
+	make_dirty(*open);
+
+	BOOST_TEST(!host->save_all());
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
+	BOOST_TEST(host->save_all());
+}
+
+BOOST_AUTO_TEST_CASE(OpeningANewerFile_IsAMessage_NoWindow)
+{
+	const res::tag tag = put("newer.desc", R"({"__type":"test.config","__version":9,"speed":1.0})");
+	host->open(tag, false);
+	BOOST_TEST(context->documents().find_by_source(tag) == nullptr);
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(context->dialogs().list().front().text.find("newer") != std::string::npos);
+}
+
 // The active document follows the focus of the data windows (S56-5): Edit > Undo acts on the window the person works in.
 namespace {
 

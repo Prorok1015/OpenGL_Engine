@@ -116,6 +116,7 @@
 // gs::input_actions loses m_warned_map and m_warned_revision, so its later members move (layout_revision 6).
 // #783: inp::action_binding is a struct {kind, code, threshold} (in the layout key), inp::action_map::actions()/size() are exports
 // (layout_revision 7). Pad bindings take an optional threshold in actions.desc.
+// #797: desc::override_expectation and desc::override_owner are new exports (no type changes: the layout key stays).
 // #759: cmd::command_desc gains describe_before_allowed_invoke at its end and joins the layout key (layout_revision 10).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
