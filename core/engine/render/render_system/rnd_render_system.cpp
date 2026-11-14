@@ -189,6 +189,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		// layer count from the file would make the driver read that many pictures out of the one buffer (#926).
 		rnd::driver::texture_header header = desc.get_header();
 		header.type = rnd::driver::TEXTURE_TYPE::TEXTURE_2D;
+		header.usage = rnd::driver::texture_usage::sampled; // the desc file may say none or a render target: a loaded picture is only sampled
 		header.data.extent = rnd::driver::texture_header::texture_extent{ .width = pixels->width, .height = pixels->height };
 		header.data.format = pixels->format;
 		header.data.mip_levels = std::clamp<uint32_t>(header.data.mip_levels, 1, full_mip_chain(pixels->width, pixels->height));
