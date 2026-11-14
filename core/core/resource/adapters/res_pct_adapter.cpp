@@ -9,8 +9,8 @@
 
 std::optional<res::raw_image_adapter::raw_image_header> res::raw_image_adapter::read_header(const std::vector<std::byte>& data) const
 {
+	// The bytes are a file's: one too short has no header, which is the caller's to report, never an assert (#930).
 	if (data.size() < HEADER_SIZE) {
-		ASSERT_FAIL("Data size is less than header size!");
 		return {};
 	}
 
