@@ -1,18 +1,21 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
-#include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_json_body.h>
 #include <snk/resource/resources/res_resource_picture.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 // #928: a small file must not be able to ask for gigabytes: a picture is refused by its header before anything is
-// decoded, a desc by its size before anything is parsed.
+// decoded and gets a memory budget while it is, a desc is refused by its size before anything is parsed.
 namespace {
 
 struct load_limit_fixture : test_util::null_engine_fixture
@@ -48,6 +51,111 @@ struct load_limit_fixture : test_util::null_engine_fixture
 	}
 };
 
+std::vector<std::byte> as_bytes(std::string_view text)
+{
+	std::vector<std::byte> out(text.size());
+	std::memcpy(out.data(), text.data(), text.size());
+	return out;
+}
+
+// Deflate fills each byte from its low bit; a Huffman code goes in from its high bit.
+struct bit_writer
+{
+	std::vector<unsigned char> bytes;
+	std::uint32_t pending = 0;
+	int count = 0;
+
+	void put(std::uint32_t value, int bits)
+	{
+		for (int i = 0; i < bits; ++i) {
+			pending |= ((value >> i) & 1u) << count;
+			if (++count == 8) flush();
+		}
+	}
+
+	void put_code(std::uint32_t code, int bits)
+	{
+		for (int i = bits - 1; i >= 0; --i) put((code >> i) & 1u, 1);
+	}
+
+	void flush()
+	{
+		if (count > 0) bytes.push_back(static_cast<unsigned char>(pending));
+		pending = 0;
+		count = 0;
+	}
+};
+
+void put_be32(std::vector<unsigned char>& out, std::uint32_t value)
+{
+	for (int shift = 24; shift >= 0; shift -= 8) out.push_back(static_cast<unsigned char>((value >> shift) & 0xFFu));
+}
+
+// A zlib stream of one fixed-Huffman block: `literals` (each below 144, at least one), then the last of them again
+// 258 x `repeats` times, as matches of length 258 at distance 1: 13 bits of file for 258 bytes of output.
+std::vector<unsigned char> zlib_stream(const std::vector<unsigned char>& literals, std::size_t repeats)
+{
+	bit_writer out;
+	out.bytes = { 0x78, 0x01 };
+	out.put(1, 1);
+	out.put(1, 2);
+	std::uint32_t a = 1;
+	std::uint32_t b = 0;
+	const auto sum = [&a, &b](unsigned char byte) {
+		a = (a + byte) % 65521u;
+		b = (b + a) % 65521u;
+	};
+	for (const unsigned char literal : literals) {
+		out.put_code(0x30u + literal, 8);
+		sum(literal);
+	}
+	for (std::size_t i = 0; i < repeats; ++i) {
+		out.put_code(0xC5u, 8);
+		out.put_code(0, 5);
+		for (int n = 0; n < 258; ++n) sum(literals.back());
+	}
+	out.put_code(0, 7);
+	out.flush();
+	put_be32(out.bytes, (b << 16) | a);
+	return out.bytes;
+}
+
+std::uint32_t crc32(const unsigned char* data, std::size_t size)
+{
+	std::uint32_t crc = 0xFFFFFFFFu;
+	for (std::size_t i = 0; i < size; ++i) {
+		crc ^= data[i];
+		for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+	}
+	return ~crc;
+}
+
+void put_chunk(std::vector<unsigned char>& out, std::string_view type, const std::vector<unsigned char>& data)
+{
+	put_be32(out, static_cast<std::uint32_t>(data.size()));
+	const std::size_t start = out.size();
+	out.insert(out.end(), type.begin(), type.end());
+	out.insert(out.end(), data.begin(), data.end());
+	put_be32(out, crc32(out.data() + start, out.size() - start));
+}
+
+// A whole 1x1 RGBA PNG whose IDAT is `idat`.
+std::vector<std::byte> png_1x1(const std::vector<unsigned char>& idat)
+{
+	std::vector<unsigned char> bytes{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+	put_chunk(bytes, "IHDR", { 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0 });
+	put_chunk(bytes, "IDAT", idat);
+	put_chunk(bytes, "IEND", {});
+	std::vector<std::byte> out(bytes.size());
+	std::memcpy(out.data(), bytes.data(), bytes.size());
+	return out;
+}
+
+bool says(const std::exception& error, std::string_view text)
+{
+	return std::string_view{ error.what() }.find(text) != std::string_view::npos;
+}
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(ResLoadLimitsTests, load_limit_fixture)
@@ -77,18 +185,67 @@ BOOST_AUTO_TEST_CASE(APictureWithinTheBudget_GoesOnToTheDecoder)
 	BOOST_TEST(picture.error_text().find("not a decodable image") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(ADescLargerThanTheLimit_IsNotParsed)
+BOOST_AUTO_TEST_CASE(AOnePixelPng_DecodesWithinItsBudget)
+{
+	// Filter byte 0, then the pixel: proves the hand-made stream below is one stb reads.
+	const std::vector<std::byte> bytes = png_1x1(zlib_stream({ 0, 10, 20, 30, 40 }, 0));
+	const res::pct_adapter adapter;
+
+	const auto picture = adapter(res::tag{ "memory://limits/pixel.png" }, bytes);
+
+	BOOST_REQUIRE(picture);
+	BOOST_TEST(picture->size().x == 1);
+	BOOST_TEST(picture->size().y == 1);
+	BOOST_REQUIRE(picture->channels() == 4);
+	BOOST_TEST(picture->data()[0] == 10);
+	BOOST_TEST(picture->data()[3] == 40);
+	BOOST_TEST(res::pct_adapter::last_decode_peak_bytes() > 0u);
+	BOOST_TEST(res::pct_adapter::last_decode_peak_bytes() <= res::pct_adapter::decode_budget_bytes(1, 1, 4, bytes.size()));
+}
+
+BOOST_AUTO_TEST_CASE(APngWhoseDeflateStreamIsABomb_IsRefusedWithinTheBudget)
+{
+	// The header says one pixel; the IDAT of a few kilobytes unpacks to a megabyte of zeros.
+	constexpr std::size_t repeats = 4096;
+	const std::size_t unpacked = 1 + repeats * 258;
+	const std::vector<std::byte> bytes = png_1x1(zlib_stream({ 0 }, repeats));
+	const std::size_t budget = res::pct_adapter::decode_budget_bytes(1, 1, 4, bytes.size());
+	BOOST_REQUIRE(bytes.size() < 16u * 1024u);
+	BOOST_REQUIRE(unpacked > budget);
+	const res::pct_adapter adapter;
+
+	BOOST_CHECK_EXCEPTION(adapter(res::tag{ "memory://limits/bomb_direct.png" }, bytes), std::runtime_error,
+		[](const std::runtime_error& error) { return says(error, "not a decodable image"); });
+
+	BOOST_TEST(res::pct_adapter::last_decode_peak_bytes() > 0u);
+	BOOST_TEST(res::pct_adapter::last_decode_peak_bytes() <= budget);
+
+	const auto picture = load<res::picture_resource>("bomb.png", bytes);
+	BOOST_TEST(picture.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(AJsonBodyLargerThanItsLimit_IsNotParsed)
 {
 	std::string text = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[])";
-	text.append(core::desc::desc_adapter_t::max_desc_bytes, ' ');
+	text.append(4096, ' ');
 	text += "}";
-	std::vector<std::byte> bytes(text.size());
-	std::memcpy(bytes.data(), text.data(), text.size());
+	const std::vector<std::byte> bytes = as_bytes(text);
 
-	const auto desc = load<desc::desc_base>("padded.desc", std::move(bytes));
+	BOOST_CHECK_EXCEPTION(res::parse_json_body("memory://limits/padded.desc", bytes, 1024), res::load_error,
+		[](const res::load_error& error) { return says(error, "is not parsed") && error.what_diagnostic().kind == res::diagnostic_kind::load; });
+	// At the limit it is parsed: the size is what was refused, not the text.
+	BOOST_TEST(res::parse_json_body("memory://limits/padded.desc", bytes, bytes.size()).contains("__type"));
+	BOOST_TEST(res::parse_json_body("memory://limits/padded.desc", bytes).contains("__type"));
+}
 
-	BOOST_TEST(desc.has_error());
-	BOOST_TEST(desc.error_text().find("is not parsed") != std::string::npos);
+BOOST_AUTO_TEST_CASE(AGeomDesc_GetsTheLargerLimit_AnyOtherFileTheDefault)
+{
+	BOOST_TEST(res::max_geometry_json_bytes > res::max_json_bytes);
+	BOOST_TEST(res::json_byte_limit("memory://import/robot.geom.desc") == res::max_geometry_json_bytes);
+	BOOST_TEST(res::json_byte_limit(res::tag{ "res://models/robot.geom.desc" }.view()) == res::max_geometry_json_bytes);
+	BOOST_TEST(res::json_byte_limit("res://materials/robot.mat.desc") == res::max_json_bytes);
+	BOOST_TEST(res::json_byte_limit("res://models/robot.desc") == res::max_json_bytes);
+	BOOST_TEST(res::json_byte_limit("res://levels/robot.geom.desc.world") == res::max_json_bytes);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

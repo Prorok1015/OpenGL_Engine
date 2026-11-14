@@ -58,5 +58,25 @@ namespace stb_image {
 		size_t size_ = 0;
 		ImageFlip flipFlag_ = ImageFlip::NONE;
 	};
+
+	// While alive, what stb holds on this thread may not pass `bytes`: an allocation over it fails, and stb gives the
+	// decode up as out of memory (#928). Without one a decode is unlimited. Scopes nest.
+	class decode_budget
+	{
+	public:
+		explicit decode_budget(std::size_t bytes);
+		~decode_budget();
+		decode_budget(const decode_budget&) = delete;
+		decode_budget& operator=(const decode_budget&) = delete;
+
+		// Enough for any picture of this header: 12 x its pixel bytes with each side padded by 32, 4 x the file, 256 KiB.
+		static std::size_t for_image(int width, int height, int channels, std::size_t encoded_bytes);
+		// The most bytes stb held at once on this thread since its last budget began.
+		static std::size_t peak_bytes();
+
+	private:
+		std::size_t m_previous_limit;
+		std::size_t m_previous_in_use;
+	};
 }
 #endif // IMAGE
