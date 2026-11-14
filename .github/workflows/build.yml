@@ -787,6 +787,16 @@ jobs:
       - name: Build desc_resave
         run: cmake --build build/ci-linux-coverage --target desc_resave --parallel
 
+      # The shared engine carries config_system: a copy of it in the tool made the engine's cfg variables register into
+      # the tool's registry and crash at exit (#874). snk_check_engine_copies() refuses such a link at configure time;
+      # this checks the binary itself.
+      - name: desc_resave carries no engine component code
+        run: |
+          tool=build/ci-linux-coverage/tools/desc_resave/desc_resave
+          if nm -C --defined-only "$tool" | grep -E ' [TtWw] cfg::'; then
+            echo "::error::desc_resave defines config_system functions that snk_engine already has (#874)"; exit 1
+          fi
+
       - name: Compiler cache statistics
         if: always()
         run: ccache -s

@@ -88,4 +88,6 @@ if(SNK_ENGINE_SHARED)
 		endforeach()
 		target_link_options(snk_engine PRIVATE "LINKER:--whole-archive" ${_snk_wa_files} "LINKER:--no-whole-archive")
 	endif()
+	# What a binary that links snk_engine must not link again (snk_check_engine_copies, #874).
+	set_property(GLOBAL PROPERTY SNK_ENGINE_CARRIED ${_snk_whole_archive})
 endif()
