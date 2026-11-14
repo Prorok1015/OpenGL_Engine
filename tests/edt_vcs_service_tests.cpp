@@ -3934,19 +3934,24 @@ BOOST_AUTO_TEST_CASE(Cancel_StopsTheRunningGit)
 // not switched off (a refusal handles them). A person's write keeps git's own behaviour.
 BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 {
-	command = [](const std::vector<std::string>&, const platform::process_options&,
-		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	command = [](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "ls-files")) on_line("a.txt\0"s);
+		return exited(0);
+	};
 	auto options = fake_options();
 	options.environment->push_back("GIT_ASKPASS=/usr/bin/evil-askpass");
 	options.environment->push_back("SSH_ASKPASS=/usr/bin/evil-askpass");
 	make_service(std::move(options));
 
 	finish(service->start_stage({ "a.txt", "-rf" }, cmd::origin_kind::agent));
-	const auto agent = calls.back();
-	BOOST_REQUIRE(agent.size() >= 4u);
-	BOOST_TEST(agent[agent.size() - 4] == "add");
-	BOOST_TEST(agent[agent.size() - 3] == "--");
-	BOOST_TEST(agent.back() == "-rf");
+	const auto* add = last_call_with(calls, "add");
+	BOOST_REQUIRE(add);
+	const auto agent = *add;
+	// The listed files go through a NUL-separated file, so "-rf" never reaches git as an argument.
+	BOOST_TEST(!arg_starting_with(agent, "--pathspec-from-file=").empty());
+	BOOST_TEST(agent.back() == "--pathspec-file-nul");
+	BOOST_TEST(!has_arg(agent, "-rf"));
 	BOOST_TEST(has_arg(agent, "core.askPass="));
 	BOOST_TEST(has_arg(agent, "core.sshCommand=ssh -oBatchMode=yes"));
 	BOOST_TEST(has_arg(agent, "core.fsmonitor=false"));

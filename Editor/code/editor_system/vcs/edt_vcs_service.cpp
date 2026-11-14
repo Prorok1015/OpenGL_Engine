@@ -2353,13 +2353,21 @@ edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::s
 		std::optional<remove_on_exit> cleanup;
 		std::vector<std::string> checked = paths;
 		if (git.guarded) {
+			// The paths named are checked too: git's literal pathspec keeps their letter case, so ".Cache" lists
+			// nothing where the file system takes it for .cache.
+			std::vector<std::string> named;
+			named.reserve(paths.size());
 			for (const auto& path : paths) {
-				const fs::path normal = fs::path(path).lexically_normal();
+				const fs::path normal = path_of(path).lexically_normal();
 				if (normal.is_absolute() || normal.has_root_name() || (!normal.empty() && *normal.begin() == "..")) {
 					return refusal_json(refused("path_outside_project", std::format("'{}' is not a path inside the "
 						"repository", edt::vcs::valid_utf8(path))), task);
 				}
+				std::string text = edt::utf8_of(normal);
+				std::ranges::replace(text, '\\', '/');
+				named.push_back(std::move(text));
 			}
+			if (auto refusal = private_files_refusal(named, scope, "stages")) return refusal_json(*refusal, task);
 			const auto listed = stage_list(git, paths, task.stop);
 			if (task.stop.stop_requested()) throw ds::task_cancelled{};
 			if (!listed) {
