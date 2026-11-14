@@ -325,6 +325,9 @@ BOOST_AUTO_TEST_CASE(AFileOfAnOlderVersion_IsMigratedInMemoryAndWrittenInTheCurr
 		shown.as_object()["speed"] = 5.0;
 		return true;
 	}));
+	// the new version of a migrated file is written only after a yes (S56-6)
+	BOOST_TEST(!document.save().saved);
+	document.confirm_version_write();
 	BOOST_REQUIRE(document.save().saved);
 	const json::object saved = parsed("old.desc");
 	BOOST_TEST(saved.at("__version").to_number<int>() == 2);
@@ -1155,6 +1158,197 @@ BOOST_AUTO_TEST_CASE(SaveOver_KeepsTheHistory_AndMarksTheSavePoint)
 	BOOST_REQUIRE(document.undo());
 	BOOST_TEST((document.own() == original));
 	BOOST_TEST(document.is_dirty());
+}
+
+namespace
+{
+	constexpr const char* k_old_file = R"({"__type":"test.config","velocity":4.0})";
+
+	// test.config gets a second version: "velocity" became "speed" (and the step says so).
+	void register_rename(desc::desc_system& descs)
+	{
+		descs.register_migration("test.config", 1, "velocity is now speed", [](json::object& object, desc::migration_context& context) {
+			if (const auto found = object.find("velocity"); found != object.end()) {
+				json::value moved = found->value(); // the insert below may reallocate: the iterator and its value go first
+				object.erase(found);
+				object["speed"] = std::move(moved);
+				context.warn("velocity was renamed to speed");
+			}
+		});
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AnOldFile_IsOpenedMigratedInMemory_AndTheFileIsNotTouched)
+{
+	register_rename(*descs);
+	const res::tag file = put("old.desc", k_old_file);
+	edt::data_document document = make();
+	BOOST_REQUIRE_MESSAGE(document.open(file).opened, "an old file must open");
+
+	BOOST_TEST(document.file_version() == 1);
+	BOOST_TEST(document.current_version() == 2);
+	BOOST_TEST(document.migrated());
+	BOOST_TEST(document.needs_version_confirmation());
+	BOOST_TEST(!document.is_dirty());
+	BOOST_TEST(document.own().at("speed").to_number<double>() == 4.0);
+	BOOST_TEST(!document.own().contains("velocity"));
+	BOOST_REQUIRE(document.migration_notes().size() == 1u);
+	BOOST_TEST(document.migration_notes().front().find("velocity was renamed") != std::string::npos);
+	BOOST_TEST(text_of("old.desc") == k_old_file);
+
+	const edt::data_document_status status = edt::status_of(document);
+	BOOST_TEST(status.migrated);
+	BOOST_TEST(status.migration_note.find("v1 -> v2") != std::string::npos);
+	BOOST_TEST(status.migration_note.find("Migrate Project") == std::string::npos);
+	BOOST_TEST(edt::status_of(document, true).migration_note.find("Project > Migrate Project") != std::string::npos);
+	BOOST_TEST(status.migration_details.find("velocity was renamed") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ASaveOfAMigratedFile_NeedsAYes_EvenWhenClean_ThenWritesTheNewVersionOnce)
+{
+	register_rename(*descs);
+	const res::tag file = put("old.desc", k_old_file);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+
+	const edt::save_result refused = document.save();
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("version 1") != std::string::npos);
+	BOOST_TEST(refused.error.find("version 2") != std::string::npos);
+	BOOST_TEST(text_of("old.desc") == k_old_file);
+
+	document.confirm_version_write();
+	BOOST_REQUIRE_MESSAGE(document.save().saved, "the confirmed save of a clean old file writes it");
+	const json::object written = parsed("old.desc");
+	BOOST_TEST(written.at("__version").to_number<int>() == 2);
+	BOOST_TEST(written.at("speed").to_number<double>() == 4.0);
+	BOOST_TEST(!written.contains("velocity"));
+	BOOST_TEST(!document.migrated());
+	BOOST_TEST(!document.needs_version_confirmation());
+	BOOST_TEST(document.file_version() == 2);
+
+	// the next edit and save go through without asking again
+	BOOST_REQUIRE(set_speed(document, 6.0));
+	BOOST_TEST(document.save().saved);
+}
+
+BOOST_AUTO_TEST_CASE(TheMigrationIsNoEdit_NothingIsRecorded_AndASaveLeavesTheHistoryAlone)
+{
+	register_rename(*descs);
+	const res::tag file = put("old.desc", k_old_file);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(document.history().size() == 0u);
+	BOOST_TEST(!document.undo());
+
+	BOOST_REQUIRE(set_speed(document, 5.0));
+	document.commit_pending();
+	document.confirm_version_write();
+	BOOST_REQUIRE(document.save().saved);
+	BOOST_TEST(document.history().size() == 1u);
+	BOOST_TEST(!document.is_dirty());
+
+	// an undo after the save works as before: the migrated state comes back, dirty against the file now of version 2
+	BOOST_REQUIRE(document.undo());
+	BOOST_TEST(document.own().at("speed").to_number<double>() == 4.0);
+	BOOST_TEST(document.is_dirty());
+	BOOST_TEST(!document.needs_version_confirmation());
+	BOOST_TEST(document.save().saved);
+}
+
+BOOST_AUTO_TEST_CASE(TheYesOfTheVersionQuestion_IsForOneSave_AFailedSaveAsksAgain)
+{
+	register_rename(*descs);
+	const res::tag file = put("old.desc", k_old_file);
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+
+	document.confirm_version_write();
+	BOOST_TEST(!document.needs_version_confirmation());
+	put("old.desc", R"({"__type":"test.config","velocity":9.0})");
+	BOOST_TEST(!document.save().saved); // the file changed on disk: nothing is written
+	BOOST_TEST(document.needs_version_confirmation());
+}
+
+BOOST_AUTO_TEST_CASE(ANestedObjectOfAnOlderVersion_MakesTheDocumentMigrated_EvenWhenTheRootIsCurrent)
+{
+	register_rename(*descs);
+	descs->register_migration("test.plain", 1, [](json::object&) {});
+	const res::tag outdated = put("nested_old.desc", R"({"__type":"test.config","__version":2,"inner":{"__type":"test.plain"}})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(outdated).opened);
+	BOOST_TEST(document.file_version() == 2);
+	BOOST_TEST(document.migrated());
+	BOOST_TEST(document.nested_outdated());
+	BOOST_TEST(document.needs_version_confirmation());
+	BOOST_TEST(edt::status_of(document).migration_note.find("Outdated data") != std::string::npos);
+
+	const res::tag current = put("nested_current.desc", R"({"__type":"test.config","__version":2,"inner":{"__type":"test.plain","__version":2}})");
+	edt::data_document up_to_date = make();
+	BOOST_REQUIRE(up_to_date.open(current).opened);
+	BOOST_TEST(!up_to_date.migrated());
+}
+
+BOOST_AUTO_TEST_CASE(AnOutdatedParent_UnderACurrentChild_IsMigratedForTheViewAndNeverWritten)
+{
+	register_rename(*descs);
+	const res::tag parent = put("old_parent.desc", k_old_file);
+	const res::tag child = put("new_child.desc", R"({"__type":"test.config","__version":2,"__parent":"res://old_parent.desc"})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(child).opened);
+	BOOST_TEST(!document.migrated());
+	BOOST_TEST(document.shown().at_pointer("/speed").to_number<double>() == 4.0);
+
+	BOOST_REQUIRE(set_speed(document, 6.0));
+	BOOST_TEST(document.save().saved);
+	BOOST_TEST(text_of("old_parent.desc") == k_old_file);
+	BOOST_TEST(!parsed("new_child.desc").contains("velocity"));
+	BOOST_TEST(parsed("new_child.desc").at("speed").to_number<double>() == 6.0);
+	(void)parent;
+}
+
+BOOST_AUTO_TEST_CASE(AFileOfTheCurrentVersion_IsNotMigrated_AndSavesWithoutAQuestion)
+{
+	const res::tag file = put("current.desc", R"({"__type":"test.config","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(!document.migrated());
+	BOOST_TEST(document.migration_notes().empty());
+	BOOST_TEST(edt::status_of(document).migration_note.empty());
+	BOOST_TEST(document.save().saved); // clean: nothing to write, nothing to ask
+	BOOST_REQUIRE(set_speed(document, 3.0));
+	BOOST_TEST(document.save().saved);
+}
+
+BOOST_AUTO_TEST_CASE(ANewerFile_IsNotOpened_TheErrorNamesTheFileThePointerAndBothVersions)
+{
+	const res::tag file = put("newer.desc", R"({"__type":"test.config","__version":5,"speed":2.0})");
+	edt::data_document document = make();
+	const edt::open_result result = document.open(file);
+	BOOST_TEST(!result.opened);
+	BOOST_TEST(!result.unsuitable);
+	BOOST_TEST(!document.is_open());
+	BOOST_TEST(result.error.find("newer.desc") != std::string::npos);
+	BOOST_TEST(result.error.find("/__version") != std::string::npos);
+	BOOST_TEST(result.error.find("version 5") != std::string::npos);
+	BOOST_TEST(result.error.find("knows (1)") != std::string::npos);
+	BOOST_TEST(text_of("newer.desc").find("\"speed\"") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ANewerParent_AndANewerNestedObject_RefuseTheOpenToo)
+{
+	put("parent_new.desc", R"({"__type":"test.config","__version":7})");
+	const res::tag child = put("child_of_new.desc", R"({"__type":"test.config","__parent":"res://parent_new.desc"})");
+	edt::data_document with_parent = make();
+	const edt::open_result parent_result = with_parent.open(child);
+	BOOST_TEST(!parent_result.opened);
+	BOOST_TEST(parent_result.error.find("parent_new.desc") != std::string::npos);
+
+	const res::tag nested = put("nested_new.desc", R"({"__type":"test.config","extra":{"__type":"test.config","__version":9}})");
+	edt::data_document with_nested = make();
+	const edt::open_result nested_result = with_nested.open(nested);
+	BOOST_TEST(!nested_result.opened);
+	BOOST_TEST(nested_result.error.find("newer") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AReset_TakesTheRecordsOut_InOneRecord_AndAnUndoPutsThemBack)
