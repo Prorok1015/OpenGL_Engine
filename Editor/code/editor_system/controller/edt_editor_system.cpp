@@ -98,6 +98,7 @@
 #include <snk/project/prj_project.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
@@ -1054,16 +1055,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		usage_sources.assets = [this]() -> const asset_database* { return m_assets.get(); };
 		usage_sources.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		// The project context lives in the app data storage as long as the editor.
-		usage_sources.manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
-		usage_sources.manifest = [manifest = &project] {
+		const auto manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
+		const auto manifest_references = [manifest = &project] {
 			std::vector<manifest_reference> out;
 			if (!manifest->data.start_scene.empty()) out.push_back(manifest_reference{ "/start_scene", manifest->data.start_scene });
 			if (!manifest->data.input_actions.empty()) out.push_back(manifest_reference{ "/input_actions", manifest->data.input_actions });
 			return out;
 		};
+		usage_sources.manifest_file = manifest_file;
+		usage_sources.manifest = manifest_references;
 		for (auto& command : register_asset_usage_commands(m_context->actions().commands(), std::move(usage_sources))) {
 			m_registrations.push_back(std::move(command));
 		}
+		m_asset_browser_panel->set_usages(
+			[this, manifest_file, manifest_references, index = std::make_shared<usage_index>()](const res::tag& asset) -> std::optional<usage_report> {
+				if (!m_assets) return std::nullopt;
+				const std::vector<manifest_reference> manifest = manifest_references();
+				return index->find(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
+			},
+			[this, manifest_references] {
+				return usage_stamp{ m_assets ? m_assets->revision() : std::uint64_t{ 0 }, m_game_layer_generation, manifest_references() };
+			});
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
@@ -1598,6 +1610,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
+	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
 	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
@@ -1615,6 +1628,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		draw_agent_status();
 		draw_play_status();
+		draw_save_notice();
 		m_live_mode->draw_status();
 	});
 }
@@ -1669,9 +1683,11 @@ void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
 	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation, m_migration_runs };
 	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
 	// dropped, never shown.
-	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs())](ds::task_context& task) {
+	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs()),
+					read_only = prj::migration::read_only_layers(m_res, root)](ds::task_context& task) {
 		prj::migration::scan_options options;
 		options.stop = [&task] { return task.stop.stop_requested(); };
+		options.read_only_layers = read_only;
 		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
 		if (scan.incomplete) throw ds::task_cancelled{};
 		prj::migration::project_step_registry steps;
@@ -1818,6 +1834,13 @@ void edt::editor_system::draw_play_status()
 	const bool paused = m_play->state() == play_state::paused;
 	ImGui::TextColored(paused ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f) : ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
 		paused ? "Play: paused" : "Play: playing");
+}
+
+void edt::editor_system::draw_save_notice()
+{
+	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
+	if (!text) return;
+	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
 
 void edt::editor_system::create_panels(bool capture_log)
@@ -2132,6 +2155,7 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	cancel_level_settle();
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
+	m_loading_file_version = level_bytes ? desc_root_version(*level_bytes) : 0;
 
 	if (level_bytes) m_services.writable_resources()->store(m_loading_editor_tag, *level_bytes);
 
@@ -2231,7 +2255,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
 	const res::tag editor_tag_before = m_state.editor_tag;
-	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag);
+	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag, m_loading_file_version);
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
