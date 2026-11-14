@@ -14,6 +14,8 @@
 #include <vector>
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_describe_ops.h>
+#include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
@@ -63,6 +65,16 @@ namespace schema_test {
 		BOOST_DESCRIBE_CLASS(typo_probe, (), (fov), (), ())
 	};
 
+	// A map of tags: a map field needs a C++ type.
+	class reference_table : public desc::schema_desc<reference_table>
+	{
+	public:
+		static constexpr std::string_view __type = "wr.table";
+
+		std::map<std::string, res::tag> named;
+
+		BOOST_DESCRIBE_CLASS(reference_table, (), (named), (), ())
+	};
 }
 
 namespace desc {
@@ -186,9 +198,12 @@ namespace {
 		}
 	};
 
-	// Every place a reference can stand in a typed object, and the places a writer must leave alone.
+	// Every place a reference can stand in a typed object, and the places a writer must leave alone. A map has no blob layout
+	// in a JSON schema: its type is described in C++ (schema_test::reference_table).
 	void register_reference_schemas(desc::desc_system& ds)
 	{
+		ds.register_desc<schema_test::reference_table>("wr.table");
+		BOOST_REQUIRE(ds.find_schema("wr.table"));
 		BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(parse(R"({
 			"name": "wr.slot", "kind": "struct",
 			"fields": [ { "name": "image", "kind": "res_tag", "default": "" } ]
@@ -201,7 +216,6 @@ namespace {
 				{ "name": "texture", "kind": "res_tag", "default": "", "read_aliases": ["/tex"] },
 				{ "name": "material", "kind": "desc_ref", "default": "" },
 				{ "name": "list", "kind": "array", "element": "res_tag" },
-				{ "name": "named", "kind": "map", "element": "res_tag" },
 				{ "name": "slot", "kind": "structure", "ref_type": "wr.slot", "default": { "image": "" } },
 				{ "name": "slots", "kind": "array", "element": "structure", "ref_type": "wr.slot" },
 				{ "name": "blob", "kind": "custom" },
@@ -217,7 +231,8 @@ namespace {
 		"tex": "res://other_known.png",
 		"material": { "__type": "wr.thing", "texture": "res://known.png", "blob": "res://known.png" },
 		"list": [ "res://known.png", "res://no_id.png", "memory://t/known.png", "" ],
-		"named": { "a": "res://known.png", "b": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://old_place.png" } },
+		"table": { "__type": "wr.table",
+		           "named": { "a": "res://known.png", "b": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://old_place.png" } } },
 		"slot": { "image": { "guid": "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6", "path": "res://gone.png" } },
 		"slots": [ { "image": { "path": "res://known.png" } } ],
 		"blob": { "image": "res://known.png" },
@@ -623,8 +638,8 @@ BOOST_FIXTURE_TEST_CASE(WriteReferences_APathWithAnIdBecomesAGuidAndAPath, schem
 	BOOST_TEST(at("/list/1") == json::value("res://no_id.png"), "a file without an ID keeps its path");
 	BOOST_TEST(at("/list/2") == json::value("memory://t/known.png"));
 	BOOST_TEST(at("/list/3") == json::value(""));
-	BOOST_TEST(at("/named/a") == ref(known, "res://known.png"));
-	BOOST_TEST(at("/named/b") == ref(moved, "res://new_place.png"), "a known guid gets the path its file has now");
+	BOOST_TEST(at("/table/named/a") == ref(known, "res://known.png"), "a map of a typed object found inside another");
+	BOOST_TEST(at("/table/named/b") == ref(moved, "res://new_place.png"), "a known guid gets the path its file has now");
 	BOOST_TEST(at("/slot/image") == original.at_pointer("/slot/image"), "an unknown guid stays as written");
 	BOOST_TEST(at("/slots/0/image") == ref(known, "res://known.png"), "a path-only reference gets its guid");
 
@@ -658,14 +673,14 @@ BOOST_FIXTURE_TEST_CASE(WriteReferences_KeepsTheGuidTheReplacedFileHadForAPath, 
 		"texture": "res://kept.png",
 		"tex": "res://moved_away.png",
 		"list": [ "res://twice.png", "res://other.png" ],
-		"named": { "a": "res://kept.png" }
+		"table": { "__type": "wr.table", "named": { "a": "res://kept.png" } }
 	})");
 	const json::value kept_texture = json::object{ { "guid", "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6" }, { "path", "res://kept.png" } };
 
 	json::value without_index = written;
 	ds.write_references(without_index, &replaced);
 	BOOST_TEST(without_index.at("texture") == kept_texture);
-	BOOST_TEST(without_index.at_pointer("/named/a") == kept_texture, "a path the file wrote with a guid gets it wherever it stands");
+	BOOST_TEST(without_index.at_pointer("/table/named/a") == kept_texture, "a path the file wrote with a guid gets it wherever it stands");
 	BOOST_TEST(without_index.at_pointer("/list/0") == json::value("res://twice.png"), "a path written with two guids keeps none");
 
 	auto index = std::make_shared<ids_index>();
