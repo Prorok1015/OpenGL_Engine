@@ -242,7 +242,7 @@ namespace core
 
 	// The SHA-256 of the libraries in `folder` that a module's copy takes along and the loader may load (#921): every
 	// file the copy keeps beside the module, symbols left out, by its sorted name and the SHA-256 of its bytes. Of
-	// build/bin it is what the copies of its modules get; of a copy's folder, what that copy loads. Nullopt: the folder
-	// or one of them cannot be read.
+	// build/bin it is what the copies of its modules get; of a copy's folder, what that copy loads. Nullopt: the
+	// folder or one of them cannot be read.
 	SNK_API std::optional<std::string> module_library_set_digest(const std::filesystem::path& folder);
 }
