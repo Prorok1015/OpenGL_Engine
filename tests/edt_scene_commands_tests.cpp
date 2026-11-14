@@ -944,7 +944,9 @@ BOOST_AUTO_TEST_CASE(a_reference_in_a_patch_replaces_the_value_whole)
 
 	// The Inspector writes an instance's component through write_component with the component's schema: the same.
 	namespace oe = edt::override_edit;
-	prefab_node& owner = *child(root(1), 0xe1);
+	const auto instance = std::ranges::find_if(root(1).children, [](const prefab_node& node) { return node.node_id == 0xe1u; });
+	BOOST_REQUIRE(instance != root(1).children.end());
+	prefab_node& owner = *instance;
 	const std::vector<std::uint64_t> target{ 0xc1 };
 	const auto base_node = oe::find_base_node(*assembler, owner, target);
 	BOOST_REQUIRE(base_node.has_value());
