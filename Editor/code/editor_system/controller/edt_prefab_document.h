@@ -3,6 +3,7 @@
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document.h>
 #include <snk/resource/res_tag.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <cstdint>
 #include <memory>
 #include <string>
