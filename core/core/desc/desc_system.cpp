@@ -571,7 +571,8 @@ namespace
 	// The guid the replaced file wrote for each path. A path it wrote with two guids has none.
 	using kept_guids = std::map<std::string, std::optional<res::asset_id>, std::less<>>;
 
-	void collect_kept(const json::value& value, kept_guids& out, int depth)
+	// `file` names the replaced file in what is logged.
+	void collect_kept(const json::value& value, kept_guids& out, std::string_view file, int depth)
 	{
 		if (depth > 128) {
 			return;
@@ -580,14 +581,16 @@ namespace
 			if (!object->contains("__type")) {
 				if (const auto read = res::reference_from_json(value); read && !read->guid.is_nil() && !read->path.view().empty()) {
 					const auto [found, added] = out.try_emplace(std::string(read->path.view()), read->guid);
-					if (!added && found->second != read->guid) {
+					if (!added && found->second && *found->second != read->guid) {
+						egLOG_WARN("desc", "{}: '{}' is written with two guids ({} and {}): neither is kept for it",
+							file.empty() ? std::string_view{ "the replaced file" } : file, read->path.view(), res::to_text(*found->second), res::to_text(read->guid));
 						found->second.reset();
 					}
 					return;
 				}
 			}
 			for (const auto& member : *object) {
-				collect_kept(member.value(), out, depth + 1);
+				collect_kept(member.value(), out, file, depth + 1);
 			}
 		}
 		else if (const json::array* items = value.if_array()) {
@@ -595,7 +598,7 @@ namespace
 				return;
 			}
 			for (const json::value& item : *items) {
-				collect_kept(item, out, depth + 1);
+				collect_kept(item, out, file, depth + 1);
 			}
 		}
 	}
@@ -818,31 +821,51 @@ namespace
 	};
 }
 
+namespace
+{
+	// `file` names the replaced file in what is logged; empty: it has no name here.
+	void write_over(const desc::desc_system& descs, const res::resource_system& resources, json::value& root, const json::value* replaced,
+		std::string_view file)
+	{
+		kept_guids kept;
+		if (replaced) {
+			collect_kept(*replaced, kept, file, 0);
+		}
+		const reference_writer writer{ descs, resources, resources.has_asset_index(), kept.empty() ? nullptr : &kept };
+		if (writer.has_index || writer.kept) {
+			writer.tree(root, {});
+		}
+	}
+
+	void write_over_bytes(const desc::desc_system& descs, const res::resource_system& resources, json::value& root,
+		std::span<const std::byte> bytes, std::string_view file)
+	{
+		const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		// A file without a {guid, path} has no guid to keep: it is not parsed again.
+		if (text.find("\"guid\"") == std::string_view::npos) {
+			write_over(descs, resources, root, nullptr, file);
+			return;
+		}
+		json::parse_options options;
+		options.max_depth = 128;
+		boost::system::error_code ec;
+		const json::value replaced = json::parse(text, ec, {}, options);
+		if (ec) {
+			egLOG_WARN("desc", "{}: the replaced file does not parse ({}), the guids of its references are not kept",
+				file.empty() ? std::string_view{ "a desc" } : file, ec.message());
+		}
+		write_over(descs, resources, root, ec ? nullptr : &replaced, file);
+	}
+}
+
 void desc::desc_system::write_references(json::value& root, const json::value* replaced) const
 {
-	kept_guids kept;
-	if (replaced) {
-		collect_kept(*replaced, kept, 0);
-	}
-	const reference_writer writer{ *this, m_res_system, m_res_system.has_asset_index(), kept.empty() ? nullptr : &kept };
-	if (writer.has_index || writer.kept) {
-		writer.tree(root, {});
-	}
+	write_over(*this, m_res_system, root, replaced, {});
 }
 
 void desc::desc_system::write_references(json::value& root, std::span<const std::byte> replaced_file) const
 {
-	const std::string_view text(reinterpret_cast<const char*>(replaced_file.data()), replaced_file.size());
-	// A file without a {guid, path} has no guid to keep: it is not parsed again.
-	if (text.find("\"guid\"") == std::string_view::npos) {
-		write_references(root);
-		return;
-	}
-	json::parse_options options;
-	options.max_depth = 128;
-	boost::system::error_code ec;
-	const json::value replaced = json::parse(text, ec, {}, options);
-	write_references(root, ec ? nullptr : &replaced);
+	write_over_bytes(*this, m_res_system, root, replaced_file, {});
 }
 
 void desc::desc_system::write_references_over(json::value& root, const res::tag& file) const
@@ -851,12 +874,16 @@ void desc::desc_system::write_references_over(json::value& root, const res::tag&
 		write_references(root);
 		return;
 	}
+	constexpr std::chrono::seconds timeout{ 5 };
 	const auto raw = m_res_system.fetch_data(file);
-	if (!raw || !raw->wait_for(std::chrono::seconds(5)) || !raw->is_ready()) {
+	const bool timed_out = raw && !raw->wait_for(timeout);
+	if (!raw || timed_out || !raw->is_ready()) {
+		egLOG_WARN("desc", "{}: the replaced file could not be read{}, the guids of its references are not kept", file.view(),
+			timed_out ? std::format(" in {} s", timeout.count()) : std::string{});
 		write_references(root);
 		return;
 	}
-	write_references(root, std::span<const std::byte>(raw->data));
+	write_over_bytes(*this, m_res_system, root, std::span<const std::byte>(raw->data), file.view());
 }
 
 void desc::desc_system::write_references(const type_schema& schema, std::string_view pointer, json::value& value, const json::value* merged_into) const

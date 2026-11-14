@@ -677,6 +677,10 @@ BOOST_FIXTURE_TEST_CASE(WriteReferences_KeepsTheGuidTheReplacedFileHadForAPath, 
 	json::value from_bytes = written;
 	ds.write_references(from_bytes, std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
 	rs.set_asset_index(nullptr);
+	const std::string broken(R"({"texture":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":)");
+	json::value from_broken = written;
+	ds.write_references(from_broken, std::span<const std::byte>(reinterpret_cast<const std::byte*>(broken.data()), broken.size()));
+	BOOST_TEST(from_broken == written, "a replaced file that does not parse keeps nothing (and says so)");
 
 	BOOST_TEST(with_index.at("texture") == kept_texture, "a guid the index does not know is kept");
 	BOOST_TEST(with_index.at("tex") == json::value("res://moved_away.png"), "a guid the index puts on another file is not");

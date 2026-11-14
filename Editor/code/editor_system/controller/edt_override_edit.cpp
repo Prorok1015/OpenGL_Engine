@@ -1,6 +1,7 @@
 #include "edt_override_edit.h"
 #include "edt_reference.h"
 #include <snk/scene/scn_glm_json_convert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
@@ -183,7 +184,13 @@ namespace
 			if (!base) return;
 			const auto component = base->components.find(parsed->component);
 			if (component == base->components.end()) return;
-			const desc::type_schema* schema = m_descs.find_schema(type_of(component->second));
+			const std::string type = type_of(component->second);
+			if (type.empty()) {
+				egLOG_WARN("Editor/Save", "override record of component '{}' at '{}': the component's desc did not load, its references are written as they are",
+					parsed->component, parsed->path);
+				return;
+			}
+			const desc::type_schema* schema = m_descs.find_schema(type);
 			if (!schema) return;
 			if (!parsed->path.empty()) {
 				m_descs.write_references(*schema, parsed->path, *value);
