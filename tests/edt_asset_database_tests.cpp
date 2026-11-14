@@ -1388,6 +1388,37 @@ BOOST_AUTO_TEST_CASE(a_resource_saved_through_a_rename_is_read_once_and_keeps_it
 	BOOST_TEST(warnings == 0u);
 }
 
+// #973: a .resource rewritten in the tick it was read, to another ID of the same length: the same size, time and file.
+// Its stamp is within the granularity of its check, so the batch reads it again and reports the file changed; an old
+// stamp is still trusted and not read again.
+BOOST_AUTO_TEST_CASE(a_resource_rewritten_within_its_stamp_granularity_is_read_again)
+{
+	write_aged("a.png", "a");
+	const fs::path meta = upper.write("a.png.resource", meta_text(k_guid_b));
+	auto& assets = open();
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_b);
+	const fs::file_time_type stamp = fs::last_write_time(meta);
+
+	upper.write("a.png.resource", meta_text(k_guid_c));
+	fs::last_write_time(meta, stamp);
+	const edt::asset_batch batch = assets.apply_changes(std::vector<res::file_change>{
+		change("a.png.resource", res::change_kind::modified) });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_c);
+	BOOST_TEST((std::ranges::find(batch.changed, res::tag::make("a.png")) != batch.changed.end()));
+
+	age(meta);
+	assets.apply_changes(std::vector<res::file_change>{ change("a.png.resource", res::change_kind::modified) });
+	test_util::pump(tasks);
+	const std::size_t read_before = assets.files_read();
+	assets.apply_changes(std::vector<res::file_change>{ change("a.png.resource", res::change_kind::modified) });
+	test_util::pump(tasks);
+	BOOST_TEST(assets.files_read() == read_before);
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_c);
+}
+
 // #888: a file system that tells another identity for an unchanged file at every look (sshfs without use_ino): warned
 // of once per layer after two looks in a row, and its files are hashed all the same.
 BOOST_AUTO_TEST_CASE(identities_that_change_at_every_look_are_warned_of_once_and_files_are_still_hashed)

@@ -103,12 +103,10 @@ struct project_fixture
 		}
 	}
 
-	// A new .resource for `relative` under res/, its old one aged first: a rewrite within one tick of the clock keeps the
-	// size and time, and the database would take the file as unchanged.
+	// A new .resource for `relative` under res/, written over the old one: within one tick of the clock it keeps the
+	// size and time, which the database reads again as a racy stamp (#973).
 	void rewrite_meta(std::string_view relative, std::string_view guid)
 	{
-		const fs::path meta = content / (std::string{ relative } + ".resource");
-		fs::last_write_time(meta, fs::file_time_type::clock::now() - std::chrono::hours(1));
 		project.write("res/" + std::string{ relative } + ".resource", meta_text(guid));
 	}
 
