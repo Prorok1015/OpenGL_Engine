@@ -28,6 +28,7 @@
 #include <entt/entt.hpp>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <filesystem>
 #include <stdexcept>
 #include <system_error>
@@ -216,6 +217,22 @@ struct dll_snake : ecs::system_interface
 	int spawned = 0;
 };
 
+res::resource_system* g_config_resources = nullptr;
+// The cache lets go of a block nobody holds: a handle dropped at the end of a frame would start the load over every frame.
+res::res_handle<dll_config> g_config_handle;
+
+// A game reads its config the way the template does: asks for the handle every frame, a hit of the cache until the file is
+// signalled as changed, and keeps the last value it got while the new one loads.
+void dll_read_config(entt::registry& reg)
+{
+	if (!g_config_resources) return;
+	auto seen = reg.view<dll_game::dll_config_seen>();
+	if (seen.empty()) reg.emplace<dll_game::dll_config_seen>(reg.create());
+	g_config_handle = g_config_resources->require<dll_config>(res::tag{ std::string{ dll_game::config_tag } });
+	const std::shared_ptr<dll_config> config = g_config_handle.get();
+	if (config) reg.get<dll_game::dll_config_seen>(seen.front()).speed = config->speed;
+}
+
 class test_game_dll_module final : public gs::game_module
 {
 public:
@@ -240,6 +257,8 @@ protected:
 		if (data.has_value<dll_service>()) {
 			data.destruct<dll_service>();
 		}
+		g_config_resources = nullptr;
+		g_config_handle = {};
 		if (data.has_value<dll_rounds>()) {
 			g_rounds = nullptr;
 			data.destruct<dll_rounds>();
@@ -280,6 +299,8 @@ private:
 			{ .phase = ecs::phase::post_update });
 		layer.systems().register_system<&dll_keeper::run, dll_keeper>(std::string{ dll_game::keeper_system_name }, {});
 		layer.systems().register_system<&dll_snake::run, dll_snake>(std::string{ dll_game::snake_system_name }, {});
+		g_config_resources = &layer.resources();
+		layer.systems().register_system<&dll_read_config>(std::string{ dll_game::config_system_name });
 		layer.systems().register_system<&dll_menu>(std::string{ dll_game::menu_system_name });
 		layer.systems().register_system<&dll_round>(std::string{ dll_game::round_system_name });
 		layer.systems().register_system<&dll_arena_blob>(std::string{ dll_game::arena_blob_system_name });
