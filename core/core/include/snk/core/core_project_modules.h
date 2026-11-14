@@ -239,4 +239,10 @@ namespace core
 	// project_module_host::load_all with a host of its own (no reload afterwards).
 	SNK_API project_modules_report load_project_modules(app::modules::module_loader& loader, ds::app_data_storage& data,
 		const project_modules_options& options);
+
+	// The SHA-256 of the libraries in `folder` that a module's copy takes along and the loader may load (#921): every
+	// file the copy keeps beside the module, symbols left out, by its sorted name and the SHA-256 of its bytes. Of
+	// build/bin it is what the copies of its modules get; of a copy's folder, what that copy loads. Nullopt: the folder
+	// or one of them cannot be read.
+	SNK_API std::optional<std::string> module_library_set_digest(const std::filesystem::path& folder);
 }

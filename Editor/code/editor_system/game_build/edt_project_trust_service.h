@@ -37,8 +37,8 @@ namespace edt {
 		[[nodiscard]] bool flag_trust() const { return m_flag; }
 		[[nodiscard]] bool has_project() const { return m_key.has_value(); }
 
-		// trust_library: whether the copy of `module` (in .cache/modules) may be loaded. A library the person must be
-		// asked about is remembered as waiting and refused for now.
+		// trust_library: whether the copy of `module` (in its own copy folder) may be loaded. A library the person
+		// must be asked about is remembered as waiting and refused for now. Hashes only while there is no answer.
 		bool allow_library(std::string_view module, const std::filesystem::path& copy);
 		[[nodiscard]] bool waiting() const { return !m_waiting.empty(); }
 		[[nodiscard]] const std::vector<std::string>& waiting_modules() const { return m_waiting; }
@@ -53,9 +53,14 @@ namespace edt {
 		// The flag, or the person said "Trust".
 		[[nodiscard]] bool trusted() const { return m_flag || m_record.answer == trust_answer::trusted; }
 
-		// The editor built `library` as `module`: while it hashes so, it loads without the question.
+		// A library of build/bin passed this gate this session (it stays loaded whatever the answer is now).
+		[[nodiscard]] bool allowed_any() const { return m_allowed_any; }
+
+		// The editor built `library` as `module`: while the libraries of its folder digest so
+		// (core::module_library_set_digest), a copy of it loads without the question. Not recorded when only the flag
+		// trusts the project.
 		void record_own_build(std::string_view module, const std::filesystem::path& library);
-		void record_own_build_hash(std::string_view module, std::string_view sha256);
+		void record_own_build_digest(std::string_view module, std::string_view digest);
 
 		// ask_project_trust's dialog is shown and not answered yet.
 		[[nodiscard]] bool question_open() const { return m_question_open; }
@@ -71,6 +76,7 @@ namespace edt {
 		std::vector<std::string> m_waiting;
 		std::vector<std::string> m_held;
 		bool m_question_open = false;
+		bool m_allowed_any = false;
 	};
 
 	// "a, b, c".

@@ -5,7 +5,7 @@
 #include "edt_project_trust.h"
 #include "edt_project_trust_service.h"
 #include "edt_settings.h"
-#include <snk/common/hash/sha256.h>
+#include <snk/core/core_project_modules.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <boost/json/object.hpp>
 #include <cstddef>
@@ -25,6 +25,18 @@ namespace {
 	constexpr std::string_view k_other = "C:/work/other";
 	const std::string k_hash_a(64, 'a');
 	const std::string k_hash_b(64, 'b');
+
+	// A library as the loader names it on this platform (core copies and loads only those).
+	std::string library_name(std::string_view module)
+	{
+#if defined(_WIN32)
+		return std::string(module) + ".dll";
+#else
+		return "lib" + std::string(module) + ".so";
+#endif
+	}
+	std::filesystem::path fs_bin(std::string_view file) { return std::filesystem::path("build/bin") / file; }
+	std::filesystem::path fs_copy(std::string_view file) { return std::filesystem::path("cache/1-0") / file; }
 
 	// edt://settings in a scratch folder. The temp dir first: the resource system's io thread is joined before it goes.
 	struct settings_env
@@ -204,8 +216,8 @@ BOOST_AUTO_TEST_CASE(Trust_IsPersistedPerProject)
 BOOST_AUTO_TEST_CASE(AnOwnBuild_LoadsWithoutAsking_UntilItChanges)
 {
 	settings_env settings;
-	const std::filesystem::path built = settings.dir.write("build/bin/libgame.so", "built by the editor");
-	const std::filesystem::path copy = settings.dir.write("cache/libgame.so", "built by the editor");
+	const std::filesystem::path built = settings.dir.write(fs_bin(library_name("game")), "built by the editor");
+	const std::filesystem::path copy = settings.dir.write(fs_copy(library_name("game")), "built by the editor");
 	settings.service()->record_own_build("game", built);
 
 	const auto trust = settings.service();
@@ -213,16 +225,55 @@ BOOST_AUTO_TEST_CASE(AnOwnBuild_LoadsWithoutAsking_UntilItChanges)
 	BOOST_CHECK(!trust->waiting());
 	BOOST_CHECK(!trust->trusted());
 
-	settings.dir.write("cache/libgame.so", "built by the editoR");
+	settings.dir.write(fs_copy(library_name("game")), "built by the editoR");
 	BOOST_CHECK(!trust->allow_library("game", copy));
 	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
 
-	// An own build recorded from its hash (as the builder hands it over) counts the same.
-	const std::optional<std::string> hash = cmn::sha256_file_hex(copy);
-	BOOST_REQUIRE(hash.has_value());
-	trust->record_own_build_hash("game", *hash);
+	// A digest handed over by the builder counts the same.
+	const std::optional<std::string> digest = core::module_library_set_digest(copy.parent_path());
+	BOOST_REQUIRE(digest.has_value());
+	trust->record_own_build_digest("game", *digest);
 	trust->clear_waiting();
 	BOOST_CHECK(trust->allow_library("game", copy));
+}
+
+// #921 review: the loader also loads the libraries the copy takes along, so a library planted next to the editor's
+// own build is asked about; debug symbols are not loaded and do not count.
+BOOST_AUTO_TEST_CASE(ALibraryPlantedBesideAnOwnBuild_IsAskedAbout)
+{
+	settings_env settings;
+	const std::filesystem::path built = settings.dir.write(fs_bin(library_name("game")), "built by the editor");
+	const std::filesystem::path copy = settings.dir.write(fs_copy(library_name("game")), "built by the editor");
+	settings.service()->record_own_build("game", built);
+#if defined(_WIN32)
+	settings.dir.write(fs_copy("game.pdb"), "symbols of another build");
+#endif
+	const auto trust = settings.service();
+	BOOST_CHECK(trust->allow_library("game", copy));
+
+	settings.dir.write(fs_copy(library_name("version")), "planted");
+	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
+}
+
+// A build only --trust-project allowed is not remembered as the person's: the next run without the flag asks.
+BOOST_AUTO_TEST_CASE(AnOwnBuild_IsNotRecorded_WhenOnlyTheFlagTrusts)
+{
+	settings_env settings;
+	const std::filesystem::path built = settings.dir.write(fs_bin(library_name("game")), "built by the editor");
+	const std::filesystem::path copy = settings.dir.write(fs_copy(library_name("game")), "built by the editor");
+	const auto flagged = settings.service();
+	flagged->set_flag_trust(true);
+	flagged->record_own_build("game", built);
+	BOOST_CHECK(settings.service()->current_answer() == edt::trust_answer::none);
+	BOOST_CHECK(!settings.service()->allow_library("game", copy));
+
+	const auto trusted = settings.service();
+	trusted->answer(edt::trust_answer::trusted);
+	trusted->set_flag_trust(true);
+	trusted->record_own_build("game", built);
+	trusted->answer(edt::trust_answer::none);
+	BOOST_CHECK(settings.service()->allow_library("game", copy));
 }
 
 // --trust-project: everything loads, nothing is stored; without a project key only the flag trusts.
@@ -262,12 +313,13 @@ BOOST_AUTO_TEST_CASE(TheQuestion_StoresOnlyAnAnswer)
 
 	edt::ask_project_trust(dialogs, trust, record);
 	BOOST_REQUIRE_EQUAL(dialogs.list().size(), 1u);
-	BOOST_CHECK(dialogs.answer(dialogs.list().front().id, boost::json::object{ { "index", 1 } }).ok);
+	// "Don't Trust" comes first.
+	BOOST_CHECK(dialogs.answer(dialogs.list().front().id, boost::json::object{ { "index", 0 } }).ok);
 	BOOST_TEST((answers == std::vector<edt::trust_answer>{ edt::trust_answer::refused }));
 	BOOST_CHECK(settings.service()->current_answer() == edt::trust_answer::refused);
 
 	edt::ask_project_trust(dialogs, trust, record);
-	BOOST_CHECK(dialogs.answer(dialogs.list().front().id, boost::json::object{ { "index", 0 } }).ok);
+	BOOST_CHECK(dialogs.answer(dialogs.list().front().id, boost::json::object{ { "index", 1 } }).ok);
 	BOOST_CHECK(answers.back() == edt::trust_answer::trusted);
 	BOOST_CHECK(settings.service()->trusted());
 }

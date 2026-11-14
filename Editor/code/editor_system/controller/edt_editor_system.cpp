@@ -141,6 +141,8 @@
 CFG_VAR_EXT_PATH(cfg_edt_data_path);
 // --headless (edt_editor_init.cpp).
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
+// --trust-project (#921), also read by main.cpp: known here before live mode at open is decided.
+CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
 	template<class T>
@@ -458,7 +460,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	if (!data.has_value<project_trust_service>()) {
 		const std::optional<std::string> trust_key = data.has_value<prj::project_context>()
 			? canonical_project_settings_key(data.require<prj::project_context>().root) : std::nullopt;
-		data.construct<project_trust_service>(m_res, trust_key);
+		data.construct<project_trust_service>(m_res, trust_key, static_cast<bool>(cfg_edt_trust_project));
 	}
 	m_trust = data.require_shared<project_trust_service>();
 	m_registrations.push_back(m_context->actions().add({ .id = "project.trust", .label = "Trust Project Modules...",
@@ -960,8 +962,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return trust && trust->trusted();
 	};
 	build_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
-	build_options.own_build = [this](std::string_view module, std::string_view sha256) {
-		if (const auto trust = m_trust.lock()) trust->record_own_build_hash(module, sha256);
+	build_options.own_build = [this](std::string_view module, std::string_view digest) {
+		if (const auto trust = m_trust.lock()) trust->record_own_build_digest(module, digest);
 	};
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
@@ -1018,6 +1020,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const auto trust = m_trust.lock();
 		return trust && trust->trusted();
 	};
+	reload_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
 			fn();
@@ -1479,12 +1482,7 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
-	if (snk_dir && project_key
-		&& live_mode_at_open(load_build_settings(*snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
-		if (auto refused = m_live_mode->set_enabled(true, false)) {
-			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
-		}
-	}
+	apply_live_consent(data);
 }
 
 void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted)
@@ -1492,13 +1490,25 @@ void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<voi
 	const auto answered = [this, &data, on_trusted = std::move(on_trusted)](trust_answer answer) {
 		const auto trust = m_trust.lock();
 		if (answer == trust_answer::trusted) {
-			if (trust && trust->waiting()) load_waiting_modules(data);
-			if (on_trusted) on_trusted();
+			// Always: the host retries every module the gate refused, those of a stored "Don't Trust" too.
+			load_waiting_modules(data, [this, &data, on_trusted] {
+				apply_live_consent(data);
+				if (on_trusted) on_trusted();
+			});
 			return;
 		}
 		if (trust && trust->waiting()) {
 			egLOG_WARN("editor/trust", "the project runs without its modules ({}): you did not trust it",
 				module_list(trust->waiting_modules()));
+		}
+		if (m_game_builder && m_game_builder->is_building()) {
+			m_game_builder->cancel();
+			egLOG_WARN("editor/trust", "the running build was cancelled: {}", k_untrusted_project_error);
+		}
+		if (trust && trust->allowed_any()) {
+			// A loaded library cannot be taken back safely while its objects live in the editor.
+			m_context->dialogs().message(message_level::info, "The project's modules that are already loaded keep "
+				"running until you restart the editor; from then on they are not loaded.");
 		}
 		if (m_live_mode && m_live_mode->enabled()) {
 			// Not stored: the person's switch comes back once they trust the project again.
@@ -1509,8 +1519,10 @@ void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<voi
 	edt::ask_project_trust(m_context->dialogs(), m_trust, answered);
 }
 
-void edt::editor_system::load_waiting_modules(ds::app_data_storage& data)
+void edt::editor_system::load_waiting_modules(ds::app_data_storage& data, std::function<void()> then)
 {
+	// Kept here, not in the callback: register_implicit ignores the id while an earlier load still waits.
+	if (then) m_trust_waiting_load.push_back(std::move(then));
 	// Not inside the dialog's answer, nor under a level load, a migration or Play: the game layer changes with it.
 	editor_layer->register_implicit("edt/project_trust/load", [this, &data, logged = std::make_shared<std::string>()] {
 		std::string reason;
@@ -1528,9 +1540,9 @@ void edt::editor_system::load_waiting_modules(ds::app_data_storage& data)
 			}
 			return true;
 		}
-		if (!data.has_value<core::project_module_host>()) return false;
 		if (const auto trust = m_trust.lock()) trust->clear_waiting();
-		const core::project_modules_report report = data.require<core::project_module_host>().load_waiting();
+		const core::project_modules_report report = data.has_value<core::project_module_host>()
+			? data.require<core::project_module_host>().load_waiting() : core::project_modules_report{};
 		if (!report.loaded.empty()) {
 			egLOG_INFO("editor/trust", "trusted modules loaded: {}", module_list(report.loaded));
 		}
@@ -1538,8 +1550,30 @@ void edt::editor_system::load_waiting_modules(ds::app_data_storage& data)
 			egLOG_WARN("editor/trust", "modules not loaded after trust: refused {}; untrusted {}; missing {}",
 				module_list(report.refused), module_list(report.untrusted), module_list(report.missing_required));
 		}
+		for (auto& next : m_trust_waiting_load) m_trust_after_load.push_back(std::move(next));
+		m_trust_waiting_load.clear();
+		// A frame later: a build or live mode started now would run beside the layer change of this load.
+		editor_layer->register_implicit("edt/project_trust/after", [this] {
+			std::vector<std::function<void()>> ready = std::move(m_trust_after_load);
+			m_trust_after_load.clear();
+			for (auto& next : ready) next();
+			return false;
+		});
 		return false;
 	});
+}
+
+void edt::editor_system::apply_live_consent(ds::app_data_storage& data)
+{
+	if (!m_live_mode || m_live_mode->enabled() || !data.has_value<prj::project_context>()) return;
+	const std::filesystem::path snk_dir = data.require<prj::project_context>().snk_dir();
+	const std::optional<std::string> project_key = canonical_project_settings_key(snk_dir.parent_path());
+	if (!project_key) return;
+	if (live_mode_at_open(load_build_settings(snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
+		if (auto refused = m_live_mode->set_enabled(true, false)) {
+			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
+		}
+	}
 }
 
 void edt::editor_system::tick_live_mode()

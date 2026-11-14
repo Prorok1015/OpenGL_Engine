@@ -3,6 +3,7 @@
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/fs_paths.h>
+#include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_modules.h>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -19,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -1175,4 +1178,34 @@ core::project_modules_report core::load_project_modules(app::modules::module_loa
 {
 	project_module_host host(loader, data, options);
 	return host.load_all();
+}
+
+std::optional<std::string> core::module_library_set_digest(const std::filesystem::path& folder)
+{
+	// The same filter as copy_library, so build/bin and a copy of it give one digest.
+	std::vector<std::pair<std::string, fs::path>> files;
+	std::error_code ec;
+	for (fs::directory_iterator it{ folder, ec }, end; !ec && it != end; it.increment(ec)) {
+		std::error_code kind;
+		if (!travels_with_module(it->path()) || !is_library(it->path()) || !fs::is_regular_file(it->path(), kind)) {
+			continue;
+		}
+		files.emplace_back(utf8(it->path().filename()), it->path());
+	}
+	if (ec || files.empty()) {
+		return std::nullopt;
+	}
+	std::ranges::sort(files);
+	std::string listing;
+	for (const auto& [name, path] : files) {
+		const std::optional<std::string> hash = cmn::sha256_file_hex(path);
+		if (!hash) {
+			return std::nullopt;
+		}
+		listing += name;
+		listing += '\0';
+		listing += *hash;
+		listing += '\n';
+	}
+	return cmn::sha256_hex(std::as_bytes(std::span{ listing.data(), listing.size() }));
 }

@@ -3,6 +3,8 @@
 #include "../test_temp_dir.hpp"
 #include "test_dll_project.hpp"
 #include "test_game_dll_api.h"
+#include "edt_data_protocol.h"
+#include "edt_project_trust_service.h"
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/core/core_project_modules.h>
@@ -13,6 +15,7 @@
 #include <snk/ecs/ecs_component.h>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
+#include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_context.h>
@@ -655,6 +658,45 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	loader.unload(dll_game::module_name, root);
 	BOOST_TEST(!resident(copy));
 	root.destruct<prj::project_context>();
+}
+
+// #921 review: a project the person refused runs without its module; "Trust" later loads it, without a restart.
+BOOST_AUTO_TEST_CASE(a_refused_project_loads_its_module_once_the_person_trusts_it)
+{
+	test_util::temp_dir settings("dll_trust_settings");
+	std::filesystem::create_directories(settings.path() / "data");
+	BOOST_REQUIRE(edt::register_data_protocol(*rs, settings.path() / "data", settings.path() / "user"));
+	// The vfs is let go of before the folder it reads goes.
+	struct unmount {
+		res::resource_system& res;
+		~unmount() { res.unregistrate_resolver(edt::DATA_PROTOCOL); }
+	} unmounted{ *rs };
+	BOOST_REQUIRE(!edt::store_trust_answer(*rs, "project", edt::trust_answer::refused));
+
+	{
+		dll_project project("dll_trust_changed", root);
+		project.build(g_module_path);
+		auto trust = std::make_shared<edt::project_trust_service>(*rs, std::string("project"));
+		core::project_modules_options options = checked_layouts();
+		options.trust_library = [trust](std::string_view name, const std::filesystem::path& copy) {
+			return trust->allow_library(name, copy);
+		};
+		core::project_module_host host(loader, root, options);
+		const auto refused = host.load_all();
+		BOOST_TEST(refused.loaded.empty());
+		BOOST_TEST(refused.untrusted == std::vector<std::string>{ std::string{ dll_game::module_name } });
+		// A stored answer is not asked again: nothing waits for the question.
+		BOOST_TEST(!trust->waiting());
+
+		trust->answer(edt::trust_answer::trusted);
+		const auto loaded = host.load_waiting();
+		BOOST_TEST(loaded.loaded == std::vector<std::string>{ std::string{ dll_game::module_name } });
+		BOOST_TEST(loaded.untrusted.empty());
+		BOOST_TEST(moved_value(*this) == 3);
+		loader.unload(dll_game::module_name, root);
+		root.destruct<prj::project_context>();
+	}
+	BOOST_CHECK(edt::read_project_trust(*rs, "project").answer == edt::trust_answer::trusted);
 }
 
 BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its_copy_removed)

@@ -200,8 +200,11 @@ namespace edt {
 		void create_live_mode(ds::app_data_storage& data);
 		// #921: "Trust this project?"; after "Trust" the modules that waited load and `on_trusted` runs.
 		void ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted);
-		// project_module_host::load_waiting on a UI frame where no level load, migration or Play holds it back.
-		void load_waiting_modules(ds::app_data_storage& data);
+		// project_module_host::load_waiting on a UI frame where no level load, migration or Play holds it back; `then`
+		// runs on the frame after the load.
+		void load_waiting_modules(ds::app_data_storage& data, std::function<void()> then);
+		// Live mode at open (#908): on when the person turned it on for this project and it may run now.
+		void apply_live_consent(ds::app_data_storage& data);
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
@@ -371,6 +374,9 @@ namespace edt {
 		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
 		// it.
 		std::weak_ptr<edt::project_trust_service> m_trust;
+		// What runs after the modules a "Trust" let in were loaded, and what runs on the frame after that load.
+		std::vector<std::function<void()>> m_trust_waiting_load;
+		std::vector<std::function<void()>> m_trust_after_load;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor

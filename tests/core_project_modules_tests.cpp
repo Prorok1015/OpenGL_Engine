@@ -714,6 +714,36 @@ BOOST_AUTO_TEST_CASE(the_trust_gate_is_asked_about_the_copy_that_would_be_loaded
 	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
 }
 
+// #921 review: what the editor records of build/bin after its build is what the gate finds in the copy: the module
+// and every library that travels with it, so a library planted beside an own build changes the digest.
+BOOST_AUTO_TEST_CASE(the_library_set_digest_of_build_bin_is_the_one_of_its_copy)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+	const fs::path bin = library.parent_path();
+	dir.write(fs::path{ "game" } / "build" / "bin" / library_file("helper"), "a library next to the module");
+	const std::optional<std::string> built = core::module_library_set_digest(bin);
+	BOOST_REQUIRE(built.has_value());
+	BOOST_TEST(built->size() == 64u);
+
+	std::optional<std::string> seen;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const fs::path& copy) {
+		seen = core::module_library_set_digest(copy.parent_path());
+		return false;
+	};
+	load(options);
+	BOOST_REQUIRE(seen.has_value());
+	BOOST_TEST(*seen == *built);
+
+	// Symbols are not loaded: they do not count.
+	dir.write(fs::path{ "game" } / "build" / "bin" / "test_game.pdb", "symbols");
+	BOOST_TEST((core::module_library_set_digest(bin) == built));
+	dir.write(fs::path{ "game" } / "build" / "bin" / library_file("version"), "planted");
+	BOOST_TEST((core::module_library_set_digest(bin) != built));
+	BOOST_TEST(!core::module_library_set_digest(root / "no such folder").has_value());
+}
+
 BOOST_AUTO_TEST_CASE(load_waiting_asks_the_gate_again_for_what_it_refused_and_only_that)
 {
 	open({ manifest_module("test_game") });

@@ -66,8 +66,10 @@ namespace edt
 		// Returns why Play is restarted instead of kept; empty: kept, or not running. Null: nothing runs.
 		std::function<std::string(const std::string& module)> before_reload;
 		// Whether the person trusts the project (#921): untrusted, build.reload_game_module is denied to every caller
-		// but the person (the host still asks its trust_library for every copy). Null: trusted.
+		// but the person (the host still asks its trust_library for every copy), and Reload Game Module asks
+		// `ask_trust` first, reloading only once `then` runs. Null: trusted.
 		std::function<bool()> trusted;
+		std::function<void(std::function<void()> then)> ask_trust;
 	};
 
 	// Reloads the game module from its new build (#435): Build > Reload Game Module (action build.reload_game_module)

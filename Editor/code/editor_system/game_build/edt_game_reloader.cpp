@@ -74,8 +74,19 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 	ui.menu_path = "Build";
 	ui.disabled_tooltip = "Open a project and build its game module first";
 	ui.activate = [this, &actions] {
-		const auto outcome = actions.invoke(k_action_id, json::object{});
-		if (!outcome.ok) m_dialogs.message(message_level::warning, std::format("The game module was not reloaded: {}", outcome.error));
+		const auto reload = [this, &actions, alive = std::weak_ptr<int>(m_alive)] {
+			if (alive.expired()) return;
+			const auto outcome = actions.invoke(k_action_id, json::object{});
+			if (!outcome.ok) {
+				m_dialogs.message(message_level::warning,
+					std::format("The game module was not reloaded: {}", outcome.error));
+			}
+		};
+		if (m_options.trusted && !m_options.trusted() && m_options.ask_trust) {
+			m_options.ask_trust(reload);
+			return;
+		}
+		reload();
 	};
 	m_action = actions.add(std::move(command), std::move(ui));
 

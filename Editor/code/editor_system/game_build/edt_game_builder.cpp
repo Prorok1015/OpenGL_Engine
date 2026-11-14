@@ -6,8 +6,8 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
-#include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/core/core_project_modules.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <imgui.h>
@@ -164,10 +164,14 @@ namespace {
 		result.problems = parser.take();
 		result.tail.assign(tail.begin(), tail.end());
 		result.modules = find_modules(in.root, in.modules);
-		// Here, not on the main thread: a module library can be large.
+		// Here, not on the main thread: the libraries can be large. One digest of build/bin: every module's copy
+		// takes the whole folder's libraries along.
 		if (result.ok()) {
+			std::optional<std::optional<std::string>> digest;
 			for (auto& module : result.modules) {
-				if (module.exists) module.sha256 = cmn::sha256_file_hex(module.path);
+				if (!module.exists) continue;
+				if (!digest) digest = core::module_library_set_digest(module.path.parent_path());
+				module.digest = *digest;
 			}
 		}
 		return result;
@@ -557,7 +561,7 @@ edt::build_outcome edt::game_builder::finish(game_build_result& result, const bu
 		// Before game_module_built: a slot reloads the module, whose copy must already pass as the editor's own build.
 		if (m_options.own_build) {
 			for (const auto& module : result.modules) {
-				if (module.exists && module.sha256) m_options.own_build(module.name, *module.sha256);
+				if (module.exists && module.digest) m_options.own_build(module.name, *module.digest);
 			}
 		}
 		if (m_options.events) {

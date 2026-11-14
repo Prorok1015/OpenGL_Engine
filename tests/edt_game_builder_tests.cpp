@@ -9,7 +9,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_problem_list.h>
-#include <snk/common/hash/sha256.h>
+#include <snk/core/core_project_modules.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <boost/json/object.hpp>
@@ -1450,15 +1450,16 @@ BOOST_AUTO_TEST_CASE(AnUntrustedProject_DeniesAnAgentsBuild_AndAsksThePersonFirs
 	BOOST_CHECK(actions.invoke(edt::game_builder::k_action_id, boost::json::object{}, cmd::origin::agent("s1")).ok);
 }
 
-// #921: the hash of each built module reaches own_build before game_module_built, whose slot reloads it.
+// #921: the digest of build/bin reaches own_build for each built module before game_module_built, whose slot
+// reloads it.
 BOOST_AUTO_TEST_CASE(OwnBuild_IsRecordedBeforeTheModuleIsAnnounced)
 {
 	std::vector<std::string> order;
 	std::string recorded;
 	auto opts = observed_options();
-	opts.own_build = [&](std::string_view module, std::string_view sha256) {
+	opts.own_build = [&](std::string_view module, std::string_view digest) {
 		order.push_back("own " + std::string(module));
-		recorded = sha256;
+		recorded = digest;
 	};
 	const edt::connection seen = events.game_module_built.subscribe(
 		[&order](const edt::game_module_build_result& result) { order.push_back("built " + result.module); });
@@ -1469,7 +1470,7 @@ BOOST_AUTO_TEST_CASE(OwnBuild_IsRecordedBeforeTheModuleIsAnnounced)
 	BOOST_REQUIRE(build().ok);
 	run_to_end();
 	BOOST_TEST((order == std::vector<std::string>{ "own game", "built game" }));
-	const std::optional<std::string> expected = cmn::sha256_file_hex(module_path());
+	const std::optional<std::string> expected = core::module_library_set_digest(module_path().parent_path());
 	BOOST_REQUIRE(expected.has_value());
 	BOOST_CHECK_EQUAL(recorded, *expected);
 }

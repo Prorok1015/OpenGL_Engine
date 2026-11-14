@@ -129,9 +129,9 @@ namespace edt
 		// Null: trusted.
 		std::function<bool()> trusted;
 		std::function<void(std::function<void()> then)> ask_trust;
-		// On the main thread after a successful build, before game_module_built: the SHA-256 of each module file it
-		// produced, hashed on the build's thread (null: none).
-		std::function<void(std::string_view module, std::string_view sha256)> own_build;
+		// On the main thread after a successful build, before game_module_built: each module it produced, with
+		// core::module_library_set_digest of build/bin taken on the build's thread (null: none).
+		std::function<void(std::string_view module, std::string_view digest)> own_build;
 	};
 
 	// What one build produced; filled on the worker thread.
@@ -151,8 +151,9 @@ namespace edt
 			// Absolute; the first of module_file_names that exists, else the first of them.
 			std::filesystem::path path;
 			bool exists = false;
-			// Of the file as the build left it; nullopt: no file, a failed build, or it could not be read.
-			std::optional<std::string> sha256;
+			// core::module_library_set_digest of build/bin as the build left it; nullopt: no file, a failed build, or
+			// it could not be read.
+			std::optional<std::string> digest;
 		};
 		// The files the manifest's modules were built into (<root>/build/bin/<file>).
 		std::vector<module_file> modules;

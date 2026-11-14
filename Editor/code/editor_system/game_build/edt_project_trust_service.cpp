@@ -1,6 +1,6 @@
 #include "edt_project_trust_service.h"
-#include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/core/core_project_modules.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <algorithm>
 #include <cstddef>
@@ -22,6 +22,7 @@ bool edt::project_trust_service::allow_library(std::string_view module, const st
 	const auto held = std::ranges::find(m_held, module);
 	if (allowed && held != m_held.end()) m_held.erase(held);
 	if (!allowed && held == m_held.end()) m_held.emplace_back(module);
+	if (allowed) m_allowed_any = true;
 	return allowed;
 }
 
@@ -33,15 +34,15 @@ bool edt::project_trust_service::decide_library(std::string_view module, const s
 			"cannot be trusted (pass --trust-project)", module);
 		return false;
 	}
-	switch (judge_library(m_record, module, cmn::sha256_file_hex(copy))) {
-	case library_verdict::load:
-		return true;
-	case library_verdict::refuse:
+	if (m_record.answer == trust_answer::trusted) return true;
+	if (m_record.answer == trust_answer::refused) {
 		egLOG_WARN("editor/trust", "module '{}' is not loaded: you did not trust this project (Project > Trust Project "
 			"Modules... changes that)", module);
 		return false;
-	case library_verdict::ask:
-		break;
+	}
+	// Every library the copy brings along counts: the loader also loads those from the copy's folder.
+	if (judge_library(m_record, module, core::module_library_set_digest(copy.parent_path())) == library_verdict::load) {
+		return true;
 	}
 	if (std::ranges::find(m_waiting, module) == m_waiting.end()) m_waiting.emplace_back(module);
 	egLOG_INFO("editor/trust", "module '{}' waits for your answer: is this project trusted?", module);
@@ -59,19 +60,21 @@ void edt::project_trust_service::answer(trust_answer answer)
 
 void edt::project_trust_service::record_own_build(std::string_view module, const std::filesystem::path& library)
 {
-	const std::optional<std::string> hash = cmn::sha256_file_hex(library);
-	if (!hash) {
+	const std::optional<std::string> digest = core::module_library_set_digest(library.parent_path());
+	if (!digest) {
 		egLOG_WARN("editor/trust", "the build of '{}' could not be read to remember it as the editor's own", module);
 		return;
 	}
-	record_own_build_hash(module, *hash);
+	record_own_build_digest(module, *digest);
 }
 
-void edt::project_trust_service::record_own_build_hash(std::string_view module, std::string_view sha256)
+void edt::project_trust_service::record_own_build_digest(std::string_view module, std::string_view digest)
 {
-	m_record.own_builds.insert_or_assign(std::string(module), std::string(sha256));
+	// A build only --trust-project allowed was not the person's decision: nothing of it outlives the run.
+	if (m_flag && m_record.answer != trust_answer::trusted) return;
+	m_record.own_builds.insert_or_assign(std::string(module), std::string(digest));
 	if (!m_key) return;
-	if (auto problem = store_own_build(m_res, *m_key, module, sha256)) {
+	if (auto problem = store_own_build(m_res, *m_key, module, digest)) {
 		egLOG_WARN("editor/trust", "the build of '{}' is remembered for this session only: {}", module, *problem);
 	}
 }
@@ -115,9 +118,9 @@ void edt::ask_project_trust(dialog_service& dialogs, std::weak_ptr<project_trust
 		return;
 	}
 	service->set_question_open(true);
-	constexpr std::size_t k_trust = 0;
+	constexpr std::size_t k_trust = 1;
 	dialogs.choose("Trust this project?", project_trust_question(service->waiting_modules(), service->current_answer()),
-		{ "Trust", "Don't Trust" },
+		{ "Don't Trust", "Trust" },
 		[trust = std::move(trust), on_answer = std::move(on_answer)](std::optional<std::size_t> chosen) {
 			const auto service = trust.lock();
 			if (!service) return;
