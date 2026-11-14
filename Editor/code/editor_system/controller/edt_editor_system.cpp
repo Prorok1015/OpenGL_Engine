@@ -900,7 +900,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
 		};
 		ports.listing_of = [&data](const std::string& id) {
-			if (!data.has_value<prj::project_context>()) return rollback_listing{ "no project is open", {} };
+			if (!data.has_value<prj::project_context>()) return rollback_listing{ "no project is open", {}, {} };
 			return rollback_listing_of(data.require<prj::project_context>().root, id);
 		};
 		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));

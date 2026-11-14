@@ -122,16 +122,20 @@ namespace edt
 		// else the plan's first unfinished one; empty: none.
 		std::string rollback_id() const;
 		bool can_roll_back() const { return !rollback_id().empty(); }
-		// project.migrate_rollback {id}; refused at once, the view stays as it was with the reason. The window calls it only
-		// through confirm_roll_back.
-		void roll_back(const std::string& id);
+		// project.migrate_rollback {id, journal_fingerprint?}; refused at once, the view stays as it was with the reason. The
+		// window calls it only through confirm_roll_back, with the fingerprint of the journal it showed.
+		void roll_back(const std::string& id, const std::string& journal_fingerprint = {});
 		// Reads what a rollback of `id` would do and arms its question ("Roll Back..." and the startup's Roll Back): nothing
 		// runs until confirm_roll_back. Ignored while a job runs.
 		void ask_roll_back(const std::string& id);
 		const std::optional<rollback_question>& question() const { return m_question; }
 		// True once after each ask_roll_back: the window opens the question then.
 		bool take_question_request() { return std::exchange(m_question_requested, false); }
-		bool can_confirm_roll_back() const { return m_question && m_question->refused.empty() && m_phase != phase::running; }
+		// Only a question bound to the journal it showed can be confirmed.
+		bool can_confirm_roll_back() const
+		{
+			return m_question && m_question->refused.empty() && !m_rollback_fingerprint.empty() && m_phase != phase::running;
+		}
 		// The person's Roll Back in the question: roll_back of the question's id; the question goes either way.
 		void confirm_roll_back();
 		void cancel_roll_back();
@@ -176,8 +180,10 @@ namespace edt
 		std::string m_notice;
 		bool m_rolling_back = false;
 		std::optional<rollback_question> m_question;
-		// The id the question was asked for, as given (rollback_question::id is cleaned for the screen).
+		// The id the question was asked for, as given (rollback_question::id is cleaned for the screen), and the journal it
+		// showed: a journal that reads otherwise by the run is refused.
 		std::string m_rollback_target;
+		std::string m_rollback_fingerprint;
 		bool m_question_requested = false;
 		// Last: gone before the state its slot touches.
 		connection m_finished;

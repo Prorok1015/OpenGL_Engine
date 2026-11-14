@@ -270,36 +270,56 @@ namespace
 		return out;
 	}
 
-	// The names, below the project root, of the folders a migration never writes into: the code folder and every private
-	// or writable folder of prj::project_context.
-	std::vector<std::string> reserved_top_names(const prj::project_context& project)
+	// The names of the top-level folders a migration never writes into, folded: the project's own folders
+	// (prj::own_top_dir_names: code, .snk, .cache with the writable folders, build).
+	std::vector<std::string> reserved_top_names()
 	{
-		std::vector<fs::path> dirs{ project.code_dir(), project.snk_dir() };
-		for (fs::path& dir : project.private_dirs()) dirs.push_back(std::move(dir));
-		for (fs::path& dir : project.writable_dirs()) dirs.push_back(std::move(dir));
 		std::vector<std::string> names;
-		for (const fs::path& dir : dirs) {
-			const fs::path relative = dir.lexically_relative(project.root);
-			if (relative.empty() || *relative.begin() == "..") continue;
-			names.push_back(ascii_lowered(fs_paths::generic_utf8_of(*relative.begin())));
-		}
+		for (const std::string_view name : prj::own_top_dir_names()) names.push_back(ascii_lowered(name));
 		return names;
+	}
+
+	bool is_reserved_top(std::string_view top, const std::vector<std::string>& reserved)
+	{
+		return prj::is_code_ignored_dir(top) || std::ranges::find(reserved, ascii_lowered(top)) != reserved.end();
 	}
 
 	// Why a rollback must not touch `path` of a journal; nullopt when it may. `manifest_allowed`: project.snkproj passes
 	// (files[], never created_files).
-	std::optional<std::string> journal_path_error(std::string_view path, bool manifest_allowed, const prj::project_context& project,
+	std::optional<std::string> journal_path_error(std::string_view path, bool manifest_allowed, const std::vector<fs::path>& content_roots,
 		const std::vector<std::string>& reserved)
 	{
 		const std::string shown = journal_path_text(path);
 		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", shown);
 		if (manifest_allowed && path == k_manifest_path) return std::nullopt;
 		const std::string_view top = first_component(path);
-		if (prj::is_code_ignored_dir(top) || std::ranges::find(reserved, ascii_lowered(top)) != reserved.end()) {
-			return std::format("'{}' is in '{}', where a migration never writes", shown, journal_path_text(top));
-		}
-		if (!tag_of(std::string(path), project.data.content_roots)) return std::format("'{}' is not inside a content root of the project", shown);
+		if (is_reserved_top(top, reserved)) return std::format("'{}' is in '{}', where a migration never writes", shown, journal_path_text(top));
+		if (!tag_of(std::string(path), content_roots)) return std::format("'{}' is not inside a content root of the project", shown);
 		return std::nullopt;
+	}
+
+	// The checks of the project's mounts that need no healthy tree (a rollback is a recovery tool): each content root is a
+	// relative folder inside the project, neither the root itself nor in or over one of the project's own folders.
+	std::optional<std::string> content_root_error(const std::vector<fs::path>& content_roots, const std::vector<std::string>& reserved)
+	{
+		for (const fs::path& content_root : content_roots) {
+			std::string text = fs_paths::generic_utf8_of(content_root.lexically_normal());
+			while (!text.empty() && text.back() == '/') text.pop_back();
+			const std::string shown = journal_path_text(text);
+			if (text.empty() || text == "." || !is_plain_relative(text)) return std::format("the content root '{}' is not a folder inside the project", shown);
+			const std::string_view top = first_component(text);
+			if (is_reserved_top(top, reserved)) return std::format("the content root '{}' lies in '{}', which is never content", shown, journal_path_text(top));
+		}
+		return std::nullopt;
+	}
+
+	// The manifest at `relative` below the root, read without following a link; nullopt when it does not read as one.
+	std::optional<prj::manifest> manifest_at(const fs::path& root, const std::string& relative)
+	{
+		const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(relative), k_max_file_bytes);
+		if (!text.exists || !text.error.empty()) return std::nullopt;
+		prj::manifest_result parsed = prj::parse_manifest(text.text);
+		return std::move(parsed.data);
 	}
 
 	journal_paths paths_of(const json::object& journal)
@@ -1256,17 +1276,40 @@ std::optional<std::string> prj::migration::check_journal_paths(const fs::path& r
 	// Exactly what apply_migration writes: a journal may not point the backup at another folder of the project.
 	const std::string backup = std::format("{}/{}/backup", k_migrations_dir, id);
 	if (journal.backup != backup) return std::format("the backup '{}' is not {}", journal_path_text(journal.backup), backup);
-	const prj::open_result project = prj::open_project(root);
-	if (!project.context) {
-		return std::format("the project does not pass the checks it gets when it is opened, so its content roots are unknown: {}",
-			journal_path_text(project.error));
+	std::error_code ec;
+	if (!fs::is_directory(root, ec)) return std::string("the project root is not a folder");
+	// Every folder down to the migration's own, looked at without following a link: a link there would lead the backup
+	// reads (and the journal's writes) out of the project.
+	fs::path folder = root;
+	for (const fs::path& part : fs_paths::path_from_utf8(std::format("{}/{}", k_migrations_dir, id))) {
+		folder /= part;
+		const fs::file_status status = fs::symlink_status(folder, ec);
+		if (ec || !fs::is_directory(status)) {
+			return std::format("{}/{} is not a folder of the project (it is missing, a link or a file)", k_migrations_dir, journal_path_text(id));
+		}
 	}
-	const std::vector<std::string> reserved = reserved_top_names(*project.context);
+
+	// The content roots come from the backup's manifest when the migration wrote project.snkproj (the current one may be
+	// what broke), else from the current one.
+	const bool restores_manifest = std::ranges::find(journal.files, k_manifest_path) != journal.files.end();
+	const std::string saved_manifest = backup + "/" + std::string(k_manifest_path);
+	std::string source = saved_manifest;
+	std::optional<prj::manifest> manifest = restores_manifest ? manifest_at(root, saved_manifest) : std::nullopt;
+	if (!manifest) {
+		source = std::string(k_manifest_path);
+		manifest = manifest_at(root, source);
+	}
+	if (!manifest) {
+		return std::format("{} does not read as a manifest{}, so the content roots are unknown; restore the files by hand from {}",
+			k_manifest_path, restores_manifest ? std::format(", nor does {}", saved_manifest) : std::string{}, backup);
+	}
+	const std::vector<std::string> reserved = reserved_top_names();
+	if (auto error = content_root_error(manifest->content_roots, reserved)) return std::format("{} ({})", *error, source);
 	for (const std::string& path : journal.files) {
-		if (auto error = journal_path_error(path, true, *project.context, reserved)) return error;
+		if (auto error = journal_path_error(path, true, manifest->content_roots, reserved)) return error;
 	}
 	for (const std::string& path : journal.created) {
-		if (auto error = journal_path_error(path, false, *project.context, reserved)) return std::format("created file {}", *error);
+		if (auto error = journal_path_error(path, false, manifest->content_roots, reserved)) return std::format("created file {}", *error);
 	}
 	return std::nullopt;
 }
@@ -1344,10 +1387,12 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(manifest->path), k_max_file_bytes);
 		const prj::project_file_text saved = prj::read_project_file(root, fs_paths::path_from_utf8(backup + "/" + manifest->path), k_max_file_bytes);
 		try {
-			if (!now.exists || !now.error.empty()) throw std::runtime_error("project.snkproj cannot be read");
+			if (!now.error.empty()) throw std::runtime_error("project.snkproj cannot be read");
 			if (!saved.exists || !saved.error.empty()) throw std::runtime_error("the backup of project.snkproj cannot be read");
 			if (hash_of(saved.text) != manifest->hash_before) throw std::runtime_error("the backup of project.snkproj is not the original");
-			unstamped = unstamped_manifest(now.text, saved.text, project_steps);
+			// A missing or broken project.snkproj holds no edit worth keeping: the original goes back whole.
+			if (!now.exists || !prj::parse_manifest(now.text).data) unstamped = saved.text;
+			else unstamped = unstamped_manifest(now.text, saved.text, project_steps);
 		} catch (const std::exception& e) {
 			refused.push_back(std::format("{} ({})", manifest->path, e.what()));
 		}

@@ -166,11 +166,15 @@ namespace prj::migration
 	// Why a rollback of migration `id` must not touch what `journal` names (#910); nullopt when every path passes. The
 	// first bad path is named (through journal_path_text) with the reason:
 	// - backup is exactly .snk/migrations/<id>/backup, as apply_migration writes it, whether or not anything is restored;
-	// - the project passes prj::open_project (its manifest reads and its mounts are what an opened project gets);
+	// - the root is a folder and .snk/migrations/<id> is a folder all the way down, no link on the way;
+	// - the content roots come from the backup's project.snkproj when the journal lists it, else from the current one (a
+	//   rollback is a recovery tool: the project need not open); neither reads as a manifest: refused, naming the backup
+	//   to restore by hand. Each root is a relative folder inside the project, not the root itself, and its first folder
+	//   is no reserved one (below);
 	// - every path is a chain of plain names below the root; a file of files[] is project.snkproj or lies inside a content
 	//   root of that manifest, a created file lies inside a content root;
-	// - and none lies below a first folder prj::is_code_ignored_dir refuses (any '.' name, build, out, ...) or that is the
-	//   code folder or a private or writable folder of prj::project_context, whatever a content root says.
+	// - and none lies below a first folder prj::is_code_ignored_dir refuses (any '.' name, build, out, ...) or one of
+	//   prj::own_top_dir_names (code, .snk, .cache, build), whatever a content root says.
 	std::optional<std::string> check_journal_paths(const std::filesystem::path& root, std::string_view id, const journal_paths& journal);
 
 	// Reads the journal of migration `id` and checks it with check_journal_paths: the refusal (or why it does not read),

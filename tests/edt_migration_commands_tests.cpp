@@ -1316,6 +1316,36 @@ BOOST_AUTO_TEST_CASE(AJournalTooLongToShow_IsRefused_InTheQuestionAndTheRun)
 	BOOST_TEST((snapshot(copy.root()) == before));
 }
 
+// #910: the window passes the fingerprint of the journal it showed; a journal that reads otherwise by the run is refused
+// with nothing written, and the fingerprint of the journal as it is now rolls it back.
+BOOST_AUTO_TEST_CASE(TheWindowsRollback_IsBoundToTheJournalItShowed)
+{
+	const std::string id = migrated();
+	const edt::rollback_listing shown = edt::rollback_listing_of(copy.root(), id);
+	BOOST_REQUIRE(shown.refused.empty());
+	BOOST_TEST(shown.fingerprint.size() == 16u);
+	for (const char* bad : { "0123", "0123456789ABCDEF", "0123456789abcdeg" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			BOOST_TEST(call("project.migrate_rollback", { { "id", id }, { "journal_fingerprint", bad } }, cmd::origin::ui()).code == cmd::codes::invalid_args);
+		}
+	}
+
+	const fs::path journal = copy.root() / ".snk" / "migrations" / id / "report.json";
+	write_text(journal, read_text(journal) + "\n");
+	const auto before = snapshot(copy.root());
+	const json::object changed = job_result(call("project.migrate_rollback", { { "id", id }, { "journal_fingerprint", shown.fingerprint } },
+		cmd::origin::ui()));
+	BOOST_TEST(changed.at("code").as_int64() == pmg::k_exit_refused, json::serialize(changed));
+	BOOST_TEST(std::string(changed.at("refused").as_string()).find("changed since it was shown") != std::string::npos, json::serialize(changed));
+	BOOST_TEST((snapshot(copy.root()) == before));
+
+	const edt::rollback_listing again = edt::rollback_listing_of(copy.root(), id);
+	BOOST_TEST(again.fingerprint != shown.fingerprint);
+	const json::object result = job_result(call("project.migrate_rollback", { { "id", id }, { "journal_fingerprint", again.fingerprint } },
+		cmd::origin::ui()));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done, json::serialize(result));
+}
+
 // #910: a journal whose backup or paths fail prj::migration::check_journal_paths is refused in the question and the run.
 BOOST_AUTO_TEST_CASE(AForgedJournal_IsRefused_InTheQuestionAndTheRun)
 {

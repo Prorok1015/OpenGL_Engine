@@ -224,12 +224,14 @@ std::string edt::migration_window_model::rollback_id() const
 	return {};
 }
 
-void edt::migration_window_model::roll_back(const std::string& id)
+void edt::migration_window_model::roll_back(const std::string& id, const std::string& journal_fingerprint)
 {
 	if (m_phase == phase::running || id.empty() || !m_ports.invoke) return;
 	clear_error();
 	m_notice.clear();
-	const cmd::result started = m_ports.invoke("project.migrate_rollback", json::object{ { "id", id } });
+	json::object args{ { "id", id } };
+	if (!journal_fingerprint.empty()) args["journal_fingerprint"] = journal_fingerprint;
+	const cmd::result started = m_ports.invoke("project.migrate_rollback", std::move(args));
 	if (!started.ok) {
 		fail(started.code.empty() ? std::string("failed") : started.code, started.error);
 		return;
@@ -248,6 +250,7 @@ void edt::migration_window_model::roll_back(const std::string& id)
 void edt::migration_window_model::ask_roll_back(const std::string& id)
 {
 	if (m_phase == phase::running || id.empty()) return;
+	m_rollback_fingerprint.clear();
 	rollback_question question;
 	question.id = clean(id, k_line_cap, false);
 	if (!m_ports.listing_of) {
@@ -256,6 +259,7 @@ void edt::migration_window_model::ask_roll_back(const std::string& id)
 		rollback_listing listing = m_ports.listing_of(id);
 		question.refused = clean(listing.refused, k_line_cap, false);
 		question.text = clean(listing.text, k_text_cap, true);
+		m_rollback_fingerprint = std::move(listing.fingerprint);
 	}
 	m_question = std::move(question);
 	m_question_requested = true;
@@ -266,9 +270,10 @@ void edt::migration_window_model::confirm_roll_back()
 {
 	if (!can_confirm_roll_back()) return;
 	const std::string id = std::exchange(m_rollback_target, std::string{});
+	const std::string fingerprint = std::exchange(m_rollback_fingerprint, std::string{});
 	m_question.reset();
 	m_question_requested = false;
-	roll_back(id);
+	roll_back(id, fingerprint);
 }
 
 void edt::migration_window_model::cancel_roll_back()
@@ -276,6 +281,7 @@ void edt::migration_window_model::cancel_roll_back()
 	m_question.reset();
 	m_question_requested = false;
 	m_rollback_target.clear();
+	m_rollback_fingerprint.clear();
 }
 
 void edt::migration_window_model::clear_error()

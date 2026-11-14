@@ -7,6 +7,7 @@
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/project/prj_json_text.h>
+#include <snk/project/prj_manifest.h>
 #include <algorithm>
 #include <filesystem>
 #include <format>
@@ -640,20 +641,83 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileInAReservedFolder)
 	}
 }
 
-// #910: the content roots come from a project that passes the checks of an opened one; otherwise nothing is rolled back.
-BOOST_AUTO_TEST_CASE(ARollback_RefusesAProjectThatFailsItsChecks)
+// #910: a rollback is a recovery tool: a project that would not open (a writable folder that is a file, a broken
+// project.snkproj) is rolled back all the same, its content roots taken from the backup's project.snkproj.
+BOOST_AUTO_TEST_CASE(ARollback_OfABrokenProject_PutsItBack)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.root() / ".cache", "not a folder");
+	write_text(copy.root() / "project.snkproj", "{");
+	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	fs::remove(copy.root() / ".cache");
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #910: project.snkproj deleted after the migration: the journal lists it, so it comes back from the backup.
+BOOST_AUTO_TEST_CASE(ARollback_PutsBackAMissingManifest)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	fs::remove(copy.root() / "project.snkproj");
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #910: neither the backup's nor the current project.snkproj reads: the content roots are unknown, nothing is written and
+// the refusal names the backup to restore by hand.
+BOOST_AUTO_TEST_CASE(ARollback_WithoutAManifestThatReads_IsRefused_NamingTheBackup)
 {
 	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
-	// A writable folder that is a file: open_project refuses the project.
-	write_text(copy.root() / ".cache", "not a folder");
-	expect_refused(copy.root(), [](json::object&) {}, "checks it gets when it is opened");
-	fs::remove(copy.root() / ".cache");
-
-	const std::string manifest = read_text(copy.root() / "project.snkproj");
 	write_text(copy.root() / "project.snkproj", "{");
-	expect_refused(copy.root(), [](json::object&) {}, "checks it gets when it is opened");
-	write_text(copy.root() / "project.snkproj", manifest);
-	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+	write_text(copy.root() / ".snk/migrations/test-migration/backup/project.snkproj", "not json");
+	expect_refused(copy.root(), [](json::object&) {}, ".snk/migrations/test-migration/backup");
+}
+
+// #910: the content roots of the manifest pass the lexical checks of an opened project: inside it, not the root itself,
+// not in one of its own folders.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesContentRootsInTheProjectsOwnFolders)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const fs::path saved = copy.root() / ".snk/migrations/test-migration/backup/project.snkproj";
+	const std::string original = read_text(saved);
+	for (const std::string& root : std::vector<std::string>{ ".", ".git", "code", "Build/x", ".cache/memory" }) {
+		BOOST_TEST_CONTEXT(root) {
+			json::value manifest = json::parse(original);
+			manifest.as_object()["content_roots"] = json::array{ json::string(root) };
+			write_text(saved, json::serialize(manifest));
+			if (prj::parse_manifest(json::serialize(manifest)).data) expect_refused(copy.root(), [](json::object&) {}, "content root");
+		}
+	}
+	write_text(saved, original);
+}
+
+// #910: the migration's folder is reached without following a link: a link there would lead the backup reads elsewhere.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAMigrationFolderThatIsALink)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const fs::path folder = copy.root() / ".snk/migrations/test-migration";
+	const fs::path moved = copy.root().parent_path() / (copy.root().filename().string() + "-moved-migration");
+	fs::rename(folder, moved);
+	std::error_code ec;
+	fs::create_directory_symlink(moved, folder, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no symlink here (" << ec.message() << "): skipped");
+		fs::rename(moved, folder);
+		return;
+	}
+	const auto before = everything_of(copy.root());
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("not a folder of the project") != std::string::npos, *error);
+	BOOST_TEST(pmg::check_journal(copy.root(), "test-migration").has_value());
+	BOOST_TEST((everything_of(copy.root()) == before));
+	fs::remove(folder);
+	fs::remove_all(moved);
 }
 
 // #910: what a message or a question shows of a journal's path: no character that could forge or hide a part of a line,

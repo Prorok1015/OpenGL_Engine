@@ -31,7 +31,7 @@ namespace edt
 	// the checks, then the level is opened again). apply_migration runs in the job's io work (#761) while the main thread
 	// keeps drawing the modal and runs the engine's desc loads it hands over (apply_context::on_main); what the mounts
 	// report waits meanwhile (resource_system::hold_changes). The job answers with the report. Main thread only.
-	// project.migrate_rollback {id} (#761) runs prj::migration::rollback_migration through the same run (modal, hand-over
+	// project.migrate_rollback {id, journal_fingerprint?} (#761, #910) runs prj::migration::rollback_migration through the same run (modal, hand-over
 	// to the io work, hold, documents closed and the level opened again) and answers as editor --migrate-rollback exits.
 	struct migration_deps
 	{
@@ -105,6 +105,9 @@ namespace edt
 	{
 		std::string refused;
 		std::string text;
+		// The journal the text was made from (prj::migration::journal_hash of its bytes, 16 hex digits), for
+		// project.migrate_rollback's journal_fingerprint; empty with `refused`.
+		std::string fingerprint;
 	};
 
 	[[nodiscard]] rollback_listing rollback_listing_of(const std::filesystem::path& root, std::string_view id);
