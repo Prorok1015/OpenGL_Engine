@@ -1,6 +1,7 @@
 #pragma once
 #include <boost/json.hpp>
 #include <charconv>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -186,5 +187,39 @@ namespace desc
 			return true;
 		}
 		return false;
+	}
+
+	// The root __guid of a desc the engine saved, made what `original` (the file before the save) had: the same value
+	// at the same place, or none. The engine's save makes one for a res:// desc without one; a migration and
+	// desc_resave write none (#851). Whether `saved` changed.
+	inline bool keep_root_guid(boost::json::object& saved, const boost::json::object& original)
+	{
+		const auto before = original.find("__guid");
+		boost::json::value* now = saved.if_contains("__guid");
+		if (before == original.end()) {
+			return now && saved.erase("__guid") > 0;
+		}
+		if (now) {
+			if (*now == before->value()) {
+				return false;
+			}
+			*now = before->value();
+			return true;
+		}
+		const auto position = static_cast<std::size_t>(before - original.begin());
+		boost::json::object ordered;
+		ordered.reserve(saved.size() + 1);
+		std::size_t index = 0;
+		for (auto& member : saved) {
+			if (index++ == position) {
+				ordered.emplace("__guid", before->value());
+			}
+			ordered.emplace(member.key(), std::move(member.value()));
+		}
+		if (!ordered.contains("__guid")) {
+			ordered.emplace("__guid", before->value());
+		}
+		saved = std::move(ordered);
+		return true;
 	}
 }
