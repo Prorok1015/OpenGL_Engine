@@ -3,6 +3,7 @@
 #include "edt_vcs_parse.h"
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_manifest.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -1223,6 +1224,78 @@ namespace {
 		return deny(std::format("git could not compare the agent policy file '{}' with the target", shown));
 	}
 
+	bool equal_ignoring_case(std::string_view a, std::string_view b)
+	{
+		return std::ranges::equal(a, b, [](unsigned char x, unsigned char y) {
+			return std::tolower(x) == std::tolower(y);
+		});
+	}
+
+	// `file` (repository path, '/'-separated) below `prefix` (the project's folder in the repository: empty for its
+	// root, else ending in '/'), in any letter case: a case-insensitive file system takes another spelling as the same.
+	std::optional<std::string_view> project_relative(std::string_view file, std::string_view prefix)
+	{
+		if (file.size() < prefix.size() || !equal_ignoring_case(file.substr(0, prefix.size()), prefix)) {
+			return std::nullopt;
+		}
+		return file.substr(prefix.size());
+	}
+
+	// What of the open project decides the code that is built and loaded (#909): its .snk/ (build settings,
+	// migrations, the agent policy), its manifest (content roots, modules), build/ (the built modules) and, while live
+	// mode builds every change at once, code/.
+	struct protected_scope
+	{
+		// edt::vcs_service::project_prefix; nullopt: the project is not in this repository, nothing of it changes.
+		std::optional<std::string> prefix;
+		bool code = false;
+	};
+
+	bool is_protected(std::string_view in_project, bool code)
+	{
+		const std::size_t slash = in_project.find('/');
+		const std::string_view first = in_project.substr(0, slash);
+		if (slash == std::string_view::npos) return equal_ignoring_case(first, prj::k_manifest_file_name);
+		return equal_ignoring_case(first, ".snk") || equal_ignoring_case(first, "build")
+			|| (code && equal_ignoring_case(first, "code"));
+	}
+
+	// A guarded checkout or pull to `target` (a commit OID) that would change protected files of the open project: an
+	// agent cannot bring them in, a person can. The files are compared in any letter case (a case-insensitive file
+	// system puts .SNK/x in .snk). Nullopt: allowed.
+	std::optional<json::value> protected_refusal(const git_context& git, const std::string& target,
+		const protected_scope& scope, const ds::task_context& task)
+	{
+		if (!git.guarded || !scope.prefix) return std::nullopt;
+		const auto deny = [](std::string message) { return error_json("denied", message, {}, -1); };
+		const git_output head = run_git(git, { "rev-parse", "--verify", "--quiet", "HEAD^{commit}" }, task.stop,
+			k_read_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (!head.process.error.empty() || head.truncated) return deny("git could not read HEAD");
+		// No commit yet: every file of the target comes in.
+		const git_output changed = head.process.exit_code != 0
+			? run_git(git, { "ls-tree", "-r", "-z", "--name-only", "--full-tree", target }, task.stop, k_list_cap)
+			: run_git(git, { "diff-tree", "-r", "-z", "--name-only", "--no-renames", std::string(trim(head.out)),
+				target }, task.stop, k_list_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (!succeeded(changed)) return deny("git could not tell which files the target changes");
+		constexpr std::size_t k_shown = 10;
+		std::vector<std::string> found;
+		std::size_t count = 0;
+		for (const auto& file : split_nul(changed.out)) {
+			const std::optional<std::string_view> inside = project_relative(file, *scope.prefix);
+			if (!inside || !is_protected(*inside, scope.code)) continue;
+			if (++count <= k_shown) found.push_back(edt::vcs::valid_utf8(file));
+		}
+		if (count == 0) return std::nullopt;
+		std::string list;
+		for (const auto& file : found) list += (list.empty() ? "" : ", ") + file;
+		if (count > found.size()) list += std::format(" and {} more", count - found.size());
+		return deny(std::format("the target changes files of the project that decide what code is built and loaded "
+			"({}{}): an agent cannot bring them in, a person can (the Git panel)", list,
+			scope.code ? "; code/ too while live mode is on" : ""));
+	}
+
 	// A guarded commit's message: every line that reads as an Agent-Session trailer goes (it is the editor's to write),
 	// then the session's trailer is added when the session is one the MCP server makes.
 	std::string strip_session_trailers(std::string_view message)
@@ -1288,23 +1361,6 @@ namespace {
 	// Folders of a project that hold the person's own files (an MCP token, caches, local settings): never an agent's to
 	// stage (#912).
 	constexpr std::array<std::string_view, 2> k_private_project_folders{ ".snk", ".cache" };
-
-	bool equal_ignoring_case(std::string_view a, std::string_view b)
-	{
-		return std::ranges::equal(a, b, [](unsigned char x, unsigned char y) {
-			return std::tolower(x) == std::tolower(y);
-		});
-	}
-
-	// `file` (repository path, '/'-separated) below `prefix` (the project's folder in the repository: empty for its
-	// root, else ending in '/'), in any letter case: a case-insensitive file system takes another spelling as the same.
-	std::optional<std::string_view> project_relative(std::string_view file, std::string_view prefix)
-	{
-		if (file.size() < prefix.size() || !equal_ignoring_case(file.substr(0, prefix.size()), prefix)) {
-			return std::nullopt;
-		}
-		return file.substr(prefix.size());
-	}
 
 	// Why an agent's stage of `paths` is refused: a file it would add is outside the project or in one of its private
 	// folders. Directories are listed as git add takes them (tracked and untracked, ignored files left out). Nullopt:
@@ -2360,7 +2416,8 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 	if (caller.kind != cmd::origin_kind::ui) {
 		if (auto error = pattern_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
-	return run_job("git checkout", [ref](const git_context& git, ds::task_context& task) -> json::value {
+	const protected_scope scope{ project_prefix(), m_options.live_mode_on && m_options.live_mode_on() };
+	return run_job("git checkout", [ref, scope](const git_context& git, ds::task_context& task) -> json::value {
 		// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
 		std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
 		std::string upstream;
@@ -2383,6 +2440,7 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 				target_oid = std::string(trim(peeled.out));
 			}
 			if (auto refusal = policy_refusal(git, target_oid, task)) return std::move(*refusal);
+			if (auto refusal = protected_refusal(git, target_oid, scope, task)) return std::move(*refusal);
 			if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, target_oid }, task.stop)) {
 				return refusal_json(*refusal, task);
 			}
@@ -2449,7 +2507,9 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	}
 	// git pull --ff-only in steps, so the filter check sees what the merge would change: fetch, then a fast-forward
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
-	return run_job("git pull", [remote, branch](const git_context& shared, ds::task_context& task) -> json::value {
+	const protected_scope scope{ project_prefix(), m_options.live_mode_on && m_options.live_mode_on() };
+	return run_job("git pull", [remote, branch, scope](const git_context& shared,
+		ds::task_context& task) -> json::value {
 		git_context git = shared;
 		progress_state progress;
 		report_progress(git, task, progress);
@@ -2519,6 +2579,7 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 			return error_json("git_failed", "what fetch got for merging is not a commit", fetched.err, -1);
 		}
 		if (auto refusal = policy_refusal(git, commit, task)) return std::move(*refusal);
+		if (auto refusal = protected_refusal(git, commit, scope, task)) return std::move(*refusal);
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, commit }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
