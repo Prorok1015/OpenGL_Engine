@@ -12,6 +12,7 @@
 #include <format>
 #include <functional>
 #include <stdexcept>
+#include <thread>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +41,9 @@ void core::res::detail::then_on_main(const std::shared_ptr<res_resource_block>& 
 
 namespace {
 constexpr std::size_t k_max_dependency_depth = 32;
+
+// The resolvers this thread is calling into (resolver_lease): unmounting one of them here would wait for itself.
+thread_local std::vector<const core::res::res_resolver_interface *> t_resolvers_in_call;
 
 // The key of an asset with an ID (resource_system::node_of): a protocol no mount serves, so no load ever reads it.
 constexpr std::string_view k_asset_node_protocol = "asset-id";
@@ -565,7 +569,14 @@ res::resource_system::~resource_system() {
     }
   }
   // The vfs threads are joined only now: the tasks that were running may still store() through them.
-  m_resolvers.clear();
+  std::unordered_map<protocol, resolver> resolvers;
+  {
+    std::unique_lock lock(m_registry_mutex);
+    resolvers.swap(m_resolvers);
+  }
+  for (auto &[name, removed] : resolvers) {
+    release_resolver(std::move(removed), name);
+  }
   if (m_parent) {
     {
       std::unique_lock lock(m_pinning_mutex);
@@ -647,6 +658,7 @@ res::resource_system::find_or_insert_cache(const res::tag &tag, ds::type_id type
 
 res::resource_system::adapter res::resource_system::find_adapter(ds::type_id type, std::string_view ext) const {
   auto key = adapter_key{type, std::string(ext)};
+  std::shared_lock lock(m_registry_mutex);
   if (m_extensions_with_magic.contains(key)) {
     // Need to check magic number
   }
@@ -730,16 +742,17 @@ void res::resource_system::start_loading(const res::tag &tag,
                                          adapter ad) {
   // The cache slot already holds `block`: any escape from here would leave waiters blocked forever.
   try {
-    const auto &resolvers = root().m_resolvers;
-    auto resolver_it = resolvers.find(tag.protocol());
-    if (resolver_it == resolvers.end()) {
-      std::string error = not_mounted_error(tag);
-      egLOG_ERROR("res/resolver", "cannot load {}: {}", tag.view(), error);
-      block->set_error(std::move(error));
-      return;
+    data raw;
+    {
+      const resolver_lease found = root().resolver_for(tag.protocol());
+      if (!found) {
+        std::string error = not_mounted_error(tag);
+        egLOG_ERROR("res/resolver", "cannot load {}: {}", tag.view(), error);
+        block->set_error(std::move(error));
+        return;
+      }
+      raw = found->resolve(tag);
     }
-
-    auto raw = resolver_it->second->resolve(tag);
     if (!raw) {
       egLOG_ERROR("res/resolver", "Resolver returned no data block for {}", tag.view());
       block->set_error("Resolver returned no data");
@@ -1983,14 +1996,15 @@ void res::resource_system::check_writable(const res::tag &tag) const {
 
 bool res::resource_system::erase(const res::tag &tag) {
   check_writable(tag);
-  auto &resolvers = root().m_resolvers;
-  const auto found = resolvers.find(tag.protocol());
-  if (found == resolvers.end()) {
-    egLOG_WARN("resource/erase", "{}", not_mounted_error(tag));
-    return false;
-  }
-  if (!found->second->erase(tag)) {
-    return false;
+  {
+    const resolver_lease found = root().resolver_for(tag.protocol());
+    if (!found) {
+      egLOG_WARN("resource/erase", "{}", not_mounted_error(tag));
+      return false;
+    }
+    if (!found->erase(tag)) {
+      return false;
+    }
   }
 
   forget_erased(tag);
@@ -2000,9 +2014,8 @@ bool res::resource_system::erase(const res::tag &tag) {
 
 res::file_operation res::resource_system::remove(const res::tag &tag) {
   check_writable(tag);
-  auto &resolvers = root().m_resolvers;
-  const auto found = resolvers.find(tag.protocol());
-  if (found == resolvers.end()) {
+  const resolver_lease found = root().resolver_for(tag.protocol());
+  if (!found) {
     std::string error = not_mounted_error(tag);
     egLOG_WARN("resource/remove", "{}", error);
     return file_operation::failure(std::move(error));
@@ -2012,7 +2025,7 @@ res::file_operation res::resource_system::remove(const res::tag &tag) {
   const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
   const res::tag node = base.node_of(tag);
   const bool waits = node != tag && base.expect_gone(tag, node, generation);
-  auto result = found->second->remove(tag);
+  auto result = found->remove(tag);
   if (waits) {
     base.finish_expected(tag, static_cast<bool>(result));
   }
@@ -2034,9 +2047,8 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
   if (from.protocol() != to.protocol()) {
     return file_operation::failure("a file cannot move between protocols");
   }
-  auto &resolvers = root().m_resolvers;
-  const auto found = resolvers.find(from.protocol());
-  if (found == resolvers.end()) {
+  const resolver_lease found = root().resolver_for(from.protocol());
+  if (!found) {
     std::string error = not_mounted_error(from);
     egLOG_WARN("resource/rename", "{}", error);
     return file_operation::failure(std::move(error));
@@ -2046,7 +2058,7 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
   const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
   const res::tag node = base.node_of(from);
   const bool waits = node != from && base.expect_gone(from, node, generation);
-  auto result = found->second->rename(from, to);
+  auto result = found->rename(from, to);
   if (waits) {
     base.finish_expected(from, static_cast<bool>(result));
   }
@@ -2272,10 +2284,14 @@ bool res::resource_system::read_only_project() {
 }
 
 std::string res::resource_system::not_mounted_error(std::string_view protocol) const {
-  std::vector<std::string_view> mounted;
-  mounted.reserve(root().m_resolvers.size());
-  for (const auto &entry : root().m_resolvers) {
-    mounted.push_back(entry.first);
+  std::vector<std::string> mounted;
+  {
+    const resource_system &base = root();
+    std::shared_lock lock(base.m_registry_mutex);
+    mounted.reserve(base.m_resolvers.size());
+    for (const auto &entry : base.m_resolvers) {
+      mounted.emplace_back(entry.first);
+    }
   }
   std::ranges::sort(mounted);
   std::string list;
@@ -2492,47 +2508,47 @@ bool res::resource_system::needed_by_layers(const res::tag &tag) const {
 
 bool res::resource_system::exists(const tag& tag) const
 {
-	const auto& resolvers = root().m_resolvers;
-	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
 		egLOG_WARN("resource/exists", "{}", not_mounted_error(tag));
 		return false;
 	}
-	return resolvers.at(tag.protocol())->exists(tag);
+	return found->exists(tag);
 }
 
 bool res::resource_system::store(const tag& tag, const std::vector<std::byte>& data)
 {
 	check_writable(tag);
-	const auto& resolvers = root().m_resolvers;
-	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
 		egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
 		return false;
 	}
 
-	return resolvers.at(tag.protocol())->store(tag, data);
+	return found->store(tag, data);
 }
 
 bool res::resource_system::store_sync(const tag& tag, const std::vector<std::byte>& data)
 {
 	check_writable(tag);
-	const auto& resolvers = root().m_resolvers;
-	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
 		egLOG_WARN("resource/store", "{}", not_mounted_error(tag));
 		return false;
 	}
-	return resolvers.at(tag.protocol())->store_sync(tag, data);
+	return found->store_sync(tag, data);
 }
 
 res::file_operation res::resource_system::create_sync(const tag& tag, const std::vector<std::byte>& data)
 {
 	check_writable(tag);
-	const auto& resolvers = root().m_resolvers;
-	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
 		std::string error = not_mounted_error(tag);
 		egLOG_WARN("resource/store", "{}", error);
 		return file_operation::failure(std::move(error));
 	}
-	auto result = resolvers.at(tag.protocol())->create_sync(tag, data);
+	auto result = found->create_sync(tag, data);
 	// Whatever was loaded under the tag meanwhile is dropped, created or refused.
 	signal_changed(tag);
 	return result;
@@ -2663,7 +2679,78 @@ std::size_t res::resource_system::edge_sweep_count() const
 
 void res::resource_system::unregistrate_resolver(protocol prt)
 {
-	m_resolvers.erase(prt);
+	const std::string name{ prt };
+	resolver removed;
+	{
+		std::unique_lock lock(m_registry_mutex);
+		const auto found = m_resolvers.find(prt);
+		if (found == m_resolvers.end()) {
+			return;
+		}
+		removed = std::move(found->second);
+		m_resolvers.erase(found);
+	}
+	release_resolver(std::move(removed), name);
+}
+
+void res::resource_system::release_resolver(resolver removed, std::string_view protocol)
+{
+	if (!removed) {
+		return;
+	}
+	// Only a resolver_lease holds another copy, for one call into the resolver, and none of those calls waits for the
+	// thread that unmounts: the wait ends. A lease of this very thread would wait for itself, so it asserts.
+	ASSERT_MSG(std::ranges::find(t_resolvers_in_call, removed.get()) == t_resolvers_in_call.end(),
+		"{}:// is unmounted from inside a call into its own resolver", protocol);
+	using clock = std::chrono::steady_clock;
+	const auto start = clock::now();
+	auto next_warning = start + std::chrono::seconds(2);
+	bool warned = false;
+	while (removed.use_count() > 1) {
+		if (clock::now() >= next_warning) {
+			egLOG_WARN("res/resolver", "unmounting {}:// waits for {} call(s) into its resolver ({} ms so far)", protocol,
+				removed.use_count() - 1, std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - start).count());
+			warned = true;
+			next_warning += std::chrono::seconds(10);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	// What the other holders did with the resolver happens before it is destroyed here.
+	std::atomic_thread_fence(std::memory_order_acquire);
+	if (warned) {
+		egLOG_INFO("res/resolver", "{}:// is unmounted after {} ms of waiting", protocol,
+			std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - start).count());
+	}
+	removed.reset();
+}
+
+res::resource_system::resolver_lease::resolver_lease(resolver held)
+	: m_held(std::move(held))
+{
+	if (m_held) {
+		t_resolvers_in_call.push_back(m_held.get());
+	}
+}
+
+res::resource_system::resolver_lease::~resolver_lease()
+{
+	// A lease is a local that cannot move: leases of a thread end in the reverse order they began.
+	if (m_held) {
+		t_resolvers_in_call.pop_back();
+	}
+}
+
+res::resource_system::resolver_lease res::resource_system::resolver_for(std::string_view protocol) const
+{
+	const resource_system &base = root();
+	resolver found;
+	{
+		std::shared_lock lock(base.m_registry_mutex);
+		if (const auto it = base.m_resolvers.find(protocol); it != base.m_resolvers.end()) {
+			found = it->second;
+		}
+	}
+	return resolver_lease{ std::move(found) };
 }
 
 std::vector<std::string> res::resource_system::registered_extensions(const extension& extension) const
@@ -2671,6 +2758,7 @@ std::vector<std::string> res::resource_system::registered_extensions(const exten
 	std::vector<std::string> out;
 	for (const auto& ext : extension.extensions) {
 		for (const resource_system* system = this; system; system = system->m_parent) {
+			std::shared_lock lock(system->m_registry_mutex);
 			const auto it = system->m_adapters.find(std::pair{ extension.resource_type, ext });
 			const auto info = it == system->m_adapters.end() ? system->m_adapter_infos.end() : system->m_adapter_infos.find(it->second);
 			if (info != system->m_adapter_infos.end() && info->second == extension) {
@@ -2684,11 +2772,15 @@ std::vector<std::string> res::resource_system::registered_extensions(const exten
 
 void res::resource_system::unregistrate_adapter(extension extension)
 {
+	// Destroyed after the lock: a loader may still hold a copy, which keeps it alive until the load ends.
+	std::vector<adapter> removed;
+	std::unique_lock lock(m_registry_mutex);
 	for(auto& ext : extension.extensions) {
 		auto it = m_adapters.find(std::pair{ extension.resource_type, ext });
 		if (it != m_adapters.end())
 		{
 			m_adapter_infos.erase(it->second);
+			removed.push_back(std::move(it->second));
 			m_adapters.erase(it);
 		}
 		if (extension.magic_number != 0)
@@ -2699,6 +2791,7 @@ void res::resource_system::unregistrate_adapter(extension extension)
 		auto it = m_adapters.find(std::pair{ extension.resource_type, std::string{ "*" } });
 		if (it != m_adapters.end()) {
 			m_adapter_infos.erase(it->second);
+			removed.push_back(std::move(it->second));
 			m_adapters.erase(it);
 		}
 
@@ -2709,13 +2802,13 @@ void res::resource_system::unregistrate_adapter(extension extension)
 
 res::resource_system::data res::resource_system::fetch_data(const tag& tag) const
 {
-	const auto& resolvers = root().m_resolvers;
-	if (resolvers.find(tag.protocol()) == resolvers.end()) {
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
 		egLOG_WARN("resource/require", "{}", not_mounted_error(tag));
 		return data{};
 	}
 
-	return resolvers.at(tag.protocol())->resolve(tag);
+	return found->resolve(tag);
 }
 
 void res::resource_system::unpin_resource(const res::tag& tag)
@@ -2931,12 +3024,17 @@ std::shared_ptr<res::resource_system::resource_handle> res::resource_system::fin
 void res::resource_system::add_resolver(protocol prt, resolver added)
 {
 	ASSERT_MSG(!m_parent, "A resource layer uses the resolvers of its root");
-	ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
-	m_resolvers[prt] = std::move(added);
+	bool added_now = false;
+	{
+		std::unique_lock lock(m_registry_mutex);
+		added_now = m_resolvers.try_emplace(prt, std::move(added)).second;
+	}
+	ASSERT_MSG(added_now, "That protocol already has resolver!");
 }
 
 void res::resource_system::add_adapter(extension extension, adapter added)
 {
+	std::unique_lock lock(m_registry_mutex);
 	m_adapter_infos[added] = extension;
 
 	if (extension.extensions.empty()) {
