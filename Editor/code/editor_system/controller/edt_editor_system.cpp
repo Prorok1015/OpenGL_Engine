@@ -66,6 +66,9 @@
 #include "edt_curl_transport.h"
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
+#include "edt_live_consent.h"
+#include "edt_agent_policy.h"
+#include "edt_settings.h"
 #include "edt_play_commands.h"
 #include "edt_runtime_commands.h"
 #include "edt_bus_commands.h"
@@ -98,6 +101,7 @@
 #include <snk/project/prj_project.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
@@ -1020,6 +1024,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
+	settings_command.live_enabled = [this] { return m_live_mode && m_live_mode->enabled(); };
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -1055,16 +1060,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		usage_sources.assets = [this]() -> const asset_database* { return m_assets.get(); };
 		usage_sources.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		// The project context lives in the app data storage as long as the editor.
-		usage_sources.manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
-		usage_sources.manifest = [manifest = &project] {
+		const auto manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
+		const auto manifest_references = [manifest = &project] {
 			std::vector<manifest_reference> out;
 			if (!manifest->data.start_scene.empty()) out.push_back(manifest_reference{ "/start_scene", manifest->data.start_scene });
 			if (!manifest->data.input_actions.empty()) out.push_back(manifest_reference{ "/input_actions", manifest->data.input_actions });
 			return out;
 		};
+		usage_sources.manifest_file = manifest_file;
+		usage_sources.manifest = manifest_references;
 		for (auto& command : register_asset_usage_commands(m_context->actions().commands(), std::move(usage_sources))) {
 			m_registrations.push_back(std::move(command));
 		}
+		m_asset_browser_panel->set_usages(
+			[this, manifest_file, manifest_references, index = std::make_shared<usage_index>()](const res::tag& asset) -> std::optional<usage_report> {
+				if (!m_assets) return std::nullopt;
+				const std::vector<manifest_reference> manifest = manifest_references();
+				return index->find(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
+			},
+			[this, manifest_references] {
+				return usage_stamp{ m_assets ? m_assets->revision() : std::uint64_t{ 0 }, m_game_layer_generation, manifest_references() };
+			});
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
@@ -1337,6 +1353,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 {
 	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
 		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
+	// No key, no consent: live mode is neither read on nor stored for a project whose path cannot be made canonical.
+	const std::optional<std::string> project_key = snk_dir ? canonical_project_settings_key(snk_dir->parent_path())
+		: std::nullopt;
 	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
 
 	live_mode_options live;
@@ -1374,11 +1393,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
 	};
-	if (snk_dir) {
-		live.store_enabled = [this, dir = *snk_dir](bool enabled) {
-			auto problem = update_build_settings(dir,[enabled](build_settings& settings) { settings.live_enabled = enabled; });
-			m_build_settings_panel->refresh_if_clean();
-			return problem;
+	if (project_key) {
+		live.store_enabled = [this, key = *project_key](bool enabled) {
+			return store_live_consent(m_res, key, enabled);
 		};
 	}
 	live.on_toggled = [this] {
@@ -1394,13 +1411,18 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	};
 	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
 	m_live_mode->watch(m_res);
-	m_build_settings_panel->set_on_settings_applied([this](const build_settings& settings) { m_live_mode->follow_settings(settings); });
 	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
+	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this](bool enabled) {
+		if (auto refused = m_live_mode->set_enabled(enabled, true)) {
+			egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+		}
+	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
-	if (snk_dir && load_build_settings(*snk_dir).live_enabled) {
+	if (snk_dir && project_key
+		&& live_mode_at_open(load_build_settings(*snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
 		if (auto refused = m_live_mode->set_enabled(true, false)) {
-			egLOG_WARN("editor/build", "live mode is on in .snk/build.json but stays off: {}", *refused);
+			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
 		}
 	}
 }
@@ -1599,6 +1621,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
+	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
 	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
@@ -1616,6 +1639,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		draw_agent_status();
 		draw_play_status();
+		draw_save_notice();
 		m_live_mode->draw_status();
 	});
 }
@@ -1670,9 +1694,11 @@ void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
 	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation, m_migration_runs };
 	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
 	// dropped, never shown.
-	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs())](ds::task_context& task) {
+	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs()),
+					read_only = prj::migration::read_only_layers(m_res, root)](ds::task_context& task) {
 		prj::migration::scan_options options;
 		options.stop = [&task] { return task.stop.stop_requested(); };
+		options.read_only_layers = read_only;
 		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
 		if (scan.incomplete) throw ds::task_cancelled{};
 		prj::migration::project_step_registry steps;
@@ -1819,6 +1845,13 @@ void edt::editor_system::draw_play_status()
 	const bool paused = m_play->state() == play_state::paused;
 	ImGui::TextColored(paused ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f) : ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
 		paused ? "Play: paused" : "Play: playing");
+}
+
+void edt::editor_system::draw_save_notice()
+{
+	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
+	if (!text) return;
+	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
 
 void edt::editor_system::create_panels(bool capture_log)
@@ -2133,6 +2166,7 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	cancel_level_settle();
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
+	m_loading_file_version = level_bytes ? desc_root_version(*level_bytes) : 0;
 
 	if (level_bytes) m_services.writable_resources()->store(m_loading_editor_tag, *level_bytes);
 
@@ -2232,7 +2266,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
 	const res::tag editor_tag_before = m_state.editor_tag;
-	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag);
+	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag, m_loading_file_version);
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,

@@ -191,6 +191,8 @@ namespace edt
 		std::function<std::optional<std::filesystem::path>()> project_root;
 		std::string default_configuration = "debuggame";
 		std::function<jobs_estimate()> estimate = estimate_jobs;
+		// Live mode as it is now, by the person's consent (#908), never build.json's live_enabled. Null: off.
+		std::function<bool()> live_enabled;
 	};
 
 	// build.settings.get {} -> {configuration, jobs_mode, jobs: {manual?, estimate: {jobs, cores, ram_bytes}},
