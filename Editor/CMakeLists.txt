@@ -5,6 +5,8 @@ set(WITH_CONSOLE_MODE TRUE)
 # The MCP server module: no engine dependency, linked into the editor only (see cmake/SnkMcpIsolation.cmake).
 add_subdirectory("code/mcp_server")
 add_subdirectory("code/editor_system")
+# File identity and digests: the asset database and the model import both use them (#888).
+add_subdirectory("code/file_identity")
 # The model importer and its guards (editor_system links it; the decoder process of #647 will too).
 add_subdirectory("code/model_import")
 
