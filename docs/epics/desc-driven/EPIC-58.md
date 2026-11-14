@@ -393,6 +393,46 @@ struct project_step {
   - Ответ job — `{code, status, id, report, text, level{tag, reopened, reason?}}`: код и `report.json` те же, что у CLI (`exit_code_of`, `report_to_json` стали публичными в `pmg_command.h`/`pmg_apply.h`). Уровень, который не загрузился заново, — `reopened: false` с причиной; уровень тогда остаётся закрытым, это принято. Пустой план ничего не пишет и уровень не трогает. Исключение из `apply_migration` — код 6 (`rollback_failed`: состояние проекта неизвестно), с подсказкой `--migrate-rollback <id>`, если журнал остался; уровень остаётся отключённым: его не загружают с диска и не сохраняют поверх полумигрированных файлов (`level.reopened: false` с причиной; `file.save`/`file.save_as` и Ctrl+S отвечают `busy` с подсказкой отката, пока эта миграция не откачена (её журнал больше не незавершённый) или не загружен другой уровень; повторная загрузка того же уровня и `file.new` блок не снимают), но все файлы плана объявляются изменёнными и база ассетов пересобирается. Job, отменённый до кадра 2, ничего не пишет; редактор, закрытый раньше конца, даёт `error.code = failed`.
   - Записи вне корня: аргумента пути нет; содержимое, которое ссылкой уходит из проекта (`res` — ссылка наружу), отказывает план (`invalid`) ещё до записи.
 
+### 4.5. Аудит `apply_migration` вне main thread (S8, #761)
+
+Вопрос: может ли `apply_migration` идти на `ds::lane::io`, пока main thread рисует модальное окно? При этом документы закрыты, уровень отцеплен, смена игрового слоя запрещена. Ниже все обращения apply и того, что он вызывает, к `resource_system`, `desc_system` и состоянию main thread (aibranch 4ca18e27).
+
+**Не годятся для io:**
+
+- `pmg_apply.cpp:750`: `resources.require_sync<desc_base>(dep.target).get_sync()` в `load_from`. Вызывается из `form_of` (:528, ветка движка) и из `check` (:576-581). На потоке пула `check_sync_require` (`res_system.cpp:2783-2786`) и `res_handle::wait` (`res_resource_handle.hpp:142`) дают `ASSERT`, а это abort в Debug и CI. В Release ожидание не взаимоблокируется: загрузка идёт на потоке vfs-резолвера и на compute. Но поток io занят всё время ожидания.
+- `pmg_apply.cpp:528` → `desc_adapter_t.cpp:118-120`: `desc_res->serialize`. Ждут на хэндлах:
+  - `desc_system::reduce_to_parent` (`desc_system.cpp:371`, `require_sync().get_sync()`);
+  - `desc_ref::to_json` (`desc_describe_ops.h:84`);
+  - `scn_animation_collection_desc.cpp:21-26`.
+
+  Всё это main-thread-only.
+- `pmg_apply.cpp:972/981`: `context.pause_watch` = `level_controller::unwatch_level` (`edt_editor_system.cpp:796`). Пишет `m_watched_resources` и `m_watched_tag` без блокировки.
+
+**Годятся для io:**
+
+- `desc_system` целиком. В нём нет `mutable`, ленивых кэшей и static-локалей. Реестры (фабрики, миграции, схемы) меняются только в `register_*`/`unregister_*`, то есть при загрузке модуля и смене слоя, а это запрещено на время миграции. Используемые вызовы:
+  - `current_version` (:899);
+  - `migrate_sidecar` → `migrate_tree` (:512, :520);
+  - `stamp_tree` (:521);
+  - `serialize_to_bytes` (:514, :534, :546);
+  - `classify_desc`/`classify_sidecar` → `is_registered`, `find_schema` (:558-559);
+  - `create_instance`.
+- `desc_adapter_t`: конструктор (:382), `collect_dependencies` (:749) и `deserialize` (:754). Последний — тот же код, что идёт на compute при каждой загрузке: блокировки индекса, кэша и `m_pending_mutex` у резолвера.
+- Файлы:
+  - `prj::write_project_file`, `read_project_file`, `create_new_file`, `remove_created`;
+  - бэкап, журнал, `report.md`, `load_manifest`;
+  - шаги проекта (`pmg_project_steps.cpp`, `pmg_asset_steps.cpp`);
+  - свободные функции `res::` для `.resource`.
+- `egLOG_*`: мьютексы. ImGui не используется.
+
+**Разрез (а'):**
+
+1. `pause_watch` вызывается на main до запуска job.
+2. В `apply_context` добавляется `on_main(fn)`: поток io отдаёт `fn` на main thread и ждёт. Через него идут ровно два места: ветка движка в `form_of` (:524-542) и перезагрузка в `check` (:576-581).
+3. Остальное — на io. Порядок по файлу (сформировать → журнал → записать → проверить) не меняется.
+4. Цена — примерно два кадра на каждый `.desc`, который пишет движок.
+5. Изменения с диска во время прогона не должны доходить до кэша раньше конца: всё объявляется одним `signal_changed` после apply, как в S7.
+
 ## 5. Бэкап, журнал и откат
 
 - **Где:** `<project>/.snk/migrations/<UTC-время>-<engine_version>/`. Не в `.cache/`: его чистят, а бэкап должен пережить очистку.
