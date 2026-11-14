@@ -1351,4 +1351,166 @@ BOOST_AUTO_TEST_CASE(NodeFromACaller_IsKeptAndExpandedInTheDefaultResource)
 	BOOST_TEST(reg.get<test_util::stat_component>(e).hp == 41);
 }
 
+// ---------------------------------------------------------------- prefabs that instantiate themselves (#924)
+
+namespace {
+
+// A prefab whose children instantiate prefabs: `children` is the text between the brackets of "children".
+std::string prefab_with_children(std::string_view children)
+{
+	return std::string(R"({"__type":"prefab_desc","__version":4,"children":[)") + std::string(children) + "]}";
+}
+
+std::string instance_child(std::string_view name, std::string_view prefab_file)
+{
+	return std::string(R"({"name":")") + std::string(name) + R"(","components":{"ref":"memory://t/)" + std::string(prefab_file) + R"("}})";
+}
+
+std::size_t spawned_nodes(entt::registry& reg)
+{
+	return reg.view<scn::parent_component>().size();
+}
+
+// A file that refers to itself gives a desc that holds a handle to itself: taken apart when the test is done, or the
+// leak check of the sanitizer run reports the cycle.
+void take_apart(const std::shared_ptr<const scn::prefab_desc>& prefab)
+{
+	auto& root = std::const_pointer_cast<scn::prefab_desc>(prefab)->get_root();
+	root.children.clear();
+	root.components.clear();
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(APrefabWhoseChildInstantiatesIt_IsBuiltOnce_AndTheSpawnEnds)
+{
+	const auto tag = put("self.prefab.desc", prefab_with_children(instance_child("again", "self.prefab.desc")));
+	auto self = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(self);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *self, "self", tag);
+
+	BOOST_TEST((child_names(reg, root) == std::vector<std::string>{ "again" }));
+	const auto again = child_named(reg, root, "again");
+	BOOST_REQUIRE(reg.valid(again));
+	BOOST_TEST(child_names(reg, again).empty());
+	BOOST_TEST(spawned_nodes(reg) == 1u);
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(again));
+
+	// Built from its root node alone, nobody said which prefab it is: the first instance is expanded, the one inside is not.
+	entt::registry bare;
+	auto from_node = bare.create();
+	assemble_prefab_node(*assembler, bare, from_node, self->get_root());
+	const auto outer = child_named(bare, from_node, "again");
+	BOOST_REQUIRE(bare.valid(outer));
+	const auto inner = child_named(bare, outer, "again");
+	BOOST_REQUIRE(bare.valid(inner));
+	BOOST_TEST(child_names(bare, inner).empty());
+	BOOST_TEST(spawned_nodes(bare) == 2u);
+
+	take_apart(self);
+}
+
+BOOST_AUTO_TEST_CASE(PrefabsThatInstantiateEachOther_EndWhereTheCircleCloses)
+{
+	const auto first_tag = put("first.prefab.desc", prefab_with_children(instance_child("to_second", "second.prefab.desc")));
+	const auto second_tag = put("second.prefab.desc", prefab_with_children(instance_child("to_first", "first.prefab.desc")));
+	auto first = load<scn::prefab_desc>(first_tag);
+	auto second = load<scn::prefab_desc>(second_tag);
+	BOOST_REQUIRE(first);
+	BOOST_REQUIRE(second);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *first, "first", first_tag);
+
+	const auto to_second = child_named(reg, root, "to_second");
+	BOOST_REQUIRE(reg.valid(to_second));
+	BOOST_TEST(reg.get<scn::prefab_instance>(to_second).source_prefab == second_tag);
+	const auto to_first = child_named(reg, to_second, "to_first");
+	BOOST_REQUIRE(reg.valid(to_first));
+	BOOST_TEST(child_names(reg, to_first).empty());
+	BOOST_TEST(spawned_nodes(reg) == 2u);
+
+	take_apart(first);
+	take_apart(second);
+}
+
+// Only one component of a node makes it an instance; another one whose parent is a prefab is spawned through the
+// assembler, which must know the same spawn is still running.
+BOOST_AUTO_TEST_CASE(APrefabReachedAgainThroughASecondComponent_IsNotBuiltAgain)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto tag = put("twice.prefab.desc", prefab_with_children(
+		R"({"name":"both","components":{"a_first":"memory://t/leaf.prefab.desc","b_second":"memory://t/twice.prefab.desc"}})"));
+	auto twice = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(twice);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *twice, "twice", tag);
+
+	const auto both = child_named(reg, root, "both");
+	BOOST_REQUIRE(reg.valid(both));
+	BOOST_TEST((child_names(reg, both) == std::vector<std::string>{ "tip" }));
+	BOOST_TEST(spawned_nodes(reg) == 2u);
+
+	take_apart(twice);
+}
+
+BOOST_AUTO_TEST_CASE(OnePrefabUnderTwoSiblings_IsNoCircle)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto tag = put("pair.prefab.desc", prefab_with_children(
+		instance_child("left", "leaf.prefab.desc") + "," + instance_child("right", "leaf.prefab.desc")));
+	auto pair = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(pair);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *pair, "pair", tag);
+
+	for (const char* side : { "left", "right" }) {
+		BOOST_TEST_CONTEXT(side) {
+			const auto child = child_named(reg, root, side);
+			BOOST_REQUIRE(reg.valid(child));
+			BOOST_TEST((child_names(reg, child) == std::vector<std::string>{ "tip" }));
+		}
+	}
+}
+
+// Ten children that each instantiate the next prefab, five prefabs deep, ask for 111 110 nodes from five small files.
+BOOST_AUTO_TEST_CASE(AFanOfInstances_IsCutAtTheNodeBudgetOfOneSpawn)
+{
+	constexpr int k_levels = 5;
+	constexpr int k_width = 10;
+	put("fan6.prefab.desc", prefab_with_children(""));
+	for (int level = k_levels; level >= 1; --level) {
+		std::string children;
+		for (int i = 0; i < k_width; ++i) {
+			if (i > 0) children += ",";
+			children += instance_child("c" + std::to_string(i), "fan" + std::to_string(level + 1) + ".prefab.desc");
+		}
+		put("fan" + std::to_string(level) + ".prefab.desc", prefab_with_children(children));
+	}
+	const auto tag = tag_of("fan1.prefab.desc");
+	auto fan = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(fan);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *fan, "fan", tag);
+
+	BOOST_TEST(spawned_nodes(reg) < 100'000u);
+	BOOST_TEST(spawned_nodes(reg) > 90'000u);
+	// What was built before the cut is whole: the first branch goes all the way down.
+	entt::entity at = root;
+	for (int level = 1; level <= k_levels; ++level) {
+		at = child_named(reg, at, "c0");
+		BOOST_REQUIRE(reg.valid(at));
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

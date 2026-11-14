@@ -394,7 +394,73 @@ namespace {
 		return child;
 	}
 
-	constexpr int max_instance_depth = 16;
+	// Prefabs open one inside another on the way from the root of a spawn down to one node, at most.
+	constexpr std::size_t max_instance_depth = 16;
+	// Nodes one spawn builds, at most: a few small files that fan out (K children that each instantiate the next
+	// prefab) would otherwise build K^depth entities.
+	constexpr std::size_t max_spawn_nodes = 100'000;
+
+	// What one spawn knows on its way down the tree (#924). A project's files decide what references what: a prefab
+	// that instantiates itself, directly or through others, must end, and so must one that fans out without bound.
+	struct spawn_walk
+	{
+		// The prefabs being expanded between the root of the spawn and the node at hand, outermost first.
+		std::vector<res::tag> open;
+		std::size_t nodes = 0;
+		bool over_budget = false;
+	};
+
+	// The walk of the spawn that is running on this thread. A component whose parent is a prefab is spawned through the
+	// assembler (assemble_prefab), which comes back into reconcile: that is the same spawn, not a new one.
+	thread_local spawn_walk* t_walk = nullptr;
+
+	class walk_scope
+	{
+	public:
+		walk_scope() : m_previous(t_walk)
+		{
+			if (t_walk == nullptr) t_walk = &m_own;
+		}
+		~walk_scope() { t_walk = m_previous; }
+		walk_scope(const walk_scope&) = delete;
+		walk_scope& operator=(const walk_scope&) = delete;
+
+		spawn_walk& walk() const { return *t_walk; }
+
+	private:
+		spawn_walk m_own;
+		spawn_walk* m_previous;
+	};
+
+	// Takes what a node opened off spawn_walk::open again, however the node's work ends.
+	class open_scope
+	{
+	public:
+		explicit open_scope(std::vector<res::tag>& open) : m_open(open), m_size(open.size()) {}
+		~open_scope() { m_open.resize(m_size); }
+		open_scope(const open_scope&) = delete;
+		open_scope& operator=(const open_scope&) = delete;
+
+	private:
+		std::vector<res::tag>& m_open;
+		std::size_t m_size;
+	};
+
+	bool is_open(const std::vector<res::tag>& tags, const res::tag& tag)
+	{
+		return !tag.string().empty() && std::find(tags.begin(), tags.end(), tag) != tags.end();
+	}
+
+	std::string path_text(const std::vector<res::tag>& open, const std::vector<res::tag>& chain, const res::tag& last)
+	{
+		std::string text;
+		for (const std::vector<res::tag>* part : { &open, &chain }) {
+			for (const res::tag& tag : *part) {
+				text += std::string(tag.view()) + " -> ";
+			}
+		}
+		return text + std::string(last.view());
+	}
 
 	struct prefab_ref {
 		std::string key;
@@ -598,21 +664,34 @@ namespace {
 	// What `node` stands for when it is more than its own fields: the prefab it references (itself expanded)
 	// plus the node's own extra components and children, then the node's override records. False for a plain
 	// node without records. `source` is the referenced prefab, empty when there is none.
-	bool materialize(const scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source, int depth)
+	// `open`: the prefabs already being expanded above `node` (spawn_walk::open); `chain` takes the ones this call
+	// expands, outermost first. A reference to a prefab that is open already, or one nested too deep, is ignored: the
+	// node is built without it and without the component that made it.
+	bool materialize(const scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source,
+		const std::vector<res::tag>& open, std::vector<res::tag>& chain)
 	{
 		std::optional<prefab_ref> ref = find_prefab_ref(assembler, node);
-		if (ref && depth >= max_instance_depth) {
-			egLOG_ERROR("desc", "prefab '{}' instantiates itself (nesting deeper than {}), reference ignored", ref->prefab->get_tag().view(), max_instance_depth);
-			ref.reset();
+		std::optional<std::string> ignored;
+		if (ref) {
+			const res::tag& tag = ref->prefab->get_tag();
+			if (is_open(open, tag) || is_open(chain, tag)) {
+				egLOG_ERROR("desc", "a prefab instantiates itself, reference ignored: {}", path_text(open, chain, tag));
+				ignored = ref->key;
+			} else if (open.size() + chain.size() >= max_instance_depth) {
+				egLOG_ERROR("desc", "prefabs nested deeper than {}, reference ignored: {}", max_instance_depth, path_text(open, chain, tag));
+				ignored = ref->key;
+			}
+			if (ignored) ref.reset();
 		}
-		if (!ref && node.overrides.empty()) return false;
+		if (!ref && !ignored && node.overrides.empty()) return false;
 
 		scn::prefab_desc fallback_owner;
 		const desc::desc_base* owner = &fallback_owner;
 		if (ref) {
 			owner = ref->prefab.get();
 			source = ref->prefab->get_tag();
-			if (!materialize(assembler, ref->prefab->get_root(), out, source, depth + 1)) {
+			chain.push_back(ref->prefab->get_tag());
+			if (!materialize(assembler, ref->prefab->get_root(), out, source, open, chain)) {
 				out = ref->prefab->get_root();
 			}
 			source = ref->prefab->get_tag();
@@ -622,6 +701,8 @@ namespace {
 			out.children.insert(out.children.end(), node.children.begin(), node.children.end());
 		} else {
 			out = node;
+			// Left in, the component would be spawned as a prefab by the assembler: the very instance just refused.
+			if (ignored) out.components.erase(*ignored);
 		}
 		out.overrides.clear();
 		apply_records(assembler, *owner, out, node.overrides);
@@ -727,9 +808,17 @@ json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cn
 bool scn::expand_instance(
 	const ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
 {
-	if (!materialize(assembler, node, out, source, 0)) return false;
+	std::vector<res::tag> chain;
+	if (!materialize(assembler, node, out, source, {}, chain)) return false;
 	keep_in_default_resource(out);
 	return true;
+}
+
+namespace {
+
+void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity live, const prefab_node& node,
+	scn::reconcile_mode mode, spawn_walk& walk);
+
 }
 
 void scn::reconcile(
@@ -739,12 +828,28 @@ void scn::reconcile(
 	const scn::prefab_desc::prefab_node& node,
 	reconcile_mode mode
 ) {
+	const walk_scope scope;
+	reconcile_node(assembler, reg, live, node, mode, scope.walk());
+}
+
+namespace {
+
+void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity live, const prefab_node& node,
+	scn::reconcile_mode mode, spawn_walk& walk)
+{
+	using scn::reconcile_mode;
+	++walk.nodes;
 	// `node` itself unless it references a prefab or carries override records; `node` may be a part of this
 	// entity's prefab_instance, which is replaced below, so nothing reads it after that.
 	prefab_node expanded;
 	const prefab_node* content = &node;
 	res::tag source;
-	if (materialize(assembler, node, expanded, source, 0)) {
+	std::vector<res::tag> chain;
+	const bool expanded_node = materialize(assembler, node, expanded, source, walk.open, chain);
+	// Open for everything built below this node, the components included.
+	const open_scope opened(walk.open);
+	walk.open.insert(walk.open.end(), chain.begin(), chain.end());
+	if (expanded_node) {
 		if (!source.string().empty()) {
 			// A transform the node spells out places the instance; otherwise the prefab root's does, with the
 			// target-[] transform records applied. Taken before the prefab_instance below replaces `node`.
@@ -784,6 +889,14 @@ void scn::reconcile(
 	std::unordered_set<entt::entity> kept;
 
 	for (const auto& child_node : content->children) {
+		if (walk.nodes >= max_spawn_nodes) {
+			if (!walk.over_budget) {
+				walk.over_budget = true;
+				egLOG_ERROR("desc", "a spawn builds more than {} nodes: the rest of the tree is left out (last prefab: {})",
+					max_spawn_nodes, walk.open.empty() ? std::string_view{ "none" } : walk.open.back().view());
+			}
+			break;
+		}
 		const uint64_t node_id = child_node.node_id;
 		std::string_view name = child_node.name.empty() ? std::string_view{ "unnamed_child" } : std::string_view{ child_node.name };
 		const glm::mat4 local = child_node.get_local_transform();
@@ -797,16 +910,17 @@ void scn::reconcile(
 			reg.emplace_or_replace<scn::name_component>(child, scn::name_component{ .name = std::string{ name } });
 
 			apply_node_path(reg, live, child, node_id);
-			reconcile(assembler, reg, child, child_node, reconcile_mode::reload);
+			reconcile_node(assembler, reg, child, child_node, reconcile_mode::reload, walk);
 		} else {
 			child = create_child_entity(reg, live, std::string{ name }, local);
 			apply_node_path(reg, live, child, node_id);
-			reconcile(assembler, reg, child, child_node, reconcile_mode::spawn);
+			reconcile_node(assembler, reg, child, child_node, reconcile_mode::spawn, walk);
 		}
 		kept.insert(child);
 	}
 
-	if (!reload) return;
+	// A walk cut short did not reach every node: a live child it never came to is not one the tree dropped.
+	if (!reload || walk.over_budget) return;
 
 	// Re-fetch: spawning children above may have created the component or moved it.
 	if (auto* children_comp = reg.try_get<scn::children_component>(live)) {
@@ -821,6 +935,8 @@ void scn::reconcile(
 			}
 		}
 	}
+}
+
 }
 
 namespace {
@@ -1246,6 +1362,20 @@ SNK_API void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry&
 
 void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab)
 {
+	// The prefab is open while its content is built: a node in it that instantiates it again is refused. Reached through
+	// the assembler too, for a component whose parent is a prefab, and that one may be open already: then nothing of
+	// the entity is touched.
+	const walk_scope scope;
+	spawn_walk& walk = scope.walk();
+	if (is_open(walk.open, source_prefab)) {
+		egLOG_ERROR("desc", "a prefab instantiates itself, it is not built again: {}", path_text(walk.open, {}, source_prefab));
+		return;
+	}
+	if (walk.open.size() >= max_instance_depth) {
+		egLOG_ERROR("desc", "prefabs nested deeper than {}, not built: {}", max_instance_depth, path_text(walk.open, {}, source_prefab));
+		return;
+	}
+
 	const auto& root_node = prefab.get_root();
 
 	// The root of a spawn is the origin of its own paths; a node spawned by a parent already has its path.
@@ -1284,5 +1414,7 @@ void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& r
 		reg.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
 	}
 
-	scn::reconcile(assembler, reg, e, root_node, scn::reconcile_mode::spawn);
+	const open_scope opened(walk.open);
+	if (!source_prefab.string().empty()) walk.open.push_back(source_prefab);
+	reconcile_node(assembler, reg, e, root_node, scn::reconcile_mode::spawn, walk);
 }
