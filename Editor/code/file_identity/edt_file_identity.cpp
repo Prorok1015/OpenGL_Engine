@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -29,25 +30,106 @@ constexpr std::array<std::uint32_t, 64> k_round_constants = {
 
 }
 
+#ifdef _WIN32
+namespace {
+
+	// The path as the wide API takes it past MAX_PATH.
+	std::wstring long_path(const std::filesystem::path& path)
+	{
+		std::filesystem::path normal = path.lexically_normal();
+		std::wstring text = normal.make_preferred().native();
+		if (text.size() < MAX_PATH || !normal.is_absolute() || text.starts_with(L"\\\\?\\")
+			|| text.starts_with(L"\\\\.\\")) {
+			return text;
+		}
+		if (text.starts_with(L"\\\\")) {
+			return L"\\\\?\\UNC\\" + text.substr(2);
+		}
+		return L"\\\\?\\" + text;
+	}
+
+	edt::file_id id_of_handle(HANDLE handle)
+	{
+		edt::file_id id;
+		FILE_ID_INFO wide{};
+		BY_HANDLE_FILE_INFORMATION info{};
+		if (GetFileInformationByHandleEx(handle, FileIdInfo, &wide, sizeof(wide))) {
+			std::memcpy(&id.index, wide.FileId.Identifier, sizeof(id.index));
+			std::memcpy(&id.index_high, wide.FileId.Identifier + sizeof(id.index), sizeof(id.index_high));
+			id.volume = wide.VolumeSerialNumber;
+			id.valid = true;
+		} else if (GetFileInformationByHandle(handle, &info)) {
+			id.volume = info.dwVolumeSerialNumber;
+			id.index = (static_cast<std::uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+			id.valid = true;
+		}
+		return id;
+	}
+
+	// The ids of the entries of the folder open as `folder`, on the volume `volume`; false when the folder could not be
+	// listed whole.
+	bool list_ids(HANDLE folder, std::uint64_t volume, std::unordered_map<std::wstring, edt::file_id>& by_name)
+	{
+		// The entries hold 64-bit fields: the buffer is aligned for them.
+		std::vector<std::uint64_t> buffer(8 * 1024);
+		const DWORD bytes = static_cast<DWORD>(buffer.size() * sizeof(std::uint64_t));
+		// The 128-bit ids of ReFS (Windows 8 on); a file system without them answers the 64-bit listing.
+		bool wide = true;
+		bool first = true;
+		for (;;) {
+			const FILE_INFO_BY_HANDLE_CLASS kind = wide
+				? (first ? FileIdExtdDirectoryRestartInfo : FileIdExtdDirectoryInfo)
+				: (first ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo);
+			if (!GetFileInformationByHandleEx(folder, kind, buffer.data(), bytes)) {
+				const DWORD error = GetLastError();
+				if (error == ERROR_NO_MORE_FILES) {
+					return true;
+				}
+				if (wide && first && (error == ERROR_INVALID_PARAMETER || error == ERROR_NOT_SUPPORTED
+					|| error == ERROR_INVALID_FUNCTION)) {
+					wide = false;
+					continue;
+				}
+				return false;
+			}
+			first = false;
+			const auto* at = reinterpret_cast<const std::byte*>(buffer.data());
+			for (;;) {
+				edt::file_id id;
+				id.volume = volume;
+				id.valid = true;
+				DWORD next = 0;
+				if (wide) {
+					const auto* entry = reinterpret_cast<const FILE_ID_EXTD_DIR_INFO*>(at);
+					std::memcpy(&id.index, entry->FileId.Identifier, sizeof(id.index));
+					std::memcpy(&id.index_high, entry->FileId.Identifier + sizeof(id.index), sizeof(id.index_high));
+					by_name.insert_or_assign(std::wstring(entry->FileName, entry->FileNameLength / sizeof(WCHAR)), id);
+					next = entry->NextEntryOffset;
+				} else {
+					const auto* entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(at);
+					id.index = static_cast<std::uint64_t>(entry->FileId.QuadPart);
+					by_name.insert_or_assign(std::wstring(entry->FileName, entry->FileNameLength / sizeof(WCHAR)), id);
+					next = entry->NextEntryOffset;
+				}
+				if (next == 0) {
+					break;
+				}
+				at += next;
+			}
+		}
+	}
+
+}
+#endif
+
 edt::file_id edt::file_id_of(const std::filesystem::path& path)
 {
 	file_id id;
 #ifdef _WIN32
-	const HANDLE handle = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	const HANDLE handle = CreateFileW(long_path(path).c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 	if (handle == INVALID_HANDLE_VALUE) return id;
-	FILE_ID_INFO wide{};
-	BY_HANDLE_FILE_INFORMATION info{};
-	if (GetFileInformationByHandleEx(handle, FileIdInfo, &wide, sizeof(wide))) {
-		std::memcpy(&id.index, wide.FileId.Identifier, sizeof(id.index));
-		std::memcpy(&id.index_high, wide.FileId.Identifier + sizeof(id.index), sizeof(id.index_high));
-		id.volume = wide.VolumeSerialNumber;
-		id.valid = true;
-	} else if (GetFileInformationByHandle(handle, &info)) {
-		id.volume = info.dwVolumeSerialNumber;
-		id.index = (static_cast<std::uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
-		id.valid = true;
-	}
+	id = id_of_handle(handle);
 	CloseHandle(handle);
 #else
 	struct stat info{};
@@ -58,6 +140,43 @@ edt::file_id edt::file_id_of(const std::filesystem::path& path)
 	}
 #endif
 	return id;
+}
+
+edt::file_id edt::file_id_reader::id_of(const std::filesystem::path& path)
+{
+#ifdef _WIN32
+	const std::wstring name = path.filename().native();
+	auto [found, added] = m_folders.try_emplace(path.parent_path().lexically_normal().make_preferred().native());
+	folder& listing = found->second;
+	if (added) {
+		const HANDLE handle = CreateFileW(long_path(path.parent_path()).c_str(), FILE_LIST_DIRECTORY,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS,
+			nullptr);
+		if (handle != INVALID_HANDLE_VALUE) {
+			const file_id own = id_of_handle(handle);
+			listing.listed = own.valid && list_ids(handle, own.volume, listing.by_name);
+			CloseHandle(handle);
+		}
+		if (!listing.listed) {
+			listing.by_name.clear();
+		}
+	}
+	if (listing.listed) {
+		if (const auto entry = listing.by_name.find(name); entry != listing.by_name.end()) {
+			return entry->second;
+		}
+		// A name spelled in another letter case than the folder holds it.
+		for (const auto& [entry_name, id] : listing.by_name) {
+			if (CompareStringOrdinal(entry_name.data(), static_cast<int>(entry_name.size()), name.data(),
+				static_cast<int>(name.size()), TRUE) == CSTR_EQUAL) {
+				return id;
+			}
+		}
+	}
+	return file_id_of(path);
+#else
+	return file_id_of(path);
+#endif
 }
 
 edt::content_hasher::content_hasher()

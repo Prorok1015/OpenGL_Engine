@@ -62,7 +62,6 @@ namespace
 		return static_cast<std::int64_t>(fs::file_time_type::clock::now().time_since_epoch().count());
 	}
 
-	// A regular file that is not a link.
 	// Whether what `before` read of a .resource holds for the one now at `now`'s path: the same stamp of the same file. A
 	// file without a known identity is read again (a .resource is a few dozen bytes).
 	bool same_meta(const edt::asset_record& before, const edt::asset_record& now)
@@ -81,6 +80,7 @@ namespace
 		return !edt::known_file_id(now.content_id) || before.content_id == now.content_id;
 	}
 
+	// A regular file that is not a link.
 	file_stat stat_of(const fs::path& path)
 	{
 		std::error_code ec;
@@ -106,8 +106,6 @@ namespace
 
 bool edt::known_file_id(const file_id& id)
 {
-	// A file reused by the file system after a delete keeps no identity apart: a .resource written into the freed one with
-	// the old size and time is still taken as the old file.
 	return id.valid && (id.index != 0 || id.index_high != 0);
 }
 
@@ -145,7 +143,8 @@ std::string edt::asset_type_of(std::string_view path)
 edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, const std::function<bool()>& stopped,
 	const std::map<std::string, asset_record>* known, bool case_insensitive, const file_id_source& id_of)
 {
-	const auto identity = [&id_of](const fs::path& path) { return id_of ? id_of(path) : file_id_of(path); };
+	file_id_reader ids;
+	const auto identity = [&id_of, &ids](const fs::path& path) { return id_of ? id_of(path) : ids.id_of(path); };
 	const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, stopped, case_insensitive);
 	const res::asset_walk_pairing pairing = res::pair_asset_metas(files, case_insensitive);
 	std::size_t sidecars = 0;
@@ -488,9 +487,12 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	m_unhashed.clear();
 	for (asset_record& record : scan.records) {
 		std::string key = record.path.string();
+		const auto known = previous.find(key);
+		if (known != previous.end()) {
+			watch_identity(known->second, record);
+		}
 		// A file the walk found as it was keeps what the background pass learned of it.
-		if (const auto known = previous.find(key);
-			known != previous.end() && !known->second.content_hash.empty() && same_content(known->second, record)) {
+		if (known != previous.end() && !known->second.content_hash.empty() && same_content(known->second, record)) {
 			record.content_hash = known->second.content_hash;
 			record.desc_type = known->second.desc_type;
 			// The hash is as old as that record's check, so a stamp it could not trust stays untrusted. Within a session a
@@ -653,6 +655,7 @@ void edt::asset_database::hash_next()
 		// The record's stamp when it was queued.
 		std::int64_t size = 0;
 		std::int64_t mtime = 0;
+		file_id content_id;
 	};
 	std::vector<item> batch;
 	while (!m_unhashed.empty() && batch.size() < hash_batch) {
@@ -667,7 +670,7 @@ void edt::asset_database::hash_next()
 		relative.remove_prefix(relative.find("://") + 3);
 		m_in_flight.push_back(key);
 		batch.push_back(item{ std::move(key), m_layers[record.layer], fs_paths::path_from_utf8(relative), record.type == "desc", record.size,
-			record.mtime });
+			record.mtime, record.content_id });
 	}
 	if (batch.empty()) {
 		return;
@@ -677,18 +680,41 @@ void edt::asset_database::hash_next()
 		std::string key;
 		std::int64_t size = 0;
 		std::int64_t mtime = 0;
+		file_id content_id;
 		asset_content content;
+		// Which file the path was before the batch was read and after it.
+		file_id id_before;
+		file_id id_after;
 	};
 	using results = std::vector<hashed>;
 	m_hash_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Hash assets", "assets", true }, m_lifetime,
-		[batch = std::move(batch)](ds::task_context& ctx) {
+		[batch = std::move(batch), id_of = m_file_id](ds::task_context& ctx) {
+			// One listing of each folder before the batch is read and one after, not two per file, taken as the walk
+			// takes the records' ids.
+			const auto identities = [&id_of, &batch] {
+				file_id_reader ids;
+				std::vector<file_id> out;
+				out.reserve(batch.size());
+				for (const item& entry : batch) {
+					const fs::path path = entry.root / entry.relative;
+					out.push_back(id_of ? id_of(path) : ids.id_of(path));
+				}
+				return out;
+			};
+			const std::vector<file_id> before = identities();
 			results out;
 			out.reserve(batch.size());
 			for (const item& entry : batch) {
 				if (ctx.stop.stop_requested()) {
 					break;
 				}
-				out.push_back(hashed{ entry.key, entry.size, entry.mtime, read_asset_content(entry.root, entry.relative, entry.is_desc, max_desc_bytes) });
+				out.push_back(hashed{ entry.key, entry.size, entry.mtime, entry.content_id,
+					read_asset_content(entry.root, entry.relative, entry.is_desc, max_desc_bytes), {}, {} });
+			}
+			const std::vector<file_id> after = identities();
+			for (std::size_t index = 0; index < out.size(); ++index) {
+				out[index].id_before = before[index];
+				out[index].id_after = after[index];
 			}
 			return out;
 		},
@@ -700,7 +726,7 @@ void edt::asset_database::hash_next()
 						m_unhashed.push_back(key);
 					}
 				};
-				for (auto& [key, queued_size, queued_mtime, content] : *result.value) {
+				for (auto& [key, queued_size, queued_mtime, queued_id, content, id_before, id_after] : *result.value) {
 					std::erase(m_in_flight, key);
 					++m_files_read;
 					const auto found = m_records.find(key);
@@ -708,7 +734,8 @@ void edt::asset_database::hash_next()
 						continue;
 					}
 					// A batch or a walk gave the record a new stamp while it was read (it skipped the key in flight).
-					if (found->second.size != queued_size || found->second.mtime != queued_mtime) {
+					if (found->second.size != queued_size || found->second.mtime != queued_mtime
+						|| found->second.content_id != queued_id) {
 						if (found->second.content_hash.empty()) {
 							queue_again(key);
 						}
@@ -718,8 +745,12 @@ void edt::asset_database::hash_next()
 						egLOG_WARN("assets", "{}: {}", key, content.error);
 						continue;
 					}
-					// Changed on the disk since the record: the next walk or batch of changes updates it and queues it again.
-					if (found->second.size != content.size || found->second.mtime != content.mtime) {
+					// Changed on the disk since the record: the next walk or batch of changes updates it and queues it
+					// again. A file moved over it with the same size and time is another file (#888).
+					const bool same_file = !known_file_id(queued_id)
+						|| m_warned_unstable_ids.contains(found->second.layer)
+						|| (id_before == queued_id && id_after == queued_id);
+					if (found->second.size != content.size || found->second.mtime != content.mtime || !same_file) {
 						continue;
 					}
 					// Written while it was read, now as the record says: hashed again with the next batch.
@@ -1418,9 +1449,31 @@ void edt::asset_database::attach(res::resource_system& resources)
 	});
 }
 
-edt::file_id edt::asset_database::id_of(const fs::path& path) const
+edt::file_id edt::asset_database::id_of(const fs::path& path)
 {
-	return m_file_id ? m_file_id(path) : file_id_of(path);
+	return m_file_id ? m_file_id(path) : m_ids.id_of(path);
+}
+
+void edt::asset_database::watch_identity(const asset_record& before, const asset_record& now)
+{
+	const auto flipped = [](const file_id& was, const file_id& is) {
+		return known_file_id(was) && known_file_id(is) && was != is;
+	};
+	const bool content_flipped = before.layer == now.layer && before.size == now.size && before.mtime == now.mtime
+		&& flipped(before.content_id, now.content_id);
+	const bool meta_flipped = before.has_meta && before.meta_layer == now.meta_layer && before.meta_size == now.meta_size
+		&& before.meta_mtime == now.meta_mtime && flipped(before.meta_id, now.meta_id);
+	const std::string key = now.path.string();
+	if (!content_flipped && !meta_flipped) {
+		m_id_flips.erase(key);
+		return;
+	}
+	// Once is a file moved over another of the same size and time; twice in a row is the file system.
+	const std::size_t layer = content_flipped ? now.layer : now.meta_layer;
+	if (++m_id_flips[key] >= 2 && layer < m_layers.size() && m_warned_unstable_ids.insert(layer).second) {
+		egLOG_WARN("assets", "the file system of '{}' tells another identity for an unchanged file ({}): its files "
+			"may be read again at every look", fs_paths::generic_utf8_of(m_layers[layer]), key);
+	}
 }
 
 void edt::asset_database::warn_without_ids(std::size_t layer)
@@ -1475,6 +1528,9 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 
 	const asset_layer_lookup::slot meta = lookup.sidecar(*folder, file.name);
 	if (!meta.found) {
+		if (before) {
+			watch_identity(*before, record);
+		}
 		return record;
 	}
 	const fs::path meta_relative = fs_paths::path_from_utf8(meta.in_layer);
@@ -1483,6 +1539,9 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 	record.meta_mtime = meta_stat.mtime;
 	record.meta_layer = meta.layer;
 	record.meta_id = id_of(m_layers[meta.layer] / meta_relative);
+	if (before) {
+		watch_identity(*before, record);
+	}
 	if (before && same_meta(*before, record)) {
 		record.has_meta = true;
 		record.id = before->id;
@@ -1568,6 +1627,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	}
 
 	asset_layer_lookup lookup(m_layers, m_case_insensitive);
+	m_ids = {};
 	// By merge key: on Windows "A.png" and "a.png" are one file.
 	std::map<std::string, std::string> files;
 	for (std::string& relative : touched) {

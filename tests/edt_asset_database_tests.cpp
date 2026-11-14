@@ -1068,7 +1068,7 @@ BOOST_AUTO_TEST_CASE(a_top_file_shadows_the_lower_one_while_it_is_there)
 	BOOST_TEST(record("s.txt").size == 6);
 
 	fs::remove(upper.path() / "s.txt");
-	assets.apply_changes(std::vector<res::file_change>{ change("s.txt", res::change_kind::deleted) });
+	const edt::asset_batch batch = assets.apply_changes(std::vector<res::file_change>{ change("s.txt", res::change_kind::deleted) });
 	BOOST_TEST(batch.removed.empty());
 	BOOST_REQUIRE(batch.changed.size() == 1u);
 	BOOST_TEST(record("s.txt").layer == 0u);
@@ -1353,6 +1353,74 @@ BOOST_AUTO_TEST_CASE(a_cache_without_file_identities_is_read_again_once)
 	second.reset();
 	auto third = cached();
 	BOOST_TEST(third->files_read() == 0u);
+}
+
+// #888: the editor saves a .resource through a temporary renamed over it (prj::write_project_file): another file of the
+// same size, time and guid. It is read once and keeps its ID; no duplicate, nothing warned of.
+BOOST_AUTO_TEST_CASE(a_resource_saved_through_a_rename_is_read_once_and_keeps_its_id)
+{
+	write_aged("a.png", "a");
+	const fs::path meta = write_aged("a.png.resource", meta_text(k_guid_a));
+	std::size_t warnings = 0;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view category, engine::log_level level,
+		std::string_view) {
+		if (category == "assets" && level >= engine::log_level::warn) {
+			++warnings;
+		}
+	});
+	auto& assets = open();
+	const std::string hash = record("a.png").content_hash;
+	BOOST_REQUIRE(!hash.empty());
+	const std::size_t read_before = assets.files_read();
+
+	const fs::path temporary = upper.write("a.png.resource.tmp", meta_text(k_guid_a));
+	fs::last_write_time(temporary, fs::last_write_time(meta));
+	fs::rename(temporary, meta);
+	assets.apply_changes(std::vector<res::file_change>{
+		change("a.png.resource", res::change_kind::renamed, "a.png.resource.tmp") });
+	test_util::pump(tasks);
+	BOOST_TEST(assets.files_read() == read_before + 1);
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_a);
+	BOOST_TEST(record("a.png").content_hash == hash);
+	BOOST_TEST(assets.duplicates().empty());
+	BOOST_TEST(assets.find(res::tag::make("a.png.resource.tmp")) == nullptr);
+	BOOST_TEST(warnings == 0u);
+}
+
+// #888: a file system that tells another identity for an unchanged file at every look (sshfs without use_ino): warned
+// of once per layer after two looks in a row, and its files are hashed all the same.
+BOOST_AUTO_TEST_CASE(identities_that_change_at_every_look_are_warned_of_once_and_files_are_still_hashed)
+{
+	write_aged("a.png", "a");
+	write_aged("a.png.resource", meta_text(k_guid_a));
+	std::size_t warnings = 0;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view category, engine::log_level level,
+		std::string_view message) {
+		if (category == "assets" && level == engine::log_level::warn
+			&& message.find("tells another identity") != std::string_view::npos) {
+			++warnings;
+		}
+	});
+	std::uint64_t next = 1;
+	db = unopened();
+	db->set_file_id_source([&next](const fs::path&) {
+		edt::file_id id;
+		id.volume = 1;
+		id.index = next++;
+		id.valid = true;
+		return id;
+	});
+	for (std::size_t look = 1; look <= 4; ++look) {
+		db->rebuild();
+		test_util::pump(tasks);
+		BOOST_TEST_CONTEXT("look " << look) {
+			BOOST_TEST(warnings == (look >= 3 ? 1u : 0u));
+		}
+	}
+	BOOST_TEST(!record("a.png").content_hash.empty());
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_a);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -345,11 +345,15 @@ namespace edt
 		void unindex_id(const asset_record& record);
 		void on_job_finished(std::uint64_t id, job_status status);
 		void load_cache();
-		// The record the walk would make of `relative` (res:// path text without the protocol, any letter case when case
-		// insensitive) now; none when it would make none. `before_of` gives what is known of a path text (may be null).
-		file_id id_of(const std::filesystem::path& path) const;
+		// Through m_file_id, else m_ids.
+		file_id id_of(const std::filesystem::path& path);
 		// Once per layer: its files have no identity, so their hashes follow size and time alone.
 		void warn_without_ids(std::size_t layer);
+		// Once per layer: a file of an unchanged size and time told another identity on two looks in a row (sshfs
+		// without use_ino, some SMB servers), so each look reads it again.
+		void watch_identity(const asset_record& before, const asset_record& now);
+		// The record the walk would make of `relative` (res:// path text without the protocol, any letter case when case
+		// insensitive) now; none when it would make none. `before_of` gives what is known of a path text (may be null).
 		std::optional<asset_record> look_up(const std::string& relative, asset_layer_lookup& lookup,
 			const std::function<const asset_record*(const std::string&)>& before_of);
 		void save_when_idle();
@@ -415,6 +419,11 @@ namespace edt
 		bool m_dirty = false;
 		std::size_t m_files_read = 0;
 		file_id_source m_file_id;
+		// The listings of one batch of changes (apply_changes): a new one for each.
+		file_id_reader m_ids;
+		// By path text: looks in a row at which the file kept its size and time but told another identity.
+		std::unordered_map<std::string, int> m_id_flips;
+		std::set<std::size_t> m_warned_unstable_ids;
 		// Layers already warned of having no file identities: once per layer.
 		std::set<std::size_t> m_warned_without_ids;
 		res::resource_system* m_resources = nullptr;

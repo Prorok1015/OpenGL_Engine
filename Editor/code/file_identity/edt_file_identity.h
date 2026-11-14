@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
+#include <unordered_map>
 
 namespace edt {
 
@@ -23,8 +25,29 @@ namespace edt {
 		bool same_as(const file_id& other) const { return valid && other.valid && *this == other; }
 	};
 
-	// The file the path itself is (a link is not followed); invalid when it cannot be told.
+	// The file the path itself is (a link is not followed); invalid when it cannot be told. On Windows it opens the file
+	// for a moment: see file_id_reader.
 	file_id file_id_of(const std::filesystem::path& path);
+
+	// Identities of many files without a handle on any of them: on Windows a rename over a file (MoveFileExW with
+	// REPLACE_EXISTING, the atomic save of the editor and of other tools) fails while the file is open anywhere, so
+	// each folder is listed once (FileIdExtdDirectoryInfo) and the ids come from the listing. A listing is kept for the
+	// reader's life: take a new reader to see the files as they are now. Elsewhere it is file_id_of.
+	class file_id_reader
+	{
+	public:
+		file_id id_of(const std::filesystem::path& path);
+
+	private:
+#ifdef _WIN32
+		struct folder
+		{
+			bool listed = false;
+			std::unordered_map<std::wstring, file_id> by_name;
+		};
+		std::unordered_map<std::wstring, folder> m_folders;
+#endif
+	};
 
 	using content_digest = std::array<std::uint8_t, 32>;
 
