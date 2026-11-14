@@ -138,6 +138,8 @@ namespace edt
 		std::vector<res::tag> added;
 		std::vector<res::tag> removed;
 		std::vector<res::tag> changed;
+		// What a walk found (apply_scan), against a watcher's report: it may name any number of files.
+		bool from_walk = false;
 	};
 
 	// The kind of asset of a path by its suffix (lowercase compare).

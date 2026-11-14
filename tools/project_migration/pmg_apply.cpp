@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <exception>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
@@ -44,6 +45,19 @@ namespace
 	{
 		return std::format("{:016x}", desc::schema_id(bytes));
 	}
+
+	void stop_at(const apply_context& context, apply_checkpoint where)
+	{
+		if (context.stop_requested && context.stop_requested(where)) {
+			throw std::runtime_error("the migration was cancelled before it was committed");
+		}
+	}
+
+	// apply_context::on_main refused: the migration fails (rolled back), never falls back to the migrated JSON.
+	struct main_thread_refused : std::runtime_error
+	{
+		using std::runtime_error::runtime_error;
+	};
 
 	std::string text_of(const std::vector<std::byte>& bytes)
 	{
@@ -444,6 +458,7 @@ namespace
 			case create_result::taken: throw std::runtime_error(std::format("{}: {} cannot be created: something is at its name", m_step, relative));
 			case create_result::failed: throw std::runtime_error(std::format("{}: {} cannot be created: {}", m_step, relative, error));
 			}
+			note_written(relative);
 			// After the file is there: a failure before it leaves nothing for a rollback to delete.
 			m_report.created_files.push_back(relative);
 			journal();
@@ -462,6 +477,7 @@ namespace
 			file.hash_after = std::string(k_removed);
 			journal();
 			if (auto error = remove_created(m_context.root, file.path)) throw std::runtime_error(std::format("{}: {}", m_step, *error));
+			note_written(file.path);
 			m_current.erase(key);
 			m_removed.insert(key);
 			m_step_touched.erase(key);
@@ -497,6 +513,7 @@ namespace
 		void put(const std::string& relative, std::string_view text)
 		{
 			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(relative), text)) throw std::runtime_error(*error);
+			note_written(relative);
 		}
 
 		// What desc_resave writes: the file loaded by the engine (migrated on load) and saved by its adapter. Loaded
@@ -525,7 +542,8 @@ namespace
 				why_json = "not under a content root";
 			} else {
 				try {
-					std::string saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original)));
+					std::string saved;
+					on_main(file.path, [&] { saved = text_of(m_adapter.serialize(*tag, load_from(*tag, original))); });
 					json::value written = json::parse(saved, {}, parse_options());
 					why_json = lost_parent(migrated, &written, {});
 					if (why_json.empty()) {
@@ -535,6 +553,8 @@ namespace
 						}
 						return saved;
 					}
+				} catch (const main_thread_refused&) {
+					throw;
 				} catch (const std::exception& e) {
 					why_json = std::format("the engine cannot load it: {}", e.what());
 				}
@@ -564,7 +584,9 @@ namespace
 			const std::optional<res::tag> tag = tag_of(file.path, m_content_roots);
 			if (!tag) return;
 			try {
-				load_from(*tag, on_disk);
+				on_main(file.path, [&] { load_from(*tag, on_disk); });
+			} catch (const main_thread_refused&) {
+				throw;
 			} catch (const std::exception& e) {
 				throw std::runtime_error(std::format("{}: does not load after the migration: {}", file.path, e.what()));
 			}
@@ -741,6 +763,42 @@ namespace
 			return index;
 		}
 
+		// The engine's load and save wait on resource handles: on the main thread when the caller runs elsewhere.
+		// A file of a content root changed on disk: its cache entry goes before the engine loads anything again.
+		void note_written(const std::string& relative)
+		{
+			if (relative.starts_with(".snk/")) return;
+			if (std::optional<res::tag> tag = tag_of(relative, m_content_roots)) m_stale.push_back(std::move(*tag));
+		}
+
+		// Out of the cache only (no watcher is told mid-run; the caller announces the files after the apply), so a parent this
+		// migration wrote is read again from the disk by the next load, not taken from the cache as it was before.
+		void evict_written()
+		{
+			for (const res::tag& tag : m_stale) m_context.resources.evict_cached(tag);
+			m_stale.clear();
+		}
+
+		void on_main(const std::string& path, const std::function<void()>& work)
+		{
+			if (!m_context.on_main) {
+				evict_written();
+				work();
+				return;
+			}
+			std::exception_ptr failed;
+			const bool ran = m_context.on_main([&] {
+				try {
+					evict_written();
+					work();
+				} catch (...) {
+					failed = std::current_exception();
+				}
+			});
+			if (!ran) throw main_thread_refused(std::format("{}: the main thread did not load it (the editor is going away)", path));
+			if (failed) std::rethrow_exception(failed);
+		}
+
 		std::shared_ptr<res::resource_entry> load_from(const res::tag& tag, std::string_view text) const
 		{
 			const auto* first = reinterpret_cast<const std::byte*>(text.data());
@@ -771,6 +829,8 @@ namespace
 		std::set<std::string> m_removed;
 		// What the steps of the phase that runs wrote or created, for the check after it.
 		std::set<std::string> m_step_touched;
+		// Written since the engine last loaded: evicted from the cache before it loads again (evict_written).
+		std::vector<res::tag> m_stale;
 	};
 
 	// project.snkproj changed after the migration (a later migration, an edit by hand): only what this migration
@@ -979,8 +1039,10 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 			if (!manifest_json.is_object()) throw std::runtime_error("project.snkproj: the root is not a JSON object");
 
 			const std::size_t planned_files = plan.files.size();
+			stop_at(context, apply_checkpoint::file);
 			apply.run_project_steps(plan, project_phase::pre, manifest_json.as_object(), planned_files);
 			for (std::size_t i = 0; i < planned_files; ++i) {
+				stop_at(context, apply_checkpoint::file);
 				const std::optional<std::string> input = apply.input_of(i);
 				if (!input) continue;
 				applied_file& file = report.files[i];
@@ -991,7 +1053,10 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 				apply.check(file, text);
 				apply.wrote(file.path, std::move(text));
 			}
+			stop_at(context, apply_checkpoint::post_steps);
 			apply.run_project_steps(plan, project_phase::post, manifest_json.as_object(), planned_files);
+			// The point of no return: what follows is the write of project.snkproj and its check.
+			stop_at(context, apply_checkpoint::commit);
 
 			applied_file& manifest_file = report.files.back();
 			const bool complete = report.skipped.empty();

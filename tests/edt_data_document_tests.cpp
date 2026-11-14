@@ -1608,6 +1608,23 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Check_RefusesWhatIsNotAName)
 	BOOST_TEST(creator.check("some/folder", "fine").empty());
 }
 
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WhileABlockerHolds_RefusesWithItsReasonAndWritesNothing)
+{
+	bool blocked = true;
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; },
+		[&blocked]() -> std::optional<std::string> {
+			return blocked ? std::optional<std::string>{ "a project migration is running" } : std::nullopt;
+		} } };
+	const edt::document_creation refused = creator.create("", "test.config", "x");
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(refused.error == "a project migration is running");
+	BOOST_TEST(!fs::exists(res_root / "x.desc"));
+
+	blocked = false;
+	BOOST_TEST(creator.create("", "test.config", "x").ok());
+}
+
 BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverTheLabelOfADeletedFile)
 {
 	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },

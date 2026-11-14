@@ -82,7 +82,8 @@ namespace {
 	constexpr std::string_view LEVEL_NOT_SAVED = "The level was not saved (the changes are kept)";
 	constexpr std::string_view PROJECT_NOT_OPENED = "The project was not opened";
 
-	// {path, allow_engine_version_mismatch?, discard_unsaved?}: what file.open_project takes.
+	// {path, allow_engine_version_mismatch?, discard_unsaved?, open_migration?}: what file.open_project takes. open_migration
+	// (#761) makes the new editor open the Project Migration window once the project is open (--open-migration).
 	json::value open_project_schema()
 	{
 		return json::object{
@@ -90,7 +91,8 @@ namespace {
 			{ "properties", json::object{
 				{ "path", json::object{ { "type", "string" }, { "minLength", 1 } } },
 				{ "allow_engine_version_mismatch", json::object{ { "type", "boolean" } } },
-				{ "discard_unsaved", json::object{ { "type", "boolean" } } } } },
+				{ "discard_unsaved", json::object{ { "type", "boolean" } } },
+				{ "open_migration", json::object{ { "type", "boolean" } } } } },
 			{ "required", json::array{ "path" } },
 			{ "additionalProperties", false } };
 	}
@@ -290,6 +292,11 @@ void edt::file_menu::exit()
 	// one on top of a Save As that the first prompt's "Save" opened.
 	if (m_exit_prompt_id && m_dialogs.is_pending(*m_exit_prompt_id)) return;
 	if (m_save_as_id && m_dialogs.is_pending(*m_save_as_id)) return;
+	if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+		egLOG_WARN("editor", "exit refused: {}", *why);
+		m_dialogs.message(message_level::warning, std::format("The editor cannot close now: {}.", *why));
+		return;
+	}
 	m_exit_prompt_id = guard_unsaved([this](bool discard) { invoke("file.exit", json::object{ { "discard_unsaved", discard } }); });
 }
 
@@ -355,12 +362,16 @@ void edt::file_menu::ask_save_path(std::function<void()> then)
 	});
 }
 
-edt::action_result edt::file_menu::switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch)
+edt::action_result edt::file_menu::switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch,
+	bool open_migration)
 {
+	if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+		return action_result::failure(cmd::codes::busy, *why);
+	}
 	// Checked here, so a project that cannot open never costs the user this editor.
 	const auto opened = prj::open_project(project);
 	if (!opened.context) return action_result::failure("failed", opened.error);
-	if (auto error = m_hooks.open_project(opened.context->manifest_file, allow_engine_version_mismatch))
+	if (auto error = m_hooks.open_project(opened.context->manifest_file, allow_engine_version_mismatch, open_migration))
 		return action_result::failure("failed", *error);
 	if (anything_dirty()) discard_everything();
 	m_hooks.exit();
@@ -581,6 +592,10 @@ void edt::file_menu::register_actions()
 	add({ .id = "file.new_project", .label = "New Project...", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
 			if (!m_hooks.create_project || !m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
+			// Before the folder is made: a project made now could not be switched to.
+			if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+				return action_result::failure(cmd::codes::busy, *why);
+			}
 			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			const auto folder = from_json_string(args.as_object().at("path").as_string()).lexically_normal();
 			const auto base = folder.has_filename() ? folder.filename() : folder.parent_path().filename();
@@ -597,7 +612,8 @@ void edt::file_menu::register_actions()
 		.execute = [this](const json::value& args) {
 			if (!m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
 			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
-			return switch_to_project(from_json_string(args.as_object().at("path").as_string()), flag(args, "allow_engine_version_mismatch"));
+			return switch_to_project(from_json_string(args.as_object().at("path").as_string()), flag(args, "allow_engine_version_mismatch"),
+				flag(args, "open_migration"));
 		},
 		.args_schema = open_project_schema(),
 		.result_schema = switched_project_schema(),
@@ -632,6 +648,9 @@ void edt::file_menu::register_actions()
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
+			if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+				return action_result::failure(cmd::codes::busy, *why);
+			}
 			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			if (anything_dirty()) discard_everything();
 			m_hooks.exit();

@@ -213,7 +213,7 @@ struct step_files_fixture : test_util::scene_env
 
 	pmg::apply_context context()
 	{
-		pmg::apply_context context{ copy.root(), *descs, *rs, {}, {}, {}, {}, &registry };
+		pmg::apply_context context{ copy.root(), *descs, *rs, {}, {}, {}, {}, &registry, {}, {} };
 		context.make_id = [] { return std::string{ "test-migration" }; };
 		return context;
 	}

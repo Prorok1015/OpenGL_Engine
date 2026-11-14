@@ -86,6 +86,9 @@ std::string edt::document_creator::check(std::string_view folder, std::string_vi
 
 edt::document_creation edt::document_creator::create(std::string_view folder, std::string_view type, std::string_view name) const
 {
+	if (const std::optional<std::string> why = m_ports.blocker ? m_ports.blocker() : std::nullopt) {
+		return { {}, *why };
+	}
 	if (std::string problem = check(folder, name); !problem.empty()) {
 		return { {}, std::move(problem) };
 	}

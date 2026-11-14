@@ -58,6 +58,7 @@ namespace edt {
 	class vcs_service;
 	class forge_service;
 	class forge_account_panel;
+	class migration_panel;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -202,6 +203,8 @@ namespace edt {
 		void draw_agent_status();
 		void draw_agent_policy_notice();
 		void open_agents_panel();
+		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
+		void open_migration_window();
 
 	public:
 		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
@@ -234,6 +237,8 @@ namespace edt {
 		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
 		// Git Account (#458 PR-4): the person sets the forge tokens here; floating, closed by default.
 		std::shared_ptr<forge_account_panel>   m_forge_account_panel;
+		// Project Migration (EPIC-58 S8, #761): floating, closed by default.
+		std::shared_ptr<migration_panel>       m_migration_panel;
 		// Owner of the Git Account jobs (token save/remove/probe): not under SNK_HAS_ASSIMP like the import's, so it is here.
 		ds::lifetime                           m_forge_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		// The console's feed from the engine log; removed with the editor system.
@@ -273,6 +278,10 @@ namespace edt {
 			std::string reason;
 		};
 		std::optional<stopped_migration> m_migration_stopped;
+		// project.migrate writes the project on the io lane (#761): Play, level changes and saves, builds, module reloads
+		// and quitting are refused until it ended (migration_blocker).
+		bool m_migration_running = false;
+		std::optional<std::string> migration_blocker() const;
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load

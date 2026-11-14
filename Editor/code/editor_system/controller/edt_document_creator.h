@@ -34,6 +34,8 @@ namespace edt
 			std::function<res::resource_system*()> resources;
 			// The folders behind res://, lowest layer first.
 			std::function<std::vector<std::filesystem::path>()> layers;
+			// Why nothing may be written now (a project migration runs): create() refuses with it. Null or nullopt: it runs.
+			std::function<std::optional<std::string>()> blocker;
 		};
 
 		explicit document_creator(ports wired) : m_ports(std::move(wired)) {}
