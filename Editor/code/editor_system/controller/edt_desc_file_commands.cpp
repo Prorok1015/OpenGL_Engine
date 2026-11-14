@@ -301,9 +301,10 @@ namespace {
 		}
 	}
 
-	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID.
+	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID. `replaced`:
+	// that file's bytes, whose reference guids are kept the same way (desc_system::write_references).
 	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, const std::string& relative,
-		const json::value& content, const std::string& kept_guid = {})
+		const json::value& content, const std::string& kept_guid = {}, std::span<const std::byte> replaced = {})
 	{
 		prepared_file out;
 		const std::string resource = "res://" + relative;
@@ -316,6 +317,7 @@ namespace {
 		json::value stamped = content;
 		if (!kept_guid.empty() && stamped.is_object()) stamped.as_object()["__guid"] = kept_guid;
 		descs.stamp_tree(stamped);
+		descs.write_references(stamped, replaced);
 		const std::vector<std::byte> bytes = descs.serialize_to_bytes(stamped);
 		if (bytes.size() > edt::k_desc_file_limit) {
 			out.error = std::format("the file would be {} bytes: at most {} go through desc.* in one call", bytes.size(), edt::k_desc_file_limit);
@@ -397,7 +399,7 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			const res::tag tag = desc_files::tag_of(path.relative);
@@ -424,7 +426,7 @@ namespace {
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
 				return refused("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));

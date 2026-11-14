@@ -1,6 +1,7 @@
 #include "edt_data_document.h"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
+#include "edt_override_edit.h"
 #include "edt_schema_inspector.h"
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_system.h>
@@ -314,8 +315,14 @@ edt::open_result edt::data_document::resolve_chain(const res::tag& file, const j
 		layers.push_back(std::move(layer));
 	}
 	inherited.clear();
+	const desc::desc_system* descs = m_services.descs();
+	const desc::type_schema* schema = descs ? descs->find_schema(type) : nullptr;
 	for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
-		desc::json_deep_merge(inherited, *it);
+		if (schema) {
+			override_edit::merge_layer(descs->schemas(), *schema, inherited, *it);
+		} else {
+			desc::json_deep_merge(inherited, *it);
+		}
 	}
 	return open_result::ok();
 }
@@ -717,6 +724,9 @@ edt::save_result edt::data_document::write_checked(bool over)
 		}
 	}
 	descs->stamp_tree(content);
+	// The document holds what the file had, but a value typed in again is a path: the guid the file had for it is kept.
+	const json::value replaced(on_disk);
+	descs->write_references(content, on_disk.empty() ? nullptr : &replaced);
 	const std::vector<std::byte> bytes = descs->serialize_to_bytes(content);
 	if (bytes.size() > k_desc_file_limit) {
 		return save_result::failure(std::format("{} would be {} bytes: a data document holds at most {}", where(m_source), bytes.size(), k_desc_file_limit));
