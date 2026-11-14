@@ -6,6 +6,7 @@
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -192,33 +193,43 @@ BOOST_AUTO_TEST_CASE(TheGuidOfADesc_IsTakenOutAfterItBecameTheId_ARollbackPutsIt
 	BOOST_TEST((content_of(copy.root()) == before));
 }
 
-// A desc the step finds without a .resource keeps its __guid: it would be the only place its ID is written.
-BOOST_AUTO_TEST_CASE(ADescWithoutAResource_KeepsItsGuid)
+// A desc of a lower content root that a higher one covers is not in the index, but has a .resource of its own beside it:
+// that is its ID, and its __guid goes too, so the next plan is empty.
+BOOST_AUTO_TEST_CASE(ACoveredDescOfALowerRoot_LosesItsGuidToItsOwnResource)
 {
-	write_text(copy.res() / "worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
-	pmg::project_step_registry only_drop;
-	pmg::project_step_registry all;
-	pmg::register_project_steps(all);
-	only_drop.add(*all.find("assets.ids_drop_desc_guid"));
-	pmg::plan_options options;
-	options.project_steps = &only_drop;
-	const pmg::migration_plan planned = pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs, options.scan), *descs, options);
-	pmg::apply_context with_drop_only = context();
-	with_drop_only.project_steps = &only_drop;
+	json::object manifest = json::parse(read_text(copy.root() / "project.snkproj")).as_object();
+	manifest["content_roots"] = json::array{ "res", "base" };
+	write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+	res::asset_meta lower;
+	lower.guid = *res::asset_id_from_text(k_guid);
+	write_text(copy.root() / "base/worlds/w_v1.desc", with_guid(read_text(copy.res() / "worlds/w_v1.desc"), k_guid));
+	write_text(copy.root() / "base/worlds/w_v1.desc.resource", res::write_asset_meta(lower));
 
-	const pmg::apply_outcome outcome = pmg::apply_migration(planned, with_drop_only);
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* covered = scan.find("base/worlds/w_v1.desc");
+	BOOST_REQUIRE(covered != nullptr);
+	BOOST_TEST(covered->root_guid);
+	BOOST_TEST(covered->resource_path == "base/worlds/w_v1.desc.resource");
+
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
 	BOOST_REQUIRE((outcome.report.status == pmg::migration_status::ok));
-	BOOST_TEST(json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().at("__guid").as_string() == k_guid);
-	BOOST_TEST(any_note(outcome.report, "res/worlds/w_v1.desc: keeps its __guid, it has no .resource with an ID"));
-
-	// With assets.ids (as register_project_steps always has it) the next migration gives the ID and takes the __guid out.
-	const pmg::apply_outcome next = pmg::apply_migration(plan(), context());
-	BOOST_REQUIRE_MESSAGE(next.refused.empty(), next.refused);
-	BOOST_REQUIRE((next.report.status == pmg::migration_status::ok));
-	BOOST_TEST(id_in(copy.res() / "worlds/w_v1.desc.resource") == k_guid);
-	BOOST_TEST(!json::parse(read_text(copy.res() / "worlds/w_v1.desc")).as_object().contains("__guid"));
+	BOOST_TEST(!json::parse(read_text(copy.root() / "base/worlds/w_v1.desc")).as_object().contains("__guid"));
+	BOOST_TEST(id_in(copy.root() / "base/worlds/w_v1.desc.resource") == k_guid);
 	BOOST_TEST(plan().empty());
+}
+
+// A .resource bigger than the asset index reads (res::asset_meta_max_bytes) is invalid to the scan too, with the reason.
+BOOST_AUTO_TEST_CASE(AResourceBiggerThanTheIndexReads_IsInvalidToTheScan)
+{
+	const std::string text = read_text(copy.res() / "textures/with_meta.png.resource");
+	write_text(copy.res() / "textures/with_meta.png.resource", text + std::string(res::asset_meta_max_bytes, ' '));
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	const pmg::scanned_file* sidecar = scan.find("res/textures/with_meta.png.resource");
+	BOOST_REQUIRE(sidecar != nullptr);
+	BOOST_TEST((sidecar->kind == pmg::file_class::invalid));
+	BOOST_TEST(sidecar->reason.find("too big") != std::string::npos, sidecar->reason);
 }
 
 // A .resource that does not read (two __guid after a bad merge) has no ID for the desc. After a migration, a desc with a

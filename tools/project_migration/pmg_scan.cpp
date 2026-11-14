@@ -16,7 +16,6 @@
 #include <iterator>
 #include <limits>
 #include <map>
-#include <set>
 #include <system_error>
 #include <utility>
 
@@ -255,9 +254,11 @@ namespace
 		return root;
 	}
 
+	// At most res::asset_meta_max_bytes, whatever `max_bytes` allows: a bigger .resource is one the editor's asset index
+	// does not read, so the scan must not call it current.
 	json::value read_sidecar(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes, std::string& text)
 	{
-		read_result read = read_file(path, max_bytes);
+		read_result read = read_file(path, std::min<std::uintmax_t>(max_bytes, res::asset_meta_max_bytes));
 		if (!read.error.empty()) {
 			set_invalid(file, std::move(read.error));
 			return {};
@@ -344,8 +345,9 @@ namespace
 			result.files.push_back(std::move(file));
 		}
 
-		// `owners`: the res::asset_name_key of every file a .resource of this folder belongs to (EPIC-57 4.2).
-		void entry(const fs::path& path, const fs::file_status& status, const std::set<std::string>& owners)
+		// `owners`: by the res::asset_name_key of every file a .resource of this folder belongs to, that .resource's name
+		// (EPIC-57 4.2); of two in other letter cases, the first by name.
+		void entry(const fs::path& path, const fs::file_status& status, const std::map<std::string, std::string>& owners)
 		{
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
@@ -367,7 +369,9 @@ namespace
 			if (extension == ".resource") {
 				scan_sidecar(file, path, descs, options);
 			} else {
-				file.has_resource = owners.contains(res::asset_name_key(name, res::asset_names_case_insensitive));
+				const auto owner = owners.find(res::asset_name_key(name, res::asset_names_case_insensitive));
+				file.has_resource = owner != owners.end();
+				if (file.has_resource) file.resource_path = fs_paths::generic_utf8_of((path.parent_path() / fs_paths::path_from_utf8(owner->second)).lexically_relative(project));
 				if (extension == ".desc") {
 					scan_desc(file, path, descs, options.max_file_bytes);
 				} else {
@@ -393,11 +397,12 @@ namespace
 				entries.emplace_back(it->path(), status_error ? fs::file_status{ fs::file_type::unknown } : status);
 			}
 			if (ec) refuse(dir, std::format("the folder could not be listed to the end: {}", ec.message()));
-			std::set<std::string> owners;
+			std::map<std::string, std::string> owners;
 			for (const auto& [path, status] : entries) {
 				const std::string name = fs_paths::utf8_of(path.filename());
 				if (fs::is_regular_file(status) && res::is_asset_meta_sidecar(name)) {
-					owners.insert(res::asset_name_key(res::asset_meta_owner(name), res::asset_names_case_insensitive));
+					const auto [held, added] = owners.try_emplace(res::asset_name_key(res::asset_meta_owner(name), res::asset_names_case_insensitive), name);
+					if (!added && name < held->second) held->second = name;
 				}
 			}
 			for (const auto& [path, status] : entries) entry(path, status, owners);
@@ -669,6 +674,17 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 	}
 	std::ranges::sort(result.files, {}, &scanned_file::path);
 
+	// A .resource the scan calls invalid or newer is one the engine does not read: the file it pairs with has no ID there.
+	std::map<std::string, file_class> sidecars;
+	for (const scanned_file& file : result.files) {
+		if (res::is_asset_meta_sidecar(file.path)) sidecars.emplace(file.path, file.kind);
+	}
+	for (scanned_file& file : result.files) {
+		if (file.resource_path.empty()) continue;
+		const auto sidecar = sidecars.find(file.resource_path);
+		file.resource_unreadable = sidecar != sidecars.end() && (sidecar->second == file_class::invalid || sidecar->second == file_class::newer);
+	}
+
 	// What the editor lists has a .resource when the editor pairs one with it, in any content root (a file of a higher
 	// root may take its .resource from a lower one); a file it does not list, one a higher root covers, by its own
 	// folder. assets.ids decides by this alone, so its plan and what it does agree.
@@ -679,7 +695,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		const auto listed = assets.assets().find(file.path);
 		if (listed == assets.assets().end()) continue;
 		file.has_resource = listed->second.has_meta;
-		file.resource_unreadable = listed->second.has_meta && !listed->second.id;
+		if (file.resource_path.empty()) file.resource_unreadable = listed->second.has_meta && !listed->second.id;
 		if (file.kind == file_class::current || file.kind == file_class::missing_resource) {
 			if (lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) != ".desc") {
 				file.kind = file.has_resource ? file_class::current : file_class::missing_resource;

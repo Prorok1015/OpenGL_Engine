@@ -13,9 +13,9 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <boost/json.hpp>
+#include <cstdint>
 #include <filesystem>
 #include <format>
-#include <limits>
 #include <optional>
 #include <system_error>
 #include <vector>
@@ -84,21 +84,34 @@ namespace {
 		level_json = std::move(file);
 	}
 
+	// A level file this big is no level a save replaces: Save As over it is refused rather than read.
+	constexpr std::uintmax_t k_replaced_level_limit = std::uintmax_t{ 64 } << 20;
+
+	struct replaced_guid
+	{
+		std::string guid;
+		// Why the save must not go on: the file is there, but its __guid cannot be read and would be lost.
+		std::string error;
+	};
+
 	// The root __guid of the file a save replaces: the one res:// reads, from the highest layer that has it (a lower
-	// layer's file is replaced by a copy in the top one, which keeps its .resource). Empty when there is none; nullopt
-	// when it is there but does not read, whatever its size: its __guid would be lost.
-	std::optional<std::string> root_guid_of_replaced(const res::resource_system& resources, const std::string& rel_path)
+	// layer's file is replaced by a copy in the top one, which keeps its .resource). Empty when there is none.
+	replaced_guid root_guid_of_replaced(const res::resource_system& resources, const std::string& rel_path)
 	{
 		const std::vector<std::filesystem::path> layers = resources.get_resource_layers();
 		for (auto layer = layers.rbegin(); layer != layers.rend(); ++layer) {
 			const std::optional<std::filesystem::path> path = res::path_within_dir(*layer, rel_path);
 			std::error_code ec;
 			if (!path || !std::filesystem::is_regular_file(*path, ec)) continue;
-			const auto bytes = res::read_regular_file_capped(*path, std::numeric_limits<std::uintmax_t>::max());
-			if (!bytes) return std::nullopt;
-			return edt::desc_root_guid(*bytes);
+			const std::uintmax_t size = std::filesystem::file_size(*path, ec);
+			if (!ec && size > k_replaced_level_limit) {
+				return { {}, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
+			}
+			const auto bytes = res::read_regular_file_capped(*path, k_replaced_level_limit);
+			if (!bytes) return { {}, "it could not be read" };
+			return { edt::desc_root_guid(*bytes), {} };
 		}
-		return std::string{};
+		return {};
 	}
 
 	// Tells the coordinator that the worlds were replaced, on every way out of the function.
@@ -349,13 +362,12 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
 	std::string guid = m_state.level_guid;
 	if (!same_file) {
-		const std::optional<std::string> replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
-		if (!replaced) {
-			egLOG_ERROR("Editor/Save", "Level not saved: '{}' is there but could not be read, so its __guid would be lost",
-				res::tag::make(rel_path).view());
+		replaced_guid replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
+		if (!replaced.error.empty()) {
+			egLOG_ERROR("Editor/Save", "Level not saved over '{}': {}, so its __guid would be lost", res::tag::make(rel_path).view(), replaced.error);
 			return false;
 		}
-		guid = *replaced;
+		guid = std::move(replaced.guid);
 	}
 
 	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);

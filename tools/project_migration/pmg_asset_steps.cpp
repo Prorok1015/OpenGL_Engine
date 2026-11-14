@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/common/engine_assert.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
@@ -8,6 +9,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -91,15 +93,31 @@ namespace
 		return std::ranges::any_of(scan.files, drops_guid_of);
 	}
 
+	// The ID that takes the place of a desc's __guid: the .resource beside it, in the file's own folder (also for a file
+	// a higher content root covers, which the index does not list; one assets.ids made in this migration is
+	// <file>.resource), else the one the index pairs with it from a lower content root.
+	std::optional<res::asset_id> own_id(project_step_context& context, const scanned_file& file)
+	{
+		const std::string sidecar = file.resource_path.empty() ? file.path + std::string(res::asset_meta_suffix) : file.resource_path;
+		if (context.files.exists(sidecar)) {
+			const res::asset_meta_result meta = res::read_asset_meta(context.files.read(sidecar));
+			return meta ? std::optional{ meta.meta->guid } : std::nullopt;
+		}
+		return context.assets.id_of(file.path);
+	}
+
+	// Each file drops_guid_of names leaves the step without its __guid, so the step is not needed again: a desc found
+	// without an ID is a broken invariant (assets.ids gives one to every such file before), and fails the migration.
 	void drop_guid_apply(project_step_context& context)
 	{
 		std::size_t dropped = 0;
 		for (const scanned_file& file : context.scan.files) {
-			if (!file.root_guid || file.kind == file_class::invalid) continue;
-			const std::optional<res::asset_id> id = context.assets.id_of(file.path);
+			if (!drops_guid_of(file)) continue;
+			const std::optional<res::asset_id> id = own_id(context, file);
 			if (!id) {
-				context.warn(std::format("{}: keeps its __guid, it has no .resource with an ID", file.path));
-				continue;
+				ASSERT_FAIL("{}: no .resource with an ID to take the place of its __guid", file.path);
+				throw std::runtime_error(std::format("{}: no .resource with an ID to take the place of its __guid (assets.ids must run "
+					"in the same migration)", file.path));
 			}
 			const std::string read = context.files.read(file.path);
 			std::string_view text = read;
@@ -108,10 +126,7 @@ namespace
 			json::parse_options options;
 			options.max_depth = 128;
 			json::value root = json::parse(text, error, {}, options);
-			if (error || !root.is_object()) {
-				context.warn(std::format("{}: keeps its __guid, it is no JSON object now", file.path));
-				continue;
-			}
+			if (error || !root.is_object()) throw std::runtime_error(std::format("{}: no JSON object after the migration of its types", file.path));
 			json::object& object = root.as_object();
 			const json::value* guid = object.if_contains("__guid");
 			if (!guid) continue;

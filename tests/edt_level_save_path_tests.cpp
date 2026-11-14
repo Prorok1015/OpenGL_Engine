@@ -290,13 +290,32 @@ BOOST_AUTO_TEST_CASE(SaveAs_OverAFileOfALowerLayer_KeepsItsGuid)
 	BOOST_TEST(saved("levels/base.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
 }
 
-// No size limit turns the rule off: the __guid of a big file is kept too.
+// The size limit of desc.* calls does not turn the rule off: the __guid of a big file is kept too.
 BOOST_AUTO_TEST_CASE(SaveAs_OverABigFile_KeepsItsGuid)
 {
 	const std::string padding(2 * 1024 * 1024, 'x');
 	write("levels/big.desc", R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","name":"big","pad":")" + padding + R"(","worlds":[]})");
 	BOOST_REQUIRE(level_ctrl.save_level_as("levels/big.desc"));
 	BOOST_TEST(saved("levels/big.desc").at("__guid").as_string() == "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+}
+
+// A file too big to be a level is not read for its __guid: Save As over it is refused and the file stays as it was.
+BOOST_AUTO_TEST_CASE(SaveAs_OverAFileBiggerThan64MiB_IsRefused)
+{
+	{
+		fs::create_directories(content / "levels");
+		std::ofstream out(content / "levels" / "huge.desc", std::ios::binary);
+		out << R"({"__type":"level_desc","__guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","pad":")";
+		const std::string chunk(1 << 20, 'x');
+		for (int i = 0; i < 65; ++i) out << chunk;
+		out << R"("})";
+	}
+	const auto size = fs::file_size(content / "levels" / "huge.desc");
+	state.commit("edit", edt::commit_mode::state_only);
+	BOOST_TEST(!level_ctrl.save_level_as("levels/huge.desc"));
+	BOOST_TEST(state.is_dirty());
+	BOOST_TEST(fs::file_size(content / "levels" / "huge.desc") == size);
+	fs::remove(content / "levels" / "huge.desc");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
