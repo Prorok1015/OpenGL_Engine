@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_asset_references.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/resource/res_asset_id.h>
@@ -69,6 +70,10 @@ namespace edt
 		std::string content_hash;
 		// The "__type" of a desc file's root, once hashed; none for any other file (or a desc without one).
 		std::optional<std::string> desc_type;
+		// The direct references of a desc file, once hashed (#774, EPIC-57 section 6.3); none for any other file.
+		std::vector<raw_reference> references;
+		// A desc file bigger than asset_database::max_desc_bytes: its references (and __type) were not read.
+		bool references_skipped = false;
 		// When the file's stamp (size, mtime) and the .resource's were taken, in ticks of
 		// std::filesystem::file_time_type::clock: a stamp this close to its check may not have moved for a change made
 		// just after (one tick of a coarse file system), so the cache trusts what was learned from it only after it was
@@ -140,6 +145,9 @@ namespace edt
 		bool unchanged = false;
 		std::string content_hash;
 		std::optional<std::string> desc_type;
+		std::vector<raw_reference> references;
+		// A desc bigger than the limit of the read: neither its "__type" nor its references were read.
+		bool references_skipped = false;
 		// The string "__guid" of a desc's root, as written (not checked).
 		std::optional<std::string> root_guid;
 	};
@@ -190,7 +198,8 @@ namespace edt
 	class asset_database
 	{
 	public:
-		static constexpr std::uint64_t max_desc_bytes = 4u * 1024u * 1024u;
+		// A desc file up to this is parsed for its "__type" and its references: a level may be this big.
+		static constexpr std::uint64_t max_desc_bytes = k_level_file_limit;
 		static constexpr std::size_t hash_batch = 64;
 		static constexpr int max_depth = res::asset_walk_max_depth;
 		// Batches that arrive during a walk wait for it, up to this many changes; past it one more walk follows instead.

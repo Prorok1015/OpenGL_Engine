@@ -274,11 +274,16 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	out.mtime = after.mtime;
 	out.unchanged = before.ok && before == after;
 	out.content_hash = std::format("fnv1a64:{:016x}", hash);
+	out.references_skipped = is_desc && !keep_text;
 	if (keep_text) {
 		boost::system::error_code ec;
 		boost::json::parse_options options;
-		options.max_depth = 64;
+		// As deep as the desc adapter reads.
+		options.max_depth = 128;
 		const boost::json::value document = boost::json::parse(text, ec, {}, options);
+		if (!ec) {
+			out.references = collect_raw_references(document);
+		}
 		if (!ec && document.is_object()) {
 			if (const boost::json::value* type = document.as_object().if_contains("__type"); type && type->is_string()) {
 				out.desc_type = std::string{ type->get_string() };
@@ -318,7 +323,8 @@ bool edt::asset_record::same_as(const asset_record& other) const
 		&& size == other.size && mtime == other.mtime && has_meta == other.has_meta && meta_layer == other.meta_layer
 		&& meta_size == other.meta_size
 		&& meta_mtime == other.meta_mtime && meta_error == other.meta_error && flags == other.flags && type == other.type
-		&& content_hash == other.content_hash && desc_type == other.desc_type && content_id == other.content_id
+		&& content_hash == other.content_hash && desc_type == other.desc_type && references == other.references
+		&& references_skipped == other.references_skipped && content_id == other.content_id
 		&& meta_id == other.meta_id;
 }
 
@@ -495,6 +501,8 @@ void edt::asset_database::apply_scan(asset_scan scan)
 		if (known != previous.end() && !known->second.content_hash.empty() && same_content(known->second, record)) {
 			record.content_hash = known->second.content_hash;
 			record.desc_type = known->second.desc_type;
+			record.references = known->second.references;
+			record.references_skipped = known->second.references_skipped;
 			// The hash is as old as that record's check, so a stamp it could not trust stays untrusted. Within a session a
 			// record with the same stamp is carried over without the racy check; a restart catches it through this min.
 			record.content_checked_at = std::min(record.content_checked_at, known->second.content_checked_at);
@@ -599,6 +607,8 @@ void edt::asset_database::pair_moves(std::vector<asset_record> gone, const std::
 		if (arrived.content_hash.empty() && !match->content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
 			arrived.content_hash = match->content_hash;
 			arrived.desc_type = match->desc_type;
+			arrived.references = match->references;
+			arrived.references_skipped = match->references_skipped;
 			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
 			std::erase(m_unhashed, key);
 		}
@@ -760,6 +770,8 @@ void edt::asset_database::hash_next()
 					}
 					found->second.content_hash = std::move(content.content_hash);
 					found->second.desc_type = std::move(content.desc_type);
+					found->second.references = std::move(content.references);
+					found->second.references_skipped = content.references_skipped;
 					if (m_pending_ids.contains(key)) {
 						m_root_guids.insert_or_assign(key, std::move(content.root_guid));
 					}
@@ -867,7 +879,7 @@ namespace
 	constexpr std::string_view k_cache_type = "asset_db";
 	// Raise it with any change of the hash, of how desc_type is found or of this format: an older cache is then
 	// dropped, never read with other meanings.
-	constexpr std::int64_t k_cache_version = 3;
+	constexpr std::int64_t k_cache_version = 4;
 	constexpr std::string_view k_hash_prefix = "fnv1a64:";
 
 	boost::json::array layer_texts(const std::vector<fs::path>& layers)
@@ -875,6 +887,74 @@ namespace
 		boost::json::array out;
 		for (const fs::path& layer : layers) {
 			out.emplace_back(fs_paths::generic_utf8_of(layer));
+		}
+		return out;
+	}
+
+	std::string_view place_name(edt::reference_place place)
+	{
+		switch (place) {
+		case edt::reference_place::parent: return "parent";
+		case edt::reference_place::component: return "component";
+		case edt::reference_place::value: break;
+		}
+		return "value";
+	}
+
+	boost::json::value reference_to_json(const edt::raw_reference& reference)
+	{
+		boost::json::object out;
+		out["pointer"] = reference.json_pointer;
+		out["path"] = reference.path;
+		if (reference.guid) {
+			out["guid"] = res::to_text(*reference.guid);
+		}
+		out["owner_type"] = reference.owner_type;
+		out["owner_pointer"] = reference.owner_pointer;
+		out["place"] = place_name(reference.place);
+		return out;
+	}
+
+	// The form reference_to_json writes, nothing else: a cache that holds another is dropped whole.
+	std::optional<edt::raw_reference> cached_reference(const boost::json::value& item)
+	{
+		const boost::json::object* object = item.if_object();
+		if (!object) {
+			return std::nullopt;
+		}
+		const auto text = [object](std::string_view name) -> const boost::json::string* {
+			const boost::json::value* field = object->if_contains(name);
+			return field ? field->if_string() : nullptr;
+		};
+		const boost::json::string* pointer = text("pointer");
+		const boost::json::string* path = text("path");
+		const boost::json::string* owner_type = text("owner_type");
+		const boost::json::string* owner_pointer = text("owner_pointer");
+		const boost::json::string* place = text("place");
+		if (!pointer || !path || !owner_type || !owner_pointer || !place) {
+			return std::nullopt;
+		}
+		edt::raw_reference out;
+		out.json_pointer = std::string{ *pointer };
+		out.path = std::string{ *path };
+		out.owner_type = std::string{ *owner_type };
+		out.owner_pointer = std::string{ *owner_pointer };
+		const std::string_view place_text{ *place };
+		if (place_text == "parent") {
+			out.place = edt::reference_place::parent;
+		} else if (place_text == "component") {
+			out.place = edt::reference_place::component;
+		} else if (place_text != "value") {
+			return std::nullopt;
+		}
+		if (const boost::json::value* guid = object->if_contains("guid")) {
+			out.guid = guid->is_string() ? res::asset_id_from_text(std::string_view{ guid->get_string() }) : std::nullopt;
+			if (!out.guid) {
+				return std::nullopt;
+			}
+		}
+		if (!out.owner_pointer.empty() && !out.json_pointer.starts_with(out.owner_pointer)) {
+			return std::nullopt;
 		}
 		return out;
 	}
@@ -917,6 +997,17 @@ namespace
 		out["hash"] = record.content_hash;
 		if (record.desc_type) {
 			out["desc_type"] = *record.desc_type;
+		}
+		if (!record.references.empty()) {
+			boost::json::array references;
+			references.reserve(record.references.size());
+			for (const edt::raw_reference& reference : record.references) {
+				references.push_back(reference_to_json(reference));
+			}
+			out["references"] = std::move(references);
+		}
+		if (record.references_skipped) {
+			out["references_skipped"] = true;
 		}
 		out["content_checked_at"] = record.content_checked_at;
 		out["meta_checked_at"] = record.meta_checked_at;
@@ -1084,6 +1175,24 @@ namespace
 			}
 			record.desc_type = std::string{ desc_type->get_string() };
 		}
+		if (const boost::json::value* references = object->if_contains("references")) {
+			if (!references->is_array() || record.type != "desc" || record.content_hash.empty()) {
+				return std::nullopt;
+			}
+			for (const boost::json::value& item : references->get_array()) {
+				std::optional<edt::raw_reference> reference = cached_reference(item);
+				if (!reference) {
+					return std::nullopt;
+				}
+				record.references.push_back(std::move(*reference));
+			}
+		}
+		if (const boost::json::value* skipped = object->if_contains("references_skipped")) {
+			if (!skipped->is_bool() || record.type != "desc" || record.content_hash.empty()) {
+				return std::nullopt;
+			}
+			record.references_skipped = skipped->get_bool();
+		}
 		return record;
 	}
 
@@ -1095,6 +1204,8 @@ namespace
 		if (record.mtime >= record.content_checked_at - margin) {
 			record.content_hash.clear();
 			record.desc_type.reset();
+			record.references.clear();
+			record.references_skipped = false;
 		}
 		if (record.has_meta && record.meta_mtime >= record.meta_checked_at - margin) {
 			// No stamp of a real file: the walk reads the .resource again.
@@ -1523,6 +1634,8 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 	if (before && !before->content_hash.empty() && same_content(*before, record)) {
 		record.content_hash = before->content_hash;
 		record.desc_type = before->desc_type;
+		record.references = before->references;
+		record.references_skipped = before->references_skipped;
 		record.content_checked_at = std::min(record.content_checked_at, before->content_checked_at);
 	}
 
@@ -2187,6 +2300,8 @@ void edt::asset_database::give_pending_ids()
 			// Hashed before it waited: hashed again for its root's "__guid", read off the main thread.
 			record.content_hash.clear();
 			record.desc_type.reset();
+			record.references.clear();
+			record.references_skipped = false;
 			if (std::ranges::find(m_in_flight, key) == m_in_flight.end() && std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
 				m_unhashed.push_back(key);
 			}

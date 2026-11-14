@@ -3,6 +3,7 @@
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
 #include "edt_asset_problems.h"
+#include "edt_asset_usages.h"
 #include "edt_begin_then_poll.h"
 #include <algorithm>
 #include <chrono>
@@ -1028,6 +1029,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_asset_catalog = std::make_unique<picker::database_catalog>(*m_assets);
 		m_asset_index = std::make_unique<asset_index_link>(*m_assets, m_res);
 		m_asset_problems = std::make_unique<asset_problem_publisher>();
+		asset_usage_sources usage_sources;
+		usage_sources.assets = [this]() -> const asset_database* { return m_assets.get(); };
+		usage_sources.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
+		// The project context lives in the app data storage as long as the editor.
+		usage_sources.manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
+		usage_sources.manifest = [manifest = &project] {
+			std::vector<manifest_reference> out;
+			if (!manifest->data.start_scene.empty()) out.push_back(manifest_reference{ "/start_scene", manifest->data.start_scene });
+			if (!manifest->data.input_actions.empty()) out.push_back(manifest_reference{ "/input_actions", manifest->data.input_actions });
+			return out;
+		};
+		for (auto& command : register_asset_usage_commands(m_context->actions().commands(), std::move(usage_sources))) {
+			m_registrations.push_back(std::move(command));
+		}
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
