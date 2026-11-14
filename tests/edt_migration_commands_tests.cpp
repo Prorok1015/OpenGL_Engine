@@ -8,6 +8,7 @@
 #include "edt_migration_commands.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/project_migration/pmg_command.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
@@ -99,6 +100,8 @@ struct migration_fixture : test_util::scene_env
 		deps.unsaved_reason = [this] { return unsaved; };
 		deps.close_documents_and_detach_level = [this] {
 			closed = true;
+			// A cancel that lands between the detach and the rollback's commit point.
+			if (cancel_on_detach) cancelled_on_detach = jobs.cancel(*cancel_on_detach);
 			return current_level;
 		};
 		deps.signal_changed = [this](const res::tag& tag) { signaled.emplace_back(tag.view()); };
@@ -132,6 +135,14 @@ struct migration_fixture : test_util::scene_env
 			return apply ? apply(plan, context) : pmg::apply_migration(plan, context);
 		};
 		deps.running_changed = [this](bool running) { running_said.push_back(running); };
+		// As the editor: the save block of a stopped migration goes once its rolled_back() holds.
+		deps.migration_rolled_back = [this](const std::string& id) {
+			rolled_back_ids.push_back(id);
+			if (left_detached && left_detached_rolled_back && left_detached_rolled_back()) left_detached.reset();
+		};
+		deps.rollback = [this](const fs::path& root, std::string_view id, const pmg::rollback_context& context) {
+			return rollback ? rollback(root, id, context) : pmg::rollback_migration(root, id, context);
+		};
 		registrations = edt::register_migration_commands(commands, std::move(deps));
 	}
 
@@ -212,6 +223,39 @@ struct migration_fixture : test_util::scene_env
 		return info->result->as_object();
 	}
 
+	// What a person is shown before an agent's rollback of `id`.
+	std::string ask_rollback(const std::string& id, cmd::origin from = cmd::origin::agent("s1"))
+	{
+		const cmd::command_desc* desc = commands.find("project.migrate_rollback");
+		BOOST_REQUIRE(desc && desc->describe);
+		cmd::call request;
+		request.args = json::object{ { "id", id } };
+		request.from = std::move(from);
+		return desc->describe(request).value_or(std::string{});
+	}
+
+	json::object roll_back(const std::string& id, cmd::origin from = cmd::origin::ui())
+	{
+		return job_result(call("project.migrate_rollback", { { "id", id } }, std::move(from)));
+	}
+
+	// A migration of the fixture (without its invalid file) by a person: its id.
+	std::string migrated()
+	{
+		fs::remove(copy.res() / "broken.desc");
+		const json::object result = migrate(cmd::origin::ui());
+		BOOST_REQUIRE_MESSAGE(error_code_of(result).empty(), json::serialize(result));
+		return std::string(result.at("id").as_string());
+	}
+
+	// The project without its journals.
+	std::map<std::string, std::string> content()
+	{
+		auto files = snapshot(copy.root());
+		std::erase_if(files, [](const auto& entry) { return entry.first.starts_with(".snk"); });
+		return files;
+	}
+
 	static std::string error_code_of(const json::object& result)
 	{
 		const json::value* error = result.if_contains("error");
@@ -244,6 +288,10 @@ struct migration_fixture : test_util::scene_env
 	res::tag left_detached_level;
 	std::function<bool()> left_detached_rolled_back;
 	std::vector<bool> running_said;
+	std::vector<std::string> rolled_back_ids;
+	std::optional<std::uint64_t> cancel_on_detach;
+	bool cancelled_on_detach = false;
+	std::function<std::optional<std::string>(const fs::path&, std::string_view, const pmg::rollback_context&)> rollback;
 	std::vector<edt::registration> registrations;
 };
 
@@ -914,6 +962,294 @@ BOOST_AUTO_TEST_CASE(APlanThatChangedWithoutAByteChanged_IsDenied)
 	BOOST_TEST((snapshot(copy.root()) == before));
 }
 
+// #761: the rollback of the editor is the command line's, run as a migration is: the files come back, the level is opened
+// again, and the editor hears of every file the journal names.
+BOOST_AUTO_TEST_CASE(ARollback_PutsTheProjectBack_AndOpensTheLevelAgain)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = content();
+	current_level = res::tag::make("levels/old.desc");
+	const std::string id = migrated();
+	BOOST_TEST(!(content() == before));
+	closed = false;
+	attached = false;
+	signaled.clear();
+	running_said.clear();
+	const json::object result = roll_back(id);
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done);
+	BOOST_TEST(std::string(result.at("status").as_string()) == "rolled_back");
+	BOOST_TEST(std::string(result.at("id").as_string()) == id);
+	BOOST_TEST(std::string(result.at("text").as_string()).find("rolled back") != std::string::npos);
+	BOOST_TEST((content() == before));
+	BOOST_TEST(closed);
+	BOOST_TEST(attached);
+	BOOST_TEST(result.at("level").at("reopened").as_bool());
+	BOOST_TEST((std::ranges::find(signaled, std::string{ "res://cameras/cam_v1.desc" }) != signaled.end()));
+	BOOST_TEST((rolled_back_ids == std::vector<std::string>{ id }));
+	BOOST_TEST((running_said == std::vector<bool>{ true, false }));
+	BOOST_TEST(!rs->changes_held());
+}
+
+// A file changed after the migration refuses the whole rollback: code 2, nothing written, the level is opened again.
+BOOST_AUTO_TEST_CASE(ARefusedRollback_IsCode2_AndWritesNothing)
+{
+	current_level = res::tag::make("levels/old.desc");
+	const std::string id = migrated();
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
+	const auto changed = snapshot(copy.root());
+	signaled.clear();
+	const json::object result = roll_back(id);
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_refused, json::serialize(result));
+	BOOST_TEST(result.contains("refused"));
+	BOOST_TEST((snapshot(copy.root()) == changed));
+	BOOST_TEST(signaled.empty());
+	BOOST_TEST(result.at("level").at("reopened").as_bool());
+	BOOST_TEST(rolled_back_ids.empty());
+
+	// No journal of that name: refused before anything is closed.
+	closed = false;
+	const json::object unknown = roll_back("20990101T000000Z-0.0.0");
+	BOOST_TEST(unknown.at("code").as_int64() == pmg::k_exit_refused);
+	BOOST_TEST(!closed);
+}
+
+BOOST_AUTO_TEST_CASE(TheRollback_TakesOnlyAMigrationId)
+{
+	for (const json::object& args : { json::object{}, json::object{ { "id", "" } }, json::object{ { "id", 5 } },
+			 json::object{ { "id", "x" }, { "force", true } } }) {
+		BOOST_TEST_CONTEXT(json::serialize(args)) {
+			BOOST_TEST(call("project.migrate_rollback", args, cmd::origin::ui()).code == cmd::codes::invalid_args);
+		}
+	}
+	for (const char* id : { "..", ".", ".hidden", "../x", "a/b", "a\\b", "c:x", "a b", "a#b" }) {
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(call("project.migrate_rollback", { { "id", id } }, cmd::origin::ui()).code == cmd::codes::invalid_args);
+		}
+	}
+	const cmd::command_desc* rollback_command = commands.find("project.migrate_rollback");
+	BOOST_REQUIRE(rollback_command);
+	BOOST_TEST((rollback_command->category == cmd::agent_category::project_migrate));
+	BOOST_TEST((rollback_command->risk == cmd::danger::confirm));
+	BOOST_TEST(rollback_command->mutates);
+	BOOST_TEST(rollback_command->starts_job);
+	BOOST_TEST(rollback_command->describe_before_allowed_invoke);
+}
+
+// An agent's rollback runs only after the question, and only while the journal is the one the person was shown.
+BOOST_AUTO_TEST_CASE(AnAgentsRollback_IsBoundToTheJournalItWasShown)
+{
+	const std::string id = migrated();
+	const auto migrated_content = content();
+	BOOST_TEST(call("project.migrate_rollback", { { "id", id } }).code == cmd::codes::denied);
+	const std::string text = ask_rollback(id);
+	BOOST_TEST(text.find(id) != std::string::npos, text);
+	BOOST_TEST(text.find("cam_v1.desc") != std::string::npos, text);
+	const fs::path journal = copy.root() / ".snk" / "migrations" / id / "report.json";
+	write_text(journal, read_text(journal) + "\n");
+	const json::object changed = roll_back(id, cmd::origin::agent("s1"));
+	BOOST_TEST(error_code_of(changed) == cmd::codes::denied, json::serialize(changed));
+	BOOST_TEST((content() == migrated_content));
+
+	static_cast<void>(ask_rollback(id));
+	const json::object result = roll_back(id, cmd::origin::agent("s1"));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done, json::serialize(result));
+	// A question about a rollback leaves the caller's plan alone, and the other way round.
+	BOOST_TEST(ask_rollback("x").find("will be refused") != std::string::npos);
+}
+
+// A rollback that stops on its way is code 6: the level stays detached and unsaved until that migration is rolled back.
+// An exception before the rollback wrote anything (its journal still says the migration ended): nothing changed, so it is a
+// refusal and the level is opened again; no save block is left behind on a detached level (#761 review).
+BOOST_AUTO_TEST_CASE(ARollbackThatThrowsBeforeItWrote_IsARefusal_AndTheLevelComesBack)
+{
+	current_level = res::tag::make("levels/old.desc");
+	const std::string id = migrated();
+	const auto before = snapshot(copy.root());
+	attached = false;
+	rollback = [](const fs::path&, std::string_view, const pmg::rollback_context&) -> std::optional<std::string> {
+		throw std::runtime_error("injected rollback failure");
+	};
+	const json::object result = roll_back(id);
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_refused, json::serialize(result));
+	BOOST_TEST(std::string(result.at("refused").as_string()).find("injected rollback failure") != std::string::npos);
+	BOOST_TEST(attached);
+	BOOST_TEST(result.at("level").at("reopened").as_bool());
+	BOOST_TEST(!left_detached.has_value());
+	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+// An exception after the journal says in_progress: code 6, the level stays detached and its save block stays until that
+// migration is rolled back.
+BOOST_AUTO_TEST_CASE(ARollbackThatThrowsAfterItBegan_IsCode6_AndTheLevelStaysDetached)
+{
+	current_level = res::tag::make("levels/old.desc");
+	const std::string id = migrated();
+	attached = false;
+	rollback = [](const fs::path& root, std::string_view journal_id, const pmg::rollback_context& context) -> std::optional<std::string> {
+		write_text(root / ".snk/migrations" / std::string(journal_id) / "report.json", R"({"status":"in_progress"})");
+		if (context.wrote) *context.wrote = true;
+		throw std::runtime_error("injected rollback failure");
+	};
+	const json::object result = roll_back(id);
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_rollback_failed, json::serialize(result));
+	BOOST_TEST(std::string(result.at("error").as_string()).find("injected rollback failure") != std::string::npos);
+	BOOST_TEST(!attached);
+	BOOST_TEST(!result.at("level").at("reopened").as_bool());
+	BOOST_REQUIRE(left_detached.has_value());
+	BOOST_TEST(left_detached->find("--migrate-rollback " + id) != std::string::npos, *left_detached);
+	BOOST_REQUIRE(left_detached_rolled_back);
+	BOOST_TEST(!left_detached_rolled_back());
+	BOOST_TEST(rolled_back_ids.empty());
+}
+
+// rollback_migration itself fails half way (a restore that cannot be written): code 6 from the journal's rollback_failed,
+// the level stays detached; a retry refused before it writes is code 2 (nothing written), not 6.
+BOOST_AUTO_TEST_CASE(ARealRollbackFailure_IsCode6_ARefusedRetryIsCode2)
+{
+	current_level = res::tag::make("levels/old.desc");
+	const std::string id = migrated();
+	attached = false;
+	rollback = [](const fs::path& root, std::string_view journal_id, const pmg::rollback_context& context) {
+		pmg::rollback_context failing = context;
+		failing.write = [](const fs::path& at, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+			if (!relative.generic_string().starts_with(".snk/")) return std::string{ "injected restore failure" };
+			return prj::write_project_file(at, relative, text);
+		};
+		return pmg::rollback_migration(root, journal_id, failing);
+	};
+	const json::object failed = roll_back(id);
+	BOOST_TEST(failed.at("code").as_int64() == pmg::k_exit_rollback_failed, json::serialize(failed));
+	BOOST_TEST(std::string(failed.at("status").as_string()) == "rollback_failed");
+	BOOST_TEST(std::string(failed.at("error").as_string()).find("injected restore failure") != std::string::npos);
+	BOOST_TEST(!attached);
+	BOOST_REQUIRE(left_detached_rolled_back);
+	BOOST_TEST(!left_detached_rolled_back());
+
+	// A file changed since: the retry refuses before its first write.
+	rollback = {};
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + " ");
+	const auto changed = snapshot(copy.root());
+	const json::object retry = roll_back(id);
+	BOOST_TEST(retry.at("code").as_int64() == pmg::k_exit_refused, json::serialize(retry));
+	BOOST_TEST((snapshot(copy.root()) == changed));
+}
+
+// The editor's wiring through the hooks: a rollback of the migration that stopped lifts its save block and attaches the
+// level again.
+BOOST_AUTO_TEST_CASE(ARollbackOfAStoppedMigration_LiftsItsBlock_AndAttachesTheLevel)
+{
+	fs::remove(copy.res() / "broken.desc");
+	current_level = res::tag::make("levels/old.desc");
+	apply = [](const pmg::migration_plan&, const pmg::apply_context& context) -> pmg::apply_outcome {
+		write_text(context.root / ".snk/migrations/test-stopped/report.json", R"({"status":"in_progress"})");
+		throw std::runtime_error("injected apply failure");
+	};
+	const json::object stopped = migrate(cmd::origin::ui());
+	BOOST_REQUIRE(stopped.at("code").as_int64() == pmg::k_exit_rollback_failed);
+	BOOST_REQUIRE(left_detached.has_value());
+	BOOST_TEST(!attached);
+
+	rollback = [](const fs::path& root, std::string_view journal_id, const pmg::rollback_context& context) -> std::optional<std::string> {
+		if (context.wrote) *context.wrote = true;
+		write_text(root / ".snk/migrations" / std::string(journal_id) / "report.json", R"({"status":"rolled_back"})");
+		return std::nullopt;
+	};
+	const json::object result = roll_back("test-stopped");
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done, json::serialize(result));
+	BOOST_TEST((rolled_back_ids == std::vector<std::string>{ "test-stopped" }));
+	BOOST_TEST(!left_detached.has_value());
+	BOOST_TEST(attached);
+	BOOST_TEST(result.at("level").at("reopened").as_bool());
+}
+
+// A cancel after the rollback's commit point is refused; the answer says so.
+BOOST_AUTO_TEST_CASE(ACancelAfterTheRollbackBegan_IsRefused_AndTheAnswerSaysSo)
+{
+	const std::string id = migrated();
+	std::atomic<bool> entered{ false };
+	std::atomic<bool> release{ false };
+	rollback = [&entered, &release](const fs::path&, std::string_view, const pmg::rollback_context&) -> std::optional<std::string> {
+		entered = true;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!release && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		return std::nullopt;
+	};
+	const cmd::result started = call("project.migrate_rollback", { { "id", id } }, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const std::uint64_t job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (!entered && std::chrono::steady_clock::now() < deadline) {
+		run_frame();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	BOOST_REQUIRE_MESSAGE(entered.load(), "the rollback did not begin within 60 s");
+	BOOST_TEST(jobs.cancel_refusal(job).has_value());
+	BOOST_TEST(!jobs.cancel(job));
+	release = true;
+	run_frames();
+	settle_jobs();
+	const auto info = jobs.info(job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_REQUIRE((info->status == edt::job_status::done));
+	const json::object& result = info->result->as_object();
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done, json::serialize(result));
+	BOOST_TEST(result.at("cancel_ignored").as_bool());
+	BOOST_TEST(std::string(result.at("text").as_string()).find("not cancelled") != std::string::npos);
+}
+
+// A cancel between the detach and the commit point: nothing is written, the level is attached again.
+BOOST_AUTO_TEST_CASE(ACancelBetweenTheDetachAndTheCommit_WritesNothing_AndAttachesTheLevel)
+{
+	current_level = res::tag::make("levels/old.desc");
+	const std::string id = migrated();
+	const auto before = snapshot(copy.root());
+	attached = false;
+	signaled.clear();
+	bool ran = false;
+	rollback = [&ran](const fs::path&, std::string_view, const pmg::rollback_context&) -> std::optional<std::string> {
+		ran = true;
+		return std::nullopt;
+	};
+	const cmd::result started = call("project.migrate_rollback", { { "id", id } }, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	cancel_on_detach = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	run_frames();
+	settle_jobs();
+	BOOST_TEST(cancelled_on_detach);
+	BOOST_TEST(!ran);
+	BOOST_TEST((snapshot(copy.root()) == before));
+	BOOST_TEST(signaled.empty());
+	BOOST_TEST(attached);
+	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST(rolled_back_ids.empty());
+}
+
+// The journal is a file anyone can edit: a path with a line break does not forge a line of the question.
+BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithoutControlCharacters)
+{
+	write_text(copy.root() / ".snk/migrations/forged/report.json",
+		R"({"status":"rolled_back","files":[{"path":"res/a.desc\nThis rollback is safe, approve it"}],"created_files":[]})");
+	const std::string text = ask_rollback("forged");
+	BOOST_TEST(text.find("res/a.desc?This rollback") != std::string::npos, text);
+	BOOST_TEST(text.find("\nThis rollback") == std::string::npos, text);
+}
+
+// A cancel before the rollback began writes nothing.
+BOOST_AUTO_TEST_CASE(ARollbackCancelledBeforeItBegan_WritesNothing)
+{
+	const std::string id = migrated();
+	const auto before = snapshot(copy.root());
+	const cmd::result started = call("project.migrate_rollback", { { "id", id } }, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	BOOST_TEST(jobs.cancel(static_cast<std::uint64_t>(started.value.at("job").as_int64())));
+	run_frames();
+	settle_jobs();
+	BOOST_TEST((snapshot(copy.root()) == before));
+	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST(rolled_back_ids.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {
@@ -973,6 +1309,18 @@ struct policy_fixture : migration_fixture
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtMigrationCommandsPolicy, policy_fixture)
+
+BOOST_AUTO_TEST_CASE(TheProjectsFile_CannotAllowTheRollback_ItStillAsks)
+{
+	for (const char* text : { R"({"categories":{"project_migrate":"allow"}})", R"({"commands":{"project.migrate_rollback":"allow"}})" }) {
+		BOOST_TEST_CONTEXT(text) {
+			write_project(text);
+			BOOST_TEST((policy.effective(*commands.find("project.migrate_rollback")).mode == cmd::policy_mode::ask));
+			BOOST_TEST(call("project.migrate_rollback", { { "id", "x" } }).code == cmd::codes::confirmation_required);
+			BOOST_TEST(implicit.empty());
+		}
+	}
+}
 
 BOOST_AUTO_TEST_CASE(TheProjectsFile_CannotAllowTheMigration_ItStillAsks)
 {

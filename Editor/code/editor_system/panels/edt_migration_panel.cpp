@@ -54,6 +54,13 @@ void edt::migration_panel::show_and_plan()
 	m_model.request_plan();
 }
 
+void edt::migration_panel::show_and_roll_back(const std::string& id)
+{
+	m_open = true;
+	m_focus = true;
+	m_model.roll_back(id);
+}
+
 void edt::migration_panel::on_before_begin()
 {
 	ImGui::SetNextWindowSize(ImVec2(720.f, 520.f), ImGuiCond_FirstUseEver);
@@ -81,6 +88,34 @@ void edt::migration_panel::on_render()
 	case migration_window_model::phase::running: draw_running(); break;
 	case migration_window_model::phase::report_shown: draw_report(); break;
 	}
+	draw_rollback_question();
+}
+
+void edt::migration_panel::draw_rollback_button()
+{
+	const std::string id = m_model.rollback_id();
+	if (id.empty()) return;
+	ImGui::SameLine();
+	if (ImGui::Button("Roll Back...")) {
+		m_rollback_asked = id;
+		ImGui::OpenPopup("Roll back migration?##edt_migration_rollback");
+	}
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ("Put the files back from .snk/migrations/" + id + "/backup").c_str());
+}
+
+void edt::migration_panel::draw_rollback_question()
+{
+	if (!ImGui::BeginPopupModal("Roll back migration?##edt_migration_rollback", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	wrapped("Roll back migration " + m_rollback_asked + "?");
+	ImGui::TextUnformatted("Every file it wrote is put back from its backup and the files it created are deleted.");
+	ImGui::TextUnformatted("Open documents are closed and the level is opened again from disk.");
+	if (ImGui::Button("Roll Back")) {
+		m_model.roll_back(m_rollback_asked);
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
 }
 
 void edt::migration_panel::draw_error()
@@ -117,7 +152,7 @@ void edt::migration_panel::draw_plan()
 		if (!plan.refused.empty()) {
 			coloured(k_error, "The migration would be refused: " + plan.refused);
 			if (!plan.unfinished.empty()) {
-				ImGui::TextUnformatted("Unfinished migrations (roll them back with editor --migrate-rollback <id>):");
+				ImGui::TextUnformatted("Unfinished migrations (Roll Back... below, or editor --migrate-rollback <id>):");
 				bullets(plan.unfinished);
 			}
 			ImGui::Separator();
@@ -169,6 +204,7 @@ void edt::migration_panel::draw_plan()
 	}
 	ImGui::SameLine();
 	if (ImGui::Button("Refresh")) m_model.request_plan();
+	draw_rollback_button();
 	ImGui::SameLine();
 	if (ImGui::Button("Close")) {
 		m_model.close();
@@ -178,16 +214,18 @@ void edt::migration_panel::draw_plan()
 
 void edt::migration_panel::draw_running()
 {
-	ImGui::TextUnformatted("Migrating the project...");
-	ImGui::TextDisabled("Open documents are closed; the level opens again from disk when the migration ends.");
+	ImGui::TextUnformatted(m_model.rolling_back() ? "Rolling the migration back..." : "Migrating the project...");
+	ImGui::TextDisabled("Open documents are closed; the level opens again from disk when it ends.");
 }
 
 void edt::migration_panel::draw_report()
 {
 	const migration_window_model::report_view& report = *m_model.report();
 	if (report.code >= 0) {
-		const bool good = report.code == migration_window_model::k_code_done || report.code == migration_window_model::k_code_partial;
-		std::string line = std::format("{} (code {}", migration_window_model::outcome_text(report.code), report.code);
+		const bool good = report.code == migration_window_model::k_code_done || (!report.rollback && report.code == migration_window_model::k_code_partial);
+		const std::string outcome = report.rollback ? migration_window_model::rollback_outcome_text(report.code)
+			: migration_window_model::outcome_text(report.code);
+		std::string line = std::format("{} (code {}", outcome, report.code);
 		if (!report.status.empty()) line += ", " + report.status;
 		if (!report.id.empty()) line += ", .snk/migrations/" + report.id;
 		line += ")";
@@ -212,4 +250,5 @@ void edt::migration_panel::draw_report()
 		m_model.close();
 		m_open = false;
 	}
+	draw_rollback_button();
 }

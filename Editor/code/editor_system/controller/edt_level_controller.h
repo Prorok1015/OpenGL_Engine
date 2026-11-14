@@ -132,6 +132,8 @@ namespace edt
 		// The new game layer is in place: rebuilds the level kept by detach_from_game_layer in it and returns to the
 		// world that was active. Desc types the new layer does not know are dropped (logged by the desc system).
 		void attach_to_game_layer();
+		// Between detach_from_game_layer and attach_to_game_layer.
+		bool is_detached() const { return m_detached_level.has_value(); }
 
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
