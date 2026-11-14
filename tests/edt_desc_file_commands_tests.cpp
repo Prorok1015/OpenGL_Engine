@@ -533,6 +533,25 @@ BOOST_AUTO_TEST_CASE(AWorldEntryTheGuardCannotRead_MakesEveryWriteBusy)
 	}
 }
 
+// #966: an agent writes res:// only, so a world under another protocol is no project file and the guard skips it.
+BOOST_AUTO_TEST_CASE(AWorldUnderAnotherProtocol_BlocksNoWriteToTheProject)
+{
+	fs::create_directories(res_root / "levels");
+	make_material("materials/m.mat.desc");
+	const std::string version = version_of("materials/m.mat.desc");
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"path":"engine://worlds/x.desc"},{"path":"memory://worlds/y.desc"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto written = call("desc.write", write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST_MESSAGE(written.error);
+	BOOST_TEST(written.ok);
+	const auto created = call("desc.create", desc_args("materials/n.mat.desc", k_material));
+	BOOST_TEST_MESSAGE(created.error);
+	BOOST_TEST(created.ok);
+	BOOST_TEST(fs::exists(res_root / "materials" / "n.mat.desc"));
+}
+
 // A guid no file holds, without a path: the resolver loads nothing by it, so no file is the level's through it.
 BOOST_AUTO_TEST_CASE(AWorldEntryThatNamesNothing_BlocksNothing)
 {

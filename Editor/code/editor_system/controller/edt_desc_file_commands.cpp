@@ -166,7 +166,7 @@ namespace {
 				for (const json::value& world : worlds->as_array()) {
 					for (const res::tag& world_file : world_files_of(world)) {
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
-						// The resolver still opens a tag the path rules reject (`//`, `/./`, an overlong path): everything is busy (#966).
+						// The resolver still opens a res:// tag the path rules reject (`//`, `/./`, an overlong path): everything is busy (#966).
 						if (!named.ok() || same_file(locate(named.path))) return true;
 					}
 				}
@@ -176,15 +176,19 @@ namespace {
 
 		// The files an entry of a level's `worlds` names, as a path or as {guid, path}: where the guid is now and what `path`
 		// spells, since the index may have moved the guid while the stale path still names a world (#920). None when inline,
-		// and none for an empty tag (a guid no file holds, without a path): the resolver loads nothing by it.
+		// and none for an empty tag (a guid no file holds, without a path): the resolver loads nothing by it. Nor for a tag under
+		// another protocol (engine://, memory://): an agent writes res:// only, so it is no project file (#966).
 		std::vector<res::tag> world_files_of(const json::value& world) const
 		{
 			std::vector<res::tag> files;
 			const std::optional<res::reference> reference = res::reference_from_json(world);
 			if (!reference) return files;
+			const auto is_project_file = [](const res::tag& file) {
+				return file.protocol().empty() || file.protocol() == res::tag::default_protocol();
+			};
 			const res::tag resolved = m_deps.res.resolve_reference(*reference);
-			if (resolved.is_valid()) files.push_back(resolved);
-			if (reference->path.is_valid() && !(reference->path == resolved)) files.push_back(reference->path);
+			if (resolved.is_valid() && is_project_file(resolved)) files.push_back(resolved);
+			if (reference->path.is_valid() && !(reference->path == resolved) && is_project_file(reference->path)) files.push_back(reference->path);
 			return files;
 		}
 
@@ -209,7 +213,7 @@ namespace {
 				for (const json::value& world : worlds->as_array()) {
 					for (const res::tag& world_file : world_files_of(world)) {
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
-						// As in belongs_to_open_level: a tag the path rules reject may still name this file (#966).
+						// As in belongs_to_open_level: a res:// tag the path rules reject may still name this file (#966).
 						if (!named.ok() || name_key(named.path) == wanted) return true;
 					}
 				}
