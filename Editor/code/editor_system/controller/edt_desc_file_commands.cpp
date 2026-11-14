@@ -552,16 +552,16 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 			}
 		}
 		if (const json::value* parent = object.if_contains("__parent")) {
-			// The object form is checked by its path as written, like the string: a guid alone names nothing to check.
+			// An agent names the parent by its path only: the guid is the editor's to write (#773).
 			std::optional<std::string> written;
 			if (parent->is_string()) {
 				written = std::string(view_of(parent->as_string()));
 			} else if (!parent->is_object()) {
-				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"guid\", \"path\"} reference");
+				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"path\"} reference");
+			} else if (parent->as_object().contains("guid")) {
+				schema_error(pointer + "/__parent", "`__parent`: give the path only; the editor writes the guid");
 			} else if (std::string problem = edt::reference_object_problem(parent->as_object()); !problem.empty()) {
 				schema_error(pointer + "/__parent", "`__parent`: " + problem);
-			} else if (!parent->as_object().contains("path")) {
-				schema_error(pointer + "/__parent", "`__parent` needs a \"path\": a \"guid\" alone is not accepted here");
 			} else {
 				written = edt::reference_path_text(parent->as_object());
 			}

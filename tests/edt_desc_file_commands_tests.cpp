@@ -519,8 +519,7 @@ BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_PassesTheSameChecksAsTheSt
 	}
 	for (const char* content : {
 		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc"}})",
-		R"({"__type":"material_desc","__parent":{"path":"res://materials/other.mat.desc"}})",
-		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})" }) {
+		R"({"__type":"material_desc","__parent":{"path":"res://materials/other.mat.desc"}})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto made = call("desc.create", desc_args("materials/ok.mat.desc", content));
 			BOOST_TEST_MESSAGE(made.error);
@@ -535,6 +534,26 @@ BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_PassesTheSameChecksAsTheSt
 		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})"));
 	BOOST_TEST(guid_only.code == cmd::codes::invalid_args);
 	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(AParentWithAGuid_IsRefused_AndNothingIsWritten)
+{
+	const char* content = R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})";
+
+	const auto created = call("desc.create", desc_args("materials/g.mat.desc", content));
+	BOOST_TEST(created.code == cmd::codes::invalid_args);
+	BOOST_TEST(created.error.find("give the path only; the editor writes the guid") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+
+	make_material("materials/w.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
+	const auto written = call("desc.write", write_args("materials/w.mat.desc", version_of("materials/w.mat.desc"), content));
+	BOOST_TEST(written.code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+
+	const auto by_path = call("desc.create", desc_args("materials/g.mat.desc", R"({"__type":"material_desc","__parent":"res://base_material.desc"})"));
+	BOOST_TEST_MESSAGE(by_path.error);
+	BOOST_TEST(by_path.ok);
 }
 
 BOOST_AUTO_TEST_CASE(AnUnknownKeyWithTwoUnderscores_IsRefused_SoNoObjectHidesFromTheCheck)
