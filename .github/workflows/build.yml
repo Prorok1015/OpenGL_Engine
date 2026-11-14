@@ -238,11 +238,28 @@ jobs:
 
       # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
       # hosted runners, so this relies on the tests being headless.
+      # 20 min on Windows Debug until #898 makes the null-backend suites cheaper (#892): a slow runner took 600 s.
       - name: Run unit tests
-        timeout-minutes: 10
+        timeout-minutes: ${{ contains(matrix.preset, 'windows') && 20 || 10 }}
         working-directory: build/${{ matrix.preset }}
         shell: bash
-        run: ./unit_tests --log_level=test_suite
+        run: |
+          set -o pipefail
+          ./unit_tests --log_level=test_suite 2>&1 | tee unit_tests.log
+
+      - name: Slowest test suites and cases
+        if: always()
+        continue-on-error: true
+        working-directory: build/${{ matrix.preset }}
+        shell: bash
+        run: |
+          [ -f unit_tests.log ] || exit 0
+          for what in suite case; do
+            echo "Slowest test ${what}s:"
+            sed -nE "s/.*Leaving test ${what} \"([^\"]+)\"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p" unit_tests.log \
+              | awk '$1 != "Master" { t = $2; if ($3 == "us") t /= 1e6; else if ($3 == "ms") t /= 1e3; printf "%9.1f s  %s\n", t, $1 }' \
+              | sort -rn | head -n 10 || true
+          done
 
       # #591: the shipping host on the static engine runs the project's start level (sandbox: levels/editor_level.desc)
       # with no display. game/exit_after_level_loaded ends the run with 0 once "level loaded" is logged;
