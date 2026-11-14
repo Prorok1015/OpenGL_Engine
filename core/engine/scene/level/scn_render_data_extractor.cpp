@@ -1,6 +1,7 @@
 #include <snk/scene/level/scn_render_data_extractor.h>
 #include <snk/scene/level/scn_screen_anchor.h>
 #include <snk/scene/level/scn_world.h>
+#include <limits>
 #include <memory_resource>
 #include <unordered_map>
 #include <snk/common/eng_transform_3d.hpp>
@@ -119,6 +120,13 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 }
 
                 auto& mlt = *mlt_ptr;
+
+                // The range is whatever a file or an agent wrote: one that runs backwards, or does not fit the 32 bits
+                // of a draw call, would wrap into a range nobody meant (#927).
+                constexpr std::size_t k_draw_limit = std::numeric_limits<uint32_t>::max();
+                if (mesh.mesh.ind_end < mesh.mesh.ind_begin || mesh.mesh.ind_end > k_draw_limit || mesh.mesh.vx_begin > k_draw_limit) {
+                    continue;
+                }
 
                 rnd::draw_call_t dc;
                 {

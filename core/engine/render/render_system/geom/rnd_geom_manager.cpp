@@ -1,6 +1,8 @@
 #include "rnd_geom_manager.h"
 #include <snk/driver/rnd_buffer_interface.h>
 #include <snk/resource/res_system.h>
+#include <algorithm>
+#include <functional>
 
 rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, res::resource_system& res_sys)
 	: m_res_sys(res_sys)
@@ -39,6 +41,7 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 
 	if (handle.is_ready()) {
 		loading.erase(geom_tag);
+		built[geom_tag] = handle;
 		return (cache[geom_tag] = create_geometry(*handle)).get();
 	}
 
@@ -48,6 +51,44 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 	}
 
 	return nullptr;
+}
+
+std::size_t rnd::geom_manager::drawn_range_hash::operator()(const drawn_range& range) const noexcept
+{
+	std::size_t seed = std::hash<res::tag>{}(range.geometry);
+	for (const std::uint32_t part : { range.count, range.base_vertex, range.base_index }) {
+		seed ^= std::hash<std::uint32_t>{}(part) + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+	}
+	return seed;
+}
+
+bool rnd::geom_manager::draw_fits(const res::tag& geom_tag, std::uint32_t count, std::uint32_t base_vertex, std::uint32_t base_index)
+{
+	if (count == 0) return true;
+	const auto geometry = built.find(geom_tag);
+	if (geometry == built.end()) return true;
+
+	const drawn_range range{ geom_tag, count, base_vertex, base_index };
+	if (const auto known = checked_ranges.find(range); known != checked_ranges.end()) return known->second;
+
+	const rnd::geometry_desc& desc = *geometry->second;
+	const std::uint32_t stride = desc.layout.get_stride();
+	const std::uint64_t vertices = stride == 0 ? 0 : desc.vertices.size() / stride;
+	const std::uint64_t end = static_cast<std::uint64_t>(base_index) + count;
+	bool fits = end <= desc.indices.size();
+	std::uint64_t highest = 0;
+	if (fits) {
+		for (std::uint64_t i = base_index; i < end; ++i) {
+			highest = std::max<std::uint64_t>(highest, desc.indices[static_cast<std::size_t>(i)]);
+		}
+		fits = static_cast<std::uint64_t>(base_vertex) + highest < vertices;
+	}
+	if (!fits) {
+		egLOG_WARN("render/geometry", "a draw of '{}' is left out: indices {}..{} from vertex {} do not fit its {} indices and {} vertices",
+			geom_tag.view(), base_index, end, base_vertex, desc.indices.size(), vertices);
+	}
+	checked_ranges.emplace(range, fits);
+	return fits;
 }
 
 rnd::driver::vertex_array_interface* rnd::geom_manager::find_geometry(res::tag geom_tag)
