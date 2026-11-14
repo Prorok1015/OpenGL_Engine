@@ -87,4 +87,39 @@ BOOST_AUTO_TEST_CASE(Prefab_TheParentOfAComponentTakesAGuidAndAPath)
 	BOOST_TEST(components.at("only_path").overrides.size() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(Prefab_AComponentWrittenAsOneReference_TakesAGuidAndAPath)
+{
+	const std::string text = "{ \"components\": {"
+		" \"plain\": \"memory://t/plain.desc\","
+		" \"moved\": " + test_util::reference_text(k_moved_guid, "memory://t/old_place.desc") + ","
+		" \"kept\": " + test_util::reference_text(k_unknown_guid, "memory://t/kept.desc") + ","
+		" \"only_path\": " + test_util::reference_text({}, "memory://t/only_path.desc") + ","
+		" \"typed\": { \"__type\": \"stat_desc\", \"path\": \"not a reference\" },"
+		" \"stat_desc\": { \"path\": \"memory://t/a_field.desc\" }"
+		" } }";
+	scn::prefab_desc prefab;
+	prefab.deserialize(*descs, parse_migrated(text));
+
+	const auto& components = prefab.get_root().components;
+	BOOST_REQUIRE(components.size() == 6u);
+	BOOST_TEST(components.at("plain").parent_desc.get_tag().view() == "memory://t/plain.desc");
+	BOOST_TEST(components.at("moved").parent_desc.get_tag().view() == "memory://t/new_place.desc");
+	BOOST_TEST(components.at("kept").parent_desc.get_tag().view() == "memory://t/kept.desc");
+	BOOST_TEST(components.at("only_path").parent_desc.get_tag().view() == "memory://t/only_path.desc");
+	for (const char* key : { "plain", "moved", "kept", "only_path" }) {
+		BOOST_TEST_CONTEXT(key) {
+			BOOST_TEST(components.at(key).overrides.empty());
+			BOOST_TEST(components.at(key).type_name.empty());
+		}
+	}
+	// An object with a type is a component, whatever its keys are called.
+	BOOST_TEST(components.at("typed").type_name == "stat_desc");
+	BOOST_TEST(components.at("typed").overrides.contains("path"));
+	BOOST_TEST(!components.at("typed").parent_desc.is_valid());
+	// So is an object under the key of a registered type: the key names the type.
+	BOOST_TEST(components.at("stat_desc").type_name == "stat_desc");
+	BOOST_TEST(components.at("stat_desc").overrides.contains("path"));
+	BOOST_TEST(!components.at("stat_desc").parent_desc.is_valid());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
