@@ -4,6 +4,7 @@
 #include "edt_asset_database.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
@@ -709,6 +710,7 @@ BOOST_AUTO_TEST_CASE(a_bad_cache_is_dropped_whole)
 		{ "a missing meta layer", record_edit([](boost::json::object& r) { r.erase("meta_layer"); }) },
 		{ "a shadowed layer not below", record_edit([](boost::json::object& r) { r["shadowed"] = boost::json::array{ 1 }; }) },
 		{ "a bad id", record_edit([](boost::json::object& r) { r["id"] = "nope"; }) },
+		{ "a bad file id", record_edit([](boost::json::object& r) { r["file_id"] = boost::json::array{ 1, 2 }; }) },
 		{ "a missing check time", record_edit([](boost::json::object& r) { r.erase("content_checked_at"); }) },
 		{ "a path twice", [](boost::json::object& root) {
 			boost::json::array& records = root.at("records").as_array();
@@ -1066,7 +1068,7 @@ BOOST_AUTO_TEST_CASE(a_top_file_shadows_the_lower_one_while_it_is_there)
 	BOOST_TEST(record("s.txt").size == 6);
 
 	fs::remove(upper.path() / "s.txt");
-	const edt::asset_batch batch = assets.apply_changes(std::vector<res::file_change>{ change("s.txt", res::change_kind::deleted) });
+	assets.apply_changes(std::vector<res::file_change>{ change("s.txt", res::change_kind::deleted) });
 	BOOST_TEST(batch.removed.empty());
 	BOOST_REQUIRE(batch.changed.size() == 1u);
 	BOOST_TEST(record("s.txt").layer == 0u);
@@ -1234,6 +1236,123 @@ BOOST_AUTO_TEST_CASE(a_layer_without_a_project_file_lists_its_code_and_build_fol
 	auto& assets = open();
 	BOOST_TEST(assets.find(res::tag::make("code/main.cpp")) != nullptr);
 	BOOST_TEST(assets.find(res::tag::make("build/out.bin")) != nullptr);
+}
+
+// #888: two files and their .resource written with one size and one time (as in one clock tick); one pair is moved over
+// the other. The path takes the moved file's ID and hash: the stamps tell the files apart by their identity.
+static void write_same_stamp_pair(test_util::temp_dir& dir)
+{
+	dir.write("a.png", "aa");
+	dir.write("a.png.resource", meta_text(k_guid_a));
+	dir.write("b.png", "bb");
+	dir.write("b.png.resource", meta_text(k_guid_b));
+	const auto when = fs::file_time_type::clock::now() - std::chrono::hours(1);
+	for (const char* name : { "a.png", "a.png.resource", "b.png", "b.png.resource" }) {
+		fs::last_write_time(dir.path() / name, when);
+	}
+}
+
+static void move_b_over_a(test_util::temp_dir& dir)
+{
+	fs::rename(dir.path() / "b.png", dir.path() / "a.png");
+	fs::rename(dir.path() / "b.png.resource", dir.path() / "a.png.resource");
+}
+
+// What the watcher reports of move_b_over_a.
+static std::vector<res::file_change> b_moved_over_a()
+{
+	return { change("a.png", res::change_kind::renamed, "b.png"),
+		change("a.png.resource", res::change_kind::renamed, "b.png.resource") };
+}
+
+BOOST_AUTO_TEST_CASE(a_file_moved_over_one_of_the_same_size_and_time_brings_its_id_and_hash)
+{
+	write_same_stamp_pair(upper);
+	auto& assets = open();
+	const std::string hash_of_b = record("b.png").content_hash;
+	BOOST_REQUIRE(!hash_of_b.empty());
+	BOOST_REQUIRE(record("a.png").content_hash != hash_of_b);
+	BOOST_REQUIRE(record("a.png").size == record("b.png").size);
+	BOOST_REQUIRE(record("a.png").meta_size == record("b.png").meta_size);
+
+	move_b_over_a(upper);
+	assets.apply_changes(b_moved_over_a());
+	test_util::pump(tasks);
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_b);
+	BOOST_TEST(record("a.png").content_hash == hash_of_b);
+	BOOST_TEST(assets.find(res::tag::make("b.png")) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(a_walk_over_the_cache_tells_a_file_moved_over_another_of_the_same_stamp)
+{
+	write_same_stamp_pair(upper);
+	std::string hash_of_b;
+	{
+		auto first = cached();
+		hash_of_b = first->find(res::tag::make("b.png"))->content_hash;
+	}
+	BOOST_REQUIRE(!hash_of_b.empty());
+
+	move_b_over_a(upper);
+	auto second = cached();
+	BOOST_TEST(second->loaded_from_cache());
+	const edt::asset_record* a = second->find(res::tag::make("a.png"));
+	BOOST_REQUIRE(a);
+	BOOST_REQUIRE(a->id.has_value());
+	BOOST_TEST(res::to_text(*a->id) == k_guid_b);
+	BOOST_TEST(a->content_hash == hash_of_b);
+	BOOST_TEST(second->files_read() == 2u); // a.png.resource and a.png, now b's
+}
+
+// #888: a file system that tells no identity (some network and synchronised ones): the .resource is read again every
+// time, so the moved one still gives its ID; hashes follow size and time alone, and that is warned of once per layer.
+BOOST_AUTO_TEST_CASE(without_file_identities_a_resource_is_read_again_and_the_layer_is_warned_of_once)
+{
+	write_same_stamp_pair(upper);
+	std::size_t warnings = 0;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view category, engine::log_level level,
+		std::string_view message) {
+		if (category == "assets" && level == engine::log_level::warn
+			&& message.find("tells no file identity") != std::string_view::npos) {
+			++warnings;
+		}
+	});
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower.path(), upper.path() });
+	db->set_file_id_source([](const fs::path&) { return edt::file_id{}; });
+	db->rebuild();
+	test_util::pump(tasks);
+	BOOST_TEST(warnings == 1u);
+
+	move_b_over_a(upper);
+	db->apply_changes(b_moved_over_a());
+	BOOST_REQUIRE(record("a.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_b);
+	BOOST_TEST(warnings == 1u);
+}
+
+// #888: a cache written before the stamps had identities is taken, and what it learned is read again once.
+BOOST_AUTO_TEST_CASE(a_cache_without_file_identities_is_read_again_once)
+{
+	write_aged("a.png", "a");
+	write_aged("a.png.resource", meta_text(k_guid_a));
+	cached().reset();
+	BOOST_REQUIRE(cache_bytes().find("\"file_id\"") != std::string::npos);
+	edit_cache([](boost::json::object& root) {
+		for (boost::json::value& record : root.at("records").as_array()) {
+			record.as_object().erase("file_id");
+			record.as_object().erase("meta_file_id");
+		}
+	});
+
+	auto second = cached();
+	BOOST_TEST(second->loaded_from_cache());
+	BOOST_TEST(second->files_read() == 2u);
+	BOOST_TEST(res::to_text(*second->find(res::tag::make("a.png"))->id) == k_guid_a);
+	second->save();
+	second.reset();
+	auto third = cached();
+	BOOST_TEST(third->files_read() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

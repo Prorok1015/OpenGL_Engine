@@ -54,7 +54,7 @@ namespace
 	bool same_stamps(const edt::asset_record& a, const edt::asset_record& b)
 	{
 		return a.layer == b.layer && a.size == b.size && a.mtime == b.mtime && a.meta_layer == b.meta_layer && a.meta_size == b.meta_size
-			&& a.meta_mtime == b.meta_mtime;
+			&& a.meta_mtime == b.meta_mtime && a.content_id == b.content_id && a.meta_id == b.meta_id;
 	}
 
 	std::int64_t now_ticks()
@@ -63,6 +63,24 @@ namespace
 	}
 
 	// A regular file that is not a link.
+	// Whether what `before` read of a .resource holds for the one now at `now`'s path: the same stamp of the same file. A
+	// file without a known identity is read again (a .resource is a few dozen bytes).
+	bool same_meta(const edt::asset_record& before, const edt::asset_record& now)
+	{
+		return before.has_meta && before.meta_layer == now.meta_layer && before.meta_size == now.meta_size
+			&& before.meta_mtime == now.meta_mtime && edt::known_file_id(now.meta_id) && before.meta_id == now.meta_id;
+	}
+
+	// Whether `before`'s hash holds for the file now at `now`'s path: the same size, time and file. Without a known
+	// identity, size and time alone, as before #888 (the caller warns of it).
+	bool same_content(const edt::asset_record& before, const edt::asset_record& now)
+	{
+		if (before.size != now.size || before.mtime != now.mtime) {
+			return false;
+		}
+		return !edt::known_file_id(now.content_id) || before.content_id == now.content_id;
+	}
+
 	file_stat stat_of(const fs::path& path)
 	{
 		std::error_code ec;
@@ -84,6 +102,13 @@ namespace
 		return out;
 	}
 
+}
+
+bool edt::known_file_id(const file_id& id)
+{
+	// A file reused by the file system after a delete keeps no identity apart: a .resource written into the freed one with
+	// the old size and time is still taken as the old file.
+	return id.valid && (id.index != 0 || id.index_high != 0);
 }
 
 bool edt::holds_id_before(const asset_record& a, const asset_record& b)
@@ -118,8 +143,9 @@ std::string edt::asset_type_of(std::string_view path)
 }
 
 edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, const std::function<bool()>& stopped,
-	const std::map<std::string, asset_record>* known, bool case_insensitive)
+	const std::map<std::string, asset_record>* known, bool case_insensitive, const file_id_source& id_of)
 {
+	const auto identity = [&id_of](const fs::path& path) { return id_of ? id_of(path) : file_id_of(path); };
 	const std::vector<res::asset_walk_file> files = res::walk_asset_layers(layers, stopped, case_insensitive);
 	const res::asset_walk_pairing pairing = res::pair_asset_metas(files, case_insensitive);
 	std::size_t sidecars = 0;
@@ -156,6 +182,10 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 		record.shadowed_layers = file.shadowed;
 		record.size = stat.size;
 		record.mtime = stat.mtime;
+		record.content_id = identity(file.physical);
+		if (!known_file_id(record.content_id)) {
+			scan.layers_without_ids.insert(file.layer);
+		}
 		record.type = asset_type_of(relative);
 		if (const std::optional<std::size_t> meta_index = pairing.meta_of[index]) {
 			const res::asset_walk_file& meta = files[*meta_index];
@@ -163,14 +193,14 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 			record.meta_size = meta_stat.size;
 			record.meta_mtime = meta_stat.mtime;
 			record.meta_layer = meta.layer;
+			record.meta_id = identity(meta.physical);
 			const asset_record* before = nullptr;
 			if (known) {
 				if (const auto found = known->find(record.path.string()); found != known->end()) {
 					before = &found->second;
 				}
 			}
-			if (before && before->has_meta && before->meta_layer == record.meta_layer && before->meta_size == meta_stat.size
-				&& before->meta_mtime == meta_stat.mtime) {
+			if (before && same_meta(*before, record)) {
 				record.has_meta = true;
 				record.id = before->id;
 				record.flags = before->flags;
@@ -289,7 +319,8 @@ bool edt::asset_record::same_as(const asset_record& other) const
 		&& size == other.size && mtime == other.mtime && has_meta == other.has_meta && meta_layer == other.meta_layer
 		&& meta_size == other.meta_size
 		&& meta_mtime == other.meta_mtime && meta_error == other.meta_error && flags == other.flags && type == other.type
-		&& content_hash == other.content_hash && desc_type == other.desc_type;
+		&& content_hash == other.content_hash && desc_type == other.desc_type && content_id == other.content_id
+		&& meta_id == other.meta_id;
 }
 
 edt::asset_database::asset_database(job_service& jobs, editor_events* events, std::vector<fs::path> layers, asset_cache_location cache)
@@ -364,8 +395,9 @@ void edt::asset_database::rebuild()
 	const std::uint64_t number = ++m_scan_number;
 	m_scanning = true;
 	m_scan_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Scan assets", "assets", true }, m_lifetime,
-		[layers = m_layers, known = m_walked_once ? m_records : m_cached, case_insensitive = m_case_insensitive](ds::task_context& ctx) {
-			return scan_asset_layers(layers, [&ctx] { return ctx.stop.stop_requested(); }, &known, case_insensitive);
+		[layers = m_layers, known = m_walked_once ? m_records : m_cached, case_insensitive = m_case_insensitive,
+			id_of = m_file_id](ds::task_context& ctx) {
+			return scan_asset_layers(layers, [&ctx] { return ctx.stop.stop_requested(); }, &known, case_insensitive, id_of);
 		},
 		[this, number](ds::task_result<asset_scan>& result) {
 			if (number != m_scan_number) {
@@ -458,8 +490,7 @@ void edt::asset_database::apply_scan(asset_scan scan)
 		std::string key = record.path.string();
 		// A file the walk found as it was keeps what the background pass learned of it.
 		if (const auto known = previous.find(key);
-			known != previous.end() && !known->second.content_hash.empty() && known->second.size == record.size
-			&& known->second.mtime == record.mtime) {
+			known != previous.end() && !known->second.content_hash.empty() && same_content(known->second, record)) {
 			record.content_hash = known->second.content_hash;
 			record.desc_type = known->second.desc_type;
 			// The hash is as old as that record's check, so a stamp it could not trust stays untrusted. Within a session a
@@ -501,6 +532,9 @@ void edt::asset_database::apply_scan(asset_scan scan)
 		if (orphan.last_hash.empty()) {
 			orphan.last_hash = take_orphan_hash(orphan.meta_path);
 		}
+	}
+	for (const std::size_t layer : scan.layers_without_ids) {
+		warn_without_ids(layer);
 	}
 	const bool same_orphans = scan.orphans == m_orphans;
 	m_orphans = std::move(scan.orphans);
@@ -833,6 +867,13 @@ namespace
 		out["meta_layer"] = record.meta_layer;
 		out["meta_size"] = record.meta_size;
 		out["meta_mtime"] = record.meta_mtime;
+		const auto write_id = [&out](std::string_view name, const edt::file_id& id) {
+			if (edt::known_file_id(id)) {
+				out[name] = boost::json::array{ id.volume, id.index, id.index_high };
+			}
+		};
+		write_id("file_id", record.content_id);
+		write_id("meta_file_id", record.meta_id);
 		if (!record.meta_error.empty()) {
 			out["meta_error"] = record.meta_error;
 		}
@@ -978,6 +1019,33 @@ namespace
 				return std::nullopt;
 			}
 			record.flags.emplace_back(flag.get_string());
+		}
+		// A cache written before #888 has no identities: the first walk reads the .resource files and hashes again.
+		const auto read_id = [object](std::string_view name, edt::file_id& id) {
+			const boost::json::value* field = object->if_contains(name);
+			if (!field) {
+				return true;
+			}
+			const boost::json::array* parts = field->if_array();
+			if (!parts || parts->size() != 3) {
+				return false;
+			}
+			std::uint64_t values[3]{};
+			for (std::size_t i = 0; i < 3; ++i) {
+				const boost::json::value& part = (*parts)[i];
+				if (part.is_uint64()) {
+					values[i] = part.get_uint64();
+				} else if (part.is_int64() && part.get_int64() >= 0) {
+					values[i] = static_cast<std::uint64_t>(part.get_int64());
+				} else {
+					return false;
+				}
+			}
+			id = edt::file_id{ values[0], values[1], values[2], true };
+			return true;
+		};
+		if (!read_id("file_id", record.content_id) || !read_id("meta_file_id", record.meta_id)) {
+			return std::nullopt;
 		}
 		if (const boost::json::value* desc_type = object->if_contains("desc_type")) {
 			if (!desc_type->is_string() || record.type != "desc" || record.content_hash.empty()) {
@@ -1350,6 +1418,19 @@ void edt::asset_database::attach(res::resource_system& resources)
 	});
 }
 
+edt::file_id edt::asset_database::id_of(const fs::path& path) const
+{
+	return m_file_id ? m_file_id(path) : file_id_of(path);
+}
+
+void edt::asset_database::warn_without_ids(std::size_t layer)
+{
+	if (layer < m_layers.size() && m_warned_without_ids.insert(layer).second) {
+		egLOG_WARN("assets", "the file system of '{}' tells no file identity: a file moved over another of the same size "
+			"and time keeps the other's hash until it is written again", fs_paths::generic_utf8_of(m_layers[layer]));
+	}
+}
+
 std::optional<edt::asset_record> edt::asset_database::look_up(const std::string& relative, asset_layer_lookup& lookup,
 	const std::function<const asset_record*(const std::string&)>& before_of)
 {
@@ -1380,9 +1461,13 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 	record.shadowed_layers = file.shadowed;
 	record.size = stat.size;
 	record.mtime = stat.mtime;
+	record.content_id = id_of(m_layers[file.layer] / fs_paths::path_from_utf8(file.in_layer));
+	if (!known_file_id(record.content_id)) {
+		warn_without_ids(file.layer);
+	}
 	record.type = asset_type_of(canonical);
 	const asset_record* before = before_of ? before_of(record.path.string()) : nullptr;
-	if (before && !before->content_hash.empty() && before->size == stat.size && before->mtime == stat.mtime) {
+	if (before && !before->content_hash.empty() && same_content(*before, record)) {
 		record.content_hash = before->content_hash;
 		record.desc_type = before->desc_type;
 		record.content_checked_at = std::min(record.content_checked_at, before->content_checked_at);
@@ -1397,8 +1482,8 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 	record.meta_size = meta_stat.size;
 	record.meta_mtime = meta_stat.mtime;
 	record.meta_layer = meta.layer;
-	if (before && before->has_meta && before->meta_layer == meta.layer && before->meta_size == meta_stat.size
-		&& before->meta_mtime == meta_stat.mtime) {
+	record.meta_id = id_of(m_layers[meta.layer] / meta_relative);
+	if (before && same_meta(*before, record)) {
 		record.has_meta = true;
 		record.id = before->id;
 		record.flags = before->flags;
