@@ -170,6 +170,37 @@ BOOST_AUTO_TEST_CASE(ARollbackThatFails_IsCode6_AndTheNextRunIsRefusedUntilItIsR
 	BOOST_TEST(migrate(true, false) == pmg::k_exit_refused);
 	BOOST_TEST(printed.find("--migrate-rollback test-migration") != std::string::npos, printed);
 
+	// A manual rollback whose restore fails too: code 6, the journal stays rollback_failed.
+	write = [](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (!relative.generic_string().starts_with(".snk/")) return std::string{ "injected restore failure" };
+		return prj::write_project_file(root, relative, text);
+	};
+	printed.clear();
+	BOOST_TEST(pmg::run_migrate_rollback("test-migration", context()) == pmg::k_exit_rollback_failed, printed);
+	BOOST_TEST(pmg::journal_status(copy.root(), "test-migration") == "rollback_failed");
+	write = {};
+
+	// A retry refused before it writes (a file changed since the migration wrote it) is code 2: nothing was written.
+	std::string changed_path;
+	std::string changed_text;
+	for (const auto& [path, text] : snapshot(copy.root())) {
+		if (path.starts_with(".snk") || path == "project.snkproj") continue;
+		const auto was = before.find(path);
+		if (was != before.end() && was->second != text) {
+			changed_path = path;
+			changed_text = text;
+			break;
+		}
+	}
+	BOOST_REQUIRE(!changed_path.empty());
+	write_text(copy.root() / changed_path, changed_text + " ");
+	const auto refused_state = snapshot(copy.root());
+	printed.clear();
+	BOOST_TEST(pmg::run_migrate_rollback("test-migration", context()) == pmg::k_exit_refused, printed);
+	BOOST_TEST((snapshot(copy.root()) == refused_state));
+	write_text(copy.root() / changed_path, changed_text);
+	printed.clear();
+
 	BOOST_TEST(pmg::run_migrate_rollback("test-migration", context()) == pmg::k_exit_done, printed);
 	auto now = snapshot(copy.root());
 	std::erase_if(now, [](const auto& entry) { return entry.first.starts_with(".snk"); });
@@ -203,6 +234,31 @@ BOOST_AUTO_TEST_CASE(ARollback_OfAFileChangedSince_IsRefused_NamingIt)
 BOOST_AUTO_TEST_CASE(ARollbackOfAnUnknownId_IsRefused)
 {
 	BOOST_TEST(pmg::run_migrate_rollback("no-such-migration", context()) == pmg::k_exit_refused);
+}
+
+// #761: the journal the caller checked is the one rolled back; one that reads otherwise by then writes nothing.
+BOOST_AUTO_TEST_CASE(AJournalChangedSinceItWasChecked_IsRefused_NothingWritten)
+{
+	leave_only_what_migrates();
+	BOOST_REQUIRE(migrate(false, false) == pmg::k_exit_done);
+	const fs::path journal = copy.root() / ".snk/migrations/test-migration/report.json";
+	const std::string checked = pmg::journal_hash(read_text(journal));
+	write_text(journal, read_text(journal) + "\n");
+	const auto before = snapshot(copy.root());
+	bool wrote = false;
+	pmg::rollback_context rollback;
+	rollback.wrote = &wrote;
+	rollback.journal_hash = checked;
+	const std::optional<std::string> error = pmg::rollback_migration(copy.root(), "test-migration", rollback);
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("changed since it was checked") != std::string::npos, *error);
+	BOOST_TEST(!wrote);
+	BOOST_TEST((snapshot(copy.root()) == before));
+	BOOST_TEST(pmg::rollback_exit_code(error, wrote) == pmg::k_exit_refused);
+
+	rollback.journal_hash = pmg::journal_hash(read_text(journal));
+	BOOST_TEST(!pmg::rollback_migration(copy.root(), "test-migration", rollback).has_value());
+	BOOST_TEST(wrote);
 }
 
 // --report never writes into the project (a dry run then would write after all); outside it is the printed text.

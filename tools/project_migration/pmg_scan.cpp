@@ -111,12 +111,31 @@ namespace
 		return descs.is_registered(type) || descs.find_schema(type) != nullptr;
 	}
 
+	// What the scan asks of the types: the game layer itself, or a snapshot of it taken on the main thread (#761). Made
+	// from either where a desc_system or a type_catalog is passed.
+	class type_source
+	{
+	public:
+		type_source(const desc::desc_system& descs) : m_descs(&descs) {}
+		type_source(const prj::migration::type_catalog& catalog) : m_catalog(&catalog) {}
+
+		bool known(std::string_view type) const { return m_descs ? is_known(*m_descs, type) : m_catalog->is_known(type); }
+		int current_version(std::string_view type) const
+		{
+			return m_descs ? m_descs->current_version(type) : m_catalog->current_version(type);
+		}
+
+	private:
+		const desc::desc_system* m_descs = nullptr;
+		const prj::migration::type_catalog* m_catalog = nullptr;
+	};
+
 	// What an importer keeps in a sidecar: neither the scan nor a step of resource_meta looks into it.
 	constexpr std::string_view k_sidecar_settings = "settings";
 
 	struct object_walker
 	{
-		const desc::desc_system& descs;
+		const type_source& descs;
 		std::vector<prj::migration::typed_object>& objects;
 		std::string bad_version;
 		// The root of a .resource: its pseudo-type resource_meta is known there only (EPIC-58 3.4).
@@ -142,7 +161,7 @@ namespace
 				prj::migration::typed_object found;
 				found.pointer = pointer;
 				found.type = std::string{ type->as_string() };
-				found.known = is_known(descs, found.type) || (sidecar && pointer.empty() && found.type == res::asset_meta_type);
+				found.known = descs.known(found.type) || (sidecar && pointer.empty() && found.type == res::asset_meta_type);
 				if (const auto version = version_of(obj)) {
 					found.version = *version;
 				} else if (bad_version.empty()) {
@@ -188,7 +207,7 @@ namespace
 	}
 
 	// The class of a desc file from its typed objects.
-	void classify(prj::migration::scanned_file& file, const json::object& root, const desc::desc_system& descs, bool sidecar = false)
+	void classify(prj::migration::scanned_file& file, const json::object& root, const type_source& descs, bool sidecar = false)
 	{
 		file.kind = file_class::current;
 		file.reason.clear();
@@ -224,7 +243,7 @@ namespace
 		file.kind = kind;
 	}
 
-	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const desc::desc_system& descs,
+	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
 		std::uintmax_t max_bytes)
 	{
 		const json::value root = read_desc(file, project, path, max_bytes);
@@ -283,7 +302,7 @@ namespace
 		return res::read_asset_meta(json::serialize(root));
 	}
 
-	void classify_sidecar_root(prj::migration::scanned_file& file, const json::object& root, std::string_view text, const desc::desc_system& descs,
+	void classify_sidecar_root(prj::migration::scanned_file& file, const json::object& root, std::string_view text, const type_source& descs,
 		std::int64_t readable)
 	{
 		classify(file, root, descs, true);
@@ -305,7 +324,7 @@ namespace
 		}
 	}
 
-	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const desc::desc_system& descs,
+	void scan_sidecar(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
 		const prj::migration::scan_options& options)
 	{
 		std::string text;
@@ -333,7 +352,7 @@ namespace
 	{
 		prj::migration::scan_result& result;
 		const fs::path& project;
-		const desc::desc_system& descs;
+		const type_source& descs;
 		const prj::migration::scan_options& options;
 
 		void refuse(const fs::path& path, std::string reason)
@@ -347,8 +366,15 @@ namespace
 
 		// `owners`: by the res::asset_name_key of every file a .resource of this folder belongs to, that .resource's name
 		// (EPIC-57 4.2); of two in other letter cases, the first by name.
+		bool stopped()
+		{
+			if (!result.incomplete && options.stop && options.stop()) result.incomplete = true;
+			return result.incomplete;
+		}
+
 		void entry(const fs::path& path, const fs::file_status& status, const std::map<std::string, std::string>& owners)
 		{
+			if (stopped()) return;
 			// A content root "." is the project itself: its code, build output and manifest are not content.
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
@@ -384,6 +410,7 @@ namespace
 		// One folder at a time: a folder that cannot be listed is reported and the walk goes on with the others.
 		void folder(const fs::path& dir)
 		{
+			if (stopped()) return;
 			std::error_code ec;
 			fs::directory_iterator it(dir, fs::directory_options::none, ec);
 			if (ec) {
@@ -392,6 +419,7 @@ namespace
 			}
 			std::vector<std::pair<fs::path, fs::file_status>> entries;
 			for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+				if (stopped()) return;
 				std::error_code status_error;
 				const fs::file_status status = it->symlink_status(status_error);
 				entries.emplace_back(it->path(), status_error ? fs::file_status{ fs::file_type::unknown } : status);
@@ -409,7 +437,7 @@ namespace
 		}
 	};
 
-	void scan_root(prj::migration::scan_result& result, const fs::path& project, const fs::path& content_root, const desc::desc_system& descs,
+	void scan_root(prj::migration::scan_result& result, const fs::path& project, const fs::path& content_root, const type_source& descs,
 		const prj::migration::scan_options& options)
 	{
 		root_walk walk{ result, project, descs, options };
@@ -661,7 +689,40 @@ const prj::migration::scanned_file* prj::migration::scan_result::find(std::strin
 	return found == files.end() ? nullptr : &*found;
 }
 
+prj::migration::type_catalog prj::migration::type_catalog::from(const desc::desc_system& game_layer)
+{
+	type_catalog catalog;
+	for (std::string& type : game_layer.type_names()) {
+		// As is_known of the scan (a member of the same name hides it here).
+		const entry value{ game_layer.is_registered(type) || game_layer.find_schema(type) != nullptr, game_layer.current_version(type) };
+		catalog.add(std::move(type), value);
+	}
+	return catalog;
+}
+
+void prj::migration::type_catalog::add(std::string type, entry value)
+{
+	m_types.insert_or_assign(std::move(type), value);
+}
+
+bool prj::migration::type_catalog::is_known(std::string_view type) const
+{
+	const auto found = m_types.find(type);
+	return found != m_types.end() && found->second.known;
+}
+
+int prj::migration::type_catalog::current_version(std::string_view type) const
+{
+	const auto found = m_types.find(type);
+	return found == m_types.end() ? 1 : found->second.current_version;
+}
+
 prj::migration::scan_result prj::migration::scan_project(const fs::path& root, const desc::desc_system& game_layer, const scan_options& options)
+{
+	return scan_project(root, type_catalog::from(game_layer), options);
+}
+
+prj::migration::scan_result prj::migration::scan_project(const fs::path& root, const type_catalog& types, const scan_options& options)
 {
 	scan_result result;
 	std::optional<prj::manifest> manifest;
@@ -670,7 +731,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 	if (!manifest) return result;
 
 	for (const auto& content_root : manifest->content_roots) {
-		scan_root(result, project, normalized(project / content_root), game_layer, options);
+		scan_root(result, project, normalized(project / content_root), types, options);
 	}
 	std::ranges::sort(result.files, {}, &scanned_file::path);
 

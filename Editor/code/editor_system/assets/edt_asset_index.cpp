@@ -170,7 +170,7 @@ edt::asset_index_link::~asset_index_link()
 void edt::asset_index_link::attach()
 {
 	m_index->refresh(m_assets);
-	m_revision = m_assets.revision();
+	m_id_revision = m_assets.id_revision();
 	m_drops_seen = m_assets.changes_dropped();
 	m_resources.set_asset_index(m_index);
 	m_attached = true;
@@ -224,9 +224,9 @@ void edt::asset_index_link::poll()
 	if (!follow_drops()) {
 		return;
 	}
-	// A walk that changed only orphans, a fix of a .resource: the records may change without a batch's moves.
-	if (m_assets.revision() != m_revision) {
-		m_revision = m_assets.revision();
+	// Every step comes with a batch (id_revision); one a batch did not take is caught here.
+	if (m_assets.id_revision() != m_id_revision) {
+		m_id_revision = m_assets.id_revision();
 		if (m_index->refresh(m_assets)) {
 			apply({});
 		}
@@ -243,12 +243,12 @@ void edt::asset_index_link::on_batch(const asset_batch& batch)
 	// A walk's batch can name every file: the whole snapshot is taken again. A watcher's touches a few IDs.
 	if (batch.from_walk) {
 		m_index->refresh(m_assets);
-		m_revision = m_assets.revision();
+		m_id_revision = m_assets.id_revision();
 	} else {
 		m_index->apply_batch(m_assets, batch);
 		// Only this batch's step is taken: a change that came without a batch since the last poll is left to it.
-		if (m_assets.revision() == m_revision + 1) {
-			m_revision = m_assets.revision();
+		if (m_assets.id_revision() == m_id_revision + 1) {
+			m_id_revision = m_assets.id_revision();
 		}
 	}
 	apply(batch.moved);

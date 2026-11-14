@@ -31,6 +31,8 @@ namespace edt
 	// the checks, then the level is opened again). apply_migration runs in the job's io work (#761) while the main thread
 	// keeps drawing the modal and runs the engine's desc loads it hands over (apply_context::on_main); what the mounts
 	// report waits meanwhile (resource_system::hold_changes). The job answers with the report. Main thread only.
+	// project.migrate_rollback {id} (#761) runs prj::migration::rollback_migration through the same run (modal, hand-over
+	// to the io work, hold, documents closed and the level opened again) and answers as editor --migrate-rollback exits.
 	struct migration_deps
 	{
 		explicit migration_deps(job_service& job_service_) : jobs(job_service_) {}
@@ -81,9 +83,18 @@ namespace edt
 		// true once a run starts writing (the apply is handed to the io lane), false when it ended: the editor refuses
 		// Play, level changes and saves, builds, module reloads and quitting meanwhile. Null: nothing is told.
 		std::function<void(bool running)> running_changed;
+		// project.migrate_rollback put migration `id` back: a save block of a migration that stopped may go. Null: nothing.
+		std::function<void(const std::string& id)> migration_rolled_back;
+		// Tests only: stands in for prj::migration::rollback_migration, on the io lane like it; null: the real one.
+		std::function<std::optional<std::string>(const std::filesystem::path& root, std::string_view id,
+			const prj::migration::rollback_context& context)> rollback;
 	};
 
 	inline constexpr std::string_view k_migration_frame_id = "edt/migrate_project";
+
+	// A migration id project.migrate_rollback takes: one folder name of [A-Za-z0-9._+-], at most 128 bytes, not starting with
+	// '.' (apply_migration makes "<UTC>-<engine version>", "-2"...).
+	[[nodiscard]] bool valid_migration_id(std::string_view id);
 
 	[[nodiscard]] std::vector<registration> register_migration_commands(cmd::command_registry& commands, migration_deps deps);
 }

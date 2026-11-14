@@ -244,6 +244,11 @@ namespace {
 
 		const edt::desc_file_deps& deps() const { return m_deps; }
 
+		std::optional<std::string> write_blocked() const
+		{
+			return m_deps.write_blocker ? m_deps.write_blocker() : std::nullopt;
+		}
+
 	private:
 		edt::desc_file_deps m_deps;
 	};
@@ -360,6 +365,7 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
 			if (found.found) {
@@ -380,6 +386,7 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
 			if (!found.found) {
@@ -416,6 +423,7 @@ namespace {
 			const auto refused = [](const std::string& why) { return std::optional<std::string>("This request will be refused: " + why); };
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
+			if (std::optional<std::string> why = m_files.write_blocked()) return refused(*why);
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return refused(found.error);
 			if (!found.found) return refused(std::format("no file 'res://{}'", path.relative));

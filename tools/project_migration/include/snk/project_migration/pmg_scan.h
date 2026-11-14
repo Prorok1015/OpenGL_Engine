@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -78,12 +80,16 @@ namespace prj::migration
 		// The .resource version the engine reads. Only a test sets another one: it stands for an engine whose
 		// res::asset_meta_version was raised with the step under test.
 		std::int64_t resource_meta_version = res::asset_meta_version;
+		// Asked before each entry of a folder: true stops the scan there (scan_result::incomplete). Empty: never stopped.
+		std::function<bool()> stop;
 	};
 
 	struct scan_result
 	{
 		manifest_state manifest;
 		std::vector<scanned_file> files;
+		// scan_options::stop ended the scan early: the files are only part of the project.
+		bool incomplete = false;
 
 		std::size_t count(file_class kind) const;
 		const scanned_file* find(std::string_view path) const;
@@ -103,10 +109,36 @@ namespace prj::migration
 	void migrate_sidecar(const desc::desc_system& game_layer, json::object& root, std::string_view file,
 		std::vector<desc::migration_warning>* warnings = nullptr);
 
+	// The game layer's types as a scan asks about them (known: registered or with a schema; current_version), taken on the
+	// main thread so that a scan can run on another one (#761). A type it does not list is unknown, at version 1, as the
+	// game layer answers for it.
+	class type_catalog
+	{
+	public:
+		struct entry
+		{
+			bool known = false;
+			int current_version = 1;
+		};
+
+		static type_catalog from(const desc::desc_system& game_layer);
+
+		void add(std::string type, entry value);
+		bool is_known(std::string_view type) const;
+		int current_version(std::string_view type) const;
+		const std::map<std::string, entry, std::less<>>& types() const { return m_types; }
+
+	private:
+		std::map<std::string, entry, std::less<>> m_types;
+	};
+
 	// Reads project.snkproj under `root` and every file of its content roots (not the engine's layer; hidden folders,
-	// links and other non-regular files are not followed). `game_layer` decides which types are known and their versions.
-	// Writes nothing.
+	// links and other non-regular files are not followed). `game_layer` decides which types are known and their versions
+	// (through type_catalog::from). Writes nothing.
 	scan_result scan_project(const std::filesystem::path& root, const desc::desc_system& game_layer, const scan_options& options = {});
+
+	// The same scan with a snapshot of the types: it touches no engine service, so it may run on a worker thread.
+	scan_result scan_project(const std::filesystem::path& root, const type_catalog& types, const scan_options& options = {});
 
 	// Leaves (JSON pointers of non-container values) added, removed and changed by a migration.
 	struct diff_stat
