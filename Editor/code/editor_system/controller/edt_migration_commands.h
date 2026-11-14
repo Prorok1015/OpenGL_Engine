@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
+#include <snk/project_migration/pmg_apply.h>
 #include <snk/resource/res_tag.h>
 #include <chrono>
 #include <filesystem>
@@ -63,6 +64,8 @@ namespace edt
 		std::function<void(bool open)> show_progress;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
+		// Tests only: stands in for prj::migration::apply_migration (one that throws); null: the real one.
+		std::function<prj::migration::apply_outcome(const prj::migration::migration_plan&, const prj::migration::apply_context&)> apply;
 	};
 
 	inline constexpr std::string_view k_migration_frame_id = "edt/migrate_project";

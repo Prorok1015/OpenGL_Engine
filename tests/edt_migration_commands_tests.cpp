@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,6 +103,9 @@ struct migration_fixture : test_util::scene_env
 		deps.level_load_in_progress = [this] { return loading; };
 		deps.current_level_tag = [this] { return current_level; };
 		deps.register_implicit = [this](std::string_view id, std::function<bool()> fn) { implicit.emplace_back(std::string(id), std::move(fn)); };
+		deps.apply = [this](const pmg::migration_plan& plan, const pmg::apply_context& context) {
+			return apply ? apply(plan, context) : pmg::apply_migration(plan, context);
+		};
 		registrations = edt::register_migration_commands(commands, std::move(deps));
 	}
 
@@ -184,6 +188,7 @@ struct migration_fixture : test_util::scene_env
 	int rebuilds = 0;
 	std::vector<std::string> signaled;
 	std::vector<std::pair<std::string, std::function<bool()>>> implicit;
+	std::function<pmg::apply_outcome(const pmg::migration_plan&, const pmg::apply_context&)> apply;
 	std::vector<edt::registration> registrations;
 };
 
@@ -335,6 +340,32 @@ BOOST_AUTO_TEST_CASE(AProjectThatMigratesWhole_IsDone_WithoutALevel)
 	const json::object& level = result.at("level").as_object();
 	BOOST_TEST(!level.at("reopened").as_bool());
 	BOOST_TEST(level.contains("reason"));
+}
+
+// An apply that throws leaves the project in an unknown state: code 6, the rollback named, every planned file announced,
+// and the level stays detached (neither loaded from the half migrated files nor saved over them).
+BOOST_AUTO_TEST_CASE(AnApplyThatThrows_IsCode6_AndTheLevelStaysDetached)
+{
+	fs::remove(copy.res() / "broken.desc");
+	current_level = res::tag::make("levels/old.desc");
+	apply = [](const pmg::migration_plan&, const pmg::apply_context& context) -> pmg::apply_outcome {
+		write_text(context.root / ".snk/migrations/test-stopped/report.json", R"({"status":"in_progress"})");
+		throw std::runtime_error("injected apply failure");
+	};
+	static_cast<void>(ask());
+	const json::object result = migrate();
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_rollback_failed, json::serialize(result));
+	const std::string error(result.at("error").as_string());
+	BOOST_TEST(error.find("injected apply failure") != std::string::npos, error);
+	BOOST_TEST(error.find("--migrate-rollback test-stopped") != std::string::npos, error);
+	const json::object& level = result.at("level").as_object();
+	BOOST_TEST(!level.at("reopened").as_bool());
+	BOOST_TEST(std::string(level.at("reason").as_string()).find("--migrate-rollback test-stopped") != std::string::npos);
+	BOOST_TEST(closed);
+	BOOST_TEST(!attached);
+	BOOST_TEST(!loading);
+	BOOST_TEST(rebuilds == 1);
+	BOOST_TEST((std::ranges::find(signaled, std::string{ "res://cameras/cam_v1.desc" }) != signaled.end()));
 }
 
 // A level that does not load again is reported; the migration stands.
