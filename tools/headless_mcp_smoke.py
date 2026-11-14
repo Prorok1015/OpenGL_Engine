@@ -3,18 +3,28 @@
 
 Starts `<editor> --headless --mcp-stdio <editor args>`, speaks newline-delimited JSON-RPC on its stdin/stdout
 (initialize, notifications/initialized, tools/list, tools/call problems_list), with --play also drives Play
-(#491: play_start, play_pause, play_step{n: 2}, play_status until the two frames ran, play_stop), then closes stdin and
-requires the editor to exit with 0. Every line on stdout must be a JSON-RPC 2.0 message: anything else (a stray print, a log line)
+(#491: play_start, play_pause, play_step{n: 2}, play_status until the two frames ran, play_stop), with --migrate migrates a
+copy of tests/data/projects/migration_v1 in place (#761: project_migration_plan, project_migrate, job_get until the job
+ends, then the report and its journal .snk/migrations/<id>/report.json), then closes stdin and requires the editor to exit
+with 0. Every line on stdout must be a JSON-RPC 2.0 message: anything else (a stray print, a log line)
 breaks an MCP client. Standard library only; every wait has a timeout, so the script cannot hang.
 
     tools/headless_mcp_smoke.py --editor build/dev-debug/Editor/editor [--stderr editor.log] [--play] -- \
         --config Editor/config/editor.cfg --project projects/sandbox
+    tools/headless_mcp_smoke.py --editor build/dev-debug/Editor/editor --migrate tests/data/projects/migration_v1 -- \
+        --config Editor/config/editor.cfg
+
+With --migrate the script adds --project <copy> --allow-engine-version-mismatch --agent-policy <answers> itself: the copy
+and the answers file (allowing project.migrate, outside the project) live in temporary folders it removes afterwards.
 """
 import argparse
 import json
+import os
 import queue
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -207,10 +217,109 @@ def drive_play(session, first_id, timeout):
     return next_id()
 
 
+def prepare_migration(fixture, scratch):
+    """Copies the fixture project into scratch/project and writes scratch/answers/agent_policy.json; returns both paths."""
+    project = os.path.join(scratch, "project")
+    shutil.copytree(fixture, project)
+    # A broken file makes the plan refuse the whole migration; newer and unknown files are only left as they are (code 4).
+    broken = os.path.join(project, "res", "broken.desc")
+    if os.path.exists(broken):
+        os.remove(broken)
+    # The project is its own git worktree, so the answers file is checked against the copy, not the folders above it.
+    os.makedirs(os.path.join(project, ".git"), exist_ok=True)
+    answers_dir = os.path.join(scratch, "answers")
+    os.makedirs(answers_dir)
+    answers = os.path.join(answers_dir, "agent_policy.json")
+    with open(answers, "w", encoding="utf-8") as file:
+        json.dump({"commands": {"project.migrate": "allow"}}, file)
+    return project, answers
+
+
+def drive_migration(session, first_id, project, timeout):
+    """project_migration_plan (code 1), project_migrate -> {job}, job_get until done, then the report. Returns the next free id."""
+    request_id = first_id
+
+    def next_id():
+        nonlocal request_id
+        request_id += 1
+        return request_id
+
+    # The start level may still be loading: both commands refuse with busy until it is there.
+    deadline = session.deadline(timeout)
+    while True:
+        is_error, structured, text = call_tool(session, next_id(), "project_migration_plan")
+        if not is_error:
+            break
+        if not text.startswith("busy") or time.monotonic() > deadline:
+            raise SmokeFailure(f"project_migration_plan answered with an error: {text}")
+        time.sleep(0.5)
+    if not isinstance(structured, dict) or structured.get("code") != 1:
+        raise SmokeFailure(f"project_migration_plan: expected code 1 (a migration is needed), got {structured!r}")
+    files = structured.get("plan", {}).get("files", [])
+    print(f"tools/call project_migration_plan: code 1, {len(files)} files")
+
+    deadline = session.deadline(timeout)
+    while True:
+        is_error, structured, text = call_tool(session, next_id(), "project_migrate")
+        if not is_error:
+            break
+        if not text.startswith("busy") or time.monotonic() > deadline:
+            raise SmokeFailure(f"project_migrate answered with an error: {text}")
+        time.sleep(0.5)
+    job = structured.get("job") if isinstance(structured, dict) else None
+    if not isinstance(job, int):
+        raise SmokeFailure(f"project_migrate: expected {{job}}, got {structured!r}")
+    print(f"tools/call project_migrate: job {job}")
+
+    deadline = session.deadline(timeout)
+    while True:
+        is_error, structured, text = call_tool(session, next_id(), "job_get", {"id": job})
+        if is_error:
+            raise SmokeFailure(f"job_get answered with an error: {text}")
+        status = structured.get("status") if isinstance(structured, dict) else None
+        if status != "running":
+            break
+        if time.monotonic() > deadline:
+            raise SmokeFailure(f"the migration job {job} still runs after {timeout} s")
+        time.sleep(0.25)
+    if status != "done":
+        raise SmokeFailure(f"the migration job {job} ended {status!r}: {structured!r}")
+    result = structured.get("result")
+    if not isinstance(result, dict) or "error" in result and isinstance(result["error"], dict):
+        raise SmokeFailure(f"the migration job {job} answered with an error: {result!r}")
+    code = result.get("code")
+    if code not in (0, 4):
+        raise SmokeFailure(f"the migration ended with code {code!r} (expected 0 or 4): {result.get('text', '')[:2000]}")
+    migration_id = result.get("id")
+    if not result.get("status") or not isinstance(result.get("report"), dict) or not migration_id:
+        raise SmokeFailure(f"the migration's answer has no status, report or id: {sorted(result)}")
+    journal = os.path.join(project, ".snk", "migrations", migration_id, "report.json")
+    if not os.path.isfile(journal):
+        raise SmokeFailure(f"the journal {journal} is missing")
+    level = result.get("level", {})
+    print(f"migration {migration_id}: code {code}, {result['status']}, {len(result['report'].get('files', []))} files written, "
+          f"level reopened: {level.get('reopened')}")
+    return next_id()
+
+
 def run(arguments):
     editor_args = arguments.editor_args
     if editor_args and editor_args[0] == "--":
         editor_args = editor_args[1:]
+    scratch = None
+    project = None
+    if arguments.migrate:
+        scratch = tempfile.mkdtemp(prefix="snk_mcp_migrate_")
+        project, answers = prepare_migration(arguments.migrate, scratch)
+        editor_args = [*editor_args, "--project", project, "--allow-engine-version-mismatch", "--agent-policy", answers]
+    try:
+        return run_editor(arguments, editor_args, project)
+    finally:
+        if scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def run_editor(arguments, editor_args, project):
     command = [arguments.editor, "--headless", "--mcp-stdio", *editor_args]
     print("$ " + " ".join(command))
     session = EditorSession(command, arguments.stderr, arguments.request_timeout, arguments.overall_timeout)
@@ -236,8 +345,11 @@ def run(arguments):
             raise SmokeFailure(f"problems_list answered with an error: {called}")
         print("tools/call problems_list: ok")
 
+        next_request = 3
         if arguments.play:
-            drive_play(session, 3, arguments.request_timeout)
+            next_request = drive_play(session, next_request, arguments.request_timeout)
+        if arguments.migrate:
+            drive_migration(session, next_request, project, arguments.request_timeout)
 
         code = session.close_and_wait(arguments.exit_timeout)
         if code != 0:
@@ -257,6 +369,8 @@ def main():
     parser.add_argument("--overall-timeout", type=float, default=200.0,
                         help="seconds for everything before stdin is closed; a failure names the step that was waiting")
     parser.add_argument("--play", action="store_true", help="also start, pause, step and stop Play over MCP (#491)")
+    parser.add_argument("--migrate", metavar="FIXTURE",
+                        help="migrate a copy of this project folder (tests/data/projects/migration_v1) over MCP (#761)")
     parser.add_argument("--exit-timeout", type=float, default=30.0, help="seconds to wait for the exit after stdin closes")
     parser.add_argument("editor_args", nargs=argparse.REMAINDER, help="more arguments for the editor, after --")
     arguments = parser.parse_args()

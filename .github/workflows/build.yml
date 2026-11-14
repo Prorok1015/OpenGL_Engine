@@ -1019,6 +1019,18 @@ jobs:
           grep -q "agent server: MCP over stdin/stdout" "$err"
           if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless MCP log"; exit 1; fi
 
+      # Project migration over MCP (#761, EPIC-58 S8): a copy of tests/data/projects/migration_v1 is planned (code 1),
+      # migrated in place by an agent the --agent-policy answers allow, and the job's report and its journal are checked.
+      - name: Headless MCP project migration
+        run: |
+          mkdir -p headless_out/mcp_migrate
+          err=headless_out/mcp_migrate/stderr.log
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 240 python3 tools/headless_mcp_smoke.py --editor "$EDITOR_BIN" \
+            --stderr "$err" --migrate tests/data/projects/migration_v1 -- --config Editor/config/editor.cfg || rc=$?
+          tail -30 "$err" || true
+          if [ "$rc" -ne 0 ]; then echo "::error::the MCP migration smoke failed (rc $rc, 124 = timed out)"; exit 1; fi
+
       - name: Smoke run (smoke_level)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/smoke/final.png \
