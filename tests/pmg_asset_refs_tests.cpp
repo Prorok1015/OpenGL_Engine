@@ -12,6 +12,7 @@
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
@@ -511,7 +512,7 @@ BOOST_AUTO_TEST_CASE(OfTwoFilesWithOneId_OnlyTheHolderGetsGuidAndPath)
 // A {"guid"} without a path whose ID is known gets the path its file has now, as write_references gives it.
 BOOST_AUTO_TEST_CASE(AGuidWithoutAPath_GetsThePathOfItsFile)
 {
-	write_text(copy.res() / "refs/g.desc", std::string(R"({"__type": "refs_test.thing", "texture": {"guid": ")") + std::string(k_with_meta_id) + ""}}");
+	write_text(copy.res() / "refs/g.desc", std::string(R"({"__type": "refs_test.thing", "texture": {"guid": ")") + std::string(k_with_meta_id) + "\"}}");
 	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
 	BOOST_REQUIRE(scan.find("res/refs/g.desc") != nullptr);
 	BOOST_TEST(scan.find("res/refs/g.desc")->reference_fixes == 1u);
