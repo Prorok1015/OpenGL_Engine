@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
+#include "edt_document_creator.h"
 #include "test_fake_asset_catalog.hpp"
 #include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
@@ -10,12 +11,17 @@
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <imgui.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,6 +53,35 @@ constexpr const char* k_plain_schema = R"({
 	"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 } ]
 })";
 
+constexpr const char* k_linked_schema = R"({
+	"name": "test.linked", "kind": "desc", "is_document": true,
+	"fields": [ { "name": "speed", "kind": "f32", "default": 1.0 }, { "name": "texture", "kind": "res_tag", "default": "" },
+		{ "name": "material", "kind": "desc_ref", "ref_type": "test.plain", "default": "" } ]
+})";
+
+// Path <-> ID both ways, as the editor's asset database answers.
+struct ids_index final : res::asset_index
+{
+	std::map<std::string, res::asset_id, std::less<>> ids;
+	std::map<res::asset_id, res::tag> paths;
+
+	void hold(const res::asset_id& id, std::string_view path)
+	{
+		ids.emplace(std::string(path), id);
+		paths.insert_or_assign(id, res::tag{ std::string(path) });
+	}
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		const auto found = ids.find(tag.view());
+		return found == ids.end() ? std::nullopt : std::optional{ found->second };
+	}
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
 struct document_fixture : test_util::scene_env
 {
 	document_fixture()
@@ -59,6 +94,7 @@ struct document_fixture : test_util::scene_env
 			res::mount_access::read_write, res::write_policy::allow_all());
 		descs->register_schema(desc::parse_type_schema(json::parse(k_config_schema).as_object()));
 		descs->register_schema(desc::parse_type_schema(json::parse(k_plain_schema).as_object()));
+		descs->register_schema(desc::parse_type_schema(json::parse(k_linked_schema).as_object()));
 		descs->register_schema(desc::parse_type_schema(json::parse(k_tagged_schema).as_object()));
 		services.base_descs = descs.get();
 		services.base_resources = rs.get();
@@ -1526,6 +1562,227 @@ BOOST_AUTO_TEST_CASE(ADataDocumentHasNoAgentChangesAndIsNeverLocked)
 	BOOST_REQUIRE(document.open(child).opened);
 	BOOST_TEST(!document.has_agent_changes());
 	BOOST_TEST(!document.edits_locked());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Types_AreTheDocumentTypesOnly)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	BOOST_TEST((creator.types() == std::vector<std::string>{ "test.config", "test.linked", "test.tagged" }));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_MakesTheExtensionDotDesc)
+{
+	BOOST_TEST(edt::document_creator::file_name("a") == "a.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.desc") == "a.desc");
+	BOOST_TEST(edt::document_creator::file_name("A.DESC") == "A.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.b") == "a.b.desc");
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WritesTheTypeAndTheVersionOnly_AndTheFileOpensAsADocument)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	const edt::document_creation made = creator.create("", "test.config", "made");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(made.tag.string() == "res://made.desc");
+	const json::object content = parsed("made.desc");
+	BOOST_TEST(content.size() == 2u);
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "test.config");
+	BOOST_TEST(content.at("__version").to_number<int>() == descs->current_version("test.config"));
+
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(made.tag);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(document.type() == "test.config");
+	BOOST_TEST(!document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_InAFolderThatDoesNotExistYet_MakesItInTheTopLayer)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	const edt::document_creation made = creator.create("configs/deep", "test.tagged", "a.desc");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(fs::exists(res_root / "configs" / "deep" / "a.desc"));
+	BOOST_TEST(!fs::exists(lower / "configs"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverAFile_OfTheTopLayerOrOfALowerOne)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	put("taken.desc", R"({"__type":"test.config","speed":9.0})");
+	const std::string before = text_of("taken.desc");
+	const edt::document_creation own = creator.create("", "test.config", "taken");
+	BOOST_TEST(!own.ok());
+	BOOST_TEST(own.error == "'taken.desc' already exists in the project layer");
+	BOOST_TEST(text_of("taken.desc") == before);
+
+	write(lower, "base.desc", R"({"__type":"test.config"})");
+	const edt::document_creation below = creator.create("", "test.config", "base.desc");
+	BOOST_TEST(!below.ok());
+	BOOST_TEST(below.error == "'base.desc' already exists in the engine layer");
+	BOOST_TEST(!fs::exists(res_root / "base.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Check_RefusesWhatIsNotAName)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	BOOST_TEST(creator.check("", "").size() > 0u);
+	BOOST_TEST(creator.check("", "a/b").size() > 0u);
+	BOOST_TEST(creator.check("", "..").size() > 0u);
+	BOOST_TEST(creator.check("", ".hidden").size() > 0u);
+	for (const char* bad : { "a\\b", "C:x", "res://x", "CON", "a.", "a ", ".desc" }) {
+		BOOST_TEST_CONTEXT("name: " << bad) BOOST_TEST(creator.check("", bad).size() > 0u);
+	}
+	BOOST_TEST(creator.check("../outside", "a").size() > 0u);
+	BOOST_TEST(creator.check("", "fine").empty());
+	BOOST_TEST(creator.check("some/folder", "fine").empty());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WhileABlockerHolds_RefusesWithItsReasonAndWritesNothing)
+{
+	bool blocked = true;
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; },
+		[&blocked]() -> std::optional<std::string> {
+			return blocked ? std::optional<std::string>{ "a project migration is running" } : std::nullopt;
+		} } };
+	const edt::document_creation refused = creator.create("", "test.config", "x");
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(refused.error == "a project migration is running");
+	BOOST_TEST(!fs::exists(res_root / "x.desc"));
+
+	blocked = false;
+	BOOST_TEST(creator.create("", "test.config", "x").ok());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverTheLabelOfADeletedFile)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	put("gone.desc.resource", "{}");
+	const edt::document_creation own = creator.create("", "test.config", "gone");
+	BOOST_TEST(!own.ok());
+	BOOST_TEST(own.error.find("project layer") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "gone.desc"));
+
+	write(lower, "old.desc.resource", "{}");
+	const edt::document_creation below = creator.create("", "test.config", "old");
+	BOOST_TEST(!below.ok());
+	BOOST_TEST(below.error.find("engine layer") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "old.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_OfATypeThatIsNoDocument_IsRefusedAndWritesNothing)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	const edt::document_creation made = creator.create("", "test.plain", "x");
+	BOOST_TEST(!made.ok());
+	BOOST_TEST(made.error == "'test.plain' is not a document type");
+	BOOST_TEST(!fs::exists(res_root / "x.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWhatIsWrongBefore)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	edt::document_create_form form(creator);
+	form.open("configs");
+	BOOST_TEST(form.folder() == "configs");
+	BOOST_TEST(form.types().size() == 3u);
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(form.problem().empty());
+	BOOST_TEST(!form.submit().has_value());
+
+	form.set_name("a/b");
+	BOOST_TEST(form.problem().size() > 0u);
+	BOOST_TEST(!form.can_submit());
+
+	form.set_type_index(2);
+	form.set_name("game");
+	BOOST_TEST(form.can_submit());
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE(made.has_value());
+	BOOST_TEST(made->string() == "res://configs/game.desc");
+	const json::object content = json::parse(text_of("configs/game.desc")).as_object();
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "test.tagged");
+
+	// the same name again: the form refuses it before anything is written
+	form.open("configs");
+	form.set_name("game");
+	BOOST_TEST(form.problem() == "'game.desc' already exists in the project layer");
+	BOOST_TEST(!form.can_submit());
+}
+
+// #773: a save writes a reference as {guid, path} when its target has an ID, and the document holds what the file does; the
+// next save keeps it.
+BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
+{
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(id, "res://textures/a.png");
+	rs->set_asset_index(index);
+	const res::tag linked = put("linked.desc", R"({"__type":"test.linked","speed":2.0})");
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(linked).opened);
+
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["texture"] = "res://textures/a.png";
+		return true;
+	}));
+	const edt::save_result saved = document.save();
+	const json::value expected = json::object{ { "guid", res::to_text(id) }, { "path", "res://textures/a.png" } };
+	const json::value written = parsed("linked.desc").at("texture");
+	const json::value held = document.shown().at("texture");
+
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 3.0;
+		return true;
+	}));
+	const edt::save_result again = document.save();
+	rs->set_asset_index(nullptr);
+
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	BOOST_TEST(written == expected);
+	BOOST_TEST(held == expected);
+	BOOST_REQUIRE_MESSAGE(again.saved, again.error);
+	BOOST_TEST(parsed("linked.desc").at("texture") == expected);
+}
+
+// #773: in a __parent chain a reference field of the nearer file replaces the farther one's value whole. Merged key by
+// key, a {guid, path} would take the __type of an inline desc, an inline desc the guid of a reference, and a new path the
+// old guid.
+BOOST_AUTO_TEST_CASE(AParentChain_AReferenceReplacesTheInheritedValueWhole)
+{
+	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
+	put("inline_parent.desc", R"({"__type":"test.linked","material":{"__type":"test.plain","speed":5.0}})");
+	put("ref_parent.desc", R"({"__type":"test.linked","material":{)" + guid + R"(,"path":"res://m.desc"}})");
+	put("ref_over_inline.desc", R"({"__type":"test.linked","__parent":"res://inline_parent.desc","material":{)" + guid + R"(,"path":"res://m.desc"}})");
+	put("inline_over_ref.desc", R"({"__type":"test.linked","__parent":"res://ref_parent.desc","material":{"__type":"test.plain","speed":2.0}})");
+	put("path_over_ref.desc", R"({"__type":"test.linked","__parent":"res://ref_parent.desc","material":{"path":"res://n.desc"}})");
+	// One level more: the chain the document is opened over is merged the same way.
+	put("grandchild.desc", R"({"__type":"test.linked","__parent":"res://ref_over_inline.desc","speed":3.0})");
+	const auto material_of = [this](std::string_view name) {
+		edt::data_document document = make();
+		const edt::open_result opened = document.open(res::tag{ "res://" + std::string(name) });
+		BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+		return json::value(document.shown().at("material"));
+	};
+
+	const json::value reference = json::parse("{" + guid + R"(,"path":"res://m.desc"})");
+	BOOST_TEST(material_of("ref_over_inline.desc") == reference);
+	BOOST_TEST(material_of("grandchild.desc") == reference);
+	BOOST_TEST(material_of("path_over_ref.desc") == json::parse(R"({"path":"res://n.desc"})"));
+	const json::value inline_over = material_of("inline_over_ref.desc");
+	BOOST_REQUIRE(inline_over.is_object());
+	BOOST_TEST(inline_over.as_object().at("__type") == json::value("test.plain"));
+	BOOST_TEST(inline_over.as_object().at("speed").to_number<double>() == 2.0);
+	BOOST_TEST(!inline_over.as_object().contains("guid"));
+	BOOST_TEST(!inline_over.as_object().contains("path"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

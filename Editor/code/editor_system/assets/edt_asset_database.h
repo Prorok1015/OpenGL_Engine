@@ -20,6 +20,7 @@
 #include <unordered_map>
 #include <vector>
 #include <snk/platform/plt_file_lock.h>
+#include "edt_file_identity.h"
 
 namespace res
 {
@@ -55,6 +56,10 @@ namespace edt
 		std::size_t meta_layer = 0;
 		std::int64_t meta_size = 0;
 		std::int64_t meta_mtime = 0;
+		// Which file on the disk the file and its .resource are: part of their stamps, as a file renamed over another keeps
+		// its size and time (#888). Invalid where the file system tells none (see known_file_id).
+		file_id content_id;
+		file_id meta_id;
 		// Why the .resource next to the file could not be read (with the path of the bad field); empty when it was read.
 		std::string meta_error;
 		std::vector<std::string> flags;
@@ -113,7 +118,16 @@ namespace edt
 		std::vector<asset_orphan> orphans;
 		// .resource files the walk read (an unchanged one known from the cache is not read).
 		std::size_t meta_reads = 0;
+		// Layers whose files the file system gives no identity: their hashes follow size and time alone.
+		std::set<std::size_t> layers_without_ids;
 	};
+
+	// Where the stamps take a file's identity from: file_id_of, or a stand-in in tests.
+	using file_id_source = std::function<file_id(const std::filesystem::path&)>;
+
+	// An identity a stamp can rely on: one the file system told, and not the zero some network and synchronised file
+	// systems answer for every file.
+	bool known_file_id(const file_id& id);
 
 	// What the background pass reads of one file: its hash and, for a desc, its "__type".
 	struct asset_content
@@ -138,6 +152,8 @@ namespace edt
 		std::vector<res::tag> added;
 		std::vector<res::tag> removed;
 		std::vector<res::tag> changed;
+		// What a walk found (apply_scan), against a watcher's report: it may name any number of files.
+		bool from_walk = false;
 	};
 
 	// The kind of asset of a path by its suffix (lowercase compare).
@@ -153,8 +169,10 @@ namespace edt
 	// skipped. `stopped` (may be empty) ends the walk early.
 	// `known` (may be null): records by path text, from the cache or the last walk; a file whose .resource has the size
 	// and time recorded there keeps the record's ID and flags without the .resource being read again.
+	// `id_of` (empty: file_id_of) gives the files' identities.
 	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {},
-		const std::map<std::string, asset_record>* known = nullptr, bool case_insensitive = platform_case_insensitive);
+		const std::map<std::string, asset_record>* known = nullptr, bool case_insensitive = platform_case_insensitive,
+		const file_id_source& id_of = {});
 
 	// Writes the cache file of `records` (the format load_cache reads) through prj::write_project_file. The error, nullopt on
 	// success.
@@ -230,6 +248,8 @@ namespace edt
 		bool loaded_from_cache() const { return m_loaded_from_cache; }
 		// Files read so far: .resource files and files hashed. For tests of the cache.
 		std::size_t files_read() const { return m_files_read; }
+		// Where the stamps take files' identities from (tests: a file system that tells none). Before the first walk.
+		void set_file_id_source(file_id_source source) { m_file_id = std::move(source); }
 		// Writes the cache now, on the calling thread, when something changed since it was last written (and the lock is
 		// held).
 		void save();
@@ -325,6 +345,13 @@ namespace edt
 		void unindex_id(const asset_record& record);
 		void on_job_finished(std::uint64_t id, job_status status);
 		void load_cache();
+		// Through m_file_id, else m_ids.
+		file_id id_of(const std::filesystem::path& path);
+		// Once per layer: its files have no identity, so their hashes follow size and time alone.
+		void warn_without_ids(std::size_t layer);
+		// Once per layer: a file of an unchanged size and time told another identity on two looks in a row (sshfs
+		// without use_ino, some SMB servers), so each look reads it again.
+		void watch_identity(const asset_record& before, const asset_record& now);
 		// The record the walk would make of `relative` (res:// path text without the protocol, any letter case when case
 		// insensitive) now; none when it would make none. `before_of` gives what is known of a path text (may be null).
 		std::optional<asset_record> look_up(const std::string& relative, asset_layer_lookup& lookup,
@@ -391,6 +418,14 @@ namespace edt
 		bool m_loaded_from_cache = false;
 		bool m_dirty = false;
 		std::size_t m_files_read = 0;
+		file_id_source m_file_id;
+		// The listings of one batch of changes (apply_changes): a new one for each.
+		file_id_reader m_ids;
+		// By path text: looks in a row at which the file kept its size and time but told another identity.
+		std::unordered_map<std::string, int> m_id_flips;
+		std::set<std::size_t> m_warned_unstable_ids;
+		// Layers already warned of having no file identities: once per layer.
+		std::set<std::size_t> m_warned_without_ids;
 		res::resource_system* m_resources = nullptr;
 		std::function<void(const asset_batch&)> m_on_batch;
 		std::vector<history_entry> m_history;

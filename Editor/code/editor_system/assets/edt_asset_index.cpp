@@ -4,6 +4,8 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
 #include <string_view>
+#include <unordered_set>
+#include <vector>
 
 std::optional<res::asset_id> edt::asset_index_snapshot::id_of(const res::tag& tag) const
 {
@@ -30,8 +32,17 @@ std::string edt::asset_index_snapshot::key_of(const res::tag& tag, bool case_ins
 	return layer_merge_key(std::string{ tag.view() }, case_insensitive);
 }
 
+void edt::asset_index_snapshot::warn_copy(const asset_record& copy, const asset_record& holder)
+{
+	if (m_warned.emplace(*copy.id, std::string{ copy.path.view() }).second) {
+		egLOG_WARN("assets", "'{}' carries the ID {} of '{}': it loads as a file of its own until it gets an ID of its own "
+			"(Problems)", copy.path.view(), res::to_text(*copy.id), holder.path.view());
+	}
+}
+
 bool edt::asset_index_snapshot::refresh(const asset_database& assets)
 {
+	++m_full_refreshes;
 	auto next = std::make_shared<data>();
 	next->case_insensitive = assets.case_insensitive();
 	std::unordered_map<res::asset_id, const asset_record*> holders;
@@ -49,9 +60,8 @@ bool edt::asset_index_snapshot::refresh(const asset_database& assets)
 			continue;
 		}
 		const asset_record& holder = *holders.at(*record.id);
-		if (&holder != &record && m_warned.emplace(*record.id, std::string{ record.path.view() }).second) {
-			egLOG_WARN("assets", "'{}' carries the ID {} of '{}': it loads as a file of its own until it gets an ID of its own "
-				"(Problems)", record.path.view(), res::to_text(*record.id), holder.path.view());
+		if (&holder != &record) {
+			warn_copy(record, holder);
 		}
 	}
 	for (const auto& [id, holder] : holders) {
@@ -63,6 +73,81 @@ bool edt::asset_index_snapshot::refresh(const asset_database& assets)
 	if (*next == *m_data) {
 		return false;
 	}
+	m_data = std::move(next);
+	return true;
+}
+
+bool edt::asset_index_snapshot::apply_batch(const asset_database& assets, const asset_batch& batch)
+{
+	const auto before = current();
+	if (before->case_insensitive != assets.case_insensitive()) {
+		return refresh(assets);
+	}
+	std::vector<const res::tag*> paths;
+	paths.reserve(batch.moved.size() * 2 + batch.added.size() + batch.removed.size() + batch.changed.size());
+	for (const auto& [from, to] : batch.moved) {
+		paths.push_back(&from);
+		paths.push_back(&to);
+	}
+	for (const auto* list : { &batch.added, &batch.removed, &batch.changed }) {
+		for (const res::tag& path : *list) {
+			paths.push_back(&path);
+		}
+	}
+	// A path that held no ID here holds none of the answers: its old ID, if any, keeps its holder.
+	std::unordered_set<res::asset_id> touched;
+	for (const res::tag* path : paths) {
+		if (const auto held = before->ids.find(key_of(*path, before->case_insensitive)); held != before->ids.end()) {
+			touched.insert(held->second);
+		}
+		if (const asset_record* record = assets.find(*path); record && record->id && !record->id->is_nil()) {
+			touched.insert(*record->id);
+		}
+	}
+
+	std::vector<std::pair<res::asset_id, const asset_record*>> holders;
+	holders.reserve(touched.size());
+	bool same = true;
+	for (const res::asset_id& id : touched) {
+		const std::vector<const asset_record*> carriers = assets.find(id);
+		const asset_record* holder = nullptr;
+		for (const asset_record* record : carriers) {
+			if (!holder || holds_id_before(*record, *holder)) {
+				holder = record;
+			}
+		}
+		for (const asset_record* record : carriers) {
+			if (record != holder) {
+				warn_copy(*record, *holder);
+			}
+		}
+		const auto answered = before->paths.find(id);
+		const bool had = answered != before->paths.end();
+		same = same && (holder ? had && answered->second == holder->path : !had);
+		holders.emplace_back(id, holder);
+	}
+	if (same) {
+		return false;
+	}
+
+	auto next = std::make_shared<data>(*before);
+	// Every old answer goes before any new one is put in: two IDs that swap paths keep both.
+	for (const auto& [id, holder] : holders) {
+		if (const auto old = next->paths.find(id); old != next->paths.end()) {
+			const auto key = next->ids.find(key_of(old->second, next->case_insensitive));
+			if (key != next->ids.end() && key->second == id) {
+				next->ids.erase(key);
+			}
+			next->paths.erase(old);
+		}
+	}
+	for (const auto& [id, holder] : holders) {
+		if (holder) {
+			next->ids.insert_or_assign(key_of(holder->path, next->case_insensitive), id);
+			next->paths.emplace(id, holder->path);
+		}
+	}
+	std::lock_guard lock(m_mutex);
 	m_data = std::move(next);
 	return true;
 }
@@ -155,7 +240,16 @@ void edt::asset_index_link::on_batch(const asset_batch& batch)
 		// Attached just now (or not yet): nothing waited for this batch, the index starts from what the database holds.
 		return;
 	}
-	m_index->refresh(m_assets);
-	m_revision = m_assets.revision();
+	// A walk's batch can name every file: the whole snapshot is taken again. A watcher's touches a few IDs.
+	if (batch.from_walk) {
+		m_index->refresh(m_assets);
+		m_revision = m_assets.revision();
+	} else {
+		m_index->apply_batch(m_assets, batch);
+		// Only this batch's step is taken: a change that came without a batch since the last poll is left to it.
+		if (m_assets.revision() == m_revision + 1) {
+			m_revision = m_assets.revision();
+		}
+	}
 	apply(batch.moved);
 }

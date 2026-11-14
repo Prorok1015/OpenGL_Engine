@@ -100,5 +100,10 @@ std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, c
     desc_res->serialize(body);
     m_desc_system.reduce_to_parent(*desc_res, body);
     m_desc_system.stamp_tree(body);
-    return m_desc_system.serialize_to_bytes(json::value{ std::move(body) });
+    json::value file{ std::move(body) };
+    // As desc_adapter_t: only a res:// file is in the asset index.
+    if (tag.protocol() == ::res::tag::default_protocol()) {
+        m_desc_system.write_references_over(file, tag);
+    }
+    return m_desc_system.serialize_to_bytes(file);
 }

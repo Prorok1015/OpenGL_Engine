@@ -1,4 +1,5 @@
 #include "edt_asset_picker.h"
+#include <snk/resource/res_asset_id.h>
 #include <algorithm>
 #include <cctype>
 #include <format>
@@ -157,7 +158,10 @@ const edt::picker::candidates_page& edt::picker::cached_candidates(page_cache& c
 
 boost::json::value edt::picker::reference_value(const asset_record& record)
 {
-	return boost::json::string(record.path.string());
+	if (!record.id || record.id->is_nil()) {
+		return boost::json::string(record.path.string());
+	}
+	return boost::json::object{ { "guid", res::to_text(*record.id) }, { "path", record.path.string() } };
 }
 
 edt::picker::reference_state edt::picker::judge_text(const filter& wanted, std::string_view text, const catalog& source)

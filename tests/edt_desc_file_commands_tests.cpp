@@ -7,6 +7,7 @@
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
@@ -21,6 +22,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -734,6 +736,58 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 	BOOST_TEST(std::string(unknown.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));
 	BOOST_TEST_MESSAGE(known.error);
 	BOOST_TEST(known.ok);
+}
+
+namespace {
+
+// Path <-> ID both ways, as the editor's asset database answers.
+struct ids_index final : res::asset_index
+{
+	std::map<std::string, res::asset_id, std::less<>> ids;
+	std::map<res::asset_id, res::tag> paths;
+
+	void hold(const res::asset_id& id, std::string_view path)
+	{
+		ids.emplace(std::string(path), id);
+		paths.insert_or_assign(id, res::tag{ std::string(path) });
+	}
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		const auto found = ids.find(tag.view());
+		return found == ids.end() ? std::nullopt : std::optional{ found->second };
+	}
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
+}
+
+// #773: what desc.create and desc.write put on disk carries the ID of a target that has one, whatever form the agent sent;
+// without an asset index the path stays a string. Writing the file again gives the same bytes.
+BOOST_AUTO_TEST_CASE(AWrittenReference_CarriesTheIdOfItsTarget)
+{
+	const char* const content = R"({"__type":"material_desc","shader_fragment":"res://shaders/a.frag"})";
+	make_material("materials/plain.mat.desc", content);
+	BOOST_TEST(json::parse(read_file(res_root / "materials" / "plain.mat.desc")).at_pointer("/shader_fragment")
+		== json::value("res://shaders/a.frag"));
+
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(id, "res://shaders/a.frag");
+	rs->set_asset_index(index);
+	make_material("materials/with_id.mat.desc", content);
+	const std::string first = read_file(res_root / "materials" / "with_id.mat.desc");
+	const auto rewritten = call("desc.write", write_args("materials/with_id.mat.desc", version_of("res://materials/with_id.mat.desc"), content));
+	const std::string second = read_file(res_root / "materials" / "with_id.mat.desc");
+	rs->set_asset_index(nullptr);
+
+	const json::value expected = json::object{ { "guid", res::to_text(id) }, { "path", "res://shaders/a.frag" } };
+	BOOST_TEST(json::parse(first).at_pointer("/shader_fragment") == expected);
+	BOOST_REQUIRE_MESSAGE(rewritten.ok, rewritten.error);
+	BOOST_TEST(second == first);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

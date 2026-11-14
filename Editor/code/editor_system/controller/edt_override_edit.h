@@ -12,7 +12,8 @@
 // How the editor turns an edit inside a prefab instance into override records on the instance node.
 // `owner` is the node of the edited desc that instantiates the prefab, `target` the node-id path below it.
 namespace edt { class scene_document; struct editor_services; }
-namespace desc { class desc_system; struct type_schema; }
+namespace scn { class world_desc; }
+namespace desc { class desc_system; class schema_registry; struct type_schema; }
 
 namespace edt::override_edit
 {
@@ -99,6 +100,18 @@ namespace edt::override_edit
 	// descs, by every key a field is read under.
 	std::vector<std::string> whole_values(const desc::desc_system& descs, const desc::type_schema& schema,
 		const boost::json::value& base, const boost::json::value& edited);
+
+	// `layer` merged onto `into` as a __parent chain and the Inspector's composed view merge a desc's layers: objects key by
+	// key, but a value whole_values names (a {guid, path} reference, or any object over one) replaces what is there.
+	void merge_layer(const desc::schema_registry& schemas, const desc::type_schema& schema, boost::json::object& into,
+		const boost::json::object& layer);
+
+	// Override records have no "__type": the component of the instance a record applies to says what its value is, so a
+	// reference set on an instance is written as {guid, path} too (desc_system::write_references, #773). `level_file` is
+	// the file form of `worlds` (scn::level_desc::build_json); its worlds follow them node by node. A record of the whole
+	// component keeps a path a string where the component holds an object there, since the record is merged into it.
+	void write_record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler,
+		const std::vector<scn::world_desc>& worlds, boost::json::value& level_file);
 
 	void write_transform(
 		prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,
