@@ -1,0 +1,6 @@
+{
+    "__type" : "game.config",
+    "__version" : 1,
+    "player_speed" : 4.0,
+    "goal" : 10
+}
