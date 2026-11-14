@@ -2,10 +2,24 @@
 #include <snk/resource/res_diagnostics.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/parse_options.hpp>
+#include <atomic>
 #include <format>
+
+namespace {
+	// Read on the load workers while a test sets it.
+	std::atomic<std::size_t> g_limit_for_tests{ 0 };
+}
+
+std::size_t res::detail::set_json_byte_limit_for_tests(std::size_t bytes)
+{
+	return g_limit_for_tests.exchange(bytes);
+}
 
 std::size_t res::json_byte_limit(std::string_view name)
 {
+	if (const std::size_t forced = g_limit_for_tests.load(); forced != 0) {
+		return forced;
+	}
 	return name.ends_with(".geom.desc") ? max_geometry_json_bytes : max_json_bytes;
 }
 

@@ -41,6 +41,7 @@ namespace stb_image {
 		ImageFlip flipped() const { return flipFlag_; }
 
 		static void free_image_data(unsigned char* data);
+		// Decodes under the decode_budget of its own header: an unreadable header or a decode over it gives an empty Image.
 		static Image read_from_memory(const unsigned char* data, int len);
 		// The size and channel count from the header, without decoding the pixels; false when stb cannot read it.
 		static bool info_from_memory(const unsigned char* data, int len, int& width, int& height, int& channels);
@@ -60,7 +61,7 @@ namespace stb_image {
 	};
 
 	// While alive, what stb holds on this thread may not pass `bytes`: an allocation over it fails, and stb gives the
-	// decode up as out of memory (#928). Without one a decode is unlimited. Scopes nest.
+	// decode up as out of memory (#928). Image sets one for every decode by the picture's header. Scopes nest.
 	class decode_budget
 	{
 	public:
@@ -71,7 +72,7 @@ namespace stb_image {
 
 		// Enough for any picture of this header: 12 x its pixel bytes with each side padded by 32, 4 x the file, 256 KiB.
 		static std::size_t for_image(int width, int height, int channels, std::size_t encoded_bytes);
-		// The most bytes stb held at once on this thread since its last budget began.
+		// The most bytes stb held at once on this thread since its last budget began: that of its last Image decode.
 		static std::size_t peak_bytes();
 
 	private:

@@ -20,7 +20,7 @@ std::vector<::res::res_dep> scn::worldwrap_adapter::collect_dependencies(const::
         return {};
     }
 
-    auto json_body = ::res::parse_json_body(tag.view(), data, ::res::max_json_bytes);
+    auto json_body = ::res::parse_json_body(tag.view(), data);
     try {
         m_desc_system.migrate_tree(json_body, tag.view());
     } catch (const std::exception& e) {
@@ -50,7 +50,7 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
 
 std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
 {
-    auto json_body = ::res::parse_json_body(tag.view(), data, ::res::max_json_bytes);
+    auto json_body = ::res::parse_json_body(tag.view(), data);
 
     try {
         m_desc_system.migrate_tree(json_body, tag.view());

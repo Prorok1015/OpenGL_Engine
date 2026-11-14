@@ -67,8 +67,10 @@ namespace {
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+#include <filesystem>
 #include <mutex>
 #include <shared_mutex>
+#include <system_error>
 #include <string>
 #include <stdexcept>
 #include <array>
@@ -116,6 +118,14 @@ void stb_image::Image::free_image_data(unsigned char* data)
 
 stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, int len)
 {
+	// The header is only a claim: a tiny PNG can still inflate to gigabytes, so the decoder gets what that header needs.
+	int width = 0;
+	int height = 0;
+	int channels = 0;
+	if (len <= 0 || !stbi_info_from_memory(data, len, &width, &height, &channels)) {
+		return Image();
+	}
+	const decode_budget budget(decode_budget::for_image(width, height, channels, static_cast<std::size_t>(len)));
 	Image result;
 	std::shared_lock lock(g_image_flip_mutex);
 	result.flipFlag_ = g_image_flip;
@@ -177,8 +187,20 @@ bool stb_image::Image::info_from_memory(const unsigned char* data, int len, int&
 
 bool stb_image::Image::read(const std::string_view filename)
 {
+	const std::string path(filename);
+	int width = 0;
+	int height = 0;
+	int channels = 0;
+	std::error_code size_error;
+	const std::uintmax_t file_bytes = std::filesystem::file_size(std::filesystem::path(path), size_error);
+	if (size_error || !stbi_info(path.c_str(), &width, &height, &channels)) {
+		return false;
+	}
+	// As in read_from_memory: the file gets the memory its header asks for and no more.
+	const decode_budget budget(decode_budget::for_image(width, height, channels,
+		static_cast<std::size_t>(std::min<std::uintmax_t>(file_bytes, std::numeric_limits<std::size_t>::max()))));
 	set_image_flip(flipFlag_);
-	if ((data_ = stbi_load(filename.data(), &width_, &height_, &channels_, 0)))
+	if ((data_ = stbi_load(path.c_str(), &width_, &height_, &channels_, 0)))
 	{
 		size_ = static_cast<size_t>(width_) * static_cast<size_t>(height_) * static_cast<size_t>(channels_);
 		return true;

@@ -1,10 +1,12 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
 #include "png_bomb_builder.hpp"
+#include <snk/desc/desc_base.hpp>
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_json_body.h>
 #include <snk/resource/resources/res_resource_picture.h>
+#include <snk/scene/level/scn_world_desc.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -64,6 +66,27 @@ using test_util::png_bomb::zlib_stream;
 std::vector<std::byte> png_1x1(const std::vector<unsigned char>& idat)
 {
 	return test_util::png_bomb::png_rgba(1, 1, idat);
+}
+
+class json_limit_scope
+{
+public:
+	explicit json_limit_scope(std::size_t bytes) : m_previous(res::detail::set_json_byte_limit_for_tests(bytes)) {}
+	json_limit_scope(const json_limit_scope&) = delete;
+	json_limit_scope& operator=(const json_limit_scope&) = delete;
+	~json_limit_scope() { res::detail::set_json_byte_limit_for_tests(m_previous); }
+
+private:
+	std::size_t m_previous;
+};
+
+// A JSON object of more than `bytes` bytes: the padding is whitespace, so only its size can be refused.
+std::vector<std::byte> padded_past(std::string_view object, std::size_t bytes)
+{
+	std::string text{ object.substr(0, object.size() - 1) };
+	text.append(bytes, ' ');
+	text += "}";
+	return as_bytes(text);
 }
 
 bool says(const std::exception& error, std::string_view text)
@@ -161,6 +184,40 @@ BOOST_AUTO_TEST_CASE(AGeomDesc_GetsTheLargerLimit_AnyOtherFileTheDefault)
 	BOOST_TEST(res::json_byte_limit("res://materials/robot.mat.desc") == res::max_json_bytes);
 	BOOST_TEST(res::json_byte_limit("res://models/robot.desc") == res::max_json_bytes);
 	BOOST_TEST(res::json_byte_limit("res://levels/robot.geom.desc.world") == res::max_json_bytes);
+}
+
+BOOST_AUTO_TEST_CASE(ADescLargerThanTheLimit_FailsItsLoad)
+{
+	constexpr std::size_t limit = 1024;
+	const std::vector<std::byte> bytes = padded_past(R"({"__type":"world_desc","name":"padded"})", limit);
+	{
+		const json_limit_scope scope(limit);
+		BOOST_TEST(res::json_byte_limit("memory://limits/any.geom.desc") == limit);
+
+		const auto desc = load<desc::desc_base>("padded.desc", bytes);
+
+		BOOST_TEST(desc.has_error());
+		BOOST_TEST(desc.error_text().find("is not parsed: at most 1024 bytes") != std::string::npos);
+	}
+	// The same bytes under the real limit: whatever the load does with them, their size is not refused.
+	const auto desc = load<desc::desc_base>("padded_again.desc", bytes);
+	BOOST_TEST(desc.error_text().find("is not parsed") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AWorldLargerThanTheLimit_FailsItsLoad)
+{
+	constexpr std::size_t limit = 1024;
+	const std::vector<std::byte> bytes = padded_past(R"({"__type":"world_desc","name":"padded"})", limit);
+	{
+		const json_limit_scope scope(limit);
+
+		const auto world = load<scn::world_desc>("padded_world.desc", bytes);
+
+		BOOST_TEST(world.has_error());
+		BOOST_TEST(world.error_text().find("is not parsed: at most 1024 bytes") != std::string::npos);
+	}
+	const auto world = load<scn::world_desc>("padded_world_again.desc", bytes);
+	BOOST_TEST(world.error_text().find("is not parsed") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

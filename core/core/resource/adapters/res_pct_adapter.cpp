@@ -102,13 +102,7 @@ std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag
 			+ " with " + std::to_string(channels) + " channels: too large to decode (at most " + std::to_string(max_side)
 			+ " a side and " + std::to_string(max_decoded_bytes / (1024 * 1024)) + " MiB of pixels)");
 	}
-	// The header is only a claim: the deflate stream of a tiny PNG can still unpack to gigabytes, so the decoder gets
-	// no more memory than a picture of that header needs.
-	stb_image::Image img;
-	{
-		const stb_image::decode_budget budget(decode_budget_bytes(width, height, channels, data.size()));
-		img = stb_image::Image::read_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()));
-	}
+	const stb_image::Image img = stb_image::Image::read_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()));
 	if (!img.data()) {
 		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is not a decodable image");
 	}
