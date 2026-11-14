@@ -309,6 +309,9 @@ namespace edt
 		const std::vector<asset_orphan>& orphans() const { return m_orphans; }
 		// Grows whenever anything the database holds changed.
 		std::uint64_t revision() const { return m_revision; }
+		// Grows when what the asset index answers by may have changed: a record with an ID came or went, or its ID,
+		// path, layer or time changed (not a hash). Only a walk or a batch moves it, so set_on_batch hears of each step.
+		std::uint64_t id_revision() const { return m_id_revision; }
 		const std::vector<std::filesystem::path>& layers() const { return m_layers; }
 		// The project's own layer (the highest): the only one the fixes below write to.
 		std::size_t top_layer() const { return m_layers.empty() ? 0 : m_layers.size() - 1; }
@@ -417,6 +420,7 @@ namespace edt
 		bool m_case_insensitive = platform_case_insensitive;
 		std::uint64_t m_scan_number = 0;
 		std::uint64_t m_revision = 0;
+		std::uint64_t m_id_revision = 0;
 		asset_cache_location m_cache;
 		// Shared with a background write, so the lock is held until that write is done.
 		std::shared_ptr<platform::file_lock> m_lock;

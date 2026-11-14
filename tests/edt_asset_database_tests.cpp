@@ -1423,6 +1423,55 @@ BOOST_AUTO_TEST_CASE(identities_that_change_at_every_look_are_warned_of_once_and
 	BOOST_TEST(res::to_text(*record("a.png").id) == k_guid_a);
 }
 
+// #885: id_revision moves with what the asset index answers by (ID, path, layer, time of a file with an ID), not with a
+// hash, a file without an ID or an orphan.
+BOOST_AUTO_TEST_CASE(id_revision_follows_ids_paths_layers_and_times_not_hashes)
+{
+	write_aged("a.png", "a");
+	write_aged("a.png.resource", meta_text(k_guid_a));
+	write_aged("plain.txt", "p");
+	lower.write("l.png", "l");
+	lower.write("l.png.resource", meta_text(k_guid_c));
+	db = unopened();
+	db->rebuild();
+	run_walk();
+	auto& assets = *db;
+	std::uint64_t ids = assets.id_revision();
+	BOOST_TEST(ids > 0u);
+	const auto step = [&](std::vector<res::file_change> changes) {
+		assets.apply_changes(changes);
+		test_util::pump(tasks);
+		const std::uint64_t before = std::exchange(ids, assets.id_revision());
+		return ids - before;
+	};
+
+	const std::uint64_t before_hash = assets.revision();
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!record("a.png").content_hash.empty());
+	BOOST_REQUIRE(assets.revision() > before_hash);
+	BOOST_TEST(assets.id_revision() == ids);
+
+	upper.write("plain.txt", "plain, longer");
+	BOOST_TEST(step({ change("plain.txt", res::change_kind::modified) }) == 0u);
+	upper.write("o.png.resource", meta_text(k_guid_d));
+	BOOST_TEST(step({ change("o.png.resource", res::change_kind::created) }) == 0u);
+	BOOST_REQUIRE(!assets.orphans().empty());
+
+	fs::last_write_time(upper.path() / "a.png", fs::file_time_type::clock::now() - std::chrono::minutes(30));
+	BOOST_TEST(step({ change("a.png", res::change_kind::modified) }) == 1u);
+	upper.write("a.png.resource", meta_text(k_guid_b));
+	BOOST_TEST(step({ change("a.png.resource", res::change_kind::modified) }) == 1u);
+	fs::rename(upper.path() / "a.png", upper.path() / "m.png");
+	fs::rename(upper.path() / "a.png.resource", upper.path() / "m.png.resource");
+	BOOST_TEST(step({ change("m.png", res::change_kind::renamed, "a.png"),
+		change("m.png.resource", res::change_kind::renamed, "a.png.resource") }) == 1u);
+	upper.write("l.png", "upper l");
+	BOOST_TEST(step({ change("l.png", res::change_kind::created) }) == 1u);
+	BOOST_TEST(record("l.png").layer == 1u);
+	BOOST_REQUIRE(record("l.png").id.has_value());
+	BOOST_TEST(res::to_text(*record("l.png").id) == k_guid_c);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {
