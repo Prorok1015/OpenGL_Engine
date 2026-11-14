@@ -996,4 +996,26 @@ BOOST_AUTO_TEST_CASE(AReferenceInAPrefabComponent_WithAGuidOfAnotherFile_IsRefus
 	BOOST_TEST(read_file(res_root / "prefabs" / "crate.desc").find("res://materials/a.mat.desc") != std::string::npos);
 }
 
+// A "guid" that is no UUID is not a reference (the engine does not read it as one): the object is data and is kept as written.
+BOOST_AUTO_TEST_CASE(AnObjectWithAGuidThatIsNoUuid_InAPrefabComponent_IsPlainData_AndIsWritten)
+{
+	fs::create_directories(res_root / "prefabs");
+	const char* const empty = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate"}]})";
+	const char* const content = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate","components":)"
+		R"({"tag":{"guid":"abc"},"link":{"guid":"abc","path":"anything"}}}]})";
+	const auto made = call("desc.create", desc_args("prefabs/crate.desc", empty));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	const std::string version = version_of("prefabs/crate.desc");
+
+	const auto written = call("desc.write", write_args("prefabs/crate.desc", version, content));
+
+	BOOST_REQUIRE_MESSAGE(written.ok, written.error);
+	const std::string saved = read_file(res_root / "prefabs" / "crate.desc");
+	BOOST_TEST(saved.find(R"("tag":{"guid":"abc"})") != std::string::npos);
+	BOOST_TEST(saved.find(R"("link":{"guid":"abc","path":"anything"})") != std::string::npos);
+
+	const auto created = call("desc.create", desc_args("prefabs/crate2.desc", content));
+	BOOST_TEST(created.ok, created.error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
