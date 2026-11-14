@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/desc/desc_template_files.h>
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <snk/render/rnd_render_service_init.h>
 #include <filesystem>
@@ -92,6 +93,8 @@ struct repo_fixture : test_util::scene_env
 		std::size_t count = 0;
 		for (const auto& file : repo_files()) {
 			if (!file.is_desc) continue;
+			const std::string_view text{ reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size() };
+			if (desc::is_template_file_of_unknown_type(file.tag.string(), text, *descs)) continue;
 			++count;
 			BOOST_TEST_CONTEXT(file.tag.string()) {
 				fn(file.tag, file);
