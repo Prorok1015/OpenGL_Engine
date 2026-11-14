@@ -668,6 +668,15 @@ namespace
 		return changed;
 	}
 
+	void report_target(const context& ctx, const std::string& target)
+	{
+		if (ctx.on_target) {
+			const ImVec2 min = ImGui::GetItemRectMin();
+			const ImVec2 max = ImGui::GetItemRectMax();
+			ctx.on_target(target, (min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+		}
+	}
+
 	bool edit_list(const char* label, const desc::field_schema& field, const widget_spec& spec, json::value& value,
 		const std::string& pointer, const context& ctx, int depth)
 	{
@@ -683,9 +692,33 @@ namespace
 		// A list is overridden whole (a merge patch replaces an array): its items carry no marks of their own.
 		context item_ctx = ctx;
 		item_ctx.origin = nullptr;
+		edt::schema_ui::map_edit_state scratch;
+		edt::schema_ui::map_edit_state& state = ctx.map_state ? *ctx.map_state : scratch;
+		std::size_t& page_start = state.list_pages[ImGui::GetID("list_page")];
+		page_start = edt::schema_ui::list_page_start(array.size(), page_start);
+		if (array.size() > edt::schema_ui::k_list_page_size) {
+			ImGui::BeginDisabled(page_start == 0);
+			if (ImGui::SmallButton("< Prev")) {
+				page_start -= edt::schema_ui::k_list_page_size;
+			}
+			report_target(ctx, pointer + "#prev");
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			const std::size_t page_end = std::min(array.size(), page_start + edt::schema_ui::k_list_page_size);
+			ImGui::TextDisabled("%zu-%zu of %zu", page_start + 1, page_end, array.size());
+			ImGui::SameLine();
+			ImGui::BeginDisabled(page_end >= array.size());
+			if (ImGui::SmallButton("Next >")) {
+				page_start += edt::schema_ui::k_list_page_size;
+			}
+			report_target(ctx, pointer + "#next");
+			ImGui::EndDisabled();
+		}
 		std::optional<std::size_t> remove;
-		const std::size_t shown = std::min(array.size(), max_listed);
-		for (std::size_t i = 0; i < shown; ++i) {
+		std::optional<std::pair<std::size_t, std::size_t>> move;
+		const std::size_t first = page_start;
+		const std::size_t last = std::min(array.size(), first + edt::schema_ui::k_list_page_size);
+		for (std::size_t i = first; i < last; ++i) {
 			ImGui::PushID(static_cast<int>(i));
 			desc::field_schema element;
 			element.name = std::format("[{}]", i);
@@ -701,13 +734,32 @@ namespace
 				changed |= draw_field(element, array[i], pointer + element.key, item_ctx, depth + 1);
 			}
 			ImGui::SameLine();
+			ImGui::BeginDisabled(field.read_only || i == 0);
+			if (ImGui::SmallButton("^")) {
+				move = std::pair{ i, i - 1 };
+			}
+			report_target(ctx, pointer + element.key + "#up");
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::BeginDisabled(field.read_only || i + 1 >= array.size());
+			if (ImGui::SmallButton("v")) {
+				move = std::pair{ i, i + 1 };
+			}
+			report_target(ctx, pointer + element.key + "#down");
+			ImGui::EndDisabled();
+			ImGui::SameLine();
 			if (ImGui::SmallButton("x")) {
 				remove = i;
 			}
+			if (const std::string problem = edt::schema_ui::list_item_problem(field, array[i], ctx.registry); !problem.empty()) {
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+				ImGui::TextWrapped("%s", problem.c_str());
+				ImGui::PopStyleColor();
+			}
 			ImGui::PopID();
 		}
-		if (array.size() > shown) {
-			ImGui::TextDisabled("... and %zu more items", array.size() - shown);
+		if (move && edt::schema_ui::move_list_item(array, move->first, move->second)) {
+			changed = true;
 		}
 		if (remove && *remove < array.size()) {
 			array.erase(array.begin() + static_cast<std::ptrdiff_t>(*remove));
@@ -715,6 +767,7 @@ namespace
 		}
 		if (ImGui::SmallButton("+ Add")) {
 			array.push_back(zero_of(element_kind, field.ref_type, ctx.registry, depth));
+			page_start = edt::schema_ui::list_page_start(array.size(), array.size() - 1);
 			changed = true;
 		}
 		ImGui::TreePop();
@@ -972,6 +1025,50 @@ std::string edt::schema_ui::display_label(const desc::field_schema& field)
 		text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
 	}
 	return text;
+}
+
+std::size_t edt::schema_ui::list_page_start(std::size_t count, std::size_t index)
+{
+	if (count == 0) {
+		return 0;
+	}
+	const std::size_t last_item = count - 1;
+	return std::min(index, last_item) / k_list_page_size * k_list_page_size;
+}
+
+bool edt::schema_ui::move_list_item(json::array& items, std::size_t from, std::size_t to)
+{
+	if (from >= items.size() || to >= items.size() || from == to) {
+		return false;
+	}
+	json::value moved = std::move(items[from]);
+	items.erase(items.begin() + static_cast<std::ptrdiff_t>(from));
+	items.insert(items.begin() + static_cast<std::ptrdiff_t>(to), std::move(moved));
+	return true;
+}
+
+std::string edt::schema_ui::list_item_problem(const desc::field_schema& field, const json::value& item, const desc::schema_registry& registry)
+{
+	if (field.kind != field_kind::array || field.element != field_kind::structure) {
+		return {};
+	}
+	const desc::type_schema* nested = registry.find(field.ref_type);
+	if (!nested) {
+		return {};
+	}
+	if (!item.is_object()) {
+		return std::format("expected an object of '{}'", field.ref_type);
+	}
+	const desc::override_failure failure = desc::check_override_object(*nested, item.as_object(), nullptr, &registry);
+	switch (failure.status) {
+	case desc::override_status::valid: return {};
+	case desc::override_status::stale: return std::format("{}: no such field", failure.pointer);
+	case desc::override_status::bad_value: {
+		const std::string expected = desc::override_expectation(*nested, failure, &registry);
+		return expected.empty() ? std::format("{}: the value does not fit", failure.pointer) : std::format("{}: expected {}", failure.pointer, expected);
+	}
+	}
+	return {};
 }
 
 std::string edt::schema_ui::map_key_problem(const json::object& entries, std::string_view key)

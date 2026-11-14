@@ -63,6 +63,21 @@ namespace edt::schema_ui
 	// is a problem. The same name is no change (true).
 	bool rename_map_key(boost::json::object& entries, std::string_view from, std::string_view to);
 
+	// A list shows this many items at a time; the page is chosen with Prev / Next.
+	inline constexpr std::size_t k_list_page_size = 50;
+
+	// The first item of the page that holds `index` (the last page when `index` is past the end, 0 for an empty list).
+	std::size_t list_page_start(std::size_t count, std::size_t index);
+
+	// Moves the item at `from` to the place `to`, the items between shift by one. False, and nothing changed, when either is
+	// out of range; the same place is no change (false too).
+	bool move_list_item(boost::json::array& items, std::size_t from, std::size_t to);
+
+	// What is wrong with an item of a list of structures, for the row: the pointer inside the item and what it expects
+	// ("/scale: expected a value of kind f32", "/gone: no such field", "expected an object of 'x'"). Empty when the item fits
+	// or the list is no list of structures with a known schema.
+	std::string list_item_problem(const desc::field_schema& field, const boost::json::value& item, const desc::schema_registry& registry);
+
 	// "m_near_distance" -> "Near distance"
 	std::string display_label(const desc::field_schema& field);
 
@@ -89,11 +104,14 @@ namespace edt::schema_ui
 	{
 		std::unordered_map<std::uint32_t, std::string> new_keys;
 		std::unordered_map<std::uint32_t, std::string> rename_errors;
+		// The first item of the page each list shows, by the ID of the list's node.
+		std::unordered_map<std::uint32_t, std::size_t> list_pages;
 
 		void clear()
 		{
 			new_keys.clear();
 			rename_errors.clear();
+			list_pages.clear();
 		}
 	};
 
