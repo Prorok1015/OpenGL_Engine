@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include "edt_migration_window_model.h"
+#include <string>
 
 namespace edt
 {
@@ -19,6 +20,9 @@ namespace edt
 		migration_window_model& model() { return m_model; }
 		// Brings the window to the front on its next frame and asks for a fresh plan (unless a migration runs).
 		void show_and_plan();
+		// Brings the window to the front and rolls migration `id` back; the window shows the rollback's answer (or why it
+		// was refused).
+		void show_and_roll_back(const std::string& id);
 
 	protected:
 		void on_before_begin() override;
@@ -30,10 +34,15 @@ namespace edt
 		void draw_running();
 		void draw_report();
 		void draw_error();
+		// "Roll Back..." (when the model names a migration to roll back) and its question.
+		void draw_rollback_button();
+		void draw_rollback_question();
 
 		migration_window_model m_model;
 		bool m_focus = false;
 		// "Reading the project..." was drawn: the next frame runs the scan.
 		bool m_planning_drawn = false;
+		// The migration the open "Roll back?" question is about.
+		std::string m_rollback_asked;
 	};
 }

@@ -15,7 +15,8 @@ namespace edt
 	class action_registry;
 
 	// The Project Migration window (EPIC-58 S8, #761) without ImGui: it asks project.migration_plan for the plan, shows it,
-	// runs project.migrate as a person's call (origin ui) and shows the report its job answers with (job_finished).
+	// runs project.migrate as a person's call (origin ui) and shows the report its job answers with (job_finished). A
+	// migration left unfinished (or one that failed) is rolled back the same way, with project.migrate_rollback {id}.
 	// Main thread only.
 	class migration_window_model
 	{
@@ -82,6 +83,10 @@ namespace edt
 			std::string level;
 			std::string error_code;
 			std::string error_text;
+			// Migrations the answer names as left unfinished (a migration that stopped).
+			std::vector<std::string> unfinished;
+			// The answer of project.migrate_rollback, not of project.migrate.
+			bool rollback = false;
 		};
 
 		migration_window_model(editor_events& events, ports ports);
@@ -98,6 +103,14 @@ namespace edt
 		bool can_migrate() const { return m_phase == phase::plan_shown && m_plan && m_plan->code == k_code_needed; }
 		// project.migrate; refused at once (busy, needs_input, ...) the plan stays shown with the reason.
 		void migrate();
+		// The migration a "Roll Back..." would roll back: the report's at code 5 or 6 (its id, else the first unfinished one),
+		// else the plan's first unfinished one; empty: none.
+		std::string rollback_id() const;
+		bool can_roll_back() const { return !rollback_id().empty(); }
+		// project.migrate_rollback {id}; refused at once, the view stays as it was with the reason.
+		void roll_back(const std::string& id);
+		// The job that runs is a rollback.
+		bool rolling_back() const { return m_rolling_back; }
 		// Back to idle; ignored while the migration runs.
 		void close();
 		void open_file(const std::string& path) const;
@@ -117,6 +130,8 @@ namespace edt
 		static std::string hint_of(std::string_view code);
 		// One line for a report's code: "Migrated", "Rolled back", ...
 		static std::string outcome_text(int code);
+		// The same for an answer of project.migrate_rollback.
+		static std::string rollback_outcome_text(int code);
 
 	private:
 		void finished(std::uint64_t id, job_status status, const std::string& error, const std::optional<boost::json::value>& result);
@@ -133,6 +148,7 @@ namespace edt
 		std::string m_error_text;
 		std::string m_error_hint;
 		std::string m_notice;
+		bool m_rolling_back = false;
 		// Last: gone before the state its slot touches.
 		connection m_finished;
 	};
