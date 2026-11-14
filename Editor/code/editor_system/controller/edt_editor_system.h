@@ -5,6 +5,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
+#include "edt_project_trust_service.h"
 #include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
