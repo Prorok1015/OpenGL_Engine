@@ -358,9 +358,11 @@ namespace {
 			return;
 		}
 		if (!value.is_object() || objects <= 0) return;
+		const bool text_is_message = value.get_object().contains(edt::k_agent_job_result_text_marker);
 		for (boost::json::key_value_pair& member : value.get_object()) {
 			const std::string_view name(member.key().data(), member.key().size());
 			boost::json::value& held = member.value();
+			if (text_is_message && name == "text") redact_string(held, filter, from);
 			if (std::find(edt::k_agent_job_result_fields.begin(), edt::k_agent_job_result_fields.end(), name) != edt::k_agent_job_result_fields.end()) {
 				redact_string(held, filter, from);
 				if (held.is_array()) {

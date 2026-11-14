@@ -2095,6 +2095,35 @@ BOOST_AUTO_TEST_CASE(AHeldCallsAnswerAndItsProgressNotes_AreRewrittenForTheAgent
 	BOOST_TEST(text_of(result.at("error").at("stderr_tail")) == "at <project>/a.txt");
 }
 
+// #935: a migration answer's `text` (beside `code`) is a message; the {text, truncated} of a diff is not.
+BOOST_AUTO_TEST_CASE(AHeldCallsAnswer_HasTheTextOfAMigrationAnswerRewritten_NotOfADiff)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
+	add(job_command("test.job_migrates", [](ds::task_context&) {
+		return json_of(R"json({"code":2,"status":"refused","id":"m1","text":"rollback of m1: cannot open /etc/secret/key"})json");
+	}));
+	add(job_command("test.job_diffs", [](ds::task_context&) {
+		return json_of(R"json({"text":"+open /etc/secret/key","truncated":false})json");
+	}));
+
+	const auto migrated = start_call("test_job_migrates", true);
+	BOOST_TEST(migrated->answers.empty());
+	finish_jobs();
+	const json::object& report = structured(*migrated).at("result").as_object();
+	BOOST_TEST(text_of(report.at("text")) == "rollback of m1: cannot open <path>");
+	BOOST_TEST(report.at("code").as_int64() == 2);
+
+	const auto diffed = start_call("test_job_diffs", true, json::value(2));
+	BOOST_TEST(diffed->answers.empty());
+	finish_jobs();
+	const json::object& diff = structured(*diffed).at("result").as_object();
+	BOOST_TEST(text_of(diff.at("text")) == "+open /etc/secret/key");
+	BOOST_TEST(diff.size() == 2u);
+}
+
 BOOST_AUTO_TEST_CASE(AHeldCallsError_IsRewrittenForTheAgent_AlsoWhenTheJobEndedBeforeTheCall)
 {
 	edt::agent_log_roots roots;

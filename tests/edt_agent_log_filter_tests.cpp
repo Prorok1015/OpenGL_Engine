@@ -232,6 +232,28 @@ BOOST_AUTO_TEST_CASE(AJobResult_HasOnlyItsMessageFieldsRewritten)
 	BOOST_TEST((edt::agent_job_result(result, nullptr, cmd::origin::agent("s1")) == result));
 }
 
+// #935: `text` is a message only beside `code` (a migration answer); the {text, truncated} of vcs.diff is data.
+BOOST_AUTO_TEST_CASE(AJobResultsText_IsRewrittenOnlyBesideACode_NeverADiff)
+{
+	cmd::log_read_filter filter;
+	edt::install_agent_log_filter(filter, [] { return false; }, roots());
+	const boost::json::value migration = boost::json::parse(R"json({
+		"code": 2, "status": "refused", "id": "m1", "refused": "locked /etc/secret/key",
+		"text": "rollback of m1: cannot open /etc/secret/key"
+	})json");
+	const boost::json::value diff = boost::json::parse(R"json({ "text": "+open /etc/secret/key", "truncated": false })json");
+	const boost::json::value nested = boost::json::parse(R"json({ "code": 0, "inner": { "text": "+open /etc/secret/key" } })json");
+
+	const boost::json::value shown = edt::agent_job_result(migration, &filter, cmd::origin::agent("s1"));
+	BOOST_TEST(shown.at("text").as_string().c_str() == std::string("rollback of m1: cannot open <path>"));
+	BOOST_TEST(shown.at("refused").as_string().c_str() == std::string("locked <path>"));
+	BOOST_TEST(shown.at("code").as_int64() == 2);
+	BOOST_TEST((edt::agent_job_result(migration, &filter, cmd::origin::ui()) == migration));
+
+	BOOST_TEST((edt::agent_job_result(diff, &filter, cmd::origin::agent("s1")) == diff));
+	BOOST_TEST((edt::agent_job_result(nested, &filter, cmd::origin::agent("s1")) == nested));
+}
+
 BOOST_AUTO_TEST_CASE(AJsonPointer_IsNoPath_UnlessItsFirstTwoSegmentsAreOnTheDisk)
 {
 	const test_util::temp_dir dir{ "edt_agent_log_filter_disk" };
