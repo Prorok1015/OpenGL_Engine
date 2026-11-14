@@ -673,10 +673,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty(); };
-	hooks.save_other_documents = [this] { return m_data_documents->save_all(); };
+	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty() || dirty_prefab() != nullptr; };
+	hooks.save_other_documents = [this] {
+		if (prefab_document* prefab = dirty_prefab()) {
+			if (const save_result saved = prefab->save(); !saved.saved) {
+				egLOG_WARN("editor", "{}", saved.error);
+				m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
+				return false;
+			}
+		}
+		return m_data_documents->save_all();
+	};
 	hooks.discard_other_documents = [this] {
 		for (const document_id id : m_data_documents->dirty()) m_data_documents->close(id);
+		if (dirty_prefab()) close_prefab_editor();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
@@ -1024,6 +1034,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		// A second reload waits for the first one's restore (#600): its snapshot would see the set held in Pause.
 		if (m_play && m_play->reloading()) return std::string{ "Play is loading the resources of the last reload" };
+		// The swap closes the prefab editor: its unapplied edits must not go with it.
+		if (dirty_prefab()) return std::string{ "the prefab editor has unapplied edits: apply or revert them first" };
 		return std::string{};
 	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
@@ -2443,6 +2455,12 @@ bool edt::editor_system::poll_pending_desc()
 }
 
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
+
+edt::prefab_document* edt::editor_system::dirty_prefab()
+{
+	prefab_document* prefab = prefab_of(m_context->documents());
+	return prefab && prefab->is_open() && prefab->is_dirty() ? prefab : nullptr;
+}
 
 void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
 {

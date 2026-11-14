@@ -33,6 +33,8 @@ namespace edt
 
 	void prefab_editor_panel::on_before_begin()
 	{
+		// The unapplied-edits mark is in the window's title; ### keeps its ImGui id while the text changes.
+		m_title = (m_ctx && m_ctx->is_open() ? "Prefab: " + m_ctx->display_title() : std::string{ "Prefab Editor" }) + "###prefab_editor";
 		ImGui::SetNextWindowSize(ImVec2(900.f, 650.f), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSizeConstraints(ImVec2(480.f, 320.f), ImVec2(FLT_MAX, FLT_MAX));
 	}
@@ -65,8 +67,12 @@ namespace edt
 			m_on_apply();
 		}
 		ImGui::EndDisabled();
-		if (!blocker.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-			ImGui::SetTooltip("%s", blocker.c_str());
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			if (!blocker.empty()) {
+				ImGui::SetTooltip("%s", blocker.c_str());
+			} else if (m_ctx->changed_on_disk()) {
+				ImGui::SetTooltip("The file changed on disk: Reload or Overwrite first");
+			}
 		}
 		ImGui::SameLine();
 		ImGui::BeginDisabled(m_ctx->edits_locked());
@@ -85,9 +91,6 @@ namespace edt
 			}
 		}
 
-		ImGui::SameLine();
-		ImGui::TextUnformatted(m_ctx->display_title().c_str());
-
 		render_disk_banner();
 		ImGui::Separator();
 	}
@@ -99,6 +102,23 @@ namespace edt
 			return;
 		}
 		if (m_banner_later) {
+			// Later keeps a compact line, so the way out stays one click away.
+			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "Changed on disk");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Reload")) {
+				m_error = m_ctx->reload();
+			}
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Overwrite")) {
+				if (const save_result saved = m_ctx->overwrite(); !saved.saved) {
+					m_error = saved.error;
+				} else {
+					m_error.clear();
+				}
+			}
+			if (!m_error.empty()) {
+				ImGui::TextWrapped("%s", m_error.c_str());
+			}
 			return;
 		}
 		ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
@@ -116,6 +136,7 @@ namespace edt
 		ImGui::SameLine();
 		if (ImGui::Button("Later")) {
 			m_banner_later = true;
+			m_error.clear();
 		}
 		if (!m_error.empty()) {
 			ImGui::TextWrapped("%s", m_error.c_str());

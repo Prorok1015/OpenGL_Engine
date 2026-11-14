@@ -265,6 +265,8 @@ namespace edt {
 		void confirm_prefab_close(std::function<void()> proceed);
 		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
 		void close_prefab_editor();
+		// The open prefab document when it has unapplied edits, else null.
+		prefab_document* dirty_prefab();
 
 		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();
