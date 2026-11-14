@@ -7,6 +7,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/ecs/ecs_bus.hpp>
@@ -79,6 +80,7 @@ namespace {
 	std::optional<std::string> profile_problem(const std::filesystem::path& project_root, const std::filesystem::path& profile)
 	{
 		namespace fs = std::filesystem;
+		if (project_root.empty()) return std::string{ "the project folder is not known: the play profile is not used" };
 		std::error_code ec;
 		const fs::path real_root = fs::canonical(project_root, ec);
 		if (ec) return std::string{ "the project folder cannot be resolved" };
@@ -97,7 +99,7 @@ namespace {
 			}
 		}
 		const fs::path real = fs::weakly_canonical(profile, ec);
-		if (ec || real != real_root / relative) {
+		if (ec || real == real_root || !fs_paths::is_inside(real_root, real)) {
 			return std::string{ "the play profile is not really inside the project folder: it is not used" };
 		}
 		return std::nullopt;
@@ -112,7 +114,7 @@ std::optional<std::string> edt::play_session::start_refusal() const
 	if (!m_services.ctx_manager.lock()) return std::string{ "there is no context manager" };
 	if (!m_document.editor_tag.is_valid() || m_document.world_descs.empty()) return std::string{ "no level with a world to play" };
 	if (!m_services.assembler() || !m_services.sfactory()) return std::string{ "the scene services are missing" };
-	if (m_options.profile_resources && !m_options.play_profile.empty() && !m_options.project_root.empty()) {
+	if (m_options.profile_resources && !m_options.play_profile.empty()) {
 		if (auto why = profile_problem(m_options.project_root, m_options.play_profile)) return why;
 	}
 	if (m_options.start_blocker) return m_options.start_blocker();

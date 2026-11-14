@@ -1746,7 +1746,8 @@ BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 	{
 		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
 		edt::play_session session(state, services, world_ctrl, selection, events,
-			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = { editor_profile } });
+			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = { editor_profile },
+				.project_root = base });
 		const res::tag settings{ "user://settings.txt" };
 		std::ofstream(editor_profile / "settings.txt") << "editor";
 		auto held = profile_rs.require_sync<res::text_resource>(settings);
@@ -1819,6 +1820,50 @@ BOOST_AUTO_TEST_CASE(play_is_refused_when_the_play_profile_is_behind_a_link)
 		BOOST_TEST(fs::exists(outside / "play_profile" / "keep.txt"));
 		BOOST_TEST(fs::exists(outside / "keep.txt"));
 	}
+	fs::remove_all(base);
+}
+
+BOOST_AUTO_TEST_CASE(play_profile_checks_the_project_root_a_link_a_file_and_no_root)
+{
+	open_level();
+	namespace fs = std::filesystem;
+	const fs::path base = fs::temp_directory_path() / "snk_edt_play_profile_root_tests";
+	fs::remove_all(base);
+	const fs::path editor_profile = base / "user_profile";
+	fs::create_directories(editor_profile);
+
+	const auto starts = [&](const fs::path& project, const fs::path& profile) {
+		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
+		edt::play_session session(state, services, world_ctrl, selection, events,
+			{ .profile_resources = &profile_rs, .play_profile = profile, .editor_profile = { editor_profile }, .project_root = project });
+		const bool started = session.start();
+		if (started) session.stop();
+		return started;
+	};
+
+	// The project folder itself may be a link: the profile is still inside the project.
+	const fs::path real_project = base / "real_project";
+	fs::create_directories(real_project);
+	std::error_code no_links;
+	fs::create_directory_symlink(real_project, base / "linked_project", no_links);
+	if (no_links) {
+		// No right to make links here (Windows without developer mode): nothing to check.
+		BOOST_TEST_MESSAGE("links cannot be made here: " << no_links.message());
+	} else {
+		const fs::path linked = base / "linked_project";
+		BOOST_TEST(starts(linked, linked / ".cache" / "play_profile"));
+		BOOST_TEST(fs::is_directory(real_project / ".cache" / "play_profile"));
+	}
+
+	// A file where the profile folder should be.
+	const fs::path file_project = base / "file_project";
+	fs::create_directories(file_project / ".cache");
+	std::ofstream(file_project / ".cache" / "play_profile") << "not a folder";
+	BOOST_TEST(!starts(file_project, file_project / ".cache" / "play_profile"));
+	BOOST_TEST(fs::is_regular_file(file_project / ".cache" / "play_profile"));
+
+	// Without a project folder the profile cannot be checked, so it is not emptied.
+	BOOST_TEST(!starts({}, base / "unchecked_profile"));
 	fs::remove_all(base);
 }
 
