@@ -777,6 +777,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// then attaches the level and loads it again from disk.
 	{
 		migration_deps migration{ m_context->jobs() };
+		migration.log_filter = data.has_value<cmd::log_read_filter>() ? &data.require<cmd::log_read_filter>() : nullptr;
 		migration.project_root = [&data]() -> std::optional<std::filesystem::path> {
 			if (!data.has_value<prj::project_context>()) return std::nullopt;
 			return data.require<prj::project_context>().root;

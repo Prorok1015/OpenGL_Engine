@@ -254,17 +254,67 @@ namespace {
 		std::size_t length = 0;
 	};
 
+	// A character as names are ordered and looked up by: without its case where same_letter ignores it.
+	unsigned char folded(char c)
+	{
+#ifdef _WIN32
+		return static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(c)));
+#else
+		return static_cast<unsigned char>(c);
+#endif
+	}
+
+	bool name_less(std::string_view a, std::string_view b)
+	{
+		return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(), [](char x, char y) { return folded(x) < folded(y); });
+	}
+
+	// Where the first segment of a listed name ends, the '/' after it included: 5 of "/usr/bin", 3 of "C:/Users".
+	std::size_t first_segment_length(std::string_view name)
+	{
+		const std::size_t slash = name.size() > 1 ? name.find('/', 1) : std::string_view::npos;
+		return slash == std::string_view::npos ? 0 : slash + 1;
+	}
+
+	// The first segment of `name` against the start of `text`, where '\' is a separator too: below 0 when it sorts
+	// before it, 0 when `text` starts with it. No first segment is the start of another, so names are ordered by it.
+	int segment_order(std::string_view name, std::string_view text)
+	{
+		const std::size_t length = first_segment_length(name);
+		for (std::size_t i = 0; i < length; ++i) {
+			if (i == text.size()) return 1;
+			const unsigned char have = folded(is_separator(text[i]) ? '/' : text[i]);
+			const unsigned char want = folded(name[i]);
+			if (want != have) return want < have ? -1 : 1;
+		}
+		return 0;
+	}
+
 	// What the listing of the disk says of the token at `from`. Compares text only: never asks the file system.
 	disk_match disk_at(std::string_view text, std::size_t from, const edt::agent_log_disk& disk, bool msys)
 	{
 		disk_match out;
-		for (const std::string& name : disk.names) {
-			const std::size_t covered = name.empty() ? 0 : root_length(text, from, name, false, msys);
-			if (covered <= out.length) continue;
-			out = disk_match{ true, true, covered };
+		const std::vector<std::string>& names = disk.names();
+		const auto longest = [&](std::string_view start) {
+			const auto before = [](const std::string& name, std::string_view key) { return segment_order(name, key) < 0; };
+			auto name = std::lower_bound(names.begin(), names.end(), start, before);
+			for (; name != names.end() && segment_order(*name, start) == 0; ++name) {
+				const std::size_t covered = root_length(text, from, *name, false, msys);
+				if (covered > out.length) out = disk_match{ true, true, covered };
+			}
+		};
+		longest(text.substr(from));
+		// "/c/Users" is listed as "C:/Users".
+		if (msys) {
+			const std::string drive{ text[from + 1], ':', '/' };
+			longest(drive);
 		}
 		if (out.found) return out;
-		for (const std::string& name : disk.unlisted) {
+		if (disk.whole_root() && text[from] == '/' && from + 1 < text.size()) {
+			out.found = is_path_char(text[from + 1]) && !is_separator(text[from + 1]);
+			if (out.found) return out;
+		}
+		for (const std::string& name : disk.unlisted()) {
 			const std::size_t covered = name.empty() ? 0 : root_length(text, from, name, false, msys);
 			const std::size_t next = from + covered + 1;
 			if (covered == 0 || next >= text.size() || !is_separator(text[next - 1])) continue;
@@ -371,33 +421,54 @@ namespace {
 		return !ec;
 	}
 
-	// Adds two levels of `root` to `out` under `prefix` ("" or "C:"); `with_first`: the first-level names too.
-	void list_disk(edt::agent_log_disk& out, const fs::path& root, const std::string& prefix, std::span<const std::string> skipped,
+	// A listing while it is made; agent_log_disk orders it.
+	struct disk_listing
+	{
+		std::vector<std::string> names;
+		std::vector<std::string> unlisted;
+		bool whole_root = false;
+	};
+
+	// Adds two levels of `root` to `out` under `prefix` ("" or "C:"); `with_first`: the first-level names too. Once
+	// `limits.total` is used up no folder is asked or entered: each name left goes to `unlisted`.
+	void list_disk(disk_listing& out, const fs::path& root, const std::string& prefix, std::span<const std::string> skipped,
 		const edt::agent_log_disk_limits& limits, bool with_first)
 	{
 		const auto used = [&out] { return out.names.size() + out.unlisted.size(); };
+		std::size_t unread = 0;
 		std::error_code ec;
 		fs::directory_iterator entry(root, ec);
 		for (; !ec && entry != fs::directory_iterator(); entry.increment(ec)) {
-			if (used() >= limits.total) return;
 			const std::string name = fs_paths::utf8_of(entry->path().filename());
 			const std::string first = prefix + "/" + name;
 			// Before anything asks the folder itself: a network mount may not answer.
-			if (std::find(skipped.begin(), skipped.end(), name) != skipped.end()) {
-				out.unlisted.push_back(first);
-				continue;
-			}
-			if (with_first) out.names.push_back(first);
+			const bool read = used() < limits.total && std::find(skipped.begin(), skipped.end(), name) == skipped.end();
+			if (read && with_first) out.names.push_back(first);
 			std::error_code entry_ec;
-			if (!entry->is_directory(entry_ec) || entry_ec) continue;
+			if (read && (!entry->is_directory(entry_ec) || entry_ec)) continue;
 			std::vector<std::string> below;
-			const bool whole = list_folder(entry->path(), first, limits.per_folder, below);
-			if (!whole || used() + below.size() > limits.total) {
-				if (used() < limits.total) out.unlisted.push_back(first);
+			if (read && list_folder(entry->path(), first, limits.per_folder, below) && used() + below.size() <= limits.total) {
+				out.names.insert(out.names.end(), std::make_move_iterator(below.begin()), std::make_move_iterator(below.end()));
 				continue;
 			}
-			out.names.insert(out.names.end(), std::make_move_iterator(below.begin()), std::make_move_iterator(below.end()));
+			// A root with more unread folders than this counts as a path whole, so `unlisted` stays small and nothing is shown.
+			if (unread++ == limits.per_folder) {
+				if (prefix.empty()) {
+					out.whole_root = true;
+				} else {
+					out.unlisted.push_back(prefix);
+				}
+				return;
+			}
+			out.unlisted.push_back(first);
 		}
+	}
+
+	bool is_remote_mount_type(std::string_view type)
+	{
+		constexpr std::array<std::string_view, 8> k_remote{ "cifs", "smb3", "autofs", "9p", "ceph", "glusterfs", "davfs", "fuse" };
+		// A FUSE file system may be a network one whatever its name (sshfs, glusterfs, rclone): none is entered.
+		return type.starts_with("nfs") || type.starts_with("fuse.") || std::find(k_remote.begin(), k_remote.end(), type) != k_remote.end();
 	}
 
 	// "\040" of /proc/self/mounts is a space, "\011" a tab, "\012" a newline, "\134" a backslash.
@@ -503,11 +574,29 @@ boost::json::value edt::agent_job_result(const boost::json::value& result, const
 	return out;
 }
 
+edt::agent_log_disk::agent_log_disk(std::vector<std::string> names, std::vector<std::string> unlisted, bool whole_root)
+	: m_unlisted(std::move(unlisted)), m_whole_root(whole_root)
+{
+	m_names.reserve(names.size());
+	for (std::string& name : names) {
+		const std::size_t length = first_segment_length(name);
+		if (length == 0 || length == name.size()) continue;
+		const std::string_view segment = std::string_view(name).substr(0, length - 1);
+		// The lookup reads '\' as a separator, so such a segment has no place in the order: all below it is a path.
+		if (segment.find('\\') != std::string_view::npos) {
+			m_unlisted.emplace_back(segment);
+			continue;
+		}
+		m_names.push_back(std::move(name));
+	}
+	std::sort(m_names.begin(), m_names.end(), [](const std::string& a, const std::string& b) { return name_less(a, b); });
+}
+
 edt::agent_log_disk edt::agent_log_disk_of(const fs::path& root, std::span<const std::string> skipped, agent_log_disk_limits limits)
 {
-	agent_log_disk out;
-	list_disk(out, root, {}, skipped, limits, false);
-	return out;
+	disk_listing found;
+	list_disk(found, root, {}, skipped, limits, false);
+	return agent_log_disk(std::move(found.names), std::move(found.unlisted), found.whole_root);
 }
 
 bool edt::agent_log_drive_is_listed(char letter, unsigned type)
@@ -527,9 +616,8 @@ std::vector<std::string> edt::agent_log_remote_mounts(std::string_view mounts)
 		next_mount_field(line);
 		const std::string point = unescaped_mount(next_mount_field(line));
 		const std::string_view type = next_mount_field(line);
-		const bool remote = type.starts_with("nfs") || type == "cifs" || type == "smb3" || type == "autofs" || type == "fuse.sshfs";
 		// The listing enters first-level folders only: a mount point further down is never read.
-		if (!remote || point.size() < 2 || point[0] != '/' || point.find('/', 1) != std::string::npos) continue;
+		if (!is_remote_mount_type(type) || point.size() < 2 || point[0] != '/' || point.find('/', 1) != std::string::npos) continue;
 		out.push_back(point.substr(1));
 	}
 	return out;
@@ -537,31 +625,34 @@ std::vector<std::string> edt::agent_log_remote_mounts(std::string_view mounts)
 
 edt::agent_log_disk edt::agent_log_disk_at_start()
 {
-	agent_log_disk out;
+	disk_listing found;
 	const agent_log_disk_limits limits{};
 #ifdef _WIN32
 	// "/Users/x" is a path on the current drive: listed only when that drive is a local disk.
 	const char current = current_drive_letter();
 	if (current != '\0' && agent_log_drive_is_listed(current, drive_type_of(current))) {
-		list_disk(out, fs::path("/"), {}, {}, limits, false);
+		list_disk(found, fs::path("/"), {}, {}, limits, false);
+	} else {
+		// Nothing tells a path on a drive that is not read from a JSON pointer: every rooted token is a path.
+		found.whole_root = true;
 	}
 	const DWORD drives = GetLogicalDrives();
 	for (int index = 0; index < 26; ++index) {
 		if ((drives & (DWORD{ 1 } << index)) == 0) continue;
-		if (out.names.size() + out.unlisted.size() >= limits.total) break;
 		const char letter = static_cast<char>('A' + index);
 		const std::string drive{ letter, ':' };
-		if (agent_log_drive_is_listed(letter, drive_type_of(letter))) {
-			list_disk(out, fs_paths::path_from_utf8(drive + "/"), drive, {}, limits, true);
+		const bool room = found.names.size() + found.unlisted.size() < limits.total;
+		if (room && agent_log_drive_is_listed(letter, drive_type_of(letter))) {
+			list_disk(found, fs_paths::path_from_utf8(drive + "/"), drive, {}, limits, true);
 		} else {
-			out.unlisted.push_back(drive);
+			found.unlisted.push_back(drive);
 		}
 	}
 #else
 	const std::vector<std::string> skipped = skipped_folders();
-	list_disk(out, fs::path("/"), {}, skipped, limits, false);
+	list_disk(found, fs::path("/"), {}, skipped, limits, false);
 #endif
-	return out;
+	return agent_log_disk(std::move(found.names), std::move(found.unlisted), found.whole_root);
 }
 
 edt::agent_log_roots edt::agent_log_roots_of(const fs::path& project)

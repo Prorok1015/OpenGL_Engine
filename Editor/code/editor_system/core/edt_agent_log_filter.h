@@ -22,21 +22,40 @@ namespace edt
 	// The top two levels of the disk as they were when it was listed: what tells an absolute path under none of the
 	// roots from a JSON pointer such as "/header/type", which looks the same. The text of a line is only ever compared
 	// with it: no file system call is made for a line (that would tell an agent what exists, and may block).
-	struct agent_log_disk
+	class agent_log_disk
 	{
+	public:
+		agent_log_disk() = default;
+		// Puts `names` in the order the lookup needs (the only way to fill one, so it cannot be forgotten). A name
+		// that has no two segments is dropped; one whose first segment holds '\' goes to `unlisted` by that segment.
+		agent_log_disk(std::vector<std::string> names, std::vector<std::string> unlisted, bool whole_root = false);
+
 		// Names of two segments with '/': "/usr/bin", "/media/John Smith", "C:/Program Files". A token that starts
-		// with one (as whole segments; a space in it counts) is a path.
-		std::vector<std::string> names;
-		// First segments whose content is not known ("/proc", a network mount, a folder too large or not readable):
-		// anything below one is a path, except right after a resource name (there it may as well be a JSON pointer).
-		std::vector<std::string> unlisted;
+		// with one (as whole segments; a space in it counts) is a path. Sorted, so that a token is looked up by its
+		// first segment with a binary search.
+		const std::vector<std::string>& names() const { return m_names; }
+		// First segments whose content is not known ("/proc", a network mount, a folder too large or not readable,
+		// one met after the total was used up): anything below one is a path, except right after a resource name
+		// (there it may as well be a JSON pointer).
+		const std::vector<std::string>& unlisted() const { return m_unlisted; }
+		// The root "/" itself is not known (more unread folders than agent_log_disk_limits allows; on Windows a
+		// current drive that is not listed): every rooted token ("/a", "/a/b") is a path, with the same exception.
+		bool whole_root() const { return m_whole_root; }
+
+	private:
+		std::vector<std::string> m_names;
+		std::vector<std::string> m_unlisted;
+		bool m_whole_root = false;
 	};
 
 	struct agent_log_disk_limits
 	{
-		// Entries of `names` and `unlisted` together; the listing stops silently there.
+		// Entries of `names` and `unlisted` together while folders are still entered; after that no folder is
+		// entered and every first-level name left goes to `unlisted`.
 		std::size_t total = 4096;
-		// A folder with more entries goes to `unlisted` as a whole, so /usr/bin cannot use up the total.
+		// A folder with more entries goes to `unlisted` as a whole, so /usr/bin cannot use up the total. Also the
+		// most names one root gives to `unlisted`: a root with more counts as a path whole (`whole_root`, or the
+		// drive itself in `unlisted`), which fails closed.
 		std::size_t per_folder = 512;
 	};
 
@@ -47,7 +66,7 @@ namespace edt
 	// The disk of this machine, listed now (once, when the editor starts). Not entered: /net, /proc, /sys, /dev and
 	// the first-level network and automount points of /proc/self/mounts. On Windows: every drive the system has, by
 	// agent_log_drive_is_listed ("C:/Users/x", or "Z:" in `unlisted` without a file system call), and the current
-	// drive ("/Users/x") when it is a listed one.
+	// drive ("/Users/x") when it is a listed one; when it is not, `whole_root` is set and it is not read.
 	agent_log_disk agent_log_disk_at_start();
 
 	// DRIVE_FIXED of GetDriveTypeW.
@@ -59,7 +78,8 @@ namespace edt
 	bool agent_log_drive_is_listed(char letter, unsigned type);
 
 	// The first-level folders (names without '/': "mnt share") that `mounts`, the text of /proc/self/mounts, says are
-	// network or automount points (nfs*, cifs, smb3, autofs, fuse.sshfs). Octal escapes of a mount point are decoded
+	// network or automount points (nfs*, cifs, smb3, autofs, 9p, ceph, glusterfs, davfs, fuse and every fuse.*, which
+	// cannot be told from a network one by its name). Octal escapes of a mount point are decoded
 	// ("\040" is a space); a mount point further down than the first level is left out.
 	std::vector<std::string> agent_log_remote_mounts(std::string_view mounts);
 

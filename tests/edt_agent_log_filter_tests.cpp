@@ -27,15 +27,14 @@ edt::agent_log_roots roots()
 	out.project = { "/home/dev/games/demo" };
 	out.home = { "/home/dev" };
 	out.temp = { "/tmp" };
-	out.disk.unlisted = { "/usr", "/etc", "/home" };
-	out.disk.names = { "/usr/local dir", "C:/Program Files" };
+	out.disk = edt::agent_log_disk({ "/usr/local dir", "C:/Program Files" }, { "/usr", "/etc", "/home" });
 	return out;
 }
 
-edt::agent_log_roots with_names(std::vector<std::string> names)
+edt::agent_log_roots with_names(std::vector<std::string> names, std::vector<std::string> unlisted = {}, bool whole_root = false)
 {
 	edt::agent_log_roots out;
-	out.disk.names = std::move(names);
+	out.disk = edt::agent_log_disk(std::move(names), std::move(unlisted), whole_root);
 	return out;
 }
 
@@ -122,8 +121,7 @@ BOOST_AUTO_TEST_CASE(AFolderWithASpace_IsAPathOnlyWhenTheListingHasIt)
 	BOOST_TEST(edt::agent_log_text("open /media/John Smithers/x.txt", listed) == "open /media/John Smithers/x.txt");
 
 	// Only the first folder is known: the space ends the path, and the sentence after it is not swallowed.
-	edt::agent_log_roots unlisted;
-	unlisted.disk.unlisted = { "/media" };
+	const edt::agent_log_roots unlisted = with_names({}, { "/media" });
 	BOOST_TEST(edt::agent_log_text("open /media/John Smith/x.txt", unlisted) == "open <path> Smith/x.txt");
 	BOOST_TEST(edt::agent_log_text("read /media/usb and/or the other one", unlisted) == "read <path> and/or the other one");
 	BOOST_TEST(edt::agent_log_text(R"(open C:\Users\John Smith\x.txt)", unlisted) == R"(open <path> Smith\x.txt)");
@@ -131,8 +129,7 @@ BOOST_AUTO_TEST_CASE(AFolderWithASpace_IsAPathOnlyWhenTheListingHasIt)
 
 BOOST_AUTO_TEST_CASE(APathList_IsRewrittenElementByElement_HoweverLongTheLine)
 {
-	edt::agent_log_roots known = with_names({ "/usr/bin" });
-	known.disk.unlisted = { "/etc" };
+	edt::agent_log_roots known = with_names({ "/usr/bin" }, { "/etc" });
 	std::string line = "PATH=";
 	std::string expected = "PATH=";
 	for (std::size_t element = 0; line.size() < 64 * 1024; ++element) {
@@ -174,13 +171,15 @@ BOOST_AUTO_TEST_CASE(TheListingOfADisk_HoldsTwoLevels_WithinItsLimits_WithoutThe
 	const edt::agent_log_disk found = edt::agent_log_disk_of(dir.path(), skipped, edt::agent_log_disk_limits{ 4096, 4 });
 	for (const char* name : { "/a/one", "/a/two.txt", "/b/John Smith" }) {
 		BOOST_TEST_CONTEXT(name) {
-			BOOST_TEST(has(found.names, name));
+			BOOST_TEST(has(found.names(), name));
 		}
 	}
-	BOOST_TEST(found.names.size() == 3u);
-	BOOST_TEST(has(found.unlisted, "/skip"));
-	BOOST_TEST(has(found.unlisted, "/big"));
-	BOOST_TEST(found.unlisted.size() == 2u);
+	BOOST_TEST(found.names().size() == 3u);
+	BOOST_TEST(std::is_sorted(found.names().begin(), found.names().end()));
+	BOOST_TEST(has(found.unlisted(), "/skip"));
+	BOOST_TEST(has(found.unlisted(), "/big"));
+	BOOST_TEST(found.unlisted().size() == 2u);
+	BOOST_TEST(!found.whole_root());
 
 	edt::agent_log_roots known;
 	known.disk = found;
@@ -189,13 +188,77 @@ BOOST_AUTO_TEST_CASE(TheListingOfADisk_HoldsTwoLevels_WithinItsLimits_WithoutThe
 
 	for (const std::size_t total : { std::size_t{ 0 }, std::size_t{ 1 }, std::size_t{ 3 } }) {
 		BOOST_TEST_CONTEXT(total) {
-			const edt::agent_log_disk cut = edt::agent_log_disk_of(dir.path(), skipped, edt::agent_log_disk_limits{ total, 512 });
-			BOOST_TEST(cut.names.size() + cut.unlisted.size() <= total);
+			// A folder met after the total is used up is not entered, and what is below it is still a path.
+			edt::agent_log_roots cut;
+			cut.disk = edt::agent_log_disk_of(dir.path(), skipped, edt::agent_log_disk_limits{ total, 512 });
+			BOOST_TEST(cut.disk.names().size() <= total);
+			BOOST_TEST(cut.disk.unlisted().size() <= 5u);
+			BOOST_TEST(!cut.disk.whole_root());
+			BOOST_TEST(edt::agent_log_text("read /a/one/deep.txt, /skip/hidden.txt and /big/9", cut) == "read <path>, <path> and <path>");
 		}
 	}
 	const edt::agent_log_disk none = edt::agent_log_disk_of(dir.path() / "no_such_folder", {});
-	BOOST_TEST(none.names.empty());
-	BOOST_TEST(none.unlisted.empty());
+	BOOST_TEST(none.names().empty());
+	BOOST_TEST(none.unlisted().empty());
+	BOOST_TEST(!none.whole_root());
+}
+
+// A root with more unread folders than the limit gives up its list: every rooted token is a path then.
+BOOST_AUTO_TEST_CASE(ARootWithTooManyUnreadFolders_CountsAsAPathWhole)
+{
+	const test_util::temp_dir dir{ "edt_agent_log_filter_overfull" };
+	for (const char* file : { "a/x", "b/x", "c/x", "d/x" }) {
+		fs::create_directories((dir.path() / file).parent_path());
+		std::ofstream(dir.path() / file) << "x";
+	}
+	edt::agent_log_roots known;
+	known.disk = edt::agent_log_disk_of(dir.path(), {}, edt::agent_log_disk_limits{ 0, 2 });
+	BOOST_TEST(known.disk.whole_root());
+	BOOST_TEST(known.disk.names().empty());
+	BOOST_TEST(known.disk.unlisted().size() == 2u);
+	BOOST_TEST(edt::agent_log_text("read /a/x, /d/x and /nowhere", known) == "read <path>, <path> and <path>");
+
+	known.disk = edt::agent_log_disk_of(dir.path(), {}, edt::agent_log_disk_limits{ 0, 4 });
+	BOOST_TEST(!known.disk.whole_root());
+	BOOST_TEST(known.disk.unlisted().size() == 4u);
+	BOOST_TEST(edt::agent_log_text("read /a/x, /d/x and /nowhere", known) == "read <path>, <path> and /nowhere");
+}
+
+// The names are ordered when the listing is made, whatever order they are given in; a lookup goes by the first segment.
+BOOST_AUTO_TEST_CASE(AListing_OrdersItsNames_AndFindsEachByItsFirstSegment)
+{
+	const edt::agent_log_disk disk({ "/usr/local dir", "/a b/c", "/usr/bin", "/a/b", "/ab/c", "/", "/single", "", "/a/b c" }, {});
+	BOOST_TEST(disk.names().size() == 6u);
+	BOOST_TEST(std::is_sorted(disk.names().begin(), disk.names().end()));
+	edt::agent_log_roots known;
+	known.disk = disk;
+	for (const char* path : { "/usr/local dir/x", "/a b/c/x", "/usr/bin/x", "/a/b/x", "/ab/c/x", "/a/b c/x", "/usr/bin" }) {
+		BOOST_TEST_CONTEXT(path) {
+			BOOST_TEST(edt::agent_log_text(std::string("open ") + path + " now", known) == "open <path> now");
+		}
+	}
+	for (const char* text : { "at /usr/lib/x", "at /a/c", "at /ab/d", "at /single/x", "at /us/bin", "at /usr", "at /usr/" }) {
+		BOOST_TEST_CONTEXT(text) {
+			BOOST_TEST(edt::agent_log_text(text, known) == text);
+		}
+	}
+
+	// A first segment with '\' cannot be ordered beside "/a/...": it counts whole instead.
+	const edt::agent_log_disk odd({ "/a\\b/c", "/a/d" }, {});
+	BOOST_TEST(odd.names().size() == 1u);
+	BOOST_REQUIRE(odd.unlisted().size() == 1u);
+	BOOST_TEST(odd.unlisted().front() == "/a\\b");
+}
+
+// The root itself is not known (on Windows: the current drive is not a listed one): "/Users/x" is a path whole.
+BOOST_AUTO_TEST_CASE(ARootThatIsNotListed_MakesEveryRootedTokenAPath)
+{
+	const edt::agent_log_roots known = with_names({}, {}, true);
+	BOOST_TEST(edt::agent_log_text("open /Users/dev/x.txt:3 now", known) == "open <path>:3 now");
+	BOOST_TEST(edt::agent_log_text("open /Users and /a/b.", known) == "open <path> and <path>.");
+	BOOST_TEST(edt::agent_log_text("res://a.desc: /header/type is bad", known) == "res://a.desc: /header/type is bad");
+	BOOST_TEST(edt::agent_log_text("a / b, and/or, http://host/x, 1/2", known) == "a / b, and/or, http://host/x, 1/2");
+	BOOST_TEST(edt::agent_log_text("open /Users/dev/x.txt", edt::agent_log_roots{}) == "open /Users/dev/x.txt");
 }
 
 BOOST_AUTO_TEST_CASE(WithoutRoots_OnlyAbsolutePathsGo)
@@ -298,7 +361,8 @@ BOOST_AUTO_TEST_CASE(OnWindows_AnMsysPath_IsThePathOfItsDrive)
 {
 	edt::agent_log_roots known;
 	known.project = { R"(C:\Games\Demo)" };
-	known.disk.names = { "C:/Users" };
+	known.disk = edt::agent_log_disk({ "D:/Users", "C:/Users", "c:/Windows" }, {});
+	BOOST_TEST(edt::agent_log_text("open /C/windows/x and /d/users", known) == "open <path> and <path>");
 	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo/res/a.desc and /C/games/demo", known) == "open <project>/res/a.desc and <project>");
 	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo2/a.desc", known) == "open /c/Games/Demo2/a.desc");
 	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
@@ -308,18 +372,30 @@ BOOST_AUTO_TEST_CASE(OnWindows_AnMsysPath_IsThePathOfItsDrive)
 BOOST_AUTO_TEST_CASE(OnWindows_ADriveThatIsNotListed_IsAPathWhole)
 {
 	edt::agent_log_roots known;
-	known.disk.unlisted = { "Z:" };
+	known.disk = edt::agent_log_disk({}, { "Z:" });
 	BOOST_TEST(edt::agent_log_text(R"(open Z:\share\x now)", known) == "open <path> now");
 	BOOST_TEST(edt::agent_log_text("open z:/share/x.txt:3", known) == "open <path>:3");
 	BOOST_TEST(edt::agent_log_text("open /z/share/x now", known) == "open <path> now");
 	BOOST_TEST(edt::agent_log_text("open /y/share/x and /z", known) == "open /y/share/x and /z");
+}
+
+// The current drive is a network one: it is not read, and a path without a drive on it is a path whole, as "/z/x" is.
+BOOST_AUTO_TEST_CASE(OnWindows_ACurrentDriveThatIsNotListed_MakesADrivelessPathAPathWhole)
+{
+	edt::agent_log_roots known;
+	known.project = { R"(Z:\Games\Demo)" };
+	known.disk = edt::agent_log_disk({ "C:/Users" }, { "Z:" }, true);
+	BOOST_TEST(edt::agent_log_text(R"(open /Users/dev/x.txt and \Users\dev)", known) == R"(open <path> and \Users\dev)");
+	BOOST_TEST(edt::agent_log_text("open /share/x now, /z/share/x and /c/Users/dev", known) == "open <path> now, <path> and <path>");
+	BOOST_TEST(edt::agent_log_text("open /z/Games/Demo/res/a.desc", known) == "open <project>/res/a.desc");
+	BOOST_TEST(edt::agent_log_text("res://a.desc: /header/type is bad", known) == "res://a.desc: /header/type is bad");
 }
 #else
 BOOST_AUTO_TEST_CASE(OffWindows_AnMsysPath_IsAnAbsolutePathLikeAnyOther)
 {
 	edt::agent_log_roots known;
 	known.project = { "/c/Games/Demo" };
-	known.disk.names = { "/c/Users" };
+	known.disk = edt::agent_log_disk({ "/c/Users" }, {});
 	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo/res/a.desc", known) == "open <project>/res/a.desc");
 	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
 	BOOST_TEST(edt::agent_log_text("open /C/games/demo/a and /c/none/x", known) == "open /C/games/demo/a and /c/none/x");
@@ -432,11 +508,22 @@ BOOST_AUTO_TEST_CASE(TheMountTable_GivesTheFirstLevelNetworkMounts_WithTheirEsca
 		"server:/n /new\\012line cifs rw 0 0\n"
 		"server:/s /back\\134slash cifs rw 0 0\n"
 		"portal /run fuse.portal rw 0 0\n"
+		"host /plan9 9p rw,trans=virtio 0 0\n"
+		"mon1:6789:/ /cephfs ceph rw 0 0\n"
+		"host:/vol /gluster glusterfs rw 0 0\n"
+		"host:/vol /glusterfuse fuse.glusterfs rw 0 0\n"
+		"https://dav.example/ /dav davfs rw 0 0\n"
+		"remote: /cloud fuse.rclone rw 0 0\n"
+		"bare /barefuse fuse rw 0 0\n"
+		"/dev/sdc1 /ntfs fuseblk rw 0 0\n"
+		"/dev/sdd1 /fused fused rw 0 0\n"
+		"tmpfs /tmp tmpfs rw 0 0\n"
 		"broken /half\n"
 		"\n"
 		"server:/last /last nfs";
 	const std::vector<std::string> expected{
-		"nfs3", "nfs4", "cifs", "smb", "misc", "sshfs", "mnt share", "tab\tbed", "new\nline", "back\\slash", "last",
+		"nfs3", "nfs4", "cifs", "smb", "misc", "sshfs", "mnt share", "tab\tbed", "new\nline", "back\\slash", "run",
+		"plan9", "cephfs", "gluster", "glusterfuse", "dav", "cloud", "barefuse", "last",
 	};
 	const std::vector<std::string> found = edt::agent_log_remote_mounts(mounts);
 	BOOST_TEST(found == expected, boost::test_tools::per_element());
@@ -451,9 +538,12 @@ BOOST_AUTO_TEST_CASE(TheMountTable_GivesTheFirstLevelNetworkMounts_WithTheirEsca
 BOOST_AUTO_TEST_CASE(TheListingOfThisMachine_StaysWithinItsLimits)
 {
 	const edt::agent_log_disk found = edt::agent_log_disk_at_start();
-	BOOST_TEST(found.names.size() + found.unlisted.size() <= edt::agent_log_disk_limits{}.total);
+	const edt::agent_log_disk_limits limits{};
+	BOOST_TEST(found.names().size() <= limits.total);
+	// Each root (the drive-less one and 26 drives) gives per_folder names at most, and a drive may be there itself.
+	BOOST_TEST(found.unlisted().size() <= 27u * (limits.per_folder + 2u));
 #ifdef __linux__
-	for (const std::string& name : found.names) {
+	for (const std::string& name : found.names()) {
 		BOOST_TEST_CONTEXT(name) {
 			BOOST_TEST(!name.starts_with("/proc/"));
 			BOOST_TEST(!name.starts_with("/sys/"));
