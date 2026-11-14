@@ -51,6 +51,7 @@
 #include <snk/mcp/mcp_host.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
@@ -3366,6 +3367,79 @@ BOOST_AUTO_TEST_CASE(the_source_play_shows_the_last_check_and_leads_to_its_nodes
 	publisher.publish(problems, {});
 	BOOST_TEST(problems.size() == 0u);
 	BOOST_TEST(!publisher.target_of(rows[0].item).has_value());
+}
+
+namespace {
+
+// An asset index that knows where some IDs are (path_of) and keys no tag by an ID (id_of), so no cache entry moves.
+struct paths_index final : res::asset_index
+{
+	std::map<res::asset_id, res::tag> paths;
+	std::optional<res::asset_id> id_of(const res::tag&) const override { return std::nullopt; }
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
+}
+
+// #773: a {guid, path} reference is checked where it leads. A guid the index holds under another path is a note (the
+// file moved), one it does not hold a warning with the path loading instead, or an error without a path.
+BOOST_AUTO_TEST_CASE(a_reference_object_is_checked_where_its_guid_leads)
+{
+	open_level();
+	const res::tag there = put("there_mat.desc", "{}");
+	const res::asset_id held = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	const res::asset_id unknown = *res::asset_id_from_text("0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6");
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(held, there);
+	rs->set_asset_index(index);
+	const auto sky = [](json::value material) {
+		scn::prefab_desc::prefab_comp_node node;
+		node.type_name = "skybox_desc";
+		node.overrides["material"] = std::move(material);
+		return node;
+	};
+	const auto reference = [](const res::asset_id& id, std::string_view path) {
+		json::object out{ { "guid", res::to_text(id) } };
+		if (!path.empty()) out["path"] = path;
+		return json::value(std::move(out));
+	};
+	crate().components["moved"] = sky(reference(held, tag_of("old_mat.desc").string()));
+	crate().components["by_path"] = sky(reference(unknown, tag_of("gone_mat.desc").string()));
+	crate().components["nowhere"] = sky(reference(unknown, ""));
+	cam().components["malformed"] = sky(json::object{ { "guid", res::to_text(held) }, { "file", "res://x.desc" } });
+	cam().components["refused"] = sky(reference(unknown, "user://saves/m.desc"));
+
+	const auto found = edt::run_play_preflight(state, checks());
+	rs->set_asset_index(nullptr);
+	const std::string crate_at = "/worlds/0/children/1/components/";
+	const std::string cam_at = "/worlds/0/children/0/components/";
+
+	const auto* moved = with_note(found, crate_at + "moved/material", "stale_path");
+	BOOST_REQUIRE(moved);
+	BOOST_TEST((moved->item.severity == edt::problem_severity::note));
+	BOOST_TEST(moved->item.message.find(std::string(there.view())) != std::string::npos);
+	BOOST_TEST(!with_note(found, crate_at + "moved/material", "missing_resource"));
+
+	const auto* by_path = with_note(found, crate_at + "by_path/material", "unknown_id");
+	BOOST_REQUIRE(by_path);
+	BOOST_TEST((by_path->item.severity == edt::problem_severity::warning));
+	BOOST_TEST(with_note(found, crate_at + "by_path/material", "missing_resource"));
+
+	const auto* nowhere = with_note(found, crate_at + "nowhere/material", "missing_resource");
+	BOOST_REQUIRE(nowhere);
+	BOOST_TEST((nowhere->item.severity == edt::problem_severity::error));
+
+	const auto* malformed = with_note(found, cam_at + "malformed/material", "reference");
+	BOOST_REQUIRE(malformed);
+	BOOST_TEST(malformed->item.message.find("\"file\"") != std::string::npos);
+
+	const auto* refused = with_note(found, cam_at + "refused/material", "reference");
+	BOOST_REQUIRE(refused);
+	BOOST_TEST((refused->item.severity == edt::problem_severity::error));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

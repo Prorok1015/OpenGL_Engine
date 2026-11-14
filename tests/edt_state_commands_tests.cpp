@@ -575,6 +575,28 @@ BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_NestsPointerKeys_AndARangeWithoutSpanIs
 	BOOST_TEST(root.find_pointer("/properties/pose/properties/rotation/minimum", ec) == nullptr);
 }
 
+// #773: a tag field is a res:// string or a {guid, path} reference, and the schema an agent reads says so.
+BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_ATagFieldTakesAStringOrAReference)
+{
+	desc::schema_registry registry;
+	desc::type_schema schema;
+	schema.name = "icon_holder";
+	desc::field_schema icon;
+	icon.name = "icon";
+	icon.key = "/icon";
+	icon.kind = desc::field_kind::res_tag;
+	schema.fields = { icon };
+
+	const json::value root = desc::to_json_schema(schema, registry);
+	const json::array& forms = root.at_pointer("/properties/icon/oneOf").as_array();
+	BOOST_REQUIRE(forms.size() == 2u);
+	BOOST_TEST(forms[0].at("type").as_string() == "string");
+	BOOST_TEST(forms[1].at("type").as_string() == "object");
+	BOOST_TEST(forms[1].at("additionalProperties").as_bool() == false);
+	BOOST_TEST(forms[1].at_pointer("/properties/guid/type").as_string() == "string");
+	BOOST_TEST(forms[1].at_pointer("/properties/path/type").as_string() == "string");
+}
+
 BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_ARangeOfAnArrayOfVectorsBoundsTheNumbers)
 {
 	desc::schema_registry registry;

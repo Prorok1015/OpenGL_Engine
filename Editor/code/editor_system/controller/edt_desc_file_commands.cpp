@@ -1,6 +1,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_code_commands.h"
 #include "edt_file_menu.h"
+#include "edt_reference.h"
 #include "edt_tag_text.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
@@ -301,12 +302,13 @@ namespace {
 	}
 
 	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID.
-	prepared_file prepare(const desc::desc_system& descs, const std::string& relative, const json::value& content, const std::string& kept_guid = {})
+	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, const std::string& relative,
+		const json::value& content, const std::string& kept_guid = {})
 	{
 		prepared_file out;
 		const std::string resource = "res://" + relative;
 		find_guid_keys(content, "", resource, out.problems);
-		for (res::diagnostic& item : edt::validate_desc_tree(descs, content, resource)) {
+		for (res::diagnostic& item : edt::validate_desc_tree(descs, content, resource, &resources)) {
 			if (item.severity == res::diagnostic_severity::error) out.problems.push_back(std::move(item));
 			else out.warnings.push_back(diagnostic_json(item));
 		}
@@ -362,7 +364,7 @@ namespace {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			// Exclusive: refused when the file appears while it is written (create_sync).
@@ -395,7 +397,7 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			const res::tag tag = desc_files::tag_of(path.relative);
@@ -422,7 +424,7 @@ namespace {
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
 				return refused("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes));
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));
@@ -476,7 +478,8 @@ namespace {
 	}
 }
 
-std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource)
+std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource,
+	const res::resource_system* resources)
 {
 	std::vector<res::diagnostic> out;
 	std::size_t errors = 0;
@@ -491,6 +494,31 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 	};
 	const auto schema_error = [&](std::string pointer, std::string reason) {
 		add(std::string(res::diagnostic_kind::schema), std::move(pointer), std::move(reason));
+	};
+	// A {guid, path} reference (EPIC-57 section 4.4): its form, its path a tag a file may hold; without a path, with an
+	// asset index, its guid must be one a file holds.
+	const auto check_reference = [&](const json::value& value, const std::string& at) {
+		const json::object& object = value.as_object();
+		if (std::string problem = edt::reference_object_problem(object); !problem.empty()) {
+			schema_error(at, std::move(problem));
+			return;
+		}
+		const std::string path = edt::reference_path_text(object);
+		if (!path.empty()) {
+			if (std::string problem = strict_tag_problem(path); !problem.empty()) {
+				schema_error(at + "/path", std::move(problem));
+				return;
+			}
+		}
+		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
+		if (!target || !target->unknown_id) return;
+		const std::string guid = res::to_text(target->reference.guid);
+		if (path.empty()) {
+			schema_error(at + "/guid", std::format("no file has the ID {} and the reference has no path", guid));
+		} else {
+			add(std::string(res::diagnostic_kind::reference), at + "/guid", std::format("no file has the ID {}: '{}' is loaded by its path", guid, path),
+				res::diagnostic_severity::warning);
+		}
 	};
 
 	const auto walk = [&](const auto& self, const json::value& value, const std::string& pointer) -> void {
@@ -576,6 +604,9 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 							if (!held) continue;
 							// Inline descs (desc_ref objects) are walked as descs; the values of any other object are all tags.
 							const bool inline_descs_allowed = field.kind == desc::field_kind::desc_ref || field.element == desc::field_kind::desc_ref;
+							// A custom field's codec reads its own objects (the samplers of a material): only a res_tag or a
+							// desc_ref holds a {guid, path} reference.
+							const bool references = field.kind != desc::field_kind::custom;
 							const auto check_tag = [&](const auto& self_tag, const json::value& tag, const std::string& at) -> void {
 								if (tag.is_string()) {
 									if (tag.as_string().empty()) return;
@@ -583,6 +614,8 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 								} else if (tag.is_array()) {
 									std::size_t index = 0;
 									for (const json::value& element : tag.as_array()) self_tag(self_tag, element, std::format("{}/{}", at, index++));
+								} else if (references && edt::is_reference_object(tag)) {
+									check_reference(tag, at);
 								} else if (tag.is_object() && !inline_descs_allowed) {
 									for (const auto& member : tag.as_object()) {
 										self_tag(self_tag, member.value(), at + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
@@ -655,7 +688,8 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 			"version":{"type":"string"},"bytes":{"type":"integer"}},"required":["text","type","version","bytes"]})json",
 		false, false, cmd::agent_category::read, cmd::danger::none, &desc_commands::read);
 	add("desc.create", "Create a desc file (*.desc) in the project's res/ folder from a JSON object with a `__type`; never replaces a file. "
-			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer",
+			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer. "
+			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"res://levels/a.desc or levels/a.desc: inside the project, *.desc only"},
 			"desc":{"type":"object","description":"the file's content; the editor writes __version and the header order"}},
