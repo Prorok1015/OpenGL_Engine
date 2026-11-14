@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_manual_tasks.hpp"
+#include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_asset_database.h"
 #include "edt_asset_usages.h"
@@ -7,6 +8,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -375,6 +377,145 @@ BOOST_AUTO_TEST_CASE(AssetUsages_AnswersByPathOrGuid_PageByPage)
 		BOOST_TEST(commands.invoke("asset.usages", json::object{ { "path", "res://sky.desc" }, { "page_size", size } }).code
 			== cmd::codes::invalid_args, size);
 	}
+}
+
+// "Used by" in the asset browser asks the database only when another asset is picked or the database moved, not at every
+// frame; without a database (no project) it says so by giving no report.
+BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainOnlyWhenTheDatabaseMovedOrAnotherAssetIsPicked)
+{
+	auto& assets = open();
+	const res::tag sky = res::tag::make("sky.desc");
+	edt::usage_list list;
+	BOOST_TEST(list.report_for(sky) == nullptr);
+
+	edt::usage_index index;
+	list.set_source([this, &index](const res::tag& asset) -> std::optional<edt::usage_report> {
+		return index.find(*db, nullptr, edt::usage_target{ asset, std::nullopt });
+	}, [this] { return edt::usage_stamp{ db->revision(), 0, {} }; });
+	const edt::usage_report* first = list.report_for(sky);
+	BOOST_REQUIRE(first);
+	BOOST_TEST(first->items.size() == 5u);
+	BOOST_TEST(list.report_for(sky) == first);
+	BOOST_TEST(list.queries() == 1u);
+	BOOST_TEST(list.report_for(res::tag::make("materials/child.desc")) != nullptr);
+	BOOST_TEST(list.queries() == 2u);
+	BOOST_TEST(index.builds() == 1u, "one index for every asset picked at one revision");
+
+	const edt::asset_usage* inherited = at(*list.report_for(sky), "res://materials/child.desc", "/__parent");
+	BOOST_REQUIRE(inherited);
+	BOOST_TEST(edt::usage_row_text(*inherited) == "res://materials/child.desc  /__parent  (parent)");
+	BOOST_TEST(list.queries() == 3u);
+	BOOST_REQUIRE(list.rows().size() == list.report_for(sky)->items.size());
+	BOOST_TEST(list.rows()[static_cast<std::size_t>(inherited - list.report_for(sky)->items.data())] == edt::usage_row_text(*inherited));
+
+	write("materials/child.desc", R"({ "__type": "material_desc" })");
+	res::file_change change;
+	change.tag = res::tag::make("materials/child.desc");
+	change.kind = res::change_kind::modified;
+	assets.apply_changes(std::vector<res::file_change>{ change });
+	test_util::pump(tasks);
+	const edt::usage_report* after = list.report_for(sky);
+	BOOST_REQUIRE(after);
+	BOOST_TEST(list.queries() == 4u, "the database moved: asked again");
+	BOOST_TEST(after->items.size() == 4u);
+	BOOST_TEST(index.builds() == 2u);
+
+	list.set_source([](const res::tag&) -> std::optional<edt::usage_report> { return std::nullopt; }, {});
+	BOOST_TEST(list.report_for(sky) == nullptr, "no database: no report");
+}
+
+BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainWhenTheSchemasOrTheManifestChange)
+{
+	open();
+	test_util::scene_env scene;
+	const desc::desc_system* schemas = nullptr;
+	std::uint64_t generation = 0;
+	std::vector<edt::manifest_reference> manifest;
+	edt::usage_list list;
+	list.set_source([&](const res::tag& asset) -> std::optional<edt::usage_report> {
+		return edt::find_usages(*db, schemas, edt::usage_target{ asset, std::nullopt }, "game.snkproj", manifest);
+	}, [&] { return edt::usage_stamp{ db->revision(), generation, manifest }; });
+	const res::tag sky = res::tag::make("sky.desc");
+	const std::string material = k_node + "/mesh/material";
+
+	BOOST_TEST((at(*list.report_for(sky), "res://levels/main.desc", material)->kind == edt::usage_kind::loose), "no schema yet");
+	schemas = scene.descs.get();
+	BOOST_TEST((at(*list.report_for(sky), "res://levels/main.desc", material)->kind == edt::usage_kind::loose), "kept until the layer moves");
+	++generation;
+	BOOST_TEST((at(*list.report_for(sky), "res://levels/main.desc", material)->kind == edt::usage_kind::field), "the game layer was loaded again");
+	BOOST_TEST(list.queries() == 2u);
+
+	BOOST_TEST(at(*list.report_for(sky), "game.snkproj", "/start_scene") == nullptr);
+	manifest.push_back(edt::manifest_reference{ "/start_scene", "res://sky.desc" });
+	BOOST_TEST(at(*list.report_for(sky), "game.snkproj", "/start_scene") != nullptr, "an edit of the manifest moves no revision");
+	BOOST_TEST(list.queries() == 3u);
+}
+
+// The rule of #774 written out plainly over every reference: what the index must agree with.
+std::vector<std::string> usages_by_walking(const edt::asset_database& assets, const edt::usage_report& asked)
+{
+	std::vector<std::string> out;
+	const bool folded = assets.case_insensitive();
+	for (const auto& [key, record] : assets.records()) {
+		for (const edt::raw_reference& reference : edt::references_in(record.references)) {
+			bool by_guid = false;
+			bool matches = false;
+			if (reference.guid && asked.id && *reference.guid == *asked.id) {
+				matches = by_guid = true;
+			} else if (reference.guid && !assets.find(*reference.guid).empty()) {
+				matches = false;
+			} else if (asked.path && !reference.path.empty()) {
+				const res::tag written{ reference.path };
+				matches = written.protocol() == res::tag::default_protocol()
+					&& res::asset_name_key(written.view(), folded) == res::asset_name_key(asked.path->view(), folded);
+			}
+			if (matches && edt::classify_reference(reference, nullptr)) {
+				out.push_back(std::string(record.path.view()) + " " + reference.json_pointer + (by_guid ? " guid" : " path"));
+			}
+		}
+	}
+	std::ranges::sort(out);
+	return out;
+}
+
+std::vector<std::string> rows_of(const edt::usage_report& report)
+{
+	std::vector<std::string> out;
+	for (const edt::asset_usage& usage : report.items) out.push_back(usage.file + " " + usage.json_pointer + (usage.by_guid ? " guid" : " path"));
+	std::ranges::sort(out);
+	return out;
+}
+
+BOOST_AUTO_TEST_CASE(TheIndex_FindsWhatAWalkOverEveryReferenceFinds)
+{
+	// A file without an ID that is referred to by its path, and by the guid of another file with its path written.
+	write("levels/second.desc", R"({ "__type": "level_desc",
+		"a": "res://materials/child.desc",
+		"b": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://materials/child.desc" },
+		"c": { "guid": "00000000-0000-4000-8000-000000000009", "path": "res://materials/child.desc" } })");
+	open();
+	edt::usage_index index;
+	std::size_t asked = 0;
+	for (const auto& [key, record] : db->records()) {
+		const edt::usage_report by_path = index.find(*db, nullptr, edt::usage_target{ record.path, std::nullopt });
+		BOOST_TEST(rows_of(by_path) == usages_by_walking(*db, by_path), key);
+		BOOST_TEST(rows_of(by_path) == rows_of(edt::find_usages(*db, nullptr, edt::usage_target{ record.path, std::nullopt })), key);
+		if (record.id) {
+			const edt::usage_report by_id = index.find(*db, nullptr, edt::usage_target{ std::nullopt, record.id });
+			BOOST_TEST(rows_of(by_id) == usages_by_walking(*db, by_id), key);
+		}
+		++asked;
+	}
+	BOOST_TEST(asked == 5u, "sky, other, levels/main, levels/second, materials/child");
+	BOOST_TEST(index.builds() == 1u);
+
+	const edt::usage_report child = index.find(*db, nullptr, edt::usage_target{ res::tag::make("materials/child.desc"), std::nullopt });
+	BOOST_TEST(!child.id.has_value());
+	BOOST_TEST(rows_of(child) == (std::vector<std::string>{ "res://levels/second.desc /a path", "res://levels/second.desc /c path" }),
+		"by its path, and by a guid no file holds; not by sky's guid");
+
+	const edt::usage_report gone = index.find(*db, nullptr, edt::usage_target{ std::nullopt, res::asset_id_from_text(k_gone_guid) });
+	BOOST_TEST(rows_of(gone) == usages_by_walking(*db, gone));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

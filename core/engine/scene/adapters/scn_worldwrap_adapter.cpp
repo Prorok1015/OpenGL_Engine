@@ -1,6 +1,7 @@
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_json_body.h>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -19,9 +20,7 @@ std::vector<::res::res_dep> scn::worldwrap_adapter::collect_dependencies(const::
         return {};
     }
 
-    json::parse_options options;
-    options.max_depth = 128;
-    auto json_body = json::parse(text, {}, options).as_object();
+    auto json_body = ::res::parse_json_body(tag.view(), data);
     try {
         m_desc_system.migrate_tree(json_body, tag.view());
     } catch (const std::exception& e) {
@@ -51,10 +50,7 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
 
 std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
 {
-    std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
-    json::parse_options options;
-    options.max_depth = 128;
-    auto json_body = json::parse(json_data, {}, options).as_object();
+    auto json_body = ::res::parse_json_body(tag.view(), data);
 
     try {
         m_desc_system.migrate_tree(json_body, tag.view());

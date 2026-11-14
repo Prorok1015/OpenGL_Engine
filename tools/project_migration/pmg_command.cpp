@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_command.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_json_text.h>
@@ -104,6 +105,7 @@ int prj::migration::run_migrate(const migrate_command& command, const command_co
 	plan_options options;
 	options.project_steps = context.project_steps;
 	options.force = command.force;
+	options.scan.read_only_layers = read_only_layers(context.resources, context.root);
 	const migration_plan plan = plan_migration(context.root, scan_project(context.root, context.descs, options.scan), context.descs, options);
 	if (const std::string refused = plan_refusal(plan); !refused.empty()) {
 		print_error(context, std::format("refused: {}", refused));

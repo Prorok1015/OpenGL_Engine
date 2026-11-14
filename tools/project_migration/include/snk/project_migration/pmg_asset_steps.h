@@ -14,6 +14,10 @@ namespace prj::migration
 	// assets.ids_drop_desc_guid (post, #772): the root __guid out of every desc that has a .resource, which is its ID
 	// from now on; a __guid other than that ID is in the report. Saves keep a __guid a file has and make none up, so
 	// none comes back.
+	// assets.refs (post, #776): in the res_tag and desc_ref fields of every desc (in lists, maps and structures too), a
+	// res:// path whose file has an ID becomes {"guid", "path"}, and a {guid, path} whose path is stale gets the path its
+	// guid's file has: the rule of the editor's save (desc::write_references_with), over the index the pre steps left. A
+	// path without an ID stays a string, an unknown guid stays as it is; the report has both counts.
 	void register_asset_project_steps(project_step_registry& registry);
 
 	// The root __guid of a desc's text as an ID, as tools/ci/asset_ids.py reads it (#768): a UTF-8 BOM is skipped, the
