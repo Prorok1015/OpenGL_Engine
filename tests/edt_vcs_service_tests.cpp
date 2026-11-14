@@ -2806,6 +2806,120 @@ BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheProjectsBuildInputs_IsDenied)
 	BOOST_TEST(head_of(repo) != before);
 }
 
+// Review of #909: a pull that changes code/ while live mode is on, or the project's .snk/ spelled in other letter
+// case where the file system ignores it.
+BOOST_AUTO_TEST_CASE(AGuardedPull_OfCodeWhileLiveOrOfAnotherSpelling_IsDenied)
+{
+	isolate_config();
+	const fs::path remote = make_bare("protected_code_remote.git");
+	const fs::path repo = make_plain_repository("protected_code_pull");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "push", "-q", "-u", "origin", "main" });
+	const fs::path other = base / "protected_code_other";
+	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(other) });
+	git(other, { "config", "user.name", "Other User" });
+	git(other, { "config", "user.email", "other@example.com" });
+	const auto push_change = [&](const std::string& file) {
+		write(other / path_of(file), "changed\n");
+		git(other, { "add", "-A" });
+		git(other, { "commit", "-q", "-m", "change " + file });
+		git(other, { "push", "-q", "origin", "main" });
+	};
+	push_change("code/src/a.cpp");
+	bool live = true;
+	edt::vcs_options options = real_options(repo);
+	options.live_mode_on = [&live] { return live; };
+	make_service(std::move(options));
+
+	const std::string before = head_of(repo);
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "denied"));
+	BOOST_TEST(head_of(repo) == before);
+	live = false;
+	const json::value allowed = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST(head_of(repo) != before);
+
+#if defined(_WIN32) || defined(__APPLE__)
+	push_change(".SNK/build.json");
+	const std::string pulled = head_of(repo);
+	const json::value refused = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == pulled);
+#endif
+}
+
+// Review of #909: a link or a submodule in the project is denied wherever it points, a folder of the project
+// spelled otherwise is the folder, and before the first commit every file of the target counts.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDenied)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("protected_links");
+	const fs::path project = repo / "game";
+	write(repo / ".gitignore", "game/build/\n");
+	write(project / "project.snkproj", "{}\n");
+	write(project / "res" / "a.txt", "a\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project" });
+	const std::string main_head = head_of(repo);
+	write(base / "link_target.txt", "../../elsewhere");
+	std::string link_blob = git_text(repo, { "hash-object", "-w", "--", edt::utf8_of(base / "link_target.txt") });
+	while (!link_blob.empty() && (link_blob.back() == '\n' || link_blob.back() == '\r')) link_blob.pop_back();
+	// Written into the index only: on the disk a short name or a folded name would reach the folder itself.
+	const auto branch_with = [&](const std::string& branch, const std::string& mode, const std::string& oid,
+		const std::string& file) {
+		git(repo, { "checkout", "-q", "-b", branch, "main" });
+		git(repo, { "update-index", "--add", "--cacheinfo", mode + "," + oid + "," + file });
+		git(repo, { "commit", "-q", "-m", "add " + file });
+		git(repo, { "checkout", "-q", "-f", "main" });
+	};
+	std::vector<std::pair<std::string, std::string>> denied{
+		{ "120000", "game/build" }, { "160000", "game/build" }, { "120000", "game/code" },
+		{ "120000", "game/res/link" } };
+#ifdef _WIN32
+	denied.emplace_back("100644", "game/SNK~1/build.json");
+	denied.emplace_back("100644", "GAME~1/.snk/build.json");
+#endif
+#if defined(_WIN32) || defined(__APPLE__)
+	denied.emplace_back("100644", "game/.s\xC5\xBFnk/build.json");
+	denied.emplace_back("100644", "game/.snk\xE2\x80\x8C/build.json");
+#endif
+	for (std::size_t i = 0; i < denied.size(); ++i) {
+		const auto& [mode, file] = denied[i];
+		branch_with("denied_" + std::to_string(i), mode, mode == "160000" ? main_head : link_blob, file);
+	}
+	branch_with("outside", "120000", link_blob, "docs/link");
+	branch_with("named", "100644", link_blob, "game/res/\xC3\xA9t\xC3\xA9.txt");
+
+	bool live = false;
+	edt::vcs_options options = real_options(project);
+	options.live_mode_on = [&live] { return live; };
+	make_service(std::move(options));
+
+	for (std::size_t i = 0; i < denied.size(); ++i) {
+		BOOST_TEST_CONTEXT(denied[i].first << " " << denied[i].second) {
+			live = denied[i].second == "game/code";
+			const json::value refused = finish(service->start_checkout("denied_" + std::to_string(i),
+				cmd::origin_kind::agent));
+			BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+			BOOST_TEST(head_of(repo) == main_head);
+		}
+	}
+	live = false;
+	for (const char* branch : { "outside", "named" }) {
+		BOOST_TEST_CONTEXT(branch) {
+			const json::value allowed = finish(service->start_checkout(branch, cmd::origin_kind::agent));
+			BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+			BOOST_TEST(!finish(service->start_checkout("main", cmd::origin_kind::agent)).as_object().contains("error"));
+		}
+	}
+
+	git(repo, { "checkout", "-q", "--orphan", "fresh" });
+	const json::value unborn = finish(service->start_checkout("main", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(unborn, "denied"), json::serialize(unborn));
+	BOOST_TEST(text(unborn.as_object().at("error").as_object().at("message")).find("game/project.snkproj")
+		!= std::string::npos);
+}
+
 // Security review of #481: with no remote named, the remote checked is the one git would use (the branch's), and
 // a local URL rewrite under allow_any_repo_config changes nothing about that.
 BOOST_AUTO_TEST_CASE(AnAgentsPull_WithoutARemote_IsCheckedAgainstTheBranchsRemote)
@@ -4429,6 +4543,27 @@ BOOST_AUTO_TEST_CASE(AnAgentsPush_UsesAnExplicitRefspec_WhateverTheUpstreamSays)
 			BOOST_TEST(!has_arg(push, "refs/heads/main"));
 		}
 	}
+}
+
+// Review of #909: an open project the service cannot place in the repository is not checked out or pulled into by
+// an agent (nothing tells what would change in it); a person can.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_WhenTheProjectIsNotInTheRepository_IsDenied)
+{
+	command = [](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "rev-parse")) on_line("1111111111111111111111111111111111111111\n");
+		return exited(0);
+	};
+	edt::vcs_options options = fake_options();
+	// Relative to the test's working folder, never below the repository the fake git reports (`base`).
+	options.project_root = [] { return std::optional<fs::path>{ "elsewhere_project_909" }; };
+	make_service(std::move(options));
+
+	const json::value refused = finish(service->start_checkout("side", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("not in this repository")
+		!= std::string::npos);
+	BOOST_TEST(!finish(service->start_checkout("side", cmd::origin_kind::ui)).as_object().contains("error"));
 }
 
 // #455: a guarded branch name follows git's ref name rules, checked before any job.
