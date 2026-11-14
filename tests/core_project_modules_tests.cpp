@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -366,9 +367,17 @@ struct project_fixture {
 		return dir.write(fs::path{ "game" } / "build" / "bin" / library_file(name), "not a library");
 	}
 
-	core::project_modules_report load(core::project_modules_options options = {})
+	core::project_modules_report load(core::project_modules_options options = trusting())
 	{
 		return core::load_project_modules(loader, data, options);
+	}
+
+	// A host whose person trusted the project (#921): the libraries of build/bin may be loaded.
+	static core::project_modules_options trusting()
+	{
+		core::project_modules_options options;
+		options.trust_library = [](std::string_view, const fs::path&) { return true; };
+		return options;
 	}
 
 	static core::project_modules_options compiled_in(app::modules::module_entry entry)
@@ -514,7 +523,7 @@ BOOST_AUTO_TEST_CASE(a_compiled_in_module_is_current_and_a_refused_library_is_no
 		BOOST_TEST(host.is_current("test_game"));
 		loader.unload("test_game", data);
 	}
-	core::project_module_host host(loader, data, core::project_modules_options{});
+	core::project_module_host host(loader, data, trusting());
 	BOOST_TEST(host.load_all().refused == std::vector<std::string>{ "test_game" });
 	BOOST_TEST(!host.is_current("test_game"));
 	BOOST_TEST(!host.is_current("no_such_module"));
@@ -640,6 +649,140 @@ BOOST_AUTO_TEST_CASE(a_cache_linked_out_of_the_project_gets_no_copy)
 
 	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
 	BOOST_TEST(!fs::exists(dir.path() / "outside" / "modules"));
+}
+
+// #921: the project's own code runs in the host only once the host says the project is trusted.
+BOOST_AUTO_TEST_CASE(without_a_trust_gate_nothing_is_loaded_from_the_build_output)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+	const auto report = load(core::project_modules_options{});
+
+	BOOST_TEST(report.untrusted == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(report.loaded.empty());
+	BOOST_TEST(report.refused.empty());
+	BOOST_TEST(report.missing_required.empty());
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
+	BOOST_TEST(fs::exists(library));
+}
+
+BOOST_AUTO_TEST_CASE(an_untrusted_project_keeps_its_libraries_out_and_compiled_in_modules_still_load)
+{
+	open({ manifest_module("test_game"), manifest_module("extra_game") });
+	put_broken_library("extra_game");
+	std::vector<std::string> asked;
+	auto options = compiled_in(probe_entry());
+	options.trust_library = [&](std::string_view name, const fs::path&) {
+		asked.emplace_back(name);
+		return false;
+	};
+	core::project_module_host host(loader, data, options);
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.loaded == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(report.untrusted == std::vector<std::string>{ "extra_game" });
+	BOOST_TEST(report.refused.empty());
+	BOOST_TEST(asked == std::vector<std::string>{ "extra_game" }); // a compiled-in module is not asked
+	BOOST_TEST(host.failed_required(report) == std::vector<std::string>{ "extra_game" });
+	BOOST_TEST(data.has_value<probe_service>());
+	BOOST_TEST(!loader.state("extra_game").has_value());
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
+}
+
+BOOST_AUTO_TEST_CASE(the_trust_gate_is_asked_about_the_copy_that_would_be_loaded)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+	std::string asked_name;
+	fs::path asked_copy;
+	bool copy_was_there = false;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view name, const fs::path& copy) {
+		asked_name = name;
+		asked_copy = copy;
+		copy_was_there = fs::is_regular_file(copy);
+		return true;
+	};
+	const auto report = load(options);
+
+	BOOST_TEST(asked_name == "test_game");
+	BOOST_TEST(copy_was_there);
+	BOOST_TEST(asked_copy.filename() == library.filename());
+	BOOST_TEST(asked_copy.parent_path().parent_path() == root / ".cache" / "modules");
+	// Past the gate: the file is no library, so it is refused for that.
+	BOOST_TEST(report.untrusted.empty());
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+}
+
+BOOST_AUTO_TEST_CASE(load_waiting_asks_the_gate_again_for_what_it_refused_and_only_that)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	bool trust = false;
+	int asked = 0;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const fs::path&) {
+		++asked;
+		return trust;
+	};
+	core::project_module_host host(loader, data, options);
+	BOOST_REQUIRE(host.load_all().untrusted == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(host.load_waiting().untrusted == std::vector<std::string>{ "test_game" });
+
+	trust = true;
+	const auto report = host.load_waiting();
+
+	BOOST_TEST(report.untrusted.empty());
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" }); // past the gate, then refused as no library
+	BOOST_TEST(asked == 3);
+	const auto again = host.load_waiting();
+	BOOST_TEST(again.refused.empty());
+	BOOST_TEST(asked == 3);
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_reload_the_gate_refuses_is_refused_before_anything_is_touched)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	core::project_modules_options options;
+	options.trust_library = [](std::string_view, const fs::path&) { return false; };
+	core::project_module_host host(loader, data, options);
+	int hooks_called = 0;
+	core::reload_hooks hooks;
+	hooks.before_swap = [&] { ++hooks_called; };
+	hooks.after_swap = [&](const core::reload_report&) { ++hooks_called; };
+	const auto report = host.reload("test_game", hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("not trusted") != std::string::npos, report.message);
+	BOOST_TEST(hooks_called == 0);
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
+}
+
+BOOST_AUTO_TEST_CASE(an_untrusted_editor_module_waits_for_the_gate_too)
+{
+	open({ manifest_module("test_editor", prj::module_kind::editor) });
+	put_broken_library("test_editor");
+	bool trust = false;
+	core::project_modules_options options;
+	options.with_editor_modules = true;
+	options.check_editor_module = &check_editor_entry;
+	options.trust_library = [&](std::string_view, const fs::path&) { return trust; };
+	core::project_module_host host(loader, data, options);
+	BOOST_TEST(host.load_all().loaded.empty());
+	BOOST_TEST(host.load_editor_modules().untrusted == std::vector<std::string>{ "test_editor" });
+	const auto reload = host.reload_editor_module("test_editor");
+	BOOST_TEST((reload.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(reload.message.find("not trusted") != std::string::npos, reload.message);
+
+	trust = true;
+	const auto report = host.load_waiting();
+
+	BOOST_TEST(report.untrusted.empty());
+	// Past the gate, then refused as no library.
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_editor" });
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
 }
 
 #if !defined(_WIN32)

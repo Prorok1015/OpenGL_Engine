@@ -297,6 +297,34 @@ namespace {
 		return {};
 	}
 
+	// The host's answer for the copy of `name` about to be loaded: no gate, or one that throws, is a no (#921).
+	bool trusted(const core::project_modules_options& options, const std::string& name, const fs::path& copy)
+	{
+		if (!options.trust_library) {
+			return false;
+		}
+		try {
+			return options.trust_library(name, copy);
+		} catch (const std::exception& e) {
+			egLOG_ERROR("project", "module '{}': the trust check failed: {}", name, e.what());
+		} catch (...) {
+			egLOG_ERROR("project", "module '{}': the trust check failed", name);
+		}
+		return false;
+	}
+
+	std::string untrusted_message(const std::string& name)
+	{
+		return std::format("the project is not trusted: its build of '{}' is not loaded", name);
+	}
+
+	void add_once(std::vector<std::string>& names, const std::string& name)
+	{
+		if (std::ranges::find(names, name) == names.end()) {
+			names.push_back(name);
+		}
+	}
+
 	template<class F>
 	std::string guarded(F&& body)
 	{
@@ -446,6 +474,8 @@ core::project_modules_report core::project_module_host::load_all()
 	// What a reload before this load left to take back or refused names builds of modules loaded anew now.
 	m_revert.clear();
 	m_rejected.clear();
+	m_untrusted_runtime.clear();
+	m_untrusted_editor.clear();
 	if (!m_data.has_value<prj::project_context>()) {
 		return report;
 	}
@@ -470,36 +500,89 @@ core::project_modules_report core::project_module_host::load_all()
 	report.missing_optional = resolution.missing_optional;
 
 	for (const auto& ref : resolution.resolved) {
-		module_copy copy;
-		const std::string problem = guarded([&]() -> std::string {
-			std::unique_ptr<app::modules::module_source> source;
-			if (const auto it = m_options.compiled_in.find(ref.name); it != m_options.compiled_in.end()) {
-				source = std::make_unique<app::modules::static_module_source>(ref.name, it->second);
-			} else if (const auto found = build_output(ref.name)) {
-				if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
-					return why;
-				}
-				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
-			} else {
-				return "its library is no longer in the build output";
+		load_runtime_module(ref.name, report);
+	}
+	return report;
+}
+
+void core::project_module_host::load_runtime_module(const std::string& name, project_modules_report& report)
+{
+	const auto& project = m_data.require<prj::project_context>();
+	std::erase(m_untrusted_runtime, name);
+	module_copy copy;
+	bool untrusted = false;
+	const std::string problem = guarded([&]() -> std::string {
+		std::unique_ptr<app::modules::module_source> source;
+		if (const auto it = m_options.compiled_in.find(name); it != m_options.compiled_in.end()) {
+			source = std::make_unique<app::modules::static_module_source>(name, it->second);
+		} else if (const auto found = build_output(name)) {
+			if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
+				return why;
 			}
-			return load_module(m_loader, m_data, std::move(source), ref.name, m_options.layout_key);
-		});
-		if (problem.empty()) {
-			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
-			if (!copy.folder.empty()) {
-				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time };
+			// Asked of the copy: the file that is checked is the one loaded, whatever the build output does meanwhile.
+			if (!trusted(m_options, name, copy.library)) {
+				untrusted = true;
+				return untrusted_message(name);
 			}
-			report.loaded.push_back(ref.name);
+			source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
+		} else {
+			return "its library is no longer in the build output";
+		}
+		return load_module(m_loader, m_data, std::move(source), name, m_options.layout_key);
+	});
+	if (problem.empty()) {
+		egLOG_INFO("project", "module '{}' loaded{}", name,
+			copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
+		if (!copy.folder.empty()) {
+			m_copies[name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source,
+				copy.source_size, copy.source_time };
+		}
+		report.loaded.push_back(name);
+		return;
+	}
+	std::error_code ec;
+	if (!copy.folder.empty()) {
+		fs::remove_all(copy.folder, ec);
+	}
+	if (untrusted) {
+		egLOG_WARN("project", "module '{}' not loaded: {}", name, problem);
+		add_once(m_untrusted_runtime, name);
+		report.untrusted.push_back(name);
+		return;
+	}
+	egLOG_ERROR("project", "module '{}' refused: {}", name, problem);
+	report.refused.push_back(name);
+}
+
+core::project_modules_report core::project_module_host::load_waiting()
+{
+	project_modules_report report;
+	if (!m_data.has_value<prj::project_context>()) {
+		return report;
+	}
+	const std::vector<std::string> runtime = m_untrusted_runtime;
+	for (const auto& name : runtime) {
+		if (m_loader.state(name) == app::modules::module_state::initialized) {
+			std::erase(m_untrusted_runtime, name);
 			continue;
 		}
-		egLOG_ERROR("project", "module '{}' refused: {}", ref.name, problem);
-		std::error_code ec;
-		if (!copy.folder.empty()) {
-			fs::remove_all(copy.folder, ec);
-		}
-		report.refused.push_back(ref.name);
+		load_runtime_module(name, report);
 	}
+	if (!m_options.with_editor_modules || m_untrusted_editor.empty()) {
+		return report;
+	}
+	const std::vector<std::string> editor = m_untrusted_editor;
+	const project_modules_report editor_report = load_editor([&](const std::string& name) {
+		return std::ranges::find(editor, name) != editor.end();
+	});
+	const auto append = [](std::vector<std::string>& to, const std::vector<std::string>& from) {
+		to.insert(to.end(), from.begin(), from.end());
+	};
+	append(report.loaded, editor_report.loaded);
+	append(report.missing_required, editor_report.missing_required);
+	append(report.missing_optional, editor_report.missing_optional);
+	append(report.refused, editor_report.refused);
+	append(report.untrusted, editor_report.untrusted);
 	return report;
 }
 
@@ -557,6 +640,18 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	if (std::string why = guarded([&] { return copy_library(project, run_scratch(m_data), *found, copy); }); !why.empty()) {
 		return refused(std::move(why));
 	}
+	// Before anything is unloaded: the running module stays.
+	if (!trusted(m_options, name, copy.library)) {
+		std::error_code ec;
+		fs::remove_all(copy.folder, ec);
+		if (m_loader.state(name) != app::modules::module_state::initialized) {
+			add_once(m_untrusted_runtime, name);
+		}
+		std::string why = untrusted_message(name);
+		egLOG_WARN("project", "module '{}' not reloaded: {}", name, why);
+		return reload_report{ reload_status::refused, std::move(why) };
+	}
+	std::erase(m_untrusted_runtime, name);
 
 	std::optional<loaded_copy> running;
 	std::function<std::unique_ptr<app::modules::module_source>()> previous;
@@ -796,6 +891,17 @@ core::reload_report core::project_module_host::reload_editor_module(const std::s
 	if (std::string why = guarded([&] { return copy_library(project, run_scratch(m_data), *found, copy); }); !why.empty()) {
 		return refused(std::move(why));
 	}
+	if (!trusted(m_options, name, copy.library)) {
+		std::error_code ec;
+		fs::remove_all(copy.folder, ec);
+		if (m_loader.state(name) != app::modules::module_state::initialized) {
+			add_once(m_untrusted_editor, name);
+		}
+		std::string why = untrusted_message(name);
+		egLOG_WARN("project", "editor module '{}' not reloaded: {}", name, why);
+		return reload_report{ reload_status::refused, std::move(why) };
+	}
+	std::erase(m_untrusted_editor, name);
 	std::function<std::unique_ptr<app::modules::module_source>()> previous;
 	if (const auto it = m_copies.find(name); it != m_copies.end() && it->second.current) {
 		previous = [library = it->second.current->library, folder = it->second.current->folder] {
@@ -952,15 +1058,23 @@ bool core::project_module_host::is_editor_module(const std::string& name) const
 
 core::project_modules_report core::project_module_host::load_editor_modules()
 {
+	return load_editor({});
+}
+
+core::project_modules_report core::project_module_host::load_editor(
+	const std::function<bool(const std::string&)>& wanted)
+{
 	project_modules_report report;
 	if (!m_options.with_editor_modules || !m_options.check_editor_module || !m_data.has_value<prj::project_context>()) {
 		return report;
 	}
 	const auto& project = m_data.require<prj::project_context>();
 	for (const auto& ref : project.data.modules) {
-		if (ref.kind != prj::module_kind::editor || std::ranges::find(m_editor_loaded, ref.name) != m_editor_loaded.end()) {
+		if (ref.kind != prj::module_kind::editor || (wanted && !wanted(ref.name))
+			|| std::ranges::find(m_editor_loaded, ref.name) != m_editor_loaded.end()) {
 			continue;
 		}
+		std::erase(m_untrusted_editor, ref.name);
 		const auto missing = [&] {
 			if (ref.optional) {
 				egLOG_DEBUG("project", "optional editor module '{}' is not loaded: not built", ref.name);
@@ -972,6 +1086,7 @@ core::project_modules_report core::project_module_host::load_editor_modules()
 		};
 
 		module_copy copy;
+		bool untrusted = false;
 		const std::string problem = guarded([&]() -> std::string {
 			std::unique_ptr<app::modules::module_source> source;
 			if (const auto it = m_options.compiled_in.find(ref.name); it != m_options.compiled_in.end()) {
@@ -981,6 +1096,10 @@ core::project_modules_report core::project_module_host::load_editor_modules()
 			} else if (const auto found = find_library(project, ref.name)) {
 				if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
 					return why;
+				}
+				if (!trusted(m_options, ref.name, copy.library)) {
+					untrusted = true;
+					return untrusted_message(ref.name);
 				}
 				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
 			} else {
@@ -1005,6 +1124,12 @@ core::project_modules_report core::project_module_host::load_editor_modules()
 		if (!copy.folder.empty()) {
 			std::error_code ec;
 			fs::remove_all(copy.folder, ec);
+		}
+		if (untrusted) {
+			egLOG_WARN("project", "editor module '{}' is not loaded: {}", ref.name, problem);
+			add_once(m_untrusted_editor, ref.name);
+			report.untrusted.push_back(ref.name);
+			continue;
 		}
 		if (ref.optional) {
 			egLOG_WARN("project", "optional editor module '{}' is not loaded: {}", ref.name, problem);
