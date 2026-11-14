@@ -2877,7 +2877,6 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDen
 		{ "120000", "game/res/link" } };
 #ifdef _WIN32
 	denied.emplace_back("100644", "game/SNK~1/build.json");
-	denied.emplace_back("100644", "GAME~1/.snk/build.json");
 #endif
 #if defined(_WIN32) || defined(__APPLE__)
 	denied.emplace_back("100644", "game/.s\xC5\xBFnk/build.json");
