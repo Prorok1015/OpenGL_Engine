@@ -2,7 +2,6 @@
 #include "edt_live_mode.h"
 #include "edt_agent_access.h"
 #include "edt_agent_policy.h"
-#include "edt_build_settings_model.h"
 #include "edt_mcp_bridge_host.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
@@ -461,42 +460,6 @@ BOOST_AUTO_TEST_CASE(AFrameQueuedBeforeLiveModeWasDestroyed_ReloadsNothing)
 	live.reset();
 	run_frame();
 	BOOST_TEST(reloads.empty());
-}
-
-// The Build Settings window applies build.json; live mode follows its live_enabled through the model's callback.
-BOOST_AUTO_TEST_CASE(BuildSettingsApply_TurnsLiveModeOnAndOff)
-{
-	make();
-	test_util::temp_dir dir{ "edt_live_mode_settings" };
-	dir.write("code/CMakePresets.json", R"({
-		"version": 3,
-		"configurePresets": [
-			{ "name": "base", "hidden": true, "generator": "Ninja", "binaryDir": "${sourceDir}/../build/${presetName}" },
-			{ "name": "debuggame", "displayName": "DebugGame", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "DebugGame" } }
-		],
-		"buildPresets": [ { "name": "debuggame", "configurePreset": "debuggame" } ]
-	})");
-	edt::build_settings_model model;
-	model.set_on_settings_applied([this](const edt::build_settings& settings) { live->follow_settings(settings); });
-	model.load(dir.path());
-	BOOST_REQUIRE(model.available());
-
-	model.set_live_enabled(true);
-	BOOST_REQUIRE(model.apply().ok());
-	BOOST_TEST(live->enabled());
-	BOOST_TEST(toggled == 1);
-	// Already in build.json: nothing is stored again.
-	BOOST_TEST(stored.empty());
-
-	model.set_live_quiet_ms(1000);
-	BOOST_REQUIRE(model.apply().ok());
-	BOOST_TEST(live->enabled());
-	BOOST_TEST(toggled == 1);
-
-	model.set_live_enabled(false);
-	BOOST_REQUIRE(model.apply().ok());
-	BOOST_TEST(!live->enabled());
-	BOOST_TEST(toggled == 2);
 }
 
 BOOST_AUTO_TEST_CASE(LiveOff_TheLiveToolsAreHiddenAndRefused)

@@ -51,6 +51,8 @@ namespace prj::migration
 		// files are migrated). A step that changes .resource files and reads them back calls rebuild() itself.
 		project_assets& assets;
 		std::string_view step_id;
+		// The game layer the migration runs with: the schemas a step reads typed objects by (assets.refs).
+		const desc::desc_system* descs = nullptr;
 
 		// A line of the report under the step's id.
 		void warn(std::string_view text) { notes.push_back(std::string(step_id) + ": " + std::string(text)); }

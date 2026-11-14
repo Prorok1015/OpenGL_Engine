@@ -2,6 +2,7 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_reference.h>
 #include <string>
 #include <string_view>
 
@@ -15,8 +16,10 @@ void read_reference(desc::desc_system& desc_system, const desc::desc_base& owner
 		return;
 	}
 	const json::object* inline_desc = value->if_object();
-	if (!value->is_string() && !(inline_desc && inline_desc->contains("__type") && inline_desc->at("__type").is_string())) {
-		egLOG_WARN("desc", "mesh_node_desc: '{}' is neither a tag nor an inline desc, keeping the current one", key);
+	const bool is_inline = inline_desc && inline_desc->contains("__type") && inline_desc->at("__type").is_string();
+	// {guid, path} is what a save and the migration write (#773, #776).
+	if (!value->is_string() && !is_inline && !res::reference_from_json(*value)) {
+		egLOG_WARN("desc", "mesh_node_desc: '{}' is neither a reference nor an inline desc, keeping the current one", key);
 		return;
 	}
 	field = desc_system.get_field_desc<T>(owner, *value, std::string("/").append(key));

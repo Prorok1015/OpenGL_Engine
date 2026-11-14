@@ -2,6 +2,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_override_edit.h"
 #include "edt_scene_document.h"
+#include "edt_version_notice.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
@@ -91,6 +92,8 @@ namespace {
 	struct replaced_guid
 	{
 		std::string guid;
+		// Its root __version (0: no file there).
+		int version = 0;
 		// Why the save must not go on: the file is there, but its __guid cannot be read and would be lost.
 		std::string error;
 	};
@@ -106,11 +109,11 @@ namespace {
 			if (!path || !std::filesystem::is_regular_file(*path, ec)) continue;
 			const std::uintmax_t size = std::filesystem::file_size(*path, ec);
 			if (!ec && size > k_replaced_level_limit) {
-				return { {}, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
+				return { {}, 0, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
 			}
 			const auto bytes = res::read_regular_file_capped(*path, k_replaced_level_limit);
-			if (!bytes) return { {}, "it could not be read" };
-			return { edt::desc_root_guid(*bytes), {} };
+			if (!bytes) return { {}, 0, "it could not be read" };
+			return { edt::desc_root_guid(*bytes), edt::desc_root_version(*bytes), {} };
 		}
 		return {};
 	}
@@ -165,6 +168,7 @@ void edt::level_controller::new_level()
 	m_state.level_tag = res::tag{};
 	m_state.level_guid.clear();
 	m_state.level_parent = res::tag{};
+	m_state.level_file_version = 0;
 	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
 	m_state.active_world_idx = m_state.world_names.empty() ? -1 : 0;
@@ -195,7 +199,7 @@ bool edt::level_controller::quick_save_level()
 
 // ─── Level load finish ──────────────────────────────────────────────────────
 
-bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle)
+bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle, int file_version)
 {
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return false;
@@ -213,6 +217,7 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		watch_level();
 		m_state.level_guid = level_res->get_guid();
 		m_state.level_parent = level_res->get_parent();
+		m_state.level_file_version = file_version;
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
@@ -233,13 +238,13 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 }
 
 bool edt::level_controller::take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag,
-	const res::tag& editor_tag)
+	const res::tag& editor_tag, int file_version)
 {
 	const res::tag level_tag_before = m_state.level_tag;
 	const res::tag editor_tag_before = m_state.editor_tag;
 	m_state.level_tag = level_tag;
 	m_state.editor_tag = editor_tag;
-	if (finish_level_load(handle)) return true;
+	if (finish_level_load(handle, file_version)) return true;
 	m_state.level_tag = level_tag_before;
 	m_state.editor_tag = editor_tag_before;
 	resume_watch();
@@ -372,6 +377,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	// Save As over another file keeps that file's.
 	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
 	std::string guid = m_state.level_guid;
+	int replaced_version = same_file ? m_state.level_file_version : 0;
 	if (!same_file) {
 		replaced_guid replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
 		if (!replaced.error.empty()) {
@@ -379,6 +385,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 			return false;
 		}
 		guid = std::move(replaced.guid);
+		replaced_version = replaced.version;
 	}
 
 	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
@@ -405,6 +412,13 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	m_state.level_name = level_name;
 	m_state.mark_clean();
 	egLOG("Editor/Save", "Level saved to {}", tag.view());
+	const int current = m_services.descs()->current_version(scn::level_desc::__type);
+	if (replaced_version > 0 && replaced_version < current) {
+		const std::string upgraded = version_upgrade_text(tag.view(), replaced_version, current);
+		egLOG_WARN("Editor/Save", "{}", upgraded);
+		if (on_file_upgraded) on_file_upgraded(upgraded);
+	}
+	m_state.level_file_version = current;
 	return true;
 }
 
