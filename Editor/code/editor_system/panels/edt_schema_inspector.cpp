@@ -762,10 +762,7 @@ namespace
 		for (std::size_t i = first; i < last; ++i) {
 			ImGui::PushID(static_cast<int>(i));
 			const desc::field_schema element = list_element(field, element_kind, i);
-			if (depth < max_depth) {
-				changed |= draw_field(element, array[i], pointer + element.key, item_ctx, depth + 1);
-			}
-			ImGui::SameLine();
+			// The buttons come first: a row whose widget is wide would push them out of a narrow window.
 			ImGui::BeginDisabled(field.read_only || i == 0);
 			if (ImGui::SmallButton("^")) {
 				move = std::pair{ i, i - 1 };
@@ -782,6 +779,10 @@ namespace
 			ImGui::SameLine();
 			if (ImGui::SmallButton("x")) {
 				remove = i;
+			}
+			ImGui::SameLine();
+			if (depth < max_depth) {
+				changed |= draw_field(element, array[i], pointer + element.key, item_ctx, depth + 1);
 			}
 			if (const std::string problem = edt::schema_ui::list_item_problem(field, array[i], ctx.registry); !problem.empty()) {
 				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
