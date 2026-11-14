@@ -91,6 +91,9 @@ namespace desc
 		bool read_only = false;
 		bool color = false;
 		bool degrees = false;
+		// A null is a value of the field: the C++ member is a std::optional and reads it as nullopt. Otherwise a null of an
+		// optional field resets it to its default (or the zero of its kind), as a data-defined field does (#861).
+		bool nullable = false;
 		std::string tooltip;
 		std::string filter;
 		std::uint32_t offset = 0; // in the blob; runtime schemas only, not part of equality
@@ -125,7 +128,7 @@ namespace desc
 			&& a.ref_type == b.ref_type && a.default_value == b.default_value && a.range == b.range
 			&& a.write == b.write && a.read_aliases == b.read_aliases && a.optional == b.optional
 			&& a.editor_hidden == b.editor_hidden && a.read_only == b.read_only && a.color == b.color
-			&& a.degrees == b.degrees && a.tooltip == b.tooltip && a.filter == b.filter;
+			&& a.degrees == b.degrees && a.nullable == b.nullable && a.tooltip == b.tooltip && a.filter == b.filter;
 	}
 
 	inline bool operator==(const type_schema& a, const type_schema& b)

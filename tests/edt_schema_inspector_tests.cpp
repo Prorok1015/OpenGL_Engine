@@ -82,12 +82,29 @@ namespace
 		std::optional<float> bonus = 2.0f;
 	};
 	BOOST_DESCRIBE_STRUCT(weights_component, (), (weights, labels, zones, speeds, extra, bonus))
+
+	// #861: a std::optional member reads a null as nullopt; a plain member marked optional reads it as its default.
+	struct nullable_inner
+	{
+		std::optional<float> x = 1.0f;
+	};
+	BOOST_DESCRIBE_STRUCT(nullable_inner, (), (x))
+
+	struct unset_component
+	{
+		std::optional<float> bonus = 2.0f;
+		float level = 5.0f;
+		nullable_inner inner;
+	};
+	BOOST_DESCRIBE_STRUCT(unset_component, (), (bonus, level, inner))
 }
 
 namespace desc
 {
 	template<>
 	inline constexpr auto field_attrs<weights_component> = attrs(f("zones").ref("edt.limits"), f("speeds").ref("edt_mode"));
+	template<>
+	inline constexpr auto field_attrs<unset_component> = attrs(f("level").optional(), f("inner").ref("edt.nullable_inner"));
 }
 
 namespace
@@ -95,6 +112,14 @@ namespace
 	desc::type_schema weights_schema()
 	{
 		return desc::schema_generator<weights_component>::make("edt.weights", 1, desc::schema_kind::component);
+	}
+
+	desc::type_schema unset_schema(desc::schema_registry& registry)
+	{
+		if (!registry.find("edt.nullable_inner")) {
+			registry.add(desc::schema_generator<nullable_inner>::make("edt.nullable_inner", 1, desc::schema_kind::structure));
+		}
+		return desc::schema_generator<unset_component>::make("edt.unset", 1, desc::schema_kind::component);
 	}
 
 	json::object parse(const char* text)
@@ -310,10 +335,10 @@ BOOST_AUTO_TEST_CASE(Draw_ShowsTheFieldsOfTheSchema)
 	BOOST_CHECK(widget_at(drawn, "/ids/0") == ui::widget::integer);
 	BOOST_CHECK(widget_at(drawn, "/ids/1") == ui::widget::integer);
 
-	// editor_hidden is not drawn; an optional field without a value is shown as not set
+	// editor_hidden is not drawn; a data-defined optional without a value shows the zero the read gives it (#861)
 	BOOST_CHECK(!was_drawn(drawn, "/secret"));
-	BOOST_CHECK(widget_at(drawn, "/extra") == ui::widget::label);
-	BOOST_CHECK(desc::json_pointer_get(value, "/extra") == nullptr);
+	BOOST_CHECK(widget_at(drawn, "/extra") == ui::widget::real);
+	BOOST_TEST(number_at(value, "/extra") == 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(Draw_FollowsTheHintsOfTheSchema)
@@ -360,7 +385,7 @@ BOOST_AUTO_TEST_CASE(Compose_LayersTheDefaultsParentAndOverrides)
 	BOOST_TEST(number_at(value, "/limits/min") == 0.0); // a default under a partly set structure
 	BOOST_TEST(number_at(value, "/gain") == 0.5);       // a default nobody set
 	BOOST_TEST(std::string(desc::json_pointer_get(value, "/label")->as_string()) == "own");
-	BOOST_CHECK(desc::json_pointer_get(value, "/extra") == nullptr); // optional: no value until set
+	BOOST_TEST(number_at(value, "/extra") == 0.0); // a data-defined optional nobody set: what the read gives (#861)
 }
 
 BOOST_AUTO_TEST_CASE(Compose_ReadsALegacyKeyThroughTheAlias)
@@ -1050,7 +1075,7 @@ BOOST_AUTO_TEST_CASE(Reset_OfMapKeysWithASlashOrATilde_TakesOnlyThatKeyOut)
 	BOOST_CHECK(overrides == parse(R"({ "weights": { "e": 3.0 } })"));
 }
 
-BOOST_AUTO_TEST_CASE(Unset_OfAnOptionalWithAnInitializerInsideAStructure_KeepsTheNullRecord)
+BOOST_AUTO_TEST_CASE(Unset_OfADataDefinedOptionalWithADefaultInsideAStructure_LeavesNoNull)
 {
 	auto& registry = descs->schemas();
 	descs->register_schema(desc::parse_type_schema(parse(R"({
@@ -1064,11 +1089,133 @@ BOOST_AUTO_TEST_CASE(Unset_OfAnOptionalWithAnInitializerInsideAStructure_KeepsTh
 	const desc::type_schema* outer = descs->find_schema("edt.outer");
 	BOOST_REQUIRE(outer != nullptr);
 
-	// without the record the read gives the initializer, so the unset must stay written
+	// a data-defined field reads a null as its default (#861): without the record the read gives the same, so none is left
 	json::object overrides = parse(R"({ "s": { "x": 3.0 } })");
 	BOOST_CHECK(ui::edit_component_marked(*outer, registry, nullptr, overrides, {}, {},
 		[](json::value& shown, const ui::field_origin&) { return ui::apply_unsets(shown, { "/s/x" }); }));
-	BOOST_CHECK(overrides == parse(R"({ "s": { "x": null } })"));
+	BOOST_CHECK(overrides.empty());
+}
+
+// #861: only a std::optional member reads a null as a value of its own.
+BOOST_AUTO_TEST_CASE(Nullable_IsSetForAStdOptionalMemberOnly)
+{
+	const desc::type_schema schema = unset_schema(descs->schemas());
+	BOOST_REQUIRE(schema.find_field("/bonus") && schema.find_field("/level"));
+	BOOST_CHECK(schema.find_field("/bonus")->nullable);
+	BOOST_CHECK(schema.find_field("/level")->optional);
+	BOOST_CHECK(!schema.find_field("/level")->nullable);
+
+	const desc::type_schema data = desc::parse_type_schema(parse(R"({
+		"name": "edt.dd_unset", "kind": "component",
+		"fields": [ { "name": "hp", "kind": "f32", "default": 100, "optional": true } ]
+	})"));
+	BOOST_REQUIRE(data.find_field("/hp"));
+	BOOST_CHECK(data.find_field("/hp")->optional);
+	BOOST_CHECK(!data.find_field("/hp")->nullable);
+}
+
+// #861: a null is written only where it changes what the game reads.
+BOOST_AUTO_TEST_CASE(Unset_WritesANullOnlyWhereItChangesWhatIsRead)
+{
+	auto& registry = descs->schemas();
+	const desc::type_schema schema = unset_schema(registry);
+	const auto unset = [](std::string pointer) {
+		return [pointer](json::value& shown, const ui::field_origin&) { return ui::apply_unsets(shown, { pointer }); };
+	};
+
+	// a std::optional with an initializer: without the record the read gives 2, so the null stays
+	json::object bonus = parse(R"({ "bonus": 3.0 })");
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, bonus, {}, {}, unset("/bonus")));
+	BOOST_CHECK(bonus == parse(R"({ "bonus": null })"));
+
+	// a plain member marked optional reads a null as its default: the record goes, no null is left
+	json::object level = parse(R"({ "level": 7.0 })");
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, level, {}, {}, unset("/level")));
+	BOOST_CHECK(level.empty());
+
+	// over a parent's value the null takes it away: written
+	const json::object parent = parse(R"({ "level": 7.0 })");
+	json::object inheriting;
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, &parent, inheriting, {}, {}, unset("/level")));
+	BOOST_CHECK(inheriting == parse(R"({ "level": null })"));
+
+	// a std::optional with an initializer inside a structure: the null stays
+	json::object nested = parse(R"({ "inner": { "x": 3.0 } })");
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, nested, {}, {}, unset("/inner/x")));
+	BOOST_CHECK(nested == parse(R"({ "inner": { "x": null } })"));
+}
+
+// #861: Unset is offered where it changes the value; a null of a non-nullable field shows what the game reads.
+BOOST_AUTO_TEST_CASE(Unset_ChangesTheValueOnlyAwayFromWhatANullReads_AndANullShowsThatValue)
+{
+	auto& registry = descs->schemas();
+	const desc::type_schema schema = unset_schema(registry);
+	const desc::field_schema& level = *schema.find_field("/level");
+	const desc::field_schema& bonus = *schema.find_field("/bonus");
+
+	BOOST_CHECK(ui::null_reads_as(bonus, registry).is_null());
+	BOOST_CHECK(ui::null_reads_as(level, registry).to_number<double>() == 5.0);
+	BOOST_CHECK(!ui::unset_changes_value(level, json::value(5.0), registry));
+	BOOST_CHECK(ui::unset_changes_value(level, json::value(7.0), registry));
+	BOOST_CHECK(ui::unset_changes_value(bonus, json::value(2.0), registry));
+
+	const json::object own = parse(R"({ "level": null, "bonus": null })");
+	const json::value shown = ui::compose(schema, registry, { &own });
+	BOOST_REQUIRE(desc::json_pointer_get(shown, "/level") != nullptr);
+	BOOST_CHECK(desc::json_pointer_get(shown, "/level")->to_number<double>() == 5.0);
+	BOOST_CHECK(desc::json_pointer_get(shown, "/bonus") == nullptr);
+
+	// a missing value shows what the read gives: the default, the initializer of a std::optional too
+	const json::value plain = ui::compose(schema, registry, {});
+	BOOST_REQUIRE(desc::json_pointer_get(plain, "/level") != nullptr);
+	BOOST_CHECK(desc::json_pointer_get(plain, "/level")->to_number<double>() == 5.0);
+	BOOST_REQUIRE(desc::json_pointer_get(plain, "/bonus") != nullptr);
+	BOOST_CHECK(desc::json_pointer_get(plain, "/bonus")->to_number<double>() == 2.0);
+}
+
+// #861: a field that writes null for empty reads a null as its empty value and an entity as none, not as a default.
+BOOST_AUTO_TEST_CASE(NullReadsAs_TheEmptyValueOfANullIfEmptyField_AndNoEntity_AndAMissingValueShowsAsANullDoes)
+{
+	auto& registry = descs->schemas();
+	const desc::type_schema schema = desc::parse_type_schema(parse(R"({
+		"name": "edt.dd_null", "kind": "component",
+		"fields": [
+			{ "name": "icon", "kind": "res_tag", "default": "res://a.png", "optional": true, "write": "null_if_empty" },
+			{ "name": "target", "kind": "entity", "optional": true },
+			{ "name": "hp", "kind": "f32", "optional": true }
+		]
+	})"));
+	BOOST_REQUIRE(schema.find_field("/icon") && schema.find_field("/target") && schema.find_field("/hp"));
+	const desc::field_schema& icon = *schema.find_field("/icon");
+	BOOST_CHECK(ui::null_reads_as(icon, registry) == json::value(json::string()));
+	BOOST_CHECK(ui::null_reads_as(*schema.find_field("/target"), registry).is_null());
+	BOOST_CHECK(ui::unset_changes_value(icon, json::value("res://a.png"), registry));
+
+	// Unset of the default tag: the null reads as the empty tag, not the default, so it is written and shown empty
+	json::object own;
+	BOOST_CHECK(ui::edit_component_marked(schema, registry, nullptr, own, {}, {},
+		[](json::value& shown, const ui::field_origin&) { return ui::apply_unsets(shown, { "/icon" }); }));
+	BOOST_CHECK(own == parse(R"({ "icon": null })"));
+	const json::value shown = ui::compose(schema, registry, { &own });
+	BOOST_REQUIRE(desc::json_pointer_get(shown, "/icon") != nullptr);
+	BOOST_CHECK(desc::json_pointer_get(shown, "/icon")->as_string().empty());
+
+	// a data-defined optional without a default: a null and a missing value both show the zero the read gives
+	const json::object nulled = parse(R"({ "hp": null })");
+	BOOST_TEST(number_at(ui::compose(schema, registry, { &nulled }), "/hp") == 0.0);
+	BOOST_TEST(number_at(ui::compose(schema, registry, {}), "/hp") == 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(TheMarksMenu_UnsetOfAValueANullWouldReadAnyway_ChangesNothing)
+{
+	const desc::type_schema schema = unset_schema(descs->schemas());
+	mark_driver driver(schema, descs->schemas(), {}, parse(R"({ "level": 5.0 })"));
+	driver.frames(3);
+	driver.click("/level#mark");
+	driver.frames(2);
+	BOOST_REQUIRE(driver.targets.contains("/level#unset"));
+	driver.click("/level#unset");
+	BOOST_CHECK(driver.overrides == parse(R"({ "level": 5.0 })"));
 }
 
 BOOST_AUTO_TEST_CASE(Draw_WithAnOrigin_DrawsEveryFieldAndAnUnsetAsksForNothingByItself)

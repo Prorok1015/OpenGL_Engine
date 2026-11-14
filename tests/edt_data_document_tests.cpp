@@ -1199,7 +1199,9 @@ BOOST_AUTO_TEST_CASE(AnUnset_OfAnInheritedOptional_WritesANull_OfAnOwnOne_TakesT
 	const json::object inheriting_before = inheriting_doc.own();
 	BOOST_REQUIRE(inheriting_doc.edit_marked(unset_extra));
 	BOOST_TEST(inheriting_doc.own().at("extra").is_null());
-	BOOST_TEST(!inheriting_doc.shown().as_object().contains("extra"));
+	// a data-defined optional reads a null as the zero of its kind, and that is what is shown (#861)
+	BOOST_REQUIRE(inheriting_doc.shown().as_object().contains("extra"));
+	BOOST_TEST(inheriting_doc.shown().as_object().at("extra").to_number<double>() == 0.0);
 	inheriting_doc.commit_pending();
 	BOOST_TEST(inheriting_doc.history().size() == 1u);
 	BOOST_REQUIRE(inheriting_doc.undo());

@@ -130,7 +130,8 @@ namespace {
 			(*bounded)["minimum"] = field.range->min;
 			(*bounded)["maximum"] = field.range->max;
 		}
-		// An optional field may be given null: the value is not set, and what is read is the field's default.
+		// An optional field may be given null: a std::optional member reads it as nullopt, a field that writes null for empty
+		// as its empty value, any other as its default.
 		if (field.optional) {
 			boost::json::object wrapped;
 			wrapped["anyOf"] = boost::json::array{ boost::json::value(std::move(out)), boost::json::value(typed("null")) };
