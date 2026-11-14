@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <cstddef>
 #include <cstdint>
@@ -79,12 +80,14 @@ namespace edt
 
 	std::optional<std::string> confirmation_detail_text(std::string_view described)
 	{
-		// A character sanitize_text replaces shrinks to one byte at best, so this much can never fit.
+		// Refused without being scanned: a bound on the work done for one request, whatever sanitizing would leave of it.
 		if (described.size() > agent_confirmations::k_max_detail * 4) return std::nullopt;
 
 		std::string out;
 		out.reserve(described.size());
 		std::size_t lines = 0;
+		// Blank lines before the text and at its end go, a run of them inside is one: they would hide the text behind the scroll.
+		bool blank_before = false;
 		std::size_t at = 0;
 		while (at <= described.size()) {
 			const std::size_t end = std::min(described.find_first_of("\r\n", at), described.size());
@@ -94,14 +97,20 @@ namespace edt
 				else line += c;
 			}
 			// Invalid bytes grow into U+FFFD (3 bytes each): room for all of them, so nothing is cut here.
-			if (lines++ > 0) out += '\n';
-			out += edt::forge::sanitize_text(line, line.size() * 3 + 3);
+			const std::string plain = edt::forge::sanitize_text(line, line.size() * 3 + 3);
+			if (plain.find_first_not_of(' ') == std::string::npos) {
+				blank_before = lines > 0;
+			} else {
+				if (blank_before) {
+					out += '\n';
+					++lines;
+					blank_before = false;
+				}
+				if (lines++ > 0) out += '\n';
+				out += plain;
+			}
 			if (end == described.size()) break;
 			at = end + ((described[end] == '\r' && end + 1 < described.size() && described[end + 1] == '\n') ? 2 : 1);
-		}
-		while (!out.empty() && out.back() == '\n') {
-			out.pop_back();
-			--lines;
 		}
 		if (out.size() > agent_confirmations::k_max_detail || lines > agent_confirmations::k_max_detail_lines) return std::nullopt;
 		return out;
@@ -508,6 +517,11 @@ namespace edt
 		if (requests.empty()) {
 			return true;
 		}
+		// A person's own modal goes first: this window over it would take the clicks meant for its buttons, so it waits unseen.
+		if (ImGui::GetTopMostPopupModal() != nullptr) {
+			confirmations.note_shown({});
+			return true;
+		}
 
 		// Answers are applied after the window is closed: allowing runs the command, which must not happen inside it.
 		std::vector<std::pair<std::uint64_t, confirmation_answer>> chosen;
@@ -533,12 +547,19 @@ namespace edt
 				ImGui::TextDisabled("session %s, %s", request.session.empty() ? "?" : request.session.c_str(), cmd::to_string(request.category));
 				ImGui::PopTextWrapPos();
 				if (!request.detail.empty()) {
-					// As many rows as the text has lines, within bounds: the rest scrolls, long lines wrap.
-					const auto text_lines = 1 + std::count(request.detail.begin(), request.detail.end(), '\n');
-					const float rows = static_cast<float>(std::clamp<std::ptrdiff_t>(text_lines, 2, 12));
-					if (ImGui::BeginChild("detail", ImVec2(0.f, rows * ImGui::GetTextLineHeightWithSpacing() + 2.f * ImGui::GetStyle().WindowPadding.y), true)) {
-						ImGui::PushTextWrapPos(0.f);
-						ImGui::TextUnformatted(request.detail.c_str(), request.detail.c_str() + request.detail.size());
+					// As high as the text is once wrapped at the width it is drawn with, within 2 to 12 lines: the rest scrolls.
+					const ImGuiStyle& style = ImGui::GetStyle();
+					const char* const detail_begin = request.detail.c_str();
+					const char* const detail_end = detail_begin + request.detail.size();
+					const float line_height = ImGui::GetTextLineHeightWithSpacing();
+					float wrap_width = std::max(ImGui::GetContentRegionAvail().x - 2.f * style.WindowPadding.x, 1.f);
+					const float text_height = ImGui::CalcTextSize(detail_begin, detail_end, false, wrap_width).y;
+					// A text that scrolls gives the width of the scrollbar away.
+					if (text_height > 12.f * line_height) wrap_width = std::max(wrap_width - style.ScrollbarSize, 1.f);
+					const float child_height = std::ceil(std::clamp(text_height, 2.f * line_height, 12.f * line_height)) + 2.f * style.WindowPadding.y;
+					if (ImGui::BeginChild("detail", ImVec2(0.f, child_height), true)) {
+						ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
+						ImGui::TextUnformatted(detail_begin, detail_end);
 						ImGui::PopTextWrapPos();
 					}
 					ImGui::EndChild();
