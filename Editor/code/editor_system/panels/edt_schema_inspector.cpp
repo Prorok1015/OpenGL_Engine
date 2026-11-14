@@ -1,4 +1,5 @@
 #include "edt_schema_inspector.h"
+#include "edt_reference.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
@@ -256,8 +257,9 @@ namespace
 		case widget::vector: return value.is_array() && value.as_array().size() == vector_size(field.kind) && all_numbers(value.as_array());
 		case widget::color: return value.is_array() && (value.as_array().size() == 3 || value.as_array().size() == 4) && all_numbers(value.as_array());
 		case widget::combo: return value.is_string() || value.is_number();
-		case widget::text:
-		case widget::asset: return value.is_string();
+		case widget::text: return value.is_string();
+		// A tag, or a {guid, path} reference (EPIC-57 section 4.4): the field shows and edits its path.
+		case widget::asset: return value.is_string() || (edt::is_reference_object(value) && edt::reference_object_problem(value.as_object()).empty());
 		case widget::group: return value.is_object();
 		case widget::list: return value.is_array();
 		case widget::map: return value.is_object();
@@ -623,13 +625,21 @@ namespace
 
 	bool edit_text(const char* label, const desc::field_schema& field, bool asset, json::value& value)
 	{
-		const std::string current(value.as_string());
+		// A {guid, path} reference shows its path; an edit writes the tag as a string, and saving the file writes the ID
+		// of the file it names (EPIC-57 section 4.4).
+		const json::object* reference = asset ? value.if_object() : nullptr;
+		const std::string current = reference ? edt::reference_path_text(*reference) : std::string(value.as_string());
+		const json::value* guid = reference ? reference->if_contains("guid") : nullptr;
+		const std::string id = guid && guid->is_string() ? std::string(guid->as_string()) : std::string{};
 		std::vector<char> buffer(std::max<std::size_t>(current.size() + 256, 512), '\0');
 		std::copy(current.begin(), current.end(), buffer.begin());
 		bool changed = false;
 		if (ImGui::InputText(label, buffer.data(), buffer.size())) {
 			value = json::string(buffer.data());
 			changed = true;
+		}
+		if (!id.empty() && ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("ID %s", id.c_str());
 		}
 		if (asset && ImGui::BeginDragDropTarget()) {
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
@@ -646,7 +656,8 @@ namespace
 		}
 		// Below the field, so the drop target above stays the text field.
 		if (asset) {
-			if (const std::string problem = edt::schema_ui::tag_text_problem(value.as_string()); !problem.empty()) {
+			const std::string shown = value.is_string() ? std::string(value.as_string()) : current;
+			if (const std::string problem = edt::schema_ui::tag_text_problem(shown); !problem.empty()) {
 				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
 				ImGui::TextWrapped("%s", problem.c_str());
 				ImGui::PopStyleColor();

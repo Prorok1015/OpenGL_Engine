@@ -1,4 +1,5 @@
 #include "edt_play_preflight.h"
+#include "edt_reference.h"
 #include "edt_scene_document.h"
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
@@ -104,11 +105,40 @@ namespace {
 			}
 		}
 
-		// The strings of a tag field; an object there is an inline desc, not a reference.
+		// A {guid, path} reference (EPIC-57 section 4.4): checked where it leads. A guid the index holds under another path
+		// is a note (the next save writes the path it has now), one it does not hold a warning (the path loads).
+		void check_reference_object(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
+		{
+			if (std::string why = edt::reference_object_problem(value.as_object()); !why.empty()) {
+				add(edt::problem_severity::error, "reference", why, path, json_path);
+				return;
+			}
+			const std::optional<edt::reference_target> target = edt::target_of(value, services.resources);
+			if (!target) return;
+			const std::string written = edt::reference_path_text(value.as_object());
+			const std::string guid = res::to_text(target->reference.guid);
+			if (target->unknown_id) {
+				if (written.empty()) {
+					add(edt::problem_severity::error, "missing_resource", std::format("no file has the ID {} and the reference has no path", guid),
+						path, json_path);
+					return;
+				}
+				add(edt::problem_severity::warning, "unknown_id", std::format("no file has the ID {}: '{}' is loaded by its path", guid, written),
+					path, json_path);
+			} else if (target->stale_path) {
+				add(edt::problem_severity::note, "stale_path", std::format("'{}' is an old path of {}: the file is '{}' now", written, guid,
+					target->tag.view()), path, json_path);
+			}
+			check_tag(std::string(target->tag.view()), path, json_path);
+		}
+
+		// The references of a tag field; an object with __type there is an inline desc, not a reference.
 		void check_tags(const json::value& value, const std::vector<std::uint64_t>& path, const std::string& json_path)
 		{
 			if (const auto* text = value.if_string()) {
 				check_tag(std::string(text->data(), text->size()), path, json_path);
+			} else if (edt::is_reference_object(value)) {
+				check_reference_object(value, path, json_path);
 			} else if (const auto* array = value.if_array()) {
 				for (std::size_t i = 0; i < array->size(); ++i) check_tags((*array)[i], path, std::format("{}/{}", json_path, i));
 			}

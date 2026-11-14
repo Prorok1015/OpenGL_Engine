@@ -371,6 +371,27 @@ BOOST_AUTO_TEST_CASE(Draw_AValueOfTheWrongShapeIsLeftToTheJsonEditor)
 	BOOST_CHECK(desc::json_pointer_get(value, "/offset")->is_string()); // not overwritten
 }
 
+// #773: a tag field holding a {guid, path} reference keeps the tag widget (it shows the path); an object that is not a
+// good reference is left to the JSON editor.
+BOOST_AUTO_TEST_CASE(Draw_AReferenceObjectInATagFieldKeepsTheTagWidget)
+{
+	imgui_ctx imgui;
+	const auto& schema = widget_schema();
+	json::value value = ui::compose(schema, descs->schemas(), {});
+	const json::value reference = json::parse(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://textures/a.png"})");
+	desc::json_pointer_set(value, "/source", reference);
+
+	bool changed = true;
+	const drawn_list drawn = draw_twice(imgui, schema, descs->schemas(), value, &changed);
+	BOOST_CHECK(widget_at(drawn, "/source") == ui::widget::asset);
+	BOOST_CHECK(!changed);
+	BOOST_CHECK(*desc::json_pointer_get(value, "/source") == reference);
+
+	desc::json_pointer_set(value, "/source", json::parse(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","file":"a.png"})"));
+	const drawn_list bad = draw_twice(imgui, schema, descs->schemas(), value, &changed);
+	BOOST_CHECK(widget_at(bad, "/source") == ui::widget::json);
+}
+
 // ---------------------------------------------------------------- what the component has
 
 BOOST_AUTO_TEST_CASE(Compose_LayersTheDefaultsParentAndOverrides)

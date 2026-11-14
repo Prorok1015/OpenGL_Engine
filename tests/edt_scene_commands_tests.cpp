@@ -813,4 +813,33 @@ BOOST_AUTO_TEST_CASE(a_partial_patch_of_an_inline_desc_takes_its_type_from_the_c
 	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_string() == "res://materials/red.mat.desc");
 }
 
+// #773: a {guid, path} reference in a tag field is held to #697 where it leads; it is no inline desc, and an object that
+// is not a good reference is refused with the reason. Without an asset index the path is what leads.
+BOOST_AUTO_TEST_CASE(a_reference_object_follows_the_rule_of_a_tag)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto set = [&](const std::string& patch) {
+		return call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":)" + patch + "}");
+	};
+	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
+
+	const auto fine = set(R"({"geometry":{)" + guid + R"(,"path":"res://g.geom.desc"},"material":{)" + guid + R"(,"path":"res://m.desc"}})");
+	BOOST_REQUIRE_MESSAGE(fine.ok, fine.error);
+	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_object().at("path").as_string() == "res://m.desc");
+
+	for (const std::string& bad : {
+		std::string(R"({"material":{)") + guid + R"(,"path":"user://saves/m.desc"}})",
+		std::string(R"({"geometry":{)") + guid + R"(,"path":"res://g.geom.desc","extra":1}})",
+		std::string(R"({"geometry":{"guid":"00000000-0000-0000-0000-000000000000"}})"),
+		std::string(R"({"material":{"samplers":["res://t.png"]}})") }) {
+		BOOST_TEST_CONTEXT(bad) {
+			const auto refused = set(bad);
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+		}
+	}
+	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_object().at("path").as_string() == "res://m.desc");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

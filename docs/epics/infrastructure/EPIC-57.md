@@ -123,6 +123,12 @@
 - Писатели (редактор, MCP, импорт) пишут объект, если у цели есть ID; иначе строку.
 - Inline-читатели (`desc_describe_ops.h`, `get_field_desc`) разбирают объект и зовут экспортируемый `resource_system::resolve_reference(guid, path)`: как именно ссылка превращается в файл, решает движок, а не код модуля (§7.1).
 - Строка `путь|guid` отклонена: inline-читатель `res_tag`-поля (`desc_describe_ops.h:242-250`) в старом модуле построил бы тег `res://a.desc|<guid>` — тихая порча данных.
+- Сделано (#773, PR 1): проверки редактора читают обе формы через `edt_reference.h` (`is_reference_object`, `reference_object_problem`, `target_of`); у `resource_system` экспорт `asset_path_of(guid)` и `has_asset_index()`.
+  - `desc.write`/`desc.create` (`validate_desc_tree`): объект без `__type` в `res_tag`/`desc_ref` (не в `custom`) — только `guid`/`path`, `path` по строгому правилу тега; без `path` при индексе — `guid` должен быть в индексе.
+  - #697 в `component.set`: объект, которому ни он сам, ни компонент (#740) не дают `__type`, — ссылка; правило #697 — к тегу, куда она ведёт; никуда не ведущая — отказ.
+  - Проверка перед Play: ссылка проверяется там, куда ведёт; `guid` в индексе под другим путём — запись `stale_path` (note), `guid` не в индексе — `unknown_id` (warning, грузится `path`), без `path` — `missing_resource` (error).
+  - Инспектор: поле тега показывает `path` объекта (ID — в подсказке), правка пишет строку. JSON-схема MCP: `res_tag` = `oneOf [string, {guid, path}]`.
+  - `__parent` остаётся строкой.
 
 ## 5. Рантайм: ключ — ID
 

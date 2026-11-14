@@ -7,6 +7,8 @@
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/resource/res_asset_index.h>
+#include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_describe_ops.h>
@@ -662,6 +664,68 @@ BOOST_AUTO_TEST_CASE(ATagInsideAMapOfTags_FollowsTheStrictRuleToo)
 	const auto fine = call("desc.create", desc_args("materials/t.desc", R"({"__type":"test.texture_table","textures":{"a":"res://ok.png"}})"));
 	BOOST_TEST_MESSAGE(fine.error);
 	BOOST_TEST(fine.ok);
+}
+
+namespace {
+
+// An asset index that knows where some IDs are and keys no tag by an ID, so no cache entry moves.
+struct paths_index final : res::asset_index
+{
+	std::map<res::asset_id, res::tag> paths;
+	std::optional<res::asset_id> id_of(const res::tag&) const override { return std::nullopt; }
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
+}
+
+// #773: a tag field takes a {guid, path} reference (EPIC-57 section 4.4): its path follows the strict rule, it has no
+// other key, its guid is a UUID that is not nil. Without a path, the asset index must hold the guid.
+BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
+{
+	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
+	for (const std::string& content : {
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"user://x.frag"}})",
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"shaders/a.frag"}})",
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag","extra":1}})",
+		std::string(R"({"__type":"material_desc","shader_fragment":{"guid":"00000000-0000-0000-0000-000000000000"}})"),
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":5}})",
+		R"({"__type":"test.texture_table","textures":{"a":{)" + guid + R"(,"path":"edt://x.png"}}})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/r.mat.desc", content.c_str()));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "r.mat.desc"));
+		}
+	}
+	for (const std::string& content : {
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag"}})",
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + "}}",
+		R"({"__type":"test.texture_table","textures":{"a":{)" + guid + R"(,"path":"res://ok.png"}}})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto made = call("desc.create", desc_args("materials/r.mat.desc", content.c_str()));
+			BOOST_TEST_MESSAGE(made.error);
+			BOOST_TEST(made.ok);
+			fs::remove(res_root / "materials" / "r.mat.desc");
+		}
+	}
+
+	// With an asset index, a guid without a path must be one a file holds.
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"), res::tag{ "res://shaders/b.frag" });
+	rs->set_asset_index(index);
+	const std::string unknown_guid = R"({"__type":"material_desc","shader_fragment":{)" + guid + "}}";
+	const auto unknown = call("desc.create", desc_args("materials/r.mat.desc", unknown_guid.c_str()));
+	const auto known = call("desc.create", desc_args("materials/k.mat.desc",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"}})"));
+	rs->set_asset_index(nullptr);
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(unknown.value.is_object());
+	BOOST_TEST(std::string(unknown.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));
+	BOOST_TEST_MESSAGE(known.error);
+	BOOST_TEST(known.ok);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
