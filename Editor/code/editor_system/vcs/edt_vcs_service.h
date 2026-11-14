@@ -39,6 +39,9 @@ namespace edt
 		std::filesystem::path git;
 		// The open project's root; nullopt (or null): no project.
 		std::function<std::optional<std::filesystem::path>()> project_root;
+		// Live mode is on: it builds and loads every change of code:// at once, so an agent's checkout or pull must not
+		// bring code in meanwhile (#909). Null: off.
+		std::function<bool()> live_mode_on;
 		process_runner run = platform::run_process;
 		// The environment git runs in, before the vcs variables are added; nullopt: this process's.
 		std::optional<std::vector<std::string>> environment;

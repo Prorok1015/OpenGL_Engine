@@ -1037,6 +1037,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
 	};
+	vcs.live_mode_on = [this] { return m_live_mode && m_live_mode->enabled(); };
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
 	edt::vcs::repository_watcher::ports watch_ports;
 	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
