@@ -1175,3 +1175,8 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 	if (auto journal_failed = journal_as(migration_status::rolled_back)) return std::format("the journal cannot be written: {}", *journal_failed);
 	return std::nullopt;
 }
+
+bool prj::migration::keep_root_guid(json::object& saved, const json::object& original)
+{
+	return desc::keep_root_guid(saved, original);
+}

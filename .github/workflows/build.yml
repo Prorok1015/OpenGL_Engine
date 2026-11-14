@@ -665,6 +665,16 @@ jobs:
       - name: Build unit_tests
         run: cmake --build build/${{ matrix.preset }} --target unit_tests --parallel
 
+      # #874 repro only (wip/874-repro, never merged).
+      - name: "#874 repro: desc_resave with project_migration under ASan"
+        continue-on-error: true
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: |
+          cmake --build build/${{ matrix.preset }} --target desc_resave --parallel
+          tools/ci/repro_874.sh build/${{ matrix.preset }}
+
       - name: Compiler cache statistics
         if: always()
         run: ccache -s
@@ -786,6 +796,13 @@ jobs:
       # --check lists every file whose re-serialized bytes differ and exits 1 if there is any.
       - name: Build desc_resave
         run: cmake --build build/ci-linux-coverage --target desc_resave --parallel
+
+      # #874 repro only (wip/874-repro, never merged).
+      - name: "#874 repro: desc_resave with project_migration"
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y gdb > /dev/null
+          tools/ci/repro_874.sh build/ci-linux-coverage gdb
 
       - name: Compiler cache statistics
         if: always()

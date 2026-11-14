@@ -92,6 +92,9 @@ namespace prj::migration
 
 	// Why apply_migration refuses `plan` before writing anything: a project.snkproj that is newer or invalid, an invalid
 	// file without plan.force, or plan.refused. Empty when it may run.
+	// #874 repro only (wip/874-repro, never merged): what desc_resave called when it crashed at exit.
+	bool keep_root_guid(boost::json::object& saved, const boost::json::object& original);
+
 	std::string plan_refusal(const migration_plan& plan);
 
 	// The files a migration of `plan` leaves as they are and reports: unknown_type and newer ones (never migrated), and
