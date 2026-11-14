@@ -94,6 +94,8 @@
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_project.h>
+#include <snk/project_migration/pmg_apply.h>
+#include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
