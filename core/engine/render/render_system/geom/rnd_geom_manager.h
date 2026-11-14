@@ -19,7 +19,7 @@ namespace res { class resource_system; }
 namespace rnd
 {
 	// How many answers of geom_manager::draw_fits one geometry keeps; a range past them is checked again at each draw.
-	inline constexpr std::size_t k_checked_ranges_cap = 256;
+	inline constexpr std::size_t k_checked_ranges_cap = 65536;
 
 	// Exported for the tests only: internal to the renderer.
 	class SNK_API geom_manager

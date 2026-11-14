@@ -3,6 +3,7 @@
 #include <snk/resource/res_system.h>
 #include <algorithm>
 #include <cstddef>
+#include <utility>
 
 rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, res::resource_system& res_sys)
 	: m_res_sys(res_sys)
@@ -42,12 +43,18 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 	if (handle.is_ready()) {
 		loading.erase(geom_tag);
 		rnd::geometry_desc& desc = *handle;
-		built_geometry& geometry = cache[geom_tag];
+		// Built aside and moved in last: a failure or an exception leaves no half-made record in the cache.
+		built_geometry geometry;
 		geometry.vertex_array = create_geometry(desc);
+		if (!geometry.vertex_array) {
+			return nullptr;
+		}
 		geometry.indices.assign(desc.indices.begin(), desc.indices.end());
 		const std::uint32_t stride = desc.layout.get_stride();
 		geometry.vertex_count = stride == 0 ? std::uint64_t{ 0 } : std::uint64_t{ desc.vertices.size() / stride };
-		return geometry.vertex_array.get();
+		rnd::driver::vertex_array_interface* const built = geometry.vertex_array.get();
+		cache.insert_or_assign(geom_tag, std::move(geometry));
+		return built;
 	}
 
 	if (handle.has_error()) {
