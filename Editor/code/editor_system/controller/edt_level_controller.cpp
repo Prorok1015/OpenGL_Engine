@@ -109,10 +109,10 @@ namespace {
 			if (!path || !std::filesystem::is_regular_file(*path, ec)) continue;
 			const std::uintmax_t size = std::filesystem::file_size(*path, ec);
 			if (!ec && size > k_replaced_level_limit) {
-				return { {}, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
+				return { {}, 0, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
 			}
 			const auto bytes = res::read_regular_file_capped(*path, k_replaced_level_limit);
-			if (!bytes) return { {}, "it could not be read" };
+			if (!bytes) return { {}, 0, "it could not be read" };
 			return { edt::desc_root_guid(*bytes), edt::desc_root_version(*bytes), {} };
 		}
 		return {};
