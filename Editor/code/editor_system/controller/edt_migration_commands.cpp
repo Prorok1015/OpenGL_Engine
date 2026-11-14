@@ -140,13 +140,19 @@ namespace {
 		hash.add_part(std::to_string(code_identity));
 		hash.add_part(json::serialize(plan_json(plan)));
 		hash.add_file(root, fs_paths::path_from_utf8(prj::k_manifest_file_name), max_bytes, true);
-		std::vector<std::pair<std::string, std::string_view>> files;
+		// Everything the scan says of a file, so a plan that a scan field changes changes the fingerprint too.
+		std::vector<std::pair<std::string, std::string>> files;
 		files.reserve(plan.scan.files.size());
-		for (const pmg::scanned_file& file : plan.scan.files) files.emplace_back(file.path, pmg::to_string(file.kind));
+		for (const pmg::scanned_file& file : plan.scan.files) {
+			std::string facts = std::format("{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
+				file.resource_path, file.resource_unreadable);
+			for (const std::string& type : file.unknown_types) facts += "|" + type;
+			files.emplace_back(file.path, std::move(facts));
+		}
 		std::ranges::sort(files);
-		for (const auto& [path, kind] : files) {
+		for (const auto& [path, facts] : files) {
 			hash.add_part(path);
-			hash.add_part(kind);
+			hash.add_part(facts);
 			hash.add_file(root, fs_paths::path_from_utf8(path), max_bytes, rewritten_by_migration(path));
 		}
 		return hash.value();
