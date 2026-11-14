@@ -1,9 +1,12 @@
 #include <snk/common/fs_paths.h>
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
+#include "edt_document_creator.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
+#include <optional>
+#include <vector>
 
 namespace edt
 {
@@ -47,6 +50,95 @@ namespace edt
 		m_layers = std::move(layers);
 		m_current_rel.clear();
 		m_needs_refresh = true;
+	}
+
+	asset_browser_panel::~asset_browser_panel() = default;
+
+	void asset_browser_panel::set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created)
+	{
+		m_creator = std::move(creator);
+		m_create_form = m_creator ? std::make_unique<document_create_form>(*m_creator) : nullptr;
+		m_on_document_created = std::move(on_created);
+	}
+
+	void asset_browser_panel::draw_create_menu_item(const std::filesystem::path& folder)
+	{
+		if (!m_create_form) {
+			return;
+		}
+		const bool no_types = m_creator->types().empty();
+		ImGui::BeginDisabled(no_types);
+		if (ImGui::MenuItem("Create Document...")) {
+			m_create_form->open(fs_paths::generic_utf8_of(folder));
+			m_create_requested = true;
+		}
+		ImGui::EndDisabled();
+		if (no_types && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::SetTooltip("no desc type is registered as a document");
+		}
+	}
+
+	void asset_browser_panel::draw_create_window()
+	{
+		if (!m_create_form) {
+			return;
+		}
+		if (m_create_requested) {
+			ImGui::OpenPopup("Create Document");
+			m_create_requested = false;
+		}
+		if (!ImGui::BeginPopupModal("Create Document", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			return;
+		}
+		document_create_form& form = *m_create_form;
+		ImGui::TextDisabled("Folder: res://%s", form.folder().c_str());
+		const auto& types = form.types();
+		const char* preview = types.empty() ? "(no document types)" : types[form.type_index()].c_str();
+		if (ImGui::BeginCombo("Type", preview)) {
+			for (std::size_t i = 0; i < types.size(); ++i) {
+				if (ImGui::Selectable(types[i].c_str(), i == form.type_index())) {
+					form.set_type_index(i);
+				}
+			}
+			ImGui::EndCombo();
+		}
+		std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
+		std::copy(form.name().begin(), form.name().end(), buffer.begin());
+		if (ImGui::IsWindowAppearing()) {
+			ImGui::SetKeyboardFocusHere();
+		}
+		const bool entered = ImGui::InputText("Name", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (buffer.data() != form.name()) {
+			form.set_name(buffer.data());
+		}
+		ImGui::TextDisabled(".desc is added when the name has no extension");
+		if (const std::string problem = form.problem(); !problem.empty()) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+			ImGui::TextWrapped("%s", problem.c_str());
+			ImGui::PopStyleColor();
+		}
+		if (!form.error().empty()) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+			ImGui::TextWrapped("%s", form.error().c_str());
+			ImGui::PopStyleColor();
+		}
+		ImGui::BeginDisabled(!form.can_submit());
+		const bool clicked = ImGui::Button("Create");
+		ImGui::EndDisabled();
+		if ((clicked || (entered && form.can_submit())) && form.can_submit()) {
+			if (const std::optional<res::tag> made = form.submit()) {
+				ImGui::CloseCurrentPopup();
+				if (m_on_document_created) {
+					m_on_document_created(*made);
+				}
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel")) {
+			form.close();
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
 	}
 
 	void asset_browser_panel::set_code_section(std::shared_ptr<code_section> section)
@@ -111,6 +203,10 @@ namespace edt
 
 			if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
 				navigate_to(sub.relative);
+			if (m_create_form && ImGui::BeginPopupContextItem()) {
+				draw_create_menu_item(sub.relative);
+				ImGui::EndPopup();
+			}
 
 			if (opened) {
 				draw_dir_tree(sub.relative, depth + 1);
@@ -215,6 +311,10 @@ namespace edt
 				// Navigate into folder on click
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					navigate_to(e.src.relative);
+				if (m_create_form && ImGui::BeginPopupContextItem()) {
+					draw_create_menu_item(e.src.relative);
+					ImGui::EndPopup();
+				}
 			} else {
 				// Double-click on file
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -248,6 +348,14 @@ namespace edt
 		if (m_entries.empty())
 			ImGui::TextDisabled("(empty)");
 
+		// The blank of the open folder.
+		if (m_create_form && ImGui::BeginPopupContextWindow("##asset_browser_blank", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+			draw_create_menu_item(m_current_rel);
+			ImGui::EndPopup();
+		}
+
 		ImGui::Columns(1);
+
+		draw_create_window();
 	}
 }
