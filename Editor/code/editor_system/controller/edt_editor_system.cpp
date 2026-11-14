@@ -496,6 +496,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	asset_kind_hooks asset_hooks;
 	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	asset_hooks.desc_layout = [this] { return desc_layout(); };
+	asset_hooks.edits_locked = [this] { return m_play && m_play->active(); };
 	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
 		if (m_context->documents().preview() == &open) m_prefab_panel->set_open(true);
 	});

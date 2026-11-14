@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_desc_file_commands.h"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <functional>
 #include <string_view>
@@ -13,7 +14,11 @@ namespace edt
 		std::function<void(const res::tag&)> open_prefab;
 		// Loads the desc and adds it to the active world as a new node.
 		std::function<void(const res::tag&)> add_desc_to_scene;
-	};
+		// Where the project's desc files are (what an Apply of the prefab checks before it writes); null: a prefab cannot be
+		// written. The members have initializers: a test that builds the hooks with only the first two keeps compiling.
+		std::function<desc_file_layout()> desc_layout = {};
+		// Play runs: the prefab cannot be edited or applied. Null: never.
+		std::function<bool()> edits_locked = {};	};
 
 	// The id of the preview that makes the prefab_document (open_prefab names it, so a module's preview with a longer suffix
 	// cannot take its place).
