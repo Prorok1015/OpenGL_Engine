@@ -354,7 +354,18 @@ BOOST_AUTO_TEST_CASE(ThePlansMessages_GoThroughTheAgentLogFilter_NotForAPerson_A
 
 	BOOST_TEST(agent.value.at("code") == person.value.at("code"));
 	BOOST_TEST(agent.value.at("fingerprint") == person.value.at("fingerprint"));
-	BOOST_TEST(agent.value.at("plan").at("files") == person.value.at("plan").at("files"));
+	// A file's warning is a message too; the rest of what is planned for the file is data.
+	const auto without_warning_text = [](json::array files, bool expect_redacted) {
+		for (json::value& file : files) {
+			for (json::value& warning : file.at("warnings").as_array()) {
+				if (expect_redacted) BOOST_TEST(warning.at("message").as_string() == "<redacted>");
+				warning.as_object().erase("message");
+			}
+		}
+		return files;
+	};
+	BOOST_TEST((without_warning_text(agent.value.at("plan").at("files").as_array(), true)
+		== without_warning_text(person.value.at("plan").at("files").as_array(), false)));
 	BOOST_TEST(agent.value.at("plan").at("project_steps") == person.value.at("plan").at("project_steps"));
 }
 
