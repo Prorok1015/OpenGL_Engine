@@ -651,6 +651,18 @@ BOOST_AUTO_TEST_CASE(AWorldEntryUnderAnUppercaseProtocol_NamesNoFile)
 	BOOST_TEST(other.ok);
 }
 
+// If this starts loading, the guard in edt_desc_file_commands.cpp (#966) has to treat such an entry like `res://`.
+BOOST_AUTO_TEST_CASE(AnUppercaseProtocol_IsNotServedByTheResourceSystem_SoTheGuardSkipsIt)
+{
+	fs::create_directories(res_root / "worlds");
+	dir.write("res/worlds/x.desc", R"({"__type":"world_desc"})");
+
+	BOOST_TEST(rs->exists(res::tag{ "res://worlds/x.desc" }));
+	const res::tag uppercase{ "RES://worlds/x.desc" };
+	BOOST_TEST(uppercase.protocol() == "RES");
+	BOOST_TEST(!rs->exists(uppercase));
+}
+
 // #966: the project's root may be the engine's base folder, so an engine:// world is compared as a file on disk.
 BOOST_AUTO_TEST_CASE(AnEngineWorldInTheProjectsOwnFolder_IsTheLevels)
 {
