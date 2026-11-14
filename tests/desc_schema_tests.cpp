@@ -15,6 +15,7 @@
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_describe_ops.h>
+#include <snk/desc/desc_dynamic.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_asset_id.h>
@@ -74,6 +75,20 @@ namespace schema_test {
 		std::map<std::string, res::tag> named;
 
 		BOOST_DESCRIBE_CLASS(reference_table, (), (named), (), ())
+	};
+
+	// Every container a reference stands in, in a C++ type (#881).
+	class reference_holder : public desc::schema_desc<reference_holder>
+	{
+	public:
+		static constexpr std::string_view __type = "rd.holder";
+
+		res::tag one;
+		std::vector<res::tag> list;
+		std::map<std::string, res::tag> named;
+		std::optional<res::tag> maybe;
+
+		BOOST_DESCRIBE_CLASS(reference_holder, (), (one, list, named, maybe), (), ())
 	};
 }
 
@@ -757,6 +772,103 @@ BOOST_FIXTURE_TEST_CASE(WriteReferences_AtAPointerOfASchema, schema_fixture)
 	BOOST_TEST(blob == json::value("res://known.png"));
 	BOOST_TEST(whole.at("texture") == json::value("res://known.png"), "merged into an inline desc, a path stays a string");
 	BOOST_TEST(whole.at("tex") == ref);
+}
+
+namespace {
+
+	constexpr std::string_view k_moved_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+	constexpr std::string_view k_unknown_guid = "0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6";
+
+	std::string reference_text(std::string_view guid, std::string_view path)
+	{
+		std::string out = "{ ";
+		if (!guid.empty()) {
+			out += "\"guid\": \"" + std::string(guid) + "\", ";
+		}
+		return out + "\"path\": \"" + std::string(path) + "\" }";
+	}
+
+	// res://new_place holds k_moved_guid: a reference that still names its old path reads the path its file has now.
+	std::shared_ptr<ids_index> moved_index()
+	{
+		auto index = std::make_shared<ids_index>();
+		index->hold(*res::asset_id_from_text(k_moved_guid), "res://new_place.desc");
+		return index;
+	}
+
+}
+
+// #881: a runtime schema reads a reference as a described field does: in a res_tag or desc_ref field, an array of
+// either and an optional one, a path string stays, {guid, path} holds the tag the guid resolves to (its path when the
+// index does not know it), and an inline desc of a desc_ref stays an object.
+BOOST_FIXTURE_TEST_CASE(ReadReferences_ARuntimeSchemaHoldsTheTagOfAGuidAndAPath, schema_fixture)
+{
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(parse(R"({
+		"name": "rd.runtime", "kind": "component",
+		"fields": [
+			{ "name": "tag", "kind": "res_tag", "default": "" },
+			{ "name": "link", "kind": "desc_ref", "default": "" },
+			{ "name": "tags", "kind": "array", "element": "res_tag" },
+			{ "name": "links", "kind": "array", "element": "desc_ref" },
+			{ "name": "maybe_tag", "kind": "res_tag", "optional": true },
+			{ "name": "maybe_link", "kind": "desc_ref", "optional": true }
+		]
+	})"))));
+	rs.set_asset_index(moved_index());
+	const std::string moved = reference_text(k_moved_guid, "res://old_place.desc");
+	const std::string unknown = reference_text(k_unknown_guid, "res://kept.desc");
+	const std::string path_only = reference_text({}, "res://only_path.desc");
+	const std::string text = "{ \"tag\": " + moved + ", \"link\": " + moved
+		+ ", \"tags\": [ \"res://a.png\", " + moved + ", " + unknown + ", " + path_only + " ]"
+		+ ", \"links\": [ \"res://a.desc\", " + moved + ", { \"__type\": \"rd.inline\", \"hp\": 1 } ]"
+		+ ", \"maybe_tag\": " + path_only + ", \"maybe_link\": " + unknown + " }";
+
+	auto runtime = std::dynamic_pointer_cast<desc::dynamic_desc>(ds.create_instance("rd.runtime", res::tag{}));
+	BOOST_REQUIRE(runtime);
+	runtime->deserialize(ds, parse(text.c_str()));
+	BOOST_TEST(runtime->get("/tag") == json::value("res://new_place.desc"));
+	BOOST_TEST(runtime->get("/link") == json::value("res://new_place.desc"));
+	BOOST_TEST(runtime->get("/tags") == json::parse(
+		R"([ "res://a.png", "res://new_place.desc", "res://kept.desc", "res://only_path.desc" ])"));
+	BOOST_TEST(runtime->get("/links") == json::parse(
+		R"([ "res://a.desc", "res://new_place.desc", { "__type": "rd.inline", "hp": 1 } ])"));
+	BOOST_TEST(runtime->get("/maybe_tag") == json::value("res://only_path.desc"));
+	BOOST_TEST(runtime->get("/maybe_link") == json::value("res://kept.desc"));
+
+	runtime->deserialize(ds, parse(R"({ "link": { "__type": "rd.inline", "hp": 2 } })"));
+	BOOST_TEST(runtime->get("/link") == json::parse(R"({ "__type": "rd.inline", "hp": 2 })"));
+	rs.set_asset_index(nullptr);
+}
+
+// #881: a C++ type reads the same forms in a field, a vector, a map and an optional.
+BOOST_FIXTURE_TEST_CASE(ReadReferences_ACppTypeHoldsTheTagOfAGuidAndAPath, schema_fixture)
+{
+	ds.register_desc<schema_test::reference_holder>("rd.holder");
+	rs.set_asset_index(moved_index());
+	const std::string moved = reference_text(k_moved_guid, "res://old_place.desc");
+	const std::string unknown = reference_text(k_unknown_guid, "res://kept.desc");
+	const std::string text = "{ \"one\": " + moved + ", \"list\": [ \"res://a.png\", " + unknown + " ]"
+		+ ", \"named\": { \"a\": \"res://a.png\", \"b\": " + moved + " }, \"maybe\": " + unknown + " }";
+
+	schema_test::reference_holder holder;
+	holder.deserialize(ds, parse(text.c_str()));
+	BOOST_TEST((holder.one == res::tag{ "res://new_place.desc" }));
+	BOOST_TEST((holder.list == std::vector<res::tag>{ res::tag{ "res://a.png" }, res::tag{ "res://kept.desc" } }));
+	BOOST_REQUIRE(holder.named.size() == 2u);
+	BOOST_TEST((holder.named.at("a") == res::tag{ "res://a.png" }));
+	BOOST_TEST((holder.named.at("b") == res::tag{ "res://new_place.desc" }));
+	BOOST_REQUIRE(holder.maybe.has_value());
+	BOOST_TEST((*holder.maybe == res::tag{ "res://kept.desc" }));
+	rs.set_asset_index(nullptr);
+}
+
+// #881: a map field has no blob layout: a runtime schema with one is refused, so a map of references is a C++ type's.
+BOOST_AUTO_TEST_CASE(ReadReferences_ARuntimeSchemaWithAMapIsRefused)
+{
+	BOOST_CHECK_THROW(desc::parse_type_schema(parse(R"({
+		"name": "rd.runtime_map", "kind": "component",
+		"fields": [ { "name": "named", "kind": "map", "element": "res_tag" } ]
+	})")), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

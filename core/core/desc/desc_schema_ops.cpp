@@ -440,13 +440,19 @@ namespace desc
 				// In the default resource: the input may live in a resource of the caller's (a module's arena, its own Boost.JSON)
 				// that is gone before the blob is (#826).
 				json::value stored(in, json::storage_ptr{});
-				// A {guid, path} reference (#758): the field holds the tag, as a described res::tag field does.
+				// A {guid, path} reference (#758, #881): the field holds the tag, as a described res::tag or desc_ref
+				// field does. An inline desc of a desc_ref stays an object.
 				const auto as_path = [&ctx](json::value& item) {
-					if (item.is_object()) item = json::value(reference_tag(item, ctx).value_or(res::tag{}).view());
+					if (const std::optional<res::tag> tag = item.is_object() ? reference_tag(item, ctx) : std::nullopt) {
+						item = json::value(tag->view());
+					}
 				};
-				if (ops.kind == field_kind::res_tag) {
+				const auto is_reference = [](field_kind kind) {
+					return kind == field_kind::res_tag || kind == field_kind::desc_ref;
+				};
+				if (is_reference(ops.kind)) {
 					as_path(stored);
-				} else if (ops.kind == field_kind::array && ops.element == field_kind::res_tag && stored.is_array()) {
+				} else if (ops.kind == field_kind::array && is_reference(ops.element) && stored.is_array()) {
 					std::ranges::for_each(stored.as_array(), as_path);
 				}
 				if (ops.kind == field_kind::array && ops.element == field_kind::entity && in.is_array()) {
