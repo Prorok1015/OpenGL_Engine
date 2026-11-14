@@ -2658,10 +2658,11 @@ void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res
 			homes.push_back(home);
 			split = split || home != pinned;
 		}
-		// No pin under the key: an earlier rebind's reload is still loading it, and it has to start again where the
-		// owners are now.
+		// No pin under the key: an earlier rebind's reload is still loading it. Owners that stayed under the same key
+		// keep it running; owners that moved have it started again where they are now.
 		const auto* pin = m_pinned_resources.find(pinned);
-		if (split || !pin || !*pin) {
+		const bool loading = !pin || !*pin;
+		if (split || (loading && pinned != key)) {
 			reload.insert(homes.begin(), homes.end());
 			reload.insert(pinned);
 		} else if (const auto* generation = m_pin_generations.find(key)) {
@@ -2676,7 +2677,9 @@ void res::resource_system::rehome_pin_owners_locked(const std::unordered_map<res
 		}
 		const std::uint64_t generation = ++m_pin_generation;
 		generations[key] = generation;
-		m_pins_to_refresh.push_back(pin_reload{ *left->begin(), key, generation });
+		// The same spelling in the root and its layers, whatever order the sets keep.
+		const res::tag& file = *std::ranges::min_element(*left, {}, &res::tag::string);
+		m_pins_to_refresh.push_back(pin_reload{ file, key, generation });
 	}
 	// A pin whose owners all went to other nodes goes.
 	for (const cache_key& key : owned) {

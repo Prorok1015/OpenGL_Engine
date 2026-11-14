@@ -1237,6 +1237,7 @@ BOOST_FIXTURE_TEST_CASE(ASplitInTheRootAndALayer_SignalsOnceAndLoadsOnce, index_
 	pump();
 	BOOST_TEST(std::ranges::count(log.told, names({ a }).front()) == 1);
 	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(layer.pending_loads() == 0u);
 	BOOST_TEST(rs->pinned_count() == 2u);
 	BOOST_TEST(layer.pinned_count() == 2u);
 	BOOST_TEST(text(a) == "file a");
@@ -1247,6 +1248,61 @@ BOOST_FIXTURE_TEST_CASE(ASplitInTheRootAndALayer_SignalsOnceAndLoadsOnce, index_
 	rs->unpin_resource(spelled);
 	BOOST_TEST(rs->pinned_count() == 0u);
 	BOOST_TEST(layer.pinned_count() == 0u);
+}
+
+// #869: a batch about another file while a split's reload loads leaves that reload alone: one load, one change signal.
+BOOST_FIXTURE_TEST_CASE(ABatchAboutAnotherFile_LeavesTheReloadRunning, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	const res::tag other = put("other.txt", "other");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	index->put(other, id_number(3));
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 2u);
+	pump();
+	BOOST_TEST(std::ranges::count(log.told, names({ a }).front()) == 1);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unwatch(a, &log);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a pin register_alias copies onto a key whose reload still loads is newer: the reload does not put its file over it.
+BOOST_FIXTURE_TEST_CASE(AnAliasCopyWhileTheAliasReloads_IsNotOverwritten, index_fixture)
+{
+	const res::tag original = put("o.txt", "O");
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(original, res::text_resource(original, test_util::to_bytes("pinned original")));
+	std::weak_ptr original_block = rs->require_sync<res::text_resource>(original).get_control_block();
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	rs->register_alias(original, a);
+	rs->unpin_resource(original);
+	pump();
+	// Only the alias' pin holds the original's block now.
+	BOOST_TEST(!original_block.expired());
+	BOOST_TEST(rs->pinned_count() == 2u);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
 // #869: register_alias copies a pin with no owner, so the alias' unpin takes the copy away; where the alias' node has a
