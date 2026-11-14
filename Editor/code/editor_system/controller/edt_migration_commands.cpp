@@ -87,7 +87,7 @@ namespace {
 
 	constexpr std::string_view k_rollback_args_schema = R"json({"type":"object","properties":{
 		"id":{"type":"string","minLength":1,"description":"the migration to roll back: a folder name under .snk/migrations (project.migration_plan lists unfinished ones)"},
-		"journal_fingerprint":{"type":"string","minLength":16,"maxLength":16,"description":"the journal that was shown (16 hex digits of its bytes): the rollback is refused when the journal reads otherwise by then"}},
+		"journal_fingerprint":{"type":"string","minLength":16,"description":"the journal that was shown (16 lowercase hex digits of its bytes): the rollback is refused when the journal reads otherwise by then"}},
 		"required":["id"],"additionalProperties":false})json";
 
 	// A journal's report.json is read at most this big (a project of many files keeps a long list).
