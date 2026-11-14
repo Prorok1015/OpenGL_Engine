@@ -1423,7 +1423,7 @@ BOOST_AUTO_TEST_CASE(TheKeyOfAnApprovedCopy_IsTheOneItWasBefore)
 	const edt::approved_snapshot_location location = edt::approved_snapshot_for("settings", project);
 	BOOST_TEST(location.key == key);
 	BOOST_TEST(location.file.filename().string() == file);
-	BOOST_TEST(edt::canonical_project_settings_key(project) == std::optional<std::string>{ key });
+	BOOST_TEST(edt::canonical_project_settings_key(project).value_or(std::string{}) == key);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
