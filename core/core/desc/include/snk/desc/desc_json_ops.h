@@ -190,8 +190,8 @@ namespace desc
 	}
 
 	// The root __guid of a desc the engine saved, made what `original` (the file before the save) had: the same value
-	// at the same place, or none. The engine's save makes one for a res:// desc without one; a migration and
-	// desc_resave write none (#851). Whether `saved` changed.
+	// at the same place, or none: a migration and desc_resave write no other (#851). The engine's save makes none up
+	// (#772), but writes the __guid it loaded first in the header. Whether `saved` changed.
 	inline bool keep_root_guid(boost::json::object& saved, const boost::json::object& original)
 	{
 		const auto before = original.find("__guid");

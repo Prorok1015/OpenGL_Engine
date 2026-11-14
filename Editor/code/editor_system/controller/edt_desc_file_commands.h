@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -87,4 +88,8 @@ namespace edt
 	// fit it, found in each object with a `__type` at any depth (a field holding an inline desc, an array of them).
 	// One entry per object at most, `json_path` the JSON pointer of the field in `resource`. Nothing is logged.
 	std::vector<res::diagnostic> validate_desc_tree(const desc::desc_system& descs, const boost::json::value& root, std::string_view resource);
+
+	// The root "__guid" string of a desc file's bytes, as the file has it (not checked as an ID); empty when it has none or
+	// is no JSON object. What a save that replaces the file keeps until the project's migration takes it out (#772).
+	std::string desc_root_guid(std::span<const std::byte> bytes);
 }

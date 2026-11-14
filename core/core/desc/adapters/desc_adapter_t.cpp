@@ -1,7 +1,6 @@
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/desc_base.hpp>
-#include <snk/desc/desc_guid.h>
 #include <snk/resource/res_diagnostics.h>
 #include <algorithm>
 #include <format>
@@ -128,11 +127,9 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
 	if (!desc_res->get_type().empty() || !body.contains("__type")) {
 		body["__type"] = std::string(desc_res->get_type());
 	}
-	// __guid identifies a file, so only res:// files get one; it is generated once and then kept on the instance.
-	if (tag.protocol() == ::res::tag::default_protocol()) {
-		if (desc_res->get_guid().empty()) {
-			desc_res->set_guid(::desc::generate_guid());
-		}
+	// The ID of a file is its .resource (EPIC-57): a __guid the file had is kept until the project's migration takes it
+	// out (assets.ids_drop_desc_guid), and none is ever made up (#772). Only res:// files keep one.
+	if (tag.protocol() == ::res::tag::default_protocol() && !desc_res->get_guid().empty()) {
 		body["__guid"] = desc_res->get_guid();
 	}
 	m_desc_system.stamp_tree(body);

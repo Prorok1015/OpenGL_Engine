@@ -1,7 +1,6 @@
 {
     "__type" : "level_desc",
     "__version" : 2,
-    "__guid" : "b7a3d9c2-5e41-4f08-9a16-2c8e0d7f3b54",
     "name" : "smoke_two_worlds",
     "worlds" : [
         {

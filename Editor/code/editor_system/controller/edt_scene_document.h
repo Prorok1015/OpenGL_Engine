@@ -35,7 +35,8 @@ namespace edt
 		res::tag editor_tag;
 		res::tag level_tag;
 		std::string level_name;
-		// __guid of the level file in level_tag; empty until the first save (or when loaded from a file without one).
+		// The root __guid the level file in level_tag has, written back by a save; empty when it has none. Not the level's
+		// ID (its .resource, asset_index::id_of): a project's migration takes it out and nothing makes one up (#772).
 		std::string level_guid;
 		// __parent of the level file read; a save writes it and only what differs from it (#812). Invalid: none.
 		res::tag level_parent;

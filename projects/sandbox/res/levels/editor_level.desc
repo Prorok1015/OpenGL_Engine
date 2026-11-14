@@ -1,7 +1,6 @@
 {
     "__type" : "level_desc",
     "__version" : 2,
-    "__guid" : "8b9cfe88-c87a-4a72-8ca3-61ac9fcf61d1",
     "name" : "editor_level",
     "worlds" : [
         {

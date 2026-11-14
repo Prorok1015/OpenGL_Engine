@@ -200,7 +200,8 @@ bool content_matches(blob_kind kind, std::string_view relative, const std::vecto
 const std::unordered_set<std::string_view> k_res_references = {
 	"res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc", "res://shaders/mix_opaque_trans_scene.frag" };
 const std::unordered_set<std::string_view> k_parent_references = { "res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc" };
-const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__guid", "__id", "__parent" };
+// No __guid: the ID of an imported file is the .resource the editor gives it (EPIC-57, #772).
+const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__id", "__parent" };
 
 // Read as res::tag reads it (edt_tag_text.h, the same functions the desc files an agent writes are checked with): "res:\\x\\y.fbx"
 // is the tag res://x/y.fbx. Stricter than res::tag: any "://", and a text that only begins like a protocol ("user/x"), in
@@ -254,6 +255,7 @@ std::string json_problem(const boost::json::value& value, const std::unordered_s
 	if (!value.is_object()) return {};
 	for (const auto& member : value.as_object()) {
 		const std::string_view key(member.key().data(), member.key().size());
+		if (key == "__guid") return "a desc of the import has the key '__guid': the editor gives each imported file its ID (.resource)";
 		if (key.starts_with("__") && !k_header_keys.contains(key)) return "a desc of the import has the key '" + cleaned(key) + "'";
 		if (reads_as_tag(key) && !bundle_tags.contains(std::string(key)) && !k_res_references.contains(key)) {
 			return "a desc of the import has the key '" + cleaned(key) + "', which reads as a tag";
@@ -404,7 +406,7 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		}
 		if (*what == blob_kind::desc) {
 			if (std::string why = desc_blob_problem(blob, created); !why.empty()) {
-				problem = std::move(why);
+				problem = "'" + cleaned(relative) + "': " + why;
 				return std::nullopt;
 			}
 		}
