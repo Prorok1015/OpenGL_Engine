@@ -20,12 +20,14 @@ namespace
 	// Typed objects inside typed objects: deeper than any file the editor writes.
 	constexpr int k_max_depth = 128;
 
-	std::string_view view_of(const json::string& text)
+	// Takes json::string_view: a key_value_pair's key() is one, and a `const json::string&` parameter would copy it into a
+	// temporary that the returned view outlives.
+	std::string_view view_of(json::string_view text)
 	{
 		return std::string_view(text.data(), text.size());
 	}
 
-	std::string token_of(const json::string& key)
+	std::string token_of(json::string_view key)
 	{
 		return res::json_pointer_token(view_of(key));
 	}
