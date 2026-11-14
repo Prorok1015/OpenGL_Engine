@@ -12,6 +12,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_template_files.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
@@ -140,6 +141,10 @@ int main(int argc, char** argv)
 	int changed = 0;
 	for (const auto& [path, tag] : files) {
 		const std::string rel = tag.string();
+		if (desc::is_template_file_of_unknown_type(rel, as_text(read_file(path)), desc_sys)) {
+			egLOG_INFO("desc_resave", "{}: a game type of a template, skipped", rel);
+			continue;
+		}
 		auto handle = res_sys.require_sync<desc::desc_base>(tag);
 		auto loaded = handle.get_sync();
 		if (!loaded) {
