@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -60,6 +61,54 @@ namespace edt
 		bool can_grant_session = false;
 		std::chrono::steady_clock::time_point asked_at{};
 		std::chrono::steady_clock::time_point deadline{};
+		// false: the request has just appeared or moved in the window, and an "allow" is not taken yet (input_guard).
+		bool can_allow = false;
+	};
+
+	// Where the window drew the "allow" of a request, in screen pixels.
+	struct shown_rect
+	{
+		float min_x = 0.f;
+		float min_y = 0.f;
+		float max_x = 0.f;
+		float max_y = 0.f;
+
+		bool operator==(const shown_rect&) const = default;
+	};
+
+	struct shown_request
+	{
+		std::uint64_t id = 0;
+		shown_rect allow;
+	};
+
+	// Since when the "allow" of each request has been drawn at the same place: a click aimed at what was under the
+	// cursor a moment ago must not land on a button that has just moved there (#913). It goes by what was drawn, not
+	// by the list: a request leaving, the window changing its width and a scroll all move a button, and a frame that
+	// was never shown (the main thread hung) gave nobody the time to read it.
+	class confirmation_layout
+	{
+	public:
+		using time_point = std::chrono::steady_clock::time_point;
+		// One frame is no proof a person saw the button there: a click queued before it is replayed on that frame.
+		static constexpr int min_frames = 2;
+
+		// `frame`: every request the window drew this frame. One that is not in it starts again when it is drawn.
+		void settle(std::span<const shown_request> frame, time_point now);
+		void forget(std::uint64_t id);
+		// When the min_frames-th frame in a row drew the button at one place (it stands there since); else nullopt.
+		std::optional<time_point> steady_since(std::uint64_t id) const;
+
+	private:
+		struct slot
+		{
+			std::uint64_t id = 0;
+			shown_rect allow;
+			time_point since{};
+			int frames = 0;
+		};
+
+		std::vector<slot> m_slots;
 	};
 
 	// The non-modal question to a person behind every `ask` of the policy (A6b #293): runs a call from an agent through
@@ -80,6 +129,12 @@ namespace edt
 		// the agent is told. Also for a call a person has just allowed: that answer belongs to this very call, so it is
 		// not asked again, and the command itself still checks the state it finds (expected_generation, refs).
 		static constexpr std::chrono::seconds busy_wait{ 5 };
+		// How long the "allow" of a request must have been drawn at one place before it is taken. Each request waits
+		// for itself, so a new request at the end holds back none of the others.
+		static constexpr std::chrono::milliseconds input_guard{ 750 };
+		// Requests of one agent session that wait for a person at a time; one more is refused. A session that keeps
+		// asking could otherwise fill the window above another session's request for as long as it likes.
+		static constexpr std::size_t max_waiting_per_session = 4;
 
 		agent_confirmations(cmd::command_registry& commands, session_grants& grants, clock_function now = {});
 		~agent_confirmations();
@@ -90,9 +145,15 @@ namespace edt
 		// confirmed one or one that waited for a gesture to end.
 		void invoke(std::string_view command_id, cmd::call request, finish done);
 
-		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped). Allowing
-		// runs the command, so call it from the frame's update, never from inside an ImGui window.
+		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped), and
+		// for an "allow" while its button has not been drawn at one place for input_guard (note_shown; it keeps
+		// waiting). A "deny" is taken at any time: a misplaced one runs nothing. Allowing runs the command, so call it from the frame's update, never
+		// from inside an ImGui window.
 		bool answer(std::uint64_t id, confirmation_answer what);
+
+		// What the window drew this frame, before the answers of that frame are given: once per frame the window is
+		// drawn, with nothing when it drew no request (collapsed, or left out while a person's modal popup is open).
+		void note_shown(std::span<const shown_request> frame);
 
 		// Once per frame, from the editor's per-frame update, not from drawing the window: times out what waited too long.
 		// An answer after the deadline is refused whether or not tick() has run, and pending() leaves the late ones out.
@@ -137,6 +198,8 @@ namespace edt
 
 		std::chrono::steady_clock::time_point now() const;
 		void finish_waiting(std::uint64_t id, std::optional<confirmation_answer> what, std::string_view why_not);
+		void expire_late();
+		bool stood_still(std::uint64_t id) const;
 		using time_point = std::chrono::steady_clock::time_point;
 		cmd::result run_command(std::string_view command_id, const cmd::call& request);
 		// One try of a call nobody has been asked about yet (a person may be asked now).
@@ -152,6 +215,7 @@ namespace edt
 		clock_function m_clock;
 		std::uint64_t m_next_id = 1;
 		std::vector<waiting> m_waiting;
+		confirmation_layout m_layout;
 		std::vector<retrying> m_retrying;
 		// The ticket run_approved made and approved, while its command runs.
 		std::string m_internal_ticket;

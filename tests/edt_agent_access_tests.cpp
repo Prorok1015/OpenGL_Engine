@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_manual_tasks.hpp"
+#include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_access.h"
 #include "edt_mcp_bridge_host.h"
@@ -27,6 +28,7 @@ struct access_fixture
 	test_util::temp_dir dir{ "edt_agent_access" };
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
+	std::chrono::steady_clock::time_point current{};
 	std::unique_ptr<edt::agent_access> access;
 	std::unique_ptr<edt::mcp_bridge_host> bridge;
 	std::vector<cmd::registration> registrations;
@@ -45,7 +47,8 @@ struct access_fixture
 			return cmd::result::success();
 		};
 		registrations.push_back(commands.add(std::move(desc)));
-		access = std::make_unique<edt::agent_access>(commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json");
+		access = std::make_unique<edt::agent_access>(commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json",
+			[this] { return current; });
 		// The way editor_system wires the end of a session: the confirmations drop what they keep for it.
 		bridge = std::make_unique<edt::mcp_bridge_host>(commands, tasks, *access,
 			[this](const std::string& session) { access->confirmations().drop_session(session); });
@@ -272,6 +275,7 @@ BOOST_AUTO_TEST_CASE(SessionClosed_ForgetsTheSessionsGrants)
 {
 	person_arrives();
 	ask_as("s1");
+	test_util::show_confirmations_and_wait(access->confirmations(), current);
 	access->confirmations().answer(access->confirmations().pending().front().id, edt::confirmation_answer::allow_session);
 	BOOST_TEST(access->grants().has("s1", agent_category::code_files));
 

@@ -118,6 +118,7 @@
 // (layout_revision 7). Pad bindings take an optional threshold in actions.desc.
 // #797: desc::override_expectation and desc::override_owner are new exports (no type changes: the layout key stays).
 // #759: cmd::command_desc gains describe_before_allowed_invoke at its end and joins the layout key (layout_revision 10).
+// #927: rnd::render_context::draw_fits is added at the end of the vtable, the functions before it keep their places (minor: the layout key stays).
 // #952 (no bump): desc_system::get_field_desc, inline in module code, refuses a reference to the owner itself (or to an alias
 // of it) through the exports that are there; a module built before keeps such a handle until rebuilt. No layout changes.
 // res::refused_tag (the tag a refused handle was asked for) is a new export (no type changes: the layout key stays).

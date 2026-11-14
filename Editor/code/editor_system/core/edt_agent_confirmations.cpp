@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <algorithm>
 #include <exception>
 #include <cstdint>
@@ -43,6 +44,36 @@ namespace edt
 	void session_grants::drop_session(std::string_view session)
 	{
 		std::erase_if(m_grants, [session](const auto& grant) { return grant.first == session; });
+	}
+
+	void confirmation_layout::settle(std::span<const shown_request> frame, time_point now)
+	{
+		std::vector<slot> next;
+		next.reserve(frame.size());
+		for (const shown_request& shown : frame) {
+			const auto before = std::find_if(m_slots.begin(), m_slots.end(), [&shown](const slot& s) { return s.id == shown.id; });
+			if (before != m_slots.end() && before->allow == shown.allow) {
+				next.push_back(*before);
+				// Only the second frame proves the first was on screen: built is not shown, and a hang between the two
+				// must not count as time a person had to read it.
+				if (++next.back().frames == min_frames) next.back().since = now;
+			} else {
+				next.push_back(slot{ shown.id, shown.allow, now, 1 });
+			}
+		}
+		m_slots = std::move(next);
+	}
+
+	void confirmation_layout::forget(std::uint64_t id)
+	{
+		std::erase_if(m_slots, [id](const slot& s) { return s.id == id; });
+	}
+
+	std::optional<confirmation_layout::time_point> confirmation_layout::steady_since(std::uint64_t id) const
+	{
+		const auto found = std::find_if(m_slots.begin(), m_slots.end(), [id](const slot& s) { return s.id == id; });
+		if (found == m_slots.end() || found->frames < min_frames) return std::nullopt;
+		return found->since;
 	}
 
 	agent_confirmations::agent_confirmations(cmd::command_registry& commands, session_grants& grants, clock_function now)
@@ -164,6 +195,17 @@ namespace edt
 			done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the same request is already waiting for a person's answer", command_id)));
 			return;
 		}
+		// After the duplicate above: its ticket is the waiting question's own, and discarding it here would leave a person
+		// approving a ticket that is gone.
+		const std::string_view asking_session = request.from.session;
+		const auto of_session = std::count_if(m_waiting.begin(), m_waiting.end(),
+			[asking_session](const waiting& w) { return w.request.session == asking_session; });
+		if (static_cast<std::size_t>(of_session) >= max_waiting_per_session) {
+			m_commands.discard(ticket_id);
+			done(cmd::result::failure(cmd::codes::denied, std::format(
+				"'{}' was refused: {} requests of this agent session already wait for a person's answer", command_id, max_waiting_per_session)));
+			return;
+		}
 		// What the person reads is what the registry bound to the ticket, never text the agent chose.
 		const std::optional<cmd::command_registry::pending_confirmation> bound = m_commands.confirmation_of(ticket_id);
 		if (!bound) {
@@ -193,11 +235,27 @@ namespace edt
 		m_waiting.push_back(std::move(entry));
 	}
 
+	void agent_confirmations::note_shown(std::span<const shown_request> frame)
+	{
+		m_layout.settle(frame, now());
+	}
+
+	bool agent_confirmations::stood_still(std::uint64_t id) const
+	{
+		const std::optional<time_point> since = m_layout.steady_since(id);
+		return since && now() >= *since + input_guard;
+	}
+
 	void agent_confirmations::finish_waiting(std::uint64_t id, std::optional<confirmation_answer> what, std::string_view why_not)
 	{
 		const auto found = std::find_if(m_waiting.begin(), m_waiting.end(), [id](const waiting& w) { return w.request.id == id; });
 		if (found == m_waiting.end()) return;
 		waiting entry = std::move(*found);
+		// What stands below moves up in the next frame; an answer that comes before that frame must not find it ready.
+		for (auto below = found + 1; below != m_waiting.end(); ++below) {
+			m_layout.forget(below->request.id);
+		}
+		m_layout.forget(entry.request.id);
 		m_waiting.erase(found);
 
 		// A yes after the deadline is no yes, whoever asks: the answer itself, or a grant that settles the ones still waiting.
@@ -256,18 +314,20 @@ namespace edt
 
 	bool agent_confirmations::answer(std::uint64_t id, confirmation_answer what)
 	{
+		// Whether or not tick() has run yet: a late yes is no yes, and a request that has timed out above this one has
+		// already moved it.
+		expire_late();
 		const auto found = std::find_if(m_waiting.begin(), m_waiting.end(), [id](const waiting& w) { return w.request.id == id; });
 		if (found == m_waiting.end()) return false;
-		// Whether or not tick() has run yet: a late yes is no yes.
-		if (found->request.deadline <= now()) {
-			finish_waiting(id, std::nullopt, std::format("nobody answered within {} seconds", timeout.count()));
+		if (what != confirmation_answer::deny && !stood_still(id)) {
+			egLOG_INFO("editor/agent", "an answer to '{}' came before its button had stood still in the window: not taken", found->command_id);
 			return false;
 		}
 		finish_waiting(id, what, {});
 		return true;
 	}
 
-	void agent_confirmations::tick()
+	void agent_confirmations::expire_late()
 	{
 		const auto current = now();
 		std::vector<std::uint64_t> late;
@@ -283,6 +343,11 @@ namespace edt
 				egLOG_ERROR("agent", "an answer to an agent could not be delivered");
 			}
 		}
+	}
+
+	void agent_confirmations::tick()
+	{
+		expire_late();
 
 		std::vector<retrying> due;
 		due.swap(m_retrying);
@@ -349,7 +414,9 @@ namespace edt
 		out.reserve(m_waiting.size());
 		const auto current = now();
 		for (const waiting& w : m_waiting) {
-			if (w.request.deadline > current) out.push_back(w.request);
+			if (w.request.deadline <= current) continue;
+			out.push_back(w.request);
+			out.back().can_allow = stood_still(w.request.id);
 		}
 		return out;
 	}
@@ -400,37 +467,55 @@ namespace edt
 		if (requests.empty()) {
 			return true;
 		}
+		// A person's own modal goes first: this window over it would take the clicks meant for its buttons, so it waits unseen.
+		if (ImGui::GetTopMostPopupModal() != nullptr) {
+			confirmations.note_shown({});
+			return true;
+		}
 
 		// Answers are applied after the window is closed: allowing runs the command, which must not happen inside it.
 		std::vector<std::pair<std::uint64_t, confirmation_answer>> chosen;
+		std::vector<shown_request> shown;
+		shown.reserve(requests.size());
 
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + 12.f), ImGuiCond_Always,
 			ImVec2(1.f, 0.f));
-		ImGui::SetNextWindowSizeConstraints(ImVec2(420.f, 0.f), ImVec2(640.f, 720.f));
+		// One width whatever the requests say: a window that grows and shrinks with its text moves the buttons sideways.
+		ImGui::SetNextWindowSizeConstraints(ImVec2(640.f, 0.f), ImVec2(640.f, 720.f));
 		const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 			| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking;
 		if (ImGui::Begin("Agent request##agent_confirmations", nullptr, flags)) {
+			// Above every other window, every frame: a panel opened over this corner and closed again (an agent's command
+			// can do both) would otherwise uncover a button that counted as shown all the while. The focus stays where it is.
+			ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 			for (const confirmation_request& request : requests) {
 				ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(request.id)));
+				ImGui::PushTextWrapPos(0.f);
 				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "An agent wants to run %s", request.command.c_str());
-				if (!request.summary.empty()) ImGui::TextWrapped("%s", request.summary.c_str());
+				if (!request.summary.empty()) ImGui::TextUnformatted(request.summary.c_str(), request.summary.c_str() + request.summary.size());
 				if (!request.detail.empty()) ImGui::TextUnformatted(request.detail.c_str(), request.detail.c_str() + request.detail.size());
 				ImGui::TextDisabled("session %s, %s", request.session.empty() ? "?" : request.session.c_str(), cmd::to_string(request.category));
+				ImGui::PopTextWrapPos();
 				// The arguments in full, as the registry bound them: what is approved is what is shown, however long.
 				if (ImGui::BeginChild("arguments", ImVec2(0.f, 140.f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());
 				}
 				ImGui::EndChild();
+				ImGui::BeginDisabled(!request.can_allow);
 				if (ImGui::Button(utf8(label_allow_once))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_once);
 				}
+				const ImVec2 allow_min = ImGui::GetItemRectMin();
+				const ImVec2 allow_max = ImGui::GetItemRectMax();
+				shown.push_back(shown_request{ request.id, shown_rect{ allow_min.x, allow_min.y, allow_max.x, allow_max.y } });
 				if (request.can_grant_session) {
 					ImGui::SameLine();
 					if (ImGui::Button(utf8(label_allow_session))) {
 						chosen.emplace_back(request.id, confirmation_answer::allow_session);
 					}
 				}
+				ImGui::EndDisabled();
 				ImGui::SameLine();
 				if (ImGui::Button(utf8(label_deny))) {
 					chosen.emplace_back(request.id, confirmation_answer::deny);
@@ -441,6 +526,7 @@ namespace edt
 		}
 		ImGui::End();
 
+		confirmations.note_shown(shown);
 		for (const auto& [id, what] : chosen) {
 			confirmations.answer(id, what);
 		}

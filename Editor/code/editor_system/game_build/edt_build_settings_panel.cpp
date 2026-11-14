@@ -49,13 +49,6 @@ void edt::build_settings_panel::reload()
 	m_changed_checked = std::chrono::steady_clock::now();
 }
 
-void edt::build_settings_panel::refresh_if_clean()
-{
-	// Not loaded yet, or closed: it reads the files when it opens.
-	if (m_reload_on_open || m_model.dirty()) return;
-	reload();
-}
-
 void edt::build_settings_panel::on_before_begin()
 {
 	if (m_reload_on_open) {
@@ -114,15 +107,18 @@ void edt::build_settings_panel::draw_live()
 {
 	if (!ImGui::CollapsingHeader("Live", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	const build_settings& settings = m_model.settings();
-	const std::string unavailable = m_live_unavailable ? m_live_unavailable() : std::string{};
-	bool enabled = settings.live_enabled;
-	// Turning it off always works.
-	ImGui::BeginDisabled(!enabled && !unavailable.empty());
-	if (ImGui::Checkbox("Enable live mode", &enabled)) m_model.set_live_enabled(enabled);
-	ImGui::EndDisabled();
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-		ImGui::SetTooltip("%s", !unavailable.empty() ? unavailable.c_str()
-			: "Rebuild the game module after a source change and reload it once the sources stay quiet");
+	if (m_live_enabled && m_set_live_enabled) {
+		const std::string unavailable = m_live_unavailable ? m_live_unavailable() : std::string{};
+		bool enabled = m_live_enabled();
+		// Turning it off always works.
+		ImGui::BeginDisabled(!enabled && !unavailable.empty());
+		if (ImGui::Checkbox("Enable live mode", &enabled)) m_set_live_enabled(enabled);
+		ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::SetTooltip("%s", !unavailable.empty() ? unavailable.c_str()
+				: "Rebuild the game module after a source change and reload it once the sources stay quiet. "
+				  "At once, for this project, in your own settings");
+		}
 	}
 
 	int quiet_ms = settings.live_quiet_ms;
