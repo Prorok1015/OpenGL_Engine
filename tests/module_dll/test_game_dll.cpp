@@ -218,6 +218,8 @@ struct dll_snake : ecs::system_interface
 };
 
 res::resource_system* g_config_resources = nullptr;
+// The cache lets go of a block nobody holds: a handle dropped at the end of a frame would start the load over every frame.
+res::res_handle<dll_config> g_config_handle;
 
 // A game reads its config the way the template does: asks for the handle every frame, a hit of the cache until the file is
 // signalled as changed, and keeps the last value it got while the new one loads.
@@ -226,7 +228,8 @@ void dll_read_config(entt::registry& reg)
 	if (!g_config_resources) return;
 	auto seen = reg.view<dll_game::dll_config_seen>();
 	if (seen.empty()) reg.emplace<dll_game::dll_config_seen>(reg.create());
-	const std::shared_ptr<dll_config> config = g_config_resources->require<dll_config>(res::tag{ std::string{ dll_game::config_tag } }).get();
+	g_config_handle = g_config_resources->require<dll_config>(res::tag{ std::string{ dll_game::config_tag } });
+	const std::shared_ptr<dll_config> config = g_config_handle.get();
 	if (config) reg.get<dll_game::dll_config_seen>(seen.front()).speed = config->speed;
 }
 
@@ -255,6 +258,7 @@ protected:
 			data.destruct<dll_service>();
 		}
 		g_config_resources = nullptr;
+		g_config_handle = {};
 		if (data.has_value<dll_rounds>()) {
 			g_rounds = nullptr;
 			data.destruct<dll_rounds>();
