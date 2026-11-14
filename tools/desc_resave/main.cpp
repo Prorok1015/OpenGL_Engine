@@ -12,6 +12,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_template_files.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
@@ -138,18 +139,9 @@ int main(int argc, char** argv)
 
 	int failed = 0;
 	int changed = 0;
-	// A project template's own game types are declared by its game module, which this tool does not load (#800).
-	const auto is_game_type_of_a_template = [&](const res::tag& tag, const fs::path& path) {
-		if (tag.protocol() != "edt" || tag.string().find("templates/projects/") == std::string::npos) return false;
-		boost::system::error_code parse_error;
-		const json::value root = json::parse(as_text(read_file(path)), parse_error);
-		const json::value* type = parse_error || !root.is_object() ? nullptr : root.as_object().if_contains("__type");
-		return type && type->is_string() && !desc_sys.is_registered(std::string{ type->as_string() });
-	};
-
 	for (const auto& [path, tag] : files) {
 		const std::string rel = tag.string();
-		if (is_game_type_of_a_template(tag, path)) {
+		if (desc::is_template_file_of_unknown_type(rel, as_text(read_file(path)), desc_sys)) {
 			egLOG_INFO("desc_resave", "{}: a game type of a template, skipped", rel);
 			continue;
 		}
