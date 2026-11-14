@@ -223,6 +223,10 @@ namespace rnd::driver::gl
 	{
 		if (!data || header.type == TEXTURE_TYPE::RENDERBUFFER) return;
 
+		// Rows as the engine keeps them, without padding: with GL's default of 4 a row of R8 or RGB8 whose byte length
+		// is no multiple of 4 is read past the end of the buffer (#926).
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
 		auto [internal_format, format, type] = get_gl_format(header.data.format);
 
 		switch (header.type) 
