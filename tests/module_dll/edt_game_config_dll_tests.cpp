@@ -17,6 +17,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 // #800 (S56-11, F33): a game config of the module is edited in a data document and the game reads the new value after the
@@ -65,12 +66,26 @@ struct game_config_fixture : test_util::module_env
 		pump();
 	}
 
-	void run_frames(int count = 4)
+	// The file is read on the resolver's io thread: frames go on, with a short sleep, until the time is up.
+	void run_for(std::chrono::milliseconds time)
 	{
-		for (int frame = 0; frame < count; ++frame) {
+		const auto until = std::chrono::steady_clock::now() + time;
+		do {
 			contexts().update(std::chrono::duration<float>(0.016f));
 			pump();
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		} while (std::chrono::steady_clock::now() < until);
+	}
+
+	// Frames until the game has `speed`, or false after five seconds.
+	bool game_gets(float speed)
+	{
+		const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::chrono::steady_clock::now() < until) {
+			run_for(std::chrono::milliseconds(1));
+			if (speed_the_game_has() == speed) return true;
 		}
+		return false;
 	}
 
 	float speed_the_game_has()
@@ -110,8 +125,7 @@ BOOST_AUTO_TEST_CASE(a_save_of_the_config_document_reaches_the_game_and_a_droppe
 {
 	write_config(4.0);
 	start_game();
-	run_frames();
-	BOOST_TEST(speed_the_game_has() == 4.0f);
+	BOOST_REQUIRE(game_gets(4.0f));
 
 	edt::data_document document(services, layout());
 	const edt::open_result opened = document.open(res::tag{ std::string{ dll_game::config_tag } });
@@ -123,12 +137,12 @@ BOOST_AUTO_TEST_CASE(a_save_of_the_config_document_reaches_the_game_and_a_droppe
 		return true;
 	}));
 	BOOST_REQUIRE(document.is_dirty());
-	run_frames();
+	run_for(std::chrono::milliseconds(100));
 	BOOST_TEST(speed_the_game_has() == 4.0f); // an edit alone does not reach the game (R30)
 
 	BOOST_REQUIRE(document.reload().opened);
 	BOOST_TEST(!document.is_dirty());
-	run_frames();
+	run_for(std::chrono::milliseconds(100));
 	BOOST_TEST(speed_the_game_has() == 4.0f); // the edit was dropped: the game still has the old value
 
 	BOOST_REQUIRE(document.edit([](json::value& shown) {
@@ -137,8 +151,7 @@ BOOST_AUTO_TEST_CASE(a_save_of_the_config_document_reaches_the_game_and_a_droppe
 	}));
 	const edt::save_result saved = document.save();
 	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
-	run_frames();
-	BOOST_TEST(speed_the_game_has() == 9.0f);
+	BOOST_TEST(game_gets(9.0f));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
