@@ -1,5 +1,6 @@
 #include "edt_schema_inspector.h"
 #include "edt_asset_picker.h"
+#include "edt_reference.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
@@ -257,8 +258,9 @@ namespace
 		case widget::vector: return value.is_array() && value.as_array().size() == vector_size(field.kind) && all_numbers(value.as_array());
 		case widget::color: return value.is_array() && (value.as_array().size() == 3 || value.as_array().size() == 4) && all_numbers(value.as_array());
 		case widget::combo: return value.is_string() || value.is_number();
-		case widget::text:
-		case widget::asset: return value.is_string();
+		case widget::text: return value.is_string();
+		// A tag, or a {guid, path} reference (EPIC-57 section 4.4): the field shows and edits its path.
+		case widget::asset: return value.is_string() || (edt::is_reference_object(value) && edt::reference_object_problem(value.as_object()).empty());
 		case widget::group: return value.is_object();
 		case widget::list: return value.is_array();
 		case widget::map: return value.is_object();
@@ -688,7 +690,12 @@ namespace
 			}
 			ImGui::SameLine();
 		}
-		const std::string current(value.as_string());
+		// A {guid, path} reference shows its path; an edit writes the tag as a string, and saving the file writes the ID
+		// of the file it names (EPIC-57 section 4.4).
+		const json::object* reference = asset ? value.if_object() : nullptr;
+		const std::string current = reference ? edt::reference_path_text(*reference) : std::string(value.as_string());
+		const json::value* guid = reference ? reference->if_contains("guid") : nullptr;
+		const std::string id = guid && guid->is_string() ? std::string(guid->as_string()) : std::string{};
 		std::vector<char> buffer(std::max<std::size_t>(current.size() + 256, 512), '\0');
 		std::copy(current.begin(), current.end(), buffer.begin());
 		if (ImGui::InputText(label, buffer.data(), buffer.size())) {
@@ -696,6 +703,9 @@ namespace
 			state.drop_refusals.erase(field_id);
 			state.drop_notes.erase(field_id);
 			changed = true;
+		}
+		if (!id.empty() && ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("ID %s", id.c_str());
 		}
 		if (asset && ImGui::BeginDragDropTarget()) {
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
@@ -721,7 +731,9 @@ namespace
 		}
 		// Below the field, so the drop target above stays the text field.
 		if (asset) {
-			if (const std::string problem = edt::schema_ui::tag_text_problem(value.as_string()); !problem.empty()) {
+			// The text of the field: its string, or the path of a {guid, path} reference.
+			const std::string shown = value.is_string() ? std::string(value.as_string()) : current;
+			if (const std::string problem = edt::schema_ui::tag_text_problem(shown); !problem.empty()) {
 				draw_red(problem);
 			}
 			if (const auto refused = state.drop_refusals.find(field_id); refused != state.drop_refusals.end()) {
@@ -731,7 +743,7 @@ namespace
 				ImGui::TextDisabled("%s", noted->second.c_str());
 			}
 			if (catalog) {
-				const edt::picker::reference_state verdict = edt::picker::judge_text(edt::picker::filter_of(field), value.as_string(), *catalog);
+				const edt::picker::reference_state verdict = edt::picker::judge_text(edt::picker::filter_of(field), shown, *catalog);
 				if (verdict.severity == edt::picker::reference_state::level::error) {
 					draw_red(verdict.text);
 				} else if (verdict.severity == edt::picker::reference_state::level::note) {

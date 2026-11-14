@@ -81,7 +81,7 @@ namespace
 		return json::object{ { "type", step.type }, { "from", step.from_version }, { "summary", step.summary }, { "objects", step.objects } };
 	}
 
-	json::value report_json(const migration_report& report)
+	json::object report_json(const migration_report& report)
 	{
 		json::array files;
 		for (const applied_file& file : report.files) {
@@ -476,7 +476,7 @@ namespace
 
 		std::string journal_text() const
 		{
-			return prj::to_indented_json(report_json(m_report));
+			return prj::to_indented_json(report_to_json(m_report));
 		}
 
 		void journal()
@@ -878,6 +878,11 @@ std::vector<prj::migration::skipped_file> prj::migration::skipped_by(const migra
 std::string prj::migration::report_text(const migration_report& report)
 {
 	return report_markdown(report);
+}
+
+json::object prj::migration::report_to_json(const migration_report& report)
+{
+	return report_json(report);
 }
 
 prj::migration::apply_outcome prj::migration::apply_migration(const migration_plan& plan, const apply_context& context)

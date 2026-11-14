@@ -79,6 +79,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersTable_ForEveryCategory)
 	BOOST_TEST((edt::default_mode(agent_category::vcs_sync) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_push) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_forge) == policy_mode::ask));
+	BOOST_TEST((edt::default_mode(agent_category::project_migrate) == policy_mode::ask));
 	BOOST_TEST((edt::default_mode(agent_category::unset) == policy_mode::deny));
 	BOOST_TEST((edt::default_mode(agent_category::not_for_agents) == policy_mode::deny));
 }
@@ -318,6 +319,8 @@ BOOST_AUTO_TEST_CASE(TheVcsCategories_AreSettableByName)
 	}
 	BOOST_TEST(std::string_view(cmd::to_string(agent_category::vcs_push)) == "vcs_push");
 	BOOST_TEST(std::string_view(cmd::to_string(agent_category::vcs_forge)) == "vcs_forge");
+	BOOST_TEST(std::string_view(cmd::to_string(agent_category::project_migrate)) == "project_migrate");
+	BOOST_TEST((edt::parse_settable_category("project_migrate") == agent_category::project_migrate));
 	const auto parsed = edt::parse_policy_layer(R"({"categories":{"vcs_push":"ask","vcs_sync":"deny","vcs_forge":"allow"}})");
 	BOOST_TEST(parsed.error.empty());
 	BOOST_TEST((parsed.layer.categories.at(agent_category::vcs_push) == policy_mode::ask));
@@ -1852,5 +1855,35 @@ BOOST_AUTO_TEST_CASE(AGitListEntry_WithControlInvisibleOrCommaCharacters_OrTooLo
 	BOOST_TEST(!edt::vcs_entry_problem(std::string("\xc3\x28")).empty());
 }
 
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// #759: project_migrate is never allowed by a layer, project or personal: an allow there stays a question.
+BOOST_AUTO_TEST_SUITE(EdtAgentPolicyProjectMigrate)
+
+BOOST_AUTO_TEST_CASE(AnAllowOfAnyLayer_ForTheCategoryOrTheCommand_StaysAsk)
+{
+	const cmd::command_desc migrate = command_of("project.migrate", agent_category::project_migrate, cmd::danger::confirm);
+	const auto category_allow = layer_with(agent_category::project_migrate, policy_mode::allow);
+	const auto command_allow = layer_with("project.migrate", policy_mode::allow);
+	BOOST_TEST((edt::effective_mode(migrate, category_allow, {}).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, command_allow, {}).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, {}, category_allow).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, {}, command_allow).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(migrate, command_allow, command_allow).mode == policy_mode::ask));
+	// A deny still denies.
+	BOOST_TEST((edt::effective_mode(migrate, layer_with("project.migrate", policy_mode::deny), {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode(migrate, {}, layer_with(agent_category::project_migrate, policy_mode::deny)).mode == policy_mode::deny));
+	// A command of the category without a risk is held the same way.
+	const cmd::command_desc plain = command_of("project.other", agent_category::project_migrate);
+	BOOST_TEST((edt::effective_mode(plain, category_allow, {}).mode == policy_mode::ask));
+}
+
+// An allow of the category changes nothing, so it is no loosening that waits for a person's approval.
+BOOST_AUTO_TEST_CASE(AnAllowOfTheCategory_IsNoLoosening)
+{
+	BOOST_TEST(edt::find_loosenings({}, layer_with(agent_category::project_migrate, policy_mode::allow), {}).empty());
+	BOOST_TEST(edt::find_loosenings({}, layer_with(agent_category::project_migrate, policy_mode::ask), {}).empty());
+}
 
 BOOST_AUTO_TEST_SUITE_END()

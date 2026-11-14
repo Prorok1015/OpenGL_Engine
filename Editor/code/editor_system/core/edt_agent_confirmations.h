@@ -110,6 +110,10 @@ namespace edt
 
 		std::vector<confirmation_request> pending() const;
 
+		// `ticket` is the one a retry of a call a person allowed made and approved itself (run_approved), not one a person
+		// answered: a command that binds what it described to the ticket judges such a call by what the person approved.
+		bool approved_internally(std::string_view ticket) const { return !ticket.empty() && ticket == m_internal_ticket; }
+
 	private:
 		// A call that found a person in the middle of a gesture and is tried again by tick().
 		struct retrying
@@ -149,6 +153,8 @@ namespace edt
 		std::uint64_t m_next_id = 1;
 		std::vector<waiting> m_waiting;
 		std::vector<retrying> m_retrying;
+		// The ticket run_approved made and approved, while its command runs.
+		std::string m_internal_ticket;
 	};
 
 	// Whether the font draws every letter of the window's buttons. The built-in ImGui font has no Cyrillic and shows '?',
