@@ -5,7 +5,34 @@
 #include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <format>
+#include <mutex>
 #include <vector>
+
+namespace {
+	// The vetoes of each service, kept here rather than as a member: job_service's layout stays as editor code built
+	// against it expects. Main thread, like the service; the mutex only guards the map against two services' threads.
+	using veto_fn = std::function<std::optional<std::string>(bool decide)>;
+	std::mutex g_vetoes_mutex;
+	std::unordered_map<const edt::job_service*, std::unordered_map<edt::job_service::job_id, veto_fn>> g_vetoes;
+
+	veto_fn veto_of(const edt::job_service* service, edt::job_service::job_id id)
+	{
+		std::lock_guard lock(g_vetoes_mutex);
+		const auto jobs = g_vetoes.find(service);
+		if (jobs == g_vetoes.end()) return {};
+		const auto found = jobs->second.find(id);
+		return found == jobs->second.end() ? veto_fn{} : found->second;
+	}
+
+	void drop_veto(const edt::job_service* service, std::optional<edt::job_service::job_id> id)
+	{
+		std::lock_guard lock(g_vetoes_mutex);
+		const auto jobs = g_vetoes.find(service);
+		if (jobs == g_vetoes.end()) return;
+		if (id) jobs->second.erase(*id);
+		if (!id || jobs->second.empty()) g_vetoes.erase(jobs);
+	}
+}
 
 edt::job_service::job_service(ds::task_system& tasks, editor_events* events)
 	: m_tasks(tasks)
@@ -16,12 +43,34 @@ edt::job_service::job_service(ds::task_system& tasks, editor_events* events)
 edt::job_service::~job_service()
 {
 	cancel_all_and_wait();
+	drop_veto(this, std::nullopt);
+}
+
+void edt::job_service::set_cancel_veto(job_id id, std::function<std::optional<std::string>(bool decide)> veto)
+{
+	if (!m_jobs.contains(id)) return;
+	std::lock_guard lock(g_vetoes_mutex);
+	g_vetoes[this][id] = std::move(veto);
+}
+
+std::optional<std::string> edt::job_service::cancel_refusal(job_id id) const
+{
+	if (!m_jobs.contains(id)) return std::nullopt;
+	const veto_fn veto = veto_of(this, id);
+	return veto ? veto(false) : std::nullopt;
 }
 
 bool edt::job_service::cancel(job_id id)
 {
 	const auto found = m_jobs.find(id);
 	if (found == m_jobs.end()) return false;
+	// The decision: the job acts on the veto's answer (a migration marks its stop, or notes the refused cancel).
+	if (const veto_fn veto = veto_of(this, id)) {
+		if (std::optional<std::string> why = veto(true)) {
+			egLOG_INFO("edt/job", "job {} is not cancelled: {}", id, *why);
+			return false;
+		}
+	}
 	m_cancelled.insert(id);
 	found->second.handle.cancel();
 	return true;
@@ -110,6 +159,7 @@ void edt::job_service::retire(job_id id, job_status status, std::string error, s
 	std::string note = found->second.handle.progress_text();
 	const bool progress_changed = fraction != found->second.reported_fraction || note != found->second.reported_note;
 
+	drop_veto(this, id);
 	job_info outcome = describe(id, found->second);
 	outcome.status = status;
 	outcome.fraction = fraction;

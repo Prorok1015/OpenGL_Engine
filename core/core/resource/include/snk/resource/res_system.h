@@ -48,6 +48,43 @@ namespace res
 	// The value of a res::when_all handle: carries nothing, the handles that were joined hold the resources.
 	struct SNK_API when_all_result : resource_entry {};
 
+	class resource_system;
+
+	// One hold of resource_system::hold_changes. Move-only; the destructor releases it, also when an exception unwinds.
+	class SNK_API change_hold
+	{
+	public:
+		change_hold() = default;
+		change_hold(change_hold&& other) noexcept
+			: m_system(std::exchange(other.m_system, nullptr))
+		{
+		}
+		change_hold& operator=(change_hold&& other) noexcept
+		{
+			if (this != &other) {
+				release();
+				m_system = std::exchange(other.m_system, nullptr);
+			}
+			return *this;
+		}
+		change_hold(const change_hold&) = delete;
+		change_hold& operator=(const change_hold&) = delete;
+		~change_hold();
+
+		// Lets go now; a second call does nothing.
+		void release() noexcept;
+		explicit operator bool() const noexcept { return m_system != nullptr; }
+
+	private:
+		friend class resource_system;
+		explicit change_hold(resource_system& system) noexcept
+			: m_system(&system)
+		{
+		}
+
+		resource_system* m_system = nullptr;
+	};
+
 	class SNK_API resource_system
 	{
 	public:
@@ -170,6 +207,20 @@ namespace res
 		// With an asset index, a file with an ID is signalled under its ID; one that is gone from disk (deleted, renamed
 		// away) waits for the index owner's batch (apply_asset_batch), so a rename keeps what was loaded.
 		void signal_changed(const res::tag& tag);
+		// Any thread. Drops the cache entries of the tag and of what is built from it (as signal_changed, here and in the
+		// layers) without telling any watcher: the next request reads the file again; the caller signals it later.
+		void evict_cached(const res::tag& tag);
+
+		// Any thread (the root's holds; a layer takes them there). While a hold is alive (holds nest) what the mounts'
+		// resolvers report, the watcher's finds and the operations done through them, waits and is not lost: a tag
+		// signalled several times is signalled once, the batches of a protocol become one in the order found. When the
+		// last hold goes, it goes the usual way (signal_changed, then a numbered batch to subscribe_changes), on the main
+		// thread: posted there when released on another one. signal_changed called by code is never held, and it drops a
+		// held signal of that tag (it was just told what is on disk now).
+		// The system outlives its holds.
+		[[nodiscard]] change_hold hold_changes();
+		// Read-only: whether a hold is alive. For tests and diagnostics.
+		bool changes_held() const;
 
 		// The asset index (EPIC-57 section 5), root only, main thread. The first entry of a tag (a cached block, a pin, an
 		// alias, a dependency edge, a watcher) binds the tag to its key: {ID, type} when the index gives the file an ID, so
@@ -458,6 +509,12 @@ namespace res
 		resource_system& root();
 		// signal_changed() on this system and, through m_layers, on its layers.
 		void signal_changed_local(const res::tag& tag);
+		void evict_cached_local(const res::tag& tag);
+		// Under m_cache_mutex: drops the batch's cache entries and the alias mappings and edges of the originals in it
+		// (`alias_nodes` read before the lock, alias_value_nodes()). signal_changed and evict_cached share it.
+		void evict_batch_locked(const std::vector<res::tag>& batch, const std::unordered_map<res::tag, res::tag>& alias_nodes);
+		// signal_changed from code: the held signal of `tag` is not delivered again at the release.
+		void drop_held_signal(const res::tag& tag);
 		// erase(): drops the pin and the alias mappings of the tag here and in every layer.
 		void forget_erased(const res::tag& tag);
 
@@ -673,6 +730,17 @@ namespace res
 			changes_listener listener;
 		};
 		void deliver_changes(const std::string& protocol, const std::vector<file_change>& batch, std::uint64_t number);
+		// Numbers a batch and queues it for deliver_changes on the main thread.
+		void post_batch(const std::string& protocol, std::vector<file_change> batch);
+
+		// hold_changes (root only): what a resolver reports goes through these first; true when a hold took it in.
+		friend class change_hold;
+		struct held_changes;
+		bool hold_signal(const res::tag& tag);
+		bool hold_batch(const std::string& protocol, const std::vector<file_change>& batch);
+		void release_hold() noexcept;
+		// Delivers what was held, on the main thread, until nothing is held or a new hold is taken.
+		void deliver_held();
 		std::mutex m_changes_mutex;
 		std::vector<change_subscription> m_change_subscriptions;
 		std::uint64_t m_next_subscription = 0;
@@ -733,6 +801,8 @@ namespace res
 		std::uint64_t m_delivering_batch = 0;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
+		// Root only (hold_changes). Last, so the members inline code reads keep their offsets.
+		std::unique_ptr<held_changes> m_held;
 	};
 
 	// A dependency of `target` as T, for adapter_interface::collect_dependencies.

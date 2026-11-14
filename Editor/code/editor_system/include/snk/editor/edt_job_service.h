@@ -116,8 +116,15 @@ namespace edt
 		}
 
 		// Cooperative: sets the stop token seen by `work`. A job that has not started never runs.
-		// Its result is discarded either way. False if the job is unknown or already delivered.
+		// Its result is discarded either way. False if the job is unknown or already delivered, or its veto refuses.
 		bool cancel(job_id id);
+		// `veto(decide)` (main thread) returns why the job may not be cancelled any more (work that is past its point of no
+		// return), nullopt to let the cancel through. decide false: a question only, no side effect; decide true (from
+		// cancel()): the job acts on the answer. Not asked by cancel_all_and_wait. Dropped with the job. The vetoes are kept
+		// in the .cpp, outside job_service's layout.
+		void set_cancel_veto(job_id id, std::function<std::optional<std::string>(bool decide)> veto);
+		// Why cancel(id) would be refused by the job's veto now; nullopt when it would not. A pure query: it cancels nothing.
+		[[nodiscard]] std::optional<std::string> cancel_refusal(job_id id) const;
 		// Queued, running, or finished but not delivered yet. False once delivered or discarded.
 		[[nodiscard]] bool is_running(job_id id) const;
 		[[nodiscard]] std::optional<job_progress> progress(job_id id) const;

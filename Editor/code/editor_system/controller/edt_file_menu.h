@@ -79,12 +79,18 @@ namespace edt
 		std::function<void()> exit;
 		std::filesystem::path resources_path;  // where "Open Level" starts
 		// Starts another editor on the project (its manifest file); this one exits afterwards. The error, if it did not start.
-		std::function<std::optional<std::string>(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch)> open_project;
+		// open_migration: the new editor opens the Project Migration window (--open-migration, #761).
+		std::function<std::optional<std::string>(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch,
+			bool open_migration)> open_project;
 		// Makes a project in `folder` from the editor's template.
 		std::function<prj::create_result(const std::filesystem::path& folder, const std::string& name)> create_project;
 		std::filesystem::path projects_path;   // where "New Project" and "Open Project" start
 		// File > Recent Projects, most recent first (manifest files); the one open now is left out by the caller.
 		std::vector<std::filesystem::path> recent_projects;
+		// Why the editor may not exit or switch projects now (a project migration writes files): file.exit,
+		// file.open_project and the recent projects answer `busy` with it, and exit() (File > Exit, the window's close
+		// request) shows it instead of asking. Null or nullopt: they run.
+		std::function<std::optional<std::string>()> exit_blocker;
 	};
 
 	// The File menu: New / Open / Save / Save As / Import / New Project / Open Project / Exit, with the "unsaved
@@ -131,7 +137,7 @@ namespace edt
 		bool invoke_or_report(std::string_view action_id, boost::json::value args, std::string_view failure);
 		// Checks that `project` (a manifest or its folder) opens, starts another editor on it and exits this one. The
 		// caller already settled the unsaved changes.
-		action_result switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch);
+		action_result switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch, bool open_migration = false);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
 

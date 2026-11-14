@@ -34,10 +34,19 @@ struct prompt_fixture
 		return *dialogs.current();
 	}
 
+	// As the editor asks it since #761: Open Anyway, Migrate..., Continue Without Project, Quit.
+	edt::dialog_service::dialog_id ask_with_migrate()
+	{
+		edt::ask_about_held_project(dialogs, held, [this] { ++quits; }, [this] { ++reopened; }, [this] { ++migrated; });
+		BOOST_REQUIRE(dialogs.current().has_value());
+		return *dialogs.current();
+	}
+
 	edt::dialog_service dialogs;
 	prj::held_project held;
 	int quits = 0;
 	int reopened = 0;
+	int migrated = 0;
 };
 
 }
@@ -117,6 +126,44 @@ BOOST_AUTO_TEST_CASE(OpenAnyway_IsNotOfferedForANewerProject)
 	BOOST_TEST(dialogs.answer(ask_with_open_anyway(), boost::json::parse(R"({"index":1})")).ok);
 	BOOST_TEST(quits == 1);
 	BOOST_TEST(reopened == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Migrate_IsTheSecondButtonForAnOlderProject)
+{
+	const auto list_options = [this] {
+		ask_with_migrate();
+		const auto list = dialogs.list();
+		BOOST_REQUIRE(list.size() == 1u);
+		BOOST_TEST(list[0].text.find("Project Migration") != std::string::npos);
+	};
+	list_options();
+	BOOST_TEST(dialogs.answer(*dialogs.current(), boost::json::parse(R"({"index":1})")).ok);
+	BOOST_TEST(migrated == 1);
+	BOOST_TEST(reopened == 0);
+	BOOST_TEST(quits == 0);
+	BOOST_TEST(prj::exit_code_for(held) == 0);
+
+	// Open Anyway, Continue and Quit keep their meaning around it.
+	held.answer = prj::held_project::decision::none;
+	BOOST_TEST(dialogs.answer(ask_with_migrate(), boost::json::parse(R"({"index":0})")).ok);
+	BOOST_TEST(reopened == 1);
+	held.answer = prj::held_project::decision::none;
+	BOOST_TEST(dialogs.answer(ask_with_migrate(), boost::json::parse(R"({"index":2})")).ok);
+	BOOST_TEST((held.answer == prj::held_project::decision::continue_without_project));
+	BOOST_TEST(dialogs.answer(ask_with_migrate(), boost::json::parse(R"({"index":3})")).ok);
+	BOOST_TEST(quits == 1);
+	BOOST_TEST(migrated == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Migrate_IsNotOfferedForANewerProject)
+{
+	held.action = prj::version_action::refuse;
+	ask_with_migrate();
+	BOOST_TEST(dialogs.list()[0].text.find("Project Migration") == std::string::npos);
+	// Continue Without Project, Quit
+	BOOST_TEST(dialogs.answer(*dialogs.current(), boost::json::parse(R"({"index":1})")).ok);
+	BOOST_TEST(quits == 1);
+	BOOST_TEST(migrated == 0);
 }
 
 // project/required (--headless, #452): going on without the project is the project error of a run without --project.

@@ -62,9 +62,10 @@ namespace {
 			hooks.discard_other_documents = [this] { other_dirty = false; other_discarded = true; };
 			hooks.load_level = [](const fs::path&) {};
 			hooks.exit = [this] { ++exits; };
-			hooks.open_project = [this](const fs::path& manifest, bool allow) -> std::optional<std::string> {
+			hooks.open_project = [this](const fs::path& manifest, bool allow, bool migration) -> std::optional<std::string> {
 				started.push_back(manifest);
 				allowed_mismatch = allow;
+				open_migration = migration;
 				return start_error;
 			};
 			hooks.create_project = [](const fs::path& folder, const std::string& name) {
@@ -72,6 +73,7 @@ namespace {
 			};
 			hooks.projects_path = dir.path();
 			hooks.recent_projects = std::move(recent);
+			hooks.exit_blocker = [this] { return exit_blocked; };
 			menu = std::make_unique<edt::file_menu>(dialogs, actions, std::move(hooks));
 			menu->register_actions();
 		}
@@ -101,7 +103,9 @@ namespace {
 		int exits = 0;
 		std::vector<fs::path> started;
 		bool allowed_mismatch = false;
+		bool open_migration = false;
 		std::optional<std::string> start_error;
+		std::optional<std::string> exit_blocked;
 	};
 
 	std::string path_args(const fs::path& path, std::string_view more = {})
@@ -222,6 +226,16 @@ BOOST_AUTO_TEST_CASE(OpenProject_PassesTheMismatchFlagOn)
 
 	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game", R"(,"allow_engine_version_mismatch":true)")).ok);
 	BOOST_TEST(allowed_mismatch);
+	BOOST_TEST(!open_migration);
+}
+
+BOOST_AUTO_TEST_CASE(OpenProject_PassesTheMigrationWindowFlagOn)
+{
+	make_project("game");
+
+	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game", R"(,"allow_engine_version_mismatch":true,"open_migration":true)")).ok);
+	BOOST_TEST(allowed_mismatch);
+	BOOST_TEST(open_migration);
 }
 
 BOOST_AUTO_TEST_CASE(NewProject_IsMadeFromTheTemplateAndOpened)
@@ -235,6 +249,29 @@ BOOST_AUTO_TEST_CASE(NewProject_IsMadeFromTheTemplateAndOpened)
 	BOOST_REQUIRE(opened.context.has_value());
 	BOOST_TEST(opened.context->data.name == "fresh"); // the folder's name when none is given
 	BOOST_TEST(exits == 1);
+}
+
+// #761: while a migration writes the project the editor may not leave it, and no folder is made for a project it could not
+// switch to.
+BOOST_AUTO_TEST_CASE(WhileTheEditorMayNotExit_NoProjectIsMadeOrOpened_AndExitIsBusy)
+{
+	make_project("game");
+	exit_blocked = "a project migration is running";
+
+	const auto made = invoke("file.new_project", path_args(dir.path() / "fresh"));
+	BOOST_TEST(made.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(dir.path() / "fresh"));
+	BOOST_TEST(invoke("file.open_project", path_args(dir.path() / "game")).code == cmd::codes::busy);
+	BOOST_TEST(invoke("file.exit", "{}").code == cmd::codes::busy);
+	BOOST_TEST(started.empty());
+	BOOST_TEST(exits == 0);
+
+	// File > Exit and the window's close request show why instead of asking about unsaved changes.
+	menu->exit();
+	const auto shown = dialogs.list();
+	BOOST_REQUIRE(shown.size() == 1u);
+	BOOST_TEST(shown[0].kind == "message");
+	BOOST_TEST(exits == 0);
 }
 
 BOOST_AUTO_TEST_CASE(NewProject_IntoATakenFolder_KeepsThisEditor)
