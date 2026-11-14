@@ -1305,8 +1305,8 @@ BOOST_FIXTURE_TEST_CASE(AnAliasCopyWhileTheAliasReloads_IsNotOverwritten, index_
 	BOOST_TEST(rs->pinned_count() == 0u);
 }
 
-// #869: a walk that sees a move before the move's batch takes the old tag out of an ID the file still holds: that is the
-// file moved, not owners split, so the pin stays with the ID and nothing is reloaded.
+// #869: a walk that sees a move before the move's batch takes the old tag out of an ID the file still holds: that is
+// the file moved, not owners split, so the pin stays with the ID and nothing is reloaded.
 BOOST_FIXTURE_TEST_CASE(AMoveSeenBeforeItsBatch_KeepsThePinWithTheId, index_fixture)
 {
 	const res::tag a = put("a.txt", "file a");
