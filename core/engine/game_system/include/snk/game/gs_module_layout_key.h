@@ -10,6 +10,7 @@
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_entity_changer.hpp>
+#include <snk/ecs/ecs_event.hpp>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/ecs/ecs_signal.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
@@ -21,9 +22,12 @@
 #include <snk/input/inp_input_stack.h>
 #include <snk/input/inp_user_bindings.h>
 #include <snk/resource/adapters/res_dependencies.hpp>
+#include <snk/resource/res_tag.h>
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/level/scn_override_record.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_animation.h>
 #include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
@@ -55,6 +59,7 @@ namespace gs
 			// component_catalog::add<T> builds the entry, desc::bind_described<T> the schema binding, its field ops and its
 			// schema with the fields (described_schema<T>).
 			scn::component_entry, desc::schema_binding, desc::field_ops, desc::type_schema, desc::field_schema,
+			desc::field_range,
 			// A module reads a component without a C++ type through find_schema_component and may build one to hand to
 			// emplace_schema_component (a const reference: the world keeps the engine's copy, #785).
 			desc::dyn_blob,
@@ -67,15 +72,20 @@ namespace gs
 			// module_context::input_stack hands the module an input_stack_handle by value; the module builds the layers it
 			// passes (stack_layer_desc), and a system that takes input_stack_control& gets it made in module code by
 			// ecs_invoker's reg.ctx().emplace<T>(), so the module allocates and destroys it.
-			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::action_binding,
+			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::stack_command, inp::action_binding,
 			// game_module::add_command takes the command a module describes.
 			cmd::command_desc,
 			// A module's systems walk view<T>/storage<T> of the engine's components inline, a step of sizeof(T) each.
 			scn::engine_component_types,
-			// ctx resources a module's system takes by reference from registry.ctx() and reads or writes inline.
+			// What the public containers of those components hold: module code walks and grows them inline too.
+			res::tag, scn::tracked_component_info, scn::prefab_desc::prefab_node, scn::prefab_desc::prefab_comp_node,
+			scn::prefab_desc::comp_edit, scn::override_record,
+			// ctx resources a module's system takes by reference from registry.ctx() and reads or writes inline, with the
+			// elements of their lists. ctx().emplace<event<T>>() runs in module code; its members do not depend on T.
 			scn::delta_time, scn::fixed_time, scn::update_alpha, scn::world_time, ecs::rng, ecs::entity_changer,
 			ecs::entity_spawner, inp::action_state, inp::fixed_action_state, inp::action_map_ref, inp::action_trace,
-			inp::input_capture, scn::node_index,
+			inp::action_trace::edge, inp::action_input, inp::action_reach, inp::action_injection, inp::injected_edge,
+			inp::input_capture, scn::node_index, ecs::event<int>,
 			// Engine events a module's event_reader<T> copies out of the bus.
 			inp::action_event, scn::animation_finished,
 			// All inline: module code runs find_entry over its members.
@@ -91,7 +101,8 @@ namespace gs
 			desc::override_failure, desc::read_context, cmd::call, cmd::result, desc::enum_item, desc::enum_schema,
 			scn::blackboard_type,
 			// task_system::run makes the task's state in module code and then_main hands its callback the result.
-			ds::task_result<void>, ds::detail::task_state<void>,
+			// task_result<void> is an explicit specialization: <int> stands for the primary template.
+			ds::task_result<void>, ds::task_result<int>, ds::detail::task_state<void>,
 			// gs::input_actions' inline accessors copy or hand out these members.
 			inp::gamepad_config, inp::user_bindings>();
 	}
