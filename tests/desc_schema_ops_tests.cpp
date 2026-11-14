@@ -1794,11 +1794,8 @@ BOOST_AUTO_TEST_CASE(AMapOfStructuresIsCheckedByItsValues_TheFailureNamesTheKeyA
 
 BOOST_FIXTURE_TEST_CASE(ListsAndStructuresInsideAnItemAreCheckedToo_TheLoadLogCarriesTheFullPointer, ops_fixture)
 {
-	const auto holder = desc::parse_type_schema(json::parse(R"({
-		"name": "ops.holder", "kind": "component",
-		"fields": [ { "name": "rows", "kind": "array", "element": "structure", "ref_type": "ops.row" } ]
-	})").as_object());
 	desc::schema_registry registry;
+	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
 	registry.add(desc::parse_type_schema(json::parse(R"({
 		"name": "ops.row", "kind": "struct",
 		"fields": [
@@ -1806,8 +1803,11 @@ BOOST_FIXTURE_TEST_CASE(ListsAndStructuresInsideAnItemAreCheckedToo_TheLoadLogCa
 			{ "name": "cells", "kind": "array", "element": "structure", "ref_type": "ops.inner" },
 			{ "name": "limits", "kind": "structure", "ref_type": "ops.inner" }
 		]
-	})").as_object()));
-	registry.add(desc::schema_generator<ops_test::inner>::make("ops.inner", 1, desc::schema_kind::structure));
+	})").as_object(), &registry));
+	const auto holder = desc::parse_type_schema(json::parse(R"({
+		"name": "ops.rows_holder", "kind": "component",
+		"fields": [ { "name": "rows", "kind": "array", "element": "structure", "ref_type": "ops.row" } ]
+	})").as_object(), &registry);
 	using desc::override_status;
 	const auto check_object = [&](const char* patch) {
 		return desc::check_override_object(holder, json::parse(patch).as_object(), nullptr, &registry);
