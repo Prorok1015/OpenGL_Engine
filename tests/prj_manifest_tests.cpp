@@ -185,6 +185,24 @@ BOOST_AUTO_TEST_CASE(Parse_ContentRootsAcceptNestedAndTrailingSeparator)
 }
 
 // #856: one root inside another (in any letter case) would put one file under two res:// tags.
+// #911: res:// may not cover .git, the editor's private folders, code/ or build output, in any letter case.
+BOOST_AUTO_TEST_CASE(Parse_ContentRootsRefuseHiddenAndTheProjectsOwnFolders)
+{
+	for (const std::string_view root : { ".git", ".github/workflows", "assets/.hidden", ".snk", ".SNK", ".cache/memory", "code",
+			"CODE/res", "build", "Build", "build/res", "out", "_deps", "CMakeFiles" }) {
+		BOOST_TEST_INFO("root: " << root);
+		const auto result = prj::parse_manifest(minimal_with("content_roots", "[\"" + std::string{ root } + "\"]"));
+		check_error(result, "$.content_roots[0]");
+		if (result.error) {
+			BOOST_TEST(result.error->reason.find(std::string{ root }) != std::string::npos, "the refusal names the root");
+			BOOST_TEST(result.error->reason.find("may not be or lie in") != std::string::npos, "and the rule");
+		}
+	}
+	const auto allowed = prj::parse_manifest(minimal_with("content_roots", R"(["assets", "game_code", "res/build", "outdoor"])"));
+	BOOST_REQUIRE(allowed.data.has_value());
+	BOOST_TEST(allowed.data->content_roots.size() == 4u);
+}
+
 BOOST_AUTO_TEST_CASE(Parse_OverlappingContentRootsAreRejected_NamingBoth)
 {
 	const std::pair<std::string_view, std::string_view> cases[] = {
