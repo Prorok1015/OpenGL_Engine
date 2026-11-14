@@ -497,6 +497,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
 	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
+	m_prefab_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_prefab_node(path); });
 	m_prefab_panel->set_on_apply([this] {
 		prefab_document* prefab = prefab_of(m_context->documents());
 		if (!prefab) return;
@@ -2026,7 +2027,6 @@ void edt::editor_system::wire_panel_callbacks()
 	m_inspector_panel->set_on_node_changed([this]() {
 		route_node_changed(m_inspector_target, prefab_of(m_context->documents()), m_state);
 	});
-	m_prefab_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_prefab_node(path); });
 	// A level selection takes the Inspector back from the prefab window.
 	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
 		if (!sel.empty()) release_inspector_to_level();
