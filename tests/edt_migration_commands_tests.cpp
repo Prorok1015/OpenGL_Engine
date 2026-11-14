@@ -110,7 +110,11 @@ struct migration_fixture : test_util::scene_env
 		deps.now = [this] { return clock; };
 		deps.approved_internally = [this](std::string_view ticket) { return internal_tickets.contains(std::string(ticket)); };
 		deps.code_identity = [this] { return code_identity; };
-		deps.level_left_detached = [this](const std::string& reason) { left_detached = reason; };
+		deps.level_left_detached = [this](const res::tag& level, std::function<bool()> rolled_back, const std::string& reason) {
+			left_detached = reason;
+			left_detached_level = level;
+			left_detached_rolled_back = std::move(rolled_back);
+		};
 		deps.apply = [this](const pmg::migration_plan& plan, const pmg::apply_context& context) {
 			return apply ? apply(plan, context) : pmg::apply_migration(plan, context);
 		};
@@ -201,6 +205,8 @@ struct migration_fixture : test_util::scene_env
 	std::set<std::string> internal_tickets;
 	std::uint64_t code_identity = 0;
 	std::optional<std::string> left_detached;
+	res::tag left_detached_level;
+	std::function<bool()> left_detached_rolled_back;
 	std::vector<edt::registration> registrations;
 };
 
@@ -378,6 +384,12 @@ BOOST_AUTO_TEST_CASE(AnApplyThatThrows_IsCode6_AndTheLevelStaysDetached)
 	BOOST_TEST(!loading);
 	BOOST_REQUIRE(left_detached.has_value());
 	BOOST_TEST(left_detached->find("--migrate-rollback test-stopped") != std::string::npos, *left_detached);
+	BOOST_TEST(left_detached_level.view() == "res://levels/old.desc");
+	// The saves stay blocked until this very migration is rolled back.
+	BOOST_REQUIRE(left_detached_rolled_back);
+	BOOST_TEST(!left_detached_rolled_back());
+	write_text(copy.root() / ".snk/migrations/test-stopped/report.json", R"({"status":"rolled_back"})");
+	BOOST_TEST(left_detached_rolled_back());
 	BOOST_TEST(rebuilds == 1);
 	BOOST_TEST((std::ranges::find(signaled, std::string{ "res://cameras/cam_v1.desc" }) != signaled.end()));
 }
@@ -653,6 +665,23 @@ BOOST_AUTO_TEST_CASE(AnApprovedPlan_OutlivesItsQuestion_AndJudgesTheRetry)
 	BOOST_TEST(error_code_of(result) == cmd::codes::denied);
 	BOOST_TEST(!closed);
 	BOOST_TEST((snapshot(copy.root()) == changed));
+}
+
+// The same with the project unchanged: the retry migrates, so the approved plan was kept past the question's lifetime.
+BOOST_AUTO_TEST_CASE(AnApprovedPlan_OutlivesItsQuestion_AndRunsTheRetry)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const std::string approved = ticket_of(call("project.migrate"));
+	clock += std::chrono::seconds(117);
+	BOOST_REQUIRE(commands.approve(approved));
+	busy = "Play is running";
+	BOOST_TEST(call_with(approved).code == cmd::codes::busy);
+
+	clock += std::chrono::seconds(4);
+	busy.reset();
+	const json::object result = job_result(call_with(retry_ticket()));
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
 }
 
 // A retry whose approved plan is gone is denied; it never falls back to the plan described for its own ticket.

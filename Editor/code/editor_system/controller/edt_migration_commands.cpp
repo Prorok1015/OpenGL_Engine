@@ -384,16 +384,15 @@ namespace {
 			return m_deps.code_identity ? m_deps.code_identity() : 0;
 		}
 
-		// A new question of the caller replaces its unanswered one, never an approved one. When every entry is taken the
-		// oldest unanswered one goes; with only approved ones left nothing is recorded (its call is then denied).
+		// A new question of the caller replaces its unanswered one, never an approved one. Only unanswered records count
+		// against k_max_shown (the oldest goes), so a question is always recorded: approved ones are at most one per caller,
+		// each made by a person's answer, and none is evicted.
 		void remember(std::string key, std::string ticket, std::uint64_t value)
 		{
 			forget_expired();
 			std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key && !shown.approved; });
-			if (m_shown.size() >= k_max_shown) {
-				const auto unanswered = std::ranges::find_if(m_shown, [](const shown_plan& shown) { return !shown.approved; });
-				if (unanswered == m_shown.end()) return;
-				m_shown.erase(unanswered);
+			if (std::ranges::count_if(m_shown, [](const shown_plan& shown) { return !shown.approved; }) >= static_cast<std::ptrdiff_t>(k_max_shown)) {
+				m_shown.erase(std::ranges::find_if(m_shown, [](const shown_plan& shown) { return !shown.approved; }));
 			}
 			m_shown.push_back({ std::move(key), std::move(ticket), value, now(), false });
 		}
@@ -539,7 +538,15 @@ namespace {
 				const std::string reason = left.empty()
 					? std::string("the migration stopped: the level is not loaded from disk again")
 					: std::format("the migration stopped: the level is not loaded from disk again; run editor --migrate-rollback {} first", left.front());
-				if (m_deps.level_left_detached) m_deps.level_left_detached(reason);
+				if (m_deps.level_left_detached) {
+					// Rolled back once the journal of this migration is no longer unfinished; without one there is nothing to roll back.
+					std::function<bool()> rolled_back = [root = run.root, id = left.empty() ? std::string{} : left.front()] {
+						if (id.empty()) return false;
+						const std::vector<std::string> still = pmg::unfinished_migrations(root);
+						return std::ranges::find(still, id) == still.end();
+					};
+					m_deps.level_left_detached(run.level, std::move(rolled_back), reason);
+				}
 				run.answer["level"] = level_json(run, false, reason);
 				return stop(run, std::move(run.answer));
 			}

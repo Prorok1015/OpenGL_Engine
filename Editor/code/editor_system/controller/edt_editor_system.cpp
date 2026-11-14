@@ -610,7 +610,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		cancel_level_settle();
 		m_desc_problems.clear(m_context->problems(), "level");
 		m_level_ctrl.new_level();
-		m_migration_stopped.reset();
 	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
 	hooks.save_level_as = [this](const std::string& rel_path) {
@@ -641,7 +640,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
 	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
 		if (m_loading_level) return std::string{ "a level is loading" };
-		if (m_migration_stopped) return *m_migration_stopped;
+		if (m_migration_stopped) {
+			if (m_migration_stopped->rolled_back && m_migration_stopped->rolled_back()) {
+				m_migration_stopped.reset();
+			} else {
+				return m_migration_stopped->reason;
+			}
+		}
 		return std::nullopt;
 	};
 	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
@@ -811,8 +816,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return m_agent_access != nullptr && m_agent_access->confirmations().approved_internally(ticket);
 		};
 		migration.code_identity = [this] { return m_game_layer_generation; };
-		migration.level_left_detached = [this](const std::string& reason) {
-			m_migration_stopped = "the level was left detached by a migration that stopped: roll the migration back first (" + reason + ")";
+		migration.level_left_detached = [this](const res::tag& level, std::function<bool()> rolled_back, const std::string& reason) {
+			m_migration_stopped = stopped_migration{ level, std::move(rolled_back),
+				"the level was left detached by a migration that stopped: roll the migration back first (" + reason + ")" };
 		};
 		migration.current_level_tag = [this] { return current_level_tag(); };
 		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
@@ -2012,7 +2018,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
 		m_loading_level_tag, level_locator(m_loading_level_handle, m_loading_editor_tag, m_loading_level_tag));
 	if (loaded) {
-		m_migration_stopped.reset();
+		if (m_migration_stopped && m_migration_stopped->level != m_state.level_tag) m_migration_stopped.reset();
 		// The previous level's working copy has no user left: the level set was rebuilt from the new one.
 		release_level_load();
 		if (editor_tag_before != m_state.editor_tag) erase_loading_copy(editor_tag_before);

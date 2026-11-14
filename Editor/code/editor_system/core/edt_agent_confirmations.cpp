@@ -7,8 +7,26 @@
 #include <exception>
 #include <cstdint>
 #include <format>
+#include <utility>
 
 namespace json = boost::json;
+
+namespace
+{
+	// Holds `ticket` in `slot` while the retry it approved runs; the value before it comes back however the run ends.
+	class internal_ticket_scope
+	{
+	public:
+		internal_ticket_scope(std::string& slot, std::string ticket) : m_slot(slot), m_previous(std::exchange(slot, std::move(ticket))) {}
+		~internal_ticket_scope() { m_slot = std::move(m_previous); }
+		internal_ticket_scope(const internal_ticket_scope&) = delete;
+		internal_ticket_scope& operator=(const internal_ticket_scope&) = delete;
+
+	private:
+		std::string& m_slot;
+		std::string m_previous;
+	};
+}
 
 namespace edt
 {
@@ -115,14 +133,10 @@ namespace edt
 				return;
 			}
 			request.confirmation = ticket_id;
-			m_internal_ticket = ticket_id;
-			try {
+			{
+				const internal_ticket_scope internal(m_internal_ticket, ticket_id);
 				outcome = run_command(command_id, request);
-			} catch (...) {
-				m_internal_ticket.clear();
-				throw;
 			}
-			m_internal_ticket.clear();
 			// A ticket the registry did not consume is not left waiting for its lifetime.
 			m_commands.discard(ticket_id);
 		}

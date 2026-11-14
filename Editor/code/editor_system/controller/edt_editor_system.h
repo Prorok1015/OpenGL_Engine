@@ -262,9 +262,16 @@ namespace edt {
 		res::tag m_level_after_layer_change;
 		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
 		std::uint64_t m_game_layer_generation = 0;
-		// Set when a migration stopped with an exception and left the level detached: no save until another level is loaded
-		// or made, so the half migrated files stay as the rollback expects them.
-		std::optional<std::string> m_migration_stopped;
+		// A migration stopped with an exception and left `level` detached: no level is saved until that migration is rolled
+		// back or another level is loaded (the same level loaded again is still half migrated), so the files stay as the
+		// rollback expects them.
+		struct stopped_migration
+		{
+			res::tag level;
+			std::function<bool()> rolled_back;
+			std::string reason;
+		};
+		std::optional<stopped_migration> m_migration_stopped;
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load

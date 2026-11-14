@@ -71,9 +71,9 @@ namespace edt
 		// What moves whenever the code that migrates can change: the game layer, whose desc types hold the steps, is
 		// replaced (a module loaded, reloaded or taken back). Part of the fingerprint; null: 0.
 		std::function<std::uint64_t()> code_identity;
-		// The migration stopped with an exception: the level was left detached and must not be saved over the half migrated
-		// files; `reason` says how to roll it back.
-		std::function<void(const std::string& reason)> level_left_detached;
+		// The migration stopped with an exception: `level` was left detached and must not be saved over the half migrated
+		// files until `rolled_back()` says the migration was rolled back or another level is loaded; `reason` says how.
+		std::function<void(const res::tag& level, std::function<bool()> rolled_back, const std::string& reason)> level_left_detached;
 		// Tests only: stands in for prj::migration::apply_migration (one that throws); null: the real one.
 		std::function<prj::migration::apply_outcome(const prj::migration::migration_plan&, const prj::migration::apply_context&)> apply;
 	};
