@@ -508,6 +508,11 @@ namespace edt
 		if (requests.empty()) {
 			return true;
 		}
+		// A person's own modal goes first: this window over it would take the clicks meant for its buttons, so it waits unseen.
+		if (ImGui::GetTopMostPopupModal() != nullptr) {
+			confirmations.note_shown({});
+			return true;
+		}
 
 		// Answers are applied after the window is closed: allowing runs the command, which must not happen inside it.
 		std::vector<std::pair<std::uint64_t, confirmation_answer>> chosen;

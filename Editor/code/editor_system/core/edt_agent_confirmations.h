@@ -155,7 +155,7 @@ namespace edt
 		bool answer(std::uint64_t id, confirmation_answer what);
 
 		// What the window drew this frame, before the answers of that frame are given: once per frame the window is
-		// drawn, with nothing when it drew no request (collapsed).
+		// drawn, with nothing when it drew no request (collapsed, or left out while a person's modal popup is open).
 		void note_shown(std::span<const shown_request> frame);
 
 		// Once per frame, from the editor's per-frame update, not from drawing the window: times out what waited too long.
