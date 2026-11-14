@@ -880,6 +880,65 @@ BOOST_AUTO_TEST_CASE(AFrameThatDrewNoRequest_StartsTheWaitAgain)
 	BOOST_TEST(runs == 0);
 }
 
+// A person's modal popup is open: draw_agent_confirmations leaves the window out and reports an empty frame.
+BOOST_AUTO_TEST_CASE(WhileAModalIsOpen_NoAllowIsTaken_HoweverLongItLasts)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+
+	for (int frame = 0; frame < 5; ++frame) {
+		confirmations->note_shown({});
+		BOOST_TEST(!confirmations->pending().front().can_allow);
+		BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+		BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_session));
+		current += edt::agent_confirmations::input_guard * 4;
+	}
+	BOOST_TEST(finished.empty());
+	BOOST_TEST(runs == 0);
+
+	// A request that came while the modal was open was never shown either.
+	run("code.delete", "s2");
+	confirmations->note_shown({});
+	current += edt::agent_confirmations::input_guard;
+	for (const edt::confirmation_request& request : confirmations->pending()) {
+		BOOST_TEST(!request.can_allow);
+	}
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::deny));
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AfterAModalCloses_AnAllowNeedsTwoFramesAndTheGuardAgain)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	confirmations->note_shown({});
+	current += edt::agent_confirmations::input_guard * 2;
+	confirmations->note_shown({});
+
+	// One frame, however long it stays, proves nothing.
+	test_util::show_confirmations(*confirmations);
+	current += edt::agent_confirmations::input_guard * 2;
+	BOOST_TEST(!confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+
+	// Two frames without the time are not enough.
+	test_util::show_confirmations(*confirmations);
+	current += edt::agent_confirmations::input_guard - 1ms;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(!confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 0);
+
+	current += 1ms;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
 BOOST_AUTO_TEST_CASE(ARequestLeavingBelow_HoldsTheOneAbove_OnlyIfItsButtonMoved)
 {
 	run("code.create", "s1");
