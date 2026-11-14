@@ -13,6 +13,16 @@
 // check of the editor reads both the same way.
 namespace edt
 {
+	// The engine's own protocols: a string naming one is meant as a reference even where no schema says so.
+	inline bool is_engine_protocol(std::string_view protocol)
+	{
+		static constexpr std::string_view k_protocols[] = { "res", "engine", "memory", "user", "edt", "code", "cache", "mod" };
+		for (const std::string_view known : k_protocols) {
+			if (known == protocol) return true;
+		}
+		return false;
+	}
+
 	// An object where a reference may stand that is no inline desc (that one has "__type"): a reference object, good or
 	// not (reference_object_problem says which).
 	inline bool is_reference_object(const boost::json::value& value)
