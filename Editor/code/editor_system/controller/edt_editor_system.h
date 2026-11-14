@@ -269,6 +269,8 @@ namespace edt {
 		void select_prefab_node(const std::vector<std::uint64_t>& path);
 		void release_inspector_to_level();
 		inspector_target m_inspector_target;
+		// The open prefab document when it has unapplied edits, else null.
+		prefab_document* dirty_prefab();
 
 		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();

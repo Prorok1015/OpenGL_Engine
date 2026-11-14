@@ -21,7 +21,12 @@ namespace edt
 	public:
 		prefab_editor_panel(rnd::render_system& rnd, gui::gui_system& gui);
 
-		void set_context(prefab_document* ctx) { m_ctx = ctx; }
+		void set_context(prefab_document* ctx)
+		{
+			m_ctx = ctx;
+			m_error.clear();
+			m_banner_later = false;
+		}
 		void set_on_apply(std::function<void()> cb) { m_on_apply = std::move(cb); }
 		void set_on_revert(std::function<void()> cb) { m_on_revert = std::move(cb); }
 		// A node picked in the tree (ids from the root, empty: the root): the editor shows it in the Inspector.

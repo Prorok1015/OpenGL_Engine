@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <format>
 #include <optional>
+#include <utility>
 
 edt::prefab_document::prefab_document(editor_services& services)
 	: m_services(services)
@@ -320,6 +321,11 @@ edt::save_result edt::prefab_document::overwrite()
 	if (!m_open || !m_working) {
 		return save_result::failure("the prefab is not open");
 	}
+	// Nothing to write: the file as it is now is what the document takes.
+	if (!m_dirty) {
+		const std::string error = reload();
+		return error.empty() ? save_result::ok() : save_result::failure(error);
+	}
 	desc::desc_system* descs = m_services.descs();
 	res::resource_system* reader = m_services.resources();
 	if (!descs || !reader || !m_files.top_layer) {
@@ -329,9 +335,10 @@ edt::save_result edt::prefab_document::overwrite()
 	if (!on_disk.error.empty() && !on_disk.located) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_source_tag.view(), on_disk.error));
 	}
-	m_disk_version = on_disk.version;
+	const std::string previous_version = std::exchange(m_disk_version, on_disk.version);
 	const save_result saved = save();
 	if (!saved.saved) {
+		m_disk_version = previous_version;
 		m_changed_on_disk = true;
 	}
 	return saved;

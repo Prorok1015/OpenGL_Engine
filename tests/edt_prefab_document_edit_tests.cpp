@@ -393,6 +393,40 @@ BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileEdited_OverwriteWritesTheEdits)
 	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("arm2") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(Overwrite_ThatFails_KeepsTheFileMarkedAsChanged_AndApplyStaysRefused)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+	BOOST_REQUIRE(document->changed_on_disk());
+	document->set_lock_source([] { return true; });
+
+	BOOST_TEST(!document->overwrite().saved);
+	document->set_lock_source([] { return false; });
+
+	BOOST_TEST(document->changed_on_disk());
+	const edt::save_result saved = document->save();
+	BOOST_TEST(!saved.saved);
+	BOOST_TEST(saved.error.find("changed on disk") != std::string::npos);
+	BOOST_TEST(arm_name() == "arm2");
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_OfACleanDocument_TakesTheFileInsteadOfClaimingSuccessDoingNothing)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+
+	const edt::save_result done = document->overwrite();
+
+	BOOST_TEST_REQUIRE(done.saved, done.error);
+	BOOST_TEST(arm_name() == "outside");
+	BOOST_TEST(!document->is_dirty());
+}
+
 BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileClean_IsTakenWithoutAsking)
 {
 	document->open(tag);
