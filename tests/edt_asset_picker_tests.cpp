@@ -152,12 +152,26 @@ BOOST_AUTO_TEST_CASE(Candidates_AnEmptyCatalogOrNoMatch_IsAnEmptyPage)
 	BOOST_CHECK_EQUAL(none.total, 0u);
 }
 
-BOOST_AUTO_TEST_CASE(ReferenceValue_IsTheResPathAsAString)
+BOOST_AUTO_TEST_CASE(ReferenceValue_IsTheResPathAsAString_ForAFileWithoutAnId)
 {
 	const fake_catalog source = sample();
 	const boost::json::value value = picker::reference_value(*source.find(res::tag::make("materials/wood.desc")));
 	BOOST_REQUIRE(value.is_string());
 	BOOST_CHECK_EQUAL(std::string(value.as_string()), "res://materials/wood.desc");
+}
+
+// #773: a file with an ID is written as {guid, path}, so the reference survives a rename.
+BOOST_AUTO_TEST_CASE(ReferenceValue_IsTheGuidAndThePath_ForAFileWithAnId)
+{
+	fake_catalog source = sample();
+	edt::asset_record& wood = source.records[2];
+	BOOST_REQUIRE(wood.path.relative() == "materials/wood.desc");
+	wood.id = res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	const boost::json::value value = picker::reference_value(wood);
+	BOOST_REQUIRE(value.is_object());
+	BOOST_CHECK_EQUAL(value.as_object().size(), 2u);
+	BOOST_CHECK_EQUAL(std::string(value.at("guid").as_string()), "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	BOOST_CHECK_EQUAL(std::string(value.at("path").as_string()), "res://materials/wood.desc");
 }
 
 BOOST_AUTO_TEST_CASE(JudgeText_SaysNothingForWhatIsNotItsBusiness)

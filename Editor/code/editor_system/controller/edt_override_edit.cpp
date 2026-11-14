@@ -1,16 +1,24 @@
 #include "edt_override_edit.h"
 #include "edt_reference.h"
 #include <snk/scene/scn_glm_json_convert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/scene/level/scn_override_record.h>
+#include <snk/scene/level/scn_world_desc.h>
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <ranges>
@@ -78,7 +86,9 @@ namespace
 		return res::json_pointer_token(std::string_view(key.data(), key.size()));
 	}
 
-	void collect_whole(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& base, const json::value& edited,
+	// `find` gives the schema of a type name: a desc system's, or a registry's.
+	template<class Find>
+	void collect_whole(const Find& find, const desc::type_schema& schema, const json::value& base, const json::value& edited,
 		const std::string& at, std::vector<std::string>& out, int depth)
 	{
 		if (depth >= k_max_depth) return;
@@ -100,18 +110,18 @@ namespace
 				if (is_tag_kind(field.kind)) {
 					whole_or_into(*held, where, [&] {
 						const json::value* type = held->as_object().if_contains("__type");
-						const desc::type_schema* nested = type && type->is_string() ? descs.find_schema(std::string_view(type->as_string())) : nullptr;
-						if (nested) collect_whole(descs, *nested, base, edited, where, out, depth + 1);
+						const desc::type_schema* nested = type && type->is_string() ? find(std::string_view(type->as_string())) : nullptr;
+						if (nested) collect_whole(find, *nested, base, edited, where, out, depth + 1);
 					});
 				} else if (field.kind == desc::field_kind::structure) {
-					if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) collect_whole(descs, *nested, base, edited, where, out, depth + 1);
+					if (const desc::type_schema* nested = find(field.ref_type)) collect_whole(find, *nested, base, edited, where, out, depth + 1);
 				} else if (field.kind == desc::field_kind::map) {
-					const desc::type_schema* nested = field.element == desc::field_kind::structure ? descs.find_schema(field.ref_type) : nullptr;
+					const desc::type_schema* nested = field.element == desc::field_kind::structure ? find(field.ref_type) : nullptr;
 					for (const auto& entry : held->as_object()) {
 						if (!entry.value().is_object()) continue;
 						const std::string item = where + "/" + token_of(entry.key());
 						if (is_tag_kind(field.element)) whole_or_into(entry.value(), item, [] {});
-						else if (nested) collect_whole(descs, *nested, base, edited, item, out, depth + 1);
+						else if (nested) collect_whole(find, *nested, base, edited, item, out, depth + 1);
 					}
 				}
 			}
@@ -119,12 +129,118 @@ namespace
 	}
 }
 
+namespace
+{
+	// The written worlds follow the edited ones node by node.
+	class record_references
+	{
+	public:
+		using prefab_node = scn::prefab_desc::prefab_node;
+
+		record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler) : m_descs(descs), m_assembler(assembler) {}
+
+		void node(const prefab_node& edited, boost::json::object& written)
+		{
+			if (boost::json::value* records = written.if_contains("overrides"); records && records->is_array()) {
+				for (boost::json::value& item : records->as_array()) {
+					record(edited, item);
+				}
+			}
+			boost::json::value* children = written.if_contains("children");
+			if (!children || !children->is_array() || children->as_array().size() != edited.children.size()) return;
+			for (std::size_t i = 0; i < edited.children.size(); ++i) {
+				if (boost::json::object* child = children->as_array()[i].if_object()) node(edited.children[i], *child);
+			}
+		}
+
+	private:
+		static std::string type_of(const scn::prefab_desc::prefab_comp_node& component)
+		{
+			if (!component.type_name.empty()) return component.type_name;
+			if (!component.parent_desc.is_valid()) return {};
+			component.parent_desc.wait();
+			return component.parent_desc.is_ready() ? std::string(component.parent_desc->get_type()) : std::string{};
+		}
+
+		const std::optional<prefab_node>& base_of(const prefab_node& owner, const std::vector<std::uint64_t>& target)
+		{
+			auto key = std::make_pair(&owner, target);
+			auto found = m_bases.find(key);
+			if (found == m_bases.end()) {
+				found = m_bases.emplace(std::move(key), edt::override_edit::find_base_node(m_assembler, owner, target)).first;
+			}
+			return found->second;
+		}
+
+		void record(const prefab_node& owner, boost::json::value& written)
+		{
+			const auto parsed = scn::parse_override_record(written);
+			boost::json::value* value = written.is_object() ? written.as_object().if_contains("value") : nullptr;
+			if (!parsed || !value || parsed->op != scn::override_op::set || parsed->component.empty()
+				|| parsed->component == scn::transform_pseudo_component) {
+				return;
+			}
+			const std::optional<prefab_node>& base = base_of(owner, parsed->target);
+			if (!base) return;
+			const auto component = base->components.find(parsed->component);
+			if (component == base->components.end()) return;
+			const std::string type = type_of(component->second);
+			if (type.empty()) {
+				egLOG_WARN("Editor/Save", "override record of component '{}' at '{}': the component's desc did not load, its references are written as they are",
+					parsed->component, parsed->path);
+				return;
+			}
+			const desc::type_schema* schema = m_descs.find_schema(type);
+			if (!schema) return;
+			if (!parsed->path.empty()) {
+				m_descs.write_references(*schema, parsed->path, *value);
+				return;
+			}
+			// A record of the whole component is merged into it.
+			const boost::json::value merged_into(edt::override_edit::component_json(component->second));
+			m_descs.write_references(*schema, {}, *value, &merged_into);
+		}
+
+		const desc::desc_system& m_descs;
+		scn::ecs_assembler& m_assembler;
+		std::map<std::pair<const prefab_node*, std::vector<std::uint64_t>>, std::optional<prefab_node>> m_bases;
+	};
+
+}
+
+void edt::override_edit::write_record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler,
+	const std::vector<scn::world_desc>& worlds, json::value& level_file)
+{
+	json::value* written = level_file.is_object() ? level_file.as_object().if_contains("worlds") : nullptr;
+	// A level saved over its parent may leave the worlds out.
+	if (!written || !written->is_array() || written->as_array().size() != worlds.size()) return;
+	record_references records(descs, assembler);
+	for (std::size_t i = 0; i < worlds.size(); ++i) {
+		if (json::object* world = written->as_array()[i].if_object()) records.node(worlds[i].get_root(), *world);
+	}
+}
+
 std::vector<std::string> edt::override_edit::whole_values(const desc::desc_system& descs, const desc::type_schema& schema,
 	const json::value& base, const json::value& edited)
 {
 	std::vector<std::string> out;
-	collect_whole(descs, schema, base, edited, {}, out, 0);
+	collect_whole([&descs](std::string_view name) { return descs.find_schema(name); }, schema, base, edited, {}, out, 0);
 	return out;
+}
+
+void edt::override_edit::merge_layer(const desc::schema_registry& schemas, const desc::type_schema& schema, json::object& into,
+	const json::object& layer)
+{
+	std::vector<std::string> whole;
+	collect_whole([&schemas](std::string_view name) { return schemas.find(name); }, schema, json::value(into), json::value(layer), {}, whole, 0);
+	desc::json_deep_merge(into, layer);
+	if (whole.empty()) return;
+	json::value merged(std::move(into));
+	const json::value given(layer);
+	for (const std::string& pointer : whole) {
+		if (const json::value* value = desc::json_pointer_get(given, pointer)) desc::json_pointer_set(merged, pointer, *value);
+	}
+	into = std::move(merged.as_object());
 }
 
 const scn::prefab_desc* edt::override_edit::referenced_prefab(const prefab_node& node)

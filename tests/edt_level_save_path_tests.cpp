@@ -2,6 +2,8 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_editor_services.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include "edt_file_menu.h"
@@ -13,8 +15,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 // Saving a level writes through the resource system, never to a path of its own (#394): a Save As path that leaves
@@ -96,6 +101,29 @@ struct level_guid_fixture : level_save_fixture
 	const fs::path lower = dir.path() / "lower";
 
 	boost::json::object saved(const std::string& relative) { return boost::json::parse(read_file(content / relative)).as_object(); }
+};
+
+// Path <-> ID both ways, as the editor's asset database answers.
+struct ids_index final : res::asset_index
+{
+	std::map<std::string, res::asset_id, std::less<>> ids;
+	std::map<res::asset_id, res::tag> paths;
+
+	void hold(const res::asset_id& id, std::string_view path)
+	{
+		ids.emplace(std::string(path), id);
+		paths.insert_or_assign(id, res::tag{ std::string(path) });
+	}
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		const auto found = ids.find(tag.view());
+		return found == ids.end() ? std::nullopt : std::optional{ found->second };
+	}
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
 };
 
 }
@@ -314,6 +342,49 @@ BOOST_AUTO_TEST_CASE(SaveAs_OverAFileBiggerThan64MiB_IsRefused)
 	BOOST_TEST(state.is_dirty());
 	BOOST_TEST(fs::file_size(content / "levels" / "huge.desc") == size);
 	fs::remove(content / "levels" / "huge.desc");
+}
+
+// #773: a level save writes a reference whose target has an ID as {guid, path}, and the next save gives the same bytes.
+BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
+{
+	scn::prefab_desc::prefab_comp_node sky;
+	sky.type_name = "skybox_desc";
+	sky.overrides["material"] = "res://sky.mat.desc";
+	// A guid the index does not know: written back as it is.
+	const boost::json::value unknown = boost::json::parse(R"({"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://gone.mat.desc"})");
+	scn::prefab_desc::prefab_comp_node lost_sky;
+	lost_sky.type_name = "skybox_desc";
+	lost_sky.overrides["material"] = unknown;
+	scn::world_desc world;
+	world.get_root().node_id = 1;
+	world.get_root().components["sky"] = std::move(sky);
+	world.get_root().components["sky_lost"] = std::move(lost_sky);
+	// No world name: no world is loaded here, so the save has no live transforms to take over.
+	state.world_descs.push_back(std::move(world));
+	state.level_tag = res::tag::make("levels/sky.desc");
+	state.level_guid = "11111111-2222-4333-8444-555555555555";
+
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(id, "res://sky.mat.desc");
+	rs->set_asset_index(index);
+	const bool first = level_ctrl.quick_save_level();
+	const std::string written = read_file(content / "levels" / "sky.desc");
+	const bool second = level_ctrl.quick_save_level();
+	rs->set_asset_index(nullptr);
+
+	BOOST_REQUIRE(first);
+	const boost::json::value file = boost::json::parse(written);
+	boost::system::error_code ec_of_pointer;
+	const boost::json::value* sky_json = file.find_pointer("/worlds/0/components/sky", ec_of_pointer);
+	const boost::json::value* lost_json = file.find_pointer("/worlds/0/components/sky_lost", ec_of_pointer);
+	BOOST_REQUIRE(sky_json);
+	BOOST_REQUIRE(lost_json);
+	BOOST_TEST(sky_json->at("material") == boost::json::value(boost::json::object{ { "guid", res::to_text(id) }, { "path", "res://sky.mat.desc" } }));
+	BOOST_TEST(lost_json->at("material") == unknown);
+	BOOST_TEST(file.at("__guid") == boost::json::value("11111111-2222-4333-8444-555555555555"), "the level's own __guid stays with an index");
+	BOOST_REQUIRE(second);
+	BOOST_TEST(read_file(content / "levels" / "sky.desc") == written);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

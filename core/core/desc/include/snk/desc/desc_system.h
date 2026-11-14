@@ -13,6 +13,7 @@
 #include <snk/desc/desc_pretty_json.h>
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -207,6 +208,24 @@ namespace desc
 
 		// resource_system::resolve_reference of the system this one loads through.
 		res::tag resolve_reference(const res::reference& ref) const;
+
+		// Writes the references of `root` the way a file keeps them (EPIC-57 section 4.4): in the res_tag and desc_ref fields
+		// of every typed object (in their lists, maps and structures too), a res:// path whose file has an ID becomes
+		// {"guid", "path"}, and a {guid, path} whose guid the asset index knows gets the path the file has now (one that is
+		// there already stays as written). An unknown guid stays as it is. "__parent", the values of custom fields, types
+		// without a schema and other protocols are not touched.
+		// `replaced`: the file `root` is written over, as it is now. A path it wrote with a guid gets that guid back where
+		// the index gives none (no index, an unknown guid, a duplicate): a writer never drops a guid the file had, unless
+		// the index puts that guid on another file.
+		void write_references(json::value& root, const json::value* replaced = nullptr) const;
+		// The same with the replaced file's bytes; ones that do not parse keep nothing.
+		void write_references(json::value& root, std::span<const std::byte> replaced_file) const;
+		// The same with the file at `file` read as it is now; none there, nothing to keep.
+		void write_references_over(json::value& root, const res::tag& file) const;
+		// The references of `value`, what an object of `schema` holds at `pointer` (empty: the object itself): an override
+		// record has no "__type", the component it applies to gives the schema. `merged_into` (the base value at `pointer`,
+		// may be null): where it holds an object, a path stays a string, since the record's value is merged into it.
+		void write_references(const type_schema& schema, std::string_view pointer, json::value& value, const json::value* merged_into = nullptr) const;
 
 		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
 		// its memory:// copy's diagnostics go to the owner's file at that path (#595).
