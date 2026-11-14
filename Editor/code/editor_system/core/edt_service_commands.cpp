@@ -1,13 +1,16 @@
 #include "edt_service_commands.h"
+#include "edt_agent_log_filter.h"
 #include <snk/command/cmd_json_schema.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <cstdint>
 #include <format>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace json = boost::json;
@@ -33,6 +36,9 @@ namespace {
 	const std::string JOB_LIST_SCHEMA = std::string(R"({"type":"object","properties":{"jobs":{"type":"array","items":)") + JOB_SCHEMA
 		+ R"(}},"required":["jobs"],"additionalProperties":false})";
 
+	// The problem sources filled from what a build or the reload after it printed (game_builder, live_build).
+	constexpr std::array<std::string_view, 2> BUILD_PROBLEM_SOURCES{ "build", "reload" };
+
 	constexpr const char* ID_ARGS_SCHEMA = R"({
 		"type": "object",
 		"properties": { "id": { "type": "integer", "minimum": 0 } },
@@ -53,16 +59,28 @@ namespace {
 		return cmd::result::failure(cmd::codes::invalid_args, "id is not an integer that fits");
 	}
 
-	json::value job_json(const edt::job_service::job_info& job)
+	// The text as this caller may read it: a person gets it as it is, the filter decides for anyone else (#935).
+	std::string shown(const cmd::log_read_filter* filter, const std::string& text, const cmd::origin& from)
+	{
+		return filter != nullptr && filter->redact ? filter->redact(text, from) : text;
+	}
+
+	// Whether this caller may read what a build printed: the filter's answer for the build's log category.
+	bool build_output_shown(const cmd::log_read_filter* filter, const cmd::origin& from)
+	{
+		return filter == nullptr || !filter->visible || filter->visible(edt::k_agent_build_category, from);
+	}
+
+	json::value job_json(const edt::job_service::job_info& job, const cmd::log_read_filter* filter, const cmd::origin& from)
 	{
 		json::object out{
 			{ "id", static_cast<std::int64_t>(job.id) },
-			{ "label", json::string(job.label) },
+			{ "label", json::string(shown(filter, job.label, from)) },
 			{ "status", json::string(edt::job_status_name(job.status)) },
 			{ "fraction", static_cast<double>(job.fraction) },
-			{ "note", json::string(job.note) },
+			{ "note", json::string(shown(filter, job.note, from)) },
 			{ "cancel_requested", job.cancel_requested } };
-		if (!job.error.empty()) out["error"] = json::string(job.error);
+		if (!job.error.empty()) out["error"] = json::string(shown(filter, job.error, from));
 		if (job.result) out["result"] = *job.result;
 		if (job.result_dropped) out["result_dropped"] = true;
 		return out;
@@ -76,6 +94,11 @@ namespace {
 
 std::vector<edt::registration> edt::register_job_commands(cmd::command_registry& commands, job_service& jobs)
 {
+	return register_job_commands(commands, jobs, nullptr);
+}
+
+std::vector<edt::registration> edt::register_job_commands(cmd::command_registry& commands, job_service& jobs, const cmd::log_read_filter* filter)
+{
 	std::vector<registration> out;
 
 	cmd::command_desc list;
@@ -83,9 +106,9 @@ std::vector<edt::registration> edt::register_job_commands(cmd::command_registry&
 	list.summary = "List the running background jobs (import, export, ...)";
 	list.category = cmd::agent_category::read;
 	list.result_schema = json::parse(JOB_LIST_SCHEMA);
-	list.invoke = [&jobs](const cmd::call&) {
+	list.invoke = [&jobs, filter](const cmd::call& request) {
 		json::array entries;
-		for (const auto& job : jobs.list()) entries.push_back(job_json(job));
+		for (const auto& job : jobs.list()) entries.push_back(job_json(job, filter, request.from));
 		return cmd::result::success(json::object{ { "jobs", std::move(entries) } });
 	};
 	keep(out, commands.add(std::move(list)));
@@ -96,13 +119,13 @@ std::vector<edt::registration> edt::register_job_commands(cmd::command_registry&
 	get.category = cmd::agent_category::read;
 	get.args_schema = json::parse(ID_ARGS_SCHEMA);
 	get.result_schema = json::parse(JOB_SCHEMA);
-	get.invoke = [&jobs](const cmd::call& request) {
+	get.invoke = [&jobs, filter](const cmd::call& request) {
 		const auto parsed = id_of(request);
 		if (!parsed) return bad_id();
 		const std::uint64_t id = *parsed;
 		const auto job = jobs.info(id);
 		if (!job) return cmd::result::failure(cmd::codes::not_found, std::format("no job {}", id));
-		return cmd::result::success(job_json(*job));
+		return cmd::result::success(job_json(*job, filter, request.from));
 	};
 	keep(out, commands.add(std::move(get)));
 
@@ -132,6 +155,11 @@ std::vector<edt::registration> edt::register_job_commands(cmd::command_registry&
 
 std::vector<edt::registration> edt::register_dialog_commands(cmd::command_registry& commands, dialog_service& dialogs)
 {
+	return register_dialog_commands(commands, dialogs, nullptr);
+}
+
+std::vector<edt::registration> edt::register_dialog_commands(cmd::command_registry& commands, dialog_service& dialogs, const cmd::log_read_filter* filter)
+{
 	std::vector<registration> out;
 
 	cmd::command_desc list;
@@ -160,13 +188,13 @@ std::vector<edt::registration> edt::register_dialog_commands(cmd::command_regist
 		"required": ["dialogs"],
 		"additionalProperties": false
 	})");
-	list.invoke = [&dialogs](const cmd::call&) {
+	list.invoke = [&dialogs, filter](const cmd::call& request) {
 		json::array entries;
 		for (const auto& dialog : dialogs.list()) {
 			entries.push_back(json::object{
 				{ "id", static_cast<std::int64_t>(dialog.id) },
 				{ "kind", json::string(dialog.kind) },
-				{ "text", json::string(dialog.text) },
+				{ "text", json::string(shown(filter, dialog.text, request.from)) },
 				{ "answer_schema", dialog.answer_schema },
 				{ "on_screen", dialog.on_screen } });
 		}
@@ -202,6 +230,11 @@ std::vector<edt::registration> edt::register_dialog_commands(cmd::command_regist
 }
 
 std::vector<edt::registration> edt::register_problem_commands(cmd::command_registry& commands, const problem_list& problems)
+{
+	return register_problem_commands(commands, problems, nullptr);
+}
+
+std::vector<edt::registration> edt::register_problem_commands(cmd::command_registry& commands, const problem_list& problems, const cmd::log_read_filter* filter)
 {
 	std::vector<registration> out;
 
@@ -242,27 +275,29 @@ std::vector<edt::registration> edt::register_problem_commands(cmd::command_regis
 		"required": ["problems"],
 		"additionalProperties": false
 	})");
-	list.invoke = [&problems](const cmd::call& request) {
+	list.invoke = [&problems, filter](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		std::optional<std::string> source;
 		if (const json::value* value = args.if_contains("source")) source = std::string(value->as_string());
 		std::optional<problem_severity> severity;
 		if (const json::value* value = args.if_contains("severity")) severity = problem_severity_from(value->as_string());
 
+		const bool build_shown = build_output_shown(filter, request.from);
 		json::array entries;
 		for (const auto& [from, item] : problems.list()) {
 			if (source && from != *source) continue;
 			if (severity && item.severity != *severity) continue;
+			if (!build_shown && std::find(BUILD_PROBLEM_SOURCES.begin(), BUILD_PROBLEM_SOURCES.end(), from) != BUILD_PROBLEM_SOURCES.end()) continue;
 			json::array notes;
-			for (const auto& note : item.notes) notes.push_back(json::string(note));
+			for (const auto& note : item.notes) notes.push_back(json::string(shown(filter, note, request.from)));
 			entries.push_back(json::object{
 				{ "source", json::string(from) },
 				{ "severity", json::string(problem_severity_name(item.severity)) },
-				{ "file", json::string(item.file) },
+				{ "file", json::string(shown(filter, item.file, request.from)) },
 				{ "line", std::max(item.line, 0) },
 				{ "column", std::max(item.column, 0) },
 				{ "code", json::string(item.code) },
-				{ "message", json::string(item.message) },
+				{ "message", json::string(shown(filter, item.message, request.from)) },
 				{ "notes", std::move(notes) } });
 		}
 		return cmd::result::success(json::object{ { "problems", std::move(entries) } });

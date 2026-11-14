@@ -337,7 +337,9 @@ edt::editor_system::~editor_system()
 		// They name this system: nothing of it may be asked once it is gone, and without them an agent would read the
 		// whole journal, so the registry's agents go first (m_agent_server above).
 		m_log_filter->visible = [](std::string_view, const cmd::origin& from) { return from.kind == cmd::origin_kind::ui; };
-		m_log_filter->redact = nullptr;
+		m_log_filter->redact = [](std::string_view text, const cmd::origin& from) {
+			return from.kind == cmd::origin_kind::ui ? std::string(text) : std::string{};
+		};
 	}
 	m_agent_access.reset();
 	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
@@ -405,8 +407,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_services.base_sfactory  = &data.require<ecs::system_factory>();
 	m_services.base_assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
+	// Filled in below, once the agent policy exists; job.*, dialog.list and problems.list ask it on every call (#935).
+	const cmd::log_read_filter* agent_filter = data.has_value<cmd::log_read_filter>() ? &data.require<cmd::log_read_filter>() : nullptr;
 	m_context = &data.construct<edt::editor_context>(m_res, m_rnd, m_gui, m_services,
-		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
+		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state, agent_filter);
 	m_context->adopt(register_state_commands(m_context->actions().commands(), state_command_sources{
 		m_context->documents(), m_context->selection(), m_services, m_context->asset_kinds(),
 		[&res = m_res] { return res.get_resource_layers(); } }));
@@ -1237,31 +1241,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
 			approved_snapshot_for(user_dir / "settings", options.project_dir));
 		// What log.read gives anyone but the person at the editor (#935). The filter is the engine's, kept in the storage.
+		ASSERT_MSG(commands.find("log.read") == nullptr || data.has_value<cmd::log_read_filter>(),
+			"log.read is registered without its filter: an agent would read the whole journal");
 		if (data.has_value<cmd::log_read_filter>()) {
 			m_log_filter = &data.require<cmd::log_read_filter>();
-			const auto build_allowed = [this, &commands] {
-				const cmd::command_desc* build = commands.find("build.game_module");
-				return m_agent_access != nullptr && build != nullptr
-					&& m_agent_access->policy().effective(*build).mode != cmd::policy_mode::deny;
-			};
-			// Asked for every entry of a read: the policy (which looks at its files) is asked a few times a second at most.
-			struct build_answer
-			{
-				bool allowed = false;
-				std::chrono::steady_clock::time_point at{};
-			};
-			m_log_filter->visible = [build_allowed, answer = std::make_shared<build_answer>()](std::string_view category, const cmd::origin& from) {
-				if (from.kind == cmd::origin_kind::ui) return true;
-				const auto now = std::chrono::steady_clock::now();
-				if (answer->at == std::chrono::steady_clock::time_point{} || now - answer->at > std::chrono::milliseconds(250)) {
-					answer->allowed = build_allowed();
-					answer->at = now;
-				}
-				return agent_log_category_visible(category, answer->allowed);
-			};
-			m_log_filter->redact = [roots = agent_log_roots_of(options.project_dir)](std::string_view text, const cmd::origin& from) {
-				return from.kind == cmd::origin_kind::ui ? std::string(text) : agent_log_text(text, roots);
-			};
+			install_agent_log_filter(*m_log_filter, [this, &commands] {
+				return m_agent_access != nullptr && agent_build_output_allowed(m_agent_access->policy(), commands);
+			}, agent_log_roots_of(options.project_dir));
 		}
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->set_policy_file(project_policy);

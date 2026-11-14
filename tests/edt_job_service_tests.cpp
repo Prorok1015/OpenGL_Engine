@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // job_service on a manual task_system: no threads, the test runs the lanes (run_one) and the main drain by hand.
@@ -759,6 +760,31 @@ BOOST_AUTO_TEST_CASE(JobGet_OfAFailedJob_CarriesTheError)
 	BOOST_REQUIRE_MESSAGE(failed.ok, failed.error);
 	BOOST_TEST(failed.value.as_object().at("status").as_string().c_str() == std::string("failed"));
 	BOOST_TEST(failed.value.as_object().at("error").as_string().c_str() == std::string("boom"));
+}
+
+// #935: the text of an exception may name a file on the disk; the filter of log.read rewrites it for whoever it says.
+BOOST_AUTO_TEST_CASE(JobGetAndList_WithAFilter_RewriteTheTexts_NotForAPerson)
+{
+	cmd::log_read_filter filter;
+	filter.redact = [](std::string_view text, const cmd::origin& from) {
+		return from.kind == cmd::origin_kind::ui ? std::string(text) : "[" + std::string(text) + "]";
+	};
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_job_commands(filtered, *jobs, &filter);
+	const auto id = start("work", [](ds::task_context&) -> int { throw std::runtime_error("cannot open /home/dev/x"); });
+	run_lane();
+	deliver();
+	const json::value args = json::parse(std::format(R"({{"id":{}}})", id));
+
+	const cmd::result as_agent = filtered.invoke("job.get", args, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	BOOST_TEST(as_agent.value.as_object().at("error").as_string().c_str() == std::string("[cannot open /home/dev/x]"));
+	BOOST_TEST(as_agent.value.as_object().at("label").as_string().c_str() == std::string("[work]"));
+
+	const cmd::result as_person = filtered.invoke("job.get", args, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	BOOST_TEST(as_person.value.as_object().at("error").as_string().c_str() == std::string("cannot open /home/dev/x"));
+	BOOST_TEST(as_person.value.as_object().at("label").as_string().c_str() == std::string("work"));
 }
 
 BOOST_AUTO_TEST_CASE(JobCancel_StopsARunningJob_AndRefusesUnknownAndFinishedOnes)

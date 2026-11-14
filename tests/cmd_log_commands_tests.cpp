@@ -230,4 +230,29 @@ BOOST_AUTO_TEST_CASE(AFilter_LeavesEntriesOutWithoutCountingThem_AndReplacesTheT
 	BOOST_TEST(texts(whole).size() == 7u);
 }
 
+// A small limit behind many hidden entries still gets the next shown one: the journal is asked for far more than it.
+BOOST_AUTO_TEST_CASE(AFilteredRead_IsNotEmptyBecauseOfTheEntriesLeftOut)
+{
+	cmd::log_read_filter filter;
+	filter.visible = [](std::string_view category, const cmd::origin&) { return category != "log_page_test/hidden"; };
+	cmd::command_registry filtered;
+	const cmd::registration filtered_registration = cmd::register_log_commands(filtered, &filter);
+	const auto read_from = [&filtered](std::uint64_t since) {
+		return filtered.invoke("log.read", json::parse(std::format(R"({{"category":"log_page_test","limit":1,"since_seq":{}}})", since)),
+			cmd::origin::agent("s1"));
+	};
+
+	const std::uint64_t first = engine::log_journal_next_seq();
+	for (int i = 0; i < 200; ++i) egLOG_INFO("log_page_test/hidden", "secret {}", i);
+	egLOG_INFO("log_page_test/shown", "found");
+	egLOG_INFO("log_page_test/shown", "later");
+
+	const auto page = read_from(first);
+	BOOST_REQUIRE_MESSAGE(page.ok, page.error);
+	BOOST_TEST((texts(page) == std::vector<std::string>{ "found" }));
+	const auto rest = read_from(static_cast<std::uint64_t>(page.value.as_object().at("next_seq").as_int64()));
+	BOOST_REQUIRE_MESSAGE(rest.ok, rest.error);
+	BOOST_TEST((texts(rest) == std::vector<std::string>{ "later" }));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

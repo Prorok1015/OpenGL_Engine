@@ -4,6 +4,7 @@
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +48,8 @@ namespace {
 
 	// A read that leaves entries out looks further than `limit`: at most this many pages of the journal.
 	constexpr std::size_t MAX_FILTERED_PAGES = 64;
+	// And asks the journal for this many at least, so a small `limit` among hidden entries does not come back empty.
+	constexpr std::size_t FILTERED_PAGE_SIZE = 500;
 
 	cmd::result read_log(const cmd::call& request, const cmd::log_read_filter* filter)
 	{
@@ -72,6 +75,7 @@ namespace {
 
 		const std::size_t wanted = query.limit;
 		const bool leaves_out = filter != nullptr && static_cast<bool>(filter->visible);
+		if (leaves_out) query.limit = std::max(wanted, FILTERED_PAGE_SIZE);
 		json::array entries;
 		entries.reserve(wanted);
 		engine::log_page page;
@@ -103,6 +107,11 @@ namespace {
 			{ "next_seq", static_cast<std::int64_t>(page.next_seq) },
 			{ "dropped", page.dropped } });
 	}
+}
+
+cmd::registration cmd::register_log_commands(command_registry& registry)
+{
+	return register_log_commands(registry, nullptr);
 }
 
 cmd::registration cmd::register_log_commands(command_registry& registry, const log_read_filter* filter)
