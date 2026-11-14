@@ -514,6 +514,7 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	// What the walk changed is a batch too: a change it saw first is not seen again by the deferred batch replayed after
 	// it. Nothing was published before the first walk.
 	asset_batch batch;
+	batch.from_walk = true;
 	if (!first_walk && !same_records) {
 		std::vector<std::string> came;
 		for (const auto& [key, record] : m_records) {

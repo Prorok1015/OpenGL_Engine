@@ -42,6 +42,20 @@ res::asset_id id_a()
 	return *res::asset_id_from_text(k_guid_a);
 }
 
+constexpr std::string_view k_guid_b = "8d1e4b2a-6c3f-4a9e-b7d0-2c4e6f8a0b1d";
+constexpr std::string_view k_guid_c = "5b7c9d1e-2f3a-4b5c-8d6e-7f8091a2b3c4";
+
+res::file_change change(std::string_view path, res::change_kind kind, std::string_view old_path = {})
+{
+	res::file_change out;
+	out.tag = res::tag::make(path);
+	if (!old_path.empty()) {
+		out.old_tag = res::tag::make(old_path);
+	}
+	out.kind = kind;
+	return out;
+}
+
 // A project: res/ (the one content layer) and .cache/, with resource_system over them and the database following it.
 struct project_fixture
 {
@@ -61,6 +75,28 @@ struct project_fixture
 	}
 
 	void pump() { test_util::pump(tasks); }
+
+	// What the database reports for `changes` (the watcher's thread is not waited for: its later batch of the same changes
+	// finds them applied).
+	edt::asset_batch apply(std::vector<res::file_change> changes) { return assets->apply_changes(changes); }
+
+	// `snapshot` answers as one taken now from the whole database, for every file it holds, the paths of `gone` and `ids`.
+	void expect_as_fresh(const edt::asset_index_snapshot& snapshot, const std::vector<res::tag>& gone,
+		const std::vector<res::asset_id>& ids)
+	{
+		edt::asset_index_snapshot fresh;
+		fresh.refresh(*assets);
+		std::vector<res::tag> paths = gone;
+		for (const auto& [key, record] : assets->records()) {
+			paths.push_back(record.path);
+		}
+		for (const res::tag& path : paths) {
+			BOOST_TEST((snapshot.id_of(path) == fresh.id_of(path)), path.view());
+		}
+		for (const res::asset_id& id : ids) {
+			BOOST_TEST((snapshot.path_of(id) == fresh.path_of(id)), res::to_text(id));
+		}
+	}
 
 	// The watcher polls on its own thread: one generous wait for what it reports.
 	template <class Pred>
@@ -348,6 +384,171 @@ BOOST_AUTO_TEST_CASE(dropped_changes_detach_the_index_until_the_next_walk)
 	link.poll();
 	BOOST_TEST(link.attached());
 	BOOST_TEST(resources->resolve_reference(by_id) == res::tag{ "res://a.txt" });
+}
+
+// #866: a watcher's batch is applied for the IDs it touches; a file without an ID, or whose ID keeps its holder,
+// changes nothing and copies nothing.
+BOOST_AUTO_TEST_CASE(a_batch_of_one_file_leaves_the_other_answers_and_takes_no_full_refresh)
+{
+	project.write("res/a.txt", "a");
+	project.write("res/a.txt.resource", meta_text(k_guid_a));
+	project.write("res/b.txt", "b");
+	project.write("res/b.txt.resource", meta_text(k_guid_b));
+	project.write("res/plain.txt", "p");
+	make_system();
+	assets->rebuild();
+	pump();
+	edt::asset_index_snapshot snapshot;
+	BOOST_TEST(snapshot.refresh(*assets));
+	BOOST_TEST(snapshot.full_refreshes() == 1u);
+
+	project.write("res/plain.txt", "plain, longer");
+	BOOST_TEST(!snapshot.apply_batch(*assets, apply({ change("plain.txt", res::change_kind::modified) })));
+	project.write("res/a.txt", "a, longer");
+	BOOST_TEST(!snapshot.apply_batch(*assets, apply({ change("a.txt", res::change_kind::modified) })));
+	BOOST_TEST(snapshot.full_refreshes() == 1u);
+	BOOST_TEST((snapshot.id_of(res::tag{ "res://a.txt" }) == std::optional{ id_a() }));
+	BOOST_TEST((snapshot.path_of(*res::asset_id_from_text(k_guid_b)) == std::optional{ res::tag{ "res://b.txt" } }));
+	BOOST_TEST(!snapshot.id_of(res::tag{ "res://plain.txt" }));
+}
+
+// #866: after an add, a move, a remove, a copy that carries an ID and the end of the file that held it, and an ID
+// changed by its .resource, the batch-by-batch snapshot answers as a fresh one for every file. The copy is warned about
+// once, also after it holds the ID.
+BOOST_AUTO_TEST_CASE(batch_by_batch_answers_as_a_fresh_snapshot_after_every_kind_of_batch)
+{
+	project.write("res/a.txt", "a");
+	project.write("res/a.txt.resource", meta_text(k_guid_a));
+	project.write("res/b.txt", "b");
+	project.write("res/b.txt.resource", meta_text(k_guid_b));
+	make_system();
+	assets->rebuild();
+	pump();
+	const res::asset_id a = id_a();
+	const res::asset_id b = *res::asset_id_from_text(k_guid_b);
+	const res::asset_id c = *res::asset_id_from_text(k_guid_c);
+	const std::vector<res::asset_id> ids{ a, b, c };
+	// The fresh snapshots warn of their own: only what the batch-by-batch one says is counted.
+	std::size_t copy_warnings = 0;
+	bool counting = true;
+	const engine::log_sink_handle sink = engine::add_log_sink([&copy_warnings, &counting](std::string_view category,
+		engine::log_level level, std::string_view message) {
+		if (counting && category == "assets" && level == engine::log_level::warn
+			&& message.starts_with("'res://d.txt' carries")) {
+			++copy_warnings;
+		}
+	});
+	edt::asset_index_snapshot snapshot;
+	snapshot.refresh(*assets);
+	const auto check = [&](const std::vector<res::tag>& gone) {
+		counting = false;
+		expect_as_fresh(snapshot, gone, ids);
+		counting = true;
+	};
+
+	project.write("res/c.txt", "c");
+	project.write("res/c.txt.resource", meta_text(k_guid_c));
+	fs::last_write_time(content / "c.txt", fs::file_time_type::clock::now() - std::chrono::hours(2));
+	BOOST_TEST(snapshot.apply_batch(*assets, apply({ change("c.txt", res::change_kind::created),
+		change("c.txt.resource", res::change_kind::created) })));
+	check({});
+
+	fs::create_directories(content / "moved");
+	fs::rename(content / "a.txt", content / "moved/a.txt");
+	fs::rename(content / "a.txt.resource", content / "moved/a.txt.resource");
+	BOOST_TEST(snapshot.apply_batch(*assets, apply({ change("moved/a.txt", res::change_kind::renamed, "a.txt"),
+		change("moved/a.txt.resource", res::change_kind::renamed, "a.txt.resource") })));
+	BOOST_TEST((snapshot.path_of(a) == std::optional{ res::tag{ "res://moved/a.txt" } }));
+	check({ res::tag{ "res://a.txt" } });
+
+	fs::remove(content / "b.txt");
+	fs::remove(content / "b.txt.resource");
+	BOOST_TEST(snapshot.apply_batch(*assets, apply({ change("b.txt", res::change_kind::deleted),
+		change("b.txt.resource", res::change_kind::deleted) })));
+	BOOST_TEST(!snapshot.path_of(b));
+	check({ res::tag{ "res://b.txt" } });
+
+	// A newer copy with the .resource of c: c keeps the ID, the copy is warned about.
+	project.write("res/d.txt", "c");
+	project.write("res/d.txt.resource", meta_text(k_guid_c));
+	BOOST_TEST(!snapshot.apply_batch(*assets, apply({ change("d.txt", res::change_kind::created),
+		change("d.txt.resource", res::change_kind::created) })));
+	BOOST_TEST(copy_warnings == 1u);
+	check({});
+
+	fs::remove(content / "c.txt");
+	fs::remove(content / "c.txt.resource");
+	BOOST_TEST(snapshot.apply_batch(*assets, apply({ change("c.txt", res::change_kind::deleted),
+		change("c.txt.resource", res::change_kind::deleted) })));
+	BOOST_TEST((snapshot.path_of(c) == std::optional{ res::tag{ "res://d.txt" } }));
+	check({ res::tag{ "res://c.txt" } });
+
+	// The .resource of d now names b: c is held by none, b by d.
+	project.write("res/d.txt.resource", meta_text(k_guid_b));
+	BOOST_TEST(snapshot.apply_batch(*assets, apply({ change("d.txt.resource", res::change_kind::modified) })));
+	BOOST_TEST(!snapshot.path_of(c));
+	BOOST_TEST((snapshot.path_of(b) == std::optional{ res::tag{ "res://d.txt" } }));
+	check({});
+
+	BOOST_TEST(copy_warnings == 1u);
+	BOOST_TEST(snapshot.full_refreshes() == 1u);
+}
+
+// #866: the holders are read from the database as it is, so two batches applied in a row, the second moving the file
+// the first added, answer as a fresh snapshot.
+BOOST_AUTO_TEST_CASE(two_batches_in_a_row_the_second_moving_what_the_first_added_answer_as_fresh)
+{
+	project.write("res/a.txt", "a");
+	project.write("res/a.txt.resource", meta_text(k_guid_a));
+	make_system();
+	assets->rebuild();
+	pump();
+	const res::asset_id c = *res::asset_id_from_text(k_guid_c);
+	edt::asset_index_snapshot snapshot;
+	snapshot.refresh(*assets);
+
+	project.write("res/e.txt", "e");
+	project.write("res/e.txt.resource", meta_text(k_guid_c));
+	const edt::asset_batch added = apply({ change("e.txt", res::change_kind::created),
+		change("e.txt.resource", res::change_kind::created) });
+	fs::rename(content / "e.txt", content / "f.txt");
+	fs::rename(content / "e.txt.resource", content / "f.txt.resource");
+	const edt::asset_batch moved = apply({ change("f.txt", res::change_kind::renamed, "e.txt"),
+		change("f.txt.resource", res::change_kind::renamed, "e.txt.resource") });
+
+	snapshot.apply_batch(*assets, added);
+	snapshot.apply_batch(*assets, moved);
+	BOOST_TEST((snapshot.path_of(c) == std::optional{ res::tag{ "res://f.txt" } }));
+	BOOST_TEST(!snapshot.id_of(res::tag{ "res://e.txt" }));
+	expect_as_fresh(snapshot, { res::tag{ "res://e.txt" } }, { id_a(), c });
+	BOOST_TEST(snapshot.full_refreshes() == 1u);
+}
+
+// #866: the link takes a watcher's batch batch by batch and a walk's whole.
+BOOST_AUTO_TEST_CASE(the_link_refreshes_the_whole_snapshot_after_a_walk_only)
+{
+	project.write("res/a.txt", "a");
+	project.write("res/a.txt.resource", meta_text(k_guid_a));
+	make_system();
+	edt::asset_index_link link(*assets, *resources);
+	assets->rebuild();
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	const std::size_t attached = link.index().full_refreshes();
+
+	project.write("res/b.txt", "b");
+	project.write("res/b.txt.resource", meta_text(k_guid_b));
+	apply({ change("b.txt", res::change_kind::created), change("b.txt.resource", res::change_kind::created) });
+	BOOST_TEST(link.index().full_refreshes() == attached);
+	BOOST_TEST((link.index().path_of(*res::asset_id_from_text(k_guid_b)) == std::optional{ res::tag{ "res://b.txt" } }));
+
+	project.write("res/c.txt", "c");
+	project.write("res/c.txt.resource", meta_text(k_guid_c));
+	assets->rebuild();
+	BOOST_REQUIRE(wait_for([&] { return !assets->scanning(); }));
+	BOOST_TEST(link.index().full_refreshes() > attached);
+	BOOST_TEST((link.index().path_of(*res::asset_id_from_text(k_guid_c)) == std::optional{ res::tag{ "res://c.txt" } }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
