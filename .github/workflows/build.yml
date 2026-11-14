@@ -1030,6 +1030,8 @@ jobs:
             --stderr "$err" --migrate tests/data/projects/migration_v1 -- --config Editor/config/editor.cfg || rc=$?
           tail -30 "$err" || true
           if [ "$rc" -ne 0 ]; then echo "::error::the MCP migration smoke failed (rc $rc, 124 = timed out)"; exit 1; fi
+          grep -q "agent server: MCP over stdin/stdout" "$err"
+          if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless MCP migration log"; exit 1; fi
 
       - name: Smoke run (smoke_level)
         run: |

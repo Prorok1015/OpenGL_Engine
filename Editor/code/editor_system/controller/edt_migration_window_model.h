@@ -63,6 +63,8 @@ namespace edt
 			std::string manifest;
 			// plan_text: the plan as the command line prints it.
 			std::string text;
+			// What project.migrate is given as plan_fingerprint: the migration runs only while the project gives this plan.
+			std::string fingerprint;
 		};
 
 		struct report_view
@@ -87,7 +89,8 @@ namespace edt
 		migration_window_model& operator=(const migration_window_model&) = delete;
 
 		phase state() const { return m_phase; }
-		// Asks for the plan on the next tick() (Refresh, the window opened). Ignored while the migration runs.
+		// Asks for the plan on the next tick() (Refresh, the window opened). Ignored while the migration runs and while a
+		// report is shown (it stays until Close).
 		void request_plan();
 		// Runs what request_plan asked for; the window calls it every frame it is drawn.
 		void tick();
@@ -107,6 +110,8 @@ namespace edt
 		const std::string& error_code() const { return m_error_code; }
 		const std::string& error_text() const { return m_error_text; }
 		const std::string& error_hint() const { return m_error_hint; }
+		// Why the plan shown was made again by itself (the project changed since it was shown); empty otherwise.
+		const std::string& notice() const { return m_notice; }
 
 		// What the person can do about an error code of these commands; empty: nothing to add.
 		static std::string hint_of(std::string_view code);
@@ -127,6 +132,7 @@ namespace edt
 		std::string m_error_code;
 		std::string m_error_text;
 		std::string m_error_hint;
+		std::string m_notice;
 		// Last: gone before the state its slot touches.
 		connection m_finished;
 	};

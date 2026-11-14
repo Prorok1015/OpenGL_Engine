@@ -47,8 +47,33 @@ namespace {
 	constexpr std::string_view k_plan_result_schema = R"json({"type":"object","properties":{
 		"code":{"type":"integer","description":"what editor --migrate --dry-run exits with: 0 nothing to do, 1 a migration is needed, 2 refused, 4 only files that are never migrated"},
 		"plan":{"type":"object"},
-		"text":{"type":"string"}},
-		"required":["code","plan","text"]})json";
+		"text":{"type":"string"},
+		"fingerprint":{"type":"string","description":"the plan and the project it was made from; pass it to project.migrate as plan_fingerprint"}},
+		"required":["code","plan","text","fingerprint"]})json";
+
+	constexpr std::string_view k_migrate_args_schema = R"json({"type":"object","properties":{
+		"plan_fingerprint":{"type":"string","minLength":16,"description":"the fingerprint of the plan that was shown (project.migration_plan): the migration is refused when the project no longer gives that plan"}},
+		"additionalProperties":false})json";
+
+	// A plan's fingerprint as the commands carry it: 16 lowercase hex digits.
+	std::string fingerprint_text(std::uint64_t value)
+	{
+		return std::format("{:016x}", value);
+	}
+
+	std::optional<std::uint64_t> parse_fingerprint(std::string_view text)
+	{
+		if (text.size() != 16) return std::nullopt;
+		std::uint64_t value = 0;
+		for (const char c : text) {
+			int digit = -1;
+			if (c >= '0' && c <= '9') digit = c - '0';
+			else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+			if (digit < 0) return std::nullopt;
+			value = (value << 4) | static_cast<std::uint64_t>(digit);
+		}
+		return value;
+	}
 
 	constexpr std::string_view k_job_result_schema = R"json({"type":"object","properties":{
 		"job":{"type":"integer","minimum":0}},"required":["job"],"additionalProperties":false})json";
@@ -453,8 +478,10 @@ namespace {
 		// Set by the job when it was cancelled: a run that has not written yet stops without writing.
 		std::shared_ptr<std::atomic<bool>> abandoned = std::make_shared<std::atomic<bool>>(false);
 		fs::path root;
-		// What the person was shown; none for a person's own call.
+		// What the person was shown (the ticket's record, or the plan_fingerprint of a person's call); none: nothing to check.
 		std::optional<std::uint64_t> shown;
+		// The fingerprint came with a person's call (the window): a change since is `plan_changed`, not `denied`.
+		bool shown_to_caller = false;
 		int frame = 0;
 		res::tag level;
 		bool modal_closed = false;
@@ -516,7 +543,8 @@ namespace {
 			if (!refused.empty()) code = pmg::k_exit_refused;
 			else if (!plan.empty()) code = pmg::k_exit_migration_needed;
 			else if (!pmg::skipped_by(plan).empty()) code = pmg::k_exit_partial;
-			return cmd::result::success(json::object{ { "code", code }, { "plan", std::move(planned) }, { "text", pmg::plan_text(plan) } });
+			return cmd::result::success(json::object{ { "code", code }, { "plan", std::move(planned) }, { "text", pmg::plan_text(plan) },
+				{ "fingerprint", fingerprint_text(fingerprint_of(*root, plan, code_identity())) } });
 		}
 
 		std::optional<std::string> describe(const cmd::call& call)
@@ -565,6 +593,15 @@ namespace {
 				return cmd::result::failure(cmd::codes::denied, retry ? "the plan the person approved is no longer kept; ask again"
 					: "the plan was not shown to a person; ask again");
 			}
+			// plan_fingerprint only ever adds a check: an agent's run stays bound to the plan its ticket recorded.
+			std::optional<std::uint64_t> passed;
+			if (const json::value* given = call.args.is_object() ? call.args.as_object().if_contains("plan_fingerprint") : nullptr) {
+				passed = given->is_string() ? parse_fingerprint(given->as_string()) : std::nullopt;
+				if (!passed) return cmd::result::failure(cmd::codes::invalid_args, "plan_fingerprint is not a fingerprint project.migration_plan gives");
+				if (shown && *passed != shown->fingerprint) {
+					return cmd::result::failure(cmd::codes::denied, "plan_fingerprint is not the plan the person approved; ask again");
+				}
+			}
 			// Refused for now: a retry (agent_confirmations repeats a `busy` with a fresh ticket, whose description sees the
 			// project as it is then) is still judged by the plan the person approved.
 			const auto refuse = [this, shown, &key](std::string code, std::string message) {
@@ -580,6 +617,9 @@ namespace {
 			if (shown) {
 				run->shown = shown->fingerprint;
 				std::erase_if(m_shown, [&key](const shown_plan& entry) { return entry.key == key; });
+			} else if (passed) {
+				run->shown = passed;
+				run->shown_to_caller = true;
 			}
 			// The io work runs the apply the main thread hands over, and otherwise waits for the answer. Once the apply was
 			// handed over it is never abandoned: it runs to its end (a stop refuses its hops, so it rolls back), and the main
@@ -625,6 +665,7 @@ namespace {
 
 	private:
 		static constexpr const char* k_no_project = "no_project";
+		static constexpr const char* k_plan_changed = "plan_changed";
 
 		// A plan a person was shown, by caller and by the ticket its question got (empty: described for a call allowed
 		// without a question). `approved`: a run the person approved was refused for now (busy): this record alone judges
@@ -779,6 +820,7 @@ namespace {
 
 			const pmg::migration_plan plan = make_plan(run.root);
 			if (run.shown && fingerprint_of(run.root, plan, code_identity()) != *run.shown) {
+				if (run.shown_to_caller) return stop(run, error_value(k_plan_changed, "the project changed since the plan was shown: nothing was written"));
 				return stop(run, error_value(cmd::codes::denied, "the project changed since the question: ask again"));
 			}
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(run.root);
@@ -967,7 +1009,7 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	migrate.summary = "Migrate the open project in place after a person approved the plan they were shown (as editor --migrate, "
 		"without --force). Refused while Play runs, a level loads or a build runs (`busy`) and with unsaved changes (`needs_input`). "
 		"Open documents are closed and the level is opened again; the job's result is the report";
-	migrate.args_schema = parse_schema(k_no_args_schema);
+	migrate.args_schema = parse_schema(k_migrate_args_schema);
 	migrate.result_schema = parse_schema(k_job_result_schema);
 	migrate.category = cmd::agent_category::project_migrate;
 	migrate.risk = cmd::danger::confirm;

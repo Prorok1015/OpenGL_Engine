@@ -33,5 +33,7 @@ namespace edt
 
 		migration_window_model m_model;
 		bool m_focus = false;
+		// "Reading the project..." was drawn: the next frame runs the scan.
+		bool m_planning_drawn = false;
 	};
 }

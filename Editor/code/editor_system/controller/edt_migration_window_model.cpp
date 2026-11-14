@@ -1,6 +1,7 @@
 #include "edt_migration_window_model.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/project_migration/pmg_command.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <cstddef>
@@ -9,6 +10,15 @@
 
 namespace {
 	namespace json = boost::json;
+	namespace pmg = prj::migration;
+
+	using model = edt::migration_window_model;
+	static_assert(model::k_code_done == pmg::k_exit_done && model::k_code_needed == pmg::k_exit_migration_needed
+		&& model::k_code_refused == pmg::k_exit_refused && model::k_code_partial == pmg::k_exit_partial
+		&& model::k_code_rolled_back == pmg::k_exit_rolled_back && model::k_code_rollback_failed == pmg::k_exit_rollback_failed,
+		"the window's codes are the command line's exit codes");
+
+	constexpr std::string_view k_plan_changed = "plan_changed";
 
 	// A report.md of a big project stays readable; the rest is in .snk/migrations/<id>/report.md.
 	constexpr std::size_t k_text_cap = 256 * 1024;
@@ -88,6 +98,7 @@ namespace {
 		edt::migration_window_model::plan_view out;
 		out.code = static_cast<int>(int_of(answer, "code", -1));
 		out.text = text_of(answer, "text");
+		out.fingerprint = string_of(answer, "fingerprint");
 		const json::value* planned = answer.if_contains("plan");
 		if (!planned || !planned->is_object()) return out;
 		const json::object& plan = planned->as_object();
@@ -169,6 +180,7 @@ std::string edt::migration_window_model::hint_of(std::string_view code)
 	if (code == "no_project") return "Open a project first.";
 	if (code == "busy") return "Something else is running. Try again once it has ended.";
 	if (code == "needs_input") return "Save or discard the unsaved changes and finish the edit in progress, then press Migrate again.";
+	if (code == k_plan_changed) return "The plan was made again from the project as it is now. Look at it and press Migrate again.";
 	if (code == "denied") return "The project changed since the plan was made. Refresh the plan and try again.";
 	if (code == "failed") return "See the log and .snk/migrations in the project for what happened.";
 	return {};
@@ -203,7 +215,8 @@ void edt::migration_window_model::fail(std::string code, std::string_view text)
 
 void edt::migration_window_model::request_plan()
 {
-	if (m_phase == phase::running) return;
+	if (m_phase == phase::running || m_phase == phase::report_shown) return;
+	m_notice.clear();
 	m_phase = phase::planning;
 }
 
@@ -232,7 +245,11 @@ void edt::migration_window_model::migrate()
 {
 	if (!can_migrate()) return;
 	clear_error();
-	const cmd::result started = m_ports.invoke("project.migrate", json::object{});
+	m_notice.clear();
+	// Only the plan shown is applied: a project that gives another plan by then is refused (plan_changed).
+	json::object args;
+	if (!m_plan->fingerprint.empty()) args["plan_fingerprint"] = m_plan->fingerprint;
+	const cmd::result started = m_ports.invoke("project.migrate", std::move(args));
 	if (!started.ok) {
 		fail(started.code.empty() ? std::string("failed") : started.code, started.error);
 		return;
@@ -253,6 +270,7 @@ void edt::migration_window_model::close()
 	m_phase = phase::idle;
 	m_plan.reset();
 	m_report.reset();
+	m_notice.clear();
 	clear_error();
 }
 
@@ -282,6 +300,14 @@ void edt::migration_window_model::finished(std::uint64_t id, job_status status, 
 	}
 	if (!report.error_code.empty()) {
 		egLOG_WARN("project/migrate", "migration window: {}: {}", report.error_code, report.error_text);
+	}
+	if (report.error_code == k_plan_changed) {
+		// Nothing was written: the person sees the plan as the project gives it now, and decides again.
+		m_notice = "The project changed since the plan was shown; the plan is refreshed. " + hint_of(k_plan_changed);
+		m_report.reset();
+		m_plan.reset();
+		m_phase = phase::planning;
+		return;
 	}
 	m_report = std::move(report);
 }

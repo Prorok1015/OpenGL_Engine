@@ -7,6 +7,8 @@
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
+#include <boost/json/value_to.hpp>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -21,7 +23,7 @@ namespace {
 namespace json = boost::json;
 using phase = edt::migration_window_model::phase;
 
-constexpr const char* k_plan = R"({"code":1,"text":"plan text","plan":{
+constexpr const char* k_plan = R"({"code":1,"text":"plan text","fingerprint":"0123456789abcdef","plan":{
 	"files":[{"path":"res/cameras/cam_v1.desc","steps":[{"type":"camera_desc","from":1,"to":2,"summary":"drops the pose"}],
 		"warnings":[{"type":"camera_desc","from":1,"to":2,"message":"the pose is lost"}]},
 		{"path":"res/levels/old.desc","steps":[{"type":"level_desc","from":1,"to":2,"summary":"worlds by name"}],"warnings":[]}],
@@ -216,6 +218,50 @@ BOOST_AUTO_TEST_CASE(AJobThatAnswersWithAnError_ShowsIt)
 	BOOST_TEST(model.report()->code == 6);
 	BOOST_TEST(model.report()->error_text == "the migration stopped: boom");
 	BOOST_TEST(model.report()->level == "Level res://levels/old.desc not reopened: left detached");
+}
+
+// Only the plan shown is applied: project.migrate gets its fingerprint.
+BOOST_AUTO_TEST_CASE(Migrate_PassesTheFingerprintOfThePlanShown)
+{
+	plan();
+	BOOST_TEST(model.plan()->fingerprint == "0123456789abcdef");
+	model.migrate();
+	BOOST_REQUIRE(calls.back().id == "project.migrate");
+	BOOST_TEST(json::value_to<std::string>(calls.back().args.at("plan_fingerprint")) == "0123456789abcdef");
+}
+
+// The project changed between the plan shown and the run: nothing was written; the plan is made again and says why.
+BOOST_AUTO_TEST_CASE(APlanChangedAnswer_PlansAgain_WithANotice)
+{
+	plan();
+	model.migrate();
+	finish(json::parse(R"({"error":{"code":"plan_changed","message":"the project changed since the plan was shown: nothing was written"}})"));
+	BOOST_TEST((model.state() == phase::planning));
+	BOOST_TEST(!model.report().has_value());
+	BOOST_TEST(!model.notice().empty());
+	model.tick();
+	BOOST_TEST_REQUIRE((model.state() == phase::plan_shown));
+	BOOST_TEST(model.notice().find("the plan is refreshed") != std::string::npos);
+	BOOST_TEST(std::ranges::count_if(calls, [](const call& made) { return made.id == "project.migration_plan"; }) == 2);
+	// A Refresh of the person's own clears it.
+	model.request_plan();
+	BOOST_TEST(model.notice().empty());
+}
+
+// The report stays until Close: opening the window again (which asks for a plan) does not replace it.
+BOOST_AUTO_TEST_CASE(TheReport_StaysWhenTheWindowIsOpenedAgain)
+{
+	plan();
+	model.migrate();
+	finish(json::parse(k_report));
+	BOOST_TEST_REQUIRE((model.state() == phase::report_shown));
+	model.request_plan();
+	model.tick();
+	BOOST_TEST((model.state() == phase::report_shown));
+	BOOST_TEST(model.report()->id == "20261114T000000Z-0.2.0");
+	model.close();
+	model.request_plan();
+	BOOST_TEST((model.state() == phase::planning));
 }
 
 BOOST_AUTO_TEST_CASE(Close_GoesBackToIdle)

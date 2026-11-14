@@ -65,15 +65,22 @@ void edt::migration_panel::on_before_begin()
 
 void edt::migration_panel::on_render()
 {
+	// The scan blocks the frame it runs in: it runs at the start of the frame after the one that showed
+	// "Reading the project...", so that line reaches the screen first.
+	if (m_model.state() == migration_window_model::phase::planning && m_planning_drawn) {
+		m_planning_drawn = false;
+		m_model.tick();
+	}
 	switch (m_model.state()) {
 	case migration_window_model::phase::idle: draw_idle(); break;
-	case migration_window_model::phase::planning: ImGui::TextDisabled("Reading the project..."); break;
+	case migration_window_model::phase::planning:
+		ImGui::TextDisabled("Reading the project...");
+		m_planning_drawn = true;
+		break;
 	case migration_window_model::phase::plan_shown: draw_plan(); break;
 	case migration_window_model::phase::running: draw_running(); break;
 	case migration_window_model::phase::report_shown: draw_report(); break;
 	}
-	// After the frame is drawn: "Reading the project..." shows for a frame before the scan.
-	m_model.tick();
 }
 
 void edt::migration_panel::draw_error()
@@ -98,6 +105,10 @@ void edt::migration_panel::draw_plan()
 		for (const migration_window_model::file_entry& file : plan.files) {
 			for (const std::string& warning : file.warnings) warnings.push_back(file.path + ": " + warning);
 		}
+		if (!m_model.notice().empty()) {
+			coloured(k_warning, m_model.notice());
+			ImGui::Separator();
+		}
 		if (!warnings.empty()) {
 			coloured(k_warning, "Warnings (data may be lost):");
 			bullets(warnings);
@@ -121,10 +132,14 @@ void edt::migration_panel::draw_plan()
 			for (std::size_t i = 0; i < plan.files.size(); ++i) {
 				const migration_window_model::file_entry& file = plan.files[i];
 				ImGui::PushID(static_cast<int>(i));
-				if (ImGui::Selectable(file.path.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+				// An id of its own and the path as plain text: a "##" in a file name is shown, not taken for an id.
+				const float row_x = ImGui::GetCursorPosX();
+				if (ImGui::Selectable("##file", false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 					m_model.open_file(file.path);
 				}
 				if (ImGui::IsItemHovered()) ImGui::SetTooltip("Double click: open the file");
+				ImGui::SameLine(row_x);
+				ImGui::TextUnformatted(file.path.c_str());
 				ImGui::Indent();
 				bullets(file.steps);
 				ImGui::Unindent();

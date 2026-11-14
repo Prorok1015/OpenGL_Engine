@@ -701,6 +701,47 @@ BOOST_AUTO_TEST_CASE(ACancelAfterTheCommit_IsRefused_AndTheAnswerSaysSo)
 	BOOST_TEST(std::string(result.at("text").as_string()).find("after the migration was committed") != std::string::npos);
 }
 
+// UI review of #761: only the plan that was shown is applied. A person's call (the window) passes the plan's fingerprint;
+// a project that gives another plan by the run is refused with plan_changed and nothing is written.
+BOOST_AUTO_TEST_CASE(APersonsRun_WithTheFingerprintOfAnOlderPlan_IsRefusedAsPlanChanged)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const cmd::result planned = call("project.migration_plan", {}, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(planned.ok, planned.error);
+	const std::string fingerprint(planned.value.at("fingerprint").as_string());
+	BOOST_TEST(fingerprint.size() == 16u);
+	// Someone edits a desc while the window shows the plan.
+	write_text(copy.res() / "cameras/cam_v1.desc", read_text(copy.res() / "cameras/cam_v1.desc") + "\n");
+	const auto before = snapshot(copy.root());
+	const json::object result = job_result(call("project.migrate", { { "plan_fingerprint", fingerprint } }, cmd::origin::ui()));
+	BOOST_TEST(error_code_of(result) == "plan_changed", json::serialize(result));
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+// For an agent the fingerprint only adds a check: one that is not the plan its ticket recorded is denied at the call.
+BOOST_AUTO_TEST_CASE(AnAgentsForeignFingerprint_IsDenied_TheMatchingOneRuns)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = snapshot(copy.root());
+	const cmd::result planned = call("project.migration_plan");
+	BOOST_REQUIRE_MESSAGE(planned.ok, planned.error);
+	const std::string fingerprint(planned.value.at("fingerprint").as_string());
+	std::string foreign = fingerprint;
+	foreign[0] = foreign[0] == '0' ? '1' : '0';
+
+	static_cast<void>(ask());
+	const cmd::result refused = call("project.migrate", { { "plan_fingerprint", foreign } });
+	BOOST_TEST(refused.code == cmd::codes::denied);
+	BOOST_TEST(call("project.migrate", { { "plan_fingerprint", "not a fingerprint" } }).code == cmd::codes::invalid_args);
+	BOOST_TEST((snapshot(copy.root()) == before));
+	BOOST_TEST(!closed);
+
+	const json::object result = job_result(call("project.migrate", { { "plan_fingerprint", fingerprint } }));
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_partial);
+}
+
 // The game module swapped between the question and the run: the code that would migrate is not the one asked about.
 BOOST_AUTO_TEST_CASE(ACodeChangeAfterTheQuestion_IsDenied)
 {

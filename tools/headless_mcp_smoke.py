@@ -256,6 +256,7 @@ def drive_migration(session, first_id, project, timeout):
     if not isinstance(structured, dict) or structured.get("code") != 1:
         raise SmokeFailure(f"project_migration_plan: expected code 1 (a migration is needed), got {structured!r}")
     files = structured.get("plan", {}).get("files", [])
+    planned_paths = sorted(file.get("path") for file in files if isinstance(file, dict))
     print(f"tools/call project_migration_plan: code 1, {len(files)} files")
 
     deadline = session.deadline(timeout)
@@ -296,7 +297,23 @@ def drive_migration(session, first_id, project, timeout):
     journal = os.path.join(project, ".snk", "migrations", migration_id, "report.json")
     if not os.path.isfile(journal):
         raise SmokeFailure(f"the journal {journal} is missing")
+    with open(journal, encoding="utf-8") as file:
+        written = json.load(file)
+    if written.get("id") != migration_id or written.get("status") != result.get("status"):
+        raise SmokeFailure(f"report.json says id {written.get('id')!r}, status {written.get('status')!r}; "
+                           f"the job said {migration_id!r}, {result.get('status')!r}")
+    journal_files = [entry.get("path") for entry in written.get("files", []) if isinstance(entry, dict)]
+    if not journal_files:
+        raise SmokeFailure("report.json lists no file")
+    # Every planned file, and project.snkproj, which the migration stamps last.
+    journal_paths = sorted(path for path in journal_files if path != "project.snkproj")
+    if journal_paths != planned_paths or "project.snkproj" not in journal_files:
+        raise SmokeFailure(f"report.json files {journal_files} are not the plan's {planned_paths} plus project.snkproj")
     level = result.get("level", {})
+    # The fixture's start_scene is res://levels/old.desc: the editor loads it at start, the migration detaches it and
+    # loads it again from the migrated file.
+    if level.get("tag") != "res://levels/old.desc" or level.get("reopened") is not True:
+        raise SmokeFailure(f"expected res://levels/old.desc reopened, got {level!r}")
     print(f"migration {migration_id}: code {code}, {result['status']}, {len(result['report'].get('files', []))} files written, "
           f"level reopened: {level.get('reopened')}")
     return next_id()
@@ -308,11 +325,11 @@ def run(arguments):
         editor_args = editor_args[1:]
     scratch = None
     project = None
-    if arguments.migrate:
-        scratch = tempfile.mkdtemp(prefix="snk_mcp_migrate_")
-        project, answers = prepare_migration(arguments.migrate, scratch)
-        editor_args = [*editor_args, "--project", project, "--allow-engine-version-mismatch", "--agent-policy", answers]
     try:
+        if arguments.migrate:
+            scratch = tempfile.mkdtemp(prefix="snk_mcp_migrate_")
+            project, answers = prepare_migration(arguments.migrate, scratch)
+            editor_args = [*editor_args, "--project", project, "--allow-engine-version-mismatch", "--agent-policy", answers]
         return run_editor(arguments, editor_args, project)
     finally:
         if scratch:
