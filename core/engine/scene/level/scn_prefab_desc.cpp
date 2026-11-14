@@ -909,11 +909,11 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 			}
 			reg.emplace_or_replace<scn::name_component>(child, scn::name_component{ .name = std::string{ name } });
 
-			apply_node_path(reg, live, child, node_id);
+			scn::apply_node_path(reg, live, child, node_id);
 			reconcile_node(assembler, reg, child, child_node, reconcile_mode::reload, walk);
 		} else {
 			child = create_child_entity(reg, live, std::string{ name }, local);
-			apply_node_path(reg, live, child, node_id);
+			scn::apply_node_path(reg, live, child, node_id);
 			reconcile_node(assembler, reg, child, child_node, reconcile_mode::spawn, walk);
 		}
 		kept.insert(child);
