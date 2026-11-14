@@ -121,6 +121,9 @@ namespace edt
 		// the configuration no longer needs --fresh, unless it was marked again after `generation` (the request's
 		// fresh_generation). Null: nothing is recorded.
 		std::function<void(std::string_view configuration, std::uint64_t generation)> on_fresh_configured;
+		// Why no build may start now (a project migration writes the project, #761): start() answers `busy` with it.
+		// Null or nullopt: builds start.
+		std::function<std::optional<std::string>()> start_blocker;
 	};
 
 	// What one build produced; filled on the worker thread.

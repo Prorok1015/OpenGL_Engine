@@ -11,6 +11,8 @@ namespace edt
 	// A non-interactive run (-n) never gets here: core_module refuses the project before the window opens (#403).
 	// For an older project `open_anyway` (when given) adds "Open Anyway": it restarts the editor on the project with
 	// --allow-engine-version-mismatch (#158); this editor then goes on as if the user had chosen to continue.
+	// `migrate` (when given, an older project too) adds "Migrate...": the same restart plus --open-migration, so the new
+	// editor opens the Project Migration window (EPIC-58 S8, #761).
 	void ask_about_held_project(dialog_service& dialogs, prj::held_project& project, std::function<void()> quit,
-		std::function<void()> open_anyway = {});
+		std::function<void()> open_anyway = {}, std::function<void()> migrate = {});
 }

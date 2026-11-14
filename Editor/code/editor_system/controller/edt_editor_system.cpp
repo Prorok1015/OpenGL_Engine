@@ -8,6 +8,7 @@
 #include <chrono>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/fs_paths.h>
 #include "edt_selection_wiring.h"
 #include "edt_prefab_document.h"
 #include "edt_editor_camera.h"
@@ -45,6 +46,8 @@
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
 #include "edt_migration_commands.h"
+#include "edt_migration_window_model.h"
+#include "edt_migration_panel.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -174,7 +177,9 @@ namespace {
 
 	// Switching projects restarts the editor (EPIC-42 #158): the same program and config file, the other project.
 	// Overrides given with --set are not carried over.
-	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch)
+	// --open-migration (#761): the new editor opens the Project Migration window once the project is open.
+	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch,
+		bool open_migration)
 	{
 		const std::filesystem::path program = platform::current_executable();
 		if (program.empty()) {
@@ -187,6 +192,9 @@ namespace {
 		args.insert(args.end(), { "--project", utf8_of(manifest_file) });
 		if (allow_engine_version_mismatch) {
 			args.push_back("--allow-engine-version-mismatch");
+		}
+		if (open_migration) {
+			args.push_back("--open-migration");
 		}
 		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", utf8_of(manifest_file));
 		auto started = platform::spawn_detached(program, args);
@@ -215,6 +223,9 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
 	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
 	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
+	// --open-migration (#761): once the project is open and the start level settled, the Project Migration window opens
+	// with a fresh plan ("Migrate..." of the engine version question restarts the editor with it). Ignored headless.
+	CFG_VAR_DEF_BOOL(cfg_open_migration, "editor/open_migration", false);
 	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
 	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
@@ -643,6 +654,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
 	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
+		if (auto migrating = migration_blocker()) return migrating;
 		if (m_loading_level) return std::string{ "a level is loading" };
 		if (m_migration_stopped) {
 			if (m_migration_stopped->rolled_back && m_migration_stopped->rolled_back()) {
@@ -656,6 +668,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
 	// its level (#518). A person has no menu or shortcut then.
 	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
+		if (auto migrating = migration_blocker()) return migrating;
 		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
 		if (m_loading_level) return std::string{ "a level is loading" };
 		return std::nullopt;
@@ -665,6 +678,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 #endif
 	hooks.agent_import = m_agent_import.get();
 	hooks.exit = m_exit_action;
+	hooks.exit_blocker = [this] { return migration_blocker(); };
 	hooks.resources_path = m_res.get_resources_path();
 	hooks.open_project = start_editor_on;
 	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
@@ -826,6 +840,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		migration.current_level_tag = [this] { return current_level_tag(); };
 		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
+		migration.running_changed = [this](bool running) { m_migration_running = running; };
 		migration.show_progress = [](bool open) {
 			constexpr const char* title = "Migrating Project##edt_migrate";
 			ImGui::OpenPopup(title);
@@ -841,6 +856,30 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		for (auto& command : register_migration_commands(m_context->actions().commands(), std::move(migration))) {
 			m_registrations.push_back(std::move(command));
 		}
+	}
+	// EPIC-58 S8 (#761): Project > Migrate Project... opens the Project Migration window, which runs the two commands above as
+	// a person's calls (origin ui) and takes the migration's answer from job_finished.
+	{
+		migration_window_model::ports ports;
+		ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
+		ports.open_file = [this, &data](const std::string& path) {
+			if (!data.has_value<prj::project_context>()) return;
+			const prj::project_context& project = data.require<prj::project_context>();
+			const std::filesystem::path file = (project.root / fs_paths::path_from_utf8(path)).lexically_normal();
+			for (const std::filesystem::path& content : project.content_roots) {
+				const std::filesystem::path relative = file.lexically_relative(content.lexically_normal());
+				if (relative.empty() || *relative.begin() == std::filesystem::path("..")) continue;
+				if (!open_asset(res::tag::make(fs_paths::generic_utf8_of(relative)), false)) {
+					egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
+				}
+				return;
+			}
+			egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
+		};
+		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));
+		add_panel(m_migration_panel, dock_slot::floating, false);
+		m_registrations.push_back(register_migration_window_action(m_context->actions(),
+			[&data] { return data.has_value<prj::project_context>(); }, [this] { open_migration_window(); }));
 	}
 	m_file_menu->attach_window_close(wnd_sys);
 
@@ -869,6 +908,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	build_options.events = &m_context->events();
 	build_options.auto_jobs = [] { return estimate_jobs().jobs; };
+	build_options.start_blocker = [this] { return migration_blocker(); };
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
@@ -931,6 +971,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		editor_layer->register_implicit(id, std::move(poll));
 	};
 	reload_options.defer = [this] {
+		if (auto migrating = migration_blocker()) return *migrating;
 		if (auto loading = load_in_progress()) return *loading;
 		if (const auto contexts = m_services.ctx_manager.lock(); contexts && contexts->level_switch_pending()) {
 			return std::string{ "the game is switching to another level" };
@@ -1022,13 +1063,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	const bool project_held = data.has_value<prj::held_project>();
 	if (project_held) {
 		auto& held = data.require<prj::held_project>();
-		ask_about_held_project(m_context->dialogs(), held, m_exit_action, [this, manifest = held.manifest_file] {
+		// Open Anyway, and Migrate... (#761): the same restart, the new editor opening the Project Migration window.
+		const auto restart_on = [this, manifest = held.manifest_file](bool open_migration) {
 			const auto outcome = m_context->actions().invoke("file.open_project", boost::json::object{
-				{ "path", utf8_of(manifest) }, { "allow_engine_version_mismatch", true }, { "discard_unsaved", true } });
+				{ "path", utf8_of(manifest) }, { "allow_engine_version_mismatch", true }, { "discard_unsaved", true },
+				{ "open_migration", open_migration } });
 			if (!outcome.ok) {
 				m_context->dialogs().message(message_level::error, std::format("The project was not opened: {}.", outcome.error));
 			}
-		});
+		};
+		ask_about_held_project(m_context->dialogs(), held, m_exit_action, [restart_on] { restart_on(false); },
+			[restart_on] { restart_on(true); });
 	}
 
 	std::string startup_level = scn::start_level_name(data, *cfg_startup_level);
@@ -1068,6 +1113,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				if (start_in_game && m_modes) m_modes->finish_startup(loaded, static_cast<bool>(m_stop_after_level_loaded));
 				return false;
 			}));
+	}
+
+	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
+		editor_layer->register_implicit("edt/open_migration", [this] {
+			const bool settling = m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
+				|| editor_layer->has_implicit_prefix("edt/load_level");
+			if (settling) return true;
+			open_migration_window();
+			return false;
+		});
 	}
 
 	bool stdio = cfg_mcp_stdio;
@@ -1369,7 +1424,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	};
 	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
 	// The document changes once these land: Play would be built from the old one and the new one land under it.
-	options.start_blocker = [this] { return load_in_progress(); };
+	options.start_blocker = [this] {
+		if (auto migrating = migration_blocker()) return migrating;
+		return load_in_progress();
+	};
 	options.each_frame = [this](const std::string& id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
 	options.preflight = [this] {
 		play_preflight_services services;
@@ -1503,6 +1561,13 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		draw_play_status();
 		m_live_mode->draw_status();
 	});
+}
+
+void edt::editor_system::open_migration_window()
+{
+	if (m_migration_panel == nullptr) return;
+	m_context->panels().set_open(m_migration_panel->get_id(), true);
+	m_migration_panel->show_and_plan();
 }
 
 void edt::editor_system::open_agents_panel()
@@ -2141,6 +2206,12 @@ void edt::editor_system::go_to(const desc_target& target)
 	if (!open_asset(res::tag{ target.resource }, true)) {
 		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
 	}
+}
+
+std::optional<std::string> edt::editor_system::migration_blocker() const
+{
+	if (m_migration_running) return std::string{ "a project migration is running" };
+	return std::nullopt;
 }
 
 std::optional<std::string> edt::editor_system::load_in_progress() const

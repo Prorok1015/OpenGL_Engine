@@ -27,9 +27,10 @@ namespace edt
 	class job_service;
 
 	// project.migration_plan / project.migrate (EPIC-58 S7, #759): an agent reads the plan of migrating the open project
-	// and, after a person approved the plan they were shown, migrates the project in place. The migration runs on the
-	// main thread across a few frames (a modal, then the writes, then the level is opened again); the job of
-	// project.migrate only waits for it and answers with the report. Main thread only.
+	// and, after a person approved the plan they were shown, migrates the project in place across a few frames (a modal,
+	// the checks, then the level is opened again). apply_migration runs in the job's io work (#761) while the main thread
+	// keeps drawing the modal and runs the engine's desc loads it hands over (apply_context::on_main); what the mounts
+	// report waits meanwhile (resource_system::hold_changes). The job answers with the report. Main thread only.
 	struct migration_deps
 	{
 		explicit migration_deps(job_service& job_service_) : jobs(job_service_) {}
@@ -49,7 +50,7 @@ namespace edt
 		std::function<std::optional<std::string>()> unsaved_reason;
 		// Closes the prefab editor and the data documents, lets go of the level (detach) and returns its tag (invalid: none).
 		std::function<res::tag()> close_documents_and_detach_level;
-		// Paused while files are written (the level's watch); the level load watches again.
+		// Called on the main thread before the apply starts (the level's watch); the level load watches again.
 		std::function<void()> pause_watch;
 		// After the writes: a file of the project changed on disk.
 		std::function<void(const res::tag&)> signal_changed;
@@ -75,7 +76,11 @@ namespace edt
 		// files until `rolled_back()` says the migration was rolled back or another level is loaded; `reason` says how.
 		std::function<void(const res::tag& level, std::function<bool()> rolled_back, const std::string& reason)> level_left_detached;
 		// Tests only: stands in for prj::migration::apply_migration (one that throws); null: the real one.
+		// Runs on the io lane like the real one; the context's on_main reaches the main thread.
 		std::function<prj::migration::apply_outcome(const prj::migration::migration_plan&, const prj::migration::apply_context&)> apply;
+		// true once a run starts writing (the apply is handed to the io lane), false when it ended: the editor refuses
+		// Play, level changes and saves, builds, module reloads and quitting meanwhile. Null: nothing is told.
+		std::function<void(bool running)> running_changed;
 	};
 
 	inline constexpr std::string_view k_migration_frame_id = "edt/migrate_project";

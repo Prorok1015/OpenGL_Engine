@@ -250,7 +250,9 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 		("force", "with --migrate: leave invalid files as they are instead of refusing the migration")
 		("report", po::value<std::string>(), "with --migrate: also write the report (or the plan) to this file, outside the project")
 		("migrate-rollback", po::value<std::string>(), "editor only, with --headless: put the project back as it was before "
-			"migration <id> (.snk/migrations/<id>) and exit");
+			"migration <id> (.snk/migrations/<id>) and exit")
+		("open-migration", "editor only: once the project is open, open the Project Migration window with its plan (what "
+			"Migrate... of the engine version question restarts the editor with); ignored with --headless");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
@@ -292,6 +294,9 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 	}
 	if (vm.count("mcp-stdio")) {
 		set_registered("editor/mcp_stdio", "true");
+	}
+	if (vm.count("open-migration")) {
+		set_registered("editor/open_migration", "true");
 	}
 	if (vm.count("agent-policy")) {
 		set_registered("editor/agent_policy_file", vm["agent-policy"].as<std::string>());
