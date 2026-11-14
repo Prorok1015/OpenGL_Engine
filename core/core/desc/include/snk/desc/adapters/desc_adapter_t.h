@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
@@ -15,6 +16,8 @@ namespace core::desc
 	{
 	public:
 		static inline auto INFO = ::res::adapter_info::make<::desc::desc_base>({ "desc" });
+		// The largest desc file that is parsed; a larger one fails its load (#928).
+		static constexpr std::size_t max_desc_bytes = std::size_t{ 64 } * 1024 * 1024;
 
 		desc_adapter_t(::res::resource_system& res_system, ::desc::desc_system& desc_system);
 

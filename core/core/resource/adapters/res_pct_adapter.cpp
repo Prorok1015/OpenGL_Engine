@@ -77,6 +77,21 @@ std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag
 	if (data.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
 		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is too large to decode: " + std::to_string(data.size()) + " bytes");
 	}
+	// The header first: a few megabytes of file can say they are gigabytes of pixels, and several pictures decode at
+	// once on the workers. Nothing is allocated for one over the budget (#928).
+	int width = 0;
+	int height = 0;
+	int channels = 0;
+	if (!stb_image::Image::info_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()), width, height, channels)) {
+		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is not a decodable image");
+	}
+	const bool fits = width > 0 && height > 0 && channels > 0 && width <= max_side && height <= max_side
+		&& static_cast<std::size_t>(width) * static_cast<std::size_t>(height) <= max_decoded_bytes / static_cast<std::size_t>(channels);
+	if (!fits) {
+		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is " + std::to_string(width) + "x" + std::to_string(height)
+			+ " with " + std::to_string(channels) + " channels: too large to decode (at most " + std::to_string(max_side)
+			+ " a side and " + std::to_string(max_decoded_bytes / (1024 * 1024)) + " MiB of pixels)");
+	}
 	auto img = stb_image::Image::read_from_memory( reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()));
 	if (!img.data()) {
 		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is not a decodable image");

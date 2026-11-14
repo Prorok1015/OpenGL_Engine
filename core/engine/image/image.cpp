@@ -58,7 +58,7 @@ stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, i
 	result.flipFlag_ = g_image_flip;
 	if ((result.data_ = stbi_load_from_memory(data, len, &result.width_, &result.height_, &result.channels_, 0)))
 	{
-		result.size_ = result.width_ * result.height_ * result.channels_;
+		result.size_ = static_cast<size_t>(result.width_) * static_cast<size_t>(result.height_) * static_cast<size_t>(result.channels_);
 		return result;
 	}
 	return Image();
@@ -74,7 +74,7 @@ bool stb_image::Image::read(const std::string_view filename)
 	set_image_flip(flipFlag_);
 	if ((data_ = stbi_load(filename.data(), &width_, &height_, &channels_, 0)))
 	{
-		size_ = width_ * height_ * channels_;
+		size_ = static_cast<size_t>(width_) * static_cast<size_t>(height_) * static_cast<size_t>(channels_);
 		return true;
 	}
 	return false;

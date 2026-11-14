@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/resources/res_resource_picture.h>
@@ -37,6 +38,10 @@ namespace res
 	public:
 		static constexpr auto EXTENSIONS = std::array{std::string_view{ "pct" }, std::string_view{ "png" }, std::string_view{ "jpeg" }, std::string_view{ "jpg" }};
 		static inline auto INFO = res::adapter_info::make<res::picture_resource>({std::string{ "pct" }, std::string{ "png" }, std::string{ "jpeg" }, std::string{ "jpg" }} );
+		// What one picture may decode to: no side longer than a GPU takes, and no more pixel bytes than this.
+		static constexpr int max_side = 16384;
+		static constexpr std::size_t max_decoded_bytes = std::size_t{ 512 } * 1024 * 1024;
+
 		pct_adapter();
 
 		std::shared_ptr<res::picture_resource> operator()(res::tag tag, const std::vector<std::byte>& data) const;

@@ -42,6 +42,11 @@ std::optional<::res::tag> read_parent(const ::res::tag& tag, const json::object&
 
 json::object parse_body(const std::vector<std::byte>& data)
 {
+	// Parsed, a desc takes several times its size in memory, and the resolver reads files far larger than any desc is.
+	if (data.size() > core::desc::desc_adapter_t::max_desc_bytes) {
+		throw ::res::load_error(::res::diagnostic_kind::load, {}, std::format("a desc of {} bytes is not parsed: at most {} MiB",
+			data.size(), core::desc::desc_adapter_t::max_desc_bytes / (1024 * 1024)));
+	}
 	std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
 	json::parse_options options;
 	options.max_depth = 128;
