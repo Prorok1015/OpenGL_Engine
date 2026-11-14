@@ -97,6 +97,7 @@
 #include <snk/project/prj_project.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
@@ -1654,9 +1655,11 @@ void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
 	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation, m_migration_runs };
 	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
 	// dropped, never shown.
-	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs())](ds::task_context& task) {
+	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs()),
+					read_only = prj::migration::read_only_layers(m_res, root)](ds::task_context& task) {
 		prj::migration::scan_options options;
 		options.stop = [&task] { return task.stop.stop_requested(); };
+		options.read_only_layers = read_only;
 		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
 		if (scan.incomplete) throw ds::task_cancelled{};
 		prj::migration::project_step_registry steps;

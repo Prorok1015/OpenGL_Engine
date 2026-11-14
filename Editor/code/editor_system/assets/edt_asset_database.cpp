@@ -143,7 +143,7 @@ bool edt::known_file_id(const file_id& id)
 // What it orders by is what same_for_index compares: a field added here moves id_revision too.
 bool edt::holds_id_before(const asset_record& a, const asset_record& b)
 {
-	return std::tie(a.layer, a.mtime, a.path.string()) < std::tie(b.layer, b.mtime, b.path.string());
+	return res::holds_id_before(res::asset_id_claim{ a.layer, a.mtime, a.path.view() }, res::asset_id_claim{ b.layer, b.mtime, b.path.view() });
 }
 
 std::string edt::asset_type_of(std::string_view path)

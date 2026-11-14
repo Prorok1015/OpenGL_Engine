@@ -25,8 +25,7 @@ namespace
 
 	bool ids_needed(const scan_result& scan)
 	{
-		return std::ranges::any_of(scan.files,
-			[](const scanned_file& file) { return !file.has_resource && file.kind != file_class::invalid; });
+		return std::ranges::any_of(scan.files, gets_resource_from_ids);
 	}
 
 	bool is_desc_path(std::string_view path)
@@ -60,7 +59,7 @@ namespace
 
 		std::size_t created = 0;
 		for (const scanned_file& file : context.scan.files) {
-			if (file.has_resource || file.kind == file_class::invalid) continue;
+			if (!gets_resource_from_ids(file)) continue;
 
 			res::asset_meta meta;
 			if (const std::optional<res::asset_id> guid = guid_of(context.files, file.path)) {
@@ -144,16 +143,9 @@ namespace
 		context.warn(std::format("{} desc files without their __guid", dropped));
 	}
 
-	// What refs_apply reads: a desc the scan does not call invalid, newer or unknown_type (scanned_file::reference_fixes
-	// counts the same files).
-	bool refs_readable(const scanned_file& file)
-	{
-		return is_desc_path(file.path) && (file.kind == file_class::current || file.kind == file_class::outdated);
-	}
-
 	bool refs_needed(const scan_result& scan)
 	{
-		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return refs_readable(file) && (file.reference_fixes > 0 || file.outdated_references); });
+		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return reads_references(file) && (file.reference_fixes > 0 || file.outdated_references); });
 	}
 
 	// The rule of the editor's save (desc::write_references_with) over the index of the project as the pre steps left it, so
@@ -168,11 +160,11 @@ namespace
 		desc::reference_counts total;
 		std::size_t files = 0;
 		for (const scanned_file& file : context.scan.files) {
-			if (!refs_readable(file)) continue;
+			if (!reads_references(file)) continue;
 			const std::string read = context.files.read(file.path);
 			std::string_view text = read;
 			if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
-			if (text.find("res://") == std::string_view::npos && text.find("\"guid\"") == std::string_view::npos) continue;
+			if (!may_hold_references(text)) continue;
 			boost::system::error_code error;
 			json::parse_options options;
 			options.max_depth = 128;

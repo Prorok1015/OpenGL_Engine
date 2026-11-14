@@ -8,12 +8,21 @@
 #include <string_view>
 #include <vector>
 
+namespace res
+{
+	class resource_system;
+}
+
 // The assets of a project as its .resource files on the disk say, for the project steps of a migration (EPIC-58 3.3,
-// S5 #756). It is the walk of the editor's asset database (res_asset_walk.h) over the project's content roots stacked
-// as res:// stacks them (the first root wins a name), without the engine's layer, its cache, watcher or hashes: a
-// migration runs from the command line too.
+// S5 #756). It is the walk of the editor's asset database (res_asset_walk.h) over the layers of res:// stacked as res://
+// stacks them (the first content root wins a name, the engine's layer is the lowest), without its cache, watcher or
+// hashes: a migration runs from the command line too.
 namespace prj::migration
 {
+	// The layers of res:// outside the project folder (the engine's core/res), lowest first: what a migration reads IDs
+	// from and never writes (project_assets, scan_options::read_only_layers, #776).
+	std::vector<std::filesystem::path> read_only_layers(const res::resource_system& resources, const std::filesystem::path& root);
+
 	struct indexed_asset
 	{
 		// Relative to the project root, with '/' ("res/textures/a.png").
@@ -29,21 +38,25 @@ namespace prj::migration
 	class project_assets
 	{
 	public:
-		// `content_roots` relative to `root`, as project.snkproj lists them. Nothing is read before rebuild().
-		project_assets(std::filesystem::path root, std::vector<std::filesystem::path> content_roots);
+		// `content_roots` relative to `root`, as project.snkproj lists them; `read_only_layers` (lowest first) below them, as
+		// read_only_layers gives them. Nothing is read before rebuild().
+		project_assets(std::filesystem::path root, std::vector<std::filesystem::path> content_roots,
+			std::vector<std::filesystem::path> read_only_layers = {});
 
-		// Walks the content roots again; what was known before is dropped.
+		// Walks the layers again; what was known before is dropped.
 		void rebuild();
 
-		// Every file the walk lists (no .resource among them), by path. A file a higher content root covers is not
-		// listed, as the editor does not list it.
+		// Every file of the content roots the walk lists (no .resource among them), by path. A file a higher content root
+		// covers is not listed, as the editor does not list it; a file of a read-only layer is never listed, it only
+		// answers id_of(tag) and path_of.
 		const std::map<std::string, indexed_asset>& assets() const { return m_assets; }
 		std::optional<res::asset_id> id_of(std::string_view path) const;
-		// resource_system::asset_id_of over this index: the ID of the file a res:// tag names, of the first content root that
-		// has it, the name compared as res::asset_names_case_insensitive says. None for another protocol, a file without an
-		// ID (no .resource, or one that does not read) and an ID two listed files carry.
+		// resource_system::asset_id_of over this index, as the editor's asset index answers it: the ID of the file a res://
+		// tag names in the highest layer that has it (read-only layers too), the name compared as
+		// res::asset_names_case_insensitive says. None for another protocol, a file without an ID (no .resource, or one
+		// that does not read), and a copy whose ID another file holds by res::holds_id_before.
 		std::optional<res::asset_id> id_of(const res::tag& tag) const;
-		// The res:// tag of the one listed file that carries `id`; none for an unknown or duplicated ID.
+		// The res:// tag of the file that holds `id` by res::holds_id_before; none for an unknown ID.
 		std::optional<res::tag> path_of(const res::asset_id& id) const;
 		// The listed files that carry `id`: more than one is a duplicate ID, which the editor reports too.
 		std::vector<std::string> paths_of(const res::asset_id& id) const;
@@ -55,12 +68,13 @@ namespace prj::migration
 	private:
 		std::filesystem::path m_root;
 		std::vector<std::filesystem::path> m_content_roots;
+		std::vector<std::filesystem::path> m_read_only_layers;
 		std::map<std::string, indexed_asset> m_assets;
 		std::map<std::string, indexed_asset> m_orphans;
-		// res::asset_name_key of a listed file's res_path -> its path.
-		std::map<std::string, std::string> m_by_name;
-		// The ID of exactly one listed file -> its path.
-		std::map<res::asset_id, std::string> m_unique_ids;
+		// res::asset_name_key of a holder's res_path -> its ID.
+		std::map<std::string, res::asset_id> m_held_ids;
+		// An ID -> the res_path of its holder.
+		std::map<res::asset_id, std::string> m_holders;
 		std::vector<std::string> m_problems;
 	};
 }

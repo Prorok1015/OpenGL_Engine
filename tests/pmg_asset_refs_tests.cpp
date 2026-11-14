@@ -16,6 +16,9 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <format>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -25,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -178,6 +182,27 @@ struct ids_index final : res::asset_index
 	}
 };
 
+// A folder outside the project, removed with the object: a read-only layer of res:// such as the engine's core/res.
+struct outside_folder
+{
+	outside_folder()
+	{
+		static std::atomic<int> counter{ 0 };
+		path = fs::temp_directory_path()
+			/ std::format("snk_refs_layer_{}_{}", std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
+		fs::create_directories(path);
+	}
+	~outside_folder()
+	{
+		std::error_code ignored;
+		fs::remove_all(path, ignored);
+	}
+	outside_folder(const outside_folder&) = delete;
+	outside_folder& operator=(const outside_folder&) = delete;
+
+	fs::path path;
+};
+
 struct asset_refs_fixture : test_util::scene_env
 {
 	asset_refs_fixture()
@@ -215,7 +240,8 @@ struct asset_refs_fixture : test_util::scene_env
 		})").as_object(), &nested)));
 	}
 
-	// a.desc, b.desc and two textures that carry one ID.
+	// a.desc, b.desc and two textures that carry one ID; dup_b.png is the older, so it holds the ID (res::holds_id_before)
+	// and dup_a.png is the copy.
 	void write_reference_files()
 	{
 		write_text(copy.res() / "refs/a.desc", k_a_desc);
@@ -226,12 +252,14 @@ struct asset_refs_fixture : test_util::scene_env
 			write_text(copy.res() / name, "png");
 			write_text(copy.res() / (std::string(name) + ".resource"), res::write_asset_meta(duplicate));
 		}
+		fs::last_write_time(copy.res() / "textures/dup_a.png", fs::last_write_time(copy.res() / "textures/dup_b.png") + std::chrono::hours(1));
 	}
 
 	pmg::migration_plan plan()
 	{
 		pmg::plan_options options;
 		options.project_steps = &registry;
+		options.scan.read_only_layers = read_only;
 		return pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs, options.scan), *descs, options);
 	}
 
@@ -253,7 +281,7 @@ struct asset_refs_fixture : test_util::scene_env
 
 	pmg::project_assets assets() const
 	{
-		pmg::project_assets index(copy.root(), { "res" });
+		pmg::project_assets index(copy.root(), { "res" }, read_only);
 		index.rebuild();
 		return index;
 	}
@@ -267,6 +295,8 @@ struct asset_refs_fixture : test_util::scene_env
 
 	test_util::fixture_copy copy{ "migration_v1" };
 	pmg::project_step_registry registry;
+	// scan_options::read_only_layers of plan() and assets().
+	std::vector<fs::path> read_only;
 };
 
 }
@@ -433,8 +463,13 @@ BOOST_AUTO_TEST_CASE(TheMigrationIndex_AnswersByTag)
 	BOOST_TEST((index.id_of(res::tag{ "res://textures/with_meta.png" }) == with_meta));
 	BOOST_TEST(!index.id_of(res::tag{ "memory://textures/with_meta.png" }).has_value());
 	BOOST_TEST(!index.id_of(res::tag{ "res://textures/plain.png" }).has_value(), "no .resource");
-	BOOST_TEST(!index.id_of(res::tag{ "res://textures/dup_a.png" }).has_value(), "a duplicated ID");
-	BOOST_TEST(!index.path_of(*res::asset_id_from_text(k_duplicate_id)).has_value());
+	const res::asset_id duplicate = *res::asset_id_from_text(k_duplicate_id);
+	BOOST_TEST(!index.id_of(res::tag{ "res://textures/dup_a.png" }).has_value(), "the newer copy of a duplicated ID");
+	BOOST_TEST((index.id_of(res::tag{ "res://textures/dup_b.png" }) == duplicate), "the older file holds it");
+	BOOST_REQUIRE(index.path_of(duplicate).has_value());
+	BOOST_TEST(index.path_of(duplicate)->view() == "res://textures/dup_b.png");
+	BOOST_TEST(index.id_of(res::tag{ "res://Textures/With_Meta.png" }).has_value() == res::asset_names_case_insensitive,
+		"another letter case is the same file only where asset names have no case");
 	BOOST_TEST(!index.path_of(*res::asset_id_from_text(k_unknown_id)).has_value());
 	BOOST_REQUIRE(index.path_of(with_meta).has_value());
 	BOOST_TEST(index.path_of(with_meta)->view() == "res://textures/with_meta.png");
@@ -458,6 +493,126 @@ BOOST_AUTO_TEST_CASE(WriteReferencesWith_TheResourceSystemsIndex_IsWriteReferenc
 	BOOST_TEST(shared == saved);
 	BOOST_TEST(counts.ids_written == 5u);
 	BOOST_TEST(counts.paths_repaired == 1u);
+}
+
+// Of two files with one ID the one res::holds_id_before puts first (here the older) holds it, as in the editor's asset
+// index: a reference to it gets {guid, path}, a reference to the copy stays a string.
+BOOST_AUTO_TEST_CASE(OfTwoFilesWithOneId_OnlyTheHolderGetsGuidAndPath)
+{
+	write_reference_files();
+	write_text(copy.res() / "refs/dup.desc", R"({"__type": "refs_test.thing", "list": ["res://textures/dup_a.png", "res://textures/dup_b.png"]})");
+	migrate();
+	const json::value after = json::parse(read_text(copy.res() / "refs/dup.desc"));
+	BOOST_TEST(*desc::json_pointer_get(after, "/list/0") == json::value("res://textures/dup_a.png"));
+	BOOST_TEST(*desc::json_pointer_get(after, "/list/1") == reference(k_duplicate_id, "res://textures/dup_b.png"));
+	BOOST_TEST(plan().empty());
+}
+
+// A {"guid"} without a path whose ID is known gets the path its file has now, as write_references gives it.
+BOOST_AUTO_TEST_CASE(AGuidWithoutAPath_GetsThePathOfItsFile)
+{
+	write_text(copy.res() / "refs/g.desc", std::string(R"({"__type": "refs_test.thing", "texture": {"guid": ")") + std::string(k_with_meta_id) + ""}}");
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	BOOST_REQUIRE(scan.find("res/refs/g.desc") != nullptr);
+	BOOST_TEST(scan.find("res/refs/g.desc")->reference_fixes == 1u);
+	const pmg::migration_report report = migrate();
+	const json::value after = json::parse(read_text(copy.res() / "refs/g.desc"));
+	BOOST_TEST(after.as_object().at("texture") == reference(k_with_meta_id, "res://textures/with_meta.png"));
+	BOOST_TEST(any_note(report, "assets.refs: res/refs/g.desc: 0 references turned into {guid, path}, 1 paths repaired"));
+	BOOST_TEST(plan().empty());
+}
+
+// A reference to an asset of a read-only layer below the project (the engine's core/res) gets the ID of that asset's
+// .resource, as in the editor, whose asset database walks every layer; nothing is written into that layer.
+BOOST_AUTO_TEST_CASE(AReferenceToAnAssetOfAReadOnlyLayer_GetsItsId)
+{
+	outside_folder engine;
+	constexpr std::string_view engine_id = "00000000-0000-4000-8000-0000000000e1";
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text(engine_id);
+	write_text(engine.path / "shaders/lit.png", "png");
+	write_text(engine.path / "shaders/lit.png.resource", res::write_asset_meta(meta));
+	write_text(engine.path / "shaders/plain.png", "png");
+	read_only = { engine.path };
+	write_text(copy.res() / "refs/e.desc", R"({"__type": "refs_test.thing", "texture": "res://shaders/lit.png", "list": ["res://shaders/plain.png"]})");
+
+	migrate();
+	const json::value after = json::parse(read_text(copy.res() / "refs/e.desc"));
+	BOOST_TEST(after.as_object().at("texture") == reference(engine_id, "res://shaders/lit.png"));
+	BOOST_TEST(*desc::json_pointer_get(after, "/list/0") == json::value("res://shaders/plain.png"), "a file of that layer without an ID");
+	BOOST_TEST(!fs::exists(engine.path / "shaders/plain.png.resource"), "assets.ids writes nothing into a read-only layer");
+	BOOST_TEST(plan().empty());
+}
+
+// A file of the upper content root whose .resource lies only in the lower one: assets.ids gives it none (it has one) and
+// assets.refs takes that ID, so one run is enough.
+BOOST_AUTO_TEST_CASE(AFileWhoseResourceIsInALowerRoot_IsReferencedByThatId_TheSecondPlanIsEmpty)
+{
+	json::object manifest = json::parse(read_text(copy.root() / "project.snkproj")).as_object();
+	manifest["content_roots"] = json::array{ "res", "base" };
+	write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+	constexpr std::string_view lower_id = "00000000-0000-4000-8000-0000000000f1";
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text(lower_id);
+	write_text(copy.root() / "base/textures/up.png.resource", res::write_asset_meta(meta));
+	write_text(copy.res() / "textures/up.png", "upper");
+	write_text(copy.res() / "refs/up.desc", R"({"__type": "refs_test.thing", "texture": "res://textures/up.png"})");
+
+	const pmg::scan_result scan = pmg::scan_project(copy.root(), *descs);
+	BOOST_REQUIRE(scan.find("res/textures/up.png") != nullptr);
+	BOOST_TEST(!pmg::gets_resource_from_ids(*scan.find("res/textures/up.png")));
+	BOOST_TEST(scan.find("res/refs/up.desc")->reference_fixes == 1u);
+
+	migrate();
+	BOOST_TEST(!fs::exists(copy.res() / "textures/up.png.resource"));
+	BOOST_TEST(json::parse(read_text(copy.res() / "refs/up.desc")).as_object().at("texture") == reference(lower_id, "res://textures/up.png"));
+	BOOST_TEST(plan().empty());
+}
+
+// The goal of the step: after the migration a save in the editor (write_references_over the file itself, with an index
+// that answers as the migration's) changes nothing.
+BOOST_AUTO_TEST_CASE(AfterTheMigration_AnEditorSave_ChangesNoReference)
+{
+	write_reference_files();
+	migrate();
+	const pmg::project_assets migrated = assets();
+	auto index = std::make_shared<ids_index>();
+	for (const auto& [path, asset] : migrated.assets()) {
+		if (!asset.id) continue;
+		if (const auto holder = migrated.path_of(*asset.id); holder && holder->view() == "res://" + asset.res_path) {
+			index->hold(*asset.id, holder->view());
+		}
+	}
+	rs->set_asset_index(index);
+	for (const std::string_view file : { "refs/a.desc", "refs/b.desc" }) {
+		const json::value written = json::parse(read_text(copy.res() / file));
+		json::value saved = written;
+		descs->write_references_over(saved, res::tag::make(file));
+		BOOST_TEST(saved == written, file);
+	}
+	rs->set_asset_index(nullptr);
+}
+
+// The one difference of the editor's save: a guid the replaced file wrote for a path the index gives no ID is kept
+// (write_references_over); the migration has no replaced file, and a {guid, path} it reads stays as it is anyway.
+BOOST_AUTO_TEST_CASE(WriteReferencesOver_KeepsAGuidOfTheReplacedFile_WriteReferencesWithDoesNot)
+{
+	auto index = std::make_shared<ids_index>();
+	index->hold(*res::asset_id_from_text(k_with_meta_id), "res://textures/with_meta.png");
+	rs->set_asset_index(index);
+	write_text(copy.res() / "refs/kept.desc", std::string(R"({"__type": "refs_test.thing", "texture": {"guid": ")") + std::string(k_unknown_id)
+		+ R"(", "path": "res://textures/none.png"}, "list": ["res://textures/with_meta.png"]})");
+	const json::value edited = json::parse(R"({"__type": "refs_test.thing", "texture": "res://textures/none.png", "list": ["res://textures/with_meta.png"]})");
+	json::value over = edited;
+	descs->write_references_over(over, res::tag::make("refs/kept.desc"));
+	json::value with = edited;
+	descs->write_references_with(with, desc::asset_index_ids(*rs));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(over.as_object().at("texture") == reference(k_unknown_id, "res://textures/none.png"), "the replaced file's guid is kept");
+	BOOST_TEST(with.as_object().at("texture") == json::value("res://textures/none.png"));
+	BOOST_TEST(*desc::json_pointer_get(over, "/list/0") == *desc::json_pointer_get(with, "/list/0"), "where the index answers, both agree");
+	BOOST_TEST(*desc::json_pointer_get(with, "/list/0") == reference(k_with_meta_id, "res://textures/with_meta.png"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

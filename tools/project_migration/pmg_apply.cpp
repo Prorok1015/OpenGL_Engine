@@ -386,7 +386,7 @@ namespace
 	{
 	public:
 		applier(const apply_context& context, migration_report& report, const std::vector<fs::path>& content_roots, std::int64_t resource_meta_version,
-			std::vector<std::string>& originals)
+			std::vector<std::string>& originals, const std::vector<fs::path>& read_only_layers)
 			: m_context(context)
 			, m_report(report)
 			, m_content_roots(content_roots)
@@ -394,7 +394,7 @@ namespace
 			, m_originals(originals)
 			, m_write(context.write ? context.write : project_writer{ default_write })
 			, m_adapter(context.resources, context.descs)
-			, m_assets(context.root, content_roots)
+			, m_assets(context.root, content_roots, read_only_layers)
 		{
 		}
 
@@ -1006,7 +1006,7 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		return outcome;
 	}
 
-	applier apply(context, report, content_roots, plan.resource_meta_version, originals);
+	applier apply(context, report, content_roots, plan.resource_meta_version, originals, plan.read_only_layers);
 	report.status = migration_status::in_progress;
 	const auto make_id = context.make_id ? context.make_id : std::function<std::string()>{ default_id };
 	const std::string base_id = make_id();

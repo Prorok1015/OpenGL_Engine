@@ -8,6 +8,7 @@
 #include <snk/project/prj_manifest.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/project_migration/pmg_command.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
@@ -926,6 +927,7 @@ namespace {
 			pmg::plan_options options;
 			options.project_steps = &m_steps;
 			options.force = false;
+			options.scan.read_only_layers = pmg::read_only_layers(m_deps.resources(), root);
 			return pmg::plan_migration(root, pmg::scan_project(root, descs, options.scan), descs, options);
 		}
 

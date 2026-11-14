@@ -41,6 +41,16 @@ namespace prj::migration
 		bool known = true;
 	};
 
+	struct scanned_file;
+
+	// The files assets.ids gives a .resource: no .resource pairs with it and it is not invalid. assets.refs counts a
+	// reference to such a file as one with an ID.
+	bool gets_resource_from_ids(const scanned_file& file);
+	// A desc assets.refs reads (and the scan counts): not invalid, newer or unknown_type.
+	bool reads_references(const scanned_file& file);
+	// The text holds a res:// path or a "guid" key: every reference assets.refs changes does.
+	bool may_hold_references(std::string_view text);
+
 	struct scanned_file
 	{
 		// Relative to the project root, with '/'.
@@ -90,6 +100,9 @@ namespace prj::migration
 		std::int64_t resource_meta_version = res::asset_meta_version;
 		// Asked before each entry of a folder: true stops the scan there (scan_result::incomplete). Empty: never stopped.
 		std::function<bool()> stop;
+		// The layers of res:// below the project, lowest first (prj::migration::read_only_layers, taken on the main
+		// thread): their .resource files give IDs to references, nothing in them is scanned or written (#776).
+		std::vector<std::filesystem::path> read_only_layers;
 	};
 
 	struct scan_result
@@ -213,6 +226,8 @@ namespace prj::migration
 		std::int64_t resource_meta_version = res::asset_meta_version;
 		// plan_options::force.
 		bool force = false;
+		// scan_options::read_only_layers of the plan: the index of the project steps reads them too.
+		std::vector<std::filesystem::path> read_only_layers;
 
 		// An older engine_version keeps the version dialog.
 		bool manifest_outdated() const { return scan.manifest.kind == file_class::outdated; }

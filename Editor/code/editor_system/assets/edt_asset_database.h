@@ -159,8 +159,8 @@ namespace edt
 	// The kind of asset of a path by its suffix (lowercase compare).
 	std::string asset_type_of(std::string_view path);
 
-	// Of files that carry one ID, whether `a` keeps it before `b` (EPIC-57 section 10): the lowest layer (an engine asset
-	// is what others refer to), then the oldest, then the smaller path. Problems and the asset index both go by it.
+	// res::holds_id_before of two records (EPIC-57 section 10): the lowest layer, then the oldest, then the smaller path.
+	// Problems and the asset index both go by it, and so does the project migration's index.
 	bool holds_id_before(const asset_record& a, const asset_record& b);
 
 	// Walks `layers` (lowest first, as resource_system::get_resource_layers gives them) merged as the asset browser merges
