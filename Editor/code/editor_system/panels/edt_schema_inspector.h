@@ -113,10 +113,17 @@ namespace edt::schema_ui
 		// The first item of the page each list shows, by the ID of the list's node.
 		std::unordered_map<std::uint32_t, std::size_t> list_pages;
 
-		void clear()
+		// What was typed or refused belongs to the content shown; the pages of the lists do not: they stay while the same
+		// document changes under the person (an undo), and `list_page_start` keeps them inside the list.
+		void forget_typed()
 		{
 			new_keys.clear();
 			rename_errors.clear();
+		}
+
+		void clear()
+		{
+			forget_typed();
 			list_pages.clear();
 		}
 	};

@@ -1398,6 +1398,48 @@ BOOST_AUTO_TEST_CASE(AListOfTwoHundredItems_ShowsOnePageAtATime_AndAMoveCrossesT
 	BOOST_CHECK_EQUAL(moved[49].at("scale").to_number<double>(), 50.0);
 	BOOST_CHECK_EQUAL(moved[50].at("scale").to_number<double>(), 49.0);
 	BOOST_CHECK_EQUAL(moved[51].at("scale").to_number<double>(), 51.0);
+
+	// the page follows the item: it is on the first page now, and the person still sees it
+	driver.targets.clear();
+	driver.frames(2);
+	BOOST_CHECK(driver.targets.contains("/rows/49#up"));
+	BOOST_CHECK(!driver.targets.contains("/rows/50#up"));
+}
+
+BOOST_AUTO_TEST_CASE(AMovedList_InheritedFromTheParent_IsWrittenWhole_AndTheMoveBackLeavesNothing_ResetBringsTheParentsBack)
+{
+	const desc::type_schema& schema = register_rows(*descs);
+	const char* parent_rows = R"({ "rows": [ { "scale": 1.0 }, { "scale": 2.0 }, { "scale": 3.0 } ] })";
+	mark_driver driver(schema, descs->schemas(), parse(parent_rows), {});
+	driver.frames(3);
+	driver.click("/rows/1#up");
+	BOOST_CHECK(driver.overrides == parse(R"({ "rows": [ { "scale": 2.0 }, { "scale": 1.0 }, { "scale": 3.0 } ] })"));
+	driver.frames(2);
+	driver.click("/rows/1#up");
+	BOOST_CHECK(driver.overrides.empty());
+
+	driver.frames(2);
+	driver.click("/rows/2#up");
+	BOOST_CHECK(!driver.overrides.empty());
+	driver.frames(2);
+	driver.click("/rows#mark");
+	driver.frames(2);
+	driver.click("/rows#reset");
+	BOOST_CHECK(driver.overrides.empty());
+}
+
+BOOST_AUTO_TEST_CASE(MapEditState_ForgetsWhatWasTypedButKeepsTheListPages)
+{
+	ui::map_edit_state state;
+	state.new_keys[1] = "key";
+	state.rename_errors[2] = "taken";
+	state.list_pages[3] = 100;
+	state.forget_typed();
+	BOOST_CHECK(state.new_keys.empty());
+	BOOST_CHECK(state.rename_errors.empty());
+	BOOST_CHECK_EQUAL(state.list_pages.at(3), 100u);
+	state.clear();
+	BOOST_CHECK(state.list_pages.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

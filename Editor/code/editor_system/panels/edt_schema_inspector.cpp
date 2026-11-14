@@ -345,6 +345,16 @@ namespace
 
 	bool draw_field(const desc::field_schema& field, json::value& value, const std::string& pointer, const context& ctx, int depth);
 
+	// Tells the test hook where the item just drawn is on the screen.
+	void report_target(const context& ctx, const std::string& target)
+	{
+		if (ctx.on_target) {
+			const ImVec2 min = ImGui::GetItemRectMin();
+			const ImVec2 max = ImGui::GetItemRectMax();
+			ctx.on_target(target, (min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+		}
+	}
+
 	// The mark in front of a field (S56-7): a star when the own data sets it, a quiet dot otherwise, the source in its tooltip.
 	// A click opens its menu: Reset takes the record out (the field is inherited or default again), Unset (a field that
 	// can be absent, now present) takes the value out; the person's choice is queued in the origin and applied with the edit.
@@ -354,13 +364,6 @@ namespace
 		if (!origin) {
 			return;
 		}
-		const auto report = [&ctx](const std::string& target) {
-			if (ctx.on_target) {
-				const ImVec2 min = ImGui::GetItemRectMin();
-				const ImVec2 max = ImGui::GetItemRectMax();
-				ctx.on_target(target, (min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
-			}
-		};
 		const bool here = edt::schema_ui::set_here(*origin, pointer);
 		// A read-only field is the code's: there is nothing to take out of the file or to take away.
 		const bool can_reset = here && !field.read_only;
@@ -379,7 +382,7 @@ namespace
 		if (here) {
 			ImGui::PopStyleColor();
 		}
-		report(pointer + "#mark");
+		report_target(ctx, pointer + "#mark");
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 			ImGui::SetTooltip("%s", edt::schema_ui::source_text(*origin, pointer).c_str());
 		}
@@ -391,7 +394,7 @@ namespace
 				if (ImGui::MenuItem("Reset to inherited")) {
 					origin->requests.resets.push_back(pointer);
 				}
-				report(pointer + "#reset");
+				report_target(ctx, pointer + "#reset");
 				if (ImGui::IsItemHovered()) {
 					ImGui::SetTooltip("Take the value set here out: the parent's value, or the schema's default, comes back.");
 				}
@@ -400,7 +403,7 @@ namespace
 				if (ImGui::MenuItem("Unset", nullptr, false, can_unset)) {
 					origin->requests.unsets.push_back(pointer);
 				}
-				report(pointer + "#unset");
+				report_target(ctx, pointer + "#unset");
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 					ImGui::SetTooltip("%s", can_unset ? "Make the field empty here, even when the parent sets a value."
 						: "Here an empty value reads as the schema's default, which the field has already: Unset changes nothing.");
@@ -679,13 +682,40 @@ namespace
 		return changed;
 	}
 
-	void report_target(const context& ctx, const std::string& target)
+	desc::field_schema list_element(const desc::field_schema& list, field_kind element_kind, std::size_t index)
 	{
-		if (ctx.on_target) {
-			const ImVec2 min = ImGui::GetItemRectMin();
-			const ImVec2 max = ImGui::GetItemRectMax();
-			ctx.on_target(target, (min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
-		}
+		desc::field_schema element;
+		element.name = std::format("[{}]", index);
+		element.key = std::format("/{}", index);
+		element.kind = element_kind;
+		element.ref_type = list.ref_type;
+		element.range = list.range;
+		element.color = list.color;
+		element.degrees = list.degrees;
+		element.read_only = list.read_only;
+		element.filter = list.filter;
+		return element;
+	}
+
+	// A structure row is a tree node whose ID holds its row number: after the items trade places, the open or closed state
+	// has to trade with them, or the row that was open stays open at its old place with another item in it.
+	ImGuiID row_node_id(const desc::field_schema& element, std::size_t index)
+	{
+		ImGui::PushID(static_cast<int>(index));
+		const ImGuiID id = ImGui::GetID(edt::schema_ui::display_label(element).c_str());
+		ImGui::PopID();
+		return id;
+	}
+
+	void swap_row_open_state(const desc::field_schema& first, std::size_t first_index, const desc::field_schema& second, std::size_t second_index)
+	{
+		ImGuiStorage* storage = ImGui::GetStateStorage();
+		const ImGuiID first_id = row_node_id(first, first_index);
+		const ImGuiID second_id = row_node_id(second, second_index);
+		const int first_open = storage->GetInt(first_id, 1);
+		const int second_open = storage->GetInt(second_id, 1);
+		storage->SetInt(first_id, second_open);
+		storage->SetInt(second_id, first_open);
 	}
 
 	bool edit_list(const char* label, const desc::field_schema& field, const widget_spec& spec, json::value& value,
@@ -731,16 +761,7 @@ namespace
 		const std::size_t last = std::min(array.size(), first + edt::schema_ui::k_list_page_size);
 		for (std::size_t i = first; i < last; ++i) {
 			ImGui::PushID(static_cast<int>(i));
-			desc::field_schema element;
-			element.name = std::format("[{}]", i);
-			element.key = std::format("/{}", i);
-			element.kind = element_kind;
-			element.ref_type = field.ref_type;
-			element.range = field.range;
-			element.color = field.color;
-			element.degrees = field.degrees;
-			element.read_only = field.read_only;
-			element.filter = field.filter;
+			const desc::field_schema element = list_element(field, element_kind, i);
 			if (depth < max_depth) {
 				changed |= draw_field(element, array[i], pointer + element.key, item_ctx, depth + 1);
 			}
@@ -770,6 +791,8 @@ namespace
 			ImGui::PopID();
 		}
 		if (move && edt::schema_ui::move_list_item(array, move->first, move->second)) {
+			swap_row_open_state(list_element(field, element_kind, move->first), move->first, list_element(field, element_kind, move->second), move->second);
+			page_start = edt::schema_ui::list_page_start(array.size(), move->second);
 			changed = true;
 		}
 		if (remove && *remove < array.size()) {
