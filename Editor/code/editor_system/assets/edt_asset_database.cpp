@@ -1763,6 +1763,8 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	if (walk_again || m_walk_again) {
 		rebuild();
 	}
+	// The listings of a large folder are not kept until the next batch.
+	m_ids = {};
 	hash_next();
 	save_when_idle();
 	// Applied, not waiting behind a walk: every batch received so far is in the records (an earlier one that waited was

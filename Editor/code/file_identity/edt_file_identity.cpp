@@ -33,12 +33,12 @@ constexpr std::array<std::uint32_t, 64> k_round_constants = {
 #ifdef _WIN32
 namespace {
 
-	// The path as the wide API takes it past MAX_PATH.
+	// The path as the wide API takes it past MAX_PATH. A folder is refused from MAX_PATH - 12 on (room for an 8.3 name).
 	std::wstring long_path(const std::filesystem::path& path)
 	{
 		std::filesystem::path normal = path.lexically_normal();
 		std::wstring text = normal.make_preferred().native();
-		if (text.size() < MAX_PATH || !normal.is_absolute() || text.starts_with(L"\\\\?\\")
+		if (text.size() < MAX_PATH - 12 || !normal.is_absolute() || text.starts_with(L"\\\\?\\")
 			|| text.starts_with(L"\\\\.\\")) {
 			return text;
 		}
@@ -85,8 +85,9 @@ namespace {
 				if (error == ERROR_NO_MORE_FILES) {
 					return true;
 				}
+				// ERROR_INVALID_LEVEL: some network redirectors.
 				if (wide && first && (error == ERROR_INVALID_PARAMETER || error == ERROR_NOT_SUPPORTED
-					|| error == ERROR_INVALID_FUNCTION)) {
+					|| error == ERROR_INVALID_FUNCTION || error == ERROR_INVALID_LEVEL)) {
 					wide = false;
 					continue;
 				}
