@@ -397,7 +397,7 @@ namespace {
 		return child;
 	}
 
-	// Where one spawn is cut short; a test lowers them (scn::detail::set_spawn_node_limit / set_spawn_depth_limit).
+	// Where one spawn is cut short; a test lowers the node budget (scn::detail::set_spawn_node_limit).
 	struct spawn_limits
 	{
 		// Nodes one outer call builds: a few small files that fan out would otherwise build K^depth entities.
@@ -925,11 +925,6 @@ bool scn::expand_instance(
 std::size_t scn::detail::set_spawn_node_limit(std::size_t nodes)
 {
 	return std::exchange(g_spawn_limits.nodes, nodes);
-}
-
-std::size_t scn::detail::set_spawn_depth_limit(std::size_t depth)
-{
-	return std::exchange(g_spawn_limits.depth, depth);
 }
 
 namespace {
@@ -1480,25 +1475,32 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 		}
 	}
 
+	// One walk for the whole call: the live instances of a prefab share one node budget, however many there are.
+	const walk_scope scope;
+	spawn_walk& walk = scope.walk();
+
 	for (auto root_entity : roots_to_reload) {
 		// The reload of an instance above it may have destroyed this one, or refused the reference that made it one.
 		if (!reg.valid(root_entity)) continue;
 		const auto* instance = reg.try_get<scn::prefab_instance>(root_entity);
 		if (!instance || instance->source_prefab != desc->get_tag()) continue;
+		// Out of budget: a tree not started keeps all its live children, as the rest of a tree cut short does.
+		if (walk.over_budget || walk.nodes >= g_spawn_limits.nodes) {
+			egLOG_ERROR("desc", "a hot reload builds more than {} nodes: the other live instances of {} are left as they are",
+				g_spawn_limits.nodes, desc->get_tag().view());
+			walk.over_budget = true;
+			break;
+		}
 		// An instance node keeps itself (it names the prefab again, so the changed one is picked up); a plain
 		// prefab root is rebuilt from the changed desc. A copy: reconcile replaces the prefab_instance it came from.
 		const scn::prefab_desc::prefab_node& remembered = instance->local_overrides;
 		const bool plain_root = remembered.components.empty();
 		const scn::prefab_desc::prefab_node node = plain_root ? desc->get_root() : remembered;
 
-		const walk_scope scope;
-		spawn_walk& walk = scope.walk();
 		// A plain root is the changed prefab's own content, as in assemble_prefab; an instance node opens it itself.
 		std::vector<res::tag> inside(walk.open.begin(), walk.open.end());
-		if (plain_root) {
-			inside.push_back(desc->get_tag());
-			if (scope.outermost()) walk.roots = 1;
-		}
+		if (plain_root) inside.push_back(desc->get_tag());
+		if (scope.outermost()) walk.roots = plain_root ? 1 : 0;
 		const open_scope opened(walk, inside);
 		reconcile_node(assembler, reg, root_entity, node, scn::reconcile_mode::reload, walk, {});
 	}

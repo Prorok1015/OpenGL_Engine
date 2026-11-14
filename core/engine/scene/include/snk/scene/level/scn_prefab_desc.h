@@ -133,9 +133,8 @@ namespace scn {
 
 	namespace detail
 	{
-		// Tests only: the most nodes one outer spawn call builds, and the most prefabs it opens one inside another.
-		// Each returns the limit it replaced. Not thread-safe.
+		// For the engine's tests only, not for game modules: the most nodes one outer spawn or hot reload call builds.
+		// Returns the limit it replaced. Not thread-safe.
 		SNK_API std::size_t set_spawn_node_limit(std::size_t nodes);
-		SNK_API std::size_t set_spawn_depth_limit(std::size_t depth);
 	}
 }
