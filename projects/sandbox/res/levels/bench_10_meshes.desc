@@ -89,12 +89,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -108,12 +114,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -127,12 +139,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -146,12 +164,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -165,12 +189,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -184,12 +214,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -203,12 +239,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
@@ -222,12 +264,18 @@
                         "mesh" : {
                             "__type" : "mesh_node_desc",
                             "__version" : 1,
-                            "geometry" : "res://bench/bench_quad.desc",
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
                             "vx_begin" : 0,
                             "vx_end" : 4,
                             "ind_begin" : 0,
                             "ind_end" : 6,
-                            "material" : "res://base_material.desc"
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
                         }
                     }
                 },
