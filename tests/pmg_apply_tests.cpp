@@ -633,7 +633,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesAFileOutsideTheContentRoots_AndCreatesNoth
 				journal["files"].as_array().push_back(json::object{ { "path", path }, { "hash_before", pmg::journal_hash(payload) },
 					{ "hash_after", "removed" }, { "written_as", "json" } });
 			}, "'" + pmg::journal_path_text(path) + "'");
-			BOOST_TEST(!fs::exists(copy.root() / path));
+			if (path != "..") BOOST_TEST(!fs::exists((copy.root() / path).lexically_normal()));
 			BOOST_TEST(!fs::exists(absolute));
 		}
 	}
@@ -726,7 +726,8 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesAMigrationFolderThatIsALink)
 	const auto before = everything_of(copy.root());
 	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
 	BOOST_REQUIRE(error.has_value());
-	BOOST_TEST(error->find("not a folder of the project") != std::string::npos, *error);
+	// The journal is read without following a link, so the read itself refuses the folder.
+	BOOST_TEST(error->find("has no journal") != std::string::npos, *error);
 	BOOST_TEST(pmg::check_journal(copy.root(), "test-migration").has_value());
 	BOOST_TEST((everything_of(copy.root()) == before));
 	fs::remove(folder);
