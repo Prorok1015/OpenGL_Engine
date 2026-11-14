@@ -1050,6 +1050,7 @@ BOOST_AUTO_TEST_CASE(a_reference_is_checked_by_its_guid_and_its_written_path)
 		BOOST_CHECK_MESSAGE(alone->error.find("a \"guid\" alone is not accepted here") != std::string::npos, alone->error);
 	}
 	BOOST_TEST(written.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(written.error.find("name different files") == std::string::npos, "the bad path is named first: " + written.error);
 	BOOST_TEST(moved.code == cmd::codes::invalid_args);
 	BOOST_CHECK_MESSAGE(moved.error.find("name different files") != std::string::npos, moved.error);
 	BOOST_CHECK_MESSAGE(same.ok, same.error);

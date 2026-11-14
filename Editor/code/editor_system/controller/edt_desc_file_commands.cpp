@@ -491,12 +491,15 @@ namespace {
 }
 
 std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource,
-	const res::resource_system* resources)
+	const res::resource_system* resources, reference_rule rule)
 {
+	const bool agent = rule == reference_rule::agent;
 	std::vector<res::diagnostic> out;
 	std::size_t errors = 0;
 	std::size_t warnings = 0;
 	std::unordered_set<std::string> unchecked;
+	// Where a reference was checked as a schema's field: the walk over every value does not report it again.
+	std::unordered_set<std::string> referenced;
 	// Errors and warnings are counted apart: a pile of warnings cannot push an error out of the list.
 	const auto add = [&](std::string kind, std::string pointer, std::string reason, res::diagnostic_severity severity = res::diagnostic_severity::error) {
 		std::size_t& count = severity == res::diagnostic_severity::error ? errors : warnings;
@@ -507,10 +510,12 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 	const auto schema_error = [&](std::string pointer, std::string reason) {
 		add(std::string(res::diagnostic_kind::schema), std::move(pointer), std::move(reason));
 	};
-	// A {guid, path} reference (EPIC-57 section 4.4): edt::agent_reference_problem, and its path a tag a file may hold.
+	// A {guid, path} reference (EPIC-57 section 4.4): its form, its path a tag a file may hold, then what the asset index
+	// says of its guid (reference_rule).
 	const auto check_reference = [&](const json::value& value, const std::string& at) {
+		if (!referenced.insert(at).second) return;
 		const json::object& object = value.as_object();
-		if (std::string problem = edt::agent_reference_problem(object, resources); !problem.empty()) {
+		if (std::string problem = agent ? edt::agent_reference_form_problem(object) : edt::reference_object_problem(object); !problem.empty()) {
 			schema_error(at, std::move(problem));
 			return;
 		}
@@ -521,10 +526,21 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 				return;
 			}
 		}
+		if (agent) {
+			if (std::string problem = edt::agent_reference_guid_problem(object, resources); !problem.empty()) {
+				schema_error(at, std::move(problem));
+				return;
+			}
+		}
 		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
 		if (!target || !target->unknown_id) return;
-		add(std::string(res::diagnostic_kind::reference), at + "/guid",
-			std::format("no file has the ID {}: '{}' is loaded by its path", res::to_text(target->reference.guid), path), res::diagnostic_severity::warning);
+		const std::string guid = res::to_text(target->reference.guid);
+		if (path.empty()) {
+			schema_error(at + "/guid", std::format("no file has the ID {} and the reference has no path", guid));
+		} else {
+			add(std::string(res::diagnostic_kind::reference), at + "/guid", std::format("no file has the ID {}: '{}' is loaded by its path", guid, path),
+				res::diagnostic_severity::warning);
+		}
 	};
 
 	const auto walk = [&](const auto& self, const json::value& value, const std::string& pointer) -> void {
@@ -539,6 +555,11 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		}
 		if (!value.is_object()) return;
 		const json::object& object = value.as_object();
+		// No schema reads a prefab's component, an override record or a world's content: there the shape tells a reference.
+		if (agent && !pointer.empty() && edt::is_guid_reference(object)) {
+			check_reference(value, pointer);
+			return;
+		}
 		for (const auto& member : object) {
 			const std::string_view key(member.key().data(), member.key().size());
 			if (key.starts_with("__") && !is_allowed_header_key(key)) {
@@ -552,7 +573,8 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 				written = std::string(view_of(parent->as_string()));
 			} else if (!parent->is_object()) {
 				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"guid\", \"path\"} reference");
-			} else if (std::string problem = edt::agent_reference_problem(parent->as_object(), resources); !problem.empty()) {
+			} else if (std::string problem = agent ? edt::agent_reference_form_problem(parent->as_object()) : edt::reference_object_problem(parent->as_object());
+				!problem.empty()) {
 				schema_error(pointer + "/__parent", "`__parent`: " + problem);
 			} else {
 				written = edt::reference_path_text(parent->as_object());
@@ -562,6 +584,10 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 					schema_error(pointer + "/__parent", "`__parent`: " + problem);
 				} else if (const edt::agent_level_path named = edt::check_agent_level_path(*written); !named.ok()) {
 					schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project: " + named.error);
+				} else if (agent && parent->is_object()) {
+					if (std::string elsewhere = edt::agent_reference_guid_problem(parent->as_object(), resources); !elsewhere.empty()) {
+						schema_error(pointer + "/__parent", "`__parent`: " + elsewhere);
+					}
 				}
 			}
 		}

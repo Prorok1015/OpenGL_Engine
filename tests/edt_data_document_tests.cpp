@@ -1876,6 +1876,33 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 	BOOST_TEST(parsed("linked.desc").at("texture") == expected);
 }
 
+// #954: a person's save is not held to the agent's rule: a reference whose file moved is saved, with its path put where
+// the guid is now.
+BOOST_AUTO_TEST_CASE(Save_OfAReferenceWhoseFileMoved_Succeeds_AndWritesWhereTheGuidIsNow)
+{
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(id, "res://textures/moved.png");
+	rs->set_asset_index(index);
+	const res::tag linked = put("linked.desc",
+		R"({"__type":"test.linked","speed":2.0,"texture":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://textures/old.png"}})");
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(linked);
+	const bool edited = opened.opened && document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 3.0;
+		return true;
+	});
+	const edt::save_result saved = edited ? document.save() : edt::save_result::failure("not edited");
+	rs->set_asset_index(nullptr);
+
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_REQUIRE(edited);
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	const json::value expected = json::object{ { "guid", res::to_text(id) }, { "path", "res://textures/moved.png" } };
+	BOOST_TEST(parsed("linked.desc").at("texture") == expected);
+	BOOST_TEST(parsed("linked.desc").at("speed").to_number<double>() == 3.0);
+}
+
 // #773: in a __parent chain a reference field of the nearer file replaces the farther one's value whole. Merged key by
 // key, a {guid, path} would take the __type of an inline desc, an inline desc the guid of a reference, and a new path the
 // old guid.

@@ -936,4 +936,64 @@ BOOST_AUTO_TEST_CASE(AReferenceFieldWithAGuidOfAnotherFile_IsRefused_OfTheSameFi
 	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc").find("res://shaders/a.frag") != std::string::npos);
 }
 
+// A path that is no place a file may refer to is named as that, also when the guid is another file's.
+BOOST_AUTO_TEST_CASE(ABadPath_IsReportedBeforeAGuidOfAnotherFile)
+{
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.frag" });
+	rs->set_asset_index(index);
+	const auto field = call("desc.create", desc_args("materials/o.mat.desc",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.frag"}})"));
+	const auto parent = call("desc.create", desc_args("materials/q.mat.desc",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://secret.desc"}})"));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(field.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(field.value.is_object());
+	const json::array& errors = field.value.at("errors").as_array();
+	BOOST_REQUIRE(!errors.empty());
+	BOOST_TEST(std::string(errors[0].at("json_path").as_string()) == std::string("/shader_fragment/path"));
+	for (const json::value& error : errors) {
+		BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") == std::string::npos);
+	}
+	BOOST_TEST(parent.code == cmd::codes::invalid_args);
+	BOOST_TEST(parent.error.find("name different files") == std::string::npos, parent.error);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "o.mat.desc"));
+	BOOST_TEST(!fs::exists(res_root / "materials" / "q.mat.desc"));
+}
+
+// A prefab's components have no schema here: a value shaped as a reference with a guid is held to the agent's rule.
+BOOST_AUTO_TEST_CASE(AReferenceInAPrefabComponent_WithAGuidOfAnotherFile_IsRefused_OfTheSameFile_IsWritten)
+{
+	fs::create_directories(res_root / "prefabs");
+	const char* const empty = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate"}]})";
+	const char* const content = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate","components":)"
+		R"({"material":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/a.mat.desc"}}}]})";
+	const auto made = call("desc.create", desc_args("prefabs/crate.desc", empty));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	const std::string before = read_file(res_root / "prefabs" / "crate.desc");
+	const std::string version = version_of("prefabs/crate.desc");
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+
+	auto elsewhere = std::make_shared<paths_index>();
+	elsewhere->paths.emplace(id, res::tag{ "res://materials/b.mat.desc" });
+	rs->set_asset_index(elsewhere);
+	const auto diverging = call("desc.write", write_args("prefabs/crate.desc", version, content));
+	const std::string kept = read_file(res_root / "prefabs" / "crate.desc");
+	auto same = std::make_shared<paths_index>();
+	same->paths.emplace(id, res::tag{ "res://materials/a.mat.desc" });
+	rs->set_asset_index(same);
+	const auto consistent = call("desc.write", write_args("prefabs/crate.desc", version, content));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(diverging.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(diverging.value.is_object());
+	const json::value& error = diverging.value.at("errors").as_array()[0];
+	BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/children/0/components/material"));
+	BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") != std::string::npos);
+	BOOST_TEST(kept == before);
+	BOOST_REQUIRE_MESSAGE(consistent.ok, consistent.error);
+	BOOST_TEST(read_file(res_root / "prefabs" / "crate.desc").find("res://materials/a.mat.desc") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

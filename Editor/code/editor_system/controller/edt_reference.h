@@ -89,12 +89,31 @@ namespace edt
 		return out;
 	}
 
-	// What an agent may not write (#954), empty when fine: a guid without a path, or one that names another file than it.
-	inline std::string agent_reference_problem(const boost::json::object& object, const res::resource_system* resources)
+	// An object that can only be a reference with a guid: no key but "guid" and "path", and a "guid".
+	inline bool is_guid_reference(const boost::json::object& object)
+	{
+		for (const auto& member : object) {
+			const std::string_view key(member.key().data(), member.key().size());
+			if (key != "guid" && key != "path") return false;
+		}
+		return object.contains("guid");
+	}
+
+	// The form an agent may write (#954), empty when fine: reference_object_problem, and no guid without a path.
+	inline std::string agent_reference_form_problem(const boost::json::object& object)
 	{
 		if (std::string form = reference_object_problem(object); !form.empty()) return form;
+		if (object.contains("guid") && reference_path_text(object).empty()) {
+			return "a reference needs a \"path\": a \"guid\" alone is not accepted here";
+		}
+		return {};
+	}
+
+	// Empty unless the asset index holds the guid of a well-formed reference for another file than its path (#954). Asked
+	// after the path's own check, so a bad path is named as one.
+	inline std::string agent_reference_guid_problem(const boost::json::object& object, const res::resource_system* resources)
+	{
 		if (!object.contains("guid")) return {};
-		if (reference_path_text(object).empty()) return "a reference needs a \"path\": a \"guid\" alone is not accepted here";
 		const std::optional<reference_target> target = target_of(boost::json::value(object), resources);
 		if (!target || !target->stale_path) return {};
 		// As the asset database pairs names: letter case does not tell two files apart where the file system does not.
