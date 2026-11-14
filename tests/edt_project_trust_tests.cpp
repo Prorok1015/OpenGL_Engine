@@ -156,6 +156,28 @@ BOOST_AUTO_TEST_CASE(AForeignLibrary_WaitsForTheAnswer)
 	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
 }
 
+// Held modules, waiting or refused, are named in the menu bar until they load (#921 review).
+BOOST_AUTO_TEST_CASE(HeldModules_AreShownUntilTheyLoad)
+{
+	settings_env settings;
+	const std::filesystem::path copy = settings.dir.write("cache/libgame.so", "foreign code");
+	const auto trust = settings.service();
+	BOOST_CHECK(!edt::held_modules_status(trust->held_modules()));
+	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_CHECK(!trust->allow_library("game_editor", copy));
+	trust->answer(edt::trust_answer::refused);
+	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_TEST((trust->held_modules() == std::vector<std::string>{ "game", "game_editor" }));
+	const std::optional<std::string> status = edt::held_modules_status(trust->held_modules());
+	BOOST_REQUIRE(status.has_value());
+	BOOST_TEST(status->find("game, game_editor") != std::string::npos);
+	BOOST_TEST(status->find("Project > Trust Project Modules") != std::string::npos);
+
+	trust->answer(edt::trust_answer::trusted);
+	BOOST_CHECK(trust->allow_library("game", copy));
+	BOOST_TEST((trust->held_modules() == std::vector<std::string>{ "game_editor" }));
+}
+
 // The answer is stored per project key and read back by the next session.
 BOOST_AUTO_TEST_CASE(Trust_IsPersistedPerProject)
 {

@@ -1755,6 +1755,11 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		draw_agent_status();
 		draw_play_status();
 		draw_save_notice();
+		if (const auto trust = m_trust.lock()) {
+			if (const auto held = held_modules_status(trust->held_modules())) {
+				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", held->c_str());
+			}
+		}
 		m_live_mode->draw_status();
 	});
 }

@@ -18,6 +18,15 @@ edt::project_trust_service::project_trust_service(res::resource_system& res, std
 
 bool edt::project_trust_service::allow_library(std::string_view module, const std::filesystem::path& copy)
 {
+	const bool allowed = decide_library(module, copy);
+	const auto held = std::ranges::find(m_held, module);
+	if (allowed && held != m_held.end()) m_held.erase(held);
+	if (!allowed && held == m_held.end()) m_held.emplace_back(module);
+	return allowed;
+}
+
+bool edt::project_trust_service::decide_library(std::string_view module, const std::filesystem::path& copy)
+{
 	if (m_flag) return true;
 	if (!m_key) {
 		egLOG_WARN("editor/trust", "module '{}' is not loaded: the project's path cannot be made canonical, so it "
@@ -120,4 +129,12 @@ void edt::ask_project_trust(dialog_service& dialogs, std::weak_ptr<project_trust
 				: "you do not trust this project: it runs without its modules");
 			if (on_answer) on_answer(answer);
 		});
+}
+
+std::optional<std::string> edt::held_modules_status(const std::vector<std::string>& held)
+{
+	if (held.empty()) return std::nullopt;
+	std::string names;
+	for (const std::string& name : held) names += (names.empty() ? "" : ", ") + name;
+	return std::format("Not loaded, the project is not trusted: {} (Project > Trust Project Modules...)", names);
 }

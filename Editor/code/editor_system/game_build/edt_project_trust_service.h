@@ -44,6 +44,8 @@ namespace edt {
 		[[nodiscard]] const std::vector<std::string>& waiting_modules() const { return m_waiting; }
 		// Before project_module_host::load_waiting, which asks allow_library again.
 		void clear_waiting() { m_waiting.clear(); }
+		// The modules allow_library refused, waiting or not, until it lets them load.
+		[[nodiscard]] const std::vector<std::string>& held_modules() const { return m_held; }
 
 		// Stores the person's answer (none: forgotten); a failed write is logged and the answer holds for this session.
 		void answer(trust_answer answer);
@@ -60,11 +62,14 @@ namespace edt {
 		void set_question_open(bool open) { m_question_open = open; }
 
 	private:
+		bool decide_library(std::string_view module, const std::filesystem::path& copy);
+
 		res::resource_system& m_res;
 		std::optional<std::string> m_key;
 		bool m_flag = false;
 		project_trust_record m_record;
 		std::vector<std::string> m_waiting;
+		std::vector<std::string> m_held;
 		bool m_question_open = false;
 	};
 
@@ -72,6 +77,8 @@ namespace edt {
 	std::string module_list(const std::vector<std::string>& modules);
 	// The question's text: what loads and runs, the waiting modules, where the answer is kept.
 	std::string project_trust_question(const std::vector<std::string>& waiting, trust_answer current);
+	// The menu bar's line while modules are held back by trust; nullopt when none is.
+	std::optional<std::string> held_modules_status(const std::vector<std::string>& held);
 
 	// Asks the person "Trust this project?" through `dialogs`. "Trust" / "Don't Trust" are stored in `trust` and then
 	// handed to `on_answer`; a dialog closed without an answer (Esc, headless auto-cancel) stores nothing and calls
