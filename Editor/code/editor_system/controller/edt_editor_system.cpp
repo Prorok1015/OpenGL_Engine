@@ -1289,6 +1289,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
 		options.jobs = &m_context->jobs();
 		options.events = &events;
+		ASSERT_MSG(m_log_filter != nullptr || commands.find("log.read") == nullptr,
+			"the MCP bridge is built without the log filter: an agent would read the texts of its jobs as they are");
+		options.log_filter = m_log_filter;
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
 		// Every open document, not only the scene: a modified preview is dropped too.

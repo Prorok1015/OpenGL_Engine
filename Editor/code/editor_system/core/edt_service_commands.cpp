@@ -81,7 +81,7 @@ namespace {
 			{ "note", json::string(shown(filter, job.note, from)) },
 			{ "cancel_requested", job.cancel_requested } };
 		if (!job.error.empty()) out["error"] = json::string(shown(filter, job.error, from));
-		if (job.result) out["result"] = *job.result;
+		if (job.result) out["result"] = edt::agent_job_result(*job.result, filter, from);
 		if (job.result_dropped) out["result_dropped"] = true;
 		return out;
 	}

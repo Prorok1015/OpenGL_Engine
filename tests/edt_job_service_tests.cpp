@@ -2,9 +2,11 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_dialog_service.h>
 #include "edt_service_commands.h"
+#include "edt_agent_log_filter.h"
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <optional>
@@ -855,6 +857,43 @@ BOOST_AUTO_TEST_CASE(JobGet_OfADoneJobWithAResult_ReturnsIt)
 	const json::object& job = got.value.as_object();
 	BOOST_REQUIRE(job.contains("result"));
 	BOOST_TEST(job.at("result").as_object().at("clean").as_bool());
+}
+
+// #935: a job's result is its command's answer; an agent gets its message fields rewritten, its data (a diff) as it is.
+BOOST_AUTO_TEST_CASE(JobGet_WithAFilter_RewritesTheMessageFieldsOfAResult_NotADiff_NotForAPerson)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	cmd::log_read_filter filter;
+	edt::install_agent_log_filter(filter, [] { return false; }, roots);
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_job_commands(filtered, *jobs, &filter);
+
+	const std::string diff = "--- a/x\n+++ b/x\n+open /etc/secret/key\n";
+	const std::string tail = "warning: /home/dev/games/demo/a.txt\nfatal: cannot read /etc/secret/key";
+	const auto id = jobs->start_with_result(ds::lane::io, { "vcs.diff", "test" }, owner, [diff, tail](ds::task_context&) {
+		return boost::json::value(boost::json::object{ { "text", diff }, { "truncated", false },
+			{ "error", boost::json::object{ { "code", "git_failed" }, { "stderr_tail", tail } } } });
+	});
+	run_lane(ds::lane::io);
+	deliver();
+	const json::value args = json::parse(std::format(R"({{"id":{}}})", id));
+
+	const cmd::result as_agent = filtered.invoke("job.get", args, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	const json::object& shown = as_agent.value.as_object().at("result").as_object();
+	BOOST_TEST(shown.at("error").as_object().at("stderr_tail").as_string().c_str()
+		== std::string("warning: <project>/a.txt\nfatal: cannot read <path>"));
+	BOOST_TEST(shown.at("error").as_object().at("code").as_string().c_str() == std::string("git_failed"));
+	BOOST_TEST(shown.at("text").as_string().c_str() == diff);
+	BOOST_TEST(!shown.at("truncated").as_bool());
+
+	const cmd::result as_person = filtered.invoke("job.get", args, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	const json::object& raw = as_person.value.as_object().at("result").as_object();
+	BOOST_TEST(raw.at("error").as_object().at("stderr_tail").as_string().c_str() == tail);
+	BOOST_TEST(raw.at("text").as_string().c_str() == diff);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/mcp/mcp_host.h>
+#include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <boost/json/value.hpp>
@@ -30,6 +31,9 @@ namespace edt
 		std::chrono::milliseconds progress_interval{ 250 };
 		// After this the call is answered with the job still running, and its progress is no longer forwarded.
 		std::chrono::milliseconds hold_limit{ std::chrono::minutes(10) };
+		// What log.read asks (#935; may be null, outlives the bridge): the note of a progress notification and, in a held
+		// call's answer, `error` and the message fields of `result` (k_agent_job_result_fields) go through its `redact`.
+		const cmd::log_read_filter* log_filter = nullptr;
 	};
 
 	// Whether an agent sees a command as a tool (AI_INTEGRATION.md section 5, A6b). Decided by the policy alone:

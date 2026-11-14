@@ -1,6 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include "edt_agent_log_filter.h"
+#include <boost/json/array.hpp>
+#include <boost/json/object.hpp>
+#include <boost/json/parse.hpp>
+#include <boost/json/value.hpp>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -104,7 +108,6 @@ BOOST_AUTO_TEST_CASE(FileAddressesAndShares_AreFiles_OtherAddressesAreNot)
 	BOOST_TEST(edt::agent_log_text("file:///C:/Users/dev/x.txt", known) == "file:///<path>");
 	BOOST_TEST(edt::agent_log_text("file://server/share/x.txt", known) == "file:<path>");
 	BOOST_TEST(edt::agent_log_text(R"(copy //server/share/x.txt to \\nas\media\y)", known) == "copy <path> to <path>");
-	BOOST_TEST(edt::agent_log_text(R"(\\?\C:\Users\dev\x)", known) == R"(\\?\<path>)");
 	BOOST_TEST(edt::agent_log_text("x // y/z and https://example.org/usr/bin", known) == "x // y/z and https://example.org/usr/bin");
 }
 
@@ -144,6 +147,90 @@ BOOST_AUTO_TEST_CASE(OnWindows_ARootIsFoundInAnyLetterCase)
 	BOOST_TEST(edt::agent_log_text(R"(open c:\games\demo2\a.desc)", known) == "open <path>");
 }
 #endif
+
+BOOST_AUTO_TEST_CASE(ALongPathPrefix_GoesWithThePathItStandsBefore)
+{
+	const edt::agent_log_roots known = roots();
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\C:\Users\dev\x.txt now)", known) == "open <path> now");
+	BOOST_TEST(edt::agent_log_text(R"(open \\.\C:\Users\dev\x.txt)", known) == "open <path>");
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\UNC\nas\media\clips\x.mp4, then stop)", known) == "open <path>, then stop");
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\unc\nas\media\x)", known) == "open <path>");
+	// Neither a drive nor a share follows: not a path this scanner knows.
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\UNC\nas)", known) == R"(open \\?\UNC\nas)");
+}
+
+#ifdef _WIN32
+BOOST_AUTO_TEST_CASE(OnWindows_ARootIsFoundBehindALongPathPrefix)
+{
+	edt::agent_log_roots on_drive;
+	on_drive.project = { R"(C:\Games\Demo)" };
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\C:\Games\Demo\res\a.desc)", on_drive) == R"(open <project>\res\a.desc)");
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\C:\Games\Demo2\a.desc)", on_drive) == "open <path>");
+
+	edt::agent_log_roots on_share;
+	on_share.project = { R"(\\nas\games\demo)" };
+	BOOST_TEST(edt::agent_log_text(R"(open \\nas\games\demo\a.desc)", on_share) == R"(open <project>\a.desc)");
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\UNC\nas\games\demo\a.desc)", on_share) == R"(open <project>\a.desc)");
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\UNC\NAS\Games\Demo)", on_share) == "open <project>");
+	BOOST_TEST(edt::agent_log_text(R"(open \\?\UNC\nas\games\demo2\a.desc)", on_share) == "open <path>");
+}
+
+BOOST_AUTO_TEST_CASE(OnWindows_AnMsysPath_IsThePathOfItsDrive)
+{
+	edt::agent_log_roots known;
+	known.project = { R"(C:\Games\Demo)" };
+	known.on_disk = [](const fs::path& folder) { return folder.generic_string() == "c:/Users"; };
+	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo/res/a.desc and /C/games/demo", known) == "open <project>/res/a.desc and <project>");
+	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo2/a.desc", known) == "open /c/Games/Demo2/a.desc");
+	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
+	BOOST_TEST(edt::agent_log_text("bad value at /a/b/name", known) == "bad value at /a/b/name");
+}
+#else
+BOOST_AUTO_TEST_CASE(OffWindows_AnMsysPath_IsAnAbsolutePathLikeAnyOther)
+{
+	edt::agent_log_roots known;
+	known.project = { "/c/Games/Demo" };
+	known.on_disk = [](const fs::path& folder) { return folder.generic_string() == "/c/Users"; };
+	BOOST_TEST(edt::agent_log_text("open /c/Games/Demo/res/a.desc", known) == "open <project>/res/a.desc");
+	BOOST_TEST(edt::agent_log_text("open /c/Users/dev/x.txt", known) == "open <path>");
+	BOOST_TEST(edt::agent_log_text("open /C/games/demo/a and /c/none/x", known) == "open /C/games/demo/a and /c/none/x");
+}
+#endif
+
+// #935: a job's result is the answer of its command; only its message fields are rewritten, never its data.
+BOOST_AUTO_TEST_CASE(AJobResult_HasOnlyItsMessageFieldsRewritten)
+{
+	cmd::log_read_filter filter;
+	edt::install_agent_log_filter(filter, [] { return false; }, roots());
+	const boost::json::value result = boost::json::parse(R"json({
+		"text": "+open /etc/secret/key",
+		"output": "wrote /etc/secret/key",
+		"exit_code": 1,
+		"error": { "code": "git_failed", "message": "fatal: cannot read /etc/secret/key", "stderr_tail": "at /home/dev/games/demo/a.txt" },
+		"report": { "error": "stopped at /etc/secret/key", "files": [
+			{ "path": "/etc/secret/key", "notes": ["kept /etc/secret/key", 7], "warnings": [{ "message": "see /etc/secret/key" }] } ] },
+		"a": { "b": { "c": { "d": { "message": "too deep /etc/secret/key" } } } }
+	})json");
+
+	const boost::json::value as_agent = edt::agent_job_result(result, &filter, cmd::origin::agent("s1"));
+	const boost::json::object& shown = as_agent.as_object();
+	BOOST_TEST(shown.at("text").as_string().c_str() == std::string("+open /etc/secret/key"));
+	BOOST_TEST(shown.at("output").as_string().c_str() == std::string("wrote <path>"));
+	BOOST_TEST(shown.at("exit_code").as_int64() == 1);
+	BOOST_TEST(shown.at("error").at("code").as_string().c_str() == std::string("git_failed"));
+	BOOST_TEST(shown.at("error").at("message").as_string().c_str() == std::string("fatal: cannot read <path>"));
+	BOOST_TEST(shown.at("error").at("stderr_tail").as_string().c_str() == std::string("at <project>/a.txt"));
+	BOOST_TEST(shown.at("report").at("error").as_string().c_str() == std::string("stopped at <path>"));
+	const boost::json::object& file = shown.at("report").at("files").as_array().at(0).as_object();
+	BOOST_TEST(file.at("path").as_string().c_str() == std::string("/etc/secret/key"));
+	BOOST_TEST(file.at("notes").as_array().at(0).as_string().c_str() == std::string("kept <path>"));
+	BOOST_TEST(file.at("notes").as_array().at(1).as_int64() == 7);
+	BOOST_TEST(file.at("warnings").as_array().at(0).at("message").as_string().c_str() == std::string("see <path>"));
+	BOOST_TEST(shown.at("a").at("b").at("c").at("d").at("message").as_string().c_str() == std::string("too deep /etc/secret/key"));
+
+	BOOST_TEST((edt::agent_job_result(result, &filter, cmd::origin::ui()) == result));
+	BOOST_TEST((edt::agent_job_result(result, nullptr, cmd::origin::agent("s1")) == result));
+}
 
 BOOST_AUTO_TEST_CASE(AJsonPointer_IsNoPath_UnlessItsFirstTwoSegmentsAreOnTheDisk)
 {

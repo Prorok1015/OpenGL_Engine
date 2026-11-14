@@ -2,6 +2,7 @@
 #include "test_manual_tasks.hpp"
 #include "edt_agent_access.h"
 #include "edt_agent_confirmations.h"
+#include "edt_agent_log_filter.h"
 #include "edt_agent_policy.h"
 #include "test_temp_dir.hpp"
 #include "edt_file_menu.h"
@@ -1677,6 +1678,8 @@ struct job_bridge_fixture : bridge_fixture
 {
 	edt::job_service jobs{ tasks, &events };
 	ds::lifetime job_owner{ ds::lifetime_option::cancel_on_destroy };
+	// Empty until a test fills it: the bridge then hands everything out as it is.
+	cmd::log_read_filter log_filter;
 	edt::mcp_bridge_host held_bridge{ commands, tasks, access, [this](const std::string& session) { events.agent_session_closed.emit(session); },
 		bridge_options() };
 	edt::job_service::job_id last_job = 0;
@@ -1697,6 +1700,7 @@ struct job_bridge_fixture : bridge_fixture
 		options.jobs = &jobs;
 		options.events = &events;
 		options.clock = [this] { return current; };
+		options.log_filter = &log_filter;
 		return options;
 	}
 
@@ -2062,6 +2066,60 @@ BOOST_AUTO_TEST_CASE(AtMost16CallsOfASession_AreHeld)
 	// Another session has its own share.
 	const auto other = start_call("test_job_ok", true, json::value(0), "session-2");
 	BOOST_TEST(other->answers.empty());
+}
+
+// #935: what a held call hands the agent goes through the filter of log.read, as job.get's answer does.
+BOOST_AUTO_TEST_CASE(AHeldCallsAnswerAndItsProgressNotes_AreRewrittenForTheAgent)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
+	add(job_command("test.job_paths", [](ds::task_context&) {
+		return json_of(R"json({"text":"+open /etc/secret/key","error":{"code":"git_failed","message":"fatal: cannot read /etc/secret/key","stderr_tail":"at /home/dev/games/demo/a.txt"}})json");
+	}));
+
+	const auto outcome = start_call("test_job_paths", true);
+	BOOST_TEST(outcome->answers.empty());
+	events.job_progress.emit(last_job, 0.5f, "reading /etc/secret/key");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+	BOOST_TEST(outcome->notes[0].message == "reading <path>");
+
+	finish_jobs();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+	const json::object& result = answer.at("result").as_object();
+	BOOST_TEST(text_of(result.at("text")) == "+open /etc/secret/key");
+	BOOST_TEST(text_of(result.at("error").at("code")) == "git_failed");
+	BOOST_TEST(text_of(result.at("error").at("message")) == "fatal: cannot read <path>");
+	BOOST_TEST(text_of(result.at("error").at("stderr_tail")) == "at <project>/a.txt");
+}
+
+BOOST_AUTO_TEST_CASE(AHeldCallsError_IsRewrittenForTheAgent_AlsoWhenTheJobEndedBeforeTheCall)
+{
+	edt::agent_log_roots roots;
+	roots.on_disk = [](const std::filesystem::path&) { return true; };
+	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
+	add(job_command("test.job_fails", [](ds::task_context&) -> json::value { throw std::runtime_error("cannot open /etc/secret/key"); }));
+
+	const auto held = start_call("test_job_fails", true);
+	BOOST_TEST(held->answers.empty());
+	const edt::job_service::job_id failed = last_job;
+	finish_jobs();
+	const json::object& answer = structured(*held);
+	BOOST_TEST(text_of(answer.at("status")) == "failed");
+	BOOST_TEST(text_of(answer.at("error")).find("cannot open <path>") != std::string::npos);
+	BOOST_TEST(text_of(answer.at("error")).find("/etc") == std::string::npos);
+
+	cmd::command_desc given = make("test.job_given");
+	given.result_schema = json_of(job_result_schema);
+	given.starts_job = true;
+	given.invoke = [failed](const cmd::call&) { return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(failed) } }); };
+	add(std::move(given));
+	const auto late = start_call("test_job_given", true, json::value(2));
+	const json::object& late_answer = structured(*late);
+	BOOST_TEST(text_of(late_answer.at("error")).find("cannot open <path>") != std::string::npos);
+	BOOST_TEST(text_of(late_answer.at("error")).find("/etc") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
