@@ -7,6 +7,7 @@
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include "edt_desc_file_commands.h"
 #include "edt_file_menu.h"
 #include "edt_level_controller.h"
 #include "edt_scene_document.h"
@@ -20,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -408,7 +410,11 @@ BOOST_AUTO_TEST_CASE(SavingALevelOfAnOlderVersion_WarnsOnce_ThatOlderEditorsWill
 	auto handle = rs->require_sync<scn::level_desc>(old);
 	pump();
 	BOOST_REQUIRE(handle.is_ready());
-	BOOST_REQUIRE(level_ctrl.finish_level_load(handle));
+	// The version of the bytes the load read, as editor_system::begin_level_load takes it.
+	const std::string old_text = read_file(content / "levels" / "old.desc");
+	const int read_version = edt::desc_root_version(std::as_bytes(std::span{ old_text.data(), old_text.size() }));
+	BOOST_TEST(read_version == 1);
+	BOOST_REQUIRE(level_ctrl.finish_level_load(handle, read_version));
 	BOOST_TEST(state.level_file_version == 1);
 	const int current = descs->current_version(scn::level_desc::__type);
 	BOOST_REQUIRE(current > 1);

@@ -2126,6 +2126,7 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	cancel_level_settle();
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
+	m_loading_file_version = level_bytes ? desc_root_version(*level_bytes) : 0;
 
 	if (level_bytes) m_services.writable_resources()->store(m_loading_editor_tag, *level_bytes);
 
@@ -2225,7 +2226,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
 	const res::tag editor_tag_before = m_state.editor_tag;
-	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag);
+	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag, m_loading_file_version);
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,

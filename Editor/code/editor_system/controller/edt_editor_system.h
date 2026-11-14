@@ -309,6 +309,8 @@ namespace edt {
 		// the copy of the level being edited, whatever the two files are called.
 		res::tag m_loading_level_tag;
 		res::tag m_loading_editor_tag;
+		// The root __version of the bytes the load read (0: unknown).
+		int m_loading_file_version = 0;
 		std::uint32_t m_load_serial = 0;
 		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
 		void abandon_level_load();

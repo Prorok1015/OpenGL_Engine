@@ -118,15 +118,6 @@ namespace {
 		return {};
 	}
 
-	// The root __version of the level as loaded: editor_tag is the byte copy of the file the load read.
-	int loaded_file_version(const res::resource_system& resources, const res::tag& editor_tag)
-	{
-		const auto raw = resources.fetch_data(editor_tag);
-		if (!raw) return 0;
-		raw->wait();
-		return raw->is_ready() ? edt::desc_root_version(raw->data) : 0;
-	}
-
 	// Tells the coordinator that the worlds were replaced, on every way out of the function.
 	struct notify_worlds_replaced
 	{
@@ -208,7 +199,7 @@ bool edt::level_controller::quick_save_level()
 
 // ─── Level load finish ──────────────────────────────────────────────────────
 
-bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle)
+bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle, int file_version)
 {
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return false;
@@ -226,7 +217,7 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		watch_level();
 		m_state.level_guid = level_res->get_guid();
 		m_state.level_parent = level_res->get_parent();
-		m_state.level_file_version = loaded_file_version(*m_services.resources(), m_state.editor_tag);
+		m_state.level_file_version = file_version;
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
@@ -247,13 +238,13 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 }
 
 bool edt::level_controller::take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag,
-	const res::tag& editor_tag)
+	const res::tag& editor_tag, int file_version)
 {
 	const res::tag level_tag_before = m_state.level_tag;
 	const res::tag editor_tag_before = m_state.editor_tag;
 	m_state.level_tag = level_tag;
 	m_state.editor_tag = editor_tag;
-	if (finish_level_load(handle)) return true;
+	if (finish_level_load(handle, file_version)) return true;
 	m_state.level_tag = level_tag_before;
 	m_state.editor_tag = editor_tag_before;
 	resume_watch();
