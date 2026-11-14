@@ -260,17 +260,43 @@ void edt::override_edit::effective_transform(
 
 void edt::override_edit::write_component(
 	prefab_node& owner, std::span<const uint64_t> target, const std::string& component,
-	const json::object& base, const json::object& edited)
+	const json::object& base, const json::object& edited, std::span<const std::string> replaced)
 {
-	json::object changed = diff(base, edited);
+	json::value changed = diff(base, edited);
 	erase_records(owner, target, component);
-	if (changed.empty()) return;
 
-	scn::override_record record;
-	record.target.assign(target.begin(), target.end());
-	record.component = component;
-	record.value = std::move(changed);
-	owner.overrides.push_back(std::move(record));
+	std::vector<scn::override_record> whole;
+	const json::value base_value(base);
+	const json::value edited_value(edited);
+	for (const std::string& pointer : replaced) {
+		const json::value* now = desc::json_pointer_get(edited_value, pointer);
+		if (!now) continue;
+		desc::json_pointer_remove(changed, pointer);
+		// The objects the removal left empty on the way say nothing.
+		for (std::string parent = pointer.substr(0, pointer.rfind('/')); !parent.empty(); parent = parent.substr(0, parent.rfind('/'))) {
+			const json::value* left = desc::json_pointer_get(changed, parent);
+			if (!left || !left->is_object() || !left->as_object().empty()) break;
+			desc::json_pointer_remove(changed, parent);
+		}
+		const json::value* was = desc::json_pointer_get(base_value, pointer);
+		if (was && same_value(*was, *now)) continue;
+		scn::override_record record;
+		record.target.assign(target.begin(), target.end());
+		record.component = component;
+		record.path = pointer;
+		record.value = *now;
+		whole.push_back(std::move(record));
+	}
+
+	if (!changed.as_object().empty()) {
+		scn::override_record record;
+		record.target.assign(target.begin(), target.end());
+		record.component = component;
+		record.value = std::move(changed);
+		owner.overrides.push_back(std::move(record));
+	}
+	// After the record of the whole component: applied later, each sets its value over what that one merged.
+	for (scn::override_record& record : whole) owner.overrides.push_back(std::move(record));
 }
 
 void edt::override_edit::write_transform(

@@ -16,6 +16,8 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
+#include <snk/resource/res_asset_index.h>
+#include <snk/resource/res_system.h>
 #include <boost/describe.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
@@ -24,6 +26,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -840,6 +844,102 @@ BOOST_AUTO_TEST_CASE(a_reference_object_follows_the_rule_of_a_tag)
 		}
 	}
 	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material").as_object().at("path").as_string() == "res://m.desc");
+}
+
+namespace {
+
+// An asset index that knows where some IDs are and keys no tag by an ID, so no cache entry moves.
+struct paths_index final : res::asset_index
+{
+	std::map<res::asset_id, res::tag> paths;
+	std::optional<res::asset_id> id_of(const res::tag&) const override { return std::nullopt; }
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		const auto found = paths.find(id);
+		return found == paths.end() ? std::nullopt : std::optional{ found->second };
+	}
+};
+
+}
+
+// #773: a reference the patch gives a reference field replaces the value whole. Merged into an inline desc it would keep
+// the __type (the old inline desc would load), merged into another reference it would keep the old guid.
+BOOST_AUTO_TEST_CASE(a_reference_in_a_patch_replaces_the_value_whole)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto set = [&](const std::string& at, const std::string& patch) {
+		return call("component.set", R"({"ref":)" + at + R"(,"key":"mesh","patch":)" + patch + "}");
+	};
+	const json::value reference = json::parse(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://m.desc"})");
+	const std::string as_patch = R"({"material":)" + json::serialize(reference) + "}";
+
+	BOOST_REQUIRE(set(crate, R"({"material":{"__type":"material_desc","__parent":"res://base_material.desc"}})").ok);
+	const auto over_inline = set(crate, as_patch);
+	BOOST_REQUIRE_MESSAGE(over_inline.ok, over_inline.error);
+	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material") == reference);
+
+	const auto new_path = set(crate, R"({"material":{"path":"res://n.desc"}})");
+	BOOST_REQUIRE_MESSAGE(new_path.ok, new_path.error);
+	BOOST_TEST(child(root(), 0xa4)->components.at("mesh").overrides.at("material") == json::parse(R"({"path":"res://n.desc"})"));
+
+	// Inside a prefab instance the reference is a record of its own that sets the field whole, after the component's.
+	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");
+	BOOST_REQUIRE(set(eye, R"({"material":{"__type":"material_desc","__parent":"res://base_material.desc"}})").ok);
+	const auto inside = set(eye, as_patch);
+	BOOST_REQUIRE_MESSAGE(inside.ok, inside.error);
+	const auto records_of = [&] {
+		std::vector<scn::override_record> out;
+		for (const scn::override_record& r : child(root(1), 0xe1)->overrides) {
+			if (r.component == "mesh") out.push_back(r);
+		}
+		return out;
+	};
+	const auto whole = [](const std::vector<scn::override_record>& records, const json::value& value) {
+		return std::ranges::any_of(records, [&](const scn::override_record& r) { return r.path == "/material" && r.value == value; });
+	};
+	const auto merged_material = [](const std::vector<scn::override_record>& records) {
+		return std::ranges::any_of(records, [](const scn::override_record& r) {
+			return r.path.empty() && r.value.is_object() && r.value.as_object().contains("material"); });
+	};
+	BOOST_TEST(whole(records_of(), reference));
+	BOOST_TEST(!merged_material(records_of()));
+
+	BOOST_REQUIRE(set(eye, R"({"material":{"path":"res://n.desc"}})").ok);
+	BOOST_TEST(whole(records_of(), json::parse(R"({"path":"res://n.desc"})")));
+	BOOST_TEST(!merged_material(records_of()));
+	// An edit of another field keeps the reference a record of its own.
+	BOOST_REQUIRE(set(eye, R"({"visible":false})").ok);
+	BOOST_TEST(whole(records_of(), json::parse(R"({"path":"res://n.desc"})")));
+	BOOST_TEST(!merged_material(records_of()));
+}
+
+// #773: with an asset index, component.set checks a reference where its guid leads and its written path too (a game
+// without an index loads that one). A guid no file holds, without a path, leads nowhere.
+BOOST_AUTO_TEST_CASE(a_reference_is_checked_by_its_guid_and_its_written_path)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto set = [&](const std::string& material) {
+		return call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":)" + material + "}}");
+	};
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://materials/moved.mat.desc" });
+	rs->set_asset_index(index);
+	const auto unknown = set(R"({"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"})");
+	const auto written = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://saves/m.desc"})");
+	const auto moved = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/old.mat.desc"})");
+	const auto known = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})");
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(unknown.error.find("0b6c1d2e") != std::string::npos, unknown.error);
+	BOOST_TEST(written.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(written.error.find("material/path") != std::string::npos, written.error);
+	BOOST_CHECK_MESSAGE(moved.ok, moved.error);
+	BOOST_CHECK_MESSAGE(known.ok, known.error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

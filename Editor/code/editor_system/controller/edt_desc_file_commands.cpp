@@ -503,12 +503,21 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 			schema_error(at, std::move(problem));
 			return;
 		}
-		if (const std::string path = edt::reference_path_text(object); !path.empty()) {
-			if (std::string problem = strict_tag_problem(path); !problem.empty()) schema_error(at + "/path", std::move(problem));
-			return;
+		const std::string path = edt::reference_path_text(object);
+		if (!path.empty()) {
+			if (std::string problem = strict_tag_problem(path); !problem.empty()) {
+				schema_error(at + "/path", std::move(problem));
+				return;
+			}
 		}
-		if (const std::optional<edt::reference_target> target = edt::target_of(value, resources); target && target->unknown_id) {
-			schema_error(at + "/guid", std::format("no file has the ID {} and the reference has no path", res::to_text(target->reference.guid)));
+		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
+		if (!target || !target->unknown_id) return;
+		const std::string guid = res::to_text(target->reference.guid);
+		if (path.empty()) {
+			schema_error(at + "/guid", std::format("no file has the ID {} and the reference has no path", guid));
+		} else {
+			add(std::string(res::diagnostic_kind::reference), at + "/guid", std::format("no file has the ID {}: '{}' is loaded by its path", guid, path),
+				res::diagnostic_severity::warning);
 		}
 	};
 

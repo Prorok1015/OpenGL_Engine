@@ -85,9 +85,11 @@ namespace edt::override_edit
 		glm::vec3& position, glm::vec3& rotation, glm::vec3& scale);
 
 	// Replace the records of (target, component) by one record holding the difference to the base; no difference, no record.
+	// Each pointer of `replaced` (a {guid, path} reference, EPIC-57 section 4.4) gets a record of its own that sets the value
+	// there whole: merged as part of the component it would mix with the inline desc or reference of the base.
 	void write_component(
 		prefab_node& owner, std::span<const uint64_t> target, const std::string& component,
-		const boost::json::object& base, const boost::json::object& edited);
+		const boost::json::object& base, const boost::json::object& edited, std::span<const std::string> replaced = {});
 
 	void write_transform(
 		prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,
