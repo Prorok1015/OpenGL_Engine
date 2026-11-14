@@ -29,22 +29,6 @@ namespace
 		return a == b || (case_insensitive && res::asset_name_key(a, true) == res::asset_name_key(b, true));
 	}
 
-	// Whether a reference written as `reference` leads to the asset (`path`, `id`).
-	std::optional<bool> matches(const edt::asset_database& assets, const edt::raw_reference& reference, const std::optional<res::tag>& path,
-		const std::optional<res::asset_id>& id)
-	{
-		if (reference.guid) {
-			if (id && *reference.guid == *id) return true;
-			// A guid a file holds is that file's: its path no longer counts.
-			if (!assets.find(*reference.guid).empty()) return std::nullopt;
-		}
-		if (!path || reference.path.empty()) return std::nullopt;
-		const res::tag written{ reference.path };
-		if (written.protocol() != res::tag::default_protocol()) return std::nullopt;
-		if (!same_path(written.view(), path->view(), assets.case_insensitive())) return std::nullopt;
-		return false;
-	}
-
 	std::string hex_of(std::string_view text)
 	{
 		std::string out;
@@ -166,6 +150,39 @@ namespace
 edt::usage_report edt::find_usages(const asset_database& assets, const desc::desc_system* descs, const usage_target& target,
 	std::string_view manifest_file, std::span<const manifest_reference> manifest)
 {
+	usage_index index;
+	return index.find(assets, descs, target, manifest_file, manifest);
+}
+
+void edt::usage_index::build(const asset_database& assets)
+{
+	m_by_guid.clear();
+	m_by_path.clear();
+	m_skipped.clear();
+	for (const auto& [key, record] : assets.records()) {
+		if (record.references_skipped) m_skipped.push_back(std::string(record.path.view()));
+		for (const raw_reference& reference : references_in(record.references)) {
+			const entry found{ &record, &reference };
+			if (reference.guid) m_by_guid.emplace(*reference.guid, found);
+			// A guid a file holds is that file's: its path no longer counts.
+			if (reference.guid && !assets.find(*reference.guid).empty()) continue;
+			if (reference.path.empty()) continue;
+			const res::tag written{ reference.path };
+			if (written.protocol() != res::tag::default_protocol()) continue;
+			m_by_path.emplace(res::asset_name_key(written.view(), assets.case_insensitive()), found);
+		}
+	}
+	m_assets = &assets;
+	m_revision = assets.revision();
+	m_built = true;
+	++m_builds;
+}
+
+edt::usage_report edt::usage_index::find(const asset_database& assets, const desc::desc_system* descs, const usage_target& target,
+	std::string_view manifest_file, std::span<const manifest_reference> manifest)
+{
+	if (!m_built || m_assets != &assets || m_revision != assets.revision()) build(assets);
+
 	usage_report out;
 	out.path = target.path;
 	out.id = target.id;
@@ -179,15 +196,23 @@ edt::usage_report edt::find_usages(const asset_database& assets, const desc::des
 		if (const std::vector<const asset_record*> holders = assets.find(*target.id); !holders.empty()) out.path = holders.front()->path;
 	}
 	out.complete = assets.walked_once() && assets.pending_hashes() == 0;
+	out.skipped = m_skipped;
 
-	for (const auto& [key, record] : assets.records()) {
-		if (record.references_skipped) out.skipped.push_back(std::string(record.path.view()));
-		for (const raw_reference& reference : references_in(record.references)) {
-			const std::optional<bool> by_guid = matches(assets, reference, out.path, out.id);
-			if (!by_guid) continue;
-			const std::optional<usage_kind> kind = classify_reference(reference, descs);
-			if (!kind) continue;
-			out.items.push_back(asset_usage{ std::string(record.path.view()), reference.json_pointer, *kind, *by_guid });
+	const auto add = [&out, descs](const entry& found, bool by_guid) {
+		if (const std::optional<usage_kind> kind = classify_reference(*found.reference, descs)) {
+			out.items.push_back(asset_usage{ std::string(found.record->path.view()), found.reference->json_pointer, *kind, by_guid });
+		}
+	};
+	if (out.id) {
+		const auto [first, last] = m_by_guid.equal_range(*out.id);
+		for (auto it = first; it != last; ++it) add(it->second, true);
+	}
+	if (out.path) {
+		const auto [first, last] = m_by_path.equal_range(res::asset_name_key(out.path->view(), assets.case_insensitive()));
+		for (auto it = first; it != last; ++it) {
+			// Already found by its guid: the asset asked for by an ID no file holds.
+			if (out.id && it->second.reference->guid == out.id) continue;
+			add(it->second, false);
 		}
 	}
 	for (const manifest_reference& reference : manifest) {

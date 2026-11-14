@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace cmd { class command_registry; }
@@ -20,6 +21,7 @@ namespace desc { class desc_system; }
 namespace edt
 {
 	class asset_database;
+	struct asset_record;
 
 	struct asset_usage
 	{
@@ -61,6 +63,37 @@ namespace edt
 	// asset's file. `descs` says what each reference is (classify_reference); null: by its place only.
 	usage_report find_usages(const asset_database& assets, const desc::desc_system* descs, const usage_target& target,
 		std::string_view manifest_file = {}, std::span<const manifest_reference> manifest = {});
+
+	// The references of every file by the guid and by the path they name (#774, PR 2): built once per revision of the
+	// database, so picking asset after asset in the browser does not walk every reference each time.
+	class usage_index
+	{
+	public:
+		// As find_usages; the index is built again first when `assets` is another database or its revision moved.
+		usage_report find(const asset_database& assets, const desc::desc_system* descs, const usage_target& target,
+			std::string_view manifest_file = {}, std::span<const manifest_reference> manifest = {});
+		// How many times the index was built. For tests.
+		std::size_t builds() const { return m_builds; }
+
+	private:
+		// Into the records and their reference lists: valid while the revision it was built at stands.
+		struct entry
+		{
+			const asset_record* record = nullptr;
+			const raw_reference* reference = nullptr;
+		};
+
+		void build(const asset_database& assets);
+
+		const asset_database* m_assets = nullptr;
+		std::uint64_t m_revision = 0;
+		bool m_built = false;
+		std::unordered_multimap<res::asset_id, entry> m_by_guid;
+		// By res::asset_name_key of the path, for the references without a guid or with one no file holds.
+		std::unordered_multimap<std::string, entry> m_by_path;
+		std::vector<std::string> m_skipped;
+		std::size_t m_builds = 0;
+	};
 
 	// One row of "Used by" as the asset browser shows it: "<file>  <pointer>  (<kind>)".
 	std::string usage_row_text(const asset_usage& usage);

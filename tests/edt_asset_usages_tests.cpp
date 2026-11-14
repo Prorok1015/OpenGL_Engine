@@ -380,8 +380,9 @@ BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainOnlyWhenTheDatabaseMovedOrAnotherAss
 	edt::usage_list list;
 	BOOST_TEST(list.report_for(sky) == nullptr);
 
-	list.set_source([this](const res::tag& asset) -> std::optional<edt::usage_report> {
-		return edt::find_usages(*db, nullptr, edt::usage_target{ asset, std::nullopt });
+	edt::usage_index index;
+	list.set_source([this, &index](const res::tag& asset) -> std::optional<edt::usage_report> {
+		return index.find(*db, nullptr, edt::usage_target{ asset, std::nullopt });
 	}, [this] { return db->revision(); });
 	const edt::usage_report* first = list.report_for(sky);
 	BOOST_REQUIRE(first);
@@ -390,6 +391,7 @@ BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainOnlyWhenTheDatabaseMovedOrAnotherAss
 	BOOST_TEST(list.queries() == 1u);
 	BOOST_TEST(list.report_for(res::tag::make("materials/child.desc")) != nullptr);
 	BOOST_TEST(list.queries() == 2u);
+	BOOST_TEST(index.builds() == 1u, "one index for every asset picked at one revision");
 
 	const edt::asset_usage* inherited = at(*list.report_for(sky), "res://materials/child.desc", "/__parent");
 	BOOST_REQUIRE(inherited);
@@ -406,9 +408,20 @@ BOOST_AUTO_TEST_CASE(TheUsedByList_AsksAgainOnlyWhenTheDatabaseMovedOrAnotherAss
 	BOOST_REQUIRE(after);
 	BOOST_TEST(list.queries() == 4u, "the database moved: asked again");
 	BOOST_TEST(after->items.size() == 4u);
+	BOOST_TEST(index.builds() == 2u);
 
 	list.set_source([](const res::tag&) -> std::optional<edt::usage_report> { return std::nullopt; }, {});
 	BOOST_TEST(list.report_for(sky) == nullptr, "no database: no report");
+}
+
+BOOST_AUTO_TEST_CASE(AnIdNoFileHolds_FindsItsReferencesOnce)
+{
+	open();
+	const edt::usage_report report = edt::find_usages(*db, nullptr, edt::usage_target{ std::nullopt, res::asset_id_from_text(k_gone_guid) });
+	BOOST_TEST(!report.path.has_value());
+	BOOST_REQUIRE(report.items.size() == 1u);
+	BOOST_TEST(report.items[0].json_pointer == k_node + "/lost/material");
+	BOOST_TEST(report.items[0].by_guid);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

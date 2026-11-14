@@ -1046,10 +1046,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_registrations.push_back(std::move(command));
 		}
 		m_asset_browser_panel->set_usages(
-			[this, manifest_file, manifest_references](const res::tag& asset) -> std::optional<usage_report> {
+			[this, manifest_file, manifest_references, index = std::make_shared<usage_index>()](const res::tag& asset) -> std::optional<usage_report> {
 				if (!m_assets) return std::nullopt;
 				const std::vector<manifest_reference> manifest = manifest_references();
-				return find_usages(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
+				return index->find(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
 			},
 			[this] { return m_assets ? m_assets->revision() : std::uint64_t{ 0 }; });
 	}
