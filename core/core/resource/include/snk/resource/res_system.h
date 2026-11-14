@@ -424,6 +424,14 @@ namespace res
 		void pin_bound(const cache_key& key, std::shared_ptr<resource_handle> block, bool always_cache);
 		// The node's pins and their owners, whoever pinned: a file that is gone (forget_erased).
 		void unpin_node(const res::tag& node);
+		// A pin a rebind took away from owners it split over nodes: their file, loaded and pinned again once the rebind's
+		// locks are gone (refresh_pins).
+		struct pin_reload
+		{
+			res::tag file;   // an owner's tag: what is loaded, and signalled as changed
+			cache_key pinned; // the key the owners' pin goes under
+			std::uint64_t generation = 0;
+		};
 		// The owners of `reload.pinned` get their file loaded and pinned again, asynchronously; a file that is not there, or
 		// fails to load, takes their pin away. No lock held.
 		void reload_pin(const pin_reload& reload);
@@ -431,8 +439,10 @@ namespace res
 		void apply_pin_reload(const pin_reload& reload, const std::shared_ptr<resource_handle>& block);
 		// m_pinning_mutex held: the next generation of `key`'s pin.
 		std::uint64_t bump_pin_generation_locked(const cache_key& key);
-		// The reloads a rebind queued, here and in the layers. No lock held.
+		// The root, no lock held: the reloads a rebind queued, here and in the layers, after one change signal per node.
 		void refresh_pins();
+		// The reloads queued here and in the layers, taken away.
+		void take_pin_reloads(std::vector<std::pair<resource_system*, pin_reload>>& out);
 		// apply_rebind, after rekey_locked (its locks held): each owner goes to its own tag's node, the pin with it.
 		void rehome_pin_owners_locked(const std::unordered_map<res::tag, res::tag>& fresh,
 			const std::unordered_map<res::tag, res::tag>& remap);
@@ -626,18 +636,11 @@ namespace res
 		// pin goes with the last. An owner follows its tag: to the tag's node after a rebind, to the new name after a move.
 		// A pin without an entry is unpinned at once. Under m_pinning_mutex.
 		tag_keyed_map<std::unordered_set<res::tag>> m_pin_owners;
-		// Moves with every pin_bound and every eviction of the pin, by the pin's key: a reload applies only if it has not
-		// moved since it began (#869). Under m_pinning_mutex.
+		// Moves with every pin_bound, register_alias copy and eviction of the pin, and goes with the owners in a rebind, by
+		// the pin's key: a reload applies only if it has not moved since it began (#869). Under m_pinning_mutex.
 		tag_keyed_map<std::uint64_t> m_pin_generations;
 		std::uint64_t m_pin_generation = 0;
-		// A pin a rebind took away from owners it split over nodes: their file, loaded and pinned again once the rebind's
-		// locks are gone (refresh_pins). Under m_pinning_mutex.
-		struct pin_reload
-		{
-			res::tag file;   // an owner's tag: what is loaded, and signalled as changed
-			cache_key pinned; // the key the owners' pin goes under
-			std::uint64_t generation = 0;
-		};
+		// Under m_pinning_mutex.
 		std::vector<pin_reload> m_pins_to_refresh;
 
 		struct watcher {

@@ -86,6 +86,22 @@ res::asset_id id_number(std::uint64_t n)
 const res::asset_id k_a = id_number(1);
 const res::asset_id k_b = id_number(2);
 
+// A file that is there and does not load.
+class broken_resolver : public test_util::ram_resolver
+{
+public:
+	using ram_resolver::ram_resolver;
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		block->set_error("broken file: " + tag.string());
+		return block;
+	}
+
+	bool exists(const res::tag&) const override { return true; }
+};
+
 using moves = std::vector<std::pair<res::tag, res::tag>>;
 
 // What a watcher was told, by tag.
@@ -1127,6 +1143,109 @@ BOOST_FIXTURE_TEST_CASE(ASplitInALayer_GivesEachSpellingItsOwnFilePinned, index_
 	BOOST_TEST(layer_text(spelled) == "file A");
 	layer.unpin_resource(a);
 	layer.unpin_resource(spelled);
+	BOOST_TEST(layer.pinned_count() == 0u);
+}
+
+// #869: a second split while the first one's reload loads: the first reload is stale, the second pins each file once.
+BOOST_FIXTURE_TEST_CASE(TwoSplitsBeforeTheReloadSettles_PinEachFileOnce, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	rs->set_asset_index(nullptr);
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	BOOST_TEST(text(spelled) == "file A");
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: an owner whose reload still loads moves to another ID without a split: the reload starts again where it is now,
+// so the owner is not left without a pin.
+BOOST_FIXTURE_TEST_CASE(AnOwnerMovedWhileItsReloadLoads_GetsItsPinWhereItIsNow, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	index->put(a, id_number(3));
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unpin_resource(a);
+	BOOST_TEST(rs->pinned_count() == 1u);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a split owner whose file fails to load loses its pin (with a warning): no empty pin stays behind.
+BOOST_FIXTURE_TEST_CASE(ASplitOwnerWhoseFileFailsToLoad_LosesThePin, index_fixture)
+{
+	rs->registrate_resolver<broken_resolver>("broken");
+	const res::tag a{ "broken://t/a.txt" };
+	const res::tag spelled{ "broken://t/A.txt" };
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("pinned a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("pinned spelled")));
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 0u);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #869: a split of one file in the root and in a layer: one change signal per node, and the layer's reload shares the
+// root's load.
+BOOST_FIXTURE_TEST_CASE(ASplitInTheRootAndALayer_SignalsOnceAndLoadsOnce, index_fixture)
+{
+	const res::tag a = put("a.txt", "file a");
+	const res::tag spelled = put("A.txt", "file A");
+	index->put(a, k_a);
+	index->spell(spelled, k_a);
+	res::resource_system layer{ *rs };
+	rs->pin_resource(a, res::text_resource(a, test_util::to_bytes("root a")));
+	rs->pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("root spelled")));
+	layer.pin_resource(a, res::text_resource(a, test_util::to_bytes("layer a")));
+	layer.pin_resource(spelled, res::text_resource(spelled, test_util::to_bytes("layer spelled")));
+	watch_log log;
+	log.watch(*rs, a);
+
+	index->spell(spelled, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	BOOST_TEST(rs->pending_loads() == 2u);
+	pump();
+	BOOST_TEST(std::ranges::count(log.told, names({ a }).front()) == 1);
+	BOOST_TEST(rs->pending_loads() == 0u);
+	BOOST_TEST(rs->pinned_count() == 2u);
+	BOOST_TEST(layer.pinned_count() == 2u);
+	BOOST_TEST(text(a) == "file a");
+	rs->unwatch(a, &log);
+	layer.unpin_resource(a);
+	layer.unpin_resource(spelled);
+	rs->unpin_resource(a);
+	rs->unpin_resource(spelled);
+	BOOST_TEST(rs->pinned_count() == 0u);
 	BOOST_TEST(layer.pinned_count() == 0u);
 }
 
