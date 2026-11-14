@@ -390,6 +390,10 @@ namespace {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
 			}
+			if (m_files.names_open_level(path.relative)) {
+				return cmd::result::failure(cmd::codes::busy,
+					std::format("'res://{}' is a name of the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", path.relative));
+			}
 			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
