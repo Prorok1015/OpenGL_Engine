@@ -328,13 +328,18 @@ res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts
 }
 
 void res::resource_system::register_mount(const mount &mounted) {
+  add_resolver(mounted.protocol, make_mount_resolver(mounted));
+}
+
+res::resource_system::resolver res::resource_system::make_mount_resolver(const mount &mounted) {
   egLOG("resource/system", "Mount {}:// ({}): {}", mounted.protocol,
         mounted.access == mount_access::read_only ? "read-only" : "read-write",
         mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
   const bool watch_files = watches_files();
   const watch_options watch = watch_files ? mounted.watch : watch_options{};
-  auto &resolver = registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access,
-                                                      mounted.writable, watch, mounted.file_operations, watch_files);
+  auto made = std::make_shared<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access, mounted.writable, watch,
+                                             mounted.file_operations, watch_files);
+  vfs_resolver &resolver = *made;
   // Everything a resolver reports passes hold_changes first, so nothing that consumes changes sees a held one early.
   resolver.set_resource_changed_callback([this](const res::tag &tag) {
     if (!hold_signal(tag)) {
@@ -352,6 +357,7 @@ void res::resource_system::register_mount(const mount &mounted) {
       }
     });
   }
+  return made;
 }
 
 void res::resource_system::post_batch(const std::string &protocol, std::vector<file_change> batch) {
@@ -500,8 +506,19 @@ bool res::resource_system::remount(std::string_view protocol, std::vector<std::f
     return false;
   }
   found->roots = std::move(roots);
-  unregistrate_resolver(found->protocol);
-  register_mount(*found);
+  // The new resolver takes the old one's place in one step: no load in between finds the protocol unmounted. The old one
+  // goes after, once the calls into it have ended.
+  resolver replaced = make_mount_resolver(*found);
+  {
+    std::unique_lock lock(m_registry_mutex);
+    const auto slot = m_resolvers.find(found->protocol);
+    if (slot == m_resolvers.end()) {
+      m_resolvers.emplace(found->protocol, std::move(replaced));
+    } else {
+      std::swap(slot->second, replaced);
+    }
+  }
+  release_resolver(std::move(replaced), found->protocol);
   // What was read from the old roots is not served any more: for the cache the files behind the tags changed.
   std::vector<res::tag> cached;
   collect_cached_tags(protocol, cached);
@@ -2014,18 +2031,20 @@ bool res::resource_system::erase(const res::tag &tag) {
 
 res::file_operation res::resource_system::remove(const res::tag &tag) {
   check_writable(tag);
-  const resolver_lease found = root().resolver_for(tag.protocol());
-  if (!found) {
-    std::string error = not_mounted_error(tag);
-    egLOG_WARN("resource/remove", "{}", error);
-    return file_operation::failure(std::move(error));
-  }
   // A file with an ID waits for the index owner's batch like a deletion found on disk; that batch forgets it.
   resource_system &base = root();
   const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
   const res::tag node = base.node_of(tag);
   const bool waits = node != tag && base.expect_gone(tag, node, generation);
-  auto result = found->remove(tag);
+  auto result = [&] {
+    const resolver_lease found = base.resolver_for(tag.protocol());
+    if (!found) {
+      std::string error = not_mounted_error(tag);
+      egLOG_WARN("resource/remove", "{}", error);
+      return file_operation::failure(std::move(error));
+    }
+    return found->remove(tag);
+  }();
   if (waits) {
     base.finish_expected(tag, static_cast<bool>(result));
   }
@@ -2047,18 +2066,20 @@ res::file_operation res::resource_system::rename(const res::tag &from, const res
   if (from.protocol() != to.protocol()) {
     return file_operation::failure("a file cannot move between protocols");
   }
-  const resolver_lease found = root().resolver_for(from.protocol());
-  if (!found) {
-    std::string error = not_mounted_error(from);
-    egLOG_WARN("resource/rename", "{}", error);
-    return file_operation::failure(std::move(error));
-  }
   // A file with an ID keeps its pins, aliases and resource if the index owner's batch pairs it with `to`.
   resource_system &base = root();
   const std::uint64_t generation = base.m_index_generation.load(std::memory_order_acquire);
   const res::tag node = base.node_of(from);
   const bool waits = node != from && base.expect_gone(from, node, generation);
-  auto result = found->rename(from, to);
+  auto result = [&] {
+    const resolver_lease found = base.resolver_for(from.protocol());
+    if (!found) {
+      std::string error = not_mounted_error(from);
+      egLOG_WARN("resource/rename", "{}", error);
+      return file_operation::failure(std::move(error));
+    }
+    return found->rename(from, to);
+  }();
   if (waits) {
     base.finish_expected(from, static_cast<bool>(result));
   }
@@ -2542,15 +2563,21 @@ bool res::resource_system::store_sync(const tag& tag, const std::vector<std::byt
 res::file_operation res::resource_system::create_sync(const tag& tag, const std::vector<std::byte>& data)
 {
 	check_writable(tag);
-	const resolver_lease found = root().resolver_for(tag.protocol());
-	if (!found) {
-		std::string error = not_mounted_error(tag);
-		egLOG_WARN("resource/store", "{}", error);
-		return file_operation::failure(std::move(error));
-	}
-	auto result = found->create_sync(tag, data);
+	bool mounted = true;
+	auto result = [&] {
+		const resolver_lease found = root().resolver_for(tag.protocol());
+		if (!found) {
+			mounted = false;
+			std::string error = not_mounted_error(tag);
+			egLOG_WARN("resource/store", "{}", error);
+			return file_operation::failure(std::move(error));
+		}
+		return found->create_sync(tag, data);
+	}();
 	// Whatever was loaded under the tag meanwhile is dropped, created or refused.
-	signal_changed(tag);
+	if (mounted) {
+		signal_changed(tag);
+	}
 	return result;
 }
 
@@ -2699,9 +2726,15 @@ void res::resource_system::release_resolver(resolver removed, std::string_view p
 		return;
 	}
 	// Only a resolver_lease holds another copy, for one call into the resolver, and none of those calls waits for the
-	// thread that unmounts: the wait ends. A lease of this very thread would wait for itself, so it asserts.
-	ASSERT_MSG(std::ranges::find(t_resolvers_in_call, removed.get()) == t_resolvers_in_call.end(),
-		"{}:// is unmounted from inside a call into its own resolver", protocol);
+	// thread that unmounts: the wait ends. A lease of this very thread would wait for itself.
+	const bool own_call = std::ranges::find(t_resolvers_in_call, removed.get()) != t_resolvers_in_call.end();
+	ASSERT_MSG(!own_call, "{}:// is unmounted from inside a call into its own resolver", protocol);
+	if (own_call) {
+		egLOG_ERROR("res/resolver", "{}:// is unmounted from inside a call into its own resolver: it is left alive", protocol);
+		// Leaked on purpose: destroying it here would join its io thread from a call that thread may be waiting on.
+		(void)new resolver(std::move(removed));
+		return;
+	}
 	using clock = std::chrono::steady_clock;
 	const auto start = clock::now();
 	auto next_warning = start + std::chrono::seconds(2);
@@ -2715,8 +2748,6 @@ void res::resource_system::release_resolver(resolver removed, std::string_view p
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
-	// What the other holders did with the resolver happens before it is destroyed here.
-	std::atomic_thread_fence(std::memory_order_acquire);
 	if (warned) {
 		egLOG_INFO("res/resolver", "{}:// is unmounted after {} ms of waiting", protocol,
 			std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - start).count());

@@ -107,7 +107,7 @@ struct probe_resource : res::text_resource
 
 struct probe_adapter : core::res::adapter_interface
 {
-	static inline auto INFO = res::adapter_info::make<probe_resource>();
+	static inline auto INFO = res::adapter_info::make<probe_resource>({ "probe" });
 
 	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
 	{
@@ -149,28 +149,55 @@ BOOST_AUTO_TEST_CASE(Unmounting_WaitsForTheCallInTheResolver_AndDestroysItOnTheU
 	BOOST_TEST(!rs->exists(k_tag), "not mounted any more");
 }
 
+// Waits until `counter` is past `above`: false after 10 s, a reader that stopped.
+bool wait_past(const std::atomic<int>& counter, int above)
+{
+	const auto deadline = std::chrono::steady_clock::now() + 10s;
+	while (counter.load() <= above) {
+		if (std::chrono::steady_clock::now() > deadline) return false;
+		std::this_thread::sleep_for(1ms);
+	}
+	return true;
+}
+
+constexpr int k_readers = 4;
+constexpr int k_rounds = 200;
+// Every so many rounds the main thread waits until the readers got through again: they ran during the rounds.
+constexpr int k_rounds_per_check = 20;
+
 BOOST_AUTO_TEST_CASE(RemountingWhileOtherThreadsRead_NeverReadsAGoneResolver)
 {
 	rs->registrate_resolver<held_resolver>(k_protocol, record);
 	std::atomic<bool> stop = false;
+	std::atomic<int> started = 0;
 	std::atomic<int> answered = 0;
 	std::vector<std::thread> readers;
-	for (int i = 0; i < 4; ++i) {
+	for (int i = 0; i < k_readers; ++i) {
 		readers.emplace_back([&] {
+			bool counted = false;
 			while (!stop) {
-				if (rs->fetch_data(k_tag)) ++answered;
+				if (rs->fetch_data(k_tag)) {
+					++answered;
+					if (!counted) {
+						counted = true;
+						++started;
+					}
+				}
 				std::this_thread::yield();
 			}
 		});
 	}
-	for (int round = 0; round < 200; ++round) {
+	BOOST_REQUIRE(wait_past(started, k_readers - 1));
+	for (int round = 0; round < k_rounds; ++round) {
 		rs->unregistrate_resolver(k_protocol);
 		rs->registrate_resolver<held_resolver>(k_protocol, record);
+		if (round % k_rounds_per_check == 0) {
+			BOOST_REQUIRE(wait_past(answered, answered.load()));
+		}
 	}
 	stop = true;
 	for (auto& reader : readers) reader.join();
 
-	BOOST_TEST(answered.load() > 0);
 	BOOST_TEST(record->alive.load() == 1, "every unmounted resolver is gone, the last one is mounted");
 	BOOST_TEST(!record->destroyed_during_call.load());
 }
@@ -178,25 +205,35 @@ BOOST_AUTO_TEST_CASE(RemountingWhileOtherThreadsRead_NeverReadsAGoneResolver)
 BOOST_AUTO_TEST_CASE(AddingAndRemovingAnAdapterWhileOtherThreadsLookItUp)
 {
 	std::atomic<bool> stop = false;
+	std::atomic<int> started = 0;
 	std::atomic<int> found = 0;
 	std::vector<std::thread> readers;
-	for (int i = 0; i < 4; ++i) {
+	for (int i = 0; i < k_readers; ++i) {
 		readers.emplace_back([&] {
+			bool counted = false;
 			while (!stop) {
-				if (rs->find_adapter_in_chain<probe_resource>(k_tag)) ++found;
+				if (!rs->registered_extensions(probe_adapter::INFO).empty()) ++found;
+				if (!counted) {
+					counted = true;
+					++started;
+				}
 				std::this_thread::yield();
 			}
 		});
 	}
-	for (int round = 0; round < 200; ++round) {
+	BOOST_REQUIRE(wait_past(started, k_readers - 1));
+	for (int round = 0; round < k_rounds; ++round) {
 		rs->registrate_adapter<probe_adapter>(probe_adapter::INFO);
-		std::this_thread::yield();
+		if (round % k_rounds_per_check == 0) {
+			BOOST_REQUIRE(wait_past(found, found.load()));
+		}
 		rs->unregistrate_adapter(probe_adapter::INFO);
 	}
 	stop = true;
 	for (auto& reader : readers) reader.join();
 
-	BOOST_TEST(!rs->find_adapter_in_chain<probe_resource>(k_tag));
+	BOOST_TEST(found.load() > 0);
+	BOOST_TEST(rs->registered_extensions(probe_adapter::INFO).empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

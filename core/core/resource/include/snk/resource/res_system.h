@@ -285,9 +285,6 @@ namespace res
 			add_resolver(prt, std::move(made));
 			return registered;
 		}
-		// Not root, not a protocol that has one already (asserts).
-		void add_resolver(protocol prt, resolver added);
-
 		// Main thread. Returns once the calls into the resolver that are running elsewhere have ended, and destroys it here:
 		// its io thread is joined on this thread, never on its own (#938).
 		void unregistrate_resolver(protocol prt);
@@ -702,6 +699,11 @@ namespace res
 		resolver_lease resolver_for(std::string_view protocol) const;
 		// Waits until `removed` is held by nobody else, then destroys it on this thread (#938).
 		static void release_resolver(resolver removed, std::string_view protocol);
+		// Not root, not a protocol that has one already (asserts). Private: a copy kept outside a resolver_lease would make
+		// unregistrate_resolver wait for it forever.
+		void add_resolver(protocol prt, resolver added);
+		// The vfs resolver of a mount, its change callbacks wired, not registered yet.
+		resolver make_mount_resolver(const mount& mounted);
 
 		// Guards the registry: m_resolvers, m_adapters, m_adapter_infos and m_extensions_with_magic. A leaf of the lock
 		// order: nothing is called while it is held, a resolver or an adapter is copied out and called after (#938).
