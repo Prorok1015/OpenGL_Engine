@@ -21,6 +21,7 @@
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
+#include "edt_migration_startup.h"
 #include "edt_module_swap_gate.h"
 #include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
@@ -59,6 +60,8 @@ namespace edt {
 	class forge_service;
 	class forge_account_panel;
 	class migration_panel;
+	class migration_notice_model;
+	struct journal_offer;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -205,6 +208,15 @@ namespace edt {
 		void open_agents_panel();
 		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
 		void open_migration_window();
+		// The window, rolling migration `id` back (project.migrate_rollback as a person's call).
+		void open_migration_rollback(const std::string& id);
+		// migration_startup's question (#761): Roll Back / Later for an unfinished migration, or why it cannot be rolled back.
+		void offer_migration_rollback(const journal_offer& offer);
+		// Once the project is open and the start level settled (#761): a scan of the project on the io lane, with a snapshot
+		// of the game layer's types; the notice "N files in an old format" when it found a migration is needed.
+		void start_migration_scan(const std::filesystem::path& root);
+		// The notice, bottom right; false once there is nothing to show (the implicit edt/migration_notice ends).
+		bool draw_migration_notice();
 
 	public:
 		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
@@ -268,20 +280,23 @@ namespace edt {
 		res::tag m_level_after_layer_change;
 		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
 		std::uint64_t m_game_layer_generation = 0;
-		// A migration stopped with an exception and left `level` detached: no level is saved until that migration is rolled
-		// back or another level is loaded (the same level loaded again is still half migrated), so the files stay as the
-		// rollback expects them.
-		struct stopped_migration
-		{
-			res::tag level;
-			std::function<bool()> rolled_back;
-			std::string reason;
-		};
-		std::optional<stopped_migration> m_migration_stopped;
+		// A migration (or rollback) stopped half way: no level of the project is saved until that migration is rolled back,
+		// whatever level is loaded meanwhile, so the files stay as the rollback expects them.
+		migration_save_block m_migration_stopped;
 		// project.migrate writes the project on the io lane (#761): Play, level changes and saves, builds, module reloads
 		// and quitting are refused until it ended (migration_blocker).
 		bool m_migration_running = false;
 		std::optional<std::string> migration_blocker() const;
+		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.
+		std::optional<std::string> project_write_blocker();
+		// The notice of a project in an old format (#761) and whether its scan still runs.
+		std::unique_ptr<migration_notice_model> m_migration_notice;
+		std::uint64_t m_migration_scan_job = 0;
+		// Migration and rollback runs started so far: a format check made before one is stale.
+		std::uint64_t m_migration_runs = 0;
+		// Owner of the format check's callback: declared after what it touches, so it dies (and cancels) first. Not the
+		// import's m_lifetime, which exists only with assimp.
+		ds::lifetime m_scan_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		bool m_loading_level = false;
 		slow_load_notice m_slow_load;
 		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load

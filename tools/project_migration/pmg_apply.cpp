@@ -1089,6 +1089,11 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 	return outcome;
 }
 
+std::string prj::migration::journal_hash(std::string_view bytes)
+{
+	return hash_of(bytes);
+}
+
 std::vector<std::string> prj::migration::unfinished_migrations(const fs::path& root)
 {
 	std::vector<std::string> ids;
@@ -1120,6 +1125,9 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 	const std::string journal_path = std::format("{}/{}/report.json", k_migrations_dir, id);
 	const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(journal_path));
 	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", id, text.error.empty() ? "" : ": " + text.error);
+	if (!context.journal_hash.empty() && hash_of(text.text) != context.journal_hash) {
+		return std::format("the journal of migration {} changed since it was checked, nothing was written", id);
+	}
 	boost::system::error_code error;
 	json::value journal = json::parse(text.text, error, {}, parse_options());
 	if (error || !journal.is_object()) return std::format("the journal of migration {} cannot be read", id);
@@ -1208,6 +1216,7 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		return writer(root, fs_paths::path_from_utf8(journal_path), prj::to_indented_json(journal));
 	};
 	if (auto failed = journal_as(migration_status::in_progress)) return std::format("the journal cannot be written: {}", *failed);
+	if (context.wrote) *context.wrote = true;
 
 	const auto roll_back_files = [&]() -> std::optional<std::string> {
 		for (const entry& file : files) {
