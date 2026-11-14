@@ -58,6 +58,37 @@ namespace
 			&& a.meta_mtime == b.meta_mtime && a.content_id == b.content_id && a.meta_id == b.meta_id;
 	}
 
+	bool carries_id(const edt::asset_record& record)
+	{
+		return record.id && !record.id->is_nil();
+	}
+
+	// What the asset index answers by (asset_index_snapshot): a record's ID and what holds_id_before orders by.
+	bool same_for_index(const edt::asset_record& a, const edt::asset_record& b)
+	{
+		if (!carries_id(a) && !carries_id(b)) {
+			return true;
+		}
+		return a.id == b.id && a.path == b.path && a.layer == b.layer && a.mtime == b.mtime;
+	}
+
+	using record_map = std::map<std::string, edt::asset_record>;
+
+	bool same_for_index(const record_map& a, const record_map& b)
+	{
+		for (const auto& [key, record] : a) {
+			if (carries_id(record)) {
+				const auto found = b.find(key);
+				if (found == b.end() || !same_for_index(record, found->second)) {
+					return false;
+				}
+			}
+		}
+		return std::ranges::none_of(b, [&a](const auto& entry) {
+			return carries_id(entry.second) && !a.contains(entry.first);
+		});
+	}
+
 	std::int64_t now_ticks()
 	{
 		return static_cast<std::int64_t>(fs::file_time_type::clock::now().time_since_epoch().count());
@@ -110,6 +141,7 @@ bool edt::known_file_id(const file_id& id)
 	return id.valid && (id.index != 0 || id.index_high != 0);
 }
 
+// What it orders by is what same_for_index compares: a field added here moves id_revision too.
 bool edt::holds_id_before(const asset_record& a, const asset_record& b)
 {
 	return std::tie(a.layer, a.mtime, a.path.string()) < std::tie(b.layer, b.mtime, b.path.string());
@@ -561,6 +593,9 @@ void edt::asset_database::apply_scan(asset_scan scan)
 	}
 	if (!same_records || !same_orphans || first_walk) {
 		++m_revision;
+	}
+	if (first_walk || !same_for_index(previous, m_records)) {
+		++m_id_revision;
 	}
 	// What the walk changed is a batch too: a change it saw first is not seen again by the deferred batch replayed after
 	// it. Nothing was published before the first walk.
@@ -1771,6 +1806,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	std::vector<std::pair<std::string, bool>> new_files;
 	const std::vector<asset_orphan> orphans_before = m_orphans;
 	bool records_changed = false;
+	bool ids_changed = false;
 	for (const auto& file : files) {
 		const std::string& owner_key = file.first;
 		const std::string& relative = file.second;
@@ -1810,6 +1846,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			if (gone_hash.empty()) {
 				gone_hash = old->second.content_hash;
 			}
+			ids_changed = ids_changed || carries_id(old->second);
 			gone.push_back(std::move(old->second));
 			m_records.erase(old);
 			records_changed = true;
@@ -1867,6 +1904,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 		if (!before || !before->same_as(*now)) {
 			records_changed = true;
 		}
+		ids_changed = ids_changed || (before ? !same_for_index(*before, *now) : carries_id(*now));
 		if (before) {
 			unindex_id(*before);
 		}
@@ -1885,6 +1923,9 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	}
 	if (records_changed || m_orphans != orphans_before) {
 		++m_revision;
+	}
+	if (ids_changed) {
+		++m_id_revision;
 	}
 	// Also a walk left owing by one that failed or was cancelled for good.
 	if (walk_again || m_walk_again) {

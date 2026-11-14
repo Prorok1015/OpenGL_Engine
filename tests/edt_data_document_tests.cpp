@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_data_document.h"
+#include "edt_document_creator.h"
 #include "test_fake_asset_catalog.hpp"
 #include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
@@ -1561,6 +1562,160 @@ BOOST_AUTO_TEST_CASE(ADataDocumentHasNoAgentChangesAndIsNeverLocked)
 	BOOST_REQUIRE(document.open(child).opened);
 	BOOST_TEST(!document.has_agent_changes());
 	BOOST_TEST(!document.edits_locked());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Types_AreTheDocumentTypesOnly)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	BOOST_TEST((creator.types() == std::vector<std::string>{ "test.config", "test.linked", "test.tagged" }));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_MakesTheExtensionDotDesc)
+{
+	BOOST_TEST(edt::document_creator::file_name("a") == "a.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.desc") == "a.desc");
+	BOOST_TEST(edt::document_creator::file_name("A.DESC") == "A.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.b") == "a.b.desc");
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WritesTheTypeAndTheVersionOnly_AndTheFileOpensAsADocument)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	const edt::document_creation made = creator.create("", "test.config", "made");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(made.tag.string() == "res://made.desc");
+	const json::object content = parsed("made.desc");
+	BOOST_TEST(content.size() == 2u);
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "test.config");
+	BOOST_TEST(content.at("__version").to_number<int>() == descs->current_version("test.config"));
+
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(made.tag);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(document.type() == "test.config");
+	BOOST_TEST(!document.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_InAFolderThatDoesNotExistYet_MakesItInTheTopLayer)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	const edt::document_creation made = creator.create("configs/deep", "test.tagged", "a.desc");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(fs::exists(res_root / "configs" / "deep" / "a.desc"));
+	BOOST_TEST(!fs::exists(lower / "configs"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverAFile_OfTheTopLayerOrOfALowerOne)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	put("taken.desc", R"({"__type":"test.config","speed":9.0})");
+	const std::string before = text_of("taken.desc");
+	const edt::document_creation own = creator.create("", "test.config", "taken");
+	BOOST_TEST(!own.ok());
+	BOOST_TEST(own.error == "'taken.desc' already exists in the project layer");
+	BOOST_TEST(text_of("taken.desc") == before);
+
+	write(lower, "base.desc", R"({"__type":"test.config"})");
+	const edt::document_creation below = creator.create("", "test.config", "base.desc");
+	BOOST_TEST(!below.ok());
+	BOOST_TEST(below.error == "'base.desc' already exists in the engine layer");
+	BOOST_TEST(!fs::exists(res_root / "base.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Check_RefusesWhatIsNotAName)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	BOOST_TEST(creator.check("", "").size() > 0u);
+	BOOST_TEST(creator.check("", "a/b").size() > 0u);
+	BOOST_TEST(creator.check("", "..").size() > 0u);
+	BOOST_TEST(creator.check("", ".hidden").size() > 0u);
+	for (const char* bad : { "a\\b", "C:x", "res://x", "CON", "a.", "a ", ".desc" }) {
+		BOOST_TEST_CONTEXT("name: " << bad) BOOST_TEST(creator.check("", bad).size() > 0u);
+	}
+	BOOST_TEST(creator.check("../outside", "a").size() > 0u);
+	BOOST_TEST(creator.check("", "fine").empty());
+	BOOST_TEST(creator.check("some/folder", "fine").empty());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WhileABlockerHolds_RefusesWithItsReasonAndWritesNothing)
+{
+	bool blocked = true;
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; },
+		[&blocked]() -> std::optional<std::string> {
+			return blocked ? std::optional<std::string>{ "a project migration is running" } : std::nullopt;
+		} } };
+	const edt::document_creation refused = creator.create("", "test.config", "x");
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(refused.error == "a project migration is running");
+	BOOST_TEST(!fs::exists(res_root / "x.desc"));
+
+	blocked = false;
+	BOOST_TEST(creator.create("", "test.config", "x").ok());
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_NeverOverTheLabelOfADeletedFile)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	put("gone.desc.resource", "{}");
+	const edt::document_creation own = creator.create("", "test.config", "gone");
+	BOOST_TEST(!own.ok());
+	BOOST_TEST(own.error.find("project layer") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "gone.desc"));
+
+	write(lower, "old.desc.resource", "{}");
+	const edt::document_creation below = creator.create("", "test.config", "old");
+	BOOST_TEST(!below.ok());
+	BOOST_TEST(below.error.find("engine layer") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "old.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_OfATypeThatIsNoDocument_IsRefusedAndWritesNothing)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	const edt::document_creation made = creator.create("", "test.plain", "x");
+	BOOST_TEST(!made.ok());
+	BOOST_TEST(made.error == "'test.plain' is not a document type");
+	BOOST_TEST(!fs::exists(res_root / "x.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWhatIsWrongBefore)
+{
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
+	edt::document_create_form form(creator);
+	form.open("configs");
+	BOOST_TEST(form.folder() == "configs");
+	BOOST_TEST(form.types().size() == 3u);
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(form.problem().empty());
+	BOOST_TEST(!form.submit().has_value());
+
+	form.set_name("a/b");
+	BOOST_TEST(form.problem().size() > 0u);
+	BOOST_TEST(!form.can_submit());
+
+	form.set_type_index(2);
+	form.set_name("game");
+	BOOST_TEST(form.can_submit());
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE(made.has_value());
+	BOOST_TEST(made->string() == "res://configs/game.desc");
+	const json::object content = json::parse(text_of("configs/game.desc")).as_object();
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "test.tagged");
+
+	// the same name again: the form refuses it before anything is written
+	form.open("configs");
+	form.set_name("game");
+	BOOST_TEST(form.problem() == "'game.desc' already exists in the project layer");
+	BOOST_TEST(!form.can_submit());
 }
 
 // #773: a save writes a reference as {guid, path} when its target has an ID, and the document holds what the file does; the

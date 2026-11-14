@@ -6,12 +6,15 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <snk/resource/res_tag.h>
 #include <string>
 #include <vector>
 
 namespace edt
 {
 	class code_section;
+	class document_creator;
+	class document_create_form;
 
 	class asset_browser_panel : public panel_base
 	{
@@ -26,6 +29,13 @@ namespace edt
 
 		// Reports the screen rectangle of every entry (headless smoke, editor/ui_probe); null: nothing.
 		void set_ui_probe(std::shared_ptr<ui_probe> probe) { m_ui_probe = std::move(probe); }
+
+		// "Create Document..." in the context menu of a folder (a row, the blank of the open folder, a node of the tree): opens a
+		// window to pick a document type and a name; `on_created` gets the tag of the new file. Without a creator the menu has no
+		// such item.
+		void set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created);
+
+		~asset_browser_panel() override;
 
 		// "Used by" of the file picked by a click (#774, EPIC-57 section 6.3): its usages as saved on the disk. Without a
 		// source the section is not drawn.
@@ -53,6 +63,7 @@ namespace edt
 		void navigate_to(const std::filesystem::path& rel_dir);
 		// The "Used by" section of the picked file, under the list.
 		void draw_usages();
+		void draw_usage_rows();
 		// Short icon prefix for a file based on extension.
 		const char* get_file_icon(const std::filesystem::path& path) const;
 
@@ -72,5 +83,14 @@ namespace edt
 		std::vector<entry> m_entries;
 		bool m_needs_refresh = true;
 		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
+
+		// The menu item of one folder (`folder` is relative to res://): asks for the window to open at the end of the frame.
+		void draw_create_menu_item(const std::filesystem::path& folder);
+		void draw_create_window();
+
+		std::shared_ptr<document_creator> m_creator;
+		std::unique_ptr<document_create_form> m_create_form;
+		std::function<void(const res::tag&)> m_on_document_created;
+		bool m_create_requested = false;
 	};
 }

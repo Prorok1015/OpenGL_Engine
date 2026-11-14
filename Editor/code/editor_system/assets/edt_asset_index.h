@@ -102,7 +102,8 @@ namespace edt
 		res::resource_system& m_resources;
 		std::shared_ptr<asset_index_snapshot> m_index = std::make_shared<asset_index_snapshot>();
 		bool m_attached = false;
-		std::uint64_t m_revision = 0;
+		// asset_database::id_revision as the index last took it.
+		std::uint64_t m_id_revision = 0;
 		std::vector<handed_move> m_moves;
 		std::uint64_t m_drops_seen = 0;
 		// Attached only after more walks than this have been applied.

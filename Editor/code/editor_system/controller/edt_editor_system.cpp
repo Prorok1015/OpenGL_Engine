@@ -2,6 +2,7 @@
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
+#include "edt_document_creator.h"
 #include "edt_asset_problems.h"
 #include "edt_asset_usages.h"
 #include "edt_begin_then_poll.h"
@@ -503,6 +504,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		editor_layer->register_implicit("edt/drop_loading", [this] { return poll_pending_desc(); });
 	};
 	for (auto& kind : register_builtin_asset_kinds(m_context->asset_kinds(), std::move(asset_hooks))) m_registrations.push_back(std::move(kind));
+	m_asset_browser_panel->set_document_creator(
+		std::make_shared<document_creator>(document_creator::ports{
+			[this] { return m_services.descs(); },
+			[this] { return m_services.writable_resources(); },
+			[this] { return m_res.get_resource_layers(); },
+			[this] { return migration_blocker(); } }),
+		[this](const res::tag& tag) { open_asset(tag, false); });
 	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open_asset(res::tag::make(res_rel.generic_string()), false);
 	});
