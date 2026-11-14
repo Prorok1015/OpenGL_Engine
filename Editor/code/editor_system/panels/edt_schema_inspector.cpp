@@ -1,4 +1,5 @@
 #include "edt_schema_inspector.h"
+#include "edt_asset_picker.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
@@ -266,35 +267,6 @@ namespace
 		case widget::json: return true;
 		}
 		return true;
-	}
-
-	bool matches_filter(std::string_view path, std::string_view filter)
-	{
-		if (filter.empty()) {
-			return true;
-		}
-		std::size_t start = 0;
-		while (start <= filter.size()) {
-			std::size_t end = filter.find_first_of(",;| ", start);
-			if (end == std::string_view::npos) {
-				end = filter.size();
-			}
-			std::string_view token = filter.substr(start, end - start);
-			while (!token.empty() && (token.front() == '*' || token.front() == '.')) {
-				token.remove_prefix(1);
-			}
-			if (!token.empty() && path.size() > token.size() && path[path.size() - token.size() - 1] == '.') {
-				const std::string_view tail = path.substr(path.size() - token.size());
-				const bool same = std::ranges::equal(tail, token, [](char a, char b) {
-					return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-				});
-				if (same) {
-					return true;
-				}
-			}
-			start = end + 1;
-		}
-		return false;
 	}
 
 	const desc::enum_schema* enum_of(const desc::field_schema& field, const desc::schema_registry& registry)
@@ -624,14 +596,93 @@ namespace
 		return changed;
 	}
 
-	bool edit_text(const char* label, const desc::field_schema& field, bool asset, json::value& value)
+	constexpr std::size_t k_picker_rows = 200;
+
+	// The list a "..." button opens: the files the field accepts, searched by name, the project's first. True when a file was
+	// picked (the value is then its reference).
+	bool draw_picker_popup(const desc::field_schema& field, const std::string& pointer, const edt::picker::catalog& catalog, std::string& query,
+		json::value& value, const context& ctx)
 	{
+		if (!ImGui::BeginPopup("##asset_picker")) {
+			return false;
+		}
+		bool picked = false;
+		if (ImGui::IsWindowAppearing()) {
+			query.clear();
+			ImGui::SetKeyboardFocusHere();
+		}
+		std::vector<char> buffer(std::max<std::size_t>(query.size() + 64, 256), '\0');
+		std::copy(query.begin(), query.end(), buffer.begin());
+		ImGui::SetNextItemWidth(360.0f);
+		if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
+			query = buffer.data();
+		}
+		const edt::picker::candidates_page page = edt::picker::candidates(catalog, edt::picker::filter_of(field), query, k_picker_rows);
+		if (page.unread > 0) {
+			ImGui::TextDisabled("%zu files, %zu descs not read yet", page.total, page.unread);
+		} else {
+			ImGui::TextDisabled("%zu files", page.total);
+		}
+		if (ImGui::BeginChild("##list", ImVec2(420.0f, 260.0f))) {
+			for (std::size_t i = 0; i < page.items.size(); ++i) {
+				const edt::asset_record& record = *page.items[i].record;
+				const std::string what = record.desc_type ? *record.desc_type : record.type;
+				const std::string row = std::format("{}   [{}] {}", record.path.relative(), what, page.items[i].layer_label);
+				ImGui::PushID(static_cast<int>(i));
+				if (ImGui::Selectable(row.c_str())) {
+					value = edt::picker::reference_value(record);
+					picked = true;
+					ImGui::CloseCurrentPopup();
+				}
+				report_target(ctx, pointer + "#pick/" + std::string(record.path.relative()));
+				ImGui::PopID();
+			}
+			if (page.total > page.items.size()) {
+				ImGui::TextDisabled("... %zu more: type to narrow the list", page.total - page.items.size());
+			}
+		}
+		ImGui::EndChild();
+		ImGui::EndPopup();
+		return picked;
+	}
+
+	void draw_red(const std::string& text)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+		ImGui::TextWrapped("%s", text.c_str());
+		ImGui::PopStyleColor();
+	}
+
+	bool edit_text(const char* label, const desc::field_schema& field, const std::string& pointer, bool asset, json::value& value, const context& ctx)
+	{
+		const edt::picker::catalog* catalog = asset ? ctx.assets : nullptr;
+		edt::schema_ui::map_edit_state scratch;
+		edt::schema_ui::map_edit_state& state = ctx.map_state ? *ctx.map_state : scratch;
+		const ImGuiID field_id = ImGui::GetID(label);
+		bool changed = false;
+		// The button comes first: a field whose text is wide would push it out of a narrow window.
+		if (catalog) {
+			ImGui::BeginDisabled(!catalog->ready());
+			if (ImGui::SmallButton("...")) {
+				ImGui::OpenPopup("##asset_picker");
+			}
+			report_target(ctx, pointer + "#pick");
+			ImGui::EndDisabled();
+			if (!catalog->ready() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+				ImGui::SetTooltip("the asset list is not ready");
+			}
+			if (draw_picker_popup(field, pointer, *catalog, state.picker_queries[field_id], value, ctx)) {
+				state.drop_refusals.erase(field_id);
+				changed = true;
+			}
+			ImGui::SameLine();
+		}
 		const std::string current(value.as_string());
 		std::vector<char> buffer(std::max<std::size_t>(current.size() + 256, 512), '\0');
 		std::copy(current.begin(), current.end(), buffer.begin());
-		bool changed = false;
 		if (ImGui::InputText(label, buffer.data(), buffer.size())) {
 			value = json::string(buffer.data());
+			state.drop_refusals.erase(field_id);
 			changed = true;
 		}
 		if (asset && ImGui::BeginDragDropTarget()) {
@@ -639,8 +690,12 @@ namespace
 				// The browser sends the path below res:// with its terminating zero (the viewport turns it into a tag the same way).
 				if (payload->DataSize > 0) {
 					const std::string path(static_cast<const char*>(payload->Data), static_cast<std::size_t>(payload->DataSize) - 1);
-					if (matches_filter(path, field.filter)) {
+					const edt::picker::verdict answer = edt::picker::judge_drop(edt::picker::filter_of(field), path, catalog);
+					if (answer.outcome == edt::picker::verdict::result::rejected) {
+						state.drop_refusals[field_id] = std::format("'{}' {}", path, answer.reason);
+					} else {
 						value = json::string(res::tag::make(path).string());
+						state.drop_refusals.erase(field_id);
 						changed = true;
 					}
 				}
@@ -650,9 +705,18 @@ namespace
 		// Below the field, so the drop target above stays the text field.
 		if (asset) {
 			if (const std::string problem = edt::schema_ui::tag_text_problem(value.as_string()); !problem.empty()) {
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
-				ImGui::TextWrapped("%s", problem.c_str());
-				ImGui::PopStyleColor();
+				draw_red(problem);
+			}
+			if (const auto refused = state.drop_refusals.find(field_id); refused != state.drop_refusals.end()) {
+				draw_red(refused->second);
+			}
+			if (catalog) {
+				const edt::picker::reference_state verdict = edt::picker::judge_text(edt::picker::filter_of(field), value.as_string(), *catalog);
+				if (verdict.severity == edt::picker::reference_state::level::error) {
+					draw_red(verdict.text);
+				} else if (verdict.severity == edt::picker::reference_state::level::note) {
+					ImGui::TextDisabled("%s", verdict.text.c_str());
+				}
 			}
 		}
 		return changed;
@@ -956,8 +1020,8 @@ namespace
 		case widget::vector: changed = edit_vector(label.c_str(), spec, value); break;
 		case widget::color: changed = edit_color(label.c_str(), value); break;
 		case widget::combo: changed = edit_combo(label.c_str(), *enumeration, value, null_form); break;
-		case widget::text: changed = edit_text(label.c_str(), field, false, value); break;
-		case widget::asset: changed = edit_text(label.c_str(), field, true, value); break;
+		case widget::text: changed = edit_text(label.c_str(), field, pointer, false, value, ctx); break;
+		case widget::asset: changed = edit_text(label.c_str(), field, pointer, true, value, ctx); break;
 		case widget::group: changed = edit_group(label.c_str(), field, spec, *nested, value, pointer, ctx, depth); break;
 		case widget::list: changed = edit_list(label.c_str(), field, spec, value, pointer, ctx, depth); break;
 		case widget::map: changed = edit_map(label.c_str(), field, spec, value, pointer, ctx, depth); break;

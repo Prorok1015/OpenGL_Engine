@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+namespace edt::picker { class catalog; }
+
 // The inspector UI generated from a desc::type_schema (DESC_SCHEMA.md 2.5): every field gets the widget its kind and
 // hints ask for, and what the user changes is written back as the JSON pointers that differ, nothing else.
 namespace edt::schema_ui
@@ -112,6 +114,10 @@ namespace edt::schema_ui
 		std::unordered_map<std::uint32_t, std::string> rename_errors;
 		// The first item of the page each list shows, by the ID of the list's node.
 		std::unordered_map<std::uint32_t, std::size_t> list_pages;
+		// The text typed into the search field of a reference picker, and why the last file dropped on a reference field was
+		// refused, by the ID of the field.
+		std::unordered_map<std::uint32_t, std::string> picker_queries;
+		std::unordered_map<std::uint32_t, std::string> drop_refusals;
 
 		// What was typed or refused belongs to the content shown; the pages of the lists do not: they stay while the same
 		// document changes under the person (an undo), and `list_page_start` keeps them inside the list.
@@ -119,6 +125,8 @@ namespace edt::schema_ui
 		{
 			new_keys.clear();
 			rename_errors.clear();
+			picker_queries.clear();
+			drop_refusals.clear();
 		}
 
 		void clear()
@@ -193,6 +201,8 @@ namespace edt::schema_ui
 		// Called for the mark of a field and for the items of its menu while it is open (tests): what it is
 		// ("<pointer>#mark", "<pointer>#reset", "<pointer>#unset") and the centre of its rectangle on the screen.
 		std::function<void(std::string_view target, float x, float y)> on_target = nullptr;
+		// The files a reference field may point at (S56-9); null: no picker, a drop is checked by its extension only.
+		const edt::picker::catalog* assets = nullptr;
 		// Not null: every field gets its mark (set here / inherited) and the menu of it (Reset, Unset). Null: no marks.
 		const field_origin* origin = nullptr;
 	};

@@ -103,29 +103,36 @@ edt::picker::candidates_page edt::picker::candidates(const catalog& source, cons
 	const std::string needle = lowered(query);
 	const std::size_t layers = source.layer_count();
 	candidates_page page;
-	std::vector<const asset_record*> fitting;
+	// The sort key is made once per file, not at every comparison.
+	struct keyed
+	{
+		std::string key;
+		const asset_record* record = nullptr;
+	};
+	std::vector<keyed> fitting;
 	source.for_each([&](const asset_record& record) {
-		if (!needle.empty() && lowered(record.path.relative()).find(needle) == std::string::npos) {
+		std::string key = lowered(record.path.relative());
+		if (!needle.empty() && key.find(needle) == std::string::npos) {
 			return;
 		}
 		const verdict answer = judge(wanted, record);
 		if (answer.outcome == verdict::result::unknown) {
 			++page.unread;
 		} else if (answer.fits()) {
-			fitting.push_back(&record);
+			fitting.push_back({ std::move(key), &record });
 		}
 	});
-	std::ranges::sort(fitting, [](const asset_record* a, const asset_record* b) {
-		if (a->layer != b->layer) {
-			return a->layer > b->layer;
+	std::ranges::sort(fitting, [](const keyed& a, const keyed& b) {
+		if (a.record->layer != b.record->layer) {
+			return a.record->layer > b.record->layer;
 		}
-		return lowered(a->path.relative()) < lowered(b->path.relative());
+		return a.key < b.key;
 	});
 	page.total = fitting.size();
 	const std::size_t shown = std::min(limit, fitting.size());
 	page.items.reserve(shown);
 	for (std::size_t i = 0; i < shown; ++i) {
-		page.items.push_back({ fitting[i], layer_label(fitting[i]->layer, layers) });
+		page.items.push_back({ fitting[i].record, layer_label(fitting[i].record->layer, layers) });
 	}
 	return page;
 }

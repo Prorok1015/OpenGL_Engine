@@ -1,6 +1,7 @@
 #include "edt_editor_system.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
+#include "edt_asset_picker.h"
 #include "edt_asset_problems.h"
 #include "edt_begin_then_poll.h"
 #include <algorithm>
@@ -438,6 +439,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	create_panels(!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
 	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
 	m_inspector_panel->set_desc_source([this] { return m_services.descs(); });
+	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_catalog.get(); };
+	m_inspector_panel->set_asset_source(asset_catalog);
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
 		auto view_cache = std::make_shared<override_edit::view_cache>(m_services, m_state);
@@ -477,6 +480,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
 		if (m_context->documents().preview() == &open) m_prefab_panel->set_open(true);
 	});
+	m_data_documents->set_asset_source(asset_catalog);
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
 		if (refused_during_play(m_play.get(), m_context->dialogs(), "Stop Play to add an asset to the scene.")) return;
 		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
@@ -864,6 +868,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return m_vcs ? m_vcs->cached_state().git_dir : std::nullopt;
 		});
 		m_assets->rebuild();
+		m_asset_catalog = std::make_unique<picker::database_catalog>(*m_assets);
 		m_asset_index = std::make_unique<asset_index_link>(*m_assets, m_res);
 		m_asset_problems = std::make_unique<asset_problem_publisher>();
 	}

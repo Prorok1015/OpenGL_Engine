@@ -92,9 +92,11 @@ namespace edt
 	namespace
 	{
 		schema_ui::context make_schema_context(const desc::schema_registry& registry, std::function<bool(const std::string&, boost::json::value&)> draw_json,
-			schema_ui::map_edit_state& map_state)
+			schema_ui::map_edit_state& map_state, const picker::catalog* assets)
 		{
-			return schema_ui::context{ registry, std::move(draw_json), {}, &map_state };
+			schema_ui::context out{ registry, std::move(draw_json), {}, &map_state };
+			out.assets = assets;
+			return out;
 		}
 	}
 
@@ -103,7 +105,7 @@ namespace edt
 		const desc::schema_registry& registry = descs()->schemas();
 		auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
-		}, m_map_state);
+		}, m_map_state, m_asset_source ? m_asset_source() : nullptr);
 		const std::string parent_name = comp.parent_desc.is_valid() ? std::string{ comp.parent_desc.get_tag().view() } : std::string{};
 		return schema_ui::edit_component_marked(schema, registry, parent_json(key, comp), comp.overrides, parent_name, {},
 			[&](boost::json::value& shown, const schema_ui::field_origin& origin) {
@@ -120,7 +122,7 @@ namespace edt
 		boost::json::value after = before;
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
-		}, m_map_state);
+		}, m_map_state, m_asset_source ? m_asset_source() : nullptr);
 		if (!schema_ui::draw_fields(schema, after, ctx))
 			return false;
 		return schema_ui::apply_edit(scratch.overrides, schema, registry, base, before, after) > 0;
