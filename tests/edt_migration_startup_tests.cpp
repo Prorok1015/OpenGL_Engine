@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(APerson_IsAskedAboutTheFirst_HeadlessGetsTheCommandLine)
 // why, and the text has neither control characters nor '#' (a dialog's title is its ImGui name).
 BOOST_AUTO_TEST_CASE(AnInvalidId_IsNotOfferedForARollback_ItsReasonIsShown)
 {
-	for (const std::string id : { std::string("a\nb\x1b"), std::string("x###y"), std::string(".hidden") }) {
+	for (const std::string& id : { std::string("a\nb\x1b"), std::string("x###y"), std::string(".hidden") }) {
 		BOOST_TEST_CONTEXT(id) {
 			const edt::journal_offer told = edt::decide_journal_offer({ id }, false);
 			BOOST_TEST((told.what == edt::journal_offer::kind::inform));

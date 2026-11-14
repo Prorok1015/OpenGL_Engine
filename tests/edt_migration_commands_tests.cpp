@@ -1046,8 +1046,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsRollback_IsBoundToTheJournalItWasShown)
 	BOOST_TEST(text.find(id) != std::string::npos, text);
 	BOOST_TEST(text.find("cam_v1.desc") != std::string::npos, text);
 	const fs::path journal = copy.root() / ".snk" / "migrations" / id / "report.json";
-	write_text(journal, read_text(journal) + "
-");
+	write_text(journal, read_text(journal) + "\n");
 	const json::object changed = roll_back(id, cmd::origin::agent("s1"));
 	BOOST_TEST(error_code_of(changed) == cmd::codes::denied, json::serialize(changed));
 	BOOST_TEST((content() == migrated_content));
