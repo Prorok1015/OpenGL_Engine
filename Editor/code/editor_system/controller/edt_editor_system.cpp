@@ -752,6 +752,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		desc_files.top_layer = std::move(layout.top_layer);
 		desc_files.layers = std::move(layout.layers);
 		desc_files.open_level_files = std::move(layout.open_level_files);
+		desc_files.write_blocker = std::move(layout.write_blocker);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));

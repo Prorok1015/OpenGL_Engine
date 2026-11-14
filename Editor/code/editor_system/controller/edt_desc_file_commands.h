@@ -47,6 +47,9 @@ namespace edt
 		std::function<std::vector<std::string>()> open_level_files;
 		// agent_action after each change an agent made; null: none.
 		editor_events* events = nullptr;
+		// Why nothing may be written into the project now (a migration runs, or one stopped half way and is not rolled back,
+		// #761): desc.create and desc.write answer busy with it. Null or nullopt: they write.
+		std::function<std::optional<std::string>()> write_blocker;
 	};
 
 	[[nodiscard]] std::vector<registration> register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps);
