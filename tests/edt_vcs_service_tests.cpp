@@ -265,6 +265,21 @@ struct vcs_fixture
 		return output;
 	}
 
+	// The paths the index holds changed against HEAD (or every path of it before the first commit), sorted.
+	std::vector<std::string> staged_files(const fs::path& repo)
+	{
+		std::string text = git_text(repo, { "diff", "--cached", "--name-only", "-z", "--no-renames" });
+		std::vector<std::string> out;
+		for (std::size_t start = 0; start < text.size();) {
+			const std::size_t end = text.find('\0', start);
+			out.emplace_back(text.substr(start, end - start));
+			if (end == std::string::npos) break;
+			start = end + 1;
+		}
+		std::ranges::sort(out);
+		return out;
+	}
+
 	std::string head_of(const fs::path& dir)
 	{
 		std::string text = git_text(dir, { "rev-parse", "HEAD" });
@@ -1480,49 +1495,108 @@ BOOST_AUTO_TEST_CASE(RealRepository_FetchPullPush_AgainstALocalBareRepository)
 	BOOST_TEST(head_of(remote) == head_of(other));
 }
 
-// #912: an agent stages only files of the open project, and never its .snk/ (the MCP token) or .cache/, whatever path
-// it names (a folder, another letter case, a path out of the project); nothing is staged then. A person's stage is
-// plain git add.
+// #912: an agent stages only files of the open project, never its .snk/ (the MCP token) or .cache/, whatever path it
+// names (a folder, a path out of the project, another letter case where the file system ignores case); nothing is
+// staged then. A person's stage is plain git add.
 BOOST_AUTO_TEST_CASE(AnAgentStagesOnlyTheProjectsOwnFiles)
 {
 	isolate_config();
-	const fs::path repo = make_repository();
+	const fs::path repo = make_plain_repository("stage_paths");
 	const fs::path project = repo / "game";
 	write(project / "res" / "a.txt", "a\n");
 	write(project / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
 	write(project / ".cache" / "user_profile", "p\n");
 	write(repo / "outside.txt", "o\n");
 	make_service(real_options(project));
-	const auto staged = [&] {
-		std::vector<std::string> out;
-		const json::value status = finish(service->start_status(cmd::origin_kind::ui));
-		for (const auto& item : status.as_object().at("entries").as_array()) {
-			const json::value* index = item.as_object().if_contains("index");
-			if (index && text(*index) == "A") out.emplace_back(text(item.as_object().at("path")));
-		}
-		std::ranges::sort(out);
-		return out;
-	};
 
-	for (const std::vector<std::string>& paths : std::vector<std::vector<std::string>>{ { "." }, { "game" }, { "game/" },
-			{ "game/.snk/mcp.json" }, { "game/.SNK/mcp.json" }, { "game/.cache" }, { "outside.txt" },
-			{ "game/res/a.txt", "outside.txt" }, { "game/res/../../outside.txt" } }) {
+	std::vector<std::vector<std::string>> refused_paths{ { "." }, { "game" }, { "game/" }, { "game/.snk/mcp.json" },
+		{ "game/.cache" }, { "outside.txt" }, { "game/res/a.txt", "outside.txt" }, { "game/res/../../outside.txt" },
+		{ "../elsewhere.txt" } };
+#if defined(_WIN32) || defined(__APPLE__)
+	refused_paths.push_back({ "game/.SNK/mcp.json" });
+	refused_paths.push_back({ "game/.Cache" });
+#endif
+#ifdef _WIN32
+	refused_paths.push_back({ "game/SNK~1/mcp.json" });
+#endif
+	for (const std::vector<std::string>& paths : refused_paths) {
 		BOOST_TEST_CONTEXT(paths.front()) {
 			const json::value result = finish(service->start_stage(paths, cmd::origin_kind::agent));
 			BOOST_TEST(is_error(result, "path_outside_project"), json::serialize(result));
-			BOOST_TEST(staged().empty());
+			BOOST_TEST(staged_files(repo).empty());
 		}
 	}
 
 	const json::value own = finish(service->start_stage({ "game/res" }, cmd::origin_kind::agent));
 	BOOST_TEST(!own.as_object().contains("error"), json::serialize(own));
-	BOOST_TEST((staged() == std::vector<std::string>{ "game/res/a.txt" }));
+	BOOST_TEST((staged_files(repo) == std::vector<std::string>{ "game/res/a.txt" }));
 
 	const json::value by_person = finish(service->start_stage({ "." }, cmd::origin_kind::ui));
 	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
-	const std::vector<std::string> all = staged();
+	const std::vector<std::string> all = staged_files(repo);
 	BOOST_TEST((std::ranges::find(all, "game/.snk/mcp.json") != all.end()));
 	BOOST_TEST((std::ranges::find(all, "outside.txt") != all.end()));
+}
+
+// #912: a deletion is a change of the file too; a project at the repository's root has its .snk/ at the top; a folder
+// whose .snk/mcp.json is ignored stages, without the file; on Linux another letter case is another folder.
+BOOST_AUTO_TEST_CASE(AnAgentsStage_DeletionsTheRootProjectAndIgnoredFiles)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("stage_scope");
+	write(repo / ".snk" / "build.json", "{}\n");
+	write(repo / "res" / "a.txt", "a\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project at the top" });
+	make_service(real_options(repo));
+
+	fs::remove(repo / ".snk" / "build.json");
+	for (const char* path : { ".snk/build.json", ".snk", "." }) {
+		BOOST_TEST_CONTEXT(path) {
+			const json::value result = finish(service->start_stage({ path }, cmd::origin_kind::agent));
+			BOOST_TEST(is_error(result, "path_outside_project"), json::serialize(result));
+			BOOST_TEST(staged_files(repo).empty());
+		}
+	}
+	git(repo, { "checkout", "-q", "--", ".snk/build.json" });
+
+	write(repo / ".gitignore", ".snk/mcp.json\n");
+	write(repo / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	write(repo / "res" / "a.txt", "changed\n");
+	const json::value folder = finish(service->start_stage({ "." }, cmd::origin_kind::agent));
+	BOOST_TEST(!folder.as_object().contains("error"), json::serialize(folder));
+	const std::vector<std::string> staged = staged_files(repo);
+	BOOST_TEST((std::ranges::find(staged, ".snk/mcp.json") == staged.end()));
+	BOOST_TEST((std::ranges::find(staged, "res/a.txt") != staged.end()));
+#if !defined(_WIN32) && !defined(__APPLE__)
+	write(repo / ".Snk" / "notes.txt", "mine\n");
+	BOOST_TEST(!finish(service->start_stage({ ".Snk" }, cmd::origin_kind::agent)).as_object().contains("error"));
+#endif
+}
+
+// #912: an agent's commit publishes nothing of the person's own files a person staged, and its push nothing a
+// person committed of them.
+BOOST_AUTO_TEST_CASE(AnAgentsCommitAndPush_RefuseThePersonsOwnFiles)
+{
+	isolate_config();
+	const fs::path remote = make_bare("private_remote.git");
+	const fs::path repo = make_plain_repository("private_commit");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "push", "-q", "-u", "origin", "main" });
+	make_service(real_options(repo));
+	const std::string before = head_of(repo);
+
+	write(repo / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	finish(service->start_stage({ ".snk/mcp.json" }, cmd::origin_kind::ui));
+	const json::value committed = finish(service->start_commit("by an agent", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(committed, "path_outside_project"), json::serialize(committed));
+	BOOST_TEST(head_of(repo) == before);
+
+	git(repo, { "checkout", "-q", "-b", "agent/work" });
+	git(repo, { "commit", "-q", "-m", "a person's commit of the token" });
+	const json::value pushed = finish(service->start_push("origin", "agent/work", false, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(pushed, "path_outside_project"), json::serialize(pushed));
+	BOOST_TEST(git_text(remote, { "branch", "--list", "agent/work" }).empty());
 }
 
 // Owner decision (#454): an agent's commit runs no hook of the repository; a person's does.

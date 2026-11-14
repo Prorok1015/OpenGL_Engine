@@ -73,6 +73,8 @@ namespace
 	{
 		const fs::path file = project_dir / ".gitignore";
 		std::string text = read_text(file);
+		// A file written with CRLF keeps them: git takes a mixed file as changed whenever autocrlf touches it.
+		const std::string_view eol = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
 		std::string added;
 		for (const auto& [line, covered_by] : k_ignored_lines) {
 			bool present = false;
@@ -87,11 +89,11 @@ namespace
 			}
 			if (!present) {
 				added += line;
-				added += '\n';
+				added += eol;
 			}
 		}
 		if (added.empty()) return std::nullopt;
-		if (!text.empty() && text.back() != '\n') text += '\n';
+		if (!text.empty() && text.back() != '\n') text += eol;
 		text += added;
 		std::ofstream out(file, std::ios::binary | std::ios::trunc);
 		out << text;
