@@ -442,18 +442,24 @@ namespace desc
 				json::value stored(in, json::storage_ptr{});
 				// A {guid, path} reference (#758, #881): the field holds the tag, as a described res::tag or desc_ref
 				// field does. An inline desc of a desc_ref stays an object.
-				const auto as_path = [&ctx](json::value& item) {
-					if (const std::optional<res::tag> tag = item.is_object() ? reference_tag(item, ctx) : std::nullopt) {
-						item = json::value(tag->view());
+				const auto as_path = [&ctx](field_kind kind, json::value& item) {
+					if (!item.is_object()) {
+						return;
+					}
+					const std::optional<res::tag> tag = reference_tag(item, ctx);
+					if (tag || kind == field_kind::res_tag) {
+						item = json::value(tag.value_or(res::tag{}).view());
 					}
 				};
 				const auto is_reference = [](field_kind kind) {
 					return kind == field_kind::res_tag || kind == field_kind::desc_ref;
 				};
 				if (is_reference(ops.kind)) {
-					as_path(stored);
+					as_path(ops.kind, stored);
 				} else if (ops.kind == field_kind::array && is_reference(ops.element) && stored.is_array()) {
-					std::ranges::for_each(stored.as_array(), as_path);
+					for (json::value& item : stored.as_array()) {
+						as_path(ops.element, item);
+					}
 				}
 				if (ops.kind == field_kind::array && ops.element == field_kind::entity && in.is_array()) {
 					for (json::value& item : stored.as_array()) {
