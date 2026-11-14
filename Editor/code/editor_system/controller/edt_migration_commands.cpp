@@ -24,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <utility>
 
 namespace {
@@ -37,6 +38,10 @@ namespace {
 	constexpr auto k_shown_lifetime = cmd::command_registry::confirmation_lifetime;
 	// How often the job's thread looks at its stop token while it waits for the main thread.
 	constexpr std::chrono::milliseconds k_wait_step{ 50 };
+	// A wait for the other side of a run (a hop, the end of the apply) logs a warning this often and goes on waiting.
+	constexpr std::chrono::seconds k_wait_warning{ 10 };
+	// A job stopped after the main thread took the apply's result waits this long for the answer being made.
+	constexpr std::chrono::seconds k_answer_grace{ 2 };
 	constexpr std::size_t k_max_listed = 5;
 
 	constexpr std::string_view k_no_args_schema = R"json({"type":"object","properties":{},"additionalProperties":false})json";
@@ -271,6 +276,39 @@ namespace {
 			m_changed.notify_all();
 		}
 
+		// The job's stop token (job.cancel, job_service::cancel_all_and_wait when the editor quits) or the job's body dropped:
+		// every hop, waiting or later, is refused at once, so an apply that runs fails fast and rolls back instead of waiting
+		// for a main thread that is itself waiting for this job.
+		void refuse_hops()
+		{
+			std::lock_guard lock(m_mutex);
+			m_closed = true;
+			for (const auto& item : m_hops) item->done.set_value(false);
+			m_hops.clear();
+		}
+
+		// The job's work is gone (finished, or dropped unrun by a cancel before it started).
+		void job_ended()
+		{
+			refuse_hops();
+			std::lock_guard lock(m_mutex);
+			m_job_gone = true;
+		}
+
+		// Main thread: the job ended without taking the apply that was handed to it; nothing was written.
+		bool ended_unrun()
+		{
+			std::lock_guard lock(m_mutex);
+			return m_job_gone && !m_over && !m_running;
+		}
+
+		// The main thread took the result and is making the answer.
+		bool answer_coming()
+		{
+			std::lock_guard lock(m_mutex);
+			return m_result_taken;
+		}
+
 		// The job saw its stop token: true when nothing was handed over yet, and then nothing ever will be.
 		bool abandon()
 		{
@@ -298,6 +336,10 @@ namespace {
 				if (m_closed) return false;
 				m_hops.push_back(item);
 			}
+			// Answered by the main thread's frame, or refused by refuse_hops/close.
+			while (ran.wait_for(k_wait_warning) != std::future_status::ready) {
+				egLOG_WARN("project/migrate", "the migration waits for the main thread to load a desc");
+			}
 			return ran.get();
 		}
 
@@ -323,6 +365,7 @@ namespace {
 		std::optional<apply_result> take_result()
 		{
 			std::lock_guard lock(m_mutex);
+			if (m_result) m_result_taken = true;
 			return std::exchange(m_result, std::nullopt);
 		}
 
@@ -338,7 +381,10 @@ namespace {
 				m_apply = {};
 				m_over = true;
 			}
-			m_changed.wait(lock, [this] { return !m_running; });
+			// The apply uses what goes with the editor: it must end first. It cannot reach the main thread any more.
+			while (!m_changed.wait_for(lock, k_wait_warning, [this] { return !m_running; })) {
+				egLOG_WARN("project/migrate", "the editor waits for the migration to end (it rolls back)");
+			}
 		}
 
 	private:
@@ -354,9 +400,25 @@ namespace {
 		bool m_closed = false;
 		bool m_running = false;
 		bool m_over = false;
+		bool m_job_gone = false;
+		bool m_result_taken = false;
 		std::function<apply_result()> m_apply;
 		std::optional<apply_result> m_result;
 		std::deque<std::shared_ptr<hop>> m_hops;
+	};
+
+	// Lives as long as the job's work (a copy of it in the task): its end, run or dropped unrun, is told to the handoff.
+	struct job_presence
+	{
+		explicit job_presence(std::weak_ptr<apply_handoff> to) : handoff(std::move(to)) {}
+		job_presence(const job_presence&) = delete;
+		job_presence& operator=(const job_presence&) = delete;
+		~job_presence()
+		{
+			if (const auto alive = handoff.lock()) alive->job_ended();
+		}
+
+		std::weak_ptr<apply_handoff> handoff;
 	};
 
 	// One project.migrate from the job's start to its answer; the steps run in the implicit frame callback, the apply in
@@ -496,8 +558,13 @@ namespace {
 				std::erase_if(m_shown, [&key](const shown_plan& entry) { return entry.key == key; });
 			}
 			// The io work runs the apply the main thread hands over, and otherwise waits for the answer. Once the apply was
-			// handed over it is never abandoned: it runs to its end, and the main thread announces what it wrote.
-			auto work = [future = run->promise.get_future().share(), abandoned = run->abandoned, handoff = run->handoff](ds::task_context& task) -> json::value {
+			// handed over it is never abandoned: it runs to its end (a stop refuses its hops, so it rolls back), and the main
+			// thread announces what it wrote.
+			auto work = [future = run->promise.get_future().share(), abandoned = run->abandoned, handoff = run->handoff,
+							presence = std::make_shared<job_presence>(run->handoff)](ds::task_context& task) -> json::value {
+				// A stop never waits for the main thread: the editor quitting waits for this job (cancel_all_and_wait) first.
+				const std::stop_callback refuse(task.stop, [handoff] { handoff->refuse_hops(); });
+				static_cast<void>(presence);
 				try {
 					while (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
 						if (std::function<apply_result()> apply = handoff->take(k_wait_step)) {
@@ -510,6 +577,8 @@ namespace {
 								throw ds::task_cancelled{};
 							}
 							if (handoff->apply_over()) {
+								// The main thread is answering (announcing, opening the level again): its answer, if it comes soon.
+								if (handoff->answer_coming() && future.wait_for(k_answer_grace) == std::future_status::ready) return future.get();
 								return error_value(cmd::codes::failed, "the migration ended without an answer (the job was cancelled or the editor "
 									"stopped): see .snk/migrations");
 							}
@@ -652,7 +721,15 @@ namespace {
 				show_progress(true);
 				run.handoff->pump();
 				std::optional<apply_result> result = run.handoff->take_result();
-				if (!result) return true;
+				if (!result) {
+					// The job was cancelled before it ran (its body dropped unrun): nobody takes the apply, so nothing is
+					// written; the level comes back as after a refused plan.
+					if (!run.handoff->ended_unrun()) return true;
+					run.handoff->close();
+					egLOG_WARN("project/migrate", "the job was cancelled before the migration ran: nothing was written");
+					result = apply_result{};
+					result->outcome.refused = "the job was cancelled before the migration ran: nothing was written";
+				}
 				run.applying = false;
 				return after_apply(current, std::move(*result));
 			}

@@ -592,6 +592,10 @@ void edt::file_menu::register_actions()
 	add({ .id = "file.new_project", .label = "New Project...", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
 			if (!m_hooks.create_project || !m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
+			// Before the folder is made: a project made now could not be switched to.
+			if (std::optional<std::string> why = m_hooks.exit_blocker ? m_hooks.exit_blocker() : std::nullopt) {
+				return action_result::failure(cmd::codes::busy, *why);
+			}
 			if (anything_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			const auto folder = from_json_string(args.as_object().at("path").as_string()).lexically_normal();
 			const auto base = folder.has_filename() ? folder.filename() : folder.parent_path().filename();

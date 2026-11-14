@@ -7,6 +7,7 @@
 #include <chrono>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/fs_paths.h>
 #include "edt_selection_wiring.h"
 #include "edt_prefab_document.h"
 #include "edt_editor_camera.h"
@@ -860,11 +861,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		ports.open_file = [this, &data](const std::string& path) {
 			if (!data.has_value<prj::project_context>()) return;
 			const prj::project_context& project = data.require<prj::project_context>();
-			const std::filesystem::path file = (project.root / std::filesystem::path(std::u8string(path.begin(), path.end()))).lexically_normal();
+			const std::filesystem::path file = (project.root / fs_paths::path_from_utf8(path)).lexically_normal();
 			for (const std::filesystem::path& content : project.content_roots) {
 				const std::filesystem::path relative = file.lexically_relative(content.lexically_normal());
-				if (relative.empty() || *relative.begin() == "..") continue;
-				if (!open_asset(res::tag::make(relative.generic_string()), false)) {
+				if (relative.empty() || *relative.begin() == std::filesystem::path("..")) continue;
+				if (!open_asset(res::tag::make(fs_paths::generic_utf8_of(relative)), false)) {
 					egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
 				}
 				return;

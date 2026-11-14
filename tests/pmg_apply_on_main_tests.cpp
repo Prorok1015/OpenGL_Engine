@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_fixture_project.hpp"
 #include "test_scene_env.hpp"
+#include "test_watchdog.hpp"
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/project/prj_json_text.h>
@@ -19,6 +20,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace json = boost::json;
@@ -65,30 +67,40 @@ void prepare(const test_util::fixture_copy& copy)
 }
 
 // The main thread's side of on_main: a worker queues `fn` and waits; the test thread runs the queue while it waits for
-// the apply to end, as the editor's frame callback does.
+// the apply to end, as the editor's frame callback does. A test thread that gives up refuses every hop, so the worker
+// never waits for it forever.
 class main_hops
 {
 public:
 	bool run(const std::function<void()>& fn)
 	{
-		std::promise<void> done;
-		auto finished = done.get_future();
+		auto queued = std::make_shared<item>();
+		queued->fn = &fn;
+		auto answered = queued->done.get_future();
 		{
 			std::lock_guard lock(m_mutex);
-			m_items.push_back(item{ &fn, &done });
+			if (m_closed) return false;
+			m_items.push_back(queued);
 		}
 		m_queued.notify_one();
-		finished.get();
-		return true;
+		return answered.get();
 	}
 
-	// Main thread: runs what is queued until `until` is ready.
+	// Main thread: runs what is queued until `until` is ready; fails the test (refusing every hop) after `limit`.
 	template<class T>
-	void pump_until(std::future<T>& until, ds::task_system* tasks = nullptr)
+	void pump_until(std::future<T>& until, ds::task_system* tasks = nullptr, std::chrono::seconds limit = std::chrono::seconds(120))
 	{
+		const auto deadline = std::chrono::steady_clock::now() + limit;
 		while (until.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+			if (std::chrono::steady_clock::now() > deadline) {
+				// Every hop refused: the apply fails fast and ends, so the worker is not left using the test's locals.
+				close();
+				BOOST_ERROR("the apply did not end in time");
+				until.wait();
+				return;
+			}
 			if (tasks) tasks->drain_main(std::chrono::milliseconds(1));
-			std::optional<item> next;
+			std::shared_ptr<item> next;
 			{
 				std::unique_lock lock(m_mutex);
 				m_queued.wait_for(lock, std::chrono::milliseconds(5), [this] { return !m_items.empty(); });
@@ -98,8 +110,16 @@ public:
 			}
 			(*next->fn)();
 			++ran;
-			next->done->set_value();
+			next->done.set_value(true);
 		}
+	}
+
+	void close()
+	{
+		std::lock_guard lock(m_mutex);
+		m_closed = true;
+		for (const auto& queued : m_items) queued->done.set_value(false);
+		m_items.clear();
 	}
 
 	std::atomic<int> ran{ 0 };
@@ -108,12 +128,13 @@ private:
 	struct item
 	{
 		const std::function<void()>* fn = nullptr;
-		std::promise<void>* done = nullptr;
+		std::promise<bool> done;
 	};
 
 	std::mutex m_mutex;
 	std::condition_variable m_queued;
-	std::deque<item> m_items;
+	std::deque<std::shared_ptr<item>> m_items;
+	bool m_closed = false;
 };
 
 // scene_env over a copy of the fixture: manual tasks, the test thread is the main one.
@@ -234,16 +255,28 @@ BOOST_FIXTURE_TEST_CASE(OnMainThatRefuses_RollsTheMigrationBack, manual_fixture)
 {
 	const auto before = content_of(copy.root());
 	pmg::apply_context context = context_for(copy.root());
-	// Two hops go through and their file is written; the main thread is gone for the third.
+	// The project's own files written through the writer port (the journal and the backup are under .snk/).
+	std::vector<std::string> content_writes;
+	context.write = [&content_writes](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (!relative.generic_string().starts_with(".snk/")) content_writes.push_back(relative.generic_string());
+		return prj::write_project_file(root, relative, text);
+	};
+	// Two hops go through (the form and the check of a file the engine wrote); the main thread is gone for the third.
 	int hops = 0;
-	context.on_main = [&hops](const std::function<void()>& fn) {
-		if (++hops > 2) return false;
+	std::size_t written_before_refusal = 0;
+	context.on_main = [&](const std::function<void()>& fn) {
+		if (++hops > 2) {
+			written_before_refusal = content_writes.size();
+			return false;
+		}
 		fn();
 		return true;
 	};
 	const pmg::apply_outcome outcome = apply(copy.root(), context);
 	BOOST_REQUIRE(outcome.refused.empty());
 	BOOST_TEST(hops == 3);
+	// A file of the project was written before the refusal, so the rollback below put something back.
+	BOOST_TEST(written_before_refusal > 0u);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
 	BOOST_TEST(outcome.report.error.find("main thread") != std::string::npos);
 	BOOST_TEST((content_of(copy.root()) == before));
@@ -252,11 +285,45 @@ BOOST_FIXTURE_TEST_CASE(OnMainThatRefuses_RollsTheMigrationBack, manual_fixture)
 	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
 }
 
+// The editor holds the mounts' reports during a run (resource_system::hold_changes), so no watcher evicts a parent the
+// migration wrote: the apply evicts every file it wrote before the engine loads again, and a child's form and check read
+// the migrated parent, not the one cached before.
+BOOST_FIXTURE_TEST_CASE(AParentWrittenByTheMigration_IsNotTakenFromTheCacheByTheLoadsAfterIt, manual_fixture)
+{
+	const res::tag parent = res::tag::make("prefabs/p_v2.prefab.desc");
+	const fs::path parent_file = copy.res() / "prefabs/p_v2.prefab.desc";
+	const std::string original = read_text(parent_file);
+	const auto before = rs->require_sync<desc::desc_base>(parent);
+	BOOST_REQUIRE(before.get_sync());
+	const auto hold = rs->hold_changes();
+
+	pmg::apply_context context = context_for(copy.root());
+	int after_write = 0;
+	int stale = 0;
+	context.on_main = [&](const std::function<void()>& fn) {
+		fn();
+		if (read_text(parent_file) != original) {
+			++after_write;
+			if (rs->require_sync<desc::desc_base>(parent).get_control_block() == before.get_control_block()) ++stale;
+		}
+		return true;
+	};
+	const pmg::apply_outcome outcome = apply(copy.root(), context);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST_MESSAGE("error: " << outcome.report.error);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::partial));
+	BOOST_TEST(read_text(parent_file) != original);
+	// The world that instances it (worlds/w_v2.desc) is formed and checked after it.
+	BOOST_TEST(after_write > 0);
+	BOOST_TEST(stale == 0);
+}
+
 // The deadlock the editor must not have: the job's io worker waits for the main thread while the main thread waits for
 // a load. A load runs on the vfs resolver's own thread and then on lane::compute (res_system.cpp require_block ->
 // run_on_compute), never on lane::io, so the only io worker being blocked stalls nothing.
 BOOST_AUTO_TEST_CASE(ARequireSyncOnMain_CompletesWhileTheOnlyIoWorkerWaitsForMain)
 {
+	const test_util::watchdog guard{ "ARequireSyncOnMain_CompletesWhileTheOnlyIoWorkerWaitsForMain", std::chrono::seconds(300) };
 	test_util::fixture_copy project{ "migration_v1" };
 	threaded_env env(project);
 	std::promise<void> loaded;
@@ -265,7 +332,7 @@ BOOST_AUTO_TEST_CASE(ARequireSyncOnMain_CompletesWhileTheOnlyIoWorkerWaitsForMai
 	auto started = io_started.get_future();
 	auto job = env.tasks.run(ds::lane::io, ds::task_desc{ "blocked io", "test", false }, [&io_started, main_done](ds::task_context&) {
 		io_started.set_value();
-		main_done.wait();
+		static_cast<void>(main_done.wait_for(std::chrono::seconds(120)));
 	});
 	BOOST_REQUIRE(started.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
 	const auto camera = env.rs->require_sync<desc::desc_base>(res::tag::make("cameras/cam_v1.desc")).get_sync();
@@ -277,6 +344,7 @@ BOOST_AUTO_TEST_CASE(ARequireSyncOnMain_CompletesWhileTheOnlyIoWorkerWaitsForMai
 // The editor's run: apply_migration on the only io worker, its engine loads hopped to the test thread, which pumps them.
 BOOST_AUTO_TEST_CASE(ApplyOnTheOnlyIoWorker_WithLoadsOnMain_GivesTheSameMigrationAsInline)
 {
+	const test_util::watchdog guard{ "ApplyOnTheOnlyIoWorker_WithLoadsOnMain_GivesTheSameMigrationAsInline", std::chrono::seconds(600) };
 	test_util::fixture_copy inline_copy{ "migration_v1" };
 	pmg::apply_outcome inline_outcome;
 	{

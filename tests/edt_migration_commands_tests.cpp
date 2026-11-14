@@ -3,6 +3,7 @@
 #include "test_manual_tasks.hpp"
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include "test_watchdog.hpp"
 #include "edt_agent_policy.h"
 #include "edt_migration_commands.h"
 #include <snk/command/cmd_registry.h>
@@ -217,6 +218,8 @@ struct migration_fixture : test_util::scene_env
 		return error ? std::string(error->at("code").as_string()) : std::string{};
 	}
 
+	// First: destroyed last, so a teardown that hangs (a job waiting for the main thread) aborts too.
+	test_util::watchdog guard{ "an EdtMigrationCommands test", std::chrono::seconds(300) };
 	test_util::fixture_copy copy{ "migration_v1" };
 	ds::task_system job_tasks{ job_pool() };
 	edt::job_service jobs{ job_tasks };
@@ -490,7 +493,8 @@ BOOST_AUTO_TEST_CASE(TheEditorGoingAway_MidRun_RefusesTheHops_AndTheJobEnds)
 	std::atomic<int> refused{ 0 };
 	apply = [&](const pmg::migration_plan&, const pmg::apply_context& context) {
 		entered = true;
-		while (!frames_stopped) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!frames_stopped && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		if (!context.on_main([] {})) ++refused;
 		// A refused hop fails the real apply, which then rolls back; here nothing was written.
 		return pmg::apply_outcome{};
@@ -520,6 +524,83 @@ BOOST_AUTO_TEST_CASE(TheEditorGoingAway_MidRun_RefusesTheHops_AndTheJobEnds)
 	} else {
 		BOOST_TEST((info->status == edt::job_status::cancelled));
 	}
+}
+
+// The order the editor quits in (#761 review): editor_init and ~editor_system call job_service::cancel_all_and_wait before
+// the registrations go. The stop of the job refuses the hop the apply waits on, so the wait ends instead of hanging.
+BOOST_AUTO_TEST_CASE(QuittingMidHop_CancelAllAndWaitFirst_RefusesTheHop_ThenTheRegistrationsGo)
+{
+	fs::remove(copy.res() / "broken.desc");
+	std::atomic<bool> entered{ false };
+	std::atomic<bool> frames_stopped{ false };
+	std::atomic<int> refused{ 0 };
+	apply = [&](const pmg::migration_plan&, const pmg::apply_context& context) {
+		entered = true;
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!frames_stopped && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		// No frame runs any more: only the job's stop can answer this hop.
+		if (!context.on_main([] {})) ++refused;
+		return pmg::apply_outcome{};
+	};
+	static_cast<void>(ask());
+	const cmd::result started = call("project.migrate");
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (!entered && std::chrono::steady_clock::now() < deadline) {
+		run_frame();
+		std::this_thread::sleep_for(std::chrono::microseconds(200));
+	}
+	BOOST_REQUIRE(entered.load());
+	frames_stopped = true;
+	// Let the apply reach its hop, so the stop finds it waiting (a hop after the stop is refused at once anyway).
+	std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	jobs.cancel_all_and_wait();
+	BOOST_TEST(refused.load() == 1);
+	BOOST_TEST(jobs.list().empty());
+	implicit.clear();
+	registrations.clear();
+	BOOST_TEST(!rs->changes_held());
+}
+
+// A job cancelled while it still waits for its io worker never runs its body: the apply handed to it is never taken. The
+// frames notice, nothing is written, the hold goes, the level comes back and the editor is told the run ended.
+BOOST_AUTO_TEST_CASE(AJobCancelledBeforeItStarted_EndsTheRunWithoutWriting)
+{
+	fs::remove(copy.res() / "broken.desc");
+	current_level = res::tag::make("levels/old.desc");
+	const auto before = snapshot(copy.root());
+	std::atomic<bool> applied{ false };
+	apply = [&](const pmg::migration_plan& plan, const pmg::apply_context& context) {
+		applied = true;
+		return pmg::apply_migration(plan, context);
+	};
+	// The pool's only io worker is busy, so the migration's job stays queued.
+	std::atomic<bool> release{ false };
+	auto blocker = job_tasks.run(ds::lane::io, ds::task_desc{ "busy io", "test", false }, [&release](ds::task_context&) {
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!release && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	});
+	static_cast<void>(ask());
+	const cmd::result started = call("project.migrate");
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const auto job = static_cast<std::uint64_t>(started.value.at("job").as_int64());
+	run_frame(); // the modal
+	run_frame(); // the checks, the hand-over
+	BOOST_TEST(closed);
+	BOOST_TEST(rs->changes_held());
+	BOOST_TEST(jobs.cancel(job));
+	run_frames();
+	release = true;
+	blocker.wait();
+	settle_jobs();
+	BOOST_TEST(!applied.load());
+	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST((running_said == std::vector<bool>{ true, false }));
+	BOOST_TEST(attached);
+	BOOST_TEST((snapshot(copy.root()) == before));
+	const auto info = jobs.info(job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_TEST((info->status == edt::job_status::cancelled));
 }
 
 // The game module swapped between the question and the run: the code that would migrate is not the one asked about.

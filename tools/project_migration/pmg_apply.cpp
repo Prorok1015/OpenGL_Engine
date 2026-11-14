@@ -451,6 +451,7 @@ namespace
 			case create_result::taken: throw std::runtime_error(std::format("{}: {} cannot be created: something is at its name", m_step, relative));
 			case create_result::failed: throw std::runtime_error(std::format("{}: {} cannot be created: {}", m_step, relative, error));
 			}
+			note_written(relative);
 			// After the file is there: a failure before it leaves nothing for a rollback to delete.
 			m_report.created_files.push_back(relative);
 			journal();
@@ -469,6 +470,7 @@ namespace
 			file.hash_after = std::string(k_removed);
 			journal();
 			if (auto error = remove_created(m_context.root, file.path)) throw std::runtime_error(std::format("{}: {}", m_step, *error));
+			note_written(file.path);
 			m_current.erase(key);
 			m_removed.insert(key);
 			m_step_touched.erase(key);
@@ -504,6 +506,7 @@ namespace
 		void put(const std::string& relative, std::string_view text)
 		{
 			if (auto error = m_write(m_context.root, fs_paths::path_from_utf8(relative), text)) throw std::runtime_error(*error);
+			note_written(relative);
 		}
 
 		// What desc_resave writes: the file loaded by the engine (migrated on load) and saved by its adapter. Loaded
@@ -754,15 +757,32 @@ namespace
 		}
 
 		// The engine's load and save wait on resource handles: on the main thread when the caller runs elsewhere.
-		void on_main(const std::string& path, const std::function<void()>& work) const
+		// A file of a content root changed on disk: its cache entry goes before the engine loads anything again.
+		void note_written(const std::string& relative)
+		{
+			if (relative.starts_with(".snk/")) return;
+			if (std::optional<res::tag> tag = tag_of(relative, m_content_roots)) m_stale.push_back(std::move(*tag));
+		}
+
+		// signal_changed called by code is never held (resource_system::hold_changes), so a parent this migration wrote is
+		// read again from the disk by the next load, not taken from the cache as it was before.
+		void evict_written()
+		{
+			for (const res::tag& tag : m_stale) m_context.resources.signal_changed(tag);
+			m_stale.clear();
+		}
+
+		void on_main(const std::string& path, const std::function<void()>& work)
 		{
 			if (!m_context.on_main) {
+				evict_written();
 				work();
 				return;
 			}
 			std::exception_ptr failed;
 			const bool ran = m_context.on_main([&] {
 				try {
+					evict_written();
 					work();
 				} catch (...) {
 					failed = std::current_exception();
@@ -802,6 +822,8 @@ namespace
 		std::set<std::string> m_removed;
 		// What the steps of the phase that runs wrote or created, for the check after it.
 		std::set<std::string> m_step_touched;
+		// Written since the engine last loaded: evicted from the cache before it loads again (evict_written).
+		std::vector<res::tag> m_stale;
 	};
 
 	// project.snkproj changed after the migration (a later migration, an edit by hand): only what this migration
