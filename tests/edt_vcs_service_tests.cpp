@@ -1530,6 +1530,12 @@ BOOST_AUTO_TEST_CASE(AnAgentStagesOnlyTheProjectsOwnFiles)
 	const json::value own = finish(service->start_stage({ "game/res" }, cmd::origin_kind::agent));
 	BOOST_TEST(!own.as_object().contains("error"), json::serialize(own));
 	BOOST_TEST((staged_files(repo) == std::vector<std::string>{ "game/res/a.txt" }));
+#ifdef _WIN32
+	// A name that only looks short is the file's own: it resolves to no private folder.
+	write(project / "notes~1.txt", "n\n");
+	const json::value tilde = finish(service->start_stage({ "game/notes~1.txt" }, cmd::origin_kind::agent));
+	BOOST_TEST(!tilde.as_object().contains("error"), json::serialize(tilde));
+#endif
 
 	const json::value by_person = finish(service->start_stage({ "." }, cmd::origin_kind::ui));
 	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
@@ -1597,6 +1603,70 @@ BOOST_AUTO_TEST_CASE(AnAgentsCommitAndPush_RefuseThePersonsOwnFiles)
 	const json::value pushed = finish(service->start_push("origin", "agent/work", false, cmd::origin_kind::agent));
 	BOOST_TEST(is_error(pushed, "path_outside_project"), json::serialize(pushed));
 	BOOST_TEST(git_text(remote, { "branch", "--list", "agent/work" }).empty());
+}
+
+// Review of #917: the project's policy file is committed by the template, so an agent's commit and its first push
+// carry it; its stage of the file is still refused.
+BOOST_AUTO_TEST_CASE(AnAgentsCommitAndFirstPush_CarryTheCommittedPolicyFile)
+{
+	isolate_config();
+	const fs::path remote = make_bare("policy_remote.git");
+	const fs::path repo = make_plain_repository("policy_push");
+	write(repo / ".snk" / "agent_policy.json", "{}\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a new project" });
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	make_service(real_options(repo));
+
+	write(repo / ".snk" / "agent_policy.json", "{\"vcs\":{}}\n");
+	const json::value staged = finish(service->start_stage({ ".snk/agent_policy.json" }, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(staged, "path_outside_project"), json::serialize(staged));
+	finish(service->start_stage({ ".snk/agent_policy.json" }, cmd::origin_kind::ui));
+	const json::value committed = finish(service->start_commit("by an agent", cmd::origin_kind::agent));
+	BOOST_TEST(!committed.as_object().contains("error"), json::serialize(committed));
+
+	// The file transport is refused to a guarded push later (network_refusal): only the files check is this test's.
+	git(repo, { "checkout", "-q", "-b", "agent/first" });
+	const json::value pushed = finish(service->start_push("origin", "agent/first", false, cmd::origin_kind::agent));
+	BOOST_TEST(!is_error(pushed, "path_outside_project"), json::serialize(pushed));
+	BOOST_TEST(!is_error(pushed, "denied"), json::serialize(pushed));
+}
+
+// Review of #917: what another remote already has is still checked for the remote pushed to, and a merge commit's
+// own changes count (an evil merge that adds the token).
+BOOST_AUTO_TEST_CASE(AnAgentsPush_ChecksWhatThisRemoteLacks_MergesToo)
+{
+	isolate_config();
+	const fs::path origin = make_bare("lacks_origin.git");
+	const fs::path backup = make_bare("lacks_backup.git");
+	const fs::path repo = make_plain_repository("lacks_push");
+	git(repo, { "remote", "add", "origin", file_url(origin) });
+	git(repo, { "remote", "add", "backup", file_url(backup) });
+	git(repo, { "push", "-q", "origin", "main" });
+	git(repo, { "push", "-q", "backup", "main" });
+	make_service(real_options(repo));
+
+	git(repo, { "checkout", "-q", "-b", "agent/backed_up" });
+	write(repo / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a person's commit of the token" });
+	git(repo, { "push", "-q", "backup", "agent/backed_up" });
+	const json::value backed_up = finish(service->start_push("origin", "agent/backed_up", false,
+		cmd::origin_kind::agent));
+	BOOST_TEST(is_error(backed_up, "path_outside_project"), json::serialize(backed_up));
+
+	git(repo, { "checkout", "-q", "-b", "side", "main" });
+	write(repo / "side.txt", "s\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "side" });
+	git(repo, { "push", "-q", "origin", "side" });
+	git(repo, { "checkout", "-q", "-b", "agent/merged", "main" });
+	git(repo, { "merge", "-q", "--no-ff", "--no-commit", "side" });
+	write(repo / ".snk" / "mcp.json", "{\"token\":\"secret\"}\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "merge side" });
+	const json::value merged = finish(service->start_push("origin", "agent/merged", false, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(merged, "path_outside_project"), json::serialize(merged));
 }
 
 // Owner decision (#454): an agent's commit runs no hook of the repository; a person's does.

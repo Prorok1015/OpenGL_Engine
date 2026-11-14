@@ -1330,10 +1330,49 @@ namespace {
 		return false;
 	}
 
+#ifdef _WIN32
+	// The name an existing entry has, when `path` names it by its 8.3 short name; nullopt: Windows could not tell.
+	std::optional<std::string> long_name_of(const fs::path& path)
+	{
+		const DWORD size = GetLongPathNameW(path.c_str(), nullptr, 0);
+		if (size == 0) return std::nullopt;
+		std::wstring long_path(size, L'\0');
+		const DWORD written = GetLongPathNameW(path.c_str(), long_path.data(), size);
+		if (written == 0 || written >= size) return std::nullopt;
+		long_path.resize(written);
+		return edt::utf8_of(fs::path(long_path).filename());
+	}
+#endif
+
+	// The project's first folder `first` as the file system names it: a short name ("SNK~1") becomes the name of the
+	// entry it resolves to; a name of nothing on the disk stays as it is. Nullopt: the file system could not tell.
+	std::optional<std::string> own_name_of(std::string_view first, const fs::path& project_dir)
+	{
+		if (!looks_like_short_name(first)) return std::string(first);
+#ifdef _WIN32
+		if (project_dir.empty()) return std::nullopt;
+		const fs::path on_disk = project_dir / path_of(first);
+		std::error_code ec;
+		const bool exists = fs::exists(on_disk, ec);
+		if (ec) return std::nullopt;
+		if (!exists) return std::string(first);
+		return long_name_of(on_disk);
+#else
+		static_cast<void>(project_dir);
+		return std::string(first);
+#endif
+	}
+
+	enum class policy_file_rule : std::uint8_t { private_file, publishable };
+
+	// The project's policy file (.snk/agent_policy.json, committed by the template): an agent's commit or push may carry
+	// it (checkout and pull guard it, policy_refusal); an agent's stage may not change it.
+	constexpr std::string_view k_policy_file_in_snk = "agent_policy.json";
+
 	// Why an agent may not write `files` (repository paths) into git: one is outside the open project or in one of its
 	// private folders, by name or as the same folder on the disk (a short name, a link). Nullopt: allowed.
 	std::optional<git_output> private_files_refusal(const std::vector<std::string>& files, const project_scope& scope,
-		std::string_view action)
+		std::string_view action, policy_file_rule policy_file = policy_file_rule::private_file)
 	{
 		const auto refuse = [](std::string why) { return refused("path_outside_project", std::move(why)); };
 		if (!scope.prefix) {
@@ -1347,20 +1386,20 @@ namespace {
 				return refuse(std::format("'{}' is outside the open project: an agent {} only the project's files",
 					shown, action));
 			}
-			std::string_view rest = file;
-			while (!rest.empty()) {
-				const std::size_t slash = rest.find('/');
-				if (looks_like_short_name(rest.substr(0, slash))) {
-					return refuse(std::format("'{}' names a folder by its short name: name it by its own name", shown));
-				}
-				rest = slash == std::string_view::npos ? std::string_view{} : rest.substr(slash + 1);
+			const std::size_t slash = inside->find('/');
+			const std::string_view first = inside->substr(0, slash);
+			const std::optional<std::string> own = own_name_of(first, scope.dir);
+			if (!own) {
+				return refuse(std::format("'{}' names a folder by its short name, and the file system could not tell "
+					"which folder it is", shown));
 			}
-			const std::string_view first = inside->substr(0, inside->find('/'));
 			for (const std::string_view folder : k_private_project_folders) {
 				std::error_code ec;
-				const bool same_folder = same_name(first, folder) || (inside->find('/') != std::string_view::npos
+				const bool same_folder = same_name(*own, folder) || (slash != std::string_view::npos
 					&& !scope.dir.empty() && fs::equivalent(scope.dir / path_of(first), scope.dir / folder, ec));
-				if (same_folder) {
+				const bool policy = policy_file == policy_file_rule::publishable && folder == ".snk"
+					&& slash != std::string_view::npos && same_name(inside->substr(slash + 1), k_policy_file_in_snk);
+				if (same_folder && !policy) {
 					return refuse(std::format("'{}' is in the project's {}/ folder, which holds the person's own files: "
 						"an agent never {} it", shown, folder, action));
 				}
@@ -2423,7 +2462,9 @@ edt::vcs_service::started edt::vcs_service::start_commit(const std::string& mess
 			if (!staged) {
 				return refusal_json(refused("path_outside_project", "git could not list what the commit holds"), task);
 			}
-			if (auto refusal = private_files_refusal(*staged, scope, "commits")) return refusal_json(*refusal, task);
+			if (auto refusal = private_files_refusal(*staged, scope, "commits", policy_file_rule::publishable)) {
+				return refusal_json(*refusal, task);
+			}
 		}
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::index, {}, {} }, task.stop)) {
 			return refusal_json(*refusal, task);
@@ -2669,15 +2710,22 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 		report_progress(git, task, progress);
 		if (git.guarded) {
 			if (auto refusal = remote_refusal(git, remote)) return std::move(*refusal);
-			// What the commits no remote has yet change: a person's commit of their own files is not an agent's to
-			// publish.
-			const auto pushed = changed_files(git, { "log", "-z", "--name-only", "--format=", "--no-renames",
-				"refs/heads/" + branch, "--not", "--remotes" }, task.stop);
+			// What the commits this remote does not have yet change, merges against each parent (-m): a person's
+			// commit of their own files is not an agent's to publish, whichever other remote already has it. A remote
+			// name with a glob character would widen --remotes=<name> to others.
+			if (remote.find_first_of("*?[\\") != std::string::npos) {
+				return refusal_json(refused("path_outside_project", "git could not list what the push sends to a "
+					"remote with a glob character in its name"), task);
+			}
+			const auto pushed = changed_files(git, { "log", "-z", "-m", "--name-only", "--format=", "--no-renames",
+				"refs/heads/" + branch, "--not", "--remotes=" + remote }, task.stop);
 			if (task.stop.stop_requested()) throw ds::task_cancelled{};
 			if (!pushed) {
 				return refusal_json(refused("path_outside_project", "git could not list what the push sends"), task);
 			}
-			if (auto refusal = private_files_refusal(*pushed, scope, "pushes")) return refusal_json(*refusal, task);
+			if (auto refusal = private_files_refusal(*pushed, scope, "pushes", policy_file_rule::publishable)) {
+				return refusal_json(*refusal, task);
+			}
 		}
 		if (auto refusal = network_refusal(git, remote, task.stop)) return refusal_json(*refusal, task);
 		const git_output out = run_write(git, args, task.stop);
