@@ -1330,7 +1330,11 @@ BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_Whe
 	document->working_node({ 0xe1 })->name = "typed";
 	inspector->note_edit();
 
-	context.selection().select({ .document = context.documents().scene().id(), .world = "w0", .path = { 0xd1 } });
+	edt::selection level_selection;
+	level_selection.document = context.documents().scene().id();
+	level_selection.world = "w0";
+	level_selection.path = { 0xd1 };
+	context.selection().select(level_selection);
 
 	BOOST_TEST(!inspector->has_pending_commit());
 	BOOST_TEST(document->is_dirty());
