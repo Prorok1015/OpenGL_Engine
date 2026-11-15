@@ -6,6 +6,7 @@
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <boost/json/monotonic_resource.hpp>
@@ -1999,6 +2000,42 @@ BOOST_AUTO_TEST_CASE(RefusedTag_OfAnyOtherHandle_IsItsOwnTag)
 	BOOST_REQUIRE(loaded.is_ready());
 	BOOST_TEST((res::refused_tag(loaded) == tag));
 	BOOST_TEST(!res::refused_tag(res::res_handle<desc::desc_base>{}).is_valid());
+}
+
+// A record's value is content of the file the record is written in, not of the prefab below whose instance it adds a
+// node (#952): its reference to that file itself is refused as one, so the node expands nothing.
+BOOST_AUTO_TEST_CASE(ANodeARecordAddsBelowAnInstance_ThatInstantiatesTheRecordsOwnFile_IsRefused)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto tag = put("grows_itself.prefab.desc", prefab_with_children(
+		R"({"name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[{"target":[],"op":"add_node","value":)"
+		R"({"__id":"00000000000000e2","name":"added","components":{"ref":"memory://t/grows_itself.prefab.desc"}}}]})"));
+	auto grows = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(grows);
+
+	std::vector<std::string> self_references;
+	{
+		const auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn && message.find("refers to itself") != std::string_view::npos) {
+				self_references.emplace_back(message);
+			}
+		});
+		entt::registry reg;
+		auto root = reg.create();
+		scn::assemble_prefab(*assembler, reg, root, *grows, "grows_itself", tag);
+
+		const auto n = child_named(reg, root, "n");
+		BOOST_REQUIRE(reg.valid(n));
+		BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "tip", "added" }));
+		const auto added = child_named(reg, n, "added");
+		BOOST_REQUIRE(reg.valid(added));
+		BOOST_TEST(child_names(reg, added).empty());
+		BOOST_TEST(!reg.all_of<scn::prefab_instance>(added));
+		BOOST_TEST(spawned_nodes(reg) == 3u);
+	}
+	// Refused when the record was read (#952), not only later as a prefab that is open already (#924).
+	BOOST_REQUIRE(!self_references.empty());
+	BOOST_TEST(std::ranges::all_of(self_references, [&] (const std::string& line) { return line.find(tag.string()) != std::string::npos; }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

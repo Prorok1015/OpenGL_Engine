@@ -760,6 +760,13 @@ namespace {
 		}
 	}
 
+	// Stands for the file records are written in: get_field_desc reads no more of an owner than its tag.
+	class written_in_file final : public scn::prefab_desc
+	{
+	public:
+		explicit written_in_file(const res::tag& file) { set_tag(file); }
+	};
+
 	// What `node` stands for when it is more than its own fields: the prefab it references (itself expanded)
 	// plus the node's own extra components and children, then the node's override records. False for a plain
 	// node without records. `source` is the referenced prefab, empty when there is none.
@@ -773,6 +780,8 @@ namespace {
 	{
 		// Taken before this call opens anything: `node` is content of a file that is inside this much.
 		const std::size_t depth = open.size() + made.chain.size();
+		// That file, the last one open (none for a node handed in alone): its records are written there (#952).
+		const res::tag written_in = !made.chain.empty() ? made.chain.back() : (!open.empty() ? open.back() : res::tag{});
 		std::optional<prefab_ref> ref = find_prefab_ref(assembler, node);
 		std::optional<std::string> ignored;
 		if (ref) {
@@ -788,10 +797,9 @@ namespace {
 		}
 		if (!ref && !ignored && node.overrides.empty()) return false;
 
-		scn::prefab_desc fallback_owner;
-		const desc::desc_base* owner = &fallback_owner;
+		// The records may instantiate the prefab `node` instantiates: only the file they are written in refers to itself.
+		const written_in_file owner(written_in);
 		if (ref) {
-			owner = ref->prefab.get();
 			source = ref->prefab->get_tag();
 			made.chain.push_back(ref->prefab->get_tag());
 			if (!materialize(assembler, ref->prefab->get_root(), out, source, open, roots, made, {})) {
@@ -814,7 +822,7 @@ namespace {
 			if (ignored) out.components.erase(*ignored);
 		}
 		out.overrides.clear();
-		apply_records(assembler, *owner, out, node.overrides, made.marks, depth);
+		apply_records(assembler, owner, out, node.overrides, made.marks, depth);
 		return true;
 	}
 
