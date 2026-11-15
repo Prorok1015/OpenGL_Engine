@@ -119,10 +119,18 @@
 // #797: desc::override_expectation and desc::override_owner are new exports (no type changes: the layout key stays).
 // #759: cmd::command_desc gains describe_before_allowed_invoke at its end and joins the layout key (layout_revision 10).
 // #927: rnd::render_context::draw_fits is added at the end of the vtable, the functions before it keep their places (minor: the layout key stays).
+// #922: the layout key also lists the engine components (scn::engine_component_types), the ctx types and events a module
+// reads, the channel types, ds::app_data_storage and the structs passed by value; no type changes (layout_revision 11).
+// #988 (no bump): desc_system guards its registries with a lock and keeps a migration step or a factory alive while it runs.
+// Its members are out of line (#786) and scene_layer holds it by pointer (#758), so its new size is not seen by a module;
+// only the private find_factory/find_migrations change their signatures, no public export changes.
+// #920: the codec of component_tracker's map gains from_json with a read_context, a new export (no type changes).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
-// without that header a module reports 0, which the host does not check.
+// without that header a module reports 0, which the host does not check. With it the file that declares the module
+// needs the key's type list, snk/game/gs_module_layout_key.h, or it does not compile: gs_game_module.h included after
+// this header and edt_editor_extension.h bring it.
 #ifndef SNK_DETAIL_MODULE_LAYOUT_KEY
 #define SNK_DETAIL_MODULE_LAYOUT_KEY 0u
 #endif

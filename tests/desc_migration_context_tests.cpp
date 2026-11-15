@@ -1,11 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/desc/desc_system.h>
-#include <functional>
-#include <map>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -13,20 +10,6 @@ namespace json = boost::json;
 
 // Migration steps with a summary and a context (#751, EPIC-58 S1).
 namespace {
-
-// scn::scene_layer holds a desc_system by value, before members modules read through inline accessors: desc_system must
-// not grow, or those members move under a module built before. The members as they are; a new one breaks this.
-struct frozen_desc_system
-{
-	res::resource_system& resources;
-	const desc::desc_system* parent = nullptr;
-	std::unordered_map<std::string, std::function<std::shared_ptr<desc::desc_base>()>> factories;
-	std::unordered_map<std::string, std::map<int, std::function<void(json::object&)>>> migrations;
-	std::vector<std::string> component_type_names;
-	desc::schema_registry schemas;
-};
-static_assert(sizeof(desc::desc_system) == sizeof(frozen_desc_system), "desc_system changed its size: scn::scene_layer moves under old modules");
-static_assert(alignof(desc::desc_system) == alignof(frozen_desc_system));
 
 struct migration_context_fixture : test_util::scene_env
 {

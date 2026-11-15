@@ -5,7 +5,9 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
+#include <cmath>
 #include <exception>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <utility>
@@ -74,6 +76,44 @@ namespace edt
 		const auto found = std::find_if(m_slots.begin(), m_slots.end(), [id](const slot& s) { return s.id == id; });
 		if (found == m_slots.end() || found->frames < min_frames) return std::nullopt;
 		return found->since;
+	}
+
+	std::optional<std::string> confirmation_detail_text(std::string_view described)
+	{
+		// Refused without being scanned: a bound on the work done for one request, whatever sanitizing would leave of it.
+		if (described.size() > agent_confirmations::k_max_detail * 4) return std::nullopt;
+
+		std::string out;
+		out.reserve(described.size());
+		std::size_t lines = 0;
+		// Blank lines before the text and at its end go, a run of them inside is one: they would hide the text behind the scroll.
+		bool blank_before = false;
+		std::size_t at = 0;
+		while (at <= described.size()) {
+			const std::size_t end = std::min(described.find_first_of("\r\n", at), described.size());
+			std::string line;
+			for (const char c : described.substr(at, end - at)) {
+				if (c == '\t') line += "    ";
+				else line += c;
+			}
+			// Invalid bytes grow into U+FFFD (3 bytes each): room for all of them, so nothing is cut here.
+			const std::string plain = edt::forge::sanitize_text(line, line.size() * 3 + 3);
+			if (plain.find_first_not_of(' ') == std::string::npos) {
+				blank_before = lines > 0;
+			} else {
+				if (blank_before) {
+					out += '\n';
+					++lines;
+					blank_before = false;
+				}
+				if (lines++ > 0) out += '\n';
+				out += plain;
+			}
+			if (end == described.size()) break;
+			at = end + ((described[end] == '\r' && end + 1 < described.size() && described[end + 1] == '\n') ? 2 : 1);
+		}
+		if (out.size() > agent_confirmations::k_max_detail || lines > agent_confirmations::k_max_detail_lines) return std::nullopt;
+		return out;
 	}
 
 	agent_confirmations::agent_confirmations(cmd::command_registry& commands, session_grants& grants, clock_function now)
@@ -212,6 +252,17 @@ namespace edt
 			done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: its confirmation is gone", command_id)));
 			return;
 		}
+		// Text a command made up (and, via the repository's files, text a stranger may have influenced): shown as plain text.
+		std::optional<std::string> detail = confirmation_detail_text(bound->detail);
+		if (!detail) {
+			m_commands.discard(ticket_id);
+			egLOG_WARN("editor/agent", "'{}' from agent session '{}' was refused: its description is {} bytes, too long to show to a person",
+				command_id, bound->session, bound->detail.size());
+			done(cmd::result::failure(cmd::codes::denied, std::format(
+				"'{}' was refused: what it would do is too long to show to a person (at most {} bytes in {} lines)", command_id,
+				k_max_detail, k_max_detail_lines)));
+			return;
+		}
 		const cmd::command_desc* command = m_commands.find(command_id);
 		waiting entry;
 		entry.ticket = ticket_id;
@@ -227,8 +278,7 @@ namespace edt
 		entry.request.session = bound->session;
 		// The category the gate asked for (cmake_presets for a CMake file), so "allow for this session" grants that one.
 		entry.request.category = bound->category;
-		// Text a command made up (and, via the repository's files, text a stranger may have influenced): shown as plain text.
-		entry.request.detail = edt::forge::sanitize_text(bound->detail, k_max_detail);
+		entry.request.detail = std::move(*detail);
 		entry.request.can_grant_session = command != nullptr && command->risk == cmd::danger::none;
 		entry.request.asked_at = now();
 		entry.request.deadline = entry.request.asked_at + timeout;
@@ -494,9 +544,26 @@ namespace edt
 				ImGui::PushTextWrapPos(0.f);
 				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "An agent wants to run %s", request.command.c_str());
 				if (!request.summary.empty()) ImGui::TextUnformatted(request.summary.c_str(), request.summary.c_str() + request.summary.size());
-				if (!request.detail.empty()) ImGui::TextUnformatted(request.detail.c_str(), request.detail.c_str() + request.detail.size());
 				ImGui::TextDisabled("session %s, %s", request.session.empty() ? "?" : request.session.c_str(), cmd::to_string(request.category));
 				ImGui::PopTextWrapPos();
+				if (!request.detail.empty()) {
+					// As high as the text is once wrapped at the width it is drawn with, within 2 to 12 lines: the rest scrolls.
+					const ImGuiStyle& style = ImGui::GetStyle();
+					const char* const detail_begin = request.detail.c_str();
+					const char* const detail_end = detail_begin + request.detail.size();
+					const float line_height = ImGui::GetTextLineHeightWithSpacing();
+					float wrap_width = std::max(ImGui::GetContentRegionAvail().x - 2.f * style.WindowPadding.x, 1.f);
+					const float text_height = ImGui::CalcTextSize(detail_begin, detail_end, false, wrap_width).y;
+					// A text that scrolls gives the width of the scrollbar away.
+					if (text_height > 12.f * line_height) wrap_width = std::max(wrap_width - style.ScrollbarSize, 1.f);
+					const float child_height = std::ceil(std::clamp(text_height, 2.f * line_height, 12.f * line_height)) + 2.f * style.WindowPadding.y;
+					if (ImGui::BeginChild("detail", ImVec2(0.f, child_height), true)) {
+						ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
+						ImGui::TextUnformatted(detail_begin, detail_end);
+						ImGui::PopTextWrapPos();
+					}
+					ImGui::EndChild();
+				}
 				// The arguments in full, as the registry bound them: what is approved is what is shown, however long.
 				if (ImGui::BeginChild("arguments", ImVec2(0.f, 140.f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());

@@ -3,6 +3,7 @@
 #include "edt_agent_policy.h"
 #include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
@@ -79,6 +80,21 @@ struct confirmations_fixture
 		desc.summary = "does " + desc.id;
 		// Any arguments: the tests send {"n":1}, {"path":...} and so on, and the default schema allows none.
 		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.invoke = [this](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		registrations.push_back(commands.add(std::move(desc)));
+	}
+
+	void add_described(std::string id, std::string text)
+	{
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.category = agent_category::vcs_forge;
+		desc.summary = "does " + desc.id;
+		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.describe = [text = std::move(text)](const cmd::call&) -> std::optional<std::string> { return text; };
 		desc.invoke = [this](const cmd::call&) {
 			++runs;
 			return cmd::result::success();
@@ -317,6 +333,117 @@ BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_IsShownSanitized_AndBoundToTheQuestio
 	const auto asked = confirmations->pending();
 	BOOST_REQUIRE(asked.size() == 1u);
 	BOOST_TEST(asked[0].detail == "in github.com/o/r   end");
+}
+
+// #932: the description reaches the person whole, line by line; one too long to show refuses the call.
+BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_KeepsItsLines_AndIsMadePlainLineByLine)
+{
+	add_described("import.described", "Import the model\r\n  a.png  3 bytes\r  b\tc\n\n\x07x\xE2\x80\xAEy \xFF\n\n\n");
+
+	run("import.described", "s1");
+
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].detail == "Import the model\n  a.png  3 bytes\n  b    c\n\n x y \xEF\xBF\xBD");
+}
+
+BOOST_AUTO_TEST_CASE(ADescriptionAtTheLimit_IsShownWhole_OneByteOrLineMore_RefusesTheCall)
+{
+	const std::size_t bytes = edt::agent_confirmations::k_max_detail;
+	const std::size_t lines = edt::agent_confirmations::k_max_detail_lines;
+	std::string many_lines;
+	for (std::size_t i = 0; i < lines; ++i) many_lines += i == 0 ? "x" : "\nx";
+	add_described("fits.bytes", std::string(bytes, 'a'));
+	add_described("fits.lines", many_lines);
+	add_described("long.bytes", std::string(bytes + 1, 'a'));
+	add_described("long.lines", many_lines + "\nx");
+
+	run("fits.bytes", "s1");
+	run("fits.lines", "s2");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+	BOOST_TEST(asked[0].detail.size() == bytes);
+	BOOST_TEST(asked[1].detail == many_lines);
+	BOOST_TEST(finished.empty());
+	const std::size_t tickets = commands.pending_confirmations();
+
+	for (const char* id : { "long.bytes", "long.lines" }) {
+		BOOST_TEST_CONTEXT(id) {
+			finished.clear();
+			run(id, "s3");
+			BOOST_REQUIRE(finished.size() == 1u);
+			BOOST_TEST(finished[0].code == cmd::codes::denied);
+			BOOST_TEST(finished[0].error.find("too long to show") != std::string::npos);
+			BOOST_TEST(confirmations->pending().size() == 2u);
+			BOOST_TEST(commands.pending_confirmations() == tickets);
+		}
+	}
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(TheTextOfADescription_IsNeverCut)
+{
+	BOOST_TEST(edt::confirmation_detail_text("").value_or("?") == "");
+	BOOST_TEST(edt::confirmation_detail_text("one").value_or("?") == "one");
+	BOOST_TEST(edt::confirmation_detail_text("a\r\nb\rc\nd").value_or("?") == "a\nb\nc\nd");
+	BOOST_TEST(edt::confirmation_detail_text("a\n\n\r\n").value_or("?") == "a");
+	// Characters that become one space: the text that is left is what counts against the limit.
+	std::string invisible = "x";
+	for (std::size_t i = 1; i < edt::agent_confirmations::k_max_detail - 1; ++i) invisible += "\xE2\x80\x8B";
+	invisible += "x";
+	const auto shown = edt::confirmation_detail_text(invisible);
+	BOOST_REQUIRE(shown.has_value());
+	BOOST_TEST(shown->size() == edt::agent_confirmations::k_max_detail);
+	BOOST_TEST(!edt::confirmation_detail_text(invisible + "x").has_value());
+	BOOST_TEST(!edt::confirmation_detail_text(std::string(edt::agent_confirmations::k_max_detail * 4 + 1, 'a')).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(BlankLinesBeforeTheText_AreRemoved)
+{
+	BOOST_TEST(edt::confirmation_detail_text("\n\r\n\rone\ntwo").value_or("?") == "one\ntwo");
+	BOOST_TEST(edt::confirmation_detail_text("   \n\t\n \xE2\x80\x8B \none").value_or("?") == "one");
+	BOOST_TEST(edt::confirmation_detail_text("\n \n\t").value_or("?") == "");
+	BOOST_TEST(edt::confirmation_detail_text(std::string(12, '\n') + "  indented").value_or("?") == "  indented");
+}
+
+BOOST_AUTO_TEST_CASE(ARunOfBlankLines_BecomesOneEmptyLine)
+{
+	BOOST_TEST(edt::confirmation_detail_text("a\n\n\n\nb").value_or("?") == "a\n\nb");
+	BOOST_TEST(edt::confirmation_detail_text("a\r\n  \r\n\t\r\n\x07\r\n\xE2\x80\x8B\r\nb").value_or("?") == "a\n\nb");
+	BOOST_TEST(edt::confirmation_detail_text("a\n" + std::string(12, '\n') + "b\n \n \nc\n \n").value_or("?") == "a\n\nb\n\nc");
+}
+
+BOOST_AUTO_TEST_CASE(LinesWithTextAndSingleBlankLines_StayAsTheyAre)
+{
+	BOOST_TEST(edt::confirmation_detail_text("a\n\nb\n\nc").value_or("?") == "a\n\nb\n\nc");
+	BOOST_TEST(edt::confirmation_detail_text("  a  \n b\nc ").value_or("?") == "  a  \n b\nc ");
+	BOOST_TEST(edt::confirmation_detail_text("a\n  -\n\n  .").value_or("?") == "a\n  -\n\n  .");
+}
+
+BOOST_AUTO_TEST_CASE(TheLimits_CountWhatIsLeftOfTheBlankLines)
+{
+	const std::size_t bytes = edt::agent_confirmations::k_max_detail;
+	const std::size_t lines = edt::agent_confirmations::k_max_detail_lines;
+
+	// Far more blank lines than the limit of lines: three lines are left.
+	const auto few = edt::confirmation_detail_text("a\n" + std::string(lines * 2, '\n') + "b");
+	BOOST_TEST(few.value_or("?") == "a\n\nb");
+
+	// The line that is left of a run counts.
+	std::string spaced;
+	for (std::size_t i = 0; i < lines / 2; ++i) spaced += i == 0 ? "x" : "\n\n\nx";
+	const auto fits = edt::confirmation_detail_text(spaced);
+	BOOST_REQUIRE(fits.has_value());
+	BOOST_TEST(static_cast<std::size_t>(std::count(fits->begin(), fits->end(), '\n')) == lines - 2);
+	BOOST_TEST(edt::confirmation_detail_text(spaced + "\nx").has_value());
+	BOOST_TEST(!edt::confirmation_detail_text(spaced + "\n\n\nx").has_value());
+
+	// So do its bytes.
+	const std::string half(bytes / 2 - 1, 'a');
+	const auto whole = edt::confirmation_detail_text("\n\n" + half + "\n \n\t\n" + half + "\n\n");
+	BOOST_REQUIRE(whole.has_value());
+	BOOST_TEST(whole->size() == bytes);
+	BOOST_TEST(!edt::confirmation_detail_text(half + "\n \n\n" + half + "a").has_value());
 }
 
 BOOST_AUTO_TEST_CASE(ADescriptionThatThrows_RefusesTheCall_WithNobodyAsked)

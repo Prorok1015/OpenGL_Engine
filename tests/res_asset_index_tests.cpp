@@ -7,6 +7,7 @@
 #include <snk/resource/resources/res_resource_binary.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <algorithm>
+#include <stdexcept>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -1363,6 +1364,117 @@ BOOST_FIXTURE_TEST_CASE(ErasingAFile_TakesThePinOfEverySpellingAway, index_fixtu
 	BOOST_TEST(rs->erase(a));
 	pump();
 	BOOST_TEST(rs->pinned_count() == 0u);
+}
+
+// #940: a change signalled while the file is keyed by its tag, delivered after the file got its ID: the queued delivery
+// looks under the tag, the watcher is under the ID by then. It still hears of the change, once.
+BOOST_FIXTURE_TEST_CASE(ASignalQueuedBeforeTheFileGetsItsId_ReachesTheWatcherUnderTheId, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	watch_log log;
+	log.watch(*rs, a);
+
+	ram->files[a] = test_util::to_bytes("A2");
+	rs->signal_changed(a);
+	BOOST_REQUIRE(rs->undelivered_signal_count() == 1u);
+	index->put(a, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+
+	BOOST_TEST(log.told == names({ a }));
+	BOOST_TEST(rs->undelivered_signal_count() == 0u);
+	BOOST_TEST(text(a) == "A2");
+	rs->unwatch(a, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(TwoSignalsQueuedBeforeTheRebind_AreDeliveredAgainOnce, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	watch_log log;
+	log.watch(*rs, a);
+
+	rs->signal_changed(a);
+	rs->signal_changed(a);
+	BOOST_REQUIRE(rs->undelivered_signal_count() == 2u);
+	index->put(a, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+
+	BOOST_TEST(log.told == names({ a }), "one reload brings the watcher up to date");
+	BOOST_TEST(rs->undelivered_signal_count() == 0u);
+	rs->unwatch(a, &log);
+}
+
+BOOST_FIXTURE_TEST_CASE(TheRepeatedSignal_ReachesOnlyTheMovedWatchers, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag spelled = put("A.txt", "A");
+	index->put(a, k_a);
+	watch_log under_id;
+	under_id.watch(*rs, a);
+	watch_log moved;
+	moved.watch(*rs, spelled);
+
+	rs->signal_changed(spelled);
+	index->spell(spelled, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+
+	BOOST_TEST(moved.told == names({ spelled }));
+	BOOST_TEST(under_id.told.empty(), "the watcher already under the ID had no signal waiting");
+	BOOST_TEST(rs->undelivered_signal_count() == 0u);
+	rs->unwatch(a, &under_id);
+	rs->unwatch(spelled, &moved);
+}
+
+// #940: two rebinds before the queue runs (a tag key, then ID1, then ID2): the repeated delivery goes along both times.
+BOOST_FIXTURE_TEST_CASE(ASignalQueuedBeforeTwoRebinds_ReachesTheWatcherOnce, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	watch_log log;
+	log.watch(*rs, a);
+
+	rs->signal_changed(a);
+	index->put(a, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	index->remove(a);
+	index->put(a, k_b);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+
+	BOOST_TEST(log.told == names({ a }));
+	BOOST_TEST(rs->undelivered_signal_count() == 0u);
+	rs->unwatch(a, &log);
+}
+
+// #940: a watcher that throws ends the delivery task; what it owed still stops counting.
+BOOST_FIXTURE_TEST_CASE(AWatcherThatThrows_LeavesNoSignalCounted, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	const res::tag b = put("b.txt", "B");
+	int owner = 0;
+	rs->watch(a, &owner, [](const res::tag&) { throw std::runtime_error("watcher failed"); });
+
+	rs->signal_changed(a);
+	rs->signal_changed(b);
+	pump();
+
+	BOOST_TEST(rs->undelivered_signal_count() == 0u);
+	rs->unwatch(a, &owner);
+}
+
+BOOST_FIXTURE_TEST_CASE(ARebindWithNoSignalWaiting_WakesNobody, index_fixture)
+{
+	const res::tag a = put("a.txt", "A");
+	watch_log log;
+	log.watch(*rs, a);
+
+	index->put(a, k_a);
+	rs->apply_asset_batch(rs->delivering_batch(), {});
+	pump();
+
+	BOOST_TEST(log.told.empty());
+	rs->unwatch(a, &log);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
