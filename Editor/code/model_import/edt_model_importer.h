@@ -9,6 +9,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <chrono>
 #include <filesystem>
+#include <string>
 #include <vector>
 #include <memory>
 
@@ -33,6 +34,12 @@ namespace edt {
 		model_file_limits                     limits;
 		// Zero: no limit. Assimp is told to stop when it passes, and the import fails with a message.
 		std::chrono::steady_clock::time_point deadline{};
+		// Empty: the model's folder. The folder side files may come from (model_file_access's boundary).
+		std::filesystem::path boundary;
+		// Empty: "<stem>/". The memory:// folder the import's resources go to, ending in '/'.
+		std::string memory_folder;
+		// False: only `preloaded` is the model, `path` names no file (model_file_access's on_disk).
+		bool on_disk = true;
 	};
 
 	class model_importer {

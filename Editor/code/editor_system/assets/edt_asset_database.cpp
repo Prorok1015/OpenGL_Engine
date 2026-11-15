@@ -976,7 +976,7 @@ namespace
 	constexpr std::string_view k_cache_type = "asset_db";
 	// Raise it with any change of the hash, of how desc_type is found or of this format: an older cache is then
 	// dropped, never read with other meanings.
-	constexpr std::int64_t k_cache_version = 4;
+	constexpr std::int64_t k_cache_version = 5;
 	constexpr std::string_view k_hash_prefix = "fnv1a64:";
 
 	boost::json::array layer_texts(const std::vector<fs::path>& layers)

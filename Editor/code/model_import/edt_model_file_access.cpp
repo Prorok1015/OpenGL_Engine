@@ -56,13 +56,25 @@ namespace {
 	}
 }
 
-edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed)
-	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed)
+edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed,
+	const fs::path& boundary, bool on_disk)
+	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed), m_on_disk(on_disk)
 {
+	m_root_extension = lowered_extension(m_root_file);
+	if (!m_on_disk) {
+		m_dir = m_boundary = m_root_file.parent_path();
+		return;
+	}
 	std::error_code ec;
 	m_dir = fs::weakly_canonical(m_root_file.parent_path(), ec);
 	if (ec) m_dir = m_root_file.parent_path();
-	m_root_extension = lowered_extension(m_root_file);
+	m_boundary = m_dir;
+	if (!boundary.empty()) {
+		fs::path wide = fs::weakly_canonical(boundary, ec);
+		if (ec) wide = boundary.lexically_normal();
+		const fs::path below = m_dir.lexically_relative(wide);
+		if (!below.empty() && *below.begin() != "..") m_boundary = wide;
+	}
 }
 
 edt::resolved_reference edt::model_file_access::resolve(std::string_view reference, model_file_kind kind)
@@ -74,12 +86,14 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		out.error = std::format("the model refers to '{}': {}", std::string(reference).substr(0, 200), why);
 		return out;
 	};
+	if (!m_on_disk) return refuse("the model is not a file on the disk, so it cannot read other files");
 
-	const auto inside = res::path_within_dir(m_dir, reference, kind == model_file_kind::side_file);
-	if (!inside) return refuse("outside the folder of the model");
+	const char* const outside = m_boundary == m_dir ? "outside the folder of the model" : "outside the content root of the model";
+	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	if (!inside) return refuse(outside);
 	std::error_code ec;
-	const fs::path relative = inside->lexically_relative(m_dir);
-	if (relative.empty() || relative.native().starts_with(fs::path("..").native())) return refuse("outside the folder of the model");
+	const fs::path relative = inside->lexically_relative(m_boundary);
+	if (relative.empty() || relative.native().starts_with(fs::path("..").native())) return refuse(outside);
 	if (has_hidden_segment(relative)) return refuse("a hidden file or folder");
 
 	const std::string extension = lowered_extension(*inside);
@@ -171,5 +185,6 @@ void edt::model_file_access::hash_listed(const resolved_reference& file)
 
 std::string edt::model_file_access::relative_name(const resolved_reference& file) const
 {
-	return file.path.lexically_relative(m_dir).generic_string();
+	// With a boundary every name is taken from it, so a file in the model's folder and one elsewhere never share a name.
+	return file.path.lexically_relative(m_boundary).generic_string();
 }
