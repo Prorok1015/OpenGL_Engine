@@ -68,6 +68,7 @@ namespace edt {
 	class migration_notice_model;
 	struct journal_offer;
 	class live_mode;
+	class play_component;
 	class editor_context;
 	class editor_layer;
 	class data_document_host;
@@ -105,7 +106,7 @@ namespace edt {
 
 		// Created in init() and owned by the app_data_storage; null before init().
 		editor_context* context() const { return m_context; }
-		play_session* play() const { return m_play.get(); }
+		play_session* play() const { return m_play; }
 
 		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
 		// would assert in the desc adapter.
@@ -212,7 +213,6 @@ namespace edt {
 		void apply_live_consent(ds::app_data_storage& data);
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
-		void draw_play_status();
 		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
 		void draw_save_notice();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
@@ -392,15 +392,13 @@ namespace edt {
 		edt::trusted_followups m_trust_followups;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
-		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
-		// while the context it reports to is still there.
-		std::unique_ptr<edt::play_session> m_play;
-		// Releases app.advance's time hold when Play stops (register_play_frame_commands).
-		connection m_play_hold_release;
-		// Editor or game layout (#294); reset in the destructor before the Play session it pauses and starts.
-		std::unique_ptr<edt::editor_mode_controller> m_modes;
-		// Gives the Scene view's camera its size back when the editor layout returns.
-		connection m_mode_changed;
+		// Play of the scene document and the editor/game mode (#1004); its commands are in m_registrations, removed before it.
+		// Stopped in the destructor while the context it reports to is still there.
+		std::unique_ptr<edt::play_component> m_play_component;
+		// The component's session and mode controller, for the areas that ask whether Play runs; null before the component.
+		// Valid only while m_play_component lives: no member destroyed after it may use them.
+		edt::play_session* m_play = nullptr;
+		edt::editor_mode_controller* m_modes = nullptr;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

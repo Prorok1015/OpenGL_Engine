@@ -742,7 +742,8 @@ edt::save_result edt::data_document::write_checked(bool over)
 
 	json::value content(m_own);
 	// A person's rule: a reference whose file moved is the one write_references below repairs.
-	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view(), reader, reference_rule::person)) {
+	const desc_tree_check checked = validate_desc_tree(*descs, content, m_source.view(), reader, reference_rule::person);
+	for (const res::diagnostic& item : checked.problems) {
 		if (item.severity == res::diagnostic_severity::error) {
 			return save_result::failure(std::format("{}: {}", where(m_source, item.json_path), item.reason));
 		}
