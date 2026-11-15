@@ -251,6 +251,11 @@ namespace {
 			return m_deps.write_blocker ? m_deps.write_blocker() : std::nullopt;
 		}
 
+		bool index_pending() const
+		{
+			return m_deps.asset_index_pending && m_deps.asset_index_pending();
+		}
+
 	private:
 		edt::desc_file_deps m_deps;
 	};
@@ -285,6 +290,8 @@ namespace {
 		std::vector<res::diagnostic> problems;
 		json::array warnings;
 		std::string error;
+		// Why the content cannot be judged now (busy): it holds a guid and the asset index is not complete (#968).
+		std::string busy;
 	};
 
 	// Where `content` carries a __guid, at any depth: the ID of a file is the editor's to write (EPIC-57).
@@ -310,17 +317,24 @@ namespace {
 
 	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID. `replaced`:
 	// that file's bytes, whose reference guids are kept the same way (desc_system::write_references).
-	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, const std::string& relative,
+	// `index_pending`: the asset index is not complete, so no guid is looked up in it (its verdict could be wrong either way)
+	// and content that holds one is `busy` once its form passed (#968).
+	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, bool index_pending, const std::string& relative,
 		const json::value& content, const std::string& kept_guid = {}, std::span<const std::byte> replaced = {})
 	{
 		prepared_file out;
 		const std::string resource = "res://" + relative;
 		find_guid_keys(content, "", resource, out.problems);
-		for (res::diagnostic& item : edt::validate_desc_tree(descs, content, resource, &resources)) {
+		edt::desc_tree_check checked = edt::validate_desc_tree(descs, content, resource, index_pending ? nullptr : &resources);
+		for (res::diagnostic& item : checked.problems) {
 			if (item.severity == res::diagnostic_severity::error) out.problems.push_back(std::move(item));
 			else out.warnings.push_back(diagnostic_json(item));
 		}
 		if (!out.problems.empty()) return out;
+		if (index_pending && checked.has_guid) {
+			out.busy = std::string(edt::k_guid_index_pending);
+			return out;
+		}
 		json::value stamped = content;
 		if (!kept_guid.empty() && stamped.is_object()) stamped.as_object()["__guid"] = kept_guid;
 		descs.stamp_tree(stamped);
@@ -374,8 +388,9 @@ namespace {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_pending(), path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
+			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			// Exclusive: refused when the file appears while it is written (create_sync).
 			const res::file_operation made = m_files.deps().res.create_sync(desc_files::tag_of(path.relative), ready.bytes);
@@ -408,8 +423,10 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_pending(), path.relative, call.args.as_object().at("desc"),
+				edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
+			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			const res::tag tag = desc_files::tag_of(path.relative);
 			if (!m_files.deps().res.store_sync(tag, ready.bytes)) {
@@ -436,8 +453,10 @@ namespace {
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
 				return refused("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_pending(), path.relative, call.args.as_object().at("desc"),
+				edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
+			if (!ready.busy.empty()) return refused(ready.busy);
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));
 			return std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
@@ -490,11 +509,12 @@ namespace {
 	}
 }
 
-std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource,
+edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource,
 	const res::resource_system* resources, reference_rule rule)
 {
 	const bool agent = rule == reference_rule::agent;
-	std::vector<res::diagnostic> out;
+	desc_tree_check checked;
+	std::vector<res::diagnostic>& out = checked.problems;
 	std::size_t errors = 0;
 	std::size_t warnings = 0;
 	std::unordered_set<std::string> unchecked;
@@ -515,6 +535,7 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 	const auto check_reference = [&](const json::value& value, const std::string& at) {
 		if (!referenced.insert(at).second) return;
 		const json::object& object = value.as_object();
+		if (edt::is_guid_reference(object)) checked.has_guid = true;
 		if (std::string problem = agent ? edt::agent_reference_form_problem(object) : edt::reference_object_problem(object); !problem.empty()) {
 			schema_error(at, std::move(problem));
 			return;
@@ -569,6 +590,7 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		if (const json::value* parent = object.if_contains("__parent")) {
 			// The object form is checked by its path as written, like the string.
 			std::optional<std::string> written;
+			if (parent->is_object() && edt::is_guid_reference(parent->as_object())) checked.has_guid = true;
 			if (parent->is_string()) {
 				written = std::string(view_of(parent->as_string()));
 			} else if (!parent->is_object()) {
@@ -691,10 +713,10 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 
 	if (!root.is_object()) {
 		add(std::string(res::diagnostic_kind::unknown_type), "", "the file must be a JSON object with a `__type`");
-		return out;
+		return checked;
 	}
 	walk(walk, root, std::string{});
-	return out;
+	return checked;
 }
 
 std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps)

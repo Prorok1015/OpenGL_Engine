@@ -253,3 +253,9 @@ void edt::asset_index_link::on_batch(const asset_batch& batch)
 	}
 	apply(batch.moved);
 }
+
+bool edt::asset_index_pending(const asset_index_link* link, const asset_database* assets)
+{
+	if (!link || !assets) return false;
+	return !link->attached() || assets->pending_hashes() > 0;
+}

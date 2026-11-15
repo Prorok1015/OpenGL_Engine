@@ -72,6 +72,7 @@ struct desc_fixture : test_util::scene_env
 		deps.open_level_files = [this] { return open_level; };
 		deps.events = &events;
 		deps.write_blocker = [this] { return blocked; };
+		deps.asset_index_pending = [this] { return index_pending; };
 		registrations = edt::register_desc_file_commands(commands, std::move(deps));
 	}
 
@@ -132,6 +133,7 @@ struct desc_fixture : test_util::scene_env
 	std::vector<edt::registration> registrations;
 	std::vector<std::string> open_level;
 	std::optional<std::string> blocked;
+	bool index_pending = false;
 };
 
 }
@@ -557,7 +559,7 @@ BOOST_AUTO_TEST_CASE(ManyProblems_AreCappedWithoutLettingTheFilePass)
 	std::string worlds;
 	for (int i = 0; i < 30; ++i) worlds += std::string(i ? "," : "") + R"({"__type":"material_desc","bogus":1})";
 	const std::string content = R"({"__type":"level_desc","worlds":[)" + worlds + "]}";
-	const std::vector<res::diagnostic> found = edt::validate_desc_tree(*descs, json::parse(content), "res://levels/x.desc");
+	const std::vector<res::diagnostic> found = edt::validate_desc_tree(*descs, json::parse(content), "res://levels/x.desc").problems;
 	std::size_t errors = 0;
 	std::size_t warnings = 0;
 	for (const res::diagnostic& item : found) (item.severity == res::diagnostic_severity::error ? errors : warnings)++;
@@ -576,7 +578,7 @@ BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolI
 		{"name":"MoveLeft","bindings":[{"key":"A"},{"key":"LEFT"}]},
 		{"name":"Fire","bindings":[{"mouse":"LEFT"}]}]})";
 	std::size_t errors = 0;
-	for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(actions), "res://input/actions.desc")) {
+	for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(actions), "res://input/actions.desc").problems) {
 		if (item.severity == res::diagnostic_severity::error) ++errors;
 	}
 	BOOST_TEST(errors == 0u);
@@ -586,7 +588,7 @@ BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolI
 			const json::value with_bad = json::parse(std::string(R"({"__type":"input_actions_desc","actions":[{"name":")") + std::string(bad)
 				+ R"(","bindings":[{"key":"A"}]}]})");
 			bool refused = false;
-			for (const res::diagnostic& item : edt::validate_desc_tree(*descs, with_bad, "res://input/actions.desc")) {
+			for (const res::diagnostic& item : edt::validate_desc_tree(*descs, with_bad, "res://input/actions.desc").problems) {
 				if (item.severity == res::diagnostic_severity::error) refused = true;
 			}
 			BOOST_TEST(refused);
@@ -698,7 +700,7 @@ BOOST_AUTO_TEST_CASE(TheChecksReadTheProtocolAsResTagDoes_AndRefuseEveryTextWith
 {
 	const auto errors_of = [&](const json::value& content) {
 		std::size_t errors = 0;
-		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, content, "res://materials/t.mat.desc")) {
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, content, "res://materials/t.mat.desc").problems) {
 			if (item.severity == res::diagnostic_severity::error) ++errors;
 		}
 		return errors;
@@ -1032,6 +1034,90 @@ BOOST_AUTO_TEST_CASE(AnObjectWithAGuidThatIsNoUuid_InAPrefabComponent_IsPlainDat
 
 	const auto created = call("desc.create", desc_args("prefabs/crate2.desc", content));
 	BOOST_TEST(created.ok, created.error);
+}
+
+// #968: while the editor's asset index is not complete a guid cannot be judged, so content that holds one is busy and
+// nothing is written; content without a guid is written as before, and the question says the request will be refused.
+BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_ContentWithAGuidIsBusy_AndNothingIsWritten)
+{
+	const char* const with_guid = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	const char* const with_parent = R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})";
+	make_material("materials/w.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
+	const std::string version = version_of("materials/w.mat.desc");
+	index_pending = true;
+
+	const auto written = call("desc.write", write_args("materials/w.mat.desc", version, with_guid));
+	BOOST_TEST(written.code == cmd::codes::busy);
+	BOOST_TEST(written.error.find("the asset index is still being built") != std::string::npos, written.error);
+	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("materials/w.mat.desc", version, with_guid)));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->rfind("This request will be refused", 0) == 0u, *question);
+	BOOST_TEST(question->find("the asset index is still being built") != std::string::npos, *question);
+
+	const auto created = call("desc.create", desc_args("materials/g.mat.desc", with_guid));
+	BOOST_TEST(created.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+	const auto parent = call("desc.create", desc_args("materials/p.mat.desc", with_parent));
+	BOOST_TEST(parent.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "p.mat.desc"));
+
+	// No guid: nothing waits for the index.
+	const auto plain_create = call("desc.create", desc_args("materials/n.mat.desc", k_material));
+	BOOST_TEST(plain_create.ok, plain_create.error);
+	const auto plain_write = call("desc.write", write_args("materials/w.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST(plain_write.ok, plain_write.error);
+
+	index_pending = false;
+	const auto ready = call("desc.create", desc_args("materials/g.mat.desc", with_guid));
+	BOOST_TEST(ready.ok, ready.error);
+	BOOST_TEST(fs::exists(res_root / "materials" / "g.mat.desc"));
+}
+
+// The form of a reference does not depend on the index: it is refused as before, not held back.
+BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_AFormErrorIsStillRefused)
+{
+	index_pending = true;
+	for (const char* content : {
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.frag"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"},"bogus":1})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/f.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "f.mat.desc"));
+		}
+	}
+}
+
+// A guid that names another file than its path: while the index is pending the answer is busy, never a verdict made
+// against an incomplete index; once it is ready the ordinary refusal comes.
+BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedOnceItIsReady)
+{
+	const char* const content = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	make_material("materials/f.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "f.mat.desc");
+	const std::string version = version_of("materials/f.mat.desc");
+	auto elsewhere = std::make_shared<paths_index>();
+	elsewhere->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.frag" });
+	rs->set_asset_index(elsewhere);
+
+	index_pending = true;
+	const auto held = call("desc.write", write_args("materials/f.mat.desc", version, content));
+	const auto held_create = call("desc.create", desc_args("materials/g.mat.desc", content));
+	index_pending = false;
+	const auto refused = call("desc.write", write_args("materials/f.mat.desc", version, content));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(held.code == cmd::codes::busy);
+	BOOST_TEST(held.error.find("name different files") == std::string::npos, held.error);
+	BOOST_TEST(held_create.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_TEST(refused.error.find("name different files") != std::string::npos, refused.error);
+	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc") == before);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

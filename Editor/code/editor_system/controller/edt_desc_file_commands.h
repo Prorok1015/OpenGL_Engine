@@ -50,6 +50,9 @@ namespace edt
 		// Why nothing may be written into the project now (a migration runs, or one stopped half way and is not rolled back,
 		// #761): desc.create and desc.write answer busy with it. Null or nullopt: they write.
 		std::function<std::optional<std::string>()> write_blocker;
+		// The asset index is not complete yet (not attached, or files still hashing): content with a guid answers busy,
+		// since a guid judged against it could pass or fail wrongly (#968). Null or false: the guid is judged now.
+		std::function<bool()> asset_index_pending;
 	};
 
 	[[nodiscard]] std::vector<registration> register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps);
@@ -64,6 +67,8 @@ namespace edt
 		// Why nothing may be written into the project now (a migration that runs, or one that stopped half way and is not
 		// rolled back yet, #761): a data document's save refuses with it. Null or nullopt: it writes.
 		std::function<std::optional<std::string>()> write_blocker = {};
+		// As desc_file_deps::asset_index_pending; only the desc.* commands read it (a person's save needs no guid judged).
+		std::function<bool()> asset_index_pending = {};
 	};
 
 	// A desc file read the way desc.read does, with what desc.write asks before it replaces one: `tag` must be a res://
@@ -101,7 +106,13 @@ namespace edt
 	// One entry per object at most, `json_path` the JSON pointer of the field in `resource`. Nothing is logged. A reference
 	// is a res:// string or {guid, path} (EPIC-57 section 4.4); `resources` (may be null) tells a guid no file holds.
 	// `rule` says whose content it is (reference_rule).
-	std::vector<res::diagnostic> validate_desc_tree(const desc::desc_system& descs, const boost::json::value& root, std::string_view resource,
+	struct desc_tree_check
+	{
+		std::vector<res::diagnostic> problems;
+		// Some reference holds a guid (a {guid, path} object with a UUID that is not nil), `__parent` included.
+		bool has_guid = false;
+	};
+	desc_tree_check validate_desc_tree(const desc::desc_system& descs, const boost::json::value& root, std::string_view resource,
 		const res::resource_system* resources = nullptr, reference_rule rule = reference_rule::agent);
 
 	// The root "__guid" string of a desc file's bytes, as the file has it (not checked as an ID); empty when it has none or

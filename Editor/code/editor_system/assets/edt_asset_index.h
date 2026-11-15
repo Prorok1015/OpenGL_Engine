@@ -109,4 +109,8 @@ namespace edt
 		// Attached only after more walks than this have been applied.
 		std::uint64_t m_attach_after = 0;
 	};
+
+	// The index cannot judge a guid yet (#968): the link is not attached (no walk applied, or changes dropped since), or
+	// files are still being hashed (a desc's own __guid is read there). Null (no project open): not pending.
+	bool asset_index_pending(const asset_index_link* link, const asset_database* assets);
 }

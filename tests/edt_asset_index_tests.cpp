@@ -622,4 +622,57 @@ BOOST_AUTO_TEST_CASE(a_hash_pass_takes_no_full_refresh)
 	BOOST_TEST((link.index().path_of(*res::asset_id_from_text(k_guid_b)) == std::optional{ res::tag{ "res://b.txt" } }));
 }
 
+// #968: what the editor wires as "an agent's guid cannot be judged yet". No project (no link, no database) is never
+// pending; before the first walk is applied, while files are hashed and after dropped changes detached the link it is.
+BOOST_AUTO_TEST_CASE(the_index_is_pending_until_it_is_attached_and_every_file_is_hashed)
+{
+	project.write("res/a.txt", "a");
+	project.write("res/a.txt.resource", meta_text(k_guid_a));
+	make_system();
+	BOOST_TEST(!edt::asset_index_pending(nullptr, nullptr));
+	BOOST_TEST(!edt::asset_index_pending(nullptr, assets.get()));
+	assets->set_max_deferred_for_tests(1);
+	edt::asset_index_link link(*assets, *resources);
+	assets->rebuild();
+	link.poll();
+	BOOST_TEST(!link.attached());
+	BOOST_TEST(edt::asset_index_pending(&link, assets.get()));
+
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	BOOST_TEST(!edt::asset_index_pending(&link, assets.get()));
+
+	// A new file without a .resource: the link stays attached, but its hash is not known yet.
+	project.write("res/x.txt", "x");
+	apply({ change("x.txt", res::change_kind::created) });
+	link.poll();
+	BOOST_TEST(link.attached());
+	BOOST_TEST(assets->pending_hashes() > 0u);
+	BOOST_TEST(edt::asset_index_pending(&link, assets.get()));
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	link.poll();
+	BOOST_TEST(!edt::asset_index_pending(&link, assets.get()));
+
+	// Changes dropped behind a walk detach the link until the next walk is applied.
+	assets->rebuild();
+	res::file_change first;
+	first.tag = res::tag{ "res://x.txt" };
+	first.kind = res::change_kind::modified;
+	res::file_change second = first;
+	second.tag = res::tag{ "res://y.txt" };
+	assets->apply_changes(std::vector<res::file_change>{ first, second });
+	BOOST_TEST(assets->changes_dropped() >= 1u);
+	link.poll();
+	BOOST_TEST(!link.attached());
+	BOOST_TEST(edt::asset_index_pending(&link, assets.get()));
+
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	BOOST_TEST(!edt::asset_index_pending(&link, assets.get()));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
