@@ -24,6 +24,10 @@ set(SE_EDT_API_SOURCES
 list(TRANSFORM SE_EDT_API_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 list(REMOVE_ITEM SE_EDT_SOURCES ${SE_EDT_API_SOURCES})
 target_sources(${PROJECT_NAME} PRIVATE ${SE_EDT_SOURCES})
+if(MSVC)
+	# edt_editor_system.cpp holds more sections than a default MSVC object file allows (C1128, #1032).
+	target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+endif()
 target_sources(snk_editor_api PRIVATE ${SE_EDT_API_SOURCES})
 # Only include/ is public (snk/editor/*); the source root and the subdirs are PRIVATE internals.
 snk_component_headers(${PROJECT_NAME})
