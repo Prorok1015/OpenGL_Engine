@@ -75,6 +75,8 @@ Editor/
     │   ├── edt_history_model.cpp/h   # history_model: History tab state without ImGui: vcs.log pages loaded as rows come into view, filter (300 ms), stale restart, commit files/diff (#457)
     │   └── edt_history_view.cpp/h    # row_segments (the lines of one graph row), age_text, short_hash: what the History tab draws (#457), pure
     │
+    ├── assets/                       # the asset database and what hangs on it (#760)
+    │   └── edt_asset_component.cpp/h # asset_component (#1004): the database, the pickers' catalog, the asset index, the Problems source `assets`, asset.usages and the browser's usage list; `editor_system` creates it only with a project, calls `install()`, `tick()` (`editor_assets` stage) and asks `database()/catalog()/index()`
     ├── input/                        # Input binding helpers & file dialog
     │   ├── edt_input_manager.h       # make_input_area / to_framebuffer_size (window units -> framebuffer pixels)
     │   ├── edt_input_binding.h       # bind_item_input: a hovered panel image binds its rect to a context in inp::input_router
