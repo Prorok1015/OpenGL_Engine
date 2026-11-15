@@ -9,9 +9,8 @@ namespace desc { class desc_system; }
 
 namespace rnd
 {
-	// Registered on the root resource system: a layer's require<geometry_desc> is then answered by the root, so a world
-	// and the renderer share one block and the file is read once (#1021). A geometry_desc subtype defined in a game
-	// module is not created here.
+	// On the root, so a layer's require<geometry_desc> gets the block the renderer gets (#1021). A geometry_desc
+	// subtype defined in a game module is not created here.
 	class geometry_desc_adapter : public core::res::adapter_interface
 	{
 	public:

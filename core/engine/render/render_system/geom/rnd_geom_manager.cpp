@@ -49,7 +49,6 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 		if (!geometry.vertex_array) {
 			return nullptr;
 		}
-		geometry.source = handle;
 		geometry.indices.assign(desc.indices.begin(), desc.indices.end());
 		const std::uint32_t stride = desc.layout.get_stride();
 		geometry.vertex_count = stride == 0 ? std::uint64_t{ 0 } : std::uint64_t{ desc.vertices.size() / stride };

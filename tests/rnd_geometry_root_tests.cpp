@@ -135,9 +135,9 @@ BOOST_AUTO_TEST_CASE(TwoLayersAndTheRenderer_ReadTheGeometryOnce_AndBuildOneVert
 	BOOST_TEST(reads(tag) == 1u);
 }
 
-// A module's layer writes under its own prefix; the geometry it wrote is still loaded by the root, so destroying the
-// layer finds none of it held in the layer.
-BOOST_AUTO_TEST_CASE(AGeometryAModuleLayerWrote_IsTheRootsBlock)
+// A module's layer writes under its own prefix; the geometry it wrote is still loaded by the root. Destroying the layer
+// erases nothing it wrote, and the root's block stays as long as a holder outside the layer keeps it.
+BOOST_AUTO_TEST_CASE(AGeometryAModuleLayerWrote_IsTheRootsBlock_AndOutlivesTheLayer)
 {
 	auto& module = contexts().create_layer();
 	module.resources().limit_writes_to("memory://modules/geometry_root/");
@@ -146,15 +146,27 @@ BOOST_AUTO_TEST_CASE(AGeometryAModuleLayerWrote_IsTheRootsBlock)
 	BOOST_REQUIRE(module.resources().store(tag, test_util::to_bytes(triangle())));
 	test_util::pump(tasks);
 	memory->reads.erase(tag);
+
+	auto in_root = load<rnd::geometry_desc>(root(), tag);
 	{
 		const auto in_module = load<rnd::geometry_desc>(module.resources(), tag);
-		const auto in_root = load<rnd::geometry_desc>(root(), tag);
 		BOOST_REQUIRE(in_module.is_ready());
 		BOOST_TEST((in_module.get_control_block() == in_root.get_control_block()));
 		BOOST_TEST(reads(tag) == 1u);
 		BOOST_TEST(module.resources().live_resources() == module_live);
 	}
 	contexts().destroy_layer(module);
+
+	BOOST_TEST(root().exists(tag));
+	BOOST_REQUIRE(in_root.is_ready());
+	BOOST_TEST((load<rnd::geometry_desc>(root(), tag).get_control_block() == in_root.get_control_block()));
+	BOOST_TEST(reads(tag) == 1u);
+
+	// Let go by its last holder, it is read again from the data the layer left.
+	in_root = res::res_handle<rnd::geometry_desc>{};
+	const auto again = load<rnd::geometry_desc>(root(), tag);
+	BOOST_TEST(again.is_ready());
+	BOOST_TEST(reads(tag) == 2u);
 }
 
 BOOST_AUTO_TEST_CASE(AChangedGeometry_IsReadOnceMore_ThroughTheLayer)

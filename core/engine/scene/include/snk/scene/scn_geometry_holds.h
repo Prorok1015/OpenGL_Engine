@@ -9,17 +9,13 @@
 
 namespace scn {
 
-	// The geometry each mesh entity draws, held while its geometry_component names it (#1021): the component keeps
-	// only the tag, and the resource cache lets go of a resource nobody holds, so the first frame that drew it read it
-	// again. Engine-only, outside the module layout key: a registry's ctx that only the engine makes.
+	// The geometry each mesh entity draws, held while its geometry_component names it: the cache lets go of what
+	// nobody holds, and the component keeps only the tag (#1021). A registry ctx only the engine makes.
 	class SNK_API geometry_holds
 	{
 	public:
-		// The holds of `reg`, made on first use with the hooks that keep them: a geometry_component made (an assembly,
-		// a snapshot restored, a script) or given another tag is held through `resources`, and one removed or destroyed
-		// with its entity or registry is let go. Each world of a context set is attached with its layer's resources
-		// when it is made, so the hooks see every component; a registry attached later (or without resources) holds
-		// only what assemble_mesh_node hands it. A later call keeps the resources it was first given.
+		// Made on first use, with hooks that hold each geometry_component made or retagged and let go of one removed.
+		// Without `resources` only what assemble_mesh_node hands it is held; a later call keeps the first resources.
 		static geometry_holds& attach(entt::registry& reg, res::resource_system* resources);
 		static geometry_holds& of(entt::registry& reg) { return attach(reg, nullptr); }
 

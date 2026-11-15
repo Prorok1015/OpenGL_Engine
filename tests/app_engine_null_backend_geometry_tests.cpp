@@ -90,20 +90,20 @@ BOOST_AUTO_TEST_CASE(TheGeometryOfALoadedLevel_IsReadOnce, * boost::unit_test::e
 	BOOST_TEST(robot_geometry_reads() == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(AfterTheLevelIsGone_ItsWorldsLetGoOfTheGeometry,
-	* boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+BOOST_AUTO_TEST_CASE(AfterTheLevelIsGone_ItsGeometryIsLetGo, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_and_draw("levels/smoke_level.desc", 3);
 	BOOST_REQUIRE(held() > 0u);
+	BOOST_REQUIRE(robot_geometry_reads() == 1u);
 
 	// load_level replaces the worlds at once: their registries, and the holds in their ctx, are gone when it returns.
 	load_and_draw("levels/test_level.desc", 1);
 	BOOST_TEST(held() == 0u);
-	// The renderer keeps the block as long as its vertex array: asked for again, it is not read again.
+	// Nothing holds it any more, the renderer neither: asked for again, it is read again.
 	const auto again = storage.require<res::resource_system>().require_sync<rnd::geometry_desc>(k_robot_geometry);
 	test_util::pump(tasks);
 	BOOST_TEST(again.is_ready());
-	BOOST_TEST(robot_geometry_reads() == 1u);
+	BOOST_TEST(robot_geometry_reads() == 2u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
