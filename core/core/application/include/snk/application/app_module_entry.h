@@ -126,6 +126,9 @@
 // Its members are out of line (#786) and scene_layer holds it by pointer (#758), so its new size is not seen by a module;
 // only the private find_factory/find_migrations change their signatures, no public export changes.
 // #920: the codec of component_tracker's map gains from_json with a read_context, a new export (no type changes).
+// #952 (no bump): desc_system::get_field_desc, inline in module code, refuses a reference to the owner itself (or to an alias
+// of it) through the exports that are there; a module built before keeps such a handle until rebuilt. No layout changes.
+// res::refused_tag (the tag a refused handle was asked for) is a new export (no type changes: the layout key stays).
 // #922 PR 2: the key also mixes in the ABI revisions of the interfaces a module calls or fills through a vtable, the
 // versions of EnTT, Boost and glm and the sizes of their types; no type changes (layout_revision 12). A library module
 // built with the static C runtime or without a layout key is refused when opened; one compiled into the host is not.

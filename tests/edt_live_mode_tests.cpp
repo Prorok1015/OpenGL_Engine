@@ -3,6 +3,7 @@
 #include "edt_agent_access.h"
 #include "edt_agent_policy.h"
 #include "edt_mcp_bridge_host.h"
+#include "edt_project_trust_service.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/command/cmd_registry.h>
@@ -63,6 +64,10 @@ struct live_mode_fixture
 	int toggled = 0;
 	// game_builder::stop_background calls (never cancel: that would drop a waiting manual build).
 	int stops = 0;
+	// #921: with gate_trust, live mode asks `trusted` and hands the question's continuation to `asked`.
+	bool gate_trust = false;
+	bool trusted = true;
+	std::function<void()> asked;
 	std::unique_ptr<edt::live_mode> live;
 
 	~live_mode_fixture()
@@ -106,6 +111,10 @@ struct live_mode_fixture
 		};
 		options.on_toggled = [this] { ++toggled; };
 		options.events = &events;
+		if (gate_trust) {
+			options.trusted = [this] { return trusted; };
+			options.ask_trust = [this](std::function<void()> then) { asked = std::move(then); };
+		}
 		live = std::make_unique<edt::live_mode>(problems, actions, std::move(options));
 	}
 
@@ -578,6 +587,34 @@ BOOST_AUTO_TEST_CASE(TheLiveTools_AreDeniedWhileLiveModeIsOff_AndAllowedWhileItI
 
 	BOOST_REQUIRE(!live->set_enabled(false, false));
 	BOOST_TEST(!edt::agent_may_use(*commands.find("live.status"), access.policy()));
+}
+
+// #921: live mode builds and loads the project's code: an untrusted project keeps it off, the person's toggle asks
+// first, and its tools are denied while the project is not trusted.
+BOOST_AUTO_TEST_CASE(AnUntrustedProject_KeepsLiveModeOff_UntilThePersonTrustsIt)
+{
+	gate_trust = true;
+	trusted = false;
+	make();
+	const std::optional<std::string> refused = live->set_enabled(true, false);
+	BOOST_REQUIRE(refused.has_value());
+	BOOST_TEST(*refused == std::string(edt::k_untrusted_project_error));
+	BOOST_TEST(!actions.invoke(edt::live_mode::k_toggle_id, json::object{}).ok);
+	BOOST_TEST(!live->enabled());
+
+	BOOST_REQUIRE(actions.activate(edt::live_mode::k_toggle_id));
+	BOOST_REQUIRE(asked);
+	BOOST_TEST(!live->enabled());
+	trusted = true;
+	asked();
+	BOOST_TEST(live->enabled());
+	BOOST_TEST((stored == std::vector<bool>{ true }));
+
+	trusted = false;
+	const auto rebuild = actions.invoke("live.rebuild_now", json::object{}, cmd::origin::agent("s1"));
+	BOOST_TEST(!rebuild.ok);
+	BOOST_TEST(rebuild.code == cmd::codes::denied);
+	BOOST_TEST(starts.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

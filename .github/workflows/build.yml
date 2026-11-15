@@ -492,11 +492,12 @@ jobs:
           if ls "$proj/build/bin" | grep -qE "game(_editor)?d\."; then echo "::error::a module has a debug postfix"; exit 1; fi
 
       # The shared editor opens the project and loads the module from build/bin (#428). The template's
-      # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag.
+      # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag; a project's modules
+      # load only when it is trusted (#921), hence --trust-project.
       - name: The editor loads the template's game module
         run: |
           tools/run_headless.sh --editor build/ci-linux-gcc-debug/Editor/editor --frames 30 --shot headless_out/template/final.png \
-            -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch
+            -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch --trust-project
           grep -E "module 'game' (loaded|refused)" headless_out/template/editor.log || true
           grep -q "module 'game' loaded" headless_out/template/editor.log
           grep -q "editor module 'game_editor' loaded" headless_out/template/editor.log
@@ -530,7 +531,9 @@ jobs:
 
           template="${RUNNER_TEMP}/template_project"
           before="$(tree_hash "$template")"
-          expect 1 --project "$template" --migrate --dry-run
+          expect 2 --project "$template" --migrate --dry-run
+          grep -q "project modules are not trusted" "$log"
+          expect 1 --project "$template" --migrate --dry-run --trust-project
           grep -q "module 'game' loaded" "$log"
           if [ "$(tree_hash "$template")" != "$before" ]; then echo "::error::--dry-run wrote into the template project"; exit 1; fi
 

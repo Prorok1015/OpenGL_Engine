@@ -33,6 +33,14 @@ namespace
 	CFG_VAR_DEF_BOOL(cfg_migration_dry_run, "migration/dry_run", false);
 	CFG_VAR_DEF_BOOL(cfg_migration_force, "migration/force", false);
 	CFG_VAR_DEF_STRING(cfg_migration_report, "migration/report", "");
+	// --trust-project (#921): the project's modules load and build without the person's answer, for this run only.
+	// Rewritten from the command line by the core; a config file cannot set it.
+	CFG_VAR_DEF_BOOL(cfg_trust_project, "project/trust", false);
+
+	bool trust_project_flag()
+	{
+		return static_cast<bool>(cfg_trust_project);
+	}
 
 	// With the game layer of the project's module: its types decide what is unknown and what is outdated.
 	int run_migration_command(ds::app_data_storage& storage)
@@ -164,6 +172,16 @@ int main(int argc, char* argv[])
 		project_modules.check_editor_module = [](const app::modules::module_entry& entry) {
 			return edt::check_editor_api_version(entry.editor_api_version);
 		};
+		// #921: nothing of build/bin loads unless the person trusts the project, the editor built it, or
+		// --trust-project. A migration runs without the editor: only the flag counts there.
+		if (migration) {
+			const bool trusted = trust_project_flag();
+			project_modules.trust_library = [trusted](std::string_view, const std::filesystem::path&) {
+				return trusted;
+			};
+		} else {
+			project_modules.trust_library = editor::project_trust_gate(app_storage, trust_project_flag());
+		}
 		project_modules.editor_unload_refusal = [&app_storage]() -> std::string {
 			return app_storage.has_value<edt::editor_context>() ? app_storage.require<edt::editor_context>().module_unload_refusal() : std::string{};
 		};
@@ -172,7 +190,11 @@ int main(int argc, char* argv[])
 		const core::project_modules_report modules = project_host.load_all();
 		if (migration) {
 			// Without a module it needs, its types would read as unknown_type and the migration as partial (4): refused.
-			if (!modules.missing_required.empty() || !modules.refused.empty()) {
+			if (!modules.untrusted.empty()) {
+				egLOG_ERROR("project/migrate", "refused: project modules are not trusted: pass --trust-project "
+					"(not loaded: {})", cfg::format_list(modules.untrusted));
+				result = prj::migration::k_exit_refused;
+			} else if (!modules.missing_required.empty() || !modules.refused.empty()) {
 				egLOG_ERROR("project/migrate", "refused: a game module of the project is not loaded (missing: {}; refused: {}); "
 					"build it first", cfg::format_list(modules.missing_required), cfg::format_list(modules.refused));
 				result = prj::migration::k_exit_refused;

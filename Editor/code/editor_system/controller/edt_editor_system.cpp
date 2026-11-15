@@ -67,6 +67,7 @@
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_live_consent.h"
+#include "edt_project_trust_service.h"
 #include "edt_agent_policy.h"
 #include "edt_settings.h"
 #include "edt_play_commands.h"
@@ -141,6 +142,8 @@
 CFG_VAR_EXT_PATH(cfg_edt_data_path);
 // --headless (edt_editor_init.cpp).
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
+// --trust-project (#921), also read by main.cpp: known here before live mode at open is decided.
+CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
 	template<class T>
@@ -454,6 +457,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		nobody.warn_headless = true;
 		m_context->dialogs().set_auto_answer(nobody);
 	}
+	// #921: main's trust_library of the project's modules finds it in the storage; build.* and live mode ask it.
+	if (!data.has_value<project_trust_service>()) {
+		const std::optional<std::string> trust_key = data.has_value<prj::project_context>()
+			? canonical_project_settings_key(data.require<prj::project_context>().root) : std::nullopt;
+		data.construct<project_trust_service>(m_res, trust_key, static_cast<bool>(cfg_edt_trust_project));
+	}
+	m_trust = data.require_shared<project_trust_service>();
+	m_registrations.push_back(m_context->actions().add({ .id = "project.trust", .label = "Trust Project Modules...",
+		.menu_path = "Project", .disabled_tooltip = "Open a project first",
+		.execute = no_args([this, &data] { ask_trust(data, nullptr); }),
+		.expose_as_tool = false,
+		.enabled = [this] {
+			const auto trust = m_trust.lock();
+			return trust && trust->has_project();
+		},
+		// Only the person grants trust: an agent never sees or answers this question.
+		.category = cmd::agent_category::not_for_agents }));
 	// The panels own input routing: whichever scene image is hovered feeds its context, nothing else does.
 	m_input_router = &data.require<inp::input_router>();
 	m_input_router->set_default_target(std::nullopt);
@@ -492,11 +512,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
 		*m_hierarchy_panel, *m_inspector_panel,
 		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
+	// After wire_selection, which blanks the Inspector on an empty selection (level undo, Esc in the viewport): the prefab node stays.
+	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
+		if (!sel.empty() || !m_inspector_target.is_prefab()) return;
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (prefab && prefab->id() == m_inspector_target.prefab()) {
+			m_inspector_panel->set_selected_node(prefab->working_node(m_inspector_target.path()));
+		}
+	}));
 	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
 
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
 	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
+	m_prefab_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_prefab_node(path); });
 	m_prefab_panel->set_on_apply([this] {
 		prefab_document* prefab = prefab_of(m_context->documents());
 		if (!prefab) return;
@@ -769,7 +798,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return result.ok;
 	};
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo)) {
+			asset_undo_label, asset_undo, [this] { return m_inspector_target.is_prefab(); })) {
 		m_registrations.push_back(std::move(action));
 	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
@@ -974,6 +1003,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	build_options.events = &m_context->events();
 	build_options.auto_jobs = [] { return estimate_jobs().jobs; };
 	build_options.start_blocker = [this] { return migration_blocker(); };
+	build_options.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	build_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
+	build_options.own_build = [this](std::string_view module, std::string_view digest) {
+		if (const auto trust = m_trust.lock()) trust->record_own_build_digest(module, digest);
+	};
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
@@ -1025,6 +1062,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
 	reload_options.stop_background = [this] { stop_live_build(); };
 	reload_options.events = &m_context->events();
+	reload_options.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	reload_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
 			fn();
@@ -1232,6 +1274,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// wait for: the project's game modules load after it (#428), and the scan's types are theirs.
 		if (headless) static_cast<void>(startup->tick());
 		else editor_layer->register_implicit("edt/migration_journal", [startup] { return startup->tick(); });
+	}
+
+	// #921: main loads the project's modules after init, so the first frame knows which wait for the person's answer.
+	// Headless nobody is asked: they stay unloaded unless --trust-project was given.
+	if (!project_held) {
+		editor_layer->register_implicit("edt/project_trust", [this, &data, headless] {
+			const auto trust = m_trust.lock();
+			if (!trust || !trust->waiting()) return false;
+			if (headless) {
+				egLOG_WARN("editor/trust", "not loaded: {}: project modules are not trusted: pass --trust-project",
+					module_list(trust->waiting_modules()));
+			} else {
+				ask_trust(data, nullptr);
+			}
+			return false;
+		});
 	}
 
 	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
@@ -1444,6 +1502,11 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 			return store_live_consent(m_res, key, enabled);
 		};
 	}
+	live.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	live.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
 	live.on_toggled = [this] {
 		if (m_agent_server) m_agent_server->notify_tools_changed();
 	};
@@ -1458,15 +1521,107 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
 	m_live_mode->watch(m_res);
 	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
-	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this](bool enabled) {
-		if (auto refused = m_live_mode->set_enabled(enabled, true)) {
-			egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this, &data](bool enabled) {
+		const auto apply = [this, enabled] {
+			if (auto refused = m_live_mode->set_enabled(enabled, true)) {
+				egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+			}
+		};
+		if (enabled && !m_live_mode->enabled() && !m_live_mode->trusted()) {
+			ask_trust(data, apply);
+			return;
 		}
+		apply();
 	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
-	if (snk_dir && project_key
-		&& live_mode_at_open(load_build_settings(*snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
+	apply_live_consent(data);
+}
+
+void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted)
+{
+	const auto answered = [this, &data, on_trusted = std::move(on_trusted)](trust_answer answer) {
+		const auto trust = m_trust.lock();
+		if (answer == trust_answer::trusted) {
+			// Always: the host retries every module the gate refused, those of a stored "Don't Trust" too.
+			load_waiting_modules(data, [this, &data, on_trusted] {
+				apply_live_consent(data);
+				if (on_trusted) on_trusted();
+			});
+			return;
+		}
+		m_trust_followups.drop();
+		if (trust && trust->waiting()) {
+			egLOG_WARN("editor/trust", "the project runs without its modules ({}): you did not trust it",
+				module_list(trust->waiting_modules()));
+		}
+		if (m_game_builder && m_game_builder->is_building()) {
+			m_game_builder->cancel();
+			egLOG_WARN("editor/trust", "the running build was cancelled: {}", k_untrusted_project_error);
+		}
+		if (trust && trust->allowed_any()) {
+			// A loaded library cannot be taken back safely while its objects live in the editor.
+			m_context->dialogs().message(message_level::info, "The project's modules that are already loaded keep "
+				"running until you restart the editor; from then on they are not loaded.");
+		}
+		if (m_live_mode && m_live_mode->enabled()) {
+			// Not stored: the person's switch comes back once they trust the project again.
+			static_cast<void>(m_live_mode->set_enabled(false, false));
+			egLOG_WARN("editor/trust", "live mode is off: {}", k_untrusted_project_error);
+		}
+	};
+	edt::ask_project_trust(m_context->dialogs(), m_trust, answered);
+}
+
+void edt::editor_system::load_waiting_modules(ds::app_data_storage& data, std::function<void()> then)
+{
+	// Kept here, not in the callback: register_implicit ignores the id while an earlier load still waits.
+	m_trust_followups.queue(std::move(then));
+	// Not inside the dialog's answer, nor under a level load, a migration or Play: the game layer changes with it.
+	editor_layer->register_implicit("edt/project_trust/load", [this, &data, logged = std::make_shared<std::string>()] {
+		std::string reason;
+		if (auto migrating = migration_blocker()) {
+			reason = *migrating;
+		} else if (auto loading = load_in_progress()) {
+			reason = *loading;
+		} else if (m_play && m_play->active()) {
+			reason = "Play runs";
+		}
+		if (!reason.empty()) {
+			if (*logged != reason) {
+				*logged = reason;
+				egLOG_INFO("editor/trust", "the project's modules load once this ends: {}", reason);
+			}
+			return true;
+		}
+		if (const auto trust = m_trust.lock()) trust->clear_waiting();
+		const core::project_modules_report report = data.has_value<core::project_module_host>()
+			? data.require<core::project_module_host>().load_waiting() : core::project_modules_report{};
+		if (!report.loaded.empty()) {
+			egLOG_INFO("editor/trust", "trusted modules loaded: {}", module_list(report.loaded));
+		}
+		if (!report.refused.empty() || !report.untrusted.empty() || !report.missing_required.empty()) {
+			egLOG_WARN("editor/trust", "modules not loaded after trust: refused {}; untrusted {}; missing {}",
+				module_list(report.refused), module_list(report.untrusted), module_list(report.missing_required));
+		}
+		m_trust_followups.loaded();
+		// A frame later: a build or live mode started now would run beside the layer change of this load.
+		editor_layer->register_implicit("edt/project_trust/after", [this] {
+			const auto trust = m_trust.lock();
+			m_trust_followups.run_ready(trust && trust->trusted());
+			return false;
+		});
+		return false;
+	});
+}
+
+void edt::editor_system::apply_live_consent(ds::app_data_storage& data)
+{
+	if (!m_live_mode || m_live_mode->enabled() || !data.has_value<prj::project_context>()) return;
+	const std::filesystem::path snk_dir = data.require<prj::project_context>().snk_dir();
+	const std::optional<std::string> project_key = canonical_project_settings_key(snk_dir.parent_path());
+	if (!project_key) return;
+	if (live_mode_at_open(load_build_settings(snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
 		if (auto refused = m_live_mode->set_enabled(true, false)) {
 			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
 		}
@@ -1686,6 +1841,11 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		draw_agent_status();
 		draw_play_status();
 		draw_save_notice();
+		if (const auto trust = m_trust.lock()) {
+			if (const auto held = held_modules_status(trust->held_modules())) {
+				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", held->c_str());
+			}
+		}
 		m_live_mode->draw_status();
 	});
 }
@@ -2034,8 +2194,30 @@ void edt::editor_system::wire_panel_callbacks()
 	});
 
 	m_inspector_panel->set_on_node_changed([this]() {
-		m_state.commit("Edit node");
+		route_node_changed(m_inspector_target, prefab_of(m_context->documents()), m_state);
 	});
+	// A level selection takes the Inspector back from the prefab window. Runs before wire_selection (wire_panel_callbacks comes
+	// first), so the pending edit is routed to the prefab before wire_selection hands the Inspector the level's node.
+	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
+		if (!sel.empty()) release_inspector_to_level();
+	}));
+	// The working copy was replaced (Revert, a reload, another prefab): the node pointer the Inspector holds is stale.
+	m_inspector_connections.push_back(m_context->events().document_changed.subscribe([this](document_id id, std::uint64_t) {
+		if (!m_inspector_target.is_prefab() || id != m_inspector_target.prefab()) return;
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab || prefab->id() != id) return;
+		if (prefab->working_replaced() == m_inspector_target.replaced()) return;
+		m_inspector_target.set_replaced(prefab->working_replaced());
+		scn::prefab_desc::prefab_node* node = prefab->working_node(m_inspector_target.path());
+		if (!node) {
+			release_inspector_to_level();
+			return;
+		}
+		m_inspector_panel->set_selected_node(node);
+	}));
+	m_inspector_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
+		if (m_inspector_target.is_prefab() && id == m_inspector_target.prefab()) release_inspector_to_level();
+	}));
 
 	m_viewport_panel->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
@@ -2503,6 +2685,26 @@ bool edt::editor_system::poll_pending_desc()
 
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
+void edt::editor_system::select_prefab_node(const std::vector<std::uint64_t>& path)
+{
+	prefab_document* prefab = prefab_of(m_context->documents());
+	if (!prefab) return;
+	// The level's selection ends first (its event would otherwise hand the Inspector back to the level).
+	m_context->selection().clear();
+	m_inspector_target.select_prefab(prefab->id(), path, prefab->working_replaced());
+	m_inspector_panel->set_selected_node(prefab->working_node(path));
+}
+
+void edt::editor_system::release_inspector_to_level()
+{
+	if (!m_inspector_target.is_prefab()) return;
+	// A drag or a typed value that has not committed yet belongs to the prefab: route it while the target still says so.
+	m_inspector_panel->flush_pending_commit();
+	m_inspector_target.reset();
+	m_inspector_panel->set_selected_node(nullptr);
+	m_prefab_panel->clear_selection();
+}
+
 edt::prefab_document* edt::editor_system::dirty_prefab()
 {
 	return dirty_prefab_of(m_context->documents());
@@ -2549,6 +2751,7 @@ void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 
 void edt::editor_system::open_prefab_now(const res::tag& tag)
 {
+	release_inspector_to_level();
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
 	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
 	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
@@ -2595,6 +2798,8 @@ bool edt::editor_system::person_is_editing() const
 
 void edt::editor_system::close_prefab_editor()
 {
+	// Before the document goes: the Inspector holds a pointer into its working copy.
+	release_inspector_to_level();
 	auto& documents = m_context->documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
 		documents.close(prefab->id());

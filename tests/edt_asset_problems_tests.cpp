@@ -372,6 +372,8 @@ BOOST_AUTO_TEST_CASE(the_lower_layer_holds_the_original_even_when_newer)
 	BOOST_REQUIRE(copy);
 	BOOST_TEST((copy->severity == edt::problem_severity::error));
 	BOOST_TEST(copy->message.find(res_path("two.png")) != std::string::npos);
+	BOOST_TEST(copy->message.find("of a lower layer, which keeps it") != std::string::npos);
+	BOOST_TEST(copy->message.find("references to it stay paths") != std::string::npos);
 	const auto actions = publisher.actions_of(*copy, *db);
 	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
 	BOOST_TEST(actions[0].label == "New ID for this copy");

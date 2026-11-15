@@ -123,6 +123,16 @@ std::vector<const cmd::command_desc*> cmd::command_registry::list() const
 	return out;
 }
 
+namespace
+{
+	cmd::call without_confirmation(const cmd::call& request)
+	{
+		cmd::call bare = request;
+		bare.confirmation.clear();
+		return bare;
+	}
+}
+
 cmd::result cmd::command_registry::invoke(std::string_view id, const call& request)
 {
 	ASSERT_MSG(on_main_thread(), "command_registry::invoke('{}'): main thread only, use main_thread_queue from other threads", id);
@@ -141,8 +151,10 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 	}
 	if (!request.args.is_object()) return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': expected an object", id));
 	// Before the schema: a call that is refused learns nothing about the arguments.
-	if (m_gate && request.from.kind == origin_kind::agent) {
-		if (std::optional<result> refused = apply_policy(command->desc, request)) return std::move(*refused);
+	bool confirmed = false;
+	const bool judged = m_gate && request.from.kind == origin_kind::agent;
+	if (judged) {
+		if (std::optional<result> refused = apply_policy(command->desc, request, confirmed)) return std::move(*refused);
 	}
 	if (m_agent_argument_check && request.from.kind == origin_kind::agent) {
 		if (std::optional<result> refused = m_agent_argument_check(command->desc, request)) return std::move(*refused);
@@ -150,7 +162,10 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 	if (auto problem = json_schema::validate(command->desc.args_schema, request.args))
 		return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': {}", id, *problem));
 
-	result outcome = command->desc.invoke(request);
+	// A ticket named by a call that did not spend it as an approved answer is the caller's word alone.
+	result outcome = judged && !confirmed && !request.confirmation.empty()
+		? command->desc.invoke(without_confirmation(request))
+		: command->desc.invoke(request);
 	// The caller may keep it (through a future) past the module that made it (#827).
 	ds::keep_in_default_resource(outcome.value);
 	if (outcome.ok) {
@@ -221,7 +236,8 @@ void cmd::command_registry::discard(std::string_view ticket)
 	std::erase_if(m_tickets, [ticket](const confirmation_ticket& t) { return t.id == ticket; });
 }
 
-std::optional<cmd::result> cmd::command_registry::apply_policy(const command_desc& command, const call& request)
+std::optional<cmd::result> cmd::command_registry::apply_policy(const command_desc& command, const call& request,
+	bool& confirmed)
 {
 	const auto denied = [&command](std::string why) {
 		return result::failure(codes::denied, std::format("'{}' was refused: {}", command.id, why));
@@ -237,15 +253,19 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 		if (!request.confirmation.empty()) {
 			const std::string args = boost::json::serialize(request.args);
 			std::erase_if(m_tickets, [&](const confirmation_ticket& t) {
-				return t.id == request.confirmation && t.command == command.id && t.args == args && t.session == request.from.session;
+				const bool own = t.id == request.confirmation && t.command == command.id && t.args == args
+					&& t.session == request.from.session;
+				confirmed = confirmed || (own && t.approved);
+				return own;
 			});
 		}
 		// A command that keeps what it described (project.migrate) is described here too when it runs without a question (an
-		// answer given in advance). Invalid arguments are left to the schema check that follows.
-		if (command.describe_before_allowed_invoke && command.risk != danger::none && command.describe && request.confirmation.empty()
+		// answer given in advance), also when the call names a ticket it did not spend as an approved answer.
+		// Invalid arguments are left to the schema check that follows.
+		if (command.describe_before_allowed_invoke && command.risk != danger::none && command.describe && !confirmed
 			&& !json_schema::validate(command.args_schema, request.args)) {
 			try {
-				static_cast<void>(command.describe(request));
+				static_cast<void>(command.describe(without_confirmation(request)));
 			} catch (const std::exception& e) {
 				egLOG_WARN("command", "the description of a call of '{}' could not be made ({}): it is refused", command.id, e.what());
 				return denied("what it would do could not be told");
@@ -270,6 +290,7 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 		}
 		if (!found->approved) return denied("the confirmation was not given");
 		m_tickets.erase(found);
+		confirmed = true;
 		return std::nullopt;
 	}
 
@@ -291,7 +312,14 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 	const auto same = std::find_if(m_tickets.begin(), m_tickets.end(), [&](const confirmation_ticket& t) {
 		return t.command == command.id && t.args == args && t.session == request.from.session;
 	});
-	if (same != m_tickets.end()) return describe(*same);
+	if (same != m_tickets.end()) {
+		// The policy may have changed since it was asked: the question waiting asks for what is missing now.
+		if (!same->approved) {
+			same->reason = decision.reason;
+			same->category = decision.category != agent_category::unset ? decision.category : command.category;
+		}
+		return describe(*same);
+	}
 
 	const auto of_session = std::count_if(m_tickets.begin(), m_tickets.end(),
 		[&request](const confirmation_ticket& t) { return t.session == request.from.session; });

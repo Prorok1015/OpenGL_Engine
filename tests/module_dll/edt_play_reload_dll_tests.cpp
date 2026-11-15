@@ -187,7 +187,7 @@ struct dll_play_fixture : test_util::module_env
 		if (before) level_ctrl.detach_from_game_layer();
 		else level_ctrl.attach_to_game_layer();
 	} };
-	core::project_module_host host{ loader, root, core::project_modules_options{} };
+	core::project_module_host host{ loader, root, test_util::trusting_options() };
 };
 
 }

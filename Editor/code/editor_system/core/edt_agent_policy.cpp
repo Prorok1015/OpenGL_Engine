@@ -1273,6 +1273,13 @@ namespace edt
 		return save(m_personal, layer, write);
 	}
 
+	// A call's category that is a narrower case of its command's: the same action on a file that asks more.
+	static bool narrows(cmd::agent_category command, cmd::agent_category call)
+	{
+		using enum cmd::agent_category;
+		return call == cmake_presets && (command == code_edit || command == code_files);
+	}
+
 	cmd::policy_decision agent_policy_gate::decide(const cmd::command_desc& command, const cmd::call& request)
 	{
 		// The command's own category and its call's (code.write to a CMake file: cmake_presets); the stricter decides, so
@@ -1284,14 +1291,24 @@ namespace edt
 		switch (decision.mode) {
 		case cmd::policy_mode::allow: return cmd::policy_decision::allow();
 		case cmd::policy_mode::ask: {
-			// The grant has to be for the category that asks; when both ask, the call's (the narrower one) covers it.
-			const cmd::agent_category asking = by_call.mode == cmd::policy_mode::ask ? of_call : command.category;
+			// The grant has to be for the category that asks. When both ask, the call's covers the command's only where
+			// it narrows it (a CMake file of a code edit); a call that is also another kind of action (a checkout that
+			// changes code/, #931) needs a grant of each.
+			cmd::agent_category asking = by_call.mode == cmd::policy_mode::ask ? of_call : command.category;
+			const bool both_ask = by_call.mode == cmd::policy_mode::ask && by_command.mode == cmd::policy_mode::ask
+				&& of_call != command.category && !narrows(command.category, of_call);
+			const auto granted = [&](cmd::agent_category category) {
+				return m_grants != nullptr && !request.from.session.empty()
+					&& m_grants->has(request.from.session, category);
+			};
 			// A grant given for a harmless call of the category must not carry a call that sends or destroys something:
 			// a command with a risk is asked every time.
-			if (command.risk == cmd::danger::none && m_grants != nullptr && !request.from.session.empty()
-				&& m_grants->has(request.from.session, asking)) {
+			if (command.risk == cmd::danger::none && granted(asking) && (!both_ask || granted(command.category))) {
 				return cmd::policy_decision::allow();
 			}
+			// The call's category is granted already: the question is for the command's, so "allow for this session"
+			// grants what is still missing.
+			if (both_ask && granted(asking)) asking = command.category;
 			return cmd::policy_decision::ask(command.summary, asking);
 		}
 		case cmd::policy_mode::deny: return cmd::policy_decision::deny(decision.reason);

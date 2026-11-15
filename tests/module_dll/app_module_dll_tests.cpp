@@ -3,6 +3,8 @@
 #include "../test_temp_dir.hpp"
 #include "test_dll_project.hpp"
 #include "test_game_dll_api.h"
+#include "edt_data_protocol.h"
+#include "edt_project_trust_service.h"
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/core/core_project_modules.h>
@@ -13,6 +15,7 @@
 #include <snk/ecs/ecs_component.h>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
+#include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_context.h>
@@ -64,7 +67,7 @@ const std::filesystem::path g_no_layout_path{ SNK_TEST_GAME_DLL_NO_LAYOUT_PATH }
 // The editor's options (#614): the engine's layout key is checked.
 core::project_modules_options checked_layouts()
 {
-	core::project_modules_options options;
+	core::project_modules_options options = test_util::trusting_options();
 	options.layout_key = gs::engine_module_layout_key();
 	return options;
 }
@@ -114,6 +117,8 @@ bool test_util::resident(const std::filesystem::path& file)
 {
 	std::error_code ec;
 	const std::filesystem::path path = std::filesystem::canonical(file, ec);
+	// dlopen("") is the main program: a file that is not there is never resident.
+	if (ec || path.empty()) return false;
 #if defined(_WIN32)
 	return ::GetModuleHandleW(path.c_str()) != nullptr;
 #else
@@ -636,7 +641,7 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	project.data.modules.back().name = std::string{ dll_game::module_name };
 	root.construct<prj::project_context>(std::move(project));
 
-	const auto report = core::load_project_modules(loader, root, core::project_modules_options{});
+	const auto report = core::load_project_modules(loader, root, test_util::trusting_options());
 	BOOST_TEST(report.loaded == std::vector<std::string>{ std::string{ dll_game::module_name } });
 	auto* layer = contexts().game_layer();
 	BOOST_REQUIRE(layer != nullptr);
@@ -658,6 +663,45 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	root.destruct<prj::project_context>();
 }
 
+// #921 review: a project the person refused runs without its module; "Trust" later loads it, without a restart.
+BOOST_AUTO_TEST_CASE(a_refused_project_loads_its_module_once_the_person_trusts_it)
+{
+	test_util::temp_dir settings("dll_trust_settings");
+	std::filesystem::create_directories(settings.path() / "data");
+	BOOST_REQUIRE(edt::register_data_protocol(*rs, settings.path() / "data", settings.path() / "user"));
+	// The vfs is let go of before the folder it reads goes.
+	struct unmount {
+		res::resource_system& res;
+		~unmount() { res.unregistrate_resolver(edt::DATA_PROTOCOL); }
+	} unmounted{ *rs };
+	BOOST_REQUIRE(!edt::store_trust_answer(*rs, "project", edt::trust_answer::refused));
+
+	{
+		dll_project project("dll_trust_changed", root);
+		project.build(g_module_path);
+		auto trust = std::make_shared<edt::project_trust_service>(*rs, std::string("project"));
+		core::project_modules_options options = checked_layouts();
+		options.trust_library = [trust](std::string_view name, const std::filesystem::path& copy) {
+			return trust->allow_library(name, copy);
+		};
+		core::project_module_host host(loader, root, options);
+		const auto refused = host.load_all();
+		BOOST_TEST(refused.loaded.empty());
+		BOOST_TEST(refused.untrusted == std::vector<std::string>{ std::string{ dll_game::module_name } });
+		// A stored answer is not asked again: nothing waits for the question.
+		BOOST_TEST(!trust->waiting());
+
+		trust->answer(edt::trust_answer::trusted);
+		const auto loaded = host.load_waiting();
+		BOOST_TEST(loaded.loaded == std::vector<std::string>{ std::string{ dll_game::module_name } });
+		BOOST_TEST(loaded.untrusted.empty());
+		BOOST_TEST(moved_value(*this) == 3);
+		loader.unload(dll_game::module_name, root);
+		root.destruct<prj::project_context>();
+	}
+	BOOST_CHECK(edt::read_project_trust(*rs, "project").answer == edt::trust_answer::trusted);
+}
+
 BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its_copy_removed)
 {
 	namespace fs = std::filesystem;
@@ -677,7 +721,7 @@ BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its
 	root.construct<prj::project_context>(std::move(project));
 
 	const std::size_t root_size = root.size();
-	const auto report = core::load_project_modules(loader, root, core::project_modules_options{});
+	const auto report = core::load_project_modules(loader, root, test_util::trusting_options());
 	BOOST_TEST(report.refused == std::vector<std::string>{ "other_game" });
 	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
 	BOOST_TEST(root.size() == root_size);
@@ -692,7 +736,7 @@ BOOST_AUTO_TEST_CASE(a_project_module_reloads_from_a_new_build_and_keeps_the_pre
 	namespace fs = std::filesystem;
 	dll_project project("dll_reload", root);
 	project.build(g_module_path);
-	core::project_module_host host(loader, root, core::project_modules_options{});
+	core::project_module_host host(loader, root, test_util::trusting_options());
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 	BOOST_TEST(moved_value(*this) == 3);
 	BOOST_TEST(host.is_current(std::string{ dll_game::module_name }));
@@ -735,7 +779,7 @@ BOOST_AUTO_TEST_CASE(a_revert_runs_the_previous_copy_again_and_the_build_taken_b
 	namespace fs = std::filesystem;
 	dll_project project("dll_revert", root);
 	project.build(g_module_path);
-	core::project_module_host host(loader, root, core::project_modules_options{});
+	core::project_module_host host(loader, root, test_util::trusting_options());
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 	project.rebuild(g_v2_path);
 	const auto reloaded = host.reload(std::string{ dll_game::module_name });
@@ -778,7 +822,7 @@ BOOST_AUTO_TEST_CASE(a_revert_whose_previous_copy_fails_leaves_no_current_copy)
 {
 	dll_project project("dll_revert_lost", root);
 	project.build(g_module_path);
-	core::project_module_host host(loader, root, core::project_modules_options{});
+	core::project_module_host host(loader, root, test_util::trusting_options());
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 	project.rebuild(g_v2_path);
 	BOOST_REQUIRE((host.reload(std::string{ dll_game::module_name }).status == core::reload_status::reloaded));
@@ -804,7 +848,7 @@ BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_module_st
 {
 	dll_project project("dll_reload_bad_api", root);
 	project.build(g_module_path);
-	core::project_module_host host(loader, root, core::project_modules_options{});
+	core::project_module_host host(loader, root, test_util::trusting_options());
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 
 	project.build(g_bad_api_path);
@@ -862,7 +906,7 @@ BOOST_AUTO_TEST_CASE(a_library_without_a_layout_key_is_refused_when_opened)
 
 	dll_project project("dll_no_layout_load", root);
 	project.build(g_no_layout_path);
-	core::project_module_host host(loader, root, core::project_modules_options{});
+	core::project_module_host host(loader, root, test_util::trusting_options());
 	const auto report = host.load_all();
 	BOOST_TEST(report.loaded.empty());
 	BOOST_TEST(report.refused == std::vector<std::string>{ std::string{ dll_game::module_name } });
@@ -937,7 +981,7 @@ BOOST_AUTO_TEST_CASE(a_build_that_fails_to_register_rolls_back_to_the_previous_c
 {
 	dll_project project("dll_reload_failing", root);
 	project.build(g_module_path);
-	core::project_module_host host(loader, root, core::project_modules_options{});
+	core::project_module_host host(loader, root, test_util::trusting_options());
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 
 	project.build(g_failing_path);
@@ -948,6 +992,87 @@ BOOST_AUTO_TEST_CASE(a_build_that_fails_to_register_rolls_back_to_the_previous_c
 	// The previous copy runs again: the failing build is still the newer one in build/bin.
 	std::filesystem::last_write_time(project.built, std::filesystem::last_write_time(project.built) + std::chrono::hours(1));
 	BOOST_TEST(!host.is_current(std::string{ dll_game::module_name }));
+	BOOST_TEST(resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
+	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// #921: a host that does not say the project is trusted runs none of its code.
+BOOST_AUTO_TEST_CASE(without_a_trust_gate_the_project_library_is_not_loaded)
+{
+	dll_project project("dll_no_gate", root);
+	project.build(g_module_path);
+	const auto report = core::load_project_modules(loader, root, core::project_modules_options{});
+
+	BOOST_TEST(report.loaded.empty());
+	BOOST_TEST(report.untrusted == std::vector<std::string>{ std::string{ dll_game::module_name } });
+	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
+	BOOST_TEST(!resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(0)));
+	root.destruct<prj::project_context>();
+}
+
+BOOST_AUTO_TEST_CASE(an_untrusted_project_module_waits_and_load_waiting_runs_it_once_trusted)
+{
+	dll_project project("dll_untrusted", root);
+	project.build(g_module_path);
+	bool trust = false;
+	std::string asked_name;
+	std::filesystem::path asked_copy;
+	auto options = checked_layouts();
+	options.trust_library = [&](std::string_view name, const std::filesystem::path& copy) {
+		asked_name = name;
+		asked_copy = copy;
+		return trust;
+	};
+	core::project_module_host host(loader, root, options);
+	const auto report = host.load_all();
+
+	BOOST_TEST(report.loaded.empty());
+	BOOST_TEST(report.untrusted == std::vector<std::string>{ std::string{ dll_game::module_name } });
+	BOOST_TEST(asked_name == dll_game::module_name);
+	// The copy, not the build output: what is checked is what would be loaded.
+	BOOST_TEST(asked_copy == project.copy(0));
+	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
+	BOOST_TEST(!resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(0)));
+
+	trust = true;
+	const auto waiting = host.load_waiting();
+
+	BOOST_TEST(waiting.loaded == std::vector<std::string>{ std::string{ dll_game::module_name } });
+	BOOST_TEST(waiting.untrusted.empty());
+	BOOST_TEST(resident(asked_copy));
+	BOOST_TEST(moved_value(*this) == 3);
+	BOOST_TEST(host.load_waiting().loaded.empty()); // nothing waits any more
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// Trust taken back while the module runs: its new build is refused before the running one is touched.
+BOOST_AUTO_TEST_CASE(a_reload_of_an_untrusted_build_is_refused_and_the_running_module_stays)
+{
+	dll_project project("dll_untrusted_reload", root);
+	project.build(g_module_path);
+	bool trust = true;
+	auto options = checked_layouts();
+	options.trust_library = [&](std::string_view, const std::filesystem::path&) { return trust; };
+	core::project_module_host host(loader, root, options);
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	trust = false;
+	project.rebuild(g_v2_path);
+	int hooks_called = 0;
+	core::reload_hooks hooks;
+	hooks.before_swap = [&] { ++hooks_called; };
+	hooks.after_swap = [&](const core::reload_report&) { ++hooks_called; };
+	const auto report = host.reload(std::string{ dll_game::module_name }, hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("not trusted") != std::string::npos, report.message);
+	BOOST_TEST(hooks_called == 0);
 	BOOST_TEST(resident(project.copy(0)));
 	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
 	BOOST_TEST(moved_value(*this) == 3);
