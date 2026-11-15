@@ -20,6 +20,12 @@
 #include <string>
 #include <vector>
 
+namespace edt::vcs_detail
+{
+	// What a job needs to run git; defined in the .cpp.
+	struct git_context;
+}
+
 namespace edt
 {
 	// vcs.log's filters besides ref and path. At namespace scope: GCC cannot use a nested class with default member
@@ -31,6 +37,19 @@ namespace edt
 		// Literal, without case; empty: none.
 		std::string author;
 		std::string grep;
+	};
+
+	// What an agent's checkout or pull may change in the open project's code/ with live mode off (#931): its
+	// arguments code_changes / cmake_changes, which the agent policy asks for as code_edit / cmake_presets. At
+	// namespace scope for the same reason as vcs_log_filter.
+	struct vcs_code_consent
+	{
+		bool code = false;
+		// CMake files of code/ too; implies `code`.
+		bool cmake = false;
+		// A person was asked about this very call (it carries the approved ticket): it may change code/ only toward
+		// the target describe_checkout / describe_pull showed. Without it the policy allowed the category outright.
+		bool asked = false;
 	};
 
 	struct vcs_options
@@ -220,11 +239,15 @@ namespace edt
 		started start_commit(const std::string& message, const cmd::origin& caller);
 		// `from` empty: HEAD.
 		started start_branch_create(const std::string& name, const std::string& from, const cmd::origin& caller);
-		started start_checkout(const std::string& ref, const cmd::origin& caller);
+		// `consent`: what of code/ an agent's call may change (#931).
+		started start_checkout(const std::string& ref, const cmd::origin& caller, vcs_code_consent consent = {});
 		// `remote` empty: git's default (the branch's remote, else origin).
 		started start_fetch(const std::string& remote, const cmd::origin& caller);
 		// `branch` needs a `remote`.
-		started start_pull(const std::string& remote, const std::string& branch, const cmd::origin& caller);
+		// `consent` as for start_checkout, with describe_pull: the target is what the remote-tracking branch is now, so
+		// a fetch that moves it refuses the pull (vcs.fetch first, then the question).
+		started start_pull(const std::string& remote, const std::string& branch, const cmd::origin& caller,
+			vcs_code_consent consent = {});
 		started start_push(const std::string& remote, const std::string& branch, bool set_upstream, const cmd::origin& caller);
 
 		// The same, by kind only (no agent session).
@@ -321,6 +344,15 @@ namespace edt
 		remote_snapshot read_remote_now(const std::string& named, bool person = false);
 		inline static constexpr const char* k_describe_timeout = "describe_timeout";
 
+		// What a person is told when an agent's checkout or pull with a vcs_code_consent is asked (#931): the target
+		// commit and the files of code/ it changes. The target is remembered for that call (by the caller's session and
+		// the arguments) and start_checkout / start_pull take it: one it does not match is refused. On the main thread,
+		// git stopped after vcs_options::describe_timeout. Nullopt for a person's call.
+		std::optional<std::string> describe_checkout(const std::string& ref, const cmd::origin& caller,
+			vcs_code_consent consent);
+		std::optional<std::string> describe_pull(const std::string& remote, const std::string& branch,
+			const cmd::origin& caller, vcs_code_consent consent);
+
 		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's
 		// (ui) means the protected read. The work may throw ds::task_cancelled.
 		using reader_work = std::function<boost::json::value(const repository_reader&, ds::task_context&)>;
@@ -367,6 +399,17 @@ namespace edt
 		started run_job(std::string label, F work, std::optional<write_mode> write = std::nullopt, const hard_rule& rule = {},
 			cmd::origin_kind reader = cmd::origin_kind::agent);
 		vcs_policy current_policy() const;
+		// Runs `work` on this thread with a stop token that a watchdog requests after vcs_options::describe_timeout;
+		// false when it did (work threw ds::task_cancelled).
+		bool run_bounded_now(const std::function<void(std::stop_token)>& work) const;
+		// The commit a describe asks about; "" with the error set when there is none.
+		using target_resolver =
+			std::function<std::string(const vcs_detail::git_context&, std::string&, std::stop_token)>;
+		std::optional<std::string> describe_code_target(std::string key, std::string what, vcs_code_consent consent,
+			const target_resolver& resolve);
+		void remember_described(std::string key, std::string target);
+		// The target described for `key`, once; "" when none was (or it expired).
+		std::string take_described(const std::string& key);
 
 		job_service& m_jobs;
 		vcs_options m_options;
@@ -388,6 +431,14 @@ namespace edt
 		std::shared_ptr<std::atomic<int>> m_running_writes = std::make_shared<std::atomic<int>>(0);
 		// 1: the state the constructor set; every probe adds one.
 		std::uint64_t m_state_generation = 1;
+		struct described_target
+		{
+			std::string key;
+			// A commit OID; "refused" when it could not be told.
+			std::string target;
+			std::chrono::steady_clock::time_point at;
+		};
+		std::vector<described_target> m_described;
 		// Last: its jobs are stopped before the rest goes.
 		ds::lifetime m_life{ ds::lifetime_option::cancel_on_destroy };
 	};
@@ -406,9 +457,10 @@ namespace edt
 	// Writes (mutates; agent categories vcs_commit, vcs_branch, vcs_sync, vcs_push; reads are vcs_read):
 	// vcs.stage {paths} / vcs.unstage {paths} -> {job}; result {output}
 	// vcs.commit {message} -> {job}; result {hash}
-	// vcs.branch.create {name, from?} / vcs.checkout {ref} -> {job}; result {output}
-	// vcs.fetch {remote?} / vcs.pull {remote?, branch?} -> {job}; result {output} (pull = fetch, then
-	//     merge --ff-only FETCH_HEAD)
+	// vcs.branch.create {name, from?} / vcs.checkout {ref, code_changes?, cmake_changes?} -> {job}; result {output}
+	// vcs.fetch {remote?} / vcs.pull {remote?, branch?, code_changes?, cmake_changes?} -> {job}; result {output}
+	//     (pull = fetch, then merge --ff-only FETCH_HEAD); code_changes / cmake_changes: an agent's call may change the
+	//     project's code/ / its CMake files too, asked as code_edit / cmake_presets (#931)
 	// vcs.push {remote, branch, set_upstream?} -> {job}; result {output} (no force: a branch +x, -x or a:b is invalid_args)
 	// `output` is git's last lines (at most 20, 4 KiB).
 	// A git failure ends the job `done` with result {error: {code, message, stderr_tail, exit_code}}: code from

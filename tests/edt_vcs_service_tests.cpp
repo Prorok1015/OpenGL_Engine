@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_vcs_service.h"
 #include "edt_path_text.h"
+#include "edt_agent_confirmations.h"
 #include "edt_agent_policy.h"
 #include "edt_git_panel_model.h"
 #include "edt_repository_watcher.h"
@@ -2832,8 +2833,9 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfAProjectInASubfolder_IsDeniedOnlyForItsP
 }
 
 // #909: an agent's checkout must not bring in what decides the code that is built and loaded: the project's .snk/,
-// its manifest, build/ (in any letter case where the file system ignores it) and, while live mode is on, code/. A
-// change elsewhere, or outside the project, goes through; so does a person's checkout.
+// its manifest, build/ (in any letter case where the file system ignores it) and, while live mode is on, code/ (with
+// it off, code/ needs the call's consent: #931). A change elsewhere, or outside the project, goes through; so does a
+// person's checkout.
 BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesTheProjectsBuildInputs_IsDenied)
 {
 	isolate_config();
@@ -2879,16 +2881,19 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesTheProjectsBuildInputs_IsDenied
 	BOOST_TEST(text(with_message.as_object().at("error").as_object().at("message")).find("game/.snk/build.json")
 		!= std::string::npos);
 
-	for (const char* branch : { "res", "outside", "code" }) {
+	for (const char* branch : { "res", "outside" }) {
 		BOOST_TEST_CONTEXT(branch) {
 			const json::value allowed = finish(service->start_checkout(branch, cmd::origin_kind::agent));
 			BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
 			BOOST_TEST(!finish(service->start_checkout("main", cmd::origin_kind::agent)).as_object().contains("error"));
 		}
 	}
+	BOOST_TEST(is_error(finish(service->start_checkout("code", cmd::origin_kind::agent)), "denied"));
+	BOOST_TEST(head_of(repo) == main_head);
 
 	live = true;
-	const json::value code_live = finish(service->start_checkout("code", cmd::origin_kind::agent));
+	const json::value code_live = finish(service->start_checkout("code", cmd::origin::agent("s"),
+		edt::vcs_code_consent{ true, true, false }));
 	BOOST_TEST(is_error(code_live, "denied"), json::serialize(code_live));
 	BOOST_TEST(head_of(repo) == main_head);
 
@@ -2975,6 +2980,224 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDen
 	BOOST_TEST(is_error(unborn, "denied"), json::serialize(unborn));
 	BOOST_TEST(text(unborn.as_object().at("error").as_object().at("message")).find("game/project.snkproj")
 		!= std::string::npos);
+}
+
+// #931: with live mode off an agent's checkout brings in code/ only when the call says it may (code_changes), and CMake
+// files only with cmake_changes; .snk/ and the rest stay refused whatever it says, and so does code/ while live mode
+// is on.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfCode_NeedsTheCallsConsent_AndCMakeFilesTheirOwn)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("code_consent");
+	const fs::path project = repo / "game";
+	write(project / "project.snkproj", "{}\n");
+	write(project / "code" / "src" / "a.cpp", "int a;\n");
+	write(project / "code" / "CMakeLists.txt", "project(game)\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project" });
+	const std::string main_head = head_of(repo);
+	const auto branch_with = [&](const std::string& branch, std::initializer_list<std::string> files) {
+		git(repo, { "checkout", "-q", "-b", branch, "main" });
+		for (const auto& file : files) write(repo / path_of(file), "changed\n");
+		git(repo, { "add", "-A" });
+		git(repo, { "commit", "-q", "-m", "change " + branch });
+		git(repo, { "checkout", "-q", "main" });
+	};
+	branch_with("code", { "game/code/src/a.cpp" });
+	branch_with("cmake", { "game/code/src/a.cpp", "game/code/CMakeLists.txt" });
+	branch_with("presets", { "game/code/CMakePresets.json" });
+	branch_with("code_and_snk", { "game/code/src/a.cpp", "game/.snk/build.json" });
+
+	bool live = false;
+	edt::vcs_options options = real_options(project);
+	options.live_mode_on = [&live] { return live; };
+	make_service(std::move(options));
+	const cmd::origin agent = cmd::origin::agent("s");
+	const edt::vcs_code_consent none{};
+	const edt::vcs_code_consent code{ true, false, false };
+	const edt::vcs_code_consent cmake{ true, true, false };
+	const auto checkout = [&](const std::string& ref, edt::vcs_code_consent consent) {
+		return finish(service->start_checkout(ref, agent, consent));
+	};
+	const auto message_of = [](const json::value& result) {
+		return text(result.as_object().at("error").as_object().at("message"));
+	};
+	const auto back_to_main = [&] {
+		BOOST_TEST(!finish(service->start_checkout("main", cmd::origin_kind::ui)).as_object().contains("error"));
+		BOOST_TEST(head_of(repo) == main_head);
+	};
+
+	const json::value without = checkout("code", none);
+	BOOST_TEST(is_error(without, "denied"), json::serialize(without));
+	BOOST_TEST(message_of(without).find("game/code/src/a.cpp") != std::string::npos, message_of(without));
+	BOOST_TEST(message_of(without).find("code_changes") != std::string::npos, message_of(without));
+	BOOST_TEST(head_of(repo) == main_head);
+
+	BOOST_TEST(!checkout("code", code).as_object().contains("error"));
+	BOOST_TEST(head_of(repo) != main_head);
+	back_to_main();
+
+	for (const char* branch : { "cmake", "presets" }) {
+		BOOST_TEST_CONTEXT(branch) {
+			for (const edt::vcs_code_consent consent : { none, code }) {
+				const json::value refused = checkout(branch, consent);
+				BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+				BOOST_TEST(message_of(refused).find("cmake_changes") != std::string::npos, message_of(refused));
+				BOOST_TEST(head_of(repo) == main_head);
+			}
+			BOOST_TEST(!checkout(branch, cmake).as_object().contains("error"));
+			back_to_main();
+		}
+	}
+
+	const json::value with_snk = checkout("code_and_snk", cmake);
+	BOOST_TEST(is_error(with_snk, "denied"), json::serialize(with_snk));
+	BOOST_TEST(message_of(with_snk).find("game/.snk/build.json") != std::string::npos, message_of(with_snk));
+	BOOST_TEST(head_of(repo) == main_head);
+
+	live = true;
+	BOOST_TEST(is_error(checkout("code", cmake), "denied"));
+	BOOST_TEST(head_of(repo) == main_head);
+}
+
+// #931: a call a person was asked about (it carries the approved ticket) checks out only the commit the question
+// named, for the session and the arguments it was asked with, and once.
+BOOST_AUTO_TEST_CASE(AnAskedCheckoutOfCode_TakesOnlyTheCommitThePersonWasShown)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("code_asked");
+	const fs::path project = repo / "game";
+	write(project / "project.snkproj", "{}\n");
+	write(project / "code" / "src" / "a.cpp", "int a;\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project" });
+	const std::string main_head = head_of(repo);
+	const auto commit_on_code = [&](const std::string& content) {
+		git(repo, { "checkout", "-q", "-B", "code", main_head });
+		write(project / "code" / "src" / "a.cpp", content);
+		git(repo, { "add", "-A" });
+		git(repo, { "commit", "-q", "-m", "change a.cpp" });
+		const std::string oid = head_of(repo);
+		git(repo, { "checkout", "-q", "main" });
+		return oid;
+	};
+	const std::string shown_oid = commit_on_code("int b;\n");
+	make_service(real_options(project));
+	const cmd::origin agent = cmd::origin::agent("s1");
+	const edt::vcs_code_consent code{ true, false, false };
+	const edt::vcs_code_consent asked{ true, false, true };
+	const auto back_to_main = [&] {
+		BOOST_TEST(!finish(service->start_checkout("main", cmd::origin_kind::ui)).as_object().contains("error"));
+		BOOST_TEST(head_of(repo) == main_head);
+	};
+
+	const json::value not_shown = finish(service->start_checkout("code", agent, asked));
+	BOOST_TEST(is_error(not_shown, "denied"), json::serialize(not_shown));
+	BOOST_TEST(head_of(repo) == main_head);
+
+	const std::optional<std::string> told = service->describe_checkout("code", agent, code);
+	BOOST_REQUIRE(told.has_value());
+	BOOST_TEST(told->find(shown_oid) != std::string::npos, *told);
+	BOOST_TEST(told->find("game/code/src/a.cpp") != std::string::npos, *told);
+	BOOST_TEST(!finish(service->start_checkout("code", agent, asked)).as_object().contains("error"));
+	BOOST_TEST(head_of(repo) == shown_oid);
+	back_to_main();
+
+	// Taken once: the next asked call needs its own question.
+	BOOST_TEST(is_error(finish(service->start_checkout("code", agent, asked)), "denied"));
+	BOOST_TEST(head_of(repo) == main_head);
+
+	// The branch moved after the question.
+	BOOST_REQUIRE(service->describe_checkout("code", agent, code).has_value());
+	const std::string moved = commit_on_code("int c;\n");
+	BOOST_REQUIRE(moved != shown_oid);
+	const json::value after_move = finish(service->start_checkout("code", agent, asked));
+	BOOST_TEST(is_error(after_move, "denied"), json::serialize(after_move));
+	BOOST_TEST(head_of(repo) == main_head);
+
+	// Asked in another session, or with other flags.
+	BOOST_REQUIRE(service->describe_checkout("code", cmd::origin::agent("s2"), code).has_value());
+	BOOST_TEST(is_error(finish(service->start_checkout("code", agent, asked)), "denied"));
+	BOOST_REQUIRE(service->describe_checkout("code", agent, edt::vcs_code_consent{ true, true, false }).has_value());
+	BOOST_TEST(is_error(finish(service->start_checkout("code", agent, asked)), "denied"));
+	BOOST_TEST(head_of(repo) == main_head);
+
+	// A person's own call describes nothing.
+	BOOST_TEST(!service->describe_checkout("code", cmd::origin::ui(), code).has_value());
+}
+
+// #931, the lead's case: an agent session granted code_edit may check out code/ without a question, never CMake files;
+// cmake_changes asks a person, whose answer runs exactly the commit described.
+BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_ACodeEditGrant_NeverCoversCMakeFiles)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("code_gate");
+	const fs::path project = repo / "game";
+	write(project / "project.snkproj", "{}\n");
+	write(project / "code" / "src" / "a.cpp", "int a;\n");
+	write(project / "code" / "CMakeLists.txt", "project(game)\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project" });
+	const std::string main_head = head_of(repo);
+	const auto branch_with = [&](const std::string& branch, const std::string& file) {
+		git(repo, { "checkout", "-q", "-b", branch, "main" });
+		write(repo / path_of(file), "changed\n");
+		git(repo, { "add", "-A" });
+		git(repo, { "commit", "-q", "-m", "change " + file });
+		git(repo, { "checkout", "-q", "main" });
+	};
+	branch_with("code", "game/code/src/a.cpp");
+	branch_with("cmake", "game/code/CMakeLists.txt");
+	make_service(real_options(project));
+
+	edt::agent_policy policy{ base / "policy" / ".snk" / "agent_policy.json", base / "policy" / "personal.json" };
+	edt::session_grants grants;
+	grants.add("s1", cmd::agent_category::code_edit);
+	auto gate = std::make_shared<edt::agent_policy_gate>(policy);
+	gate->set_can_ask(true);
+	gate->set_session_grants(&grants);
+	commands.set_policy_gate(gate);
+	registrations = edt::register_vcs_commands(commands, *service);
+	const cmd::origin agent = cmd::origin::agent("s1");
+	const auto job_of = [this](const cmd::result& started) {
+		BOOST_REQUIRE_MESSAGE(started.ok, started.code + ": " + started.error);
+		return finish(static_cast<edt::job_service::job_id>(started.value.as_object().at("job").as_int64()));
+	};
+	const auto back_to_main = [&] {
+		BOOST_TEST(!finish(service->start_checkout("main", cmd::origin_kind::ui)).as_object().contains("error"));
+		BOOST_TEST(head_of(repo) == main_head);
+	};
+
+	const json::value plain = job_of(commands.invoke("vcs.checkout", json::object{ { "ref", "code" } }, agent));
+	BOOST_TEST(is_error(plain, "denied"), json::serialize(plain));
+
+	const json::value granted = job_of(commands.invoke("vcs.checkout",
+		json::object{ { "ref", "code" }, { "code_changes", true } }, agent));
+	BOOST_TEST(!granted.as_object().contains("error"), json::serialize(granted));
+	back_to_main();
+
+	const json::value cmake_by_grant = job_of(commands.invoke("vcs.checkout",
+		json::object{ { "ref", "cmake" }, { "code_changes", true } }, agent));
+	BOOST_TEST(is_error(cmake_by_grant, "denied"), json::serialize(cmake_by_grant));
+	BOOST_TEST(text(cmake_by_grant.as_object().at("error").as_object().at("message")).find("cmake_changes")
+		!= std::string::npos);
+	BOOST_TEST(head_of(repo) == main_head);
+
+	const json::value cmake_args = json::object{ { "ref", "cmake" }, { "cmake_changes", true } };
+	const cmd::result question = commands.invoke("vcs.checkout", cmake_args, agent);
+	BOOST_REQUIRE_MESSAGE(question.code == cmd::codes::confirmation_required, question.code + ": " + question.error);
+	const std::string ticket = text(question.value.as_object().at("ticket"));
+	const auto pending = commands.confirmation_of(ticket);
+	BOOST_REQUIRE(pending.has_value());
+	BOOST_TEST(pending->category == cmd::agent_category::cmake_presets);
+	BOOST_TEST(pending->detail.find("game/code/CMakeLists.txt") != std::string::npos, pending->detail);
+	BOOST_REQUIRE(commands.approve(ticket));
+	const json::value approved = job_of(commands.invoke("vcs.checkout", cmd::call{ cmake_args, agent, 0, ticket }));
+	BOOST_TEST(!approved.as_object().contains("error"), json::serialize(approved));
+	BOOST_TEST(head_of(repo) != main_head);
+	back_to_main();
+
+	commands.set_policy_gate(nullptr);
 }
 
 // Security review of #481: with no remote named, the remote checked is the one git would use (the branch's), and
@@ -4804,11 +5027,40 @@ BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheProjectsBuildInputs_IsDenied)
 
 	changed = "code/src/a.cpp";
 	live = true;
-	BOOST_TEST(is_error(pull(), "denied"));
+	const edt::vcs_code_consent code{ true, false, false };
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin::agent("s"), code)), "denied"));
 	BOOST_TEST(!merged());
 	live = false;
-	const json::value allowed = pull();
+	const json::value without_consent = pull();
+	BOOST_TEST(is_error(without_consent, "denied"), json::serialize(without_consent));
+	BOOST_TEST(text(without_consent.as_object().at("error").as_object().at("message")).find("code_changes")
+		!= std::string::npos);
+	BOOST_TEST(!merged());
+	const json::value allowed = finish(service->start_pull({}, {}, cmd::origin::agent("s"), code));
 	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST(merged());
+
+	// #931: a person asked about the pull saw the remote-tracking branch's commit; the job merges only that one.
+	calls.clear();
+	const edt::vcs_code_consent asked{ true, false, true };
+	const std::optional<std::string> told = service->describe_pull({}, {}, cmd::origin::agent("s"), code);
+	BOOST_REQUIRE(told.has_value());
+	BOOST_TEST(told->find("code/src/a.cpp") != std::string::npos, *told);
+	BOOST_TEST(!finish(service->start_pull({}, {}, cmd::origin::agent("s"), asked)).as_object().contains("error"));
+	BOOST_TEST(merged());
+	calls.clear();
+	const json::value not_told = finish(service->start_pull({}, {}, cmd::origin::agent("s"), asked));
+	BOOST_TEST(is_error(not_told, "denied"), json::serialize(not_told));
+	BOOST_TEST(!merged());
+
+	changed = "code/CMakeLists.txt";
+	const json::value cmake = finish(service->start_pull({}, {}, cmd::origin::agent("s"), code));
+	BOOST_TEST(is_error(cmake, "denied"), json::serialize(cmake));
+	BOOST_TEST(text(cmake.as_object().at("error").as_object().at("message")).find("cmake_changes")
+		!= std::string::npos);
+	BOOST_TEST(!merged());
+	const edt::vcs_code_consent with_cmake{ true, true, false };
+	BOOST_TEST(!finish(service->start_pull({}, {}, cmd::origin::agent("s"), with_cmake)).as_object().contains("error"));
 	BOOST_TEST(merged());
 
 #if defined(_WIN32) || defined(__APPLE__)
