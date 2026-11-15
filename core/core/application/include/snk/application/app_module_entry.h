@@ -124,6 +124,7 @@
 // #988 (no bump): desc_system guards its registries with a lock and keeps a migration step or a factory alive while it runs.
 // Its members are out of line (#786) and scene_layer holds it by pointer (#758), so its new size is not seen by a module;
 // only the private find_factory/find_migrations change their signatures, no public export changes.
+// #920: the codec of component_tracker's map gains from_json with a read_context, a new export (no type changes).
 // #925: res::resource_system::warn_on_sync_require is a new export; its members are the engine's (no type changes: the layout key stays).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 

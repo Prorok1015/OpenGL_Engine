@@ -11,6 +11,11 @@
 #include <functional>
 #include <entt/entt.hpp>
 
+namespace res
+{
+	class resource_system;
+}
+
 namespace scn
 {
 	class prefab_desc;
@@ -41,6 +46,8 @@ namespace edt
 		bool is_dirty() const override { return m_open && m_dirty; }
 		std::string_view kind() const override { return "prefab"; }
 		const std::string& title() const override { return m_prefab_name; }
+		// What the window shows: the name, with "[*]" while there are unapplied edits.
+		std::string display_title() const { return is_dirty() ? m_prefab_name + " [*]" : m_prefab_name; }
 		const res::tag& source() const override { return m_source_tag; }
 		// Moves with every edit and every revert.
 		std::uint64_t generation() const override { return m_generation; }
@@ -51,8 +58,18 @@ namespace edt
 		// a lower layer or changed on disk since it was read, and when the file cannot be checked; on success the preview's
 		// source is signalled as changed (the levels that use the prefab reload it) and the working copy is the save point.
 		save_result save() override;
+		// Why Apply is off right now (empty: it can be pressed): Play, a file of a lower layer, a project that may not be written.
+		std::string apply_blocker() const;
 		bool edits_locked() const override { return m_locked && m_locked(); }
 		void bind_events(editor_events* events) override { m_events = events; }
+
+		// The file changed on disk while the working copy has edits (a clean copy takes the new file by itself): Apply is
+		// refused until reload() or overwrite().
+		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
+		// Takes the file as it is now and drops the edits (like revert()). The error text, empty when it worked.
+		std::string reload() { return revert(); }
+		// Keeps the edits and writes them over the file as it is now.
+		save_result overwrite();
 
 		// Where the project's desc files are (the checks of an Apply); without it nothing can be written.
 		void set_files(desc_file_layout files) { m_files = std::move(files); }
@@ -88,6 +105,9 @@ namespace edt
 		std::string working_form() const;
 		void take_from(const scn::prefab_desc& source);
 		void sync_preview();
+		void watch_source();
+		void unwatch_source();
+		void on_source_changed(const res::tag& changed);
 		void announce();
 
 		editor_services& m_services;
@@ -100,6 +120,9 @@ namespace edt
 		// code_version_of the file's bytes when it was read or last written: an Apply refuses a file that is not this.
 		std::string m_disk_version;
 		std::uint64_t m_generation = 0;
+		bool m_changed_on_disk = false;
+		bool m_lower_layer = false;
+		res::resource_system* m_watching = nullptr;
 
 		res::tag m_source_tag;
 		std::string m_prefab_name;
@@ -108,6 +131,7 @@ namespace edt
 		bool m_dirty = false;
 		editor_camera_state m_camera_state;
 
+		static constexpr std::string_view k_working_tag = "memory://editor/__prefab_working";
 		static constexpr std::string_view CONTEXT_NAME = "__prefab_preview";
 	};
 }

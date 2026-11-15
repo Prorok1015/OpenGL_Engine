@@ -92,6 +92,7 @@
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include "edt_document_cast.h"
+#include "edt_prefab_close.h"
 #include "edt_state_commands.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_loop_service_interface.h>
@@ -515,7 +516,29 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
-	m_prefab_panel->set_on_close([this] { close_prefab_editor(); });
+	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
+	m_prefab_panel->set_on_apply([this] {
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab) return;
+		if (const save_result saved = prefab->save(); !saved.saved) {
+			egLOG_WARN("editor", "{}", saved.error);
+			m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
+		}
+	});
+	m_prefab_panel->set_on_revert([this] {
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab) return;
+		m_context->dialogs().choose("Revert prefab", std::format("Drop the edits of '{}' and take the file again?", prefab->title()), { "Revert", "Cancel" },
+			[this, id = prefab->id(), alive = std::weak_ptr<int>(m_prefab_alive)](std::optional<std::size_t> choice) {
+				if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
+				prefab_document* open = prefab_of(m_context->documents());
+				if (!open || open->id() != id) return;
+				if (const std::string error = open->revert(); !error.empty()) {
+					egLOG_WARN("editor", "{}", error);
+					m_context->dialogs().message(message_level::error, std::format("'{}' was not reverted:\n{}", open->title(), error));
+				}
+			});
+	});
 	m_prefab_panel->set_input_router(m_input_router);
 
 	asset_kind_hooks asset_hooks;
@@ -675,10 +698,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty(); };
-	hooks.save_other_documents = [this] { return m_data_documents->save_all(); };
+	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty() || dirty_prefab() != nullptr; };
+	hooks.save_other_documents = [this] {
+		if (prefab_document* prefab = dirty_prefab()) {
+			if (const save_result saved = prefab->save(); !saved.saved) {
+				egLOG_WARN("editor", "{}", saved.error);
+				m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
+				return false;
+			}
+		}
+		return m_data_documents->save_all();
+	};
 	hooks.discard_other_documents = [this] {
 		for (const document_id id : m_data_documents->dirty()) m_data_documents->close(id);
+		if (dirty_prefab()) close_prefab_editor();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
@@ -1030,6 +1063,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		// A second reload waits for the first one's restore (#600): its snapshot would see the set held in Pause.
 		if (m_play && m_play->reloading()) return std::string{ "Play is loading the resources of the last reload" };
+		// The swap closes the prefab editor: its unapplied edits must not go with it.
+		if (dirty_prefab()) return std::string{ "the prefab editor has unapplied edits: apply or revert them first" };
 		return std::string{};
 	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
@@ -1965,6 +2000,8 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
 		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
 		if (m_play && m_play->active()) m_play->stop(play_reason::user);
+		// Reload, quit and project switch wait for a dirty prefab; this is the way in of anything else (a module loaded by hand).
+		if (dirty_prefab()) egLOG_WARN("editor", "the game layer changes: the prefab editor is closed with unapplied edits");
 		close_prefab_editor();
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
@@ -2486,7 +2523,51 @@ bool edt::editor_system::poll_pending_desc()
 
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
+edt::prefab_document* edt::editor_system::dirty_prefab()
+{
+	return dirty_prefab_of(m_context->documents());
+}
+
+void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
+{
+	prefab_document* prefab = dirty_prefab();
+	if (prefab) {
+		// The window stays while the question is open (closing it asked, nothing was decided).
+		m_prefab_panel->set_open(true);
+	}
+	const document_id id = prefab ? prefab->id() : document_id{};
+	prefab_close_ports ports;
+	ports.ask = [this](std::function<void(unsaved_choice)> answer) {
+		m_context->dialogs().confirm_unsaved([answer = std::move(answer), alive = std::weak_ptr<int>(m_prefab_alive)](unsaved_choice choice) {
+			if (alive.lock()) answer(choice);
+		});
+	};
+	ports.apply = [this, id]() -> save_result {
+		prefab_document* open = prefab_of(m_context->documents());
+		return open && open->id() == id ? open->save() : save_result::failure("the prefab is not open any more");
+	};
+	ports.report_failure = [this](const std::string& error) {
+		egLOG_WARN("editor", "{}", error);
+		m_context->dialogs().message(message_level::error, std::format("The prefab was not applied and stays open:\n{}", error));
+	};
+	close_prefab_with_question(prefab != nullptr, ports, std::move(proceed));
+}
+
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
+{
+	prefab_document* current = prefab_of(m_context->documents());
+	if (current && current->is_open() && current->is_dirty()) {
+		if (current->source_tag() == tag) {
+			m_prefab_panel->set_open(true);
+			return;
+		}
+		confirm_prefab_close([this, tag] { open_prefab_now(tag); });
+		return;
+	}
+	open_prefab_now(tag);
+}
+
+void edt::editor_system::open_prefab_now(const res::tag& tag)
 {
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
 	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
