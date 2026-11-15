@@ -121,8 +121,33 @@ std::pair<std::size_t, std::string> class_body(const std::string& text, const st
 	return { std::string::npos, {} };
 }
 
-// Special members the compiler would write inline over the members: no `= default` in the class, a declared destructor,
-// and the destructor and copy/move members declared without a body (`= delete` is fine).
+// Where a member's declaration ends after the `(` at `open`: the offset of the `{` or `:` that starts an inline body
+// or an initializer list, or npos when a `;` ends it first. Parentheses nest and `::` is not an initializer list.
+std::size_t inline_body_start(const std::string& body, std::size_t open)
+{
+	int depth = 1;
+	std::size_t i = open;
+	for (; i < body.size() && depth > 0; ++i) {
+		if (body[i] == '(') ++depth;
+		if (body[i] == ')') --depth;
+	}
+	for (; i < body.size(); ++i) {
+		if (body[i] == ';') return std::string::npos;
+		if (body[i] == '{') return i;
+		if (body[i] == ':') {
+			if (i + 1 < body.size() && body[i + 1] == ':') {
+				++i;
+				continue;
+			}
+			return i;
+		}
+	}
+	return std::string::npos;
+}
+
+// Code the compiler would write inline over the members: no `= default` in the class, a declared destructor, every
+// constructor, the destructor and every `operator=` declared without a body (`= delete` is fine), and no definition of
+// a constructor or the destructor after the class in the header.
 std::vector<std::string> inline_special_members(std::string_view header, std::string_view source, const std::string& name)
 {
 	const std::string text = strip_comments(source);
@@ -134,31 +159,35 @@ std::vector<std::string> inline_special_members(std::string_view header, std::st
 		out.push_back(at(header, text, offset + static_cast<std::size_t>(it->position(0))) + name
 			+ ": '= default' in the class is inline code over the members; define it in the .cpp (#922)");
 	}
-	const std::regex destructor{ "~" + name + R"(\s*\(\s*\))" };
-	const std::regex copy_or_move{ R"(\b(?:)" + name + R"(|operator\s*=)\s*\(\s*(?:const\s+)?)" + name + R"(\s*&)" };
+	// Group 1 is the member's name; the character before it keeps out `other.name(`, `p->name(` and `ns::name(`.
+	const std::regex special{ R"((?:^|[^\w:.>~]))" "(~?" + name + R"(|operator\s*=)\s*\()" };
 	bool has_destructor = false;
-	for (const std::regex* pattern : { &destructor, &copy_or_move }) {
-		for (auto it = std::sregex_iterator(body.begin(), body.end(), *pattern); it != std::sregex_iterator(); ++it) {
-			has_destructor = has_destructor || pattern == &destructor;
-			const std::size_t end = static_cast<std::size_t>(it->position(0) + it->length(0));
-			const std::size_t stop = body.find_first_of(";{", end);
-			if (stop != std::string::npos && body[stop] == '{') {
-				out.push_back(at(header, text, offset + static_cast<std::size_t>(it->position(0))) + name + ": '" + it->str()
-					+ "' has an inline body; declare it and define it in the .cpp (#922)");
-			}
+	for (auto it = std::sregex_iterator(body.begin(), body.end(), special); it != std::sregex_iterator(); ++it) {
+		const std::string member = (*it)[1].str();
+		has_destructor = has_destructor || member.front() == '~';
+		const std::size_t open = static_cast<std::size_t>(it->position(0) + it->length(0));
+		if (inline_body_start(body, open) != std::string::npos) {
+			out.push_back(at(header, text, offset + static_cast<std::size_t>(it->position(1))) + name + ": '" + member
+				+ "(' has an inline body; declare it and define it in the .cpp (#922)");
 		}
 	}
 	if (!has_destructor) {
 		out.push_back(std::string{ header } + ": " + name
 			+ " declares no destructor, so the compiler writes an inline one; declare it and define it in the .cpp (#922)");
 	}
+	const std::regex outside{ R"(\b)" + name + R"(\s*::\s*(?:~\s*)?)" + name + R"(\s*\()" };
+	for (auto it = std::sregex_iterator(text.begin(), text.end(), outside); it != std::sregex_iterator(); ++it) {
+		out.push_back(at(header, text, static_cast<std::size_t>(it->position(0))) + "'" + it->str()
+			+ "' is defined in the header; define it in the .cpp (#922)");
+	}
 	return out;
 }
 
-// sizeof/alignof/offsetof of the class in a header bakes its layout into module code.
+// sizeof/alignof/offsetof of the class, of `*this` or of the store's entry in a header bakes a layout into module code.
 std::vector<std::string> layout_queries(std::string_view header, std::string_view source)
 {
-	static const std::regex query{ R"(\b(?:sizeof|alignof|offsetof)\s*\(\s*(?:[\w:]*::)?(?:scene_layer|input_actions|app_data_storage)\b)" };
+	static const std::regex query{ R"(\b(?:sizeof|alignof|offsetof)\s*\(?\s*(?:(?:const|volatile)\s+)*(?:decltype\s*\(\s*)?)"
+		R"((?:\*\s*this\b|(?:[\w:]*::)?(?:scene_layer|input_actions|app_data_storage|entry)\b))" };
 	const std::string text = strip_comments(source);
 	std::vector<std::string> out;
 	for (auto it = std::sregex_iterator(text.begin(), text.end(), query); it != std::sregex_iterator(); ++it) {
@@ -194,9 +223,23 @@ BOOST_AUTO_TEST_CASE(TheCheckerFlagsInlineSpecialMembersAndLayoutQueries)
 	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X() {} };", "X").size() == 1u);
 	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X(X&& other) {} };", "X").size() == 1u);
 	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X& operator=(const X&) { return *this; } };", "X").size() == 1u);
-	BOOST_TEST(inline_special_members("synthetic.h", "class SNK_API X\n{\n\t~X();\n\tX(const X&) = delete;\n\tX& operator=(X&&);\n};", "X").empty());
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X() {} };", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); explicit X(X*) {} };", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X(int (*f)(int)) noexcept(a::b) : n{ 0 } {} };", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X(X const&) {} };", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X& operator=(X) { return *this; } };", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X& operator =(const ds::X&) { return *this; } };", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); };\ninline X::~X() = default;", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class X { ~X(); X(X&&); };\ninline X::X(X&&) {}", "X").size() == 1u);
+	BOOST_TEST(inline_special_members("synthetic.h", "class SNK_API X\n{\n\t~X();\n\tX(const X&) = delete;\n\tX& operator=(X&&);\n"
+		"\texplicit X(ds::Y* parent);\n\tvoid f(const ds::X& other) { other.X(); }\n\tvoid g(X* p);\n};\n"
+		"void h() { throw \"ds::X::f\"; }", "X").empty());
 	BOOST_TEST(layout_queries("synthetic.h", "static_assert(sizeof(ds::app_data_storage) > 0);").size() == 1u);
 	BOOST_TEST(layout_queries("synthetic.h", "constexpr auto a = alignof( scene_layer );").size() == 1u);
+	BOOST_TEST(layout_queries("synthetic.h", "constexpr auto a = alignof(const scene_layer);").size() == 1u);
+	BOOST_TEST(layout_queries("synthetic.h", "auto n = sizeof(*this);").size() == 1u);
+	BOOST_TEST(layout_queries("synthetic.h", "auto n = sizeof(decltype(*this));").size() == 1u);
+	BOOST_TEST(layout_queries("synthetic.h", "auto n = sizeof(entry);").size() == 1u);
 	BOOST_TEST(layout_queries("synthetic.h", "constexpr auto s = sizeof(int); // sizeof(input_actions)").empty());
 }
 
