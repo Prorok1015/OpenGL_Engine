@@ -13,7 +13,8 @@ namespace edt {
 	// reads besides itself and imports it with exactly those, each step in the decoder within k_person_parse_time_limit,
 	// into memory://`memory_folder` (emptied first). As for an agent, the model may read files of its own folder and its
 	// non-hidden subfolders only. The model is never parsed in this process: without the decoder the import fails with the
-	// reason. A failure is `error`, naming the step and the size of the file; a stop request throws ds::task_cancelled.
+	// reason. A failure is `error`, naming the step and the size of the file; a stop request throws ds::task_cancelled, and
+	// one that arrives while the decoder imports erases what it stored first.
 	import_intermediate person_model_import(const std::filesystem::path& path, const std::string& memory_folder,
 		const decoder_steps& decoder, res::resource_system& resources, ds::task_context& ctx);
 

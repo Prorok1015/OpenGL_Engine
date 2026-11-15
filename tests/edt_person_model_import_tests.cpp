@@ -177,6 +177,40 @@ BOOST_AUTO_TEST_CASE(TheMemoryFolderIsEmptiedBeforeTheImport_SoAnEarlierRunLeave
 	BOOST_TEST(!present_at_import);
 }
 
+BOOST_AUTO_TEST_CASE(AStopRequestWhileTheDecoderImports_LeavesNothingInMemory)
+{
+	// A cancelled job never reports back, so nobody else would erase what the decoder stored.
+	std::stop_source stop;
+	ctx.stop = stop.get_token();
+	const res::tag stored{ "memory://__imports/1/robot/robot.prefab.desc" };
+	edt::decoder_steps steps = decoder();
+	steps.import = [&](const edt::import_source&, ds::task_context*) {
+		BOOST_REQUIRE(resources->store_sync(stored, std::vector<std::byte>(4, std::byte{ 1 })));
+		stop.request_stop();
+		edt::import_intermediate result;
+		result.prefab_tag = stored;
+		result.created_tags = { stored };
+		return result;
+	};
+	BOOST_CHECK_THROW(run(steps), ds::task_cancelled);
+	BOOST_TEST(!resources->exists(stored));
+}
+
+BOOST_AUTO_TEST_CASE(TheFoldersOfEarlierImports_GoWithOneSweepOfImports)
+{
+	// What the editor does at startup: an import of an earlier run that ended without erasing its folder (a crash).
+	const res::tag first{ "memory://__imports/1/robot/robot.geom.desc" };
+	const res::tag second{ "memory://__imports/7/crate/materials/m.mat.desc" };
+	const res::tag other{ "memory://__models/res/levels/robot.glb/robot.prefab.desc" };
+	for (const res::tag& tag : { first, second, other }) {
+		BOOST_REQUIRE(resources->store_sync(tag, std::vector<std::byte>(4, std::byte{ 1 })));
+	}
+	BOOST_TEST(!edt::erase_memory_folder(*resources, "__imports/").has_value());
+	BOOST_TEST(!resources->exists(first));
+	BOOST_TEST(!resources->exists(second));
+	BOOST_TEST(resources->exists(other), "only the imports' folder is swept");
+}
+
 BOOST_AUTO_TEST_CASE(EachImportHasAFolderOfItsOwn)
 {
 	BOOST_TEST(edt::person_import_folder(model, 1) == "__imports/1/robot/");

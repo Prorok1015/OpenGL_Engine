@@ -1,6 +1,7 @@
 #include "edt_person_model_import.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
 #include <chrono>
@@ -99,7 +100,8 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 		return failed(listing, e.what());
 	}
 	if (!found.ok()) return failed(listing, found.error);
-	egLOG_INFO("Editor/Import", "'{}' ({}) reads {} other file(s), {} in all", fs_paths::utf8_of(path.filename()), size,
+	egLOG_INFO("Editor/Import", "'{}' ({}) reads {} other file(s), {} in all",
+		text_escape::escaped_text(fs_paths::utf8_of(path.filename()), 256), size,
 		found.files.size(), mib_text(found.total_bytes));
 
 	constexpr std::string_view importing = "importing the model";
@@ -116,6 +118,11 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 		return failed(importing, e.what());
 	}
 	if (!imported.error.empty()) return failed(importing, imported.error);
+	// Stopped while the decoder imported: the job reports nothing, so what it stored goes now.
+	if (ctx.stop.stop_requested()) {
+		for (const res::tag& tag : imported.created_tags) resources.erase(tag);
+		throw ds::task_cancelled{};
+	}
 	imported.source_path = path;
 	return imported;
 }
