@@ -904,6 +904,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}
 			egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
 		};
+		ports.listing_of = [&data](const std::string& id) {
+			if (!data.has_value<prj::project_context>()) return rollback_listing{ "no project is open", {}, {} };
+			return rollback_listing_of(data.require<prj::project_context>().root, id);
+		};
 		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));
 		add_panel(m_migration_panel, dock_slot::floating, false);
 		m_registrations.push_back(register_migration_window_action(m_context->actions(),
@@ -1180,6 +1184,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				|| editor_layer->has_implicit_prefix("edt/load_level"));
 		};
 		startup_ports.unfinished = [root] { return prj::migration::unfinished_migrations(root); };
+		startup_ports.journal_refusal = [root](const std::string& id) -> std::optional<std::string> {
+			rollback_listing listing = rollback_listing_of(root, id);
+			if (listing.refused.empty()) return std::nullopt;
+			return std::move(listing.refused);
+		};
 		startup_ports.warn = [](const std::string& text) { egLOG_WARN("project/migrate", "{}", text); };
 		startup_ports.ask = [this](const journal_offer& offer) { offer_migration_rollback(offer); };
 		startup_ports.start_scan = [this, root] { start_migration_scan(root); };
@@ -1657,7 +1666,7 @@ void edt::editor_system::open_migration_rollback(const std::string& id)
 {
 	if (m_migration_panel == nullptr) return;
 	m_context->panels().set_open(m_migration_panel->get_id(), true);
-	m_migration_panel->show_and_roll_back(id);
+	m_migration_panel->show_rollback_question(id);
 }
 
 void edt::editor_system::offer_migration_rollback(const journal_offer& offer)

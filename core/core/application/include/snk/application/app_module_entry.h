@@ -122,6 +122,9 @@
 // #927: rnd::render_context::draw_fits is added at the end of the vtable, the functions before it keep their places (minor: the layout key stays).
 // #922: the layout key also lists the engine components (scn::engine_component_types), the ctx types and events a module
 // reads, the channel types, ds::app_data_storage and the structs passed by value; no type changes (layout_revision 11).
+// #988 (no bump): desc_system guards its registries with a lock and keeps a migration step or a factory alive while it runs.
+// Its members are out of line (#786) and scene_layer holds it by pointer (#758), so its new size is not seen by a module;
+// only the private find_factory/find_migrations change their signatures, no public export changes.
 // #922 PR 2: the key also mixes in the ABI revisions of the interfaces a module calls or fills through a vtable, the
 // versions of EnTT, Boost and glm and the sizes of their types; no type changes (layout_revision 12). A library module
 // built with the static C runtime or without a layout key is refused when opened; one compiled into the host is not.

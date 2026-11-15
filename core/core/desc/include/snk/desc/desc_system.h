@@ -19,7 +19,9 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -174,6 +176,7 @@ namespace desc
 
 		void unregister_desc(std::string_view type_name);
 
+		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
 		// current_version(name). Migrations registered later move the stored schema's version along, so the order
 		// does not matter.
@@ -182,6 +185,8 @@ namespace desc
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema);
 
+		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
+		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
 		const type_schema* find_schema(std::string_view type_name) const;
 
 		const schema_registry& schemas() const;
@@ -329,12 +334,13 @@ namespace desc
 		using migration_step_fn = std::function<void(json::object&)>;
 		using migration_steps = std::map<int, migration_step_fn>;
 
-		const factory_fn* find_factory(std::string_view type_name) const;
+		// Shared with the registry: a factory or a step that is running outlives the unregistration of its type (#988).
+		std::shared_ptr<const factory_fn> find_factory(std::string_view type_name) const;
 
 		// Why `schema` cannot be a document (empty: it can); see mark_document.
 		std::string document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const;
 
-		const migration_steps* find_migrations(std::string_view type) const;
+		std::shared_ptr<const migration_steps> find_migrations(std::string_view type) const;
 
 		bool owned_by_parent(std::string_view type_name) const;
 
@@ -368,9 +374,13 @@ namespace desc
 
 		res::resource_system& m_res_system;
 		const desc_system* m_parent = nullptr;
-		std::unordered_map<std::string, factory_fn> factory_map;
-		std::unordered_map<std::string, migration_steps> m_migrations;
+		std::unordered_map<std::string, std::shared_ptr<const factory_fn>> factory_map;
+		// Copy on write: a change publishes a new map of the type, a load keeps the one it took.
+		std::unordered_map<std::string, std::shared_ptr<const migration_steps>> m_migrations;
 		std::vector<std::string> m_component_type_names;
 		schema_registry m_schemas;
+		// Guards the four registries above against loads that read them on other threads (#988). A leaf of the lock order:
+		// only lookups and copies under it; a factory or a step runs after it is released, and so does a call to m_parent.
+		mutable std::shared_mutex m_registry_mutex;
 	};
 }

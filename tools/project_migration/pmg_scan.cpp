@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_scan.h>
+#include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_project_steps.h>
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/common/fs_paths.h>
@@ -887,6 +888,11 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 	if (const int steps_to = game_layer.current_version(res::asset_meta_type); steps_to != options.scan.resource_meta_version) {
 		plan.refused = std::format("the steps of {} lead to version {}, but the engine reads version {}: a step must raise "
 			"res::asset_meta_version with it", res::asset_meta_type, steps_to, options.scan.resource_meta_version);
+	}
+	if (plan.refused.empty()) {
+		if (const prj::manifest_result manifest = prj::load_manifest(root); manifest.data) {
+			if (auto why = content_roots_refusal(manifest.data->content_roots)) plan.refused = std::move(*why);
+		}
 	}
 	for (scanned_file& file : plan.scan.files) {
 		if (file.kind != file_class::outdated) continue;
