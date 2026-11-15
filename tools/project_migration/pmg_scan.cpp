@@ -879,11 +879,10 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		if (listed == assets.assets().end()) continue;
 		file.has_resource = listed->second.has_meta;
 		if (file.resource_path.empty()) file.resource_unreadable = listed->second.has_meta && !listed->second.id;
-		// A .resource of another content root (resource_path empty) is left to the editor's Problems: the step
-		// writes the one beside the file.
-		if (listed->second.id && assets.held_below(*listed->second.id) && !file.resource_path.empty()) {
+		if (listed->second.id && assets.held_below(*listed->second.id) && !listed->second.meta_path.empty()) {
 			if (const std::optional<res::tag> holder = assets.path_of(*listed->second.id)) {
 				file.id_held_below = std::string(holder->view());
+				file.id_held_below_meta = listed->second.meta_path;
 			}
 		}
 		if (file.kind == file_class::current || file.kind == file_class::missing_resource) {

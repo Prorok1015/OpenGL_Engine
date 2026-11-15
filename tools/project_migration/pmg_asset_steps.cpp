@@ -11,6 +11,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -99,17 +100,25 @@ namespace
 		std::size_t renewed = 0;
 		for (const scanned_file& file : context.scan.files) {
 			if (file.id_held_below.empty()) continue;
-			const res::asset_meta_result read = res::read_asset_meta(context.files.read(file.resource_path));
+			const std::string& sidecar = file.id_held_below_meta;
+			const res::asset_meta_result read = res::read_asset_meta(context.files.read(sidecar));
 			if (!read.meta) {
-				throw std::runtime_error(std::format("{}: cannot read it again to give {} a new ID", file.resource_path,
+				throw std::runtime_error(std::format("{}: cannot read it again to give {} a new ID", sidecar,
 					file.path));
 			}
 			res::asset_meta meta = *read.meta;
 			const res::asset_id old = meta.guid;
+			const std::optional<res::tag> holder =
+				context.assets.held_below(old) ? context.assets.path_of(old) : std::nullopt;
+			if (!holder || holder->view() != file.id_held_below) {
+				context.warn(std::format("{}: {} no longer carries the ID of {}; left as it is", file.path, sidecar,
+					file.id_held_below));
+				continue;
+			}
 			meta.guid = res::generate_asset_id();
-			context.files.write(file.resource_path, res::write_asset_meta(meta));
+			context.files.write(sidecar, res::write_asset_meta(meta));
 			context.warn(std::format("{}: its ID {} belongs to {} of a layer below the project; it gets the new ID {} "
-				"({})", file.path, res::to_text(old), file.id_held_below, res::to_text(meta.guid), file.resource_path));
+				"({})", file.path, res::to_text(old), file.id_held_below, res::to_text(meta.guid), sidecar));
 			++renewed;
 		}
 		context.warn(std::format("{} .resource files with a new ID", renewed));
@@ -187,8 +196,26 @@ namespace
 	void refs_apply(project_step_context& context)
 	{
 		if (!context.descs) throw std::runtime_error("assets.refs: no game layer to read the references by");
+		// The files assets.ids_below gave a new ID: a path to one that turns into {guid, path} is a line of the report.
+		std::set<std::string> renewed;
+		for (const scanned_file& file : context.scan.files) {
+			if (file.id_held_below.empty()) continue;
+			if (const auto listed = context.assets.assets().find(file.path); listed != context.assets.assets().end()) {
+				renewed.insert(res::asset_name_key(listed->second.res_path, res::asset_names_case_insensitive));
+			}
+		}
+		std::set<std::string> to_copies;
 		desc::reference_ids ids;
-		ids.id_of = [&context](const res::tag& tag) { return context.assets.id_of(tag); };
+		ids.id_of = [&context, &renewed, &to_copies](const res::tag& tag) {
+			std::optional<res::asset_id> id = context.assets.id_of(tag);
+			if (id && tag.protocol() == res::tag::default_protocol()) {
+				const std::string_view res_path = tag.view().substr(tag.protocol().size() + 3);
+				if (renewed.contains(res::asset_name_key(res_path, res::asset_names_case_insensitive))) {
+					to_copies.insert(std::string(tag.view()));
+				}
+			}
+			return id;
+		};
 		ids.path_of = [&context](const res::asset_id& id) { return context.assets.path_of(id); };
 
 		desc::reference_counts total;
@@ -204,9 +231,10 @@ namespace
 			options.max_depth = 128;
 			json::value root = json::parse(text, error, {}, options);
 			if (error || !root.is_object()) throw std::runtime_error(std::format("{}: no JSON object after the migration of its types", file.path));
+			to_copies.clear();
 			const desc::reference_counts counts = context.descs->write_references_with(root, ids);
 			if (counts.total() == 0) continue;
-			for (const std::string& copy : file.references_to_copies) {
+			for (const std::string& copy : to_copies) {
 				context.warn(std::format("{}: {} turned into {{guid, path}} with the new ID of the copy", file.path,
 					copy));
 			}

@@ -125,6 +125,7 @@ void prj::migration::project_assets::rebuild()
 		indexed_asset asset = entry_of(files[i]);
 		if (const std::optional<std::size_t> meta = pairing.meta_of[i]) {
 			asset.has_meta = true;
+			if (!read_only[files[*meta].layer]) asset.meta_path = entry_of(files[*meta]).path;
 			const res::asset_meta_file read = res::read_asset_meta_file(layers[files[*meta].layer], files[*meta].relative);
 			if (read.meta) {
 				asset.id = read.meta->guid;
@@ -145,16 +146,11 @@ void prj::migration::project_assets::rebuild()
 		m_orphans.insert_or_assign(meta.path, std::move(meta));
 	}
 
-	// A name two holders share (a project file over one of a lower layer): the highest layer's, as the resolver reads.
-	std::map<std::string, std::pair<res::asset_id, std::size_t>> by_name;
 	for (auto& [id, held] : holders) {
-		const std::string name = res::asset_name_key(held.res_path, res::asset_names_case_insensitive);
-		const auto [named, added] = by_name.try_emplace(name, id, held.layer);
-		if (!added && held.layer > named->second.second) named->second = { id, held.layer };
+		m_held_ids.emplace(res::asset_name_key(held.res_path, res::asset_names_case_insensitive), id);
 		if (read_only[held.layer]) m_held_below.insert(id);
 		m_holders.emplace(id, std::move(held.res_path));
 	}
-	for (auto& [name, held] : by_name) m_held_ids.emplace(name, held.first);
 }
 
 std::optional<res::asset_id> prj::migration::project_assets::id_of(std::string_view path) const

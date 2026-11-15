@@ -3,8 +3,8 @@
 #include <snk/resource/res_tag.h>
 #include <filesystem>
 #include <map>
-#include <set>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,6 +43,9 @@ namespace prj::migration
 		std::optional<res::asset_id> id;
 		// A .resource pairs with the file, read or not.
 		bool has_meta = false;
+		// The .resource the walk paired with the file, relative to the project root; empty when it is in a read-only
+		// layer or there is none. It may be in another content root than the file.
+		std::string meta_path;
 	};
 
 	class project_assets

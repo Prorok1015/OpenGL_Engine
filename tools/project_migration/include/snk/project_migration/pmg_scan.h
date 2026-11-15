@@ -73,6 +73,9 @@ namespace prj::migration
 		// Its .resource holds the ID of a file of a read-only layer (the engine's), which keeps it: the res:// tag of
 		// that file; assets.ids_below gives this one a new ID (#902). Empty: none.
 		std::string id_held_below;
+		// The .resource assets.ids_below rewrites: the one the walk paired with the file (project-relative), which
+		// may be in another content root than the file.
+		std::string id_held_below_meta;
 		// The res:// paths this desc names that become {guid, path} only because assets.ids_below gives their file an
 		// ID in the same migration (#902).
 		std::vector<std::string> references_to_copies;

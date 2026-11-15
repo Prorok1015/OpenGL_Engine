@@ -584,7 +584,7 @@ BOOST_AUTO_TEST_CASE(ACopyOfAnEngineFilesId_GetsANewId_AndPathsToItBecomeReferen
 	const pmg::scanned_file* copied = planned_now.scan.find("res/textures/lit_copy.png");
 	BOOST_REQUIRE(copied != nullptr);
 	BOOST_TEST(copied->id_held_below == "res://shaders/lit.png");
-	BOOST_TEST(copied->resource_path == "res/textures/lit_copy.png.resource");
+	BOOST_TEST(copied->id_held_below_meta == "res/textures/lit_copy.png.resource");
 	BOOST_TEST(planned(planned_now, "assets.ids_below"));
 	BOOST_TEST(planned(planned_now, "assets.refs"));
 	const pmg::scanned_file* referring = planned_now.scan.find("res/refs/e.desc");
@@ -639,6 +639,72 @@ BOOST_AUTO_TEST_CASE(ARollback_PutsBackTheResourceOfTheCopyAndItsReferences)
 	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
 	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
 	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// A project file at the path of an engine file shadows it, as res:// does: the walk lists only the project's, so it
+// holds the ID itself and is no copy; a path to it takes that ID.
+BOOST_AUTO_TEST_CASE(AProjectFileAtThePathOfAnEngineFile_HoldsItsIdItself)
+{
+	outside_folder engine;
+	constexpr std::string_view engine_id = "00000000-0000-4000-8000-0000000000e4";
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text(engine_id);
+	write_text(engine.path / "shaders/lit.png", "png");
+	write_text(engine.path / "shaders/lit.png.resource", res::write_asset_meta(meta));
+	write_text(copy.res() / "shaders/lit.png", "project png");
+	write_text(copy.res() / "shaders/lit.png.resource", res::write_asset_meta(meta));
+	write_text(copy.res() / "refs/s.desc", std::format(R"({{"__type": "refs_test.thing",
+		"texture": "res://shaders/lit.png",
+		"list": [ {{ "guid": "{}", "path": "res://shaders/lit.png" }} ]}})", engine_id));
+	read_only = { engine.path };
+
+	const pmg::migration_plan planned_now = plan();
+	BOOST_REQUIRE(planned_now.scan.find("res/shaders/lit.png") != nullptr);
+	BOOST_TEST(planned_now.scan.find("res/shaders/lit.png")->id_held_below.empty());
+	BOOST_TEST(!planned(planned_now, "assets.ids_below"));
+	BOOST_TEST(pmg::plan_text(planned_now).find("New IDs") == std::string::npos);
+	BOOST_TEST(assets().path_of(meta.guid)->view() == "res://shaders/lit.png");
+	BOOST_TEST(!assets().held_below(meta.guid));
+
+	migrate();
+	BOOST_TEST(id_in(copy.res() / "shaders/lit.png.resource") == std::string(engine_id));
+	const json::value after = json::parse(read_text(copy.res() / "refs/s.desc"));
+	BOOST_TEST(after.as_object().at("texture") == reference(engine_id, "res://shaders/lit.png"));
+	BOOST_TEST(*desc::json_pointer_get(after, "/list/0") == reference(engine_id, "res://shaders/lit.png"));
+	BOOST_TEST(plan().empty());
+}
+
+// The .resource of a copy may lie in another content root: the step rewrites the one the walk paired with the file.
+BOOST_AUTO_TEST_CASE(ACopyWhoseResourceIsInALowerRoot_GetsItsNewIdThere)
+{
+	json::object manifest = json::parse(read_text(copy.root() / "project.snkproj")).as_object();
+	manifest["content_roots"] = json::array{ "res", "base" };
+	write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+	outside_folder engine;
+	constexpr std::string_view engine_id = "00000000-0000-4000-8000-0000000000e5";
+	res::asset_meta meta;
+	meta.guid = *res::asset_id_from_text(engine_id);
+	write_text(engine.path / "shaders/lit.png", "png");
+	write_text(engine.path / "shaders/lit.png.resource", res::write_asset_meta(meta));
+	write_text(copy.res() / "textures/up.png", "upper");
+	write_text(copy.root() / "base/textures/up.png.resource", res::write_asset_meta(meta));
+	write_text(copy.res() / "refs/up.desc", R"({"__type": "refs_test.thing", "texture": "res://textures/up.png"})");
+	read_only = { engine.path };
+
+	const pmg::migration_plan planned_now = plan();
+	const pmg::scanned_file* copied = planned_now.scan.find("res/textures/up.png");
+	BOOST_REQUIRE(copied != nullptr);
+	BOOST_TEST(copied->id_held_below == "res://shaders/lit.png");
+	BOOST_TEST(copied->id_held_below_meta == "base/textures/up.png.resource");
+
+	const pmg::migration_report report = migrate();
+	const std::string new_id = id_in(copy.root() / "base/textures/up.png.resource");
+	BOOST_TEST(new_id != std::string(engine_id));
+	BOOST_TEST(!fs::exists(copy.res() / "textures/up.png.resource"));
+	BOOST_TEST(json::parse(read_text(copy.res() / "refs/up.desc")).as_object().at("texture")
+		== reference(new_id, "res://textures/up.png"));
+	BOOST_TEST(any_note(report, "assets.refs: res/refs/up.desc: res://textures/up.png turned into {guid, path}"));
+	BOOST_TEST(plan().empty());
 }
 
 // assets.ids: a desc whose __guid is the ID of an engine file takes a new ID, not that one.
