@@ -3,12 +3,14 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1845,12 +1847,19 @@ BOOST_FIXTURE_TEST_CASE(ListsAndStructuresInsideAnItemAreCheckedToo_TheLoadLogCa
 	BOOST_TEST((check("/rows/1/limits", R"({"scale":"x"})") == override_status::bad_value));
 	BOOST_TEST((check("/rows/1/limits/gone", "1") == override_status::stale));
 
-	std::vector<std::string> messages;
-	const engine::log_sink_handle sink = engine::add_log_sink([&messages](std::string_view, engine::log_level level, std::string_view text) {
-		if (level == engine::log_level::warn) messages.emplace_back(text);
+	std::mutex logged_mutex;
+	std::vector<std::string> logged;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view text) {
+		if (level != engine::log_level::warn) return;
+		std::lock_guard lock(logged_mutex);
+		logged.emplace_back(text);
 	});
 	check("/rows/1", R"({"cells":[{"scale":1.0},{"scale":"x"}]})");
 	check("/rows/0/limits/gone", "1");
+	const auto messages = [&] {
+		std::lock_guard lock(logged_mutex);
+		return logged;
+	}();
 	BOOST_REQUIRE(messages.size() == 2);
 	BOOST_TEST(messages[0].find("'/rows/1/cells/1/scale'") != std::string::npos);
 	BOOST_TEST(messages[0].find("expected a value of kind f32") != std::string::npos);
@@ -1876,7 +1885,7 @@ BOOST_AUTO_TEST_CASE(AMapOfStructuresIsCheckedByTheStructure)
 
 BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNoWarning, ops_fixture)
 {
-	int warnings = 0;
+	std::atomic<int> warnings = 0;
 	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view) {
 		if (level == engine::log_level::warn) ++warnings;
 	});
@@ -1884,7 +1893,7 @@ BOOST_FIXTURE_TEST_CASE(ANullForAnOptionalFieldIsNoWarning, ops_fixture)
 	value.gain = 2.0f;
 	value.deserialize(ds, parse(R"({ "gain": null, "note": null })"));
 	BOOST_TEST(!value.gain.has_value());
-	BOOST_TEST(warnings == 0);
+	BOOST_TEST(warnings.load() == 0);
 }
 
 // What the assembler does with a __parent: the parent's values are copied, then the child's data is read over them.
