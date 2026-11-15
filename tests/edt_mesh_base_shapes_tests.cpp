@@ -1,14 +1,17 @@
 #include <boost/test/unit_test.hpp>
+#include <boost/json.hpp>
 #include "null_engine_fixture.hpp"
 #include "edt_mesh_base_shapes.h"
 #include <snk/desc/desc_system.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -18,13 +21,73 @@ namespace fs = std::filesystem;
 
 constexpr std::size_t vertex_stride = 14 * sizeof(float);
 
-// A checkout on Windows may turn the file's line ends into CR LF; the text the generator writes has LF only.
 std::string read_text(const fs::path& path)
 {
 	std::ifstream in(path, std::ios::binary);
-	std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-	std::erase(text, '\r');
-	return text;
+	return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+}
+
+std::vector<std::byte> bytes_of(const boost::json::array& numbers)
+{
+	std::vector<std::byte> out;
+	out.reserve(numbers.size());
+	for (const boost::json::value& number : numbers) {
+		out.push_back(static_cast<std::byte>(boost::json::value_to<unsigned>(number)));
+	}
+	return out;
+}
+
+// The float arithmetic of sin, cos and acos is the C runtime's: another compiler or runtime may differ in the last bit of a
+// vertex. So the file is compared as data: everything but the vertices exactly, the vertices float by float with a tolerance.
+// Empty: the file is what the generator writes; else the first difference.
+std::string difference(const std::string& expected_text, const std::string& committed_text)
+{
+	constexpr float tolerance = 1e-6f;
+	boost::json::value expected_value;
+	boost::json::value committed_value;
+	try {
+		expected_value = boost::json::parse(expected_text);
+		committed_value = boost::json::parse(committed_text);
+	} catch (const std::exception& error) {
+		return std::string("the file is not JSON: ") + error.what();
+	}
+	if (!expected_value.is_object() || !committed_value.is_object()) {
+		return "the file is not an object";
+	}
+	const boost::json::object& expected = expected_value.as_object();
+	const boost::json::object& committed = committed_value.as_object();
+	if (expected.size() != committed.size()) {
+		return "the file has other keys";
+	}
+	for (const auto& member : expected) {
+		const std::string_view key = member.key();
+		const boost::json::value& value = member.value();
+		const boost::json::value* other = committed.if_contains(key);
+		if (!other) {
+			return "'" + std::string(key) + "' is missing";
+		}
+		if (key != "vertices") {
+			if (value != *other) {
+				return "'" + std::string(key) + "' differs";
+			}
+			continue;
+		}
+		if (!value.is_array() || !other->is_array() || value.as_array().size() != other->as_array().size()) {
+			return "the number of vertex bytes differs";
+		}
+		const std::vector<std::byte> want = bytes_of(value.as_array());
+		const std::vector<std::byte> have = bytes_of(other->as_array());
+		for (std::size_t i = 0; i + sizeof(float) <= want.size(); i += sizeof(float)) {
+			float a = 0.f;
+			float b = 0.f;
+			std::memcpy(&a, want.data() + i, sizeof(float));
+			std::memcpy(&b, have.data() + i, sizeof(float));
+			if (!(std::abs(a - b) <= tolerance)) {
+				return "float " + std::to_string(i / sizeof(float)) + " of the vertices differs: " + std::to_string(a) + " against " + std::to_string(b);
+			}
+		}
+	}
+	return {};
 }
 
 struct bounds
@@ -70,14 +133,35 @@ BOOST_AUTO_TEST_CASE(TheCommittedFiles_AreWhatTheBakeWrites)
 		BOOST_TEST_CONTEXT(shape.name) {
 			const std::string expected = base_shape_file_text(shape);
 			const fs::path committed = fs::path(SNK_CORE_RES_DIR) / "shapes" / (std::string(shape.name) + ".geom.desc");
-			if (read_text(committed) != expected) {
+			const std::string found = difference(expected, read_text(committed));
+			if (!found.empty()) {
 				const fs::path generated = fs::path("generated_shapes") / committed.filename();
 				fs::create_directories(generated.parent_path());
 				std::ofstream(generated, std::ios::binary) << expected;
-				BOOST_ERROR("core/res/shapes/" + committed.filename().string() + " is missing or differs from the generator: take the file from the generated_shapes artifact");
+				BOOST_ERROR("core/res/shapes/" + committed.filename().string() + " is missing or differs from the generator (" + found
+					+ "): take the file from the generated_shapes artifact");
 			}
 		}
 	}
+}
+
+BOOST_AUTO_TEST_CASE(TheComparison_AcceptsAFloatOffByTheTolerance_AndRefusesAMovedVertexOrAnotherIndex)
+{
+	const std::string text = base_shape_file_text(*find_base_shape("plane"));
+	BOOST_TEST(difference(text, text).empty());
+
+	// The first vertex's x is the float with the bytes 00 00 00 BF (-0.5): one bit more is a change of 6e-8, 0xBE80 in the high
+	// bytes is -0.25.
+	const auto changed = [&](const char* array, std::size_t index, unsigned value) {
+		boost::json::value file = boost::json::parse(text);
+		file.as_object()[array].as_array()[index] = value;
+		return boost::json::serialize(file);
+	};
+	BOOST_TEST(changed("vertices", 0, 1) != text);
+	BOOST_TEST(difference(text, changed("vertices", 0, 1)).empty());
+	BOOST_TEST(!difference(text, changed("vertices", 3, 190)).empty());
+	BOOST_TEST(!difference(text, changed("indices", 2, 3)).empty());
+	BOOST_TEST(!difference(text, "[]").empty());
 }
 
 BOOST_AUTO_TEST_CASE(TheFileVersion_IsTheEnginesGeometryVersion_AndTheTextIsPrettyWithANewline)
