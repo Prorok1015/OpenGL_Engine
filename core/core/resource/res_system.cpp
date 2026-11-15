@@ -2433,9 +2433,6 @@ res::mount_table res::resource_system::project_mount_table(
     const std::filesystem::path &cache_dir,
     const std::filesystem::path &user_dir, const std::filesystem::path &code_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
-  if (engine_base.empty()) {
-    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted, so the UI font and the shaders of the render passes are read from the project's res://");
-  }
 
   std::vector<fs::path> layers;
   if (!engine_base.empty())
@@ -2469,9 +2466,6 @@ res::mount_table res::resource_system::shipping_mount_table(
     const std::vector<std::filesystem::path> &content_roots,
     const std::filesystem::path &user_dir, const std::filesystem::path &scratch_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
-  if (engine_base.empty()) {
-    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted, so the UI font and the shaders of the render passes are read from the project's res://");
-  }
 
   std::vector<fs::path> layers;
   if (!engine_base.empty())
@@ -2605,8 +2599,31 @@ bool res::resource_system::needed_by_layers(const res::tag &tag) const {
   return m_layer_needs.contains(tag);
 }
 
+namespace {
+// engine_file is an export modules call: the path names a file below engine://, never another protocol or a parent of it.
+bool is_engine_relative(std::string_view relative)
+{
+	if (relative.empty() || relative.front() == '/' || relative.front() == '\\' || relative.find("://") != std::string_view::npos) {
+		return false;
+	}
+	std::size_t begin = 0;
+	while (begin <= relative.size()) {
+		const std::size_t end = relative.find_first_of("/\\", begin);
+		if (relative.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin) == "..") {
+			return false;
+		}
+		if (end == std::string_view::npos) {
+			break;
+		}
+		begin = end + 1;
+	}
+	return true;
+}
+}
+
 res::tag res::resource_system::engine_file(std::string_view relative) const
 {
+	ASSERT_MSG(is_engine_relative(relative), "engine_file('{}'): a path below the engine's root, without a protocol, a leading '/' or '..'", relative);
 	const bool engine_mounted = static_cast<bool>(root().resolver_for(tag::engine));
 	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
 }
