@@ -21,7 +21,7 @@ namespace scn {
 		void detach_registry(entt::registry& reg);
 		// Registries currently attached. For tests and diagnostics.
 		std::size_t attached_count() const { return m_registries.size(); }
-		res::resource_system& resources() const { return m_res_sys; }
+		res::resource_system& resources() const;
 
 		// Tags currently watched in resource_system. For tests and diagnostics.
 		std::size_t watched_count() const { return m_watch_refs.size(); }

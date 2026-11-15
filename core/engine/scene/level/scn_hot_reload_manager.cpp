@@ -24,6 +24,11 @@ namespace scn {
 		}
 	}
 
+	res::resource_system& hot_reload_manager::resources() const
+	{
+		return m_res_sys;
+	}
+
 	void hot_reload_manager::attach_registry(entt::registry& reg)
 	{
 		if (m_registries.insert(&reg).second) {
