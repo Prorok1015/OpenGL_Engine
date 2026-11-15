@@ -20,6 +20,7 @@
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
+#include "edt_inspector_target.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
 #include "edt_migration_startup.h"
@@ -269,6 +270,9 @@ namespace edt {
 		void confirm_prefab_close(std::function<void()> proceed);
 		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
 		void close_prefab_editor();
+		void select_prefab_node(const std::vector<std::uint64_t>& path);
+		void release_inspector_to_level();
+		inspector_target m_inspector_target;
 		// The open prefab document when it has unapplied edits, else null.
 		prefab_document* dirty_prefab();
 
@@ -384,6 +388,7 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
+		std::vector<connection> m_inspector_connections;
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
