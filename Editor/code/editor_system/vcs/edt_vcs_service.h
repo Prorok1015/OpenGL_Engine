@@ -47,9 +47,11 @@ namespace edt
 		bool code = false;
 		// CMake files of code/ too; implies `code`.
 		bool cmake = false;
-		// A person was asked about this very call (it carries the approved ticket): it may change code/ only toward
-		// the target describe_checkout / describe_pull showed. Without it the policy allowed the category outright.
-		bool asked = false;
+		// The approved ticket the call carries (cmd::call::confirmation): a person was asked about this very call, and
+		// it may change code/ only toward the target describe_checkout / describe_pull showed for that ticket. Empty:
+		// the policy allowed the call without a question, which brings in only sources and headers of code/ (and
+		// CMake files with `cmake`), nothing else there.
+		std::string ticket;
 	};
 
 	struct vcs_options
@@ -344,10 +346,10 @@ namespace edt
 		remote_snapshot read_remote_now(const std::string& named, bool person = false);
 		inline static constexpr const char* k_describe_timeout = "describe_timeout";
 
-		// What a person is told when an agent's checkout or pull with a vcs_code_consent is asked (#931): the target
-		// commit and the files of code/ it changes. The target is remembered for that call (by the caller's session and
-		// the arguments) and start_checkout / start_pull take it: one it does not match is refused. On the main thread,
-		// git stopped after vcs_options::describe_timeout. Nullopt for a person's call.
+		// What a person is told when an agent's checkout or pull is asked (#931): the target commit and the files of
+		// code/ it changes. The target is remembered for the ticket (`consent.ticket`, the registry's id of the
+		// question) and start_checkout / start_pull take it for the call that carries that ticket: one it does not match
+		// is refused. On the main thread, git stopped after vcs_options::describe_timeout. Nullopt for a person's call.
 		std::optional<std::string> describe_checkout(const std::string& ref, const cmd::origin& caller,
 			vcs_code_consent consent);
 		std::optional<std::string> describe_pull(const std::string& remote, const std::string& branch,

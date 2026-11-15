@@ -1,4 +1,5 @@
 #include "edt_vcs_service.h"
+#include "edt_forge_types.h"
 #include "edt_path_text.h"
 #include "edt_vcs_parse.h"
 #include <snk/command/cmd_json_schema.h>
@@ -1401,17 +1402,30 @@ namespace {
 		return false;
 	}
 
-	// Binds a described target to one call: the agent session, the command and its arguments, each length-prefixed.
-	std::string described_key(const cmd::origin& caller, std::string_view kind,
-		std::initializer_list<std::string_view> parts, edt::vcs_code_consent consent)
+	// A source or a header of code/ that code.write could write: a code file outside the ignored folders.
+	bool is_source_of_code(std::string_view in_code)
 	{
-		std::string key = std::format("{}:{}|{}:{}|{}{}", caller.session.size(), caller.session, kind.size(), kind,
-			consent.code ? 'c' : '-', consent.cmake ? 'm' : '-');
-		for (const std::string_view part : parts) key += std::format("|{}:{}", part.size(), part);
-		return key;
+		const prj::code_category category = prj::code_category_of(in_code);
+		if (in_code.empty() || (category != prj::code_category::source && category != prj::code_category::header)) {
+			return false;
+		}
+		std::string_view rest = in_code;
+		for (std::size_t slash = rest.find('/'); slash != std::string_view::npos; slash = rest.find('/')) {
+			if (prj::is_code_ignored_dir(rest.substr(0, slash))) return false;
+			rest.remove_prefix(slash + 1);
+		}
+		return true;
 	}
 
-	constexpr std::size_t k_max_described = 32;
+	// Binds a described target to one question: the agent session, the command and the registry's ticket, which the
+	// registry binds to the arguments.
+	std::string described_key(const cmd::origin& caller, std::string_view kind, std::string_view ticket)
+	{
+		return std::format("{}:{}|{}:{}|{}", caller.session.size(), caller.session, kind.size(), kind, ticket);
+	}
+
+	// As many as questions may wait: a waiting question never loses its target to others.
+	constexpr std::size_t k_max_described = cmd::command_registry::max_pending_confirmations;
 	constexpr std::chrono::minutes k_described_lifetime{ 5 };
 	constexpr std::string_view k_refused_target = "refused";
 
@@ -1454,16 +1468,20 @@ namespace {
 		std::vector<std::string> shown;
 		std::size_t count = 0;
 
+		// Each path escaped (edt::forge::escaped_text): a name with a line break cannot forge a line of a question.
 		void add(std::string_view path)
 		{
-			if (++count <= k_shown) shown.push_back(edt::vcs::valid_utf8(path));
+			if (++count <= k_shown) shown.push_back(edt::forge::escaped_text(path, 512));
 		}
 
-		std::string text() const
+		std::string text(std::string_view separator = ", ") const
 		{
 			std::string out;
-			for (const auto& path : shown) out += (out.empty() ? "" : ", ") + path;
-			if (count > shown.size()) out += std::format(" and {} more", count - shown.size());
+			for (const auto& path : shown) {
+				if (!out.empty()) out += separator;
+				out += path;
+			}
+			if (count > shown.size()) out += std::format("{}and {} more", separator, count - shown.size());
 			return out;
 		}
 	};
@@ -1474,8 +1492,11 @@ namespace {
 		// Not empty: git could not tell, the call is refused with this.
 		std::string error;
 		path_list build_inputs;
+		// Every file of code/ it changes; of them, the CMake files and those that are neither a source nor a header
+		// (what code.write could not write either: a generator script, a prebuilt library, a file of an ignored folder).
 		path_list code;
 		path_list cmake;
+		path_list other;
 	};
 
 	target_changes changes_of(const git_context& git, const std::string& target, const protected_scope& scope,
@@ -1509,6 +1530,7 @@ namespace {
 			if (kind != entry_kind::code) continue;
 			out.code.add(entry.path);
 			if (may_be_cmake_file(in_code)) out.cmake.add(entry.path);
+			else if (!is_source_of_code(in_code)) out.other.add(entry.path);
 		}
 		return out;
 	}
@@ -1544,7 +1566,13 @@ namespace {
 			return deny(std::format("the target changes CMake files of the project ({}), which run when it is "
 				"configured: call again with cmake_changes: true and a person is asked", changes.cmake.text()));
 		}
-		if (consent.asked && described != target) {
+		const bool asked = !consent.ticket.empty();
+		if (changes.other.count > 0 && !asked) {
+			return deny(std::format("the target changes files of code/ that are neither sources nor headers ({}): an "
+				"agent brings them in only when a person is asked about the call, never under an answer given in "
+				"advance (a session grant or an allow); a person can (the Git panel)", changes.other.text()));
+		}
+		if (asked && described != target) {
 			return deny(std::format("the target {} is not the commit a person was asked about ({}): call again",
 				target, described.empty() ? "none" : described));
 		}
@@ -2784,8 +2812,8 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 	}
 	const protected_scope scope{ m_options.project_root && m_options.project_root().has_value(), project_prefix(),
 		project_dir(), m_options.live_mode_on && m_options.live_mode_on() };
-	const std::string described = consent.asked && caller.kind != cmd::origin_kind::ui
-		? take_described(described_key(caller, "checkout", { ref }, consent)) : std::string{};
+	const std::string described = !consent.ticket.empty() && caller.kind != cmd::origin_kind::ui
+		? take_described(described_key(caller, "checkout", consent.ticket)) : std::string{};
 	return run_job("git checkout", [ref, scope, consent, described](const git_context& git,
 		ds::task_context& task) -> json::value {
 		// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
@@ -2909,8 +2937,8 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
 	const protected_scope scope{ m_options.project_root && m_options.project_root().has_value(), project_prefix(),
 		project_dir(), m_options.live_mode_on && m_options.live_mode_on() };
-	const std::string described = consent.asked && caller.kind != cmd::origin_kind::ui
-		? take_described(described_key(caller, "pull", { remote, branch }, consent)) : std::string{};
+	const std::string described = !consent.ticket.empty() && caller.kind != cmd::origin_kind::ui
+		? take_described(described_key(caller, "pull", consent.ticket)) : std::string{};
 	return run_job("git pull", [remote, branch, scope, consent, described](const git_context& shared,
 		ds::task_context& task) -> json::value {
 		git_context git = shared;
@@ -3183,22 +3211,29 @@ namespace {
 		return std::string(trim(peeled.out));
 	}
 
-	// What a person is asked about for a guarded checkout or pull to `target` with `consent`.
+	// What a person is asked about for a guarded checkout or pull to `target` with `consent`: one path a line.
 	std::string described_changes(std::string_view what, const std::string& target, const target_changes& changes,
 		const protected_scope& scope, edt::vcs_code_consent consent)
 	{
+		constexpr std::string_view line = "\n  ";
 		const std::string head = std::format("{} (commit {})", what, target);
-		if (!changes.error.empty()) return std::format("{}: will be refused: {}", head, changes.error);
+		if (!changes.error.empty()) return std::format("{}\nThis request will be refused: {}", head, changes.error);
 		if (changes.build_inputs.count > 0) {
-			return std::format("{}: will be refused: it changes files that decide what code is built and loaded ({}{})",
-				head, changes.build_inputs.text(), scope.live ? "; code/ too while live mode is on" : "");
+			return std::format("{}\nThis request will be refused: it changes files that decide what code is built and "
+				"loaded{}:{}{}", head, scope.live ? " (code/ too while live mode is on)" : "", line,
+				changes.build_inputs.text(line));
 		}
-		if (changes.code.count == 0) return head + ": it changes no file of code/";
-		std::string text = std::format("{}: it changes {} file(s) of code/, which the project's next build runs: {}",
-			head, changes.code.count, changes.code.text());
+		if (changes.code.count == 0) return head + "\nIt changes no file of code/.";
+		std::string text = std::format("{}\nIt changes {} file(s) of code/, which the project's next build runs:{}{}",
+			head, changes.code.count, line, changes.code.text(line));
 		if (changes.cmake.count > 0) {
-			text += std::format(". CMake files, which run when the project is configured: {}", changes.cmake.text());
-			if (!consent.cmake) text += " (will be refused: they need cmake_changes)";
+			text += std::format("\nCMake files among them, which run when the project is configured{}:{}{}",
+				consent.cmake ? "" : " (this request will be refused: they need cmake_changes)", line,
+				changes.cmake.text(line));
+		}
+		if (changes.other.count > 0) {
+			text += std::format("\nFiles among them that are neither sources nor headers (scripts, libraries...):{}{}",
+				line, changes.other.text(line));
 		}
 		return text;
 	}
@@ -3257,10 +3292,12 @@ std::optional<std::string> edt::vcs_service::describe_code_target(std::string ke
 {
 	std::string target(k_refused_target);
 	std::string text;
+	const auto refused = [&what](std::string_view why) {
+		return std::format("{}\nThis request will be refused: {}", what, edt::forge::escaped_text(why, 512));
+	};
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") {
-		text = std::format("{}: will be refused: {}", what,
-			m_state.reason.empty() ? "git is not available" : m_state.reason);
+		text = refused(m_state.reason.empty() ? "git is not available" : m_state.reason);
 	}
 	else {
 		const protected_scope scope{ m_options.project_root && m_options.project_root().has_value(), project_prefix(),
@@ -3269,32 +3306,33 @@ std::optional<std::string> edt::vcs_service::describe_code_target(std::string ke
 			m_options.run, m_state.git_version);
 		const bool answered = run_bounded_now([&](std::stop_token stop) {
 			if (auto refusal = harden_read(git, stop)) {
-				text = std::format("{}: will be refused: {}", what, edt::vcs::valid_utf8(trim(refusal->err)));
+				text = refused(trim(refusal->err));
 				return;
 			}
 			std::string error;
 			const std::string commit = resolve(git, error, stop);
 			if (commit.empty()) {
-				text = std::format("{}: will be refused: {}", what, error);
+				text = refused(error);
 				return;
 			}
 			target = commit;
 			if (!scope.open) {
-				text = std::format("{} (commit {}): no project is open", what, commit);
+				text = std::format("{} (commit {})\nNo project is open.", what, commit);
 				return;
 			}
 			if (!scope.prefix) {
-				text = std::format("{}: will be refused: the open project is not in this repository", what);
+				text = refused("the open project is not in this repository");
 				return;
 			}
 			text = described_changes(what, commit, changes_of(git, commit, scope, stop), scope, consent);
 		});
 		if (!answered) {
 			target = k_refused_target;
-			text = std::format("{}: will be refused: git did not answer in time", what);
+			text = refused("git did not answer in time");
 		}
 	}
-	remember_described(std::move(key), std::move(target));
+	// Only a question has a ticket to bind the target to; without one nothing would ever take it.
+	if (!consent.ticket.empty()) remember_described(std::move(key), std::move(target));
 	return text;
 }
 
@@ -3302,8 +3340,8 @@ std::optional<std::string> edt::vcs_service::describe_checkout(const std::string
 	vcs_code_consent consent)
 {
 	if (caller.kind == cmd::origin_kind::ui) return std::nullopt;
-	return describe_code_target(described_key(caller, "checkout", { ref }, consent),
-		std::format("Check out '{}'", edt::vcs::valid_utf8(ref)), consent,
+	return describe_code_target(described_key(caller, "checkout", consent.ticket),
+		std::format("Check out '{}'", edt::forge::escaped_text(ref, 256)), consent,
 		[&ref](const git_context& git, std::string& error, std::stop_token stop) {
 			return checkout_commit(git, ref, error, stop);
 		});
@@ -3315,9 +3353,9 @@ std::optional<std::string> edt::vcs_service::describe_pull(const std::string& re
 	if (caller.kind == cmd::origin_kind::ui) return std::nullopt;
 	const std::string what = branch.empty()
 		? std::format("Pull {}",
-			remote.empty() ? std::string("the current branch's upstream") : edt::vcs::valid_utf8(remote))
-		: std::format("Pull '{}' of {}", edt::vcs::valid_utf8(branch), edt::vcs::valid_utf8(remote));
-	return describe_code_target(described_key(caller, "pull", { remote, branch }, consent), what, consent,
+			remote.empty() ? std::string("the current branch's upstream") : edt::forge::escaped_text(remote, 256))
+		: std::format("Pull '{}' of {}", edt::forge::escaped_text(branch, 256), edt::forge::escaped_text(remote, 256));
+	return describe_code_target(described_key(caller, "pull", consent.ticket), what, consent,
 		[&remote, &branch](const git_context& git, std::string& error, std::stop_token stop) {
 			return pull_commit(git, remote, branch, error, stop);
 		});
@@ -3544,7 +3582,7 @@ namespace {
 		edt::vcs_code_consent consent;
 		consent.cmake = flag("cmake_changes");
 		consent.code = consent.cmake || flag("code_changes");
-		consent.asked = !request.confirmation.empty();
+		consent.ticket = request.confirmation;
 		return consent;
 	}
 
@@ -3756,6 +3794,8 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	judge_code_changes(checkout);
+	// The registry hands describe the ticket's id, which the target is remembered by.
+	checkout.describe_before_allowed_invoke = true;
 	checkout.describe = [&service](const cmd::call& request) {
 		return service.describe_checkout(string_arg(request.args.as_object(), "ref"), request.from,
 			code_consent_of(request));
@@ -3788,6 +3828,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	judge_code_changes(pull);
+	pull.describe_before_allowed_invoke = true;
 	pull.describe = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		return service.describe_pull(string_arg(args, "remote"), string_arg(args, "branch"), request.from,
