@@ -3,11 +3,13 @@
 #include "edt_agent_access.h"
 #include "edt_live_build.h"
 #include "edt_mcp_bridge_host.h"
+#include "edt_project_trust_service.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_problem_list.h>
+#include <snk/core/core_project_modules.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <boost/json/object.hpp>
@@ -1416,6 +1418,77 @@ BOOST_AUTO_TEST_CASE(NinjaProgress_IsParsed)
 	BOOST_CHECK(!edt::parse_ninja_progress("[x/10] nope").has_value());
 	BOOST_CHECK(!edt::parse_ninja_progress("-- Configuring done").has_value());
 	BOOST_CHECK(!edt::parse_ninja_progress("[11/10] too far").has_value());
+}
+
+// #921: until the project is trusted an agent's build is denied before anything runs; the person is asked first and
+// the build starts only after "Trust".
+BOOST_AUTO_TEST_CASE(AnUntrustedProject_DeniesAnAgentsBuild_AndAsksThePersonFirst)
+{
+	bool trusted = false;
+	std::function<void()> asked;
+	auto opts = options();
+	opts.trusted = [&trusted] { return trusted; };
+	opts.ask_trust = [&asked](std::function<void()> then) { asked = std::move(then); };
+	make(std::move(opts));
+
+	const auto agent = actions.invoke(edt::game_builder::k_action_id, boost::json::object{}, cmd::origin::agent("s1"));
+	BOOST_CHECK(!agent.ok);
+	BOOST_CHECK_EQUAL(agent.code, cmd::codes::denied);
+	BOOST_CHECK(agent.error.find(edt::k_untrusted_project_error) != std::string::npos);
+	const auto test = actions.invoke(edt::game_builder::k_action_id, boost::json::object{}, cmd::origin::test());
+	BOOST_CHECK(!test.ok);
+	BOOST_CHECK(!builder->is_building());
+
+	BOOST_REQUIRE(actions.activate(edt::game_builder::k_action_id));
+	BOOST_REQUIRE(asked);
+	BOOST_CHECK(!builder->is_building());
+	trusted = true;
+	asked();
+	BOOST_CHECK(builder->is_building());
+	run_to_end();
+	BOOST_CHECK_EQUAL(calls.size(), 2u);
+	BOOST_CHECK(actions.invoke(edt::game_builder::k_action_id, boost::json::object{}, cmd::origin::agent("s1")).ok);
+}
+
+// #921: the digest of build/bin reaches own_build for each built module before game_module_built, whose slot
+// reloads it.
+BOOST_AUTO_TEST_CASE(OwnBuild_IsRecordedBeforeTheModuleIsAnnounced)
+{
+	std::vector<std::string> order;
+	std::string recorded;
+	auto opts = observed_options();
+	opts.own_build = [&](std::string_view module, std::string_view digest) {
+		order.push_back("own " + std::string(module));
+		recorded = digest;
+	};
+	const edt::connection seen = events.game_module_built.subscribe(
+		[&order](const edt::game_module_build_result& result) { order.push_back("built " + result.module); });
+	make(std::move(opts));
+	fs::create_directories(root / "build" / "bin");
+	std::ofstream(module_path(), std::ios::binary) << "the module";
+
+	BOOST_REQUIRE(build().ok);
+	run_to_end();
+	BOOST_TEST((order == std::vector<std::string>{ "own game", "built game" }));
+	const std::optional<std::string> expected = core::module_library_set_digest(module_path().parent_path());
+	BOOST_REQUIRE(expected.has_value());
+	BOOST_CHECK_EQUAL(recorded, *expected);
+}
+
+// A failed build records nothing as the editor's own.
+BOOST_AUTO_TEST_CASE(OwnBuild_NotAfterAFailure)
+{
+	bool recorded = false;
+	auto opts = options();
+	opts.own_build = [&recorded](std::string_view, std::string_view) { recorded = true; };
+	make(std::move(opts));
+	write_module();
+	script = [](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		return exited(index == 1 ? 1 : 0);
+	};
+	BOOST_REQUIRE(build().ok);
+	run_to_end();
+	BOOST_CHECK(!recorded);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

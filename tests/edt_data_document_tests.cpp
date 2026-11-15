@@ -956,6 +956,34 @@ BOOST_AUTO_TEST_CASE(DiskChangeSerial_MovesForANewOutsideVersionOnly)
 	BOOST_TEST(document.disk_change_serial() == first + 1);
 }
 
+// #966: a worlds entry the agents' path rules reject is compared by file for a person: only the world it names is the level's.
+BOOST_AUTO_TEST_CASE(AnOddWorldEntryOfTheOpenLevel_KeepsOnlyTheFileItNamesFromAPerson)
+{
+	fs::create_directories(res_root / "worlds");
+	fs::create_directories(res_root / "levels");
+	const res::tag world = put("worlds/x.desc", R"({"__type":"test.config","speed":1.0})");
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	put("levels/a.desc",
+		R"({"__type":"level_desc","worlds":[{"path":"res://worlds//x.desc"},{"path":"res://worlds/../gone.desc"},{"path":"res://worlds/./missing.desc"}]})");
+	open_level = { "levels/a.desc" };
+
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(file);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const edt::save_result saved = document.save();
+	BOOST_TEST_MESSAGE(saved.error);
+	BOOST_TEST(saved.saved);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
+
+	const edt::open_result of_level = make().open(world);
+	BOOST_TEST(!of_level.opened);
+	BOOST_TEST(of_level.error.find("open level") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(SaveOver_OfAGoneWorldOfTheOpenLevel_IsRefused)
 {
 	fs::create_directories(res_root / "worlds");

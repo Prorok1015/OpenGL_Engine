@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "edt_agent_confirmations.h"
 #include "edt_agent_policy.h"
 #include <snk/command/cmd_registry.h>
 #include <boost/json/parse.hpp>
@@ -747,6 +748,47 @@ BOOST_FIXTURE_TEST_CASE(AnApprovedAsk_RunsOnceThroughTheRealPolicy, gate_fixture
 	again.confirmation = ticket;
 	BOOST_TEST(commands.invoke("code.create", again).ok);
 	BOOST_TEST(runs == 1);
+}
+
+// #931: a call judged as another kind of action than its command's (a checkout that changes code/: vcs_branch and
+// code_edit) needs a grant of each category that asks; a call that only narrows its command's (a code edit of a CMake
+// file) is covered by the grant of its own.
+BOOST_FIXTURE_TEST_CASE(AGrantOfTheCallsCategory_CoversAnotherKindOfActionOnlyWithItsOwn, gate_fixture)
+{
+	edt::session_grants grants;
+	gate->set_session_grants(&grants);
+	gate->set_can_ask(true);
+	const auto add_judged = [this](std::string id, agent_category category, agent_category of_call) {
+		cmd::command_desc desc = command_of(std::move(id), category);
+		desc.category_of = [of_call](const cmd::call&) { return of_call; };
+		desc.invoke = [this](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		registrations.push_back(commands.add(std::move(desc)));
+	};
+	add_judged("vcs.switch", agent_category::vcs_branch, agent_category::code_edit);
+	add_judged("code.edit_cmake", agent_category::code_edit, agent_category::cmake_presets);
+
+	BOOST_TEST(call("vcs.switch").code == cmd::codes::confirmation_required);
+	grants.add("s1", agent_category::code_edit);
+	BOOST_TEST(call("vcs.switch").ok);
+
+	write_project(R"({"categories":{"vcs_branch":"ask"}})");
+	const cmd::result missing = call("vcs.switch");
+	BOOST_REQUIRE(missing.code == cmd::codes::confirmation_required);
+	// What the grant does not cover yet is what is asked for, so "allow for this session" completes it.
+	const auto question = commands.confirmation_of(std::string(missing.value.as_object().at("ticket").as_string()));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST((question->category == agent_category::vcs_branch));
+	grants.add("s1", agent_category::vcs_branch);
+	BOOST_TEST(call("vcs.switch").ok);
+
+	BOOST_TEST(call("code.edit_cmake").code == cmd::codes::confirmation_required);
+	grants.add("s1", agent_category::cmake_presets);
+	BOOST_TEST(call("code.edit_cmake").ok);
+	BOOST_TEST(runs == 3);
+	commands.set_policy_gate(nullptr);
 }
 
 BOOST_FIXTURE_TEST_CASE(AFileThatTurnsToDeny_StopsTheCallAtOnce, gate_fixture)

@@ -3,6 +3,7 @@
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document.h>
 #include <snk/resource/res_tag.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -51,6 +52,8 @@ namespace edt
 		const res::tag& source() const override { return m_source_tag; }
 		// Moves with every edit and every revert.
 		std::uint64_t generation() const override { return m_generation; }
+		// Moves when the working copy is replaced as a whole (open, revert): pointers into its nodes are stale after that.
+		std::uint64_t working_replaced() const { return m_replaced; }
 
 		// Apply: writes the working copy over the prefab's file (see save()).
 		bool can_save() const override { return m_open; }
@@ -81,6 +84,11 @@ namespace edt
 		// Changes the working copy: `change` gets it and says whether it changed anything; the preview follows (reconcile by
 		// node id), the document is dirty when the result differs from the file. False: closed, locked, or nothing changed.
 		bool edit(const std::function<bool(scn::prefab_desc&)>& change);
+		// A node of the working copy by its node ids from the root (empty path: the root); null when the document is closed,
+		// locked (Play) or the path leads nowhere. The Inspector changes it in place, then calls notify_edited().
+		scn::prefab_desc::prefab_node* working_node(const std::vector<std::uint64_t>& path);
+		// The copy was changed through working_node(): the preview follows and the dirty mark is judged again. False: closed or locked.
+		bool notify_edited();
 		// Revert: the working copy comes from the file again (fresh bytes, not the cache), the preview follows. The error
 		// text, empty when it worked; nothing changes on an error.
 		std::string revert();
@@ -120,6 +128,7 @@ namespace edt
 		// code_version_of the file's bytes when it was read or last written: an Apply refuses a file that is not this.
 		std::string m_disk_version;
 		std::uint64_t m_generation = 0;
+		std::uint64_t m_replaced = 0;
 		bool m_changed_on_disk = false;
 		bool m_lower_layer = false;
 		res::resource_system* m_watching = nullptr;
