@@ -309,8 +309,8 @@ BOOST_AUTO_TEST_CASE(AModelFromMemoryThatNamesAnotherFile_FailsTheLoad)
 	const std::string obj = "mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n";
 
 	struct named_file { const char* tag; std::string content; const char* named; };
-	for (const named_file& model : { named_file{ "res://ram/m.gltf", gltf, "the model refers to 'm.bin'" },
-		named_file{ "res://ram/m.obj", obj, "the model refers to 'm.mtl'" } }) {
+	for (const named_file& model : { named_file{ "res://ram/m.gltf", gltf, "m.bin': the model is not a file on the disk" },
+		named_file{ "res://ram/m.obj", obj, "m.mtl': the model is not a file on the disk" } }) {
 		BOOST_TEST_CONTEXT(model.tag) {
 			const std::string error = error_of(adapter(), res::tag(model.tag), text(model.content));
 			BOOST_TEST(error.find(model.tag) != std::string::npos);
