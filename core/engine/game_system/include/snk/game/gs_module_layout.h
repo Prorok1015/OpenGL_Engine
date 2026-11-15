@@ -14,10 +14,10 @@ namespace scn
 // whose size is compiled into module code: a module constructs, copies or allocates them through engine templates
 // (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION), walks their storage (the engine components) or reads them
 // whole from registry.ctx() and the bus (#922). A type the engine creates and a module only reads through
-// inline accessors (scene_layer, context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
+// inline accessors (context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
 // moves nothing a module reads and is a minor change, while a reorder or removal there is a major bump by hand, or in
-// the window of 4.0 (#758) a new layout_revision. world_context has no inline accessor since #802: its layout is the
-// engine's alone. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
+// the window of 4.0 (#758) a new layout_revision. world_context (#802), scene_layer and input_actions (#922 PR 3) have
+// no inline accessor: their layout is the engine's alone. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
 // fields of one size is not caught. A vtable a module calls or fills enters as the <interface>_abi_revision declared
 // next to it, which tools/ci/check_vtable_pins.py holds to its bases and virtual functions; the versions of EnTT,
 // Boost and glm and the sizes of their types enter too (#922). A new type, a comment or a rebuilt engine leave the

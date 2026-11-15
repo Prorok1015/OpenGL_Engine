@@ -1,5 +1,11 @@
 #include <snk/common/ds/ds_store.hpp>
 
+struct ds::app_data_storage::entry {
+	std::uint64_t key;
+	std::string_view name;
+	std::shared_ptr<void> object;
+};
+
 ds::app_data_storage::app_data_storage() = default;
 
 ds::app_data_storage::app_data_storage(app_data_storage* parent)
@@ -77,6 +83,23 @@ const ds::app_data_storage::entry* ds::app_data_storage::find_entry(std::uint64_
 		}
 	}
 	return nullptr;
+}
+
+bool ds::app_data_storage::contains(std::uint64_t key, std::string_view name) const
+{
+	return find_entry(key, name) != nullptr;
+}
+
+void* ds::app_data_storage::find_object(std::uint64_t key, std::string_view name) const
+{
+	const entry* found = find_entry(key, name);
+	return found ? found->object.get() : nullptr;
+}
+
+std::shared_ptr<void> ds::app_data_storage::find_shared(std::uint64_t key, std::string_view name) const
+{
+	const entry* found = find_entry(key, name);
+	return found ? found->object : nullptr;
 }
 
 bool ds::app_data_storage::hidden(std::uint64_t key, std::string_view name) const

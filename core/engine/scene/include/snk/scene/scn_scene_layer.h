@@ -98,7 +98,7 @@ namespace scn
 
 		entt::meta_ctx m_meta;
 		std::unique_ptr<res::resource_system> m_resources;
-		// By pointer (#758): the size of desc_system does not move the members a module reads after it.
+		// By pointer (#758): the size of desc_system does not move the members after it.
 		std::unique_ptr<desc::desc_system> m_descs;
 		ecs_assembler m_assembler;
 		ecs::system_factory m_systems;

@@ -36,7 +36,7 @@ namespace ds {
 
 		template<class T>
 		bool has_value() const {
-			return find_entry(type_key<T>(), type_name<T>()) != nullptr;
+			return contains(type_key<T>(), type_name<T>());
 		}
 
 		template<class T>
@@ -49,15 +49,12 @@ namespace ds {
 
 		template<class T>
 		std::shared_ptr<T> require_shared() const {
-			if (const entry* found = find_entry(type_key<T>(), type_name<T>())) {
-				return std::static_pointer_cast<T>(found->object);
-			}
-			return nullptr;
+			return std::static_pointer_cast<T>(find_shared(type_key<T>(), type_name<T>()));
 		}
 
 		template<class T>
 		T& require() const {
-			const entry* found = find_entry(type_key<T>(), type_name<T>());
+			void* found = find_object(type_key<T>(), type_name<T>());
 			if (!found) {
 				if (hidden(type_key<T>(), type_name<T>())) {
 					throw std::logic_error(std::string{ "ds::app_data_storage::require: " } + std::string{ type_name<T>() }
@@ -66,7 +63,7 @@ namespace ds {
 				// Hard error in every build type: a missing service must not turn into a null dereference.
 				throw std::runtime_error(std::string{ "ds::app_data_storage::require: service not found: " } + std::string{ type_name<T>() });
 			}
-			return *static_cast<T*>(found->object.get());
+			return *static_cast<T*>(found);
 		}
 
 		template<class T, class... A>
@@ -102,11 +99,8 @@ namespace ds {
 		}
 
 	private:
-		struct entry {
-			std::uint64_t key;
-			std::string_view name;
-			std::shared_ptr<void> object;
-		};
+		// Defined in ds_store.cpp: module code never sees its layout.
+		struct entry;
 
 		template<class KEY, class INSTANCE, class... A>
 		KEY& add(A&&... args) {
@@ -121,7 +115,12 @@ namespace ds {
 		void insert(std::uint64_t key, std::string_view name, std::shared_ptr<void> object);
 		void rebuild_index();
 		// Looks in this storage first, then in the parents, up to an isolated storage that does not expose the key.
+		// Used by the .cpp only; templates go through contains, find_object and find_shared.
 		const entry* find_entry(std::uint64_t key, std::string_view name) const;
+		bool contains(std::uint64_t key, std::string_view name) const;
+		// The object found by find_entry, or null.
+		void* find_object(std::uint64_t key, std::string_view name) const;
+		std::shared_ptr<void> find_shared(std::uint64_t key, std::string_view name) const;
 		// Not found because an isolated storage stops the lookup before a parent that has it.
 		bool hidden(std::uint64_t key, std::string_view name) const;
 		void destroy_all();
