@@ -1004,6 +1004,17 @@ void res::resource_system::await_blocks(
     }
   };
 
+  // A wait given up in the loop takes back the edges it added to the dependencies before `i`: their callbacks find no
+  // wait any more and would not, and the graph would hold both blocks until stop_loading (#941).
+  const auto give_up = [this, &state, &owner, id](std::size_t i) {
+    for (std::size_t j = 0; j < i; ++j) {
+      if (const auto &earlier = state->blocks[j].first) {
+        m_graph->remove_edge(owner.get(), earlier.get());
+      }
+    }
+    drop_await(id);
+  };
+
   for (std::size_t i = 0; i < state->blocks.size(); ++i) {
     const auto &[dep, dep_tag] = state->blocks[i];
     if (!dep) {
@@ -1038,7 +1049,7 @@ void res::resource_system::await_blocks(
         }
         fail_owner(member, message);
       }
-      drop_await(id);
+      give_up(i);
       return;
     }
     if (added.result == wait_graph::verdict::too_deep) {
@@ -1047,7 +1058,7 @@ void res::resource_system::await_blocks(
       egLOG_ERROR("res/graph", "{}", message);
       describe(owner, res::diagnostic_kind::load, role_of(*state, i).json_path, message);
       fail_owner(owner, message);
-      drop_await(id);
+      give_up(i);
       return;
     }
 

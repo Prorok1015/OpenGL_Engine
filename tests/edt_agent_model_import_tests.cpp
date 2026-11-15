@@ -327,6 +327,21 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 	BOOST_CHECK(refused->rfind("This request will be refused", 0) == 0u);
 }
 
+#ifndef _WIN32
+// #943: a file name may hold a line break (not on Windows); it must not become a line of the question.
+BOOST_AUTO_TEST_CASE(Describe_AFileNameWithALineBreak_StaysOnOneLine)
+{
+	dir.write("outside/ro\n  harmless.glb", "glb bytes of the robot");
+	const fs::path forged = fs::weakly_canonical(dir.path() / "outside") / "ro\n  harmless.glb";
+
+	const std::optional<std::string> text = service->describe({ forged.string(), "hero", "models" }, agent);
+
+	BOOST_REQUIRE(text.has_value());
+	BOOST_TEST(text->find("\n  harmless.glb") == std::string::npos);
+	BOOST_TEST(text->find("ro\\n  harmless.glb") != std::string::npos);
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(Describe_ShowsOnlyThePathTheSizeAndTheDestination_AndParsesNothing)
 {
 	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };

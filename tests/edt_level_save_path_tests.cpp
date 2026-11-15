@@ -20,6 +20,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -396,10 +397,17 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 // menu bar; the next save of the same file says nothing, and a file of the current version never does.
 BOOST_AUTO_TEST_CASE(SavingALevelOfAnOlderVersion_WarnsOnce_ThatOlderEditorsWillNotOpenIt)
 {
+	std::mutex warnings_mutex;
 	std::vector<std::string> warnings;
-	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn && category == "Editor/Save") warnings.emplace_back(message);
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || category != "Editor/Save") return;
+		std::lock_guard lock(warnings_mutex);
+		warnings.emplace_back(message);
 	});
+	const auto warned = [&] {
+		std::lock_guard lock(warnings_mutex);
+		return warnings;
+	};
 	std::vector<std::string> shown;
 	level_ctrl.on_file_upgraded = [&shown](const std::string& text) { shown.push_back(text); };
 
@@ -424,23 +432,23 @@ BOOST_AUTO_TEST_CASE(SavingALevelOfAnOlderVersion_WarnsOnce_ThatOlderEditorsWill
 	const auto saved = boost::json::parse(read_file(content / "levels" / "old.desc")).as_object();
 	BOOST_TEST(saved.at("__version").to_number<int>() == current);
 	const std::string expected = edt::version_upgrade_text("res://levels/old.desc", 1, current);
-	BOOST_REQUIRE(warnings.size() == 1u);
-	BOOST_TEST(warnings.front() == expected);
+	BOOST_REQUIRE(warned().size() == 1u);
+	BOOST_TEST(warned().front() == expected);
 	BOOST_REQUIRE(shown.size() == 1u);
 	BOOST_TEST(shown.front() == expected);
 	BOOST_TEST(state.level_file_version == current);
 
 	state.commit("edit", edt::commit_mode::state_only);
 	BOOST_REQUIRE(level_ctrl.quick_save_level());
-	BOOST_TEST(warnings.size() == 1u);
+	BOOST_TEST(warned().size() == 1u);
 	BOOST_TEST(shown.size() == 1u);
 
 	// Save As over another file of an older version says so too, a new file does not.
 	dir.write("content/levels/other.desc", R"({"__type":"level_desc","name":"other","worlds":[]})");
 	BOOST_REQUIRE(level_ctrl.save_level_as("levels/other.desc"));
-	BOOST_TEST(warnings.size() == 2u);
+	BOOST_TEST(warned().size() == 2u);
 	BOOST_REQUIRE(level_ctrl.save_level_as("levels/fresh.desc"));
-	BOOST_TEST(warnings.size() == 2u);
+	BOOST_TEST(warned().size() == 2u);
 	BOOST_TEST(shown.size() == 2u);
 }
 

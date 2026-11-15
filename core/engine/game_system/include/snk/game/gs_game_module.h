@@ -17,6 +17,11 @@
 #include <string_view>
 #include <vector>
 
+// The file that declares a module has app_module_entry.h before this header: it alone gets the key's type list (#922).
+#if defined(SNK_DECLARE_MODULE)
+#include <snk/game/gs_module_layout_key.h>
+#endif
+
 namespace scn { class context_manager; }
 namespace cmd { class command_registry; }
 namespace inp { class input_router; }
