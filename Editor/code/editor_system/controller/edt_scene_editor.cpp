@@ -209,7 +209,7 @@ void edt::scene_editor::on_transform_committed(
 		node.has_transform = true;
 	} else {
 		if (!m_services.assembler()) return;
-		const auto base = override_edit::find_base_node(*m_services.assembler(), *address.owner, address.target, world->get_tag());
+		const auto base = override_edit::find_base_node(*m_services.assembler(), *address.owner, address.target, m_state.active_world_tag());
 		if (!base) {
 			egLOG_WARN("editor", "no node below '{}' for the committed transform", address.owner->name);
 			return;

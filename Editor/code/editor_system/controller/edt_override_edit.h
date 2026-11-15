@@ -25,8 +25,7 @@ namespace edt::override_edit
 	// The node of the instantiated content that `target` addresses, composed the way reconcile builds it: records of
 	// every prefab level on the way are applied, only the owner's own edits of this node are left out. Name, id,
 	// placement and components are filled, children are not. Empty if the content has no such node.
-	// `file`: the file whose content `owner` is (the edited world or prefab), open while the owner is expanded as it is
-	// at a spawn, so the owner's records may instantiate its prefab again; the nodes below it expand without it (#995).
+	// `file`: the file `owner` is content of (scene_document::world_tag), open for the owner's expansion only (#993, #995).
 	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
 		const res::tag& file);
 
@@ -44,8 +43,7 @@ namespace edt::override_edit
 		const res::tag& file, std::size_t limit = static_cast<std::size_t>(-1), std::size_t* total = nullptr);
 
 	// Expanding an instance copies prefab content and logs about broken input, so the panels do it once per selection or
-	// edit instead of once per frame. The owner is a node of the active world, whose desc's tag is its file.
-	// Results are kept per (active world, owner node id, target) and dropped as a whole
+	// edit instead of once per frame. Results are kept per (active world, owner node id, target) and dropped as a whole
 	// when scene_document::desc_generation moves, so correctness does not depend on anyone calling invalidate().
 	// Callers get shared ownership: what they hold stays valid whatever the cache does meanwhile.
 	class view_cache
@@ -68,6 +66,7 @@ namespace edt::override_edit
 		};
 
 		void sync_generation();
+		// The owners are nodes of the active world: its file is theirs (#993).
 		res::tag active_file() const;
 
 		const editor_services& m_services;
@@ -115,8 +114,9 @@ namespace edt::override_edit
 	// reference set on an instance is written as {guid, path} too (desc_system::write_references, #773). `level_file` is
 	// the file form of `worlds` (scn::level_desc::build_json); its worlds follow them node by node. A record of the whole
 	// component keeps a path a string where the component holds an object there, since the record is merged into it.
+	// `files`: the file of each world (scene_document::world_tags), empty or short when unknown.
 	void write_record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler,
-		const std::vector<scn::world_desc>& worlds, boost::json::value& level_file);
+		const std::vector<scn::world_desc>& worlds, std::span<const res::tag> files, boost::json::value& level_file);
 
 	void write_transform(
 		prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,

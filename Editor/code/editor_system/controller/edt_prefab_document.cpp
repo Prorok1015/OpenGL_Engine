@@ -107,6 +107,8 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
 	m_open = true;
+	// Built again as content of the edited file, as every later sync is: a reference back to it is refused at once.
+	sync_preview();
 	m_dirty = false;
 	m_changed_on_disk = false;
 	m_saved_form = working_form();

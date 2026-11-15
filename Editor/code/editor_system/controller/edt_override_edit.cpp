@@ -139,7 +139,7 @@ namespace
 
 		record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler) : m_descs(descs), m_assembler(assembler) {}
 
-		// The file the nodes handed to node() are content of: the world they are in.
+		// A world's records may instantiate a prefab its instance nodes instantiate: only its file says so (#993).
 		void set_file(const res::tag& file) { m_file = file; }
 
 		void node(const prefab_node& edited, boost::json::object& written)
@@ -213,14 +213,14 @@ namespace
 }
 
 void edt::override_edit::write_record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler,
-	const std::vector<scn::world_desc>& worlds, json::value& level_file)
+	const std::vector<scn::world_desc>& worlds, std::span<const res::tag> files, json::value& level_file)
 {
 	json::value* written = level_file.is_object() ? level_file.as_object().if_contains("worlds") : nullptr;
 	// A level saved over its parent may leave the worlds out.
 	if (!written || !written->is_array() || written->as_array().size() != worlds.size()) return;
 	record_references records(descs, assembler);
 	for (std::size_t i = 0; i < worlds.size(); ++i) {
-		records.set_file(worlds[i].get_tag());
+		records.set_file(i < files.size() ? files[i] : res::tag{});
 		if (json::object* world = written->as_array()[i].if_object()) records.node(worlds[i].get_root(), *world);
 	}
 }
@@ -359,8 +359,7 @@ void edt::override_edit::view_cache::invalidate()
 
 res::tag edt::override_edit::view_cache::active_file() const
 {
-	const scn::world_desc* world = m_state.active_world_desc();
-	return world ? world->get_tag() : res::tag{};
+	return m_state.active_world_tag();
 }
 
 void edt::override_edit::view_cache::sync_generation()

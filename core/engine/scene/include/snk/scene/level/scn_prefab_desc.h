@@ -116,9 +116,8 @@ namespace scn {
 		entt::entity live,
 		const prefab_desc::prefab_node& node,
 		reconcile_mode mode);
-	// `file`: the file whose content `node` is, empty when unknown (as the overload above). A known file is open while
-	// `node` is built, as in assemble_prefab: its records may instantiate the prefab `node` instantiates, a record that
-	// instantiates `file` itself is refused, and it counts for the nesting depth. Nothing is built if `file` is open already.
+	// `file`: the file `node` is content of, empty when unknown. It is open while `node` is built, as in assemble_prefab:
+	// a record of it may instantiate the prefab `node` instantiates, one that instantiates `file` itself is refused.
 	SNK_API void reconcile(
 		const ecs_assembler& assembler,
 		entt::registry& reg,

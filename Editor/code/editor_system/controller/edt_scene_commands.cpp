@@ -822,7 +822,7 @@ namespace {
 			// A node of the prefab's content: the edit becomes override records on the instance.
 			scn::ecs_assembler* assembler = ctx.sources.services.assembler();
 			if (!assembler) return failure(cmd::codes::failed, "no assembler to expand the prefab instance");
-			const auto base = edt::override_edit::find_base_node(*assembler, *at.owner, at.target, scene.world_descs[at.world].get_tag());
+			const auto base = edt::override_edit::find_base_node(*assembler, *at.owner, at.target, scene.world_tag(at.world));
 			if (!base) return failure(cmd::codes::not_found, "no node at that path inside the instance");
 			const auto component = base->components.find(key);
 			if (component == base->components.end()) {
@@ -877,7 +877,7 @@ namespace {
 
 			scn::ecs_assembler* assembler = ctx.sources.services.assembler();
 			if (!assembler) return failure(cmd::codes::failed, "no assembler to expand the prefab instance");
-			const auto base = edt::override_edit::find_base_node(*assembler, *at.owner, at.target, scene.world_descs[at.world].get_tag());
+			const auto base = edt::override_edit::find_base_node(*assembler, *at.owner, at.target, scene.world_tag(at.world));
 			if (!base) return failure(cmd::codes::not_found, "no node at that path inside the instance");
 			glm::vec3 pos{};
 			glm::vec3 rot{};

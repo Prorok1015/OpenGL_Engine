@@ -2051,13 +2051,15 @@ std::string grown_with(std::string_view added_prefab)
 		R"({"__id":"00000000000000e1","name":"added","components":{"ref":"memory://t/)" + std::string(added_prefab) + R"("}}}]})");
 }
 
-// Counts the warnings that refuse a reference to the desc that holds it; resource io threads log too (#978).
-class self_reference_log
+// Counts the log lines of `level` that hold `needle`; resource io threads log too (#978).
+class log_count
 {
 public:
-	self_reference_log()
-		: m_sink(engine::add_log_sink([this] (std::string_view, engine::log_level level, std::string_view message) {
-			if (level != engine::log_level::warn || message.find("refers to itself") == std::string_view::npos) return;
+	log_count(engine::log_level level, std::string needle)
+		: m_level(level)
+		, m_needle(std::move(needle))
+		, m_sink(engine::add_log_sink([this] (std::string_view, engine::log_level at, std::string_view message) {
+			if (at != m_level || message.find(m_needle) == std::string_view::npos) return;
 			std::lock_guard lock(m_mutex);
 			++m_count;
 		}))
@@ -2070,9 +2072,11 @@ public:
 	}
 
 private:
+	const engine::log_level m_level;
+	const std::string m_needle;
 	mutable std::mutex m_mutex;
 	std::size_t m_count = 0;
-	// Last: removed before what it writes to goes.
+	// Last: removed before what it reads and writes goes.
 	engine::log_sink_handle m_sink;
 };
 
@@ -2101,7 +2105,7 @@ BOOST_AUTO_TEST_CASE(Reconcile_WithTheNodesFile_ExpandsARecordThatInstantiatesTh
 	BOOST_TEST(reg.get<scn::prefab_instance>(added).source_prefab == leaf_tag);
 	BOOST_TEST(reg.get<scn::prefab_instance>(added).content_of == file_tag);
 
-	const self_reference_log refusals;
+	const log_count refusals(engine::log_level::warn, "refers to itself");
 	const auto unknown = reg.create();
 	scn::reconcile(*assembler, reg, unknown, node, scn::reconcile_mode::spawn);
 	BOOST_TEST((child_names(reg, unknown) == std::vector<std::string>{ "tip", "added" }));
@@ -2121,7 +2125,7 @@ BOOST_AUTO_TEST_CASE(Reconcile_WithTheNodesFile_RefusesARecordThatInstantiatesTh
 	auto grows = load<scn::prefab_desc>(file_tag);
 	BOOST_REQUIRE(grows);
 
-	const self_reference_log refusals;
+	const log_count refusals(engine::log_level::warn, "refers to itself");
 	entt::registry reg;
 	const auto e = reg.create();
 	scn::reconcile(*assembler, reg, e, grows->get_root().children.at(0), scn::reconcile_mode::spawn, file_tag);
@@ -2159,7 +2163,7 @@ BOOST_AUTO_TEST_CASE(ExpandInstance_WithTheNodesFile_KeepsARecordThatInstantiate
 	BOOST_TEST(known_source == leaf_tag);
 	BOOST_TEST(source_of_added(known) == leaf_tag);
 
-	const self_reference_log refusals;
+	const log_count refusals(engine::log_level::warn, "refers to itself");
 	scn::prefab_desc::prefab_node unknown;
 	res::tag unknown_source;
 	BOOST_REQUIRE(scn::expand_instance(*assembler, node, unknown, unknown_source));
@@ -2175,7 +2179,7 @@ BOOST_AUTO_TEST_CASE(ExpandInstance_WithTheNodesFile_RefusesARecordThatInstantia
 	auto grows = load<scn::prefab_desc>(file_tag);
 	BOOST_REQUIRE(grows);
 
-	const self_reference_log refusals;
+	const log_count refusals(engine::log_level::warn, "refers to itself");
 	scn::prefab_desc::prefab_node expanded;
 	res::tag source;
 	BOOST_REQUIRE(scn::expand_instance(*assembler, grows->get_root().children.at(0), expanded, source, file_tag));
@@ -2225,6 +2229,75 @@ BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseRecordInstantiatesItsPrefab
 	BOOST_TEST(reg.get<scn::prefab_instance>(added).source_prefab == leaf_tag);
 	BOOST_TEST((child_names(reg, added) == std::vector<std::string>{ "tip2" }));
 	BOOST_TEST(reg.get<scn::prefab_instance>(n).content_of == host_tag);
+}
+
+// A file open in the running spawn is not opened again by code that names it from inside that spawn (#993).
+BOOST_AUTO_TEST_CASE(Reconcile_WithAFileOpenInTheRunningSpawn_IsRefused_AndBuildsNothing)
+{
+	const auto file_tag = put("outer.prefab.desc",
+		R"({"__type":"prefab_desc","__version":4,"components":{"stat":{"__type":"stat_desc","hp":1}}})");
+	auto outer = load<scn::prefab_desc>(file_tag);
+	BOOST_REQUIRE(outer);
+
+	scn::prefab_desc::prefab_node inner;
+	inner.name = "inner";
+	scn::prefab_desc::prefab_node kid;
+	kid.name = "kid";
+	inner.children.push_back(kid);
+	// The outer file's component is built while the file is open: its spawner hands a node of that file to reconcile.
+	entt::entity reached = entt::null;
+	assembler->register_desc_spawner("stat_desc", [&] (entt::registry& r, entt::entity, const desc::desc_base&, std::string_view) {
+		reached = r.create();
+		scn::reconcile(*assembler, r, reached, inner, scn::reconcile_mode::spawn, file_tag);
+	});
+
+	const log_count refusals(engine::log_level::error, "it is not built again");
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *outer, "outer", file_tag);
+
+	BOOST_REQUIRE(reg.valid(reached));
+	BOOST_TEST(child_names(reg, reached).empty());
+	BOOST_TEST(refusals.count() == 1u);
+}
+
+// The changed prefab's content that refers back to the file the live instance node is content of is refused on a reload,
+// as on a spawn of that file: the file is open while the node is rebuilt (#993).
+BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_RefusesAReferenceBackToTheFileItIsContentOf)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto host_tag = put("host.prefab.desc", prefab_with_children(instance_child("n", "leaf.prefab.desc")));
+	auto host = load<scn::prefab_desc>(host_tag);
+	BOOST_REQUIRE(host);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *host, "host", host_tag);
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_REQUIRE(reg.get<scn::prefab_instance>(n).content_of == host_tag);
+
+	put("leaf.prefab.desc", prefab_with_children(instance_child("back", "host.prefab.desc")));
+	rs->signal_changed(leaf_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(leaf_tag));
+
+	BOOST_TEST((child_named(reg, root, "n") == n));
+	BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "back" }));
+	const auto back = child_named(reg, n, "back");
+	BOOST_REQUIRE(reg.valid(back));
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(back));
+	BOOST_TEST(child_names(reg, back).empty());
+	BOOST_TEST(spawned_nodes(reg) == 2u);
+
+	// A spawn of the host refuses it at the same node.
+	entt::registry fresh;
+	auto fresh_root = fresh.create();
+	scn::assemble_prefab(*assembler, fresh, fresh_root, *host, "host", host_tag);
+	BOOST_TEST(spawned_nodes(fresh) == 2u);
+
+	take_apart(load<scn::prefab_desc>(leaf_tag));
+	take_apart(load<scn::prefab_desc>(host_tag));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

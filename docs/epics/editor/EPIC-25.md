@@ -22,7 +22,7 @@
 | Термин | Описание |
 |---|---|
 | **prefab source** | Файл `res://objects/robot/robot.prefab.desc` — источник правды |
-| **prefab instance** | `prefab_instance { source_prefab, local_overrides }` — размещение prefab в мире |
+| **prefab instance** | `prefab_instance { source_prefab, local_overrides, content_of }` — размещение prefab в мире; `content_of` — файл, содержимым которого является узел экземпляра (#993) |
 | **override** | Изменение поля компонента в конкретном инстансе, скрывающее значение из source |
 | **prefab variant** | Отдельный `.prefab.desc` файл, наследующий source через `base_prefab` с набором override'ов |
 | **prefab context** | Изолированный ECS world + `prefab_desc`, открытый в Prefab Editor |
@@ -43,6 +43,7 @@ struct prefab_instance {
     glm::vec3 rotation{0};
     glm::vec3 scale{1};
     std::vector<prefab_override_entry> overrides;
+    res::tag content_of;           // файл, содержимым которого является узел экземпляра (#993)
 };
 ```
 
