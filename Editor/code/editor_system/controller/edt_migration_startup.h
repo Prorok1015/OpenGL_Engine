@@ -13,9 +13,12 @@
 namespace edt
 {
 	// What the editor does about migrations a project was left with (EPIC-58 S8, #761) once the project is open and its
-	// start level settled: a person is asked whether to roll the first one back now; headless nobody is asked, a WARN names
-	// the command line that does it. A folder name that is no migration id (valid_migration_id) is not offered for a
-	// rollback: the person is told why (`inform`). No ImGui.
+	// start level settled: a person is asked whether to roll the first one back now (Roll Back opens the Project Migration
+	// window with the rollback's full listing and its question; nothing runs before the person confirms there); headless
+	// nobody is asked, a WARN names the command line that does it. A folder name that is no migration id
+	// (valid_migration_id), or a journal the rollback's question would refuse (#910: a backup elsewhere, a path outside the
+	// content roots, a listing too long to show...), is not offered for a rollback: the person is told why (`inform`). No
+	// ImGui.
 	struct journal_offer
 	{
 		enum class kind : std::uint8_t { none, ask, inform, warn };
@@ -30,8 +33,10 @@ namespace edt
 	inline constexpr std::string_view k_journal_offer_roll_back = "Roll Back";
 	inline constexpr std::string_view k_journal_offer_later = "Later";
 
-	// `unfinished`: prj::migration::unfinished_migrations of the project's root.
-	journal_offer decide_journal_offer(const std::vector<std::string>& unfinished, bool headless);
+	// `unfinished`: prj::migration::unfinished_migrations of the project's root. `refused`: why the journal of the first one
+	// is not offered for a rollback (migration_startup::ports::journal_refusal); nullopt: it may be.
+	journal_offer decide_journal_offer(const std::vector<std::string>& unfinished, bool headless,
+		const std::optional<std::string>& refused = std::nullopt);
 
 	// The save block of a migration (or a rollback) that stopped half way (#761): it holds for the whole project, whatever
 	// level is loaded meanwhile, until `rolled_back()` says that migration was rolled back. No ImGui.
@@ -72,6 +77,10 @@ namespace edt
 			std::function<bool()> settled;
 			// prj::migration::unfinished_migrations of the project.
 			std::function<std::vector<std::string>()> unfinished;
+			// Why the journal of a migration id is not offered for a rollback (edt::rollback_listing_of's refusal: it fails
+			// prj::migration::check_journal_paths, or it is too long to show and the command line is the way out); nullopt
+			// (or null): it may be.
+			std::function<std::optional<std::string>(const std::string& id)> journal_refusal;
 			// Asks the person (an `ask` or an `inform` offer).
 			std::function<void(const journal_offer& offer)> ask;
 			std::function<void(const std::string& text)> warn;
