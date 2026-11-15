@@ -2426,7 +2426,7 @@ res::mount_table res::resource_system::project_mount_table(
     const std::filesystem::path &user_dir, const std::filesystem::path &code_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
   if (engine_base.empty()) {
-    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
+    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted, so the UI font and the shaders of the render passes are read from the project's res://");
   }
 
   std::vector<fs::path> layers;
@@ -2462,7 +2462,7 @@ res::mount_table res::resource_system::shipping_mount_table(
     const std::filesystem::path &user_dir, const std::filesystem::path &scratch_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
   if (engine_base.empty()) {
-    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
+    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted, so the UI font and the shaders of the render passes are read from the project's res://");
   }
 
   std::vector<fs::path> layers;
@@ -2595,6 +2595,12 @@ void res::resource_system::release_in_parents(const res::tag &target) {
 bool res::resource_system::needed_by_layers(const res::tag &tag) const {
   std::lock_guard lock(m_layer_needs_mutex);
   return m_layer_needs.contains(tag);
+}
+
+res::tag res::resource_system::engine_file(std::string_view relative) const
+{
+	const bool engine_mounted = static_cast<bool>(root().resolver_for(tag::engine));
+	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
 }
 
 bool res::resource_system::exists(const tag& tag) const

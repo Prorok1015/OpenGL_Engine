@@ -4,8 +4,12 @@
 #include "rnd_pass_pipelines.h"
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
+#include <utility>
 
 namespace rnd {
+z_prepass::z_prepass(res::tag vertex_shader, res::tag fragment_shader)
+    : m_vertex_shader(std::move(vertex_shader)), m_fragment_shader(std::move(fragment_shader)) {}
+
 void z_prepass::execute(render_context &context, driver::driver_interface &drv) {
   PROFILE_SCOPE("Pass.ZPrepass");
   PROFILE_GPU_SCOPE("Pass.ZPrepass");
@@ -58,8 +62,8 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
                                 packet.camera.viewport.y, vp_width, vp_height});
 
 	auto z_prepass_program = rnd::shader_config::shader_program_data::build()
-        .set_vertex_shader(res::tag::make("shaders/z_prepass.vert"))
-        .set_fragment_shader(res::tag::make("shaders/z_prepass.frag"));
+        .set_vertex_shader(m_vertex_shader)
+        .set_fragment_shader(m_fragment_shader);
 
     auto& variants = context.variants();
     std::pmr::vector<rnd::variant_id> z_variants(ds::frame_allocator());

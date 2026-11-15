@@ -95,11 +95,11 @@ pass_draws run_scene(const std::vector<bool>& wireframe_of_cameras)
 	}
 	context.use_packets(&packets);
 
-	z_prepass z;
+	z_prepass z{ res::tag::make("shaders/z_prepass.vert"), res::tag::make("shaders/z_prepass.frag") };
 	opaque_pass opaque;
 	skybox_pass sky;
 	transparent_pass transparent;
-	composition_pass composition;
+	composition_pass composition{ res::tag::make("shaders/composition.vert"), res::tag::make("shaders/composition.frag") };
 	pass_draws out;
 	out.z = run(z, context, drv);
 	out.opaque = run(opaque, context, drv);

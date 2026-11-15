@@ -4,6 +4,7 @@
 #include "rnd_pass_pipelines.h"
 #include <snk/driver/rnd_buffer_layout.h>
 #include <snk/common/eng_profiler.h>
+#include <snk/resource/res_system.h>
 
 namespace rnd {
 
@@ -36,8 +37,8 @@ void debug_pass::ensure_resources(driver::driver_interface& drv)
 
 	shader_config cfg;
 	cfg.cdata.program = shader_config::shader_program_data::build()
-		.set_vertex_shader(res::tag::make("shaders/debug_line.vert"))
-		.set_fragment_shader(res::tag::make("shaders/debug_line.frag"));
+		.set_vertex_shader(m_res_sys.engine_file("shaders/debug_line.vert"))
+		.set_fragment_shader(m_res_sys.engine_file("shaders/debug_line.frag"));
 
 	const auto source = cfg.load(m_res_sys, drv.bindings());
 	if (source.ok()) {

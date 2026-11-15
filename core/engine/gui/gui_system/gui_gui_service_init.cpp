@@ -20,12 +20,11 @@ namespace {
 // Where the window layout (ImGui's ini) is loaded from and saved to; empty: it is not kept on disk, so a process writes no
 // file into the folder it was started from (#713). The editor sets a default in the user's folder (editor::apply_default_settings).
 CFG_VAR_DEF_PATH(cfg_gui_layout_file, "gui/layout_file", "");
+}
 
-// The shipped UI font (core/res, base layer). Not an error when it is absent: the backend keeps the built-in
-// ImGui font, so the editor starts and looks as it did before the font was added.
-std::vector<std::byte> load_ui_font_bytes(res::resource_system& resources)
+std::vector<std::byte> engine::gui::load_ui_font_bytes(res::resource_system& resources)
 {
-	const res::tag font_tag{ "res://fonts/NotoSans-Regular.ttf" };
+	const res::tag font_tag = resources.engine_file("fonts/NotoSans-Regular.ttf");
 	if (!resources.exists(font_tag)) {
 		egLOG_WARN("gui", "UI font '{}' not found, using the built-in ImGui font (no Cyrillic)", font_tag.view());
 		return {};
@@ -36,7 +35,6 @@ std::vector<std::byte> load_ui_font_bytes(res::resource_system& resources)
 		return {};
 	}
 	return font->bytes();
-}
 }
 
 void engine::gui::gui_init(ds::app_data_storage& data)
