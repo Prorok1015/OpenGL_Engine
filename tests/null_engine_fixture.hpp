@@ -33,6 +33,7 @@
 #include <snk/scene/scn_scene_service_init.h>
 #include <snk/window/wnd_null_window_system.h>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -42,6 +43,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifndef SNK_TEST_PROJECT_DIR
 #error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
@@ -106,10 +108,44 @@ inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::s
 	}
 }
 
+// A 16x16 24-bit BMP of one colour; stb_image reads it by its content whatever the file's extension.
+inline std::vector<std::byte> small_bmp(std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+	constexpr std::uint32_t side = 16;
+	constexpr std::uint32_t pixels_offset = 54;
+	constexpr std::uint32_t file_size = pixels_offset + side * side * 3;
+	std::vector<std::byte> bmp(file_size);
+	const auto put = [&bmp](std::size_t at, std::uint32_t value, int bytes) {
+		for (int i = 0; i < bytes; ++i) bmp[at + i] = std::byte(value >> (8 * i));
+	};
+	bmp[0] = std::byte('B');
+	bmp[1] = std::byte('M');
+	put(2, file_size, 4);
+	put(10, pixels_offset, 4);
+	put(14, 40, 4);
+	put(18, side, 4);
+	put(22, side, 4);
+	put(26, 1, 2);
+	put(28, 24, 2);
+	for (std::size_t at = pixels_offset; at < file_size; at += 3) {
+		bmp[at] = std::byte(b);
+		bmp[at + 1] = std::byte(g);
+		bmp[at + 2] = std::byte(r);
+	}
+	return bmp;
+}
+
 inline void mount_repo_res(test_util::ram_resolver& ram)
 {
 	for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, (fs::path{ SNK_TEST_PROJECT_DIR } / "res") }) {
 		mount_dir(ram, root, res::tag::default_protocol());
+	}
+	// The shipped sky faces are 2048x2048 JPEGs: decoding six of them in every level with a sky cost seconds of
+	// Debug test time, and no check reads their pixels (#977).
+	for (const char* face : { "right", "left", "top", "bottom", "front", "back" }) {
+		const res::tag tag{ res::tag::default_protocol(), std::string{ "skybox/" } + face + ".jpg" };
+		BOOST_REQUIRE_MESSAGE(ram.files.contains(tag), "the sky face moved: update the small sky of the test fixture");
+		ram.files[tag] = small_bmp(96, 128, 192);
 	}
 }
 
