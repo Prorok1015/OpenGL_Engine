@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.16)
 project(editor_system)
 add_library(${PROJECT_NAME} STATIC)
 add_library(snk::editor_system ALIAS ${PROJECT_NAME})
+if(MSVC)
+	# edt_editor_system.cpp registers every command, panel and adapter of the editor: more sections than a default MSVC
+	# object file allows (C1128).
+	target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+endif()
 
 # snk_editor_api: the part of the editor a game_editor module calls into (the registries, editor_context and the
 # services it hands out, panel_base; #587). A shared library next to snk_engine when the engine is shared, so the
