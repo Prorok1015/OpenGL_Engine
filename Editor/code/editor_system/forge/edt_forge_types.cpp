@@ -3,6 +3,7 @@
 #include <format>
 #include <algorithm>
 #include <cctype>
+#include <snk/common/text_escape.h>
 
 namespace {
 
@@ -44,7 +45,8 @@ namespace {
 		return length;
 	}
 
-	// Controls, bidi controls and characters that draw nothing.
+	// Controls, bidi controls and characters that draw nothing. Narrower than text_escape::is_hidden_code_point:
+	// sanitize_text and is_plain_text pass a PR's text, where a no-break space or an emoji's variation selector is fine.
 	bool is_unsafe_to_show(char32_t c)
 	{
 		if (c < 0x20 || (c >= 0x7F && c <= 0x9F)) return true;
@@ -186,43 +188,7 @@ std::string edt::forge::sanitize_text(std::string_view text, std::size_t max_byt
 
 std::string edt::forge::escaped_text(std::string_view text, std::size_t max_bytes)
 {
-	std::string out;
-	out.reserve(std::min(text.size(), max_bytes));
-	// The longest prefix of whole pieces that still leaves room for "...".
-	std::size_t room_for_dots = 0;
-	bool cut = false;
-	std::size_t i = 0;
-	while (i < text.size()) {
-		char32_t code = 0;
-		std::size_t length = decode_utf8(text.substr(i), code);
-		std::string piece;
-		if (length == 0) {
-			length = 1;
-			piece = std::format("\\x{{{:02X}}}", static_cast<unsigned>(static_cast<unsigned char>(text[i])));
-		} else if (code == U'\n') {
-			piece = "\\n";
-		} else if (code == U'\r') {
-			piece = "\\r";
-		} else if (code == U'\t') {
-			piece = "\\t";
-		} else if (is_unsafe_to_show(code)) {
-			piece = std::format("\\u{{{:04X}}}", static_cast<std::uint32_t>(code));
-		} else {
-			piece = text.substr(i, length);
-		}
-		if (out.size() + piece.size() > max_bytes) {
-			cut = true;
-			break;
-		}
-		out += piece;
-		i += length;
-		if (out.size() + 3 <= max_bytes) room_for_dots = out.size();
-	}
-	if (cut) {
-		out.resize(room_for_dots);
-		if (max_bytes >= 3) out += "...";
-	}
-	return out;
+	return text_escape::escaped_text(text, max_bytes);
 }
 
 bool edt::forge::is_plain_text(std::string_view text, bool allow_line_breaks)

@@ -189,7 +189,8 @@ BOOST_AUTO_TEST_CASE(EscapedText_WritesOutWhatWouldBreakTheLineOrNotShow)
 	BOOST_TEST(escaped_text("a\r\tb\x07" "c\x7F", 100) == "a\\r\\tb\\u{0007}c\\u{007F}");
 	BOOST_TEST(escaped_text("txt\xE2\x80\xAE" "exe\xE2\x80\x8B", 100) == "txt\\u{202E}exe\\u{200B}");
 	BOOST_TEST(escaped_text("a\xFF" "b\xC3", 100) == "a\\x{FF}b\\x{C3}");
-	BOOST_TEST(escaped_text("C:\\models\\n.glb", 100) == "C:\\models\\n.glb");
+	// A backslash is doubled, so a "\\n" of the text never reads as an escaped line break.
+	BOOST_TEST(escaped_text("C:\\models\\n.glb", 100) == "C:\\\\models\\\\n.glb");
 	const std::string escaped = escaped_text(std::string(40, '\n'), 100);
 	BOOST_TEST(escaped.find('\n') == std::string::npos);
 }
@@ -203,7 +204,7 @@ BOOST_AUTO_TEST_CASE(EscapedText_IsCutAtAWholeCharacterOrEscape)
 	BOOST_TEST(escaped_text("ab\xE2\x80\xAE", 10) == "ab\\u{202E}");
 	BOOST_TEST(escaped_text("ab\xE2\x80\xAE" "c", 10) == "ab...");
 	BOOST_TEST(escaped_text("\xC3\xBC\xC3\xBC\xC3\xBC\xC3\xBC", 6) == "\xC3\xBC...");
-	BOOST_TEST(escaped_text("abc", 2) == "");
+	BOOST_TEST(escaped_text("abc", 2) == "ab");
 	BOOST_TEST(escaped_text("", 0) == "");
 }
 

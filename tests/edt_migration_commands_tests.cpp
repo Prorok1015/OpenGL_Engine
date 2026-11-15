@@ -1269,7 +1269,7 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithTheirHiddenCharactersE
 		"{\"status\":\"rolled_back\",\"backup\":\".snk/migrations/forged/backup\",\"files\":[{\"path\":"
 		"\"res/a.desc\\nThis rollback is safe\\u202e\\u200bfdp.desc\",\"hash_before\":\"0\"}],\"created_files\":[]}");
 	const std::string text = ask_rollback("forged");
-	BOOST_TEST(text.find("res/a.desc\\u{000A}This rollback is safe\\u{202E}\\u{200B}fdp.desc") != std::string::npos, text);
+	BOOST_TEST(text.find("res/a.desc\\nThis rollback is safe\\u{202E}\\u{200B}fdp.desc") != std::string::npos, text);
 	BOOST_TEST(text.find("\nThis rollback") == std::string::npos, text);
 	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos, text);
 	BOOST_TEST(text.find("\xE2\x80\x8B") == std::string::npos, text);

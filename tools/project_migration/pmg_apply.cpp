@@ -1,6 +1,7 @@
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
@@ -212,54 +213,10 @@ namespace
 		return std::nullopt;
 	}
 
-	// A journal's path longer than this is refused; escaped (at most 8 bytes for each byte) it still fits the cut below, so
-	// every path a question lists is shown whole.
+	// A journal's path longer than this is refused. Escaped, a byte takes at most 8 bytes (\u{0001}; a byte that is no
+	// UTF-8, \x{FF}, takes 6), so such a path always fits the cut below and every path a question lists is shown whole.
 	constexpr std::size_t k_max_journal_path_bytes = 1024;
 	constexpr std::size_t k_max_shown_path_bytes = 8 * k_max_journal_path_bytes;
-
-	// One code point of `text` at `at`: its value and length; nullopt for a byte that starts no valid UTF-8 sequence.
-	std::optional<std::pair<char32_t, std::size_t>> code_point_at(std::string_view text, std::size_t at)
-	{
-		const auto byte = [&text](std::size_t i) { return static_cast<unsigned char>(text[i]); };
-		const unsigned char lead = byte(at);
-		if (lead < 0x80) return std::pair{ static_cast<char32_t>(lead), std::size_t{ 1 } };
-		std::size_t length = 0;
-		std::uint32_t value = 0;
-		std::uint32_t least = 0;
-		if ((lead & 0xe0) == 0xc0) {
-			length = 2;
-			value = lead & 0x1fu;
-			least = 0x80;
-		} else if ((lead & 0xf0) == 0xe0) {
-			length = 3;
-			value = lead & 0x0fu;
-			least = 0x800;
-		} else if ((lead & 0xf8) == 0xf0) {
-			length = 4;
-			value = lead & 0x07u;
-			least = 0x10000;
-		} else {
-			return std::nullopt;
-		}
-		if (at + length > text.size()) return std::nullopt;
-		for (std::size_t i = 1; i < length; ++i) {
-			if ((byte(at + i) & 0xc0) != 0x80) return std::nullopt;
-			value = (value << 6) | (byte(at + i) & 0x3fu);
-		}
-		if (value < least || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return std::nullopt;
-		return std::pair{ static_cast<char32_t>(value), length };
-	}
-
-	// What could forge or hide a part of a line a person reads: controls (C0, DEL, C1), bidi controls, line and paragraph
-	// separators, invisible, zero-width and fill characters, variation selectors, tags, and spaces other than U+0020
-	// (one that looks like a space would make two paths read alike).
-	bool is_hidden_code_point(char32_t c)
-	{
-		return c < 0x20 || (c >= 0x7f && c <= 0xa0) || c == 0xad || c == 0x61c || c == 0x115f || c == 0x1160 || c == 0x180e
-			|| (c >= 0x2000 && c <= 0x200f) || (c >= 0x2028 && c <= 0x202f) || (c >= 0x205f && c <= 0x2064) || (c >= 0x2066 && c <= 0x206f)
-			|| c == 0x3000 || c == 0x3164 || (c >= 0xfe00 && c <= 0xfe0f) || c == 0xfeff || c == 0xffa0 || c == 0xe0001
-			|| (c >= 0xe0020 && c <= 0xe007f);
-	}
 
 	// The first component of a journal path, or the path itself.
 	std::string_view first_component(std::string_view path)
@@ -1273,23 +1230,7 @@ std::vector<std::string> prj::migration::unfinished_migrations(const fs::path& r
 
 std::string prj::migration::journal_path_text(std::string_view path)
 {
-	std::string out;
-	out.reserve(path.size() < k_max_shown_path_bytes ? path.size() : k_max_shown_path_bytes);
-	for (std::size_t at = 0; at < path.size();) {
-		const auto point = code_point_at(path, at);
-		std::string unit;
-		if (!point) unit = std::format("\\x{:02X}", static_cast<unsigned char>(path[at]));
-		else if (is_hidden_code_point(point->first)) unit = std::format("\\u{{{:04X}}}", static_cast<std::uint32_t>(point->first));
-		else if (point->first == U'\\') unit = "\\\\";
-		else unit = std::string(path.substr(at, point->second));
-		if (out.size() + unit.size() > k_max_shown_path_bytes) {
-			out += "...";
-			break;
-		}
-		out += unit;
-		at += point ? point->second : 1;
-	}
-	return out;
+	return text_escape::escaped_text(path, k_max_shown_path_bytes);
 }
 
 std::optional<std::string> prj::migration::check_journal_paths(const fs::path& root, std::string_view id, const journal_paths& journal)
