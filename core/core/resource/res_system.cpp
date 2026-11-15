@@ -8,9 +8,12 @@
 #include <snk/resource/res_asset_id.h>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <format>
 #include <functional>
+#include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <string>
@@ -751,6 +754,9 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
     start_loading(tag, block, std::move(found));
   }
   if (sync) {
+    if (!is_finished(*block)) {
+      warn_sync_wait(tag);
+    }
     wait_for_block(block);
   }
   return block;
@@ -763,6 +769,14 @@ res::resource_system::refused_block(const res::tag &tag, std::string reason) {
   block->diagnostics.set_resource(std::string{tag.view()});
   block->set_error(std::move(reason));
   return block;
+}
+
+res::tag res::refused_tag(const res::tag &own, const core::res::res_control_block_base *block) {
+  if (own.is_valid() || !block || block->status.load() != core::res::res_status::error) {
+    return own;
+  }
+  const std::string recorded = block->diagnostics.read().resource;
+  return recorded.empty() ? own : res::tag{recorded};
 }
 
 void res::resource_system::start_loading(const res::tag &tag,
@@ -875,13 +889,7 @@ void res::resource_system::deserialize_stage(const res::tag &tag,
   }
   try {
     const res::load_scope scope(block);
-    const auto started = std::chrono::steady_clock::now();
     block->set_ready(ad->deserialize(tag, raw->data, deps));
-    // Where a slow test spends its loads (#977): only what takes long enough to matter.
-    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
-    if (took >= std::chrono::milliseconds{20}) {
-      egLOG_DEBUG("res/timing", "{}: deserialized in {} ms", tag.view(), took.count());
-    }
   } catch (const res::load_error &e) {
     res::add_while_unsettled(*block, e.what_diagnostic());
     block->set_error(std::string{"Adapter error: "} + e.what());
@@ -3194,6 +3202,25 @@ void res::resource_system::check_sync_require([[maybe_unused]] const res::tag& t
 {
 	ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
 		"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
+}
+
+void res::resource_system::warn_sync_wait(const res::tag& tag) const
+{
+	const resource_system& top = root();
+	if (!top.m_sync_warnings_on.load(std::memory_order_acquire)) return;
+	std::lock_guard lock(top.m_sync_warning_mutex);
+	std::string extension(tag.extension());
+	std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	if (!top.m_slow_sync_extensions.contains(extension) || !top.m_sync_warned.insert(std::string(tag.view())).second) return;
+	egLOG_WARN("resource/require", "require_sync('{}') blocks the main thread while it loads, which can take seconds: require it and wait for the handle instead", tag.view());
+}
+
+void res::resource_system::warn_on_sync_require(std::vector<std::string> extensions)
+{
+	resource_system& top = root();
+	std::lock_guard lock(top.m_sync_warning_mutex);
+	top.m_slow_sync_extensions = std::unordered_set<std::string>(std::make_move_iterator(extensions.begin()), std::make_move_iterator(extensions.end()));
+	top.m_sync_warnings_on.store(!top.m_slow_sync_extensions.empty(), std::memory_order_release);
 }
 
 res::tag res::resource_system::resolve_reference(const reference& ref) const

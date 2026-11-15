@@ -180,6 +180,15 @@ struct sample_repositories
 	}
 };
 
+// Puts the environment back when a make() of a sample throws (a failed BOOST_REQUIRE in git()), as on success.
+struct restore_environment
+{
+	std::vector<std::string>& environment;
+	std::vector<std::string> saved;
+
+	~restore_environment() { environment = std::move(saved); }
+};
+
 sample_repositories& samples()
 {
 	static sample_repositories store;
@@ -195,7 +204,7 @@ struct vcs_fixture
 		tasks = std::make_unique<ds::task_system>(config);
 		jobs = std::make_unique<edt::job_service>(*tasks, &events);
 		static int counter = 0;
-		base = fs::temp_directory_path() / std::format("snk_edt_vcs_tests_{}_{}",
+		base = fs::temp_directory_path() / std::format("snk_edt_vcs_tests_{}_{}_{}", platform::current_process_id(),
 			std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
 		fs::create_directories(base);
 		environment = parent_environment();
@@ -269,21 +278,22 @@ struct vcs_fixture
 	{
 		sample_repositories& store = samples();
 		if (store.root.empty()) {
-			store.root = fs::temp_directory_path() / std::format("snk_edt_vcs_samples_{}",
-				std::chrono::steady_clock::now().time_since_epoch().count());
+			store.root = fs::temp_directory_path() / std::format("snk_edt_vcs_samples_{}_{}",
+				platform::current_process_id(), std::chrono::steady_clock::now().time_since_epoch().count());
 			fs::create_directories(store.root);
 			write(store.root / "global.gitconfig", "");
 		}
 		auto found = store.made.find(kind);
 		if (found == store.made.end()) {
+			// A make() that failed part way left a half-built sample: it is built again from an empty folder.
 			const fs::path sample = store.root / kind;
+			fs::remove_all(sample);
 			fs::create_directories(sample);
-			const std::vector<std::string> saved = environment;
+			const restore_environment restore{ environment, environment };
 			edt::set_variable(environment, "GIT_CEILING_DIRECTORIES", edt::utf8_of(store.root));
 			edt::set_variable(environment, "GIT_CONFIG_NOSYSTEM", "1");
 			edt::set_variable(environment, "GIT_CONFIG_GLOBAL", edt::utf8_of(store.root / "global.gitconfig"));
 			make(sample);
-			environment = saved;
 			found = store.made.emplace(std::string(kind), sample).first;
 		}
 		fs::create_directories(to);

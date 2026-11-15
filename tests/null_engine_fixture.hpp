@@ -212,7 +212,7 @@ struct null_engine_fixture
 		// What the case did before its frames: the level's load in most cases.
 		using std::chrono::milliseconds;
 		const auto before = std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - m_ready);
-		egLOG_INFO("test/timing", "before run_frames({}): {} ms since the setup or the last run_frames", frames,
+		egLOG_DEBUG("test/timing", "before run_frames({}): {} ms since the setup or the last run_frames", frames,
 			before.count());
 		const phase_timer timer(std::format("run_frames({})", frames));
 		int done = 0;
@@ -221,7 +221,7 @@ struct null_engine_fixture
 		stages.add_stage("test_frame_counter", app::builtin_stage::present, app::stage_side::after,
 			[&done, &frame_start, frames](app::stage_context& c) {
 				const auto now = std::chrono::steady_clock::now();
-				egLOG_INFO("test/timing", "frame {}: {} ms", done,
+				egLOG_DEBUG("test/timing", "frame {}: {} ms", done,
 					std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_start).count());
 				frame_start = now;
 				if (++done >= frames) {
