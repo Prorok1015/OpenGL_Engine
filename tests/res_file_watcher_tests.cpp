@@ -2,10 +2,13 @@
 #include "test_temp_dir.hpp"
 #include <snk/resource/resolvers/res_file_watcher.h>
 #include <boost/asio/io_context.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -378,6 +381,96 @@ BOOST_AUTO_TEST_CASE(AFolderRemovedDuringAScan_DoesNotReportItsNeighbours_BatchM
 		BOOST_TEST((change.kind == res::change_kind::deleted));
 		BOOST_TEST((change.path == sub || change.path == sub / "inner.txt"));
 	}
+
+	watcher.stop();
+	io.restart();
+	io.run_for(50ms);
+}
+
+// #975: a file whose stamp was racy when a poll recorded it is looked at again once the stamp has aged: modified only
+// when its content differs from then, or cannot be compared (larger than the limit, unreadable); never an own write.
+BOOST_AUTO_TEST_CASE(RecheckRacy_ReportsAnAgedFileOnlyWhenItsContentChanged)
+{
+	const fs::file_time_type stamp = fs::file_time_type::clock::now();
+	const fs::file_time_type racy = stamp + 1s;
+	const fs::file_time_type aged = stamp + res::k_stamp_granularity + 1s;
+	const fs::path same = "root/same.desc";
+	const fs::path rewritten = "root/rewritten.desc";
+	const fs::path large = "root/large.bin";
+	const fs::path unreadable = "root/unreadable.desc";
+	const fs::path own = "root/own.desc";
+	const fs::path grown = "root/grown.desc";
+	std::map<fs::path, std::optional<std::string>> content{ { same, "a" }, { rewritten, "a" }, { unreadable, "a" },
+		{ own, "a" }, { grown, "a" } };
+	int large_reads = 0;
+	const res::detail::content_hash_source hash_of = [&](const fs::path& path) -> std::optional<std::string> {
+		if (path == large) ++large_reads;
+		return content.contains(path) ? content.at(path) : std::nullopt;
+	};
+	res::detail::watch_snapshot first;
+	for (const auto& path : { same, rewritten, unreadable, own, grown }) first.files[path] = { stamp, 10 };
+	first.files[large] = { stamp, res::detail::k_racy_hash_limit + 1 };
+	BOOST_TEST(res::detail::recheck_racy({}, first, racy, hash_of).empty());
+	BOOST_TEST(first.racy.size() == 6u);
+	BOOST_TEST(large_reads == 0);
+	BOOST_TEST(!first.racy.at(large).hash.has_value());
+	first.racy.at(own).own = true;
+
+	// Still racy: nothing yet, whatever the content does.
+	content[rewritten] = "b";
+	res::detail::watch_snapshot second;
+	second.files = first.files;
+	BOOST_TEST(res::detail::recheck_racy(first.racy, second, racy, hash_of).empty());
+	BOOST_TEST(second.racy.size() == 6u);
+
+	content[unreadable] = std::nullopt;
+	content[own] = "b";
+	res::detail::watch_snapshot third;
+	third.files = second.files;
+	third.files[grown] = { stamp, 11 };
+	const std::vector<res::raw_change> changed = res::detail::recheck_racy(second.racy, third, aged, hash_of);
+	std::set<fs::path> reported;
+	for (const auto& change : changed) {
+		BOOST_TEST((change.kind == res::change_kind::modified));
+		reported.insert(change.path);
+	}
+	// grown: diff_snapshots reports it by its size.
+	BOOST_TEST((reported == std::set<fs::path>{ rewritten, large, unreadable }));
+	BOOST_TEST(third.racy.empty());
+	BOOST_TEST(large_reads == 0);
+
+	// Aged once: the next poll reports nothing more.
+	res::detail::watch_snapshot fourth;
+	fourth.files = third.files;
+	BOOST_TEST(res::detail::recheck_racy(third.racy, fourth, aged + 1s, hash_of).empty());
+}
+
+// #975: an outside rewrite of the same size whose stamp is set back to what it was (cp -p, a script, git) is reported
+// once the stamp has aged.
+BOOST_AUTO_TEST_CASE(ARewriteInTheSameTick_IsReportedOnceTheStampHasAged_BatchMode)
+{
+	res::file_watcher watcher(io);
+	watcher.add_path(dir.path());
+	res::watch_options options;
+	options.report_changes = true;
+	std::vector<res::raw_change> seen;
+	watcher.report_changes(options, [&](std::vector<res::raw_change> batch) {
+		seen.insert(seen.end(), batch.begin(), batch.end());
+	});
+	watcher.start();
+
+	const fs::path file = dir.write("level.desc", "{\"ref\":\"aaaa\"}");
+	const fs::file_time_type stamp = fs::last_write_time(file);
+	BOOST_REQUIRE(run_until([&] { return !seen.empty(); }));
+	seen.clear();
+
+	dir.write("level.desc", "{\"ref\":\"bbbb\"}");
+	fs::last_write_time(file, stamp);
+	BOOST_TEST(run_until([&] {
+		return std::ranges::any_of(seen, [&](const res::raw_change& change) {
+			return change.path == file && change.kind == res::change_kind::modified;
+		});
+	}));
 
 	watcher.stop();
 	io.restart();

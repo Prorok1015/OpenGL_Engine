@@ -5,6 +5,7 @@
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_file_change.h>
+#include <snk/resource/res_stamp.h>
 #include <snk/resource/res_tag.h>
 #include <chrono>
 #include <cstddef>
@@ -207,11 +208,9 @@ namespace edt
 		static constexpr std::size_t max_deferred_changes = 4096;
 		// A larger cache is not read (the walk then reads every file).
 		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
-		// A file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s): a .resource with
-		// one is read again by every walk and batch, a file's hash only after a restart (#973). The polling watcher
-		// (res::diff_snapshots, state_of) compares size and time only, so it may not report such a rewrite at all
-		// (#975).
-		static constexpr std::chrono::seconds stamp_granularity{ 2 };
+		// A file stamp within this of the time it was checked is not trusted (res::racy_stamp): a .resource with one is
+		// read again by every walk and batch, a file's hash once more when the stamp is older than this (#973, #975).
+		static constexpr std::chrono::seconds stamp_granularity = res::k_stamp_granularity;
 		// A git index or HEAD written this recently means a git operation may still be writing files (#765).
 		static constexpr std::chrono::seconds git_quiet_time{ 5 };
 		// A file from outside written this recently may still be written, copied or moved: it waits for its ID.
@@ -295,12 +294,17 @@ namespace edt
 		// The repository's git folder (index, HEAD), asked at every check (may be empty: no git folder is looked at).
 		void set_git_dir_provider(std::function<std::optional<std::filesystem::path>()> provider) { m_git_dir = std::move(provider); }
 		// Looks at the files waiting for an ID again (a git operation may have ended); at most every poll_interval
-		// unless `force`. Cheap when none waits. Main thread, once per frame.
+		// unless `force`. Cheap when none waits. Also queues again the hashes whose racy stamp has aged (#975). Main
+		// thread, once per frame.
 		void poll(bool force = false);
 		// Files from outside waiting for an ID. For tests.
 		std::size_t pending_ids() const { return m_pending_ids.size(); }
 		// Tests only: the steady time the database reads (poll throttle, move_window, pending_timeout).
 		void set_clock_for_tests(std::function<std::chrono::steady_clock::time_point()> clock) { m_clock = std::move(clock); }
+		// Tests only: the file clock (ticks of std::filesystem::file_time_type) a hash's racy stamp is aged by.
+		void set_file_clock_for_tests(std::function<std::int64_t()> clock) { m_file_clock = std::move(clock); }
+		// Hashes read while their file's stamp was racy, waiting to be read once more (#975). For tests.
+		std::size_t aging_hashes() const { return m_aging.size(); }
 
 		const asset_record* find(const res::tag& path) const;
 		// As find, and when names are case insensitive the file of that name in any letter case (the record has the
@@ -359,6 +363,10 @@ namespace edt
 		// Pairs `gone` and `came` (keys of m_records) by guid into `batch` (moved, added, removed).
 		void pair_moves(std::vector<asset_record> gone, const std::vector<std::string>& came, asset_batch& batch);
 		void hash_next();
+		// Remembers a record whose hash came from a racy stamp (#975).
+		void note_hash(const std::string& key, const asset_record& record);
+		// Queues again the noted hashes whose stamp has aged and not moved.
+		void rehash_aged();
 		// m_by_id and, case insensitive, m_by_folded.
 		void index_id(const asset_record& record);
 		void unindex_id(const asset_record& record);
@@ -404,6 +412,16 @@ namespace edt
 		std::vector<asset_orphan> m_orphans;
 		std::vector<std::string> m_unhashed;
 		std::vector<std::string> m_in_flight;
+		// Records whose hash was read while their stamp was racy (#975): hashed once more when the stamp is older than
+		// stamp_granularity, if it is still the same.
+		struct aging_hash
+		{
+			std::string key;
+			std::int64_t size = 0;
+			std::int64_t mtime = 0;
+		};
+		std::vector<aging_hash> m_aging;
+		std::function<std::int64_t()> m_file_clock;
 		std::uint64_t m_hash_job = 0;
 		std::uint64_t m_scan_job = 0;
 		bool m_scanning = false;

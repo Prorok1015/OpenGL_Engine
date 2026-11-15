@@ -33,15 +33,6 @@ namespace fs = std::filesystem;
 
 namespace
 {
-	std::uint64_t fnv1a_64_update(std::uint64_t hash, std::span<const std::byte> bytes)
-	{
-		for (const std::byte b : bytes) {
-			hash ^= static_cast<std::uint64_t>(b);
-			hash *= 1099511628211ull;
-		}
-		return hash;
-	}
-
 	struct file_stat
 	{
 		bool ok = false;
@@ -96,14 +87,7 @@ namespace
 		return static_cast<std::int64_t>(fs::file_time_type::clock::now().time_since_epoch().count());
 	}
 
-	// A stamp within the granularity of the time it was checked may hide a change made in the same tick (a file saved
-	// twice, or replaced by one of the same size and time: cp -p, rsync, #973).
-	bool racy_stamp(std::int64_t mtime, std::int64_t checked_at)
-	{
-		const std::int64_t margin = std::chrono::duration_cast<fs::file_time_type::duration>(
-			edt::asset_database::stamp_granularity).count();
-		return mtime >= checked_at - margin;
-	}
+	using res::racy_stamp;
 
 	// Whether what `before` read of a .resource holds for the one now at `now`'s path: the same stamp of the same file,
 	// one older than its check (racy_stamp). Anything else is read again (a .resource is a few dozen bytes).
@@ -293,7 +277,7 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	request.leaf = relative.filename();
 	request.max_bytes = (std::numeric_limits<std::uint64_t>::max)();
 
-	std::uint64_t hash = 14695981039346656037ull;
+	res::content_hasher hash;
 	std::string text;
 	bool keep_text = is_desc;
 	if (keep_text && before.ok && before.size >= 0 && static_cast<std::uint64_t>(before.size) <= max_desc_bytes) {
@@ -301,7 +285,7 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	}
 	const platform::beneath::read_result result = platform::beneath::read_beneath_stream(request,
 		[&](std::span<const std::byte> chunk) {
-			hash = fnv1a_64_update(hash, chunk);
+			hash.update(chunk);
 			if (keep_text) {
 				if (text.size() + chunk.size() > max_desc_bytes) {
 					keep_text = false;
@@ -321,7 +305,7 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	out.size = after.size;
 	out.mtime = after.mtime;
 	out.unchanged = before.ok && before == after;
-	out.content_hash = std::format("fnv1a64:{:016x}", hash);
+	out.content_hash = hash.text();
 	out.references_skipped = is_desc && !keep_text;
 	if (keep_text) {
 		boost::system::error_code ec;
@@ -562,6 +546,7 @@ void edt::asset_database::apply_scan(asset_scan scan)
 		if (record.content_hash.empty() && !in_flight) {
 			m_unhashed.push_back(key);
 		}
+		note_hash(key, record);
 		index_id(record);
 		m_records.emplace(std::move(key), std::move(record));
 	}
@@ -665,6 +650,7 @@ void edt::asset_database::pair_moves(std::vector<asset_record> gone, const std::
 			arrived.references_skipped = match->references_skipped;
 			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
 			std::erase(m_unhashed, key);
+			note_hash(key, arrived);
 		}
 		batch.moved.emplace_back(match->path, arrived.path);
 		gone.erase(match);
@@ -826,6 +812,7 @@ void edt::asset_database::hash_next()
 					found->second.desc_type = std::move(content.desc_type);
 					found->second.references = std::move(content.references);
 					found->second.references_skipped = content.references_skipped;
+					note_hash(key, found->second);
 					if (m_pending_ids.contains(key)) {
 						m_root_guids.insert_or_assign(key, std::move(content.root_guid));
 					}
@@ -1919,6 +1906,7 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 			unindex_id(*before);
 		}
 		index_id(*now);
+		note_hash(key, *now);
 		m_records.insert_or_assign(key, std::move(*now));
 	}
 
@@ -2318,17 +2306,62 @@ void edt::asset_database::queue_new_file(const std::string& key, bool own)
 	}
 }
 
+void edt::asset_database::note_hash(const std::string& key, const asset_record& record)
+{
+	if (record.content_hash.empty() || !racy_stamp(record.mtime, record.content_checked_at)) {
+		return;
+	}
+	std::erase_if(m_aging, [&key](const aging_hash& aging) { return aging.key == key; });
+	m_aging.push_back(aging_hash{ key, record.size, record.mtime });
+}
+
+void edt::asset_database::rehash_aged()
+{
+	if (m_aging.empty()) {
+		return;
+	}
+	const std::int64_t now = m_file_clock ? m_file_clock() : now_ticks();
+	bool queued = false;
+	std::erase_if(m_aging, [&](const aging_hash& aging) {
+		const auto found = m_records.find(aging.key);
+		// Gone, rehashed already, or given a new stamp: the usual way hashes it.
+		if (found == m_records.end() || found->second.content_hash.empty() || found->second.size != aging.size
+			|| found->second.mtime != aging.mtime) {
+			return true;
+		}
+		// A file waiting for its ID keeps its hash until it has one: that wait reads the hash.
+		if (racy_stamp(aging.mtime, now) || m_pending_ids.contains(aging.key)) {
+			return false;
+		}
+		// A rewrite in the stamp's own tick has happened by now: what is read this time holds.
+		asset_record& record = found->second;
+		record.content_hash.clear();
+		record.desc_type.reset();
+		record.references.reset();
+		record.references_skipped = false;
+		record.content_checked_at = now;
+		if (std::ranges::find(m_in_flight, aging.key) == m_in_flight.end()
+			&& std::ranges::find(m_unhashed, aging.key) == m_unhashed.end()) {
+			m_unhashed.push_back(aging.key);
+		}
+		queued = true;
+		return true;
+	});
+	if (queued) {
+		hash_next();
+	}
+}
+
 void edt::asset_database::poll(bool force)
 {
-	if (m_pending_ids.empty()) {
-		return;
+	if (!m_pending_ids.empty()) {
+		const auto now = steady_now();
+		if (force || now - m_last_poll >= poll_interval) {
+			m_last_poll = now;
+			give_pending_ids();
+		}
 	}
-	const auto now = steady_now();
-	if (!force && now - m_last_poll < poll_interval) {
-		return;
-	}
-	m_last_poll = now;
-	give_pending_ids();
+	rehash_aged();
 }
 
 void edt::asset_database::give_pending_ids()

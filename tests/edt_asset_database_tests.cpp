@@ -1391,6 +1391,66 @@ BOOST_AUTO_TEST_CASE(a_resource_saved_through_a_rename_is_read_once_and_keeps_it
 // #973: a .resource rewritten in the tick it was read, to another ID of the same length: the same size, time and file.
 // Its stamp is within the granularity of its check, so the batch reads it again and reports the file changed; an old
 // stamp is still trusted and not read again.
+// #975: a desc saved twice in one tick with the same size (a reference retargeted to a guid of the same length) keeps
+// the stamp it had; its hash, read while the stamp was racy, is read once more when the stamp has aged.
+BOOST_AUTO_TEST_CASE(a_hash_read_under_a_racy_stamp_is_read_again_once_the_stamp_has_aged)
+{
+	const fs::path file = upper.write("level.desc", R"({"__type":"level_desc","ref":"res://a.png"})");
+	// Racy whenever the database checks it, however slow the run.
+	const fs::file_time_type stamp = fs::file_time_type::clock::now() + std::chrono::minutes(1);
+	fs::last_write_time(file, stamp);
+	auto& assets = open();
+	const std::string first = record("level.desc").content_hash;
+	BOOST_REQUIRE(!first.empty());
+	BOOST_TEST(assets.aging_hashes() == 1u);
+
+	upper.write("level.desc", R"({"__type":"level_desc","ref":"res://b.png"})");
+	fs::last_write_time(file, stamp);
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(record("level.desc").content_hash == first);
+
+	const auto aged = (stamp + edt::asset_database::stamp_granularity + std::chrono::seconds(1))
+		.time_since_epoch().count();
+	assets.set_file_clock_for_tests([aged] { return static_cast<std::int64_t>(aged); });
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(record("level.desc").content_hash != first);
+	BOOST_TEST(assets.aging_hashes() == 0u);
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(assets.pending_hashes() == 0u);
+}
+
+// #975: a hash a move carries over from a racy stamp waits to be read again under the new name.
+BOOST_AUTO_TEST_CASE(a_move_with_a_racy_stamp_keeps_its_hash_aging)
+{
+	upper.write("a.png", "a");
+	upper.write("a.png.resource", meta_text(k_guid_a));
+	const fs::file_time_type stamp = fs::file_time_type::clock::now() + std::chrono::minutes(1);
+	fs::last_write_time(upper.path() / "a.png", stamp);
+	auto& assets = open();
+	BOOST_REQUIRE(!record("a.png").content_hash.empty());
+	fs::rename(upper.path() / "a.png", upper.path() / "b.png");
+	fs::rename(upper.path() / "a.png.resource", upper.path() / "b.png.resource");
+	const edt::asset_batch batch = assets.apply_changes(std::vector<res::file_change>{
+		change("b.png", res::change_kind::renamed, "a.png"),
+		change("b.png.resource", res::change_kind::renamed, "a.png.resource") });
+	BOOST_REQUIRE(batch.moved.size() == 1u);
+	BOOST_TEST(!record("b.png").content_hash.empty());
+	// b.png's, and a.png's until the next poll drops it.
+	BOOST_TEST(assets.aging_hashes() == 2u);
+
+	const auto aged = (stamp + edt::asset_database::stamp_granularity + std::chrono::seconds(1))
+		.time_since_epoch().count();
+	assets.set_file_clock_for_tests([aged] { return static_cast<std::int64_t>(aged); });
+	const std::size_t read_before = assets.files_read();
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(assets.files_read() == read_before + 1u);
+	BOOST_TEST(assets.aging_hashes() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(a_resource_rewritten_within_its_stamp_granularity_is_read_again)
 {
 	write_aged("a.png", "a");
