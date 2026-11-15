@@ -12,6 +12,7 @@
 #include <boost/json/monotonic_resource.hpp>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -2013,12 +2014,13 @@ BOOST_AUTO_TEST_CASE(ANodeARecordAddsBelowAnInstance_ThatInstantiatesTheRecordsO
 	auto grows = load<scn::prefab_desc>(tag);
 	BOOST_REQUIRE(grows);
 
-	std::vector<std::string> self_references;
+	std::mutex logged_mutex;
+	std::vector<std::string> logged;
 	{
 		const auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
-			if (level == engine::log_level::warn && message.find("refers to itself") != std::string_view::npos) {
-				self_references.emplace_back(message);
-			}
+			if (level != engine::log_level::warn || message.find("refers to itself") == std::string_view::npos) return;
+			std::lock_guard lock(logged_mutex);
+			logged.emplace_back(message);
 		});
 		entt::registry reg;
 		auto root = reg.create();
@@ -2034,6 +2036,10 @@ BOOST_AUTO_TEST_CASE(ANodeARecordAddsBelowAnInstance_ThatInstantiatesTheRecordsO
 		BOOST_TEST(spawned_nodes(reg) == 3u);
 	}
 	// Refused when the record was read (#952), not only later as a prefab that is open already (#924).
+	const std::vector<std::string> self_references = [&] {
+		std::lock_guard lock(logged_mutex);
+		return logged;
+	}();
 	BOOST_REQUIRE(!self_references.empty());
 	BOOST_TEST(std::ranges::all_of(self_references, [&] (const std::string& line) { return line.find(tag.string()) != std::string::npos; }));
 }
