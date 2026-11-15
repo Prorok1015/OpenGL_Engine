@@ -12,6 +12,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include "edt_selection_wiring.h"
+#include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document_manager.h>
