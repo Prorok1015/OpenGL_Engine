@@ -1741,9 +1741,9 @@ BOOST_AUTO_TEST_CASE(HotReload_TwoInstancesShareOneNodeBudget_TheOneNotReachedKe
 	BOOST_TEST(spawned_nodes(reg) == 4u);
 }
 
-// The live instance is reloaded on its own: what its file is inside is not open, so the circle closes one prefab later
-// than in a spawn from the top, and it does close.
-BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseFileNowComesBackToItselfThroughASecondFile_Ends)
+// The live instance is reloaded with the file it is content of open (#993), as in a spawn: the circle closes where a
+// spawn from the top closes it. What that file is inside is not open, which this circle does not need.
+BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseFileNowComesBackToItselfThroughASecondFile_EndsWhereASpawnDoes)
 {
 	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
 	const auto changed_tag = put("changed.prefab.desc", prefab_with_children(instance_child("again", "leaf.prefab.desc")));
@@ -1775,18 +1775,13 @@ BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseFileNowComesBackToItselfThr
 
 	BOOST_TEST((child_named(reg, kid, "to_changed") == to_changed));
 	BOOST_TEST(reg.get<scn::prefab_instance>(to_changed).source_prefab == changed_tag);
+	BOOST_TEST(reg.get<scn::prefab_instance>(to_changed).content_of == second_tag);
 	BOOST_TEST((child_names(reg, to_changed) == std::vector<std::string>{ "again" }));
-	// One more level than a spawn of the host builds: the second file is opened once below the reloaded node.
+	// The second file is open while the reloaded node is built: the reference back to it is refused at once.
 	BOOST_TEST((child_named(reg, to_changed, "again") == again));
-	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(again));
-	BOOST_TEST(reg.get<scn::prefab_instance>(again).source_prefab == second_tag);
-	BOOST_TEST((child_names(reg, again) == std::vector<std::string>{ "to_changed" }));
-	// The reference back to the changed file is refused there.
-	const auto repeat = child_named(reg, again, "to_changed");
-	BOOST_REQUIRE(reg.valid(repeat));
-	BOOST_TEST(!reg.all_of<scn::prefab_instance>(repeat));
-	BOOST_TEST(child_names(reg, repeat).empty());
-	BOOST_TEST(spawned_nodes(reg) == 4u);
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(again));
+	BOOST_TEST(child_names(reg, again).empty());
+	BOOST_TEST(spawned_nodes(reg) == 3u);
 
 	// From the top the host and the second file are open already: the circle closes at `again`.
 	entt::registry fresh;
@@ -2042,6 +2037,194 @@ BOOST_AUTO_TEST_CASE(ANodeARecordAddsBelowAnInstance_ThatInstantiatesTheRecordsO
 	}();
 	BOOST_REQUIRE(!self_references.empty());
 	BOOST_TEST(std::ranges::all_of(self_references, [&] (const std::string& line) { return line.find(tag.string()) != std::string::npos; }));
+}
+
+// ---------------------------------------------------------------- a caller names the file of its node (#993)
+
+namespace {
+
+// A file whose node `n` instantiates leaf.prefab.desc and adds, by a record, a node `added` that instantiates `added_prefab`.
+std::string grown_with(std::string_view added_prefab)
+{
+	return prefab_with_children(
+		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[{"target":[],"op":"add_node","value":)"
+		R"({"__id":"00000000000000e1","name":"added","components":{"ref":"memory://t/)" + std::string(added_prefab) + R"("}}}]})");
+}
+
+// Counts the warnings that refuse a reference to the desc that holds it; resource io threads log too (#978).
+class self_reference_log
+{
+public:
+	self_reference_log()
+		: m_sink(engine::add_log_sink([this] (std::string_view, engine::log_level level, std::string_view message) {
+			if (level != engine::log_level::warn || message.find("refers to itself") == std::string_view::npos) return;
+			std::lock_guard lock(m_mutex);
+			++m_count;
+		}))
+	{}
+
+	std::size_t count() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_count;
+	}
+
+private:
+	mutable std::mutex m_mutex;
+	std::size_t m_count = 0;
+	// Last: removed before what it writes to goes.
+	engine::log_sink_handle m_sink;
+};
+
+}
+
+// The file the node is content of is open, not the prefab the node instantiates: a record of that file that instantiates
+// the same prefab again is the file's content and expands. Without the file the record is read as the prefab's own.
+BOOST_AUTO_TEST_CASE(Reconcile_WithTheNodesFile_ExpandsARecordThatInstantiatesTheNodesPrefabAgain_WithoutItRefusesIt)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto file_tag = put("grown.prefab.desc", grown_with("leaf.prefab.desc"));
+	auto grown = load<scn::prefab_desc>(file_tag);
+	BOOST_REQUIRE(grown);
+	const auto& node = grown->get_root().children.at(0);
+
+	entt::registry reg;
+	const auto known = reg.create();
+	scn::reconcile(*assembler, reg, known, node, scn::reconcile_mode::spawn, file_tag);
+	BOOST_TEST((child_names(reg, known) == std::vector<std::string>{ "tip", "added" }));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(known));
+	BOOST_TEST(reg.get<scn::prefab_instance>(known).content_of == file_tag);
+	const auto added = child_named(reg, known, "added");
+	BOOST_REQUIRE(reg.valid(added));
+	BOOST_TEST((child_names(reg, added) == std::vector<std::string>{ "tip" }));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
+	BOOST_TEST(reg.get<scn::prefab_instance>(added).source_prefab == leaf_tag);
+	BOOST_TEST(reg.get<scn::prefab_instance>(added).content_of == file_tag);
+
+	const self_reference_log refusals;
+	const auto unknown = reg.create();
+	scn::reconcile(*assembler, reg, unknown, node, scn::reconcile_mode::spawn);
+	BOOST_TEST((child_names(reg, unknown) == std::vector<std::string>{ "tip", "added" }));
+	BOOST_TEST(reg.get<scn::prefab_instance>(unknown).content_of.string().empty());
+	const auto refused = child_named(reg, unknown, "added");
+	BOOST_REQUIRE(reg.valid(refused));
+	BOOST_TEST(child_names(reg, refused).empty());
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(refused));
+	BOOST_TEST(refusals.count() > 0u);
+}
+
+// The named file is open: a record of it that instantiates the file itself is refused, as in a spawn of the file.
+BOOST_AUTO_TEST_CASE(Reconcile_WithTheNodesFile_RefusesARecordThatInstantiatesThatFile)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto file_tag = put("grows_itself.prefab.desc", grown_with("grows_itself.prefab.desc"));
+	auto grows = load<scn::prefab_desc>(file_tag);
+	BOOST_REQUIRE(grows);
+
+	const self_reference_log refusals;
+	entt::registry reg;
+	const auto e = reg.create();
+	scn::reconcile(*assembler, reg, e, grows->get_root().children.at(0), scn::reconcile_mode::spawn, file_tag);
+
+	BOOST_TEST((child_names(reg, e) == std::vector<std::string>{ "tip", "added" }));
+	const auto added = child_named(reg, e, "added");
+	BOOST_REQUIRE(reg.valid(added));
+	BOOST_TEST(child_names(reg, added).empty());
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(added));
+	BOOST_TEST(spawned_nodes(reg) == 2u);
+	BOOST_TEST(refusals.count() > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ExpandInstance_WithTheNodesFile_KeepsARecordThatInstantiatesTheNodesPrefabAgain_WithoutItRefusesIt)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto file_tag = put("grown.prefab.desc", grown_with("leaf.prefab.desc"));
+	auto grown = load<scn::prefab_desc>(file_tag);
+	BOOST_REQUIRE(grown);
+	const auto& node = grown->get_root().children.at(0);
+
+	// What `added` instantiates once it is expanded in turn, as reconcile does with a child.
+	const auto source_of_added = [&] (const scn::prefab_desc::prefab_node& expanded) {
+		const auto added = std::ranges::find_if(expanded.children, [] (const auto& child) { return child.name == "added"; });
+		BOOST_REQUIRE(added != expanded.children.end());
+		scn::prefab_desc::prefab_node deeper;
+		res::tag source;
+		scn::expand_instance(*assembler, *added, deeper, source);
+		return source;
+	};
+
+	scn::prefab_desc::prefab_node known;
+	res::tag known_source;
+	BOOST_REQUIRE(scn::expand_instance(*assembler, node, known, known_source, file_tag));
+	BOOST_TEST(known_source == leaf_tag);
+	BOOST_TEST(source_of_added(known) == leaf_tag);
+
+	const self_reference_log refusals;
+	scn::prefab_desc::prefab_node unknown;
+	res::tag unknown_source;
+	BOOST_REQUIRE(scn::expand_instance(*assembler, node, unknown, unknown_source));
+	BOOST_TEST(unknown_source == leaf_tag);
+	BOOST_TEST(source_of_added(unknown).string().empty());
+	BOOST_TEST(refusals.count() > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ExpandInstance_WithTheNodesFile_RefusesARecordThatInstantiatesThatFile)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto file_tag = put("grows_itself.prefab.desc", grown_with("grows_itself.prefab.desc"));
+	auto grows = load<scn::prefab_desc>(file_tag);
+	BOOST_REQUIRE(grows);
+
+	const self_reference_log refusals;
+	scn::prefab_desc::prefab_node expanded;
+	res::tag source;
+	BOOST_REQUIRE(scn::expand_instance(*assembler, grows->get_root().children.at(0), expanded, source, file_tag));
+	const auto added = std::ranges::find_if(expanded.children, [] (const auto& child) { return child.name == "added"; });
+	BOOST_REQUIRE(added != expanded.children.end());
+	scn::prefab_desc::prefab_node deeper;
+	res::tag added_source;
+	scn::expand_instance(*assembler, *added, deeper, added_source);
+	BOOST_TEST(added_source.string().empty());
+	BOOST_TEST(refusals.count() > 0u);
+}
+
+// The live instance node remembers the file it is content of and a hot reload opens it again, so the node its record adds
+// keeps the prefab it instantiates (before #993 the reload read the record as the prefab's own and dropped its subtree).
+BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseRecordInstantiatesItsPrefabAgain_KeepsTheAddedSubtree)
+{
+	const auto leaf_tag = put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto host_tag = put("grown.prefab.desc", grown_with("leaf.prefab.desc"));
+	auto host = load<scn::prefab_desc>(host_tag);
+	BOOST_REQUIRE(host);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *host, "grown", host_tag);
+	BOOST_TEST(reg.get<scn::prefab_instance>(root).content_of.string().empty()); // a plain root
+
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(n));
+	BOOST_TEST(reg.get<scn::prefab_instance>(n).content_of == host_tag);
+	const auto added = child_named(reg, n, "added");
+	BOOST_REQUIRE(reg.valid(added));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
+	BOOST_TEST(reg.get<scn::prefab_instance>(added).content_of == host_tag);
+	BOOST_TEST((child_names(reg, added) == std::vector<std::string>{ "tip" }));
+
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip2"})"));
+	rs->signal_changed(leaf_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(leaf_tag));
+
+	BOOST_TEST((child_named(reg, root, "n") == n));
+	BOOST_TEST(child_names(reg, n).size() == 2u);
+	BOOST_TEST(reg.valid(child_named(reg, n, "tip2")));
+	BOOST_TEST((child_named(reg, n, "added") == added));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
+	BOOST_TEST(reg.get<scn::prefab_instance>(added).source_prefab == leaf_tag);
+	BOOST_TEST((child_names(reg, added) == std::vector<std::string>{ "tip2" }));
+	BOOST_TEST(reg.get<scn::prefab_instance>(n).content_of == host_tag);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

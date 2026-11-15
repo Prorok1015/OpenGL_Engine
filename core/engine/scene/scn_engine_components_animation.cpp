@@ -19,7 +19,7 @@ namespace scn
 		duration, ticks_per_second))
 	BOOST_DESCRIBE_STRUCT(animation_collection_component, (), (clips))
 	BOOST_DESCRIBE_STRUCT(animated_node_component, (), (node_name))
-	BOOST_DESCRIBE_STRUCT(prefab_instance, (), (source_prefab, local_overrides))
+	BOOST_DESCRIBE_STRUCT(prefab_instance, (), (source_prefab, local_overrides, content_of))
 	BOOST_DESCRIBE_STRUCT(component_tracker, (), (tracked_components))
 }
 

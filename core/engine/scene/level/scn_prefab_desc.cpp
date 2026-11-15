@@ -478,6 +478,20 @@ namespace {
 		return text + std::string(last.view());
 	}
 
+	// What stops `file` from being opened for its content: it is open already, or would be nested too deep.
+	bool refuses_to_open(const spawn_walk& walk, const res::tag& file)
+	{
+		if (is_open(walk.open, file)) {
+			egLOG_ERROR("desc", "a prefab instantiates itself, it is not built again: {}", path_text(walk.open, {}, file));
+			return true;
+		}
+		if (walk.open.size() - std::min(walk.roots, walk.open.size()) >= g_spawn_limits.depth) {
+			egLOG_ERROR("desc", "prefabs nested deeper than {}, not built: {}", g_spawn_limits.depth, path_text(walk.open, {}, file));
+			return true;
+		}
+		return false;
+	}
+
 	// A node of an expanded tree that is not content of the file its parent is from: an outer file put it there.
 	struct scope_mark
 	{
@@ -809,7 +823,8 @@ namespace {
 		// The records may instantiate the prefab `node` instantiates: only the file they are written in refers to itself.
 		const written_in_file file_owner(written_in);
 		const desc::desc_base* owner = &file_owner;
-		// No file known: the instance's prefab, as before; there a record that instantiates it again is refused (#952).
+		// Only for a call that names no file (the old reconcile / expand_instance, lower override_edit nodes, #995):
+		// the instance's prefab, so a record that instantiates it again is refused (#952).
 		if (ref && !file_known) owner = ref->prefab.get();
 		if (ref) {
 			source = ref->prefab->get_tag();
@@ -937,8 +952,17 @@ json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cn
 bool scn::expand_instance(
 	const ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
 {
+	return expand_instance(assembler, node, out, source, res::tag{});
+}
+
+bool scn::expand_instance(const ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out,
+	res::tag& source, const res::tag& file)
+{
 	expansion made;
-	if (!materialize(assembler, node, out, source, {}, 0, made, {})) return false;
+	// A known file is the one the expansion starts from, as a spawn's root file is.
+	const bool known = !file.string().empty();
+	const std::span<const res::tag> open = known ? std::span<const res::tag>(&file, 1) : std::span<const res::tag>{};
+	if (!materialize(assembler, node, out, source, open, known ? 1 : 0, made, {})) return false;
 	keep_in_default_resource(out);
 	return true;
 }
@@ -962,8 +986,30 @@ void scn::reconcile(
 	const scn::prefab_desc::prefab_node& node,
 	reconcile_mode mode
 ) {
+	reconcile(assembler, reg, live, node, mode, res::tag{});
+}
+
+void scn::reconcile(
+	const scn::ecs_assembler& assembler,
+	entt::registry& reg,
+	entt::entity live,
+	const scn::prefab_desc::prefab_node& node,
+	reconcile_mode mode,
+	const res::tag& file
+) {
 	const walk_scope scope;
-	reconcile_node(assembler, reg, live, node, mode, scope.walk(), {});
+	spawn_walk& walk = scope.walk();
+	if (file.string().empty()) {
+		reconcile_node(assembler, reg, live, node, mode, walk, {});
+		return;
+	}
+	// `node` is content of `file`, which is open while it is built, as assemble_prefab opens its prefab (#993).
+	if (refuses_to_open(walk, file)) return;
+	std::vector<res::tag> inside(walk.open.begin(), walk.open.end());
+	inside.push_back(file);
+	if (scope.outermost()) walk.roots = 1;
+	const open_scope opened(walk, inside);
+	reconcile_node(assembler, reg, live, node, mode, walk, {});
 }
 
 namespace {
@@ -1001,7 +1047,9 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 			if (!kept_by_game && (!node.has_transform || !reg.all_of<scn::local_transform>(live))) {
 				reg.emplace_or_replace<scn::local_transform>(live, placement);
 			}
-			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, kept_copy(node) });
+			// `node` is content of the last file open on entry, not of the prefabs it opens itself.
+			const res::tag content_of = walk.open.empty() ? res::tag{} : walk.open.back();
+			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, kept_copy(node), content_of });
 			emit_event<scn::transform_updated>(reg, live);
 		}
 		content = &expanded;
@@ -1519,11 +1567,16 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 		const scn::prefab_desc::prefab_node& remembered = instance->local_overrides;
 		const bool plain_root = remembered.components.empty();
 		const scn::prefab_desc::prefab_node node = plain_root ? desc->get_root() : remembered;
+		// An instance node is content of the file it was built in: open again, its records may instantiate the prefab (#993).
+		const res::tag content_of = plain_root ? res::tag{} : instance->content_of;
+		const bool file_known = !content_of.string().empty();
+		if (file_known && refuses_to_open(walk, content_of)) continue;
 
 		// A plain root is the changed prefab's own content, as in assemble_prefab; an instance node opens it itself.
 		std::vector<res::tag> inside(walk.open.begin(), walk.open.end());
 		if (plain_root) inside.push_back(desc->get_tag());
-		if (scope.outermost()) walk.roots = plain_root ? 1 : 0;
+		if (file_known) inside.push_back(content_of);
+		if (scope.outermost()) walk.roots = (plain_root || file_known) ? 1 : 0;
 		const open_scope opened(walk, inside);
 		reconcile_node(assembler, reg, root_entity, node, scn::reconcile_mode::reload, walk, {});
 	}
@@ -1542,14 +1595,7 @@ void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& r
 	// the entity is touched.
 	const walk_scope scope;
 	spawn_walk& walk = scope.walk();
-	if (is_open(walk.open, source_prefab)) {
-		egLOG_ERROR("desc", "a prefab instantiates itself, it is not built again: {}", path_text(walk.open, {}, source_prefab));
-		return;
-	}
-	if (walk.open.size() - std::min(walk.roots, walk.open.size()) >= g_spawn_limits.depth) {
-		egLOG_ERROR("desc", "prefabs nested deeper than {}, not built: {}", g_spawn_limits.depth, path_text(walk.open, {}, source_prefab));
-		return;
-	}
+	if (refuses_to_open(walk, source_prefab)) return;
 
 	const auto& root_node = prefab.get_root();
 
@@ -1577,7 +1623,8 @@ void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& r
 	if (!source_prefab.string().empty()) {
 		reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{
 			source_prefab,
-			scn::prefab_desc::prefab_node{}
+			scn::prefab_desc::prefab_node{},
+			res::tag{}
 		});
 	}
 

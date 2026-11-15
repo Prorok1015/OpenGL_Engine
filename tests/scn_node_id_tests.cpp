@@ -446,7 +446,7 @@ BOOST_FIXTURE_TEST_CASE(Override_ComponentEditIsOneRecordAndResetRemovesIt, inst
 	namespace oe = edt::override_edit;
 	auto& robot = nodes()[2];
 	const std::vector<uint64_t> target{ 0xa1ull };
-	const auto arm = oe::find_base_node(*assembler, robot, target);
+	const auto arm = oe::find_base_node(*assembler, robot, target, res::tag{});
 	BOOST_REQUIRE(arm);
 	BOOST_TEST(arm->name == "arm");
 
@@ -479,7 +479,7 @@ BOOST_FIXTURE_TEST_CASE(Override_RecordsSurviveSaveAndLoad, instance_fixture)
 	const std::vector<uint64_t> path{ 0xc1ull, 0xa1ull };
 	editor->on_transform_committed(path, glm::vec3{ 9, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
 	const std::vector<uint64_t> target{ 0xa1ull };
-	const auto base_json = oe::component_json(oe::find_base_node(*assembler, nodes()[2], target)->components.at("stat"));
+	const auto base_json = oe::component_json(oe::find_base_node(*assembler, nodes()[2], target, res::tag{})->components.at("stat"));
 	auto edited = base_json;
 	edited["hp"] = 20;
 	oe::write_component(nodes()[2], target, "stat", base_json, edited);
@@ -580,7 +580,7 @@ BOOST_FIXTURE_TEST_CASE(Override_TransformIsEffectiveAndResettable, instance_fix
 	namespace oe = edt::override_edit;
 	auto& robot = nodes()[2];
 	const std::vector<uint64_t> target{ 0xa1ull };
-	const auto arm = oe::find_base_node(*assembler, robot, target);
+	const auto arm = oe::find_base_node(*assembler, robot, target, res::tag{});
 	BOOST_REQUIRE(arm);
 
 	oe::write_transform(robot, target, *arm, glm::vec3{ 1, 1, 1 }, arm->rotation, arm->scale);
@@ -632,7 +632,7 @@ BOOST_FIXTURE_TEST_CASE(Override_BaseTwoLevelsDeepCarriesTheIntermediateRecords,
 {
 	namespace oe = edt::override_edit;
 	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
-	const auto base = oe::find_base_node(*assembler, robot(), tooth);
+	const auto base = oe::find_base_node(*assembler, robot(), tooth, res::tag{});
 	BOOST_REQUIRE(base);
 	BOOST_TEST(base->name == "tooth");
 	BOOST_TEST((base->position == glm::vec3{ 2, 0, 0 }));          // body's transform record, not gear's raw {1,0,0}
@@ -645,7 +645,7 @@ BOOST_FIXTURE_TEST_CASE(Override_EditBackToTheRawValueIsStillAnOverrideOfTheComp
 {
 	namespace oe = edt::override_edit;
 	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
-	const auto base_json = oe::component_json(oe::find_base_node(*assembler, robot(), tooth)->components.at("stat"));
+	const auto base_json = oe::component_json(oe::find_base_node(*assembler, robot(), tooth, res::tag{})->components.at("stat"));
 
 	auto edited = base_json;
 	edited["hp"] = 3; // gear's own value, but the instance has 7 from body
@@ -655,7 +655,7 @@ BOOST_FIXTURE_TEST_CASE(Override_EditBackToTheRawValueIsStillAnOverrideOfTheComp
 	BOOST_TEST(oe::effective_component(robot(), tooth, "stat", base_json).at("hp").to_number<int64_t>() == 3);
 
 	// the base does not move with the level's own record
-	const auto again = oe::component_json(oe::find_base_node(*assembler, robot(), tooth)->components.at("stat"));
+	const auto again = oe::component_json(oe::find_base_node(*assembler, robot(), tooth, res::tag{})->components.at("stat"));
 	BOOST_TEST(again.at("hp").to_number<int64_t>() == 7);
 
 	// editing back to the composed base drops the record, "Reset to base" restores body's value
@@ -672,7 +672,7 @@ BOOST_FIXTURE_TEST_CASE(Override_TransformIsRelativeToTheComposedBase, nested_fi
 {
 	namespace oe = edt::override_edit;
 	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
-	const auto base = oe::find_base_node(*assembler, robot(), tooth);
+	const auto base = oe::find_base_node(*assembler, robot(), tooth, res::tag{});
 	BOOST_REQUIRE(base);
 
 	oe::write_transform(robot(), tooth, *base, base->position, base->rotation, base->scale);
@@ -685,36 +685,36 @@ BOOST_FIXTURE_TEST_CASE(Override_TransformIsRelativeToTheComposedBase, nested_fi
 	BOOST_TEST((pos == glm::vec3{ 1, 0, 0 }));
 
 	BOOST_TEST(oe::reset(robot(), tooth, std::string{ scn::transform_pseudo_component }));
-	oe::effective_transform(robot(), tooth, *oe::find_base_node(*assembler, robot(), tooth), pos, rot, scl);
+	oe::effective_transform(robot(), tooth, *oe::find_base_node(*assembler, robot(), tooth, res::tag{}), pos, rot, scl);
 	BOOST_TEST((pos == glm::vec3{ 2, 0, 0 }));
 }
 
 BOOST_FIXTURE_TEST_CASE(Override_BaseAppliesRemoveAndAddNodeRecordsOfIntermediateLevels, nested_fixture)
 {
 	namespace oe = edt::override_edit;
-	const auto tail = oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0xa2ull });
+	const auto tail = oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0xa2ull }, res::tag{});
 	BOOST_REQUIRE(tail);
 	BOOST_TEST(tail->components.count("stat") == 0u); // body removed the component
 
-	BOOST_TEST(!oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0xa3ull }).has_value()); // body removed the node
+	BOOST_TEST(!oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0xa3ull }, res::tag{}).has_value()); // body removed the node
 
-	const auto extra = oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0xe1ull });
+	const auto extra = oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0xe1ull }, res::tag{});
 	BOOST_REQUIRE(extra); // body added the node
 	BOOST_TEST(extra->name == "extra");
 	BOOST_TEST(oe::component_json(extra->components.at("stat")).at("hp").to_number<int64_t>() == 9);
 
-	BOOST_TEST(!oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0x99ull }).has_value());
+	BOOST_TEST(!oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0x99ull }, res::tag{}).has_value());
 }
 
 BOOST_FIXTURE_TEST_CASE(Override_ListedChildrenAreTheComposedNodes, nested_fixture)
 {
 	namespace oe = edt::override_edit;
-	const auto top = oe::list_children(*assembler, robot(), std::span<const uint64_t>{});
+	const auto top = oe::list_children(*assembler, robot(), std::span<const uint64_t>{}, res::tag{});
 	BOOST_REQUIRE(top.size() == 1u);
 	BOOST_TEST(top[0].node.node_id == 0xb1ull);
 	BOOST_TEST(top[0].has_children); // mid instantiates gear
 
-	const auto below = oe::list_children(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull });
+	const auto below = oe::list_children(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull }, res::tag{});
 	std::vector<uint64_t> ids;
 	for (const auto& listed : below) ids.push_back(listed.node.node_id);
 	// body removed wing and added extra; the inspector's base has the same nodes
@@ -772,6 +772,41 @@ BOOST_FIXTURE_TEST_CASE(Editor_TransformCommitInsideANestedInstanceIsRelativeToT
 	editor_under_test.on_transform_committed(path, glm::vec3{ 5, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
 	BOOST_REQUIRE(robot().overrides.size() == 1u);
 	BOOST_TEST((robot().overrides[0].target == std::vector<uint64_t>{ 0xb1ull, 0xa1ull }));
+}
+
+// The owner's file is open while the owner is expanded, as in a spawn (#993): a record of the owner that instantiates the
+// owner's prefab again adds a node that expands. Without the file that record is read as the prefab's own and refused.
+BOOST_AUTO_TEST_CASE(Override_WithTheOwnersFile_ARecordThatInstantiatesTheOwnersPrefabAgainIsListedAndFound)
+{
+	namespace oe = edt::override_edit;
+	load<scn::prefab_desc>(put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000a1","name":"tip"}]})"));
+	const res::tag file = put("grown.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[
+			{"op":"add_node","target":[],"value":{"__id":"00000000000000e1","name":"added",
+				"components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
+	const auto grown = load<scn::prefab_desc>(file);
+	BOOST_REQUIRE(grown);
+	pump();
+	const prefab_node& owner = grown->get_root().children.at(0);
+	const std::vector<uint64_t> added{ 0xe1ull };
+	const std::vector<uint64_t> tip_of_added{ 0xe1ull, 0xa1ull };
+
+	const auto listed = oe::list_children(*assembler, owner, std::span<const uint64_t>{}, file);
+	BOOST_REQUIRE(listed.size() == 2u);
+	BOOST_TEST(listed[1].node.node_id == 0xe1ull);
+	BOOST_TEST(listed[1].has_children); // it instantiates leaf
+	const auto base = oe::find_base_node(*assembler, owner, added, file);
+	BOOST_REQUIRE(base);
+	BOOST_TEST(base->name == "added");
+	const auto tip = oe::find_base_node(*assembler, owner, tip_of_added, file);
+	BOOST_REQUIRE(tip);
+	BOOST_TEST(tip->name == "tip");
+
+	const auto without_file = oe::list_children(*assembler, owner, std::span<const uint64_t>{}, res::tag{});
+	BOOST_REQUIRE(without_file.size() == 2u);
+	BOOST_TEST(!without_file[1].has_children);
+	BOOST_TEST(!oe::find_base_node(*assembler, owner, tip_of_added, res::tag{}).has_value());
 }
 
 // ---------------------------------------------------------------- importer

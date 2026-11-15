@@ -195,7 +195,8 @@ void edt::prefab_document::sync_preview()
 	entt::registry* reg = get_registry();
 	scn::ecs_assembler* assembler = m_services.assembler();
 	if (reg && assembler && m_working && m_root != entt::null && reg->valid(m_root)) {
-		scn::reconcile(*assembler, *reg, m_root, m_working->get_root(), scn::reconcile_mode::reload);
+		// The working copy is the file's content: its records may instantiate a prefab its nodes instantiate (#993).
+		scn::reconcile(*assembler, *reg, m_root, m_working->get_root(), scn::reconcile_mode::reload, m_source_tag);
 		// reconcile moves the children only: the root's own transform is placed here, whether or not the file spells it out.
 		reg->emplace_or_replace<scn::local_transform>(m_root, m_working->get_root().get_local_transform());
 		if (reg->ctx().contains<ecs::event<scn::transform_updated>>()) {

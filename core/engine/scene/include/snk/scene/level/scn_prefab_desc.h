@@ -79,6 +79,8 @@ namespace scn {
 	struct prefab_instance {
 		res::tag source_prefab;
 		scn::prefab_desc::prefab_node local_overrides;
+		// The file whose content the instance node is (empty when unknown, e.g. a plain prefab root); hot reload opens it (#993).
+		res::tag content_of;
 	};
 
 	// Gives every node of the subtree a fresh random id (editor duplicate).
@@ -107,13 +109,23 @@ namespace scn {
 	// content (with the node's override records applied and the node's own components and children added) is
 	// what gets built, and the entity remembers the prefab as its prefab_instance. Children are matched with
 	// the live children on a reload by node id. Every spawned node gets its node_id_component, which fills
-	// the registry's node_index.
+	// the registry's node_index. The file `node` is content of is unknown here: see the overload below.
 	SNK_API void reconcile(
 		const ecs_assembler& assembler,
 		entt::registry& reg,
 		entt::entity live,
 		const prefab_desc::prefab_node& node,
 		reconcile_mode mode);
+	// `file`: the file whose content `node` is, empty when unknown (as the overload above). A known file is open while
+	// `node` is built, as in assemble_prefab: its records may instantiate the prefab `node` instantiates, a record that
+	// instantiates `file` itself is refused, and it counts for the nesting depth. Nothing is built if `file` is open already.
+	SNK_API void reconcile(
+		const ecs_assembler& assembler,
+		entt::registry& reg,
+		entt::entity live,
+		const prefab_desc::prefab_node& node,
+		reconcile_mode mode,
+		const res::tag& file);
 
 	// What reconcile builds for `node` before it spawns anything: the referenced prefab (itself expanded) plus the
 	// node's own components and children, then the node's override records, those forwarded from above included.
@@ -124,6 +136,14 @@ namespace scn {
 		const prefab_desc::prefab_node& node,
 		prefab_desc::prefab_node& out,
 		res::tag& source);
+	// `file`: the file whose content `node` is, empty when unknown (as the overload above); it is open while `node` is
+	// expanded, as in the reconcile overload that names it.
+	SNK_API bool expand_instance(
+		const ecs_assembler& assembler,
+		const prefab_desc::prefab_node& node,
+		prefab_desc::prefab_node& out,
+		res::tag& source,
+		const res::tag& file);
 
 	// A component as reconcile spawns it: serialize(parent), the component's own overrides, then its edits.
 	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);

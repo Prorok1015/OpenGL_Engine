@@ -489,7 +489,7 @@ namespace {
 		std::optional<prefab_node> base;
 		const prefab_node* subject = at.owner;
 		if (!at.target.empty()) {
-			base = edt::override_edit::find_base_node(*sources.services.assembler(), *at.owner, at.target);
+			base = edt::override_edit::find_base_node(*sources.services.assembler(), *at.owner, at.target, at.world.desc->get_tag());
 			if (!base) return cmd::result::failure(cmd::codes::not_found, "no node at that path inside the prefab instance");
 			subject = &*base;
 		}
@@ -543,7 +543,8 @@ namespace {
 		const bool composed = !at.target.empty() || !at.owner->overrides.empty() || references_prefab(*at.owner);
 		// The cap applies before any child is expanded: expanding costs a copy of the prefab content of each one.
 		if (composed) {
-			for (const auto& listed : edt::override_edit::list_children(*sources.services.assembler(), *at.owner, at.target, max_children_listed, &child_total)) {
+			for (const auto& listed : edt::override_edit::list_children(*sources.services.assembler(), *at.owner, at.target, at.world.desc->get_tag(),
+				max_children_listed, &child_total)) {
 				rows.push_back({ listed.node.node_id, listed.node.name, sorted_keys(listed.node.components), listed.has_children });
 			}
 		} else {

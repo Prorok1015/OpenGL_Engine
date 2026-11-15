@@ -139,6 +139,9 @@ namespace
 
 		record_references(const desc::desc_system& descs, scn::ecs_assembler& assembler) : m_descs(descs), m_assembler(assembler) {}
 
+		// The file the nodes handed to node() are content of: the world they are in.
+		void set_file(const res::tag& file) { m_file = file; }
+
 		void node(const prefab_node& edited, boost::json::object& written)
 		{
 			if (boost::json::value* records = written.if_contains("overrides"); records && records->is_array()) {
@@ -167,7 +170,7 @@ namespace
 			auto key = std::make_pair(&owner, target);
 			auto found = m_bases.find(key);
 			if (found == m_bases.end()) {
-				found = m_bases.emplace(std::move(key), edt::override_edit::find_base_node(m_assembler, owner, target)).first;
+				found = m_bases.emplace(std::move(key), edt::override_edit::find_base_node(m_assembler, owner, target, m_file)).first;
 			}
 			return found->second;
 		}
@@ -203,6 +206,7 @@ namespace
 
 		const desc::desc_system& m_descs;
 		scn::ecs_assembler& m_assembler;
+		res::tag m_file;
 		std::map<std::pair<const prefab_node*, std::vector<std::uint64_t>>, std::optional<prefab_node>> m_bases;
 	};
 
@@ -216,6 +220,7 @@ void edt::override_edit::write_record_references(const desc::desc_system& descs,
 	if (!written || !written->is_array() || written->as_array().size() != worlds.size()) return;
 	record_references records(descs, assembler);
 	for (std::size_t i = 0; i < worlds.size(); ++i) {
+		records.set_file(worlds[i].get_tag());
 		if (json::object* world = written->as_array()[i].if_object()) records.node(worlds[i].get_root(), *world);
 	}
 }
@@ -266,18 +271,20 @@ namespace
 		const prefab_node* composed = nullptr; // the same node expanded
 	};
 
-	const prefab_node* expand_node(scn::ecs_assembler& assembler, const prefab_node& raw, std::vector<std::unique_ptr<prefab_node>>& keep)
+	const prefab_node* expand_node(scn::ecs_assembler& assembler, const prefab_node& raw, std::vector<std::unique_ptr<prefab_node>>& keep,
+		const res::tag& file = {})
 	{
 		auto expanded = std::make_unique<prefab_node>();
 		res::tag source;
-		if (!scn::expand_instance(assembler, raw, *expanded, source)) return &raw;
+		if (!scn::expand_instance(assembler, raw, *expanded, source, file)) return &raw;
 		keep.push_back(std::move(expanded));
 		return keep.back().get();
 	}
 
 	// `without_target_edits`: leave out the owner's own set records of the target node, the edit a base is for.
-	std::optional<composed_path> compose_path(
-		scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target, bool without_target_edits)
+	// `file` is the owner's only: what lies below it is content of prefabs, expanded without a file for now (#995).
+	std::optional<composed_path> compose_path(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
+		const res::tag& file, bool without_target_edits)
 	{
 		composed_path path;
 		path.copy = std::make_unique<prefab_node>(owner);
@@ -287,7 +294,7 @@ namespace
 			});
 		}
 		path.raw = path.copy.get();
-		path.composed = expand_node(assembler, *path.raw, path.expansions);
+		path.composed = expand_node(assembler, *path.raw, path.expansions, file);
 		for (uint64_t id : target) {
 			auto child = std::ranges::find(path.composed->children, id, &prefab_node::node_id);
 			if (child == path.composed->children.end()) return std::nullopt;
@@ -299,11 +306,12 @@ namespace
 }
 
 std::vector<edt::override_edit::listed_node> edt::override_edit::list_children(
-	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target, std::size_t limit, std::size_t* total)
+	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target, const res::tag& file, std::size_t limit,
+	std::size_t* total)
 {
 	std::vector<listed_node> out;
 	if (total) *total = 0;
-	auto path = compose_path(assembler, owner, target, false);
+	auto path = compose_path(assembler, owner, target, file, false);
 	if (!path) return out;
 
 	if (total) *total = path->composed->children.size();
@@ -323,9 +331,9 @@ std::vector<edt::override_edit::listed_node> edt::override_edit::list_children(
 }
 
 std::optional<edt::override_edit::prefab_node> edt::override_edit::find_base_node(
-	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target)
+	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target, const res::tag& file)
 {
-	auto path = compose_path(assembler, owner, target, true);
+	auto path = compose_path(assembler, owner, target, file, true);
 	if (!path) return std::nullopt;
 	const prefab_node* raw = path->raw;
 	const prefab_node* composed = path->composed;
@@ -349,6 +357,12 @@ void edt::override_edit::view_cache::invalidate()
 	m_children.clear();
 }
 
+res::tag edt::override_edit::view_cache::active_file() const
+{
+	const scn::world_desc* world = m_state.active_world_desc();
+	return world ? world->get_tag() : res::tag{};
+}
+
 void edt::override_edit::view_cache::sync_generation()
 {
 	if (m_generation == m_state.desc_generation) return;
@@ -363,7 +377,7 @@ std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::overr
 	for (const auto& e : m_bases) {
 		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
 	}
-	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(*m_services.assembler(), owner, target));
+	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(*m_services.assembler(), owner, target, active_file()));
 	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
 	return value;
 }
@@ -375,7 +389,7 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	for (const auto& e : m_children) {
 		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
 	}
-	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target));
+	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target, active_file()));
 	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
 	return value;
 }

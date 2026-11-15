@@ -25,7 +25,10 @@ namespace edt::override_edit
 	// The node of the instantiated content that `target` addresses, composed the way reconcile builds it: records of
 	// every prefab level on the way are applied, only the owner's own edits of this node are left out. Name, id,
 	// placement and components are filled, children are not. Empty if the content has no such node.
-	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target);
+	// `file`: the file whose content `owner` is (the edited world or prefab), open while the owner is expanded as it is
+	// at a spawn, so the owner's records may instantiate its prefab again; the nodes below it expand without it (#995).
+	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
+		const res::tag& file);
 
 	// A node of an instance as the hierarchy lists it: no children, `has_children` says whether it has some.
 	struct listed_node {
@@ -38,10 +41,11 @@ namespace edt::override_edit
 	// `limit` bounds the children that are expanded (each one costs a copy of its prefab content); `total`, if given,
 	// receives how many children there are.
 	std::vector<listed_node> list_children(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
-		std::size_t limit = static_cast<std::size_t>(-1), std::size_t* total = nullptr);
+		const res::tag& file, std::size_t limit = static_cast<std::size_t>(-1), std::size_t* total = nullptr);
 
 	// Expanding an instance copies prefab content and logs about broken input, so the panels do it once per selection or
-	// edit instead of once per frame. Results are kept per (active world, owner node id, target) and dropped as a whole
+	// edit instead of once per frame. The owner is a node of the active world, whose desc's tag is its file.
+	// Results are kept per (active world, owner node id, target) and dropped as a whole
 	// when scene_document::desc_generation moves, so correctness does not depend on anyone calling invalidate().
 	// Callers get shared ownership: what they hold stays valid whatever the cache does meanwhile.
 	class view_cache
@@ -64,6 +68,7 @@ namespace edt::override_edit
 		};
 
 		void sync_generation();
+		res::tag active_file() const;
 
 		const editor_services& m_services;
 		const scene_document& m_state;

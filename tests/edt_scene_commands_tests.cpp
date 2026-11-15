@@ -638,7 +638,7 @@ BOOST_AUTO_TEST_CASE(values_written_inside_an_instance_and_back)
 	BOOST_REQUIRE(call("transform.set", R"({"ref":)" + eye + R"(,"position":[0,5,0]})").ok);
 
 	const prefab_node& inst = *child(root(1), 0xe1);
-	const auto base = edt::override_edit::find_base_node(*assembler, inst, std::vector<std::uint64_t>{ 0xc1 });
+	const auto base = edt::override_edit::find_base_node(*assembler, inst, std::vector<std::uint64_t>{ 0xc1 }, res::tag{});
 	BOOST_REQUIRE(base.has_value());
 	const auto effective = edt::override_edit::effective_component(inst, std::vector<std::uint64_t>{ 0xc1 }, "camera_desc",
 		edt::override_edit::component_json(base->components.at("camera_desc")));
@@ -980,7 +980,7 @@ BOOST_AUTO_TEST_CASE(a_reference_in_a_patch_replaces_the_value_whole)
 	BOOST_REQUIRE(instance != root(1).children.end());
 	prefab_node& owner = *instance;
 	const std::vector<std::uint64_t> target{ 0xc1 };
-	const auto base_node = oe::find_base_node(*assembler, owner, target);
+	const auto base_node = oe::find_base_node(*assembler, owner, target, res::tag{});
 	BOOST_REQUIRE(base_node.has_value());
 	const json::object base_json = oe::component_json(base_node->components.at("mesh"));
 	json::object edited = oe::effective_component(owner, target, "mesh", base_json);
