@@ -24,6 +24,11 @@ namespace scn {
 		}
 	}
 
+	res::resource_system& hot_reload_manager::resources() const
+	{
+		return m_res_sys;
+	}
+
 	void hot_reload_manager::attach_registry(entt::registry& reg)
 	{
 		if (m_registries.insert(&reg).second) {
@@ -141,8 +146,8 @@ namespace scn {
 			// A level without worlds has no registry, but its own reload callback above must still run.
 			if (m_registries.empty()) continue;
 
-			// Internal component-tracker hot-reload. A desc whose __parent changed arrives under its own tag, after the
-			// parent: resource_system follows the dependency graph. desc_base shares one cache block with the concrete desc type.
+			// A desc whose __parent changed arrives under its own tag, after the parent (the dependency graph). A
+			// tracked source is never a geometry_desc, the one type whose block is not desc_base's (#1021).
 			// Deleted or moved away (a branch switch, a save that renames a backup): keep what is loaded.
 			if (!m_res_sys.exists(tag)) {
 				egLOG_DEBUG("scene/hot_reload", "hot reload: '{}' is gone, keeping previous state", tag.view());
