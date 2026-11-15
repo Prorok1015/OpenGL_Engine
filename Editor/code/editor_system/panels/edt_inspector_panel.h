@@ -31,6 +31,7 @@ namespace edt
 		inspector_panel();
 
 		void set_selected_node(scn::prefab_desc::prefab_node* node, bool readonly = false);
+		scn::prefab_desc::prefab_node* selected_node() const { return m_selected_node; }
 		// The selected node is a node of the prefab that `owner` instantiates, `target` the ids from the instance to it.
 		// Edits then become override records on `owner`; null owner = the selected node is edited itself.
 		void set_override_target(scn::prefab_desc::prefab_node* owner, std::vector<uint64_t> target);
