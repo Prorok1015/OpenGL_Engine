@@ -176,6 +176,7 @@ namespace desc
 
 		void unregister_desc(std::string_view type_name);
 
+		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
 		// current_version(name). Migrations registered later move the stored schema's version along, so the order
 		// does not matter.
@@ -184,9 +185,8 @@ namespace desc
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema);
 
-		// A schema from register_schema, find_schema or schemas() stays valid until its type is unregistered (#988): hold one
-		// on the main thread, or in a load of a layer whose registrations are not removed before its loads have ended. The
-		// lookup of find_schema is guarded; what schemas() gives is not.
+		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
+		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
 		const type_schema* find_schema(std::string_view type_name) const;
 
 		const schema_registry& schemas() const;

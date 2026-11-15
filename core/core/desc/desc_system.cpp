@@ -27,8 +27,7 @@
 namespace
 {
 	// What register_migration with a summary stores in the registry. Its type stays in the engine: only the engine asks
-	// a step for it (std::function::target), so the summary needs no table of its own and desc_system keeps its size
-	// (scn::scene_layer holds one by value and modules read the members after it, #751).
+	// a step for it (std::function::target), so the summary needs no table of its own.
 	struct described_step
 	{
 		std::string type;
@@ -211,7 +210,7 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 			return stored;
 		}
 	}
-	// Off the lock (it logs a schema it cannot bind): only the registering thread changes the registry it reads.
+	// Off the lock: it logs a schema it cannot bind.
 	factory_fn factory = make_dynamic_factory(*stored, m_schemas);
 	if (!factory) {
 		return stored;
@@ -283,8 +282,7 @@ void desc::desc_system::register_migration(std::string_view type, int from_versi
 			published = it->second;
 		}
 	}
-	// Copied off the lock (the copy runs the copy constructors of what the steps capture); only the registering thread
-	// writes, so the map taken above is still the published one.
+	// Copied off the lock: the copy runs the copy constructors of what the steps capture.
 	auto steps = published ? std::make_shared<migration_steps>(*published) : std::make_shared<migration_steps>();
 	const bool added = steps->emplace(from_version, std::move(fn)).second;
 	ASSERT_MSG(added, "Migration for '{}' from version {} is already registered!", type, from_version);

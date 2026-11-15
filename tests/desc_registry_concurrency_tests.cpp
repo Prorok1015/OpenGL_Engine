@@ -7,9 +7,11 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_schema.h>
@@ -248,7 +250,8 @@ BOOST_AUTO_TEST_CASE(RunningStep_SurvivesUnregisteringItsMigrations)
 	BOOST_TEST(token_watch.expired(), "released with the last copy of the steps");
 }
 
-BOOST_AUTO_TEST_CASE(RunningFactory_SurvivesUnregisteringItsDesc)
+// The factory of add_desc<T> holds no state, so the copy taken under the lock is not what this case proves (the step case does).
+BOOST_AUTO_TEST_CASE(AFactoryCallInFlight_ReturnsAValidInstance_WhenItsDescIsUnregistered)
 {
 	gate factory_gate;
 	const factory_gate_scope scope(factory_gate);
