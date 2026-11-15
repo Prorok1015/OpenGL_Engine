@@ -1,9 +1,11 @@
 #pragma once
 #include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
+#include <array>
 #include <filesystem>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace edt {
@@ -16,6 +18,8 @@ namespace edt {
 		std::vector<res::tag>             all_tags;
 		// The tags this run stored itself; the rest of all_tags was there before.
 		std::vector<res::tag>             created_tags;
+		// The SHA-256 of each created resource as it was stored, when the importer knows it (the decoder process's, #999).
+		std::vector<std::pair<res::tag, std::array<std::uint8_t, 32>>> created_digests;
 		std::filesystem::path             source_path;
 
 		// Owned copy of prefab JSON for main-thread desc_sys.create_instance + deserialize.

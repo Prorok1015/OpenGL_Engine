@@ -594,6 +594,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 			const res::tag tag(blob.tag);
 			if (!m_resources.store(tag, blob.bytes)) throw std::runtime_error(std::format("'{}' could not be stored", blob.tag));
 			stored.push_back(tag);
+			imported->created_digests.emplace_back(tag, digest_of(blob.bytes));
 		}
 		if (task != nullptr) task->throw_if_stopped();
 	} catch (...) {

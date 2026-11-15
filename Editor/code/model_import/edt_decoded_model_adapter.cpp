@@ -3,6 +3,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_path_sanitize.h>
+#include <algorithm>
 #include <cstdint>
 #include <format>
 #include <fstream>
@@ -142,7 +143,10 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
 		imported = step([&] { return m_decoder.import(source, nullptr); });
 		if (!imported->error.empty()) throw refuse(imported->error);
-		if (!key.empty()) remember(source.memory_folder, cached_decode{ key, found, *imported });
+		// Only an import whose every resource has its digest is reused: a hit compares the bytes in memory:// with them.
+		if (!key.empty() && imported->created_digests.size() == imported->created_tags.size()) {
+			remember(source.memory_folder, cached_decode{ key, found, *imported });
+		}
 	}
 
 	std::shared_ptr<desc::desc_base> instance = m_descs.create_instance("prefab_desc", imported->prefab_tag);
@@ -187,6 +191,13 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 		}
 		std::optional<std::vector<std::byte>> bytes = read_exactly(*file, size);
 		if (!bytes) return std::nullopt;
+		// A resource that still passes the checks of an answer but is not what the decoder made is not taken either.
+		const auto stored = std::find_if(decode.imported.created_digests.begin(), decode.imported.created_digests.end(),
+			[&resource](const auto& entry) { return entry.first == resource; });
+		if (stored == decode.imported.created_digests.end() || stored->second != digest_of(*bytes)) {
+			problem = std::format("'{}' is not what the decoder stored", resource.view());
+			return std::nullopt;
+		}
 		answer.blobs.push_back(bundle_blob{ std::string(resource.view()), std::move(*bytes) });
 	}
 	return accept_import_answer(answer, request, problem);

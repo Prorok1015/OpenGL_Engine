@@ -300,12 +300,15 @@ struct cache_env : adapter_env
 		};
 		steps.import = [this](const edt::import_source&, ds::task_context*) {
 			++imports;
-			BOOST_REQUIRE(rs->store_sync(k_prefab, text_bytes(R"({"__type":"prefab_desc"})")));
-			BOOST_REQUIRE(rs->store_sync(k_geom, text_bytes(R"({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})")));
+			const std::vector<std::byte> prefab = text_bytes(R"({"__type":"prefab_desc"})");
+			const std::vector<std::byte> geom = text_bytes(R"({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})");
+			BOOST_REQUIRE(rs->store_sync(k_prefab, prefab));
+			BOOST_REQUIRE(rs->store_sync(k_geom, geom));
 			edt::import_intermediate answer;
 			answer.prefab_tag = k_prefab;
 			answer.geom_tag = k_geom;
 			answer.created_tags = { k_prefab, k_geom };
+			if (with_digests) answer.created_digests = { { k_prefab, edt::digest_of(prefab) }, { k_geom, edt::digest_of(geom) } };
 			answer.all_tags = answer.created_tags;
 			answer.prefab_json = boost::json::parse(R"({ "__type": "prefab_desc" })").as_object();
 			descs->migrate_tree(answer.prefab_json, "test");
@@ -315,6 +318,7 @@ struct cache_env : adapter_env
 	}
 
 	std::string version = "decoder-1";
+	bool with_digests = true;
 	int scans = 0;
 	int imports = 0;
 };
@@ -404,6 +408,36 @@ BOOST_AUTO_TEST_CASE(AResourceChangedInMemory_IsRefusedAsADecodersAnswerWouldBe_
 	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
 	BOOST_TEST(imports == 2);
 	BOOST_TEST(warned.count("the earlier decode of 'res://models/m.obj' was refused") == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceSwappedForOneThatPassesTheChecks_IsNotTaken_AndTheModelIsDecodedAgain)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	BOOST_REQUIRE(rs->store_sync(k_geom, text_bytes(R"({"__type":"geometry_desc","__parent":"res://base_geometry.desc","name":"other"})")));
+	const warnings warned;
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(imports == 2);
+	BOOST_TEST(warned.count("is not what the decoder stored") == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AnImportWithoutTheDigestsOfItsResources_IsNotReused)
+{
+	with_digests = false;
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(imports == 2);
+}
+
+BOOST_AUTO_TEST_CASE(TheSameBytesFoundInAnotherRoot_AreDecodedAgain)
+{
+	// Same tag, same folder, same bytes; another file and content root, so another boundary for its side files.
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	fs::remove(dir.path() / "content" / "models" / "m.obj");
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(imports == 2);
 }
 
 BOOST_AUTO_TEST_CASE(AResourceGoneFromMemory_IsDecodedAgain)
