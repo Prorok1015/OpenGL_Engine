@@ -45,11 +45,10 @@ struct mesh_range_fixture : test_util::null_engine_fixture
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendMeshRange, mesh_range_fixture)
 
-// The smoke level's meshes come from a .glb: without assimp it has nothing to draw.
-BOOST_AUTO_TEST_CASE(AMeshRangeOutsideItsGeometry_IsNotDrawn, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+BOOST_AUTO_TEST_CASE(AMeshRangeOutsideItsGeometry_IsNotDrawn)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 	test_util::pump(tasks);
 	BOOST_REQUIRE(run_frames(3) == 3);
 	const std::size_t whole = draws_of_a_frame();

@@ -14,8 +14,7 @@
 #include <vector>
 
 // The render passes read their shaders from engine:// when it is mounted (#929): a project's res://shaders file at the
-// same path is not compiled in their place. The engine frame over the smoke level (it has a model) runs in the assimp
-// build only; the debug pass, run on its own, in every build.
+// same path is not compiled in their place.
 
 namespace {
 
@@ -59,7 +58,7 @@ struct project_overrides_fixture : test_util::null_engine_fixture
 	{
 		driver()->record_shader_sources(true);
 		auto& levels = storage.require<scn::context_manager>();
-		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 		test_util::pump(tasks);
 		BOOST_REQUIRE(run_frames(3) == 3);
 		std::set<std::string> marked;
@@ -120,7 +119,7 @@ struct without_engine : project_overrides_fixture
 
 }
 
-BOOST_AUTO_TEST_SUITE(AppEngineNullBackendEngineShaders, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+BOOST_AUTO_TEST_SUITE(AppEngineNullBackendEngineShaders)
 
 BOOST_FIXTURE_TEST_CASE(WithEngineMounted_ThePassesCompileTheEngineShaders, with_engine)
 {

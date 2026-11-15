@@ -36,7 +36,7 @@ BOOST_AUTO_TEST_CASE(WindowSystemNullFromConfigBuildsAWindowWithoutAGlSurface)
 BOOST_FIXTURE_TEST_CASE(ExitAfterFramesStopsTheEngineFrameLoop, test_util::null_engine_fixture)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 	auto* loop = dynamic_cast<app::loop_service*>(&storage.require<app::app_loop_service_interface>());
 	BOOST_REQUIRE(loop);
 	loop->set_exit_after_frames(4);
