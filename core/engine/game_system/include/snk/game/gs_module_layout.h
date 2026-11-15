@@ -1,22 +1,5 @@
 #pragma once
-// Not used here: the includes this header had before #922, kept for module code that reaches them through it.
-#include <snk/command/cmd_types.h>
-#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
-#include <snk/desc/desc_base.hpp>
-#include <snk/desc/desc_schema_ops.h>
-#include <snk/ecs/ecs_bus.hpp>
-#include <snk/ecs/ecs_signal.hpp>
-#include <snk/ecs/ecs_system_access.hpp>
-#include <snk/ecs/ecs_system_registry.hpp>
-#include <snk/game/gs_input_stack_handle.h>
-#include <snk/input/inp_input_stack.h>
-#include <snk/resource/adapters/res_dependencies.hpp>
-#include <snk/resource/resolvers/res_control_block.hpp>
-#include <snk/resource/resources/res_resource_handle.hpp>
-#include <snk/scene/scn_component_catalog.h>
-#include <snk/scene/scn_event_subscriptions.h>
-#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
