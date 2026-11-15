@@ -64,7 +64,7 @@ namespace {
 		std::vector<edt::game_build_result::module_file> out;
 		for (const auto& module : modules) {
 			const auto names = edt::module_file_names(module);
-			edt::game_build_result::module_file file{ module, dir / names.front(), false };
+			edt::game_build_result::module_file file{ module, dir / names.front(), false, std::nullopt };
 			for (const auto& name : names) {
 				if (fs::exists(dir / name, ec)) {
 					file.path = dir / name;
