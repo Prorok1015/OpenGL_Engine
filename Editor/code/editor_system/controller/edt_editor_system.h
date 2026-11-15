@@ -171,7 +171,9 @@ namespace edt {
 #if SNK_HAS_ASSIMP
 		std::unique_ptr<edt::model_importer> m_model_importer;
 		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
-		std::unique_ptr<edt::process_decoder> m_process_decoder;
+		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
+		std::shared_ptr<edt::process_decoder> m_process_decoder;
+		bool m_model_adapter_registered = false;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;

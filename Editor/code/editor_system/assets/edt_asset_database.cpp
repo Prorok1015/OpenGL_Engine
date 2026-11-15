@@ -2430,6 +2430,9 @@ void edt::asset_database::poll(bool force)
 
 void edt::asset_database::give_pending_ids()
 {
+	if (m_pending_ids.empty()) {
+		m_ids_held_by_git = false;
+	}
 	if (m_pending_ids.empty() || m_giving_ids || m_scanning || !m_walked_once) {
 		return;
 	}
@@ -2498,6 +2501,7 @@ void edt::asset_database::give_pending_ids()
 		ready.push_back(key);
 		it = m_pending_ids.erase(it);
 	}
+	m_ids_held_by_git = busy.value_or(false) && !m_pending_ids.empty();
 	for (const std::string& key : ready) {
 		give_id(key);
 		m_root_guids.erase(key);

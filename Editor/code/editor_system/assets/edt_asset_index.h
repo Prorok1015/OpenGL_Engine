@@ -2,14 +2,17 @@
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_tag.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -82,7 +85,19 @@ namespace edt
 		bool attached() const { return m_attached; }
 		const asset_index_snapshot& index() const { return *m_index; }
 
+		// The index cannot judge a guid now (#968): not attached (no walk applied, or changes dropped since), or files
+		// still wait for their hash (a desc's own __guid is read there) or for their ID.
+		bool pending() const;
+		// The busy text for an agent's guid while pending(), else nullopt. Once the wait (as poll() saw it begin) is longer
+		// than k_detail_after, it names each reason.
+		std::optional<std::string> guid_wait() const;
+		static constexpr std::chrono::seconds k_detail_after{ 10 };
+		// Tests only: the steady time the wait is measured with.
+		void set_clock_for_tests(std::function<std::chrono::steady_clock::time_point()> clock) { m_clock = std::move(clock); }
+
 	private:
+		void follow();
+		std::chrono::steady_clock::time_point now() const { return m_clock ? m_clock() : std::chrono::steady_clock::now(); }
 		void attach();
 		void detach();
 		// Detaches when the database dropped changes since the link last looked; true when attached afterwards.
@@ -108,5 +123,14 @@ namespace edt
 		std::uint64_t m_drops_seen = 0;
 		// Attached only after more walks than this have been applied.
 		std::uint64_t m_attach_after = 0;
+		// When poll() first saw the index pending; reset once it is ready.
+		std::optional<std::chrono::steady_clock::time_point> m_pending_since;
+		std::function<std::chrono::steady_clock::time_point()> m_clock;
 	};
+
+	// The `busy` answer to an agent's guid while the asset index is not complete (#968).
+	inline constexpr std::string_view k_guid_index_pending = "the asset index is still being built, so a guid cannot be checked; call again when it is ready";
+
+	// asset_index_link::guid_wait; null (no project open): nullopt, the guid is judged as without an index.
+	std::optional<std::string> asset_index_wait(const asset_index_link* link);
 }
