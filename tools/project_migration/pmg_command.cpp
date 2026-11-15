@@ -8,6 +8,7 @@
 #include <format>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace fs = std::filesystem;
 namespace json = boost::json;
@@ -79,6 +80,20 @@ std::string prj::migration::plan_text(const migration_plan& plan)
 		}
 		for (const desc::migration_warning& warning : file.warnings) {
 			text += std::format("  - warning: {} {} -> {}: {}\n", warning.type, warning.from_version, warning.from_version + 1, warning.message);
+		}
+	}
+	bool copies = false;
+	for (const scanned_file& file : plan.scan.files) {
+		if (file.id_held_below.empty()) continue;
+		if (!std::exchange(copies, true)) text += "New IDs (the ID belongs to a file of a layer below the project):\n";
+		text += std::format("- {} ({}): ID of {}\n", file.path, file.resource_path, file.id_held_below);
+	}
+	bool to_copies = false;
+	for (const scanned_file& file : plan.scan.files) {
+		if (file.references_to_copies.empty()) continue;
+		if (!std::exchange(to_copies, true)) text += "References turned into {guid, path} with a new ID of a copy:\n";
+		for (const std::string& reference : file.references_to_copies) {
+			text += std::format("- {}: {}\n", file.path, reference);
 		}
 	}
 	const std::vector<skipped_file> skipped = skipped_by(plan);

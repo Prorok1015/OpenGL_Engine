@@ -3,6 +3,7 @@
 #include <snk/resource/res_tag.h>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -67,6 +68,9 @@ namespace prj::migration
 		std::optional<res::asset_id> id_of(const res::tag& tag) const;
 		// The res:// tag of the file that holds `id` by res::holds_id_before; none for an unknown ID.
 		std::optional<res::tag> path_of(const res::asset_id& id) const;
+		// The file that holds `id` is in a read-only layer (the engine's): a project file with that ID is a copy
+		// without one (#902).
+		bool held_below(const res::asset_id& id) const { return m_held_below.contains(id); }
 		// The listed files that carry `id`: more than one is a duplicate ID, which the editor reports too.
 		std::vector<std::string> paths_of(const res::asset_id& id) const;
 		// .resource files no listed file pairs with, by path; `id` when it could be read.
@@ -86,6 +90,7 @@ namespace prj::migration
 		std::map<std::string, res::asset_id> m_held_ids;
 		// An ID -> the res_path of its holder.
 		std::map<res::asset_id, std::string> m_holders;
+		std::set<res::asset_id> m_held_below;
 		std::vector<std::string> m_problems;
 		std::vector<read_only_resource> m_read_only_resources;
 	};

@@ -52,6 +52,7 @@ void prj::migration::project_assets::rebuild()
 	m_problems.clear();
 	m_held_ids.clear();
 	m_holders.clear();
+	m_held_below.clear();
 	m_read_only_resources.clear();
 
 	// Lowest first, as res:// stacks them: the read-only layers, then the content roots, the first of project.snkproj
@@ -144,10 +145,16 @@ void prj::migration::project_assets::rebuild()
 		m_orphans.insert_or_assign(meta.path, std::move(meta));
 	}
 
+	// A name two holders share (a project file over one of a lower layer): the highest layer's, as the resolver reads.
+	std::map<std::string, std::pair<res::asset_id, std::size_t>> by_name;
 	for (auto& [id, held] : holders) {
-		m_held_ids.emplace(res::asset_name_key(held.res_path, res::asset_names_case_insensitive), id);
+		const std::string name = res::asset_name_key(held.res_path, res::asset_names_case_insensitive);
+		const auto [named, added] = by_name.try_emplace(name, id, held.layer);
+		if (!added && held.layer > named->second.second) named->second = { id, held.layer };
+		if (read_only[held.layer]) m_held_below.insert(id);
 		m_holders.emplace(id, std::move(held.res_path));
 	}
+	for (auto& [name, held] : by_name) m_held_ids.emplace(name, held.first);
 }
 
 std::optional<res::asset_id> prj::migration::project_assets::id_of(std::string_view path) const

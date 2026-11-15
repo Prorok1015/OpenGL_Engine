@@ -659,7 +659,8 @@ namespace
 	// scanned_file::reference_fixes of every desc whose text the walk kept, by the walker of the editor's save
 	// (desc::write_references_with) over `assets`. A file assets.ids gives a .resource in the same migration
 	// (gets_resource_from_ids) answers an ID as well: its references change in that migration, so the step is planned for
-	// them. The ID itself is never written.
+	// them. The ID itself is never written. A copy of an engine file's ID (scanned_file::id_held_below) gets one from
+	// assets.ids_below the same way; the paths that change only for that are listed in references_to_copies (#902).
 	void count_reference_fixes(prj::migration::scan_result& result, const prj::migration::type_catalog& types,
 		const prj::migration::project_assets& assets, const reference_texts& texts, const prj::migration::scan_options& options)
 	{
@@ -670,13 +671,26 @@ namespace
 				gets_id.insert(res::asset_name_key(listed->second.res_path, res::asset_names_case_insensitive));
 			}
 		}
+		std::set<std::string> copies;
+		for (const prj::migration::scanned_file& file : result.files) {
+			if (file.id_held_below.empty()) continue;
+			if (const auto listed = assets.assets().find(file.path); listed != assets.assets().end()) {
+				copies.insert(res::asset_name_key(listed->second.res_path, res::asset_names_case_insensitive));
+			}
+		}
 		const res::asset_id will_get_one{ 0, 1 };
+		std::set<std::string> to_copies;
 		desc::reference_ids ids;
 		ids.id_of = [&](const res::tag& tag) -> std::optional<res::asset_id> {
 			if (std::optional<res::asset_id> id = assets.id_of(tag)) return id;
 			if (tag.protocol() != res::tag::default_protocol()) return std::nullopt;
 			const std::string_view res_path = tag.view().substr(tag.protocol().size() + 3);
-			return gets_id.contains(res::asset_name_key(res_path, res::asset_names_case_insensitive)) ? std::optional{ will_get_one } : std::nullopt;
+			const std::string key = res::asset_name_key(res_path, res::asset_names_case_insensitive);
+			if (copies.contains(key)) {
+				to_copies.insert(std::string(tag.view()));
+				return will_get_one;
+			}
+			return gets_id.contains(key) ? std::optional{ will_get_one } : std::nullopt;
 		};
 		ids.path_of = [&assets](const res::asset_id& id) { return assets.path_of(id); };
 		const desc::schema_lookup schema_of = [&types](std::string_view type) { return types.find_schema(type); };
@@ -691,7 +705,9 @@ namespace
 			json::value root = parse_desc_json(text->second, error);
 			if (error || !root.is_object()) continue;
 			file.outdated_references = file.kind == file_class::outdated && holds_reference(root, 0);
+			to_copies.clear();
 			file.reference_fixes = desc::write_references_with(root, schema_of, ids).total();
+			file.references_to_copies.assign(to_copies.begin(), to_copies.end());
 		}
 	}
 }
@@ -863,6 +879,13 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		if (listed == assets.assets().end()) continue;
 		file.has_resource = listed->second.has_meta;
 		if (file.resource_path.empty()) file.resource_unreadable = listed->second.has_meta && !listed->second.id;
+		// A .resource of another content root (resource_path empty) is left to the editor's Problems: the step
+		// writes the one beside the file.
+		if (listed->second.id && assets.held_below(*listed->second.id) && !file.resource_path.empty()) {
+			if (const std::optional<res::tag> holder = assets.path_of(*listed->second.id)) {
+				file.id_held_below = std::string(holder->view());
+			}
+		}
 		if (file.kind == file_class::current || file.kind == file_class::missing_resource) {
 			if (lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) != ".desc") {
 				file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
