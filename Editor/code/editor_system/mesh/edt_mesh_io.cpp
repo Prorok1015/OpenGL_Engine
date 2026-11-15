@@ -198,7 +198,7 @@ namespace edt::mesh
 		}
 	}
 
-	void poly_mesh_from_json(const json::object& resource, poly_mesh_desc& out)
+	void poly_mesh_from_json(const json::object& resource, poly_mesh_desc& out, const poly_read_limits& limits)
 	{
 		poly_mesh mesh;
 		std::optional<shape_params> generator;
@@ -222,8 +222,8 @@ namespace edt::mesh
 
 		if (const json::value* vertices_value = find(resource, "vertices")) {
 			const json::array& vertices = array_of(*vertices_value, "vertices");
-			if (vertices.size() > max_poly_vertices) {
-				fail("vertices", std::format("holds {} vertices, at most {} are read", vertices.size(), max_poly_vertices));
+			if (vertices.size() > limits.vertices) {
+				fail("vertices", std::format("holds {} vertices, at most {} are read", vertices.size(), limits.vertices));
 			}
 			for (std::size_t i = 0; i < vertices.size(); ++i) {
 				const std::string where = std::format("vertices[{}]", i);
@@ -231,15 +231,15 @@ namespace edt::mesh
 				const vertex_id id = uint_of(item[0], where + "[0]");
 				const glm::vec3 position{ float_of(item[1], where + "[1]"), float_of(item[2], where + "[2]"), float_of(item[3], where + "[3]") };
 				if (!mesh.restore_vertex(id, position)) {
-					fail(where, std::format("id {} is 0 or used twice", id));
+					fail(where, std::format("id {} is 0, 4294967295 or used twice", id));
 				}
 			}
 		}
 
 		if (const json::value* faces_value = find(resource, "faces")) {
 			const json::array& faces = array_of(*faces_value, "faces");
-			if (faces.size() > max_poly_faces) {
-				fail("faces", std::format("holds {} faces, at most {} are read", faces.size(), max_poly_faces));
+			if (faces.size() > limits.faces) {
+				fail("faces", std::format("holds {} faces, at most {} are read", faces.size(), limits.faces));
 			}
 			std::size_t corner_total = 0;
 			for (std::size_t i = 0; i < faces.size(); ++i) {
@@ -255,16 +255,16 @@ namespace edt::mesh
 				}
 				const face_id id = uint_of(*id_value, where + ".id");
 				const std::uint32_t slot = optional_uint(object, "material", 0, where);
-				if (slot > max_material_slot) {
-					fail(where + ".material", std::format("is {}, at most {} is read", slot, max_material_slot));
+				if (slot > limits.material_slot) {
+					fail(where + ".material", std::format("is {}, at most {} is read", slot, limits.material_slot));
 				}
 				const json::array& corners_json = array_of(*corners_value, where + ".corners");
-				if (corners_json.size() > max_face_corners) {
-					fail(where + ".corners", std::format("holds {} corners, at most {} are read", corners_json.size(), max_face_corners));
+				if (corners_json.size() > limits.face_corners) {
+					fail(where + ".corners", std::format("holds {} corners, at most {} are read", corners_json.size(), limits.face_corners));
 				}
 				corner_total += corners_json.size();
-				if (corner_total > max_poly_corners) {
-					fail(where, std::format("is past the limit of {} corners in a mesh", max_poly_corners));
+				if (corner_total > limits.corners) {
+					fail(where, std::format("is past the limit of {} corners in a mesh", limits.corners));
 				}
 				std::vector<corner> corners;
 				corners.reserve(corners_json.size());
@@ -275,15 +275,15 @@ namespace edt::mesh
 						glm::vec2{ float_of(item[1], corner_where + "[1]"), float_of(item[2], corner_where + "[2]") } });
 				}
 				if (!mesh.restore_face(id, std::move(corners), slot)) {
-					fail(where, "has an id that is 0 or used twice, fewer than 3 corners, an unknown vertex or a vertex twice in a row");
+					fail(where, "has an id that is 0, 4294967295 or used twice, fewer than 3 corners, an unknown vertex or a vertex twice in a row");
 				}
 			}
 		}
 
 		if (const json::value* edges_value = find(resource, "edges")) {
 			const json::array& edges = array_of(*edges_value, "edges");
-			if (edges.size() > max_poly_corners) {
-				fail("edges", std::format("holds {} entries, at most {} are read", edges.size(), max_poly_corners));
+			if (edges.size() > limits.edges) {
+				fail("edges", std::format("holds {} entries, at most {} are read", edges.size(), limits.edges));
 			}
 			for (std::size_t i = 0; i < edges.size(); ++i) {
 				const std::string where = std::format("edges[{}]", i);

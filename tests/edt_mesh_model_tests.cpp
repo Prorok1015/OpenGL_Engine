@@ -74,6 +74,21 @@ BOOST_AUTO_TEST_CASE(Restore_KeepsTheGivenIds_AndRefusesATakenOne)
 	BOOST_TEST(mesh.add_vertex({ 2.f, 0.f, 0.f }) == 8u);
 }
 
+BOOST_AUTO_TEST_CASE(TheReservedId_IsNeverGivenOutNorRestored_AndTheIdsRunningOutGiveNoElement)
+{
+	poly_mesh mesh;
+	BOOST_TEST(!mesh.restore_vertex(reserved_id, { 0.f, 0.f, 0.f }));
+	BOOST_TEST(mesh.restore_vertex(reserved_id - 1, { 0.f, 0.f, 0.f }));
+	BOOST_TEST(mesh.add_vertex({ 1.f, 0.f, 0.f }) == invalid_id);
+
+	const vertex_id a = 1;
+	BOOST_TEST(mesh.restore_vertex(a, { 1.f, 0.f, 0.f }));
+	BOOST_TEST(mesh.restore_vertex(2, { 0.f, 1.f, 0.f }));
+	BOOST_TEST(!mesh.restore_face(reserved_id, { { a }, { 2 }, { reserved_id - 1 } }, 0));
+	BOOST_TEST(mesh.restore_face(reserved_id - 1, { { a }, { 2 }, { reserved_id - 1 } }, 0));
+	BOOST_TEST(mesh.add_face({ { a }, { 2 }, { reserved_id - 1 } }) == invalid_id);
+}
+
 BOOST_AUTO_TEST_CASE(EdgeFlags_AreKeptPerEdge_NotPerDirection)
 {
 	poly_mesh mesh = make(box_params{});
@@ -183,6 +198,8 @@ BOOST_AUTO_TEST_CASE(AShapeParameterOutOfRange_GivesNoMesh_AndAnError)
 	BOOST_TEST(!make_shape(plane_params{ { 1.f, 1.f }, 0, 1 }).mesh.has_value());
 	BOOST_TEST(!make_shape(capsule_params{ 1.f, 0.f, 8, 2 }).mesh.has_value());
 	BOOST_TEST(!make_shape(box_params{ { std::nanf(""), 1.f, 1.f } }).mesh.has_value());
+	BOOST_TEST(!make_shape(capsule_params{ 3.0e38f, 1.f, 8, 2 }).mesh.has_value());
+	BOOST_TEST(!make_shape(box_params{ { 2.0e6f, 1.f, 1.f } }).mesh.has_value());
 	BOOST_TEST(make_shape(sphere_params{ 1.f, 2, 8 }).error.find("sphere") != std::string::npos);
 }
 

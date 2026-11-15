@@ -10,12 +10,16 @@
 namespace edt::mesh
 {
 	// What a *.poly.desc may hold. The file comes from outside (a project, a repository): anything over these fails the load
-	// with a message that names the place in the file.
-	inline constexpr std::size_t max_poly_vertices = 2'000'000;
-	inline constexpr std::size_t max_poly_faces = 1'000'000;
-	inline constexpr std::size_t max_poly_corners = 8'000'000;
-	inline constexpr std::size_t max_face_corners = 1024;
-	inline constexpr std::uint32_t max_material_slot = 255;
+	// with a message that names the place in the file. A parameter of poly_mesh_from_json so that tests can use small ones.
+	struct poly_read_limits
+	{
+		std::size_t vertices = 2'000'000;
+		std::size_t faces = 1'000'000;
+		std::size_t corners = 8'000'000;
+		std::size_t face_corners = 1024;
+		std::size_t edges = 8'000'000;
+		std::uint32_t material_slot = 255;
+	};
 
 	// The editable source of a mesh (x.poly.desc). Only the editor registers this type; the engine never reads it.
 	// `generator` is the shape the mesh was made from while nobody has edited it by hand.
@@ -37,7 +41,7 @@ namespace edt::mesh
 	};
 
 	// Throw res::load_error on a value that is not what the format says. Free of a desc_system, for tests and tools.
-	void poly_mesh_from_json(const json::object& resource, poly_mesh_desc& out);
+	void poly_mesh_from_json(const json::object& resource, poly_mesh_desc& out, const poly_read_limits& limits = {});
 	json::object poly_mesh_to_json(const poly_mesh_desc& source);
 
 	struct geometry_file_options

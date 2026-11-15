@@ -5,8 +5,19 @@
 
 namespace edt::mesh
 {
+	namespace
+	{
+		bool usable_id(std::uint32_t id)
+		{
+			return id != invalid_id && id != reserved_id;
+		}
+	}
+
 	vertex_id poly_mesh::add_vertex(const glm::vec3& position)
 	{
+		if (m_next_vertex == reserved_id) {
+			return invalid_id;
+		}
 		const vertex_id id = m_next_vertex++;
 		m_vertices.emplace(id, vertex{ position });
 		++m_generation;
@@ -30,7 +41,7 @@ namespace edt::mesh
 
 	face_id poly_mesh::add_face(std::vector<corner> corners, std::uint32_t material_slot)
 	{
-		if (!corners_are_sound(m_vertices, corners)) {
+		if (m_next_face == reserved_id || !corners_are_sound(m_vertices, corners)) {
 			return invalid_id;
 		}
 		const face_id id = m_next_face++;
@@ -74,7 +85,7 @@ namespace edt::mesh
 
 	bool poly_mesh::restore_vertex(vertex_id id, const glm::vec3& position)
 	{
-		if (id == invalid_id || !m_vertices.emplace(id, vertex{ position }).second) {
+		if (!usable_id(id) || !m_vertices.emplace(id, vertex{ position }).second) {
 			return false;
 		}
 		m_next_vertex = std::max(m_next_vertex, id + 1);
@@ -84,7 +95,7 @@ namespace edt::mesh
 
 	bool poly_mesh::restore_face(face_id id, std::vector<corner> corners, std::uint32_t material_slot)
 	{
-		if (id == invalid_id || m_faces.contains(id) || !corners_are_sound(m_vertices, corners)) {
+		if (!usable_id(id) || m_faces.contains(id) || !corners_are_sound(m_vertices, corners)) {
 			return false;
 		}
 		m_faces.emplace(id, face{ std::move(corners), material_slot });

@@ -13,11 +13,10 @@ namespace edt::mesh
 		}
 
 		template<class T>
-		void add_unique(std::vector<T>& list, const T& value)
+		void sort_unique(std::vector<T>& list)
 		{
-			if (std::ranges::find(list, value) == list.end()) {
-				list.push_back(value);
-			}
+			std::ranges::sort(list);
+			list.erase(std::ranges::unique(list).begin(), list.end());
 		}
 	}
 
@@ -30,11 +29,20 @@ namespace edt::mesh
 				const vertex_id from = corners[i].vertex;
 				const vertex_id to = corners[(i + 1) % corners.size()].vertex;
 				const edge_key key = edge_key::of(from, to);
-				add_unique(m_faces_of_edge[key], id);
-				add_unique(m_edges_of_vertex[from], key);
-				add_unique(m_edges_of_vertex[to], key);
-				add_unique(m_faces_of_vertex[from], id);
+				m_faces_of_edge[key].push_back(id);
+				m_edges_of_vertex[from].push_back(key);
+				m_edges_of_vertex[to].push_back(key);
+				m_faces_of_vertex[from].push_back(id);
 			}
+		}
+		for (auto& entry : m_faces_of_edge) {
+			sort_unique(entry.second);
+		}
+		for (auto& entry : m_edges_of_vertex) {
+			sort_unique(entry.second);
+		}
+		for (auto& entry : m_faces_of_vertex) {
+			sort_unique(entry.second);
 		}
 		m_edges.reserve(m_faces_of_edge.size());
 		for (const auto& entry : m_faces_of_edge) {

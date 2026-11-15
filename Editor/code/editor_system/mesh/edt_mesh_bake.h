@@ -27,11 +27,16 @@ namespace edt::mesh
 	{
 		rnd::geometry_desc geometry;
 		std::vector<material_range> ranges;
-		// Faces left out because they have no area.
+		// Faces left out, see bake().
 		std::vector<face_id> skipped_faces;
 	};
 
-	// Pure and deterministic: one mesh and settings give the same bytes. Layout is always position vec3, normal vec3, uv vec2,
+	// Pure and deterministic: one mesh and settings give the same bytes from the same binary (float math may differ between
+	// compilers, libm and CPUs, so a file written elsewhere can differ in the last bit). Vertices follow the order of the
+	// faces and their corners, never the vertex ids. Vertices are split by UV and by sharp edges only: the `seam` flag
+	// belongs to the UV tools and is not read here. Faces the bake cannot triangulate (no area, a vertex used twice, a
+	// position that is not finite, a polygon that crosses itself, winds twice or is concave with more than 64 corners)
+	// are left out and listed in `skipped_faces`. Layout is always position vec3, normal vec3, uv vec2,
 	// tangent vec3, bitangent vec3 in that order (a shader input is the element's place in the layout), `bounds` stay empty.
 	baked_mesh bake(const poly_mesh& mesh, const bake_settings& settings = {});
 }

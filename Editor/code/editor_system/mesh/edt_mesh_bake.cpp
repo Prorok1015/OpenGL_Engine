@@ -7,6 +7,7 @@
 #include <map>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <tuple>
 
@@ -14,6 +15,8 @@ namespace edt::mesh
 {
 	namespace
 	{
+		using triangle_list = std::vector<std::array<std::uint32_t, 3>>;
+
 		struct corner_ref
 		{
 			face_id face = invalid_id;
@@ -24,7 +27,7 @@ namespace edt::mesh
 		{
 			glm::vec3 normal{ 0.f };
 			bool has_area = false;
-			std::vector<std::array<std::uint32_t, 3>> triangles;
+			triangle_list triangles;
 		};
 
 		struct out_vertex
@@ -40,8 +43,8 @@ namespace edt::mesh
 		{
 			glm::vec3 sum{ 0.f };
 			for (std::size_t i = 0; i < points.size(); ++i) {
-				const glm::vec3& current = points[i];
-				const glm::vec3& next = points[(i + 1) % points.size()];
+				const glm::vec3 current = points[i] - points[0];
+				const glm::vec3 next = points[(i + 1) % points.size()] - points[0];
 				sum.x += (current.y - next.y) * (current.z + next.z);
 				sum.y += (current.z - next.z) * (current.x + next.x);
 				sum.z += (current.x - next.x) * (current.y + next.y);
@@ -63,11 +66,14 @@ namespace edt::mesh
 			return side(a, b, p) > 1e-9f && side(b, c, p) > 1e-9f && side(c, a, p) > 1e-9f;
 		}
 
-		std::vector<std::array<std::uint32_t, 3>> triangulate(const std::vector<glm::vec3>& points, const glm::vec3& normal)
+		// Cost of the concave path is cubic in the corner count; a bigger concave face is reported, not triangulated.
+		constexpr std::uint32_t max_concave_corners = 64;
+
+		// nullopt for a face that is not a simple polygon (winds twice, crosses itself, has no ear) or is too big and concave.
+		std::optional<triangle_list> triangulate(const std::vector<glm::vec3>& points, const glm::vec3& normal)
 		{
 			const std::uint32_t count = static_cast<std::uint32_t>(points.size());
-			std::vector<std::array<std::uint32_t, 3>> triangles;
-			triangles.reserve(count - 2);
+			triangle_list triangles;
 			if (count == 3) {
 				triangles.push_back({ 0, 1, 2 });
 				return triangles;
@@ -85,22 +91,55 @@ namespace edt::mesh
 			};
 
 			bool convex = true;
-			for (std::uint32_t i = 0; i < count && convex; ++i) {
-				convex = turn(i, (i + 1) % count, (i + 2) % count) >= -1e-9f;
+			float turning = 0.f;
+			for (std::uint32_t i = 0; i < count; ++i) {
+				const std::uint32_t b = (i + 1) % count;
+				const std::uint32_t c = (i + 2) % count;
+				const glm::vec2 first = flat[b] - flat[i];
+				const glm::vec2 second = flat[c] - flat[b];
+				turning += std::atan2(first.x * second.y - first.y * second.x, glm::dot(first, second));
+				convex = convex && turn(i, b, c) >= -1e-9f;
 			}
+			if (std::abs(turning - 2.f * std::numbers::pi_v<float>) > 0.1f) {
+				return std::nullopt;
+			}
+
+			triangles.reserve(count - 2);
 			if (convex) {
 				for (std::uint32_t i = 1; i + 1 < count; ++i) {
-					triangles.push_back({ 0, i, i + 1 });
+					if (std::abs(turn(0, i, i + 1)) > 1e-12f) {
+						triangles.push_back({ 0, i, i + 1 });
+					}
 				}
 				return triangles;
+			}
+			if (count > max_concave_corners) {
+				return std::nullopt;
+			}
+
+			const auto side = [&](std::uint32_t a, std::uint32_t b, const glm::vec2& q) {
+				return (flat[b].x - flat[a].x) * (q.y - flat[a].y) - (flat[b].y - flat[a].y) * (q.x - flat[a].x);
+			};
+			for (std::uint32_t i = 0; i < count; ++i) {
+				for (std::uint32_t j = i + 2; j < count; ++j) {
+					const std::uint32_t i_end = (i + 1) % count;
+					const std::uint32_t j_end = (j + 1) % count;
+					if (j_end == i) {
+						continue;
+					}
+					const bool splits_other = side(i, i_end, flat[j]) * side(i, i_end, flat[j_end]) < 0.f;
+					const bool split_by_other = side(j, j_end, flat[i]) * side(j, j_end, flat[i_end]) < 0.f;
+					if (splits_other && split_by_other) {
+						return std::nullopt;
+					}
+				}
 			}
 
 			std::vector<std::uint32_t> rest(count);
 			std::iota(rest.begin(), rest.end(), 0u);
 			while (rest.size() > 3) {
-				std::size_t ear = 0;
-				bool found = false;
-				for (std::size_t i = 0; i < rest.size() && !found; ++i) {
+				std::optional<std::size_t> ear;
+				for (std::size_t i = 0; i < rest.size() && !ear; ++i) {
 					const std::uint32_t prev = rest[(i + rest.size() - 1) % rest.size()];
 					const std::uint32_t curr = rest[i];
 					const std::uint32_t next = rest[(i + 1) % rest.size()];
@@ -112,15 +151,19 @@ namespace edt::mesh
 					});
 					if (empty) {
 						ear = i;
-						found = true;
 					}
 				}
-				const std::uint32_t prev = rest[(ear + rest.size() - 1) % rest.size()];
-				const std::uint32_t next = rest[(ear + 1) % rest.size()];
-				triangles.push_back({ prev, rest[ear], next });
-				rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(ear));
+				if (!ear) {
+					return std::nullopt;
+				}
+				const std::uint32_t prev = rest[(*ear + rest.size() - 1) % rest.size()];
+				const std::uint32_t next = rest[(*ear + 1) % rest.size()];
+				triangles.push_back({ prev, rest[*ear], next });
+				rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(*ear));
 			}
-			triangles.push_back({ rest[0], rest[1], rest[2] });
+			if (turn(rest[0], rest[1], rest[2]) > 0.f) {
+				triangles.push_back({ rest[0], rest[1], rest[2] });
+			}
 			return triangles;
 		}
 
@@ -184,20 +227,34 @@ namespace edt::mesh
 
 		std::map<face_id, face_info> infos;
 		for (const auto& [id, f] : mesh.faces()) {
+			face_info& info = infos[id];
 			std::vector<glm::vec3> points;
 			points.reserve(f.corners.size());
+			std::vector<vertex_id> ids;
+			ids.reserve(f.corners.size());
+			bool finite = true;
 			for (const corner& c : f.corners) {
-				points.push_back(mesh.find_vertex(c.vertex)->position);
+				const glm::vec3& p = mesh.find_vertex(c.vertex)->position;
+				finite = finite && std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+				points.push_back(p);
+				ids.push_back(c.vertex);
 			}
-			const glm::vec3 area_normal = newell_normal(points);
-			face_info& info = infos[id];
-			if (glm::length(area_normal) < 1e-12f) {
+			std::ranges::sort(ids);
+			const glm::vec3 area_normal = finite ? newell_normal(points) : glm::vec3{ 0.f };
+			const float area_length = glm::length(area_normal);
+			if (!std::isfinite(area_length) || area_length < 1e-12f || std::ranges::adjacent_find(ids) != ids.end()) {
+				result.skipped_faces.push_back(id);
+				continue;
+			}
+			const glm::vec3 normal = area_normal / area_length;
+			std::optional<triangle_list> triangles = triangulate(points, normal);
+			if (!triangles || triangles->empty()) {
 				result.skipped_faces.push_back(id);
 				continue;
 			}
 			info.has_area = true;
-			info.normal = glm::normalize(area_normal);
-			info.triangles = triangulate(points, info.normal);
+			info.normal = normal;
+			info.triangles = std::move(*triangles);
 		}
 
 		std::map<vertex_id, std::vector<corner_ref>> corners_at;
@@ -215,25 +272,24 @@ namespace edt::mesh
 		std::map<std::pair<vertex_id, std::size_t>, glm::vec3> group_normal;
 		for (const auto& [vertex_value, refs] : corners_at) {
 			corner_groups groups(refs.size());
+			std::map<vertex_id, std::vector<std::size_t>> at_edge;
 			for (std::size_t p = 0; p < refs.size(); ++p) {
 				const face& f = *mesh.find_face(refs[p].face);
-				for (const bool next : { false, true }) {
-					const vertex_id other_end = neighbour(f, refs[p].index, next);
-					const edge_key key = edge_key::of(vertex_value, other_end);
-					const auto sharing = adjacency.faces_of_edge(key);
-					if (sharing.size() != 2 || has_flag(mesh.edge_flags(key), edge_flag::sharp)) {
-						continue;
-					}
-					for (std::size_t q = 0; q < refs.size(); ++q) {
-						if (refs[q].face == refs[p].face || (refs[q].face != sharing[0] && refs[q].face != sharing[1])) {
-							continue;
-						}
-						const face& g = *mesh.find_face(refs[q].face);
-						const bool touches = neighbour(g, refs[q].index, false) == other_end || neighbour(g, refs[q].index, true) == other_end;
-						if (touches && glm::dot(infos[refs[p].face].normal, infos[refs[q].face].normal) >= min_dot) {
-							groups.join(p, q);
-						}
-					}
+				at_edge[neighbour(f, refs[p].index, false)].push_back(p);
+				at_edge[neighbour(f, refs[p].index, true)].push_back(p);
+			}
+			for (const auto& [other_end, members] : at_edge) {
+				if (members.size() != 2) {
+					continue;
+				}
+				const std::size_t p = members[0];
+				const std::size_t q = members[1];
+				const edge_key key = edge_key::of(vertex_value, other_end);
+				if (refs[p].face == refs[q].face || adjacency.faces_of_edge(key).size() != 2 || has_flag(mesh.edge_flags(key), edge_flag::sharp)) {
+					continue;
+				}
+				if (glm::dot(infos[refs[p].face].normal, infos[refs[q].face].normal) >= min_dot) {
+					groups.join(p, q);
 				}
 			}
 			for (std::size_t p = 0; p < refs.size(); ++p) {
@@ -287,12 +343,17 @@ namespace edt::mesh
 					const glm::vec2 d1 = v1.uv - v0.uv;
 					const glm::vec2 d2 = v2.uv - v0.uv;
 					const float det = d1.x * d2.y - d2.x * d1.y;
-					if (std::abs(det) > 1e-12f) {
+					const float uv_scale = glm::length(d1) * glm::length(d2);
+					if (uv_scale > 0.f && std::abs(det) > 1e-4f * uv_scale) {
 						const glm::vec3 tangent = (e1 * d2.y - e2 * d1.y) / det;
 						const glm::vec3 bitangent = (e2 * d1.x - e1 * d2.x) / det;
-						for (out_vertex* v : { &v0, &v1, &v2 }) {
-							v->tangent += tangent;
-							v->bitangent += bitangent;
+						const float tangent_length = glm::length(tangent);
+						const float bitangent_length = glm::length(bitangent);
+						if (std::isfinite(tangent_length) && std::isfinite(bitangent_length) && tangent_length > 0.f && bitangent_length > 0.f) {
+							for (out_vertex* v : { &v0, &v1, &v2 }) {
+								v->tangent += tangent / tangent_length;
+								v->bitangent += bitangent / bitangent_length;
+							}
 						}
 					}
 					for (const std::uint32_t corner_index : tri) {

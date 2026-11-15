@@ -2,7 +2,9 @@
 #include "edt_mesh_bake.h"
 #include "edt_mesh_shapes.h"
 #include <cmath>
+#include <chrono>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -46,17 +48,56 @@ bool near(const glm::vec3& a, const glm::vec3& b, float eps = 1e-4f)
 }
 
 // Two quads sharing the edge b0-b1, the second one standing up at 90 degrees; the UV runs on across the edge.
-poly_mesh folded_strip()
+poly_mesh folded_strip(bool add_vertices_backwards = false)
 {
+	const glm::vec3 positions[6] = { { 0.f, 0.f, 0.f }, { 0.f, 0.f, 1.f }, { 1.f, 0.f, 0.f }, { 1.f, 0.f, 1.f }, { 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f } };
 	poly_mesh mesh;
-	const vertex_id a0 = mesh.add_vertex({ 0.f, 0.f, 0.f });
-	const vertex_id a1 = mesh.add_vertex({ 0.f, 0.f, 1.f });
-	const vertex_id b0 = mesh.add_vertex({ 1.f, 0.f, 0.f });
-	const vertex_id b1 = mesh.add_vertex({ 1.f, 0.f, 1.f });
-	const vertex_id c0 = mesh.add_vertex({ 1.f, 1.f, 0.f });
-	const vertex_id c1 = mesh.add_vertex({ 1.f, 1.f, 1.f });
+	vertex_id ids[6];
+	for (int step = 0; step < 6; ++step) {
+		const int i = add_vertices_backwards ? 5 - step : step;
+		ids[i] = mesh.add_vertex(positions[i]);
+	}
+	const vertex_id a0 = ids[0], a1 = ids[1], b0 = ids[2], b1 = ids[3], c0 = ids[4], c1 = ids[5];
 	mesh.add_face({ { a0, { 0.f, 0.f } }, { a1, { 0.f, 1.f } }, { b1, { 0.5f, 1.f } }, { b0, { 0.5f, 0.f } } });
 	mesh.add_face({ { b0, { 0.5f, 0.f } }, { b1, { 0.5f, 1.f } }, { c1, { 1.f, 1.f } }, { c0, { 1.f, 0.f } } });
+	return mesh;
+}
+
+poly_mesh polygon(std::initializer_list<glm::vec3> outline)
+{
+	poly_mesh mesh;
+	std::vector<corner> corners;
+	for (const glm::vec3& p : outline) {
+		corners.push_back({ mesh.add_vertex(p) });
+	}
+	mesh.add_face(std::move(corners));
+	return mesh;
+}
+
+float area_of_triangles(const baked_mesh& baked, const std::vector<baked_vertex>& vertices)
+{
+	float area = 0.f;
+	for (std::size_t i = 0; i + 2 < baked.geometry.indices.size(); i += 3) {
+		const glm::vec3& p0 = vertices[baked.geometry.indices[i]].position;
+		area += glm::length(glm::cross(vertices[baked.geometry.indices[i + 1]].position - p0, vertices[baked.geometry.indices[i + 2]].position - p0)) * 0.5f;
+	}
+	return area;
+}
+
+poly_mesh star(std::uint32_t corners)
+{
+	std::vector<glm::vec3> outline;
+	for (std::uint32_t i = 0; i < corners; ++i) {
+		const float angle = 6.2831853f * static_cast<float>(i) / static_cast<float>(corners);
+		const float radius = i % 2 == 0 ? 1.f : 0.4f;
+		outline.emplace_back(radius * std::cos(angle), 0.f, radius * std::sin(angle));
+	}
+	poly_mesh mesh;
+	std::vector<corner> loop;
+	for (std::size_t i = outline.size(); i-- > 0;) {
+		loop.push_back({ mesh.add_vertex(outline[i]) });
+	}
+	mesh.add_face(std::move(loop));
 	return mesh;
 }
 
@@ -267,6 +308,101 @@ BOOST_AUTO_TEST_CASE(MaterialSlots_GetTheirOwnRanges_WithIndicesCountedFromTheRa
 	BOOST_TEST(baked.ranges[1].ind_end == 6u);
 	for (std::size_t i = baked.ranges[1].ind_begin; i < baked.ranges[1].ind_end; ++i) {
 		BOOST_TEST(baked.geometry.indices[i] < 3u);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TheBake_DoesNotDependOnTheOrderTheVerticesWereAdded)
+{
+	const baked_mesh forwards = bake(folded_strip(false));
+	const baked_mesh backwards = bake(folded_strip(true));
+
+	BOOST_TEST((forwards.geometry.vertices == backwards.geometry.vertices));
+	BOOST_TEST((forwards.geometry.indices == backwards.geometry.indices));
+}
+
+BOOST_AUTO_TEST_CASE(FacesThatAreNoSimplePolygon_AreLeftOutAndReported)
+{
+	const poly_mesh pentagram = polygon({ { 1.f, 0.f, 0.f }, { -0.81f, 0.f, 0.59f }, { 0.31f, 0.f, -0.95f }, { 0.31f, 0.f, 0.95f }, { -0.81f, 0.f, -0.59f } });
+	const poly_mesh bowtie = polygon({ { 0.f, 0.f, 0.f }, { 1.f, 0.f, 1.f }, { 1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f } });
+	const poly_mesh collinear = polygon({ { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 2.f, 0.f, 0.f }, { 3.f, 0.f, 0.f } });
+	for (const poly_mesh* mesh : { &pentagram, &bowtie, &collinear }) {
+		const baked_mesh baked = bake(*mesh);
+		BOOST_TEST(baked.skipped_faces.size() == 1u);
+		BOOST_TEST(baked.geometry.indices.empty());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AFaceThatUsesAVertexTwice_OrHasAPositionThatIsNotFinite_IsLeftOutAndReported)
+{
+	poly_mesh twice;
+	const vertex_id a = twice.add_vertex({ 0.f, 0.f, 0.f });
+	const vertex_id b = twice.add_vertex({ 1.f, 0.f, 0.f });
+	const vertex_id c = twice.add_vertex({ 1.f, 0.f, 1.f });
+	const vertex_id d = twice.add_vertex({ 0.f, 0.f, 1.f });
+	twice.add_face({ { a }, { b }, { c }, { b }, { d } });
+	BOOST_TEST(bake(twice).skipped_faces.size() == 1u);
+
+	poly_mesh infinite = polygon({ { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f } });
+	infinite.set_position(2, { std::numeric_limits<float>::infinity(), 0.f, 0.f });
+	const baked_mesh baked = bake(infinite);
+	BOOST_TEST(baked.skipped_faces.size() == 1u);
+	BOOST_TEST(baked.geometry.vertices.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AFaceWithAVertexOnItsEdge_IsBakedWithItsFullArea)
+{
+	const baked_mesh baked = bake(polygon({ { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 2.f, 0.f, 0.f }, { 2.f, 0.f, 2.f }, { 0.f, 0.f, 2.f } }));
+
+	BOOST_TEST(baked.skipped_faces.empty());
+	BOOST_TEST(std::abs(area_of_triangles(baked, read_vertices(baked.geometry)) - 4.f) < 1e-4f);
+}
+
+BOOST_AUTO_TEST_CASE(AStarShapedFace_OfFewCorners_IsTriangulated_AndOfManyIsReported)
+{
+	const baked_mesh few = bake(star(16));
+	BOOST_TEST(few.skipped_faces.empty());
+	BOOST_TEST(few.geometry.indices.size() == 14u * 3u);
+
+	const auto started = std::chrono::steady_clock::now();
+	const baked_mesh many = bake(star(1024));
+	BOOST_TEST(many.skipped_faces.size() == 1u);
+	BOOST_TEST((std::chrono::steady_clock::now() - started < std::chrono::seconds(10)));
+}
+
+BOOST_AUTO_TEST_CASE(AHedgehog_OfManyFacesAroundOneVertex_IsBakedInTime)
+{
+	constexpr std::uint32_t spikes = 100000;
+	poly_mesh mesh;
+	const vertex_id centre = mesh.add_vertex({ 0.f, 0.f, 0.f });
+	std::vector<vertex_id> ring;
+	ring.reserve(spikes);
+	for (std::uint32_t i = 0; i < spikes; ++i) {
+		const float angle = 6.2831853f * static_cast<float>(i) / static_cast<float>(spikes);
+		ring.push_back(mesh.add_vertex({ std::cos(angle), 0.f, -std::sin(angle) }));
+	}
+	for (std::uint32_t i = 0; i < spikes; ++i) {
+		mesh.add_face({ { centre }, { ring[i] }, { ring[(i + 1) % spikes] } });
+	}
+
+	const auto started = std::chrono::steady_clock::now();
+	const baked_mesh baked = bake(mesh);
+	const auto elapsed = std::chrono::steady_clock::now() - started;
+
+	BOOST_TEST(baked.skipped_faces.empty());
+	BOOST_TEST(baked.geometry.indices.size() == spikes * 3u);
+	BOOST_TEST((elapsed < std::chrono::seconds(15)));
+}
+
+BOOST_AUTO_TEST_CASE(AMeshWithoutUv_StillGetsAFiniteOrthonormalFrame)
+{
+	const baked_mesh baked = bake(polygon({ { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 0.f, 1.f, 0.f } }));
+
+	for (const baked_vertex& v : read_vertices(baked.geometry)) {
+		BOOST_TEST(std::isfinite(v.tangent.x + v.tangent.y + v.tangent.z + v.bitangent.x + v.bitangent.y + v.bitangent.z));
+		BOOST_TEST(std::abs(glm::length(v.tangent) - 1.f) < 1e-4f);
+		BOOST_TEST(std::abs(glm::length(v.bitangent) - 1.f) < 1e-4f);
+		BOOST_TEST(std::abs(glm::dot(v.normal, v.tangent)) < 1e-4f);
+		BOOST_TEST(std::abs(glm::dot(v.tangent, v.bitangent)) < 1e-4f);
 	}
 }
 

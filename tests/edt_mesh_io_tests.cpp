@@ -6,6 +6,7 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/res_diagnostics.h>
 #include <boost/json.hpp>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -40,11 +41,11 @@ poly_mesh_desc shape_desc(const shape_params& params)
 	return desc;
 }
 
-std::string load_error_of(const std::string& text)
+std::string load_error_of(const std::string& text, const poly_read_limits& limits = {})
 {
 	poly_mesh_desc out;
 	try {
-		poly_mesh_from_json(boost::json::parse(text).as_object(), out);
+		poly_mesh_from_json(boost::json::parse(text).as_object(), out, limits);
 	} catch (const res::load_error& error) {
 		return error.what();
 	}
@@ -166,26 +167,72 @@ BOOST_AUTO_TEST_CASE(TheGeometryFile_LoadsInTheEngine_WithoutTheEditor_AndKeepsT
 
 BOOST_AUTO_TEST_CASE(AFileOverTheLimits_FailsWithAMessageThatNamesThePlace)
 {
-	const std::string too_many_vertices = R"({"vertices":[)" + [] {
-		std::string items;
-		for (std::size_t i = 1; i <= max_poly_vertices + 1; ++i) {
-			items += i == 1 ? "0" : ",0";
+	poly_read_limits small;
+	small.vertices = 3;
+	small.faces = 2;
+	small.corners = 5;
+	small.face_corners = 4;
+	small.edges = 1;
+	small.material_slot = 7;
+
+	const std::string four_vertices = R"({"vertices":[[1,0,0,0],[2,0,0,0],[3,0,0,0],[4,0,0,0]]})";
+	BOOST_TEST(load_error_of(four_vertices, small).find("vertices holds 4 vertices, at most 3") != std::string::npos);
+
+	const std::string vertices = R"("vertices":[[1,0,0,0],[2,1,0,0],[3,0,1,0]],)";
+	const std::string three_faces = "{" + vertices + R"("faces":[{"id":1,"corners":[[1,0,0],[2,0,0],[3,0,0]]},{"id":2,"corners":[[1,0,0],[2,0,0],[3,0,0]]},{"id":3,"corners":[[1,0,0],[2,0,0],[3,0,0]]}]})";
+	BOOST_TEST(load_error_of(three_faces, small).find("faces holds 3 faces, at most 2") != std::string::npos);
+
+	const std::string two_faces = "{" + vertices + R"("faces":[{"id":1,"corners":[[1,0,0],[2,0,0],[3,0,0]]},{"id":2,"corners":[[1,0,0],[2,0,0],[3,0,0]]}]})";
+	BOOST_TEST(load_error_of(two_faces, small).find("faces[1] is past the limit of 5 corners") != std::string::npos);
+
+	const std::string five_corners = "{" + vertices + R"("faces":[{"id":1,"corners":[[1,0,0],[2,0,0],[3,0,0],[1,0,0],[2,0,0]]}]})";
+	BOOST_TEST(load_error_of(five_corners, small).find("faces[0].corners holds 5 corners, at most 4") != std::string::npos);
+
+	const std::string two_edges = "{" + vertices + R"("edges":[[1,2,1],[2,3,1]]})";
+	BOOST_TEST(load_error_of(two_edges, small).find("edges holds 2 entries, at most 1") != std::string::npos);
+
+	const std::string slot = "{" + vertices + R"("faces":[{"id":1,"material":8,"corners":[[1,0,0],[2,0,0],[3,0,0]]}]})";
+	BOOST_TEST(load_error_of(slot, small).find("faces[0].material is 8, at most 7") != std::string::npos);
+
+	BOOST_TEST(load_error_of(four_vertices).empty());
+}
+
+BOOST_AUTO_TEST_CASE(APositionThatIsInfiniteOrNotANumber_FailsTheLoad)
+{
+	for (const double bad : { std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN(), 1e39 }) {
+		boost::json::object resource;
+		boost::json::array vertex{ 1, 0, 0, bad };
+		boost::json::array vertices;
+		vertices.push_back(std::move(vertex));
+		resource["vertices"] = std::move(vertices);
+		poly_mesh_desc out;
+		try {
+			poly_mesh_from_json(resource, out);
+			BOOST_FAIL("a position that is not a finite float was read");
+		} catch (const res::load_error& error) {
+			BOOST_TEST(std::string(error.what()).find("vertices[0][3] is not a finite float") != std::string::npos);
 		}
-		return items;
-	}() + "]}";
-	BOOST_TEST(load_error_of(too_many_vertices).find("vertices") != std::string::npos);
-	BOOST_TEST(load_error_of(too_many_vertices).find("at most") != std::string::npos);
-
-	std::string long_face = R"({"vertices":[[1,0,0,0],[2,1,0,0]],"faces":[{"id":1,"corners":[)";
-	for (std::size_t i = 0; i < max_face_corners + 1; ++i) {
-		long_face += i == 0 ? "[1,0,0]" : (i % 2 == 0 ? ",[1,0,0]" : ",[2,0,0]");
 	}
-	long_face += "]}]}";
-	const std::string message = load_error_of(long_face);
-	BOOST_TEST(message.find("faces[0].corners") != std::string::npos);
-	BOOST_TEST(message.find("at most") != std::string::npos);
+}
 
-	BOOST_TEST(load_error_of(R"({"vertices":[[1,0,0,0]],"faces":[{"id":1,"material":9999,"corners":[]}]})").find("faces[0].material") != std::string::npos);
+BOOST_AUTO_TEST_CASE(TheReservedId_IsRefusedWhenRead)
+{
+	BOOST_TEST(load_error_of(R"({"vertices":[[4294967295,0,0,0]]})").find("vertices[0]") != std::string::npos);
+	BOOST_TEST(load_error_of(R"({"vertices":[[1,0,0,0],[2,0,0,0],[3,0,0,0]],"faces":[{"id":4294967295,"corners":[[1,0,0],[2,0,0],[3,0,0]]}]})")
+		.find("faces[0]") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ABakeOfAMeshRead_FromItsFile_IsTheBakeOfTheMeshItself)
+{
+	const poly_mesh_desc source = shape_desc(capsule_params{ 0.4f, 1.5f, 10, 3 });
+	poly_mesh_desc loaded;
+	poly_mesh_from_json(boost::json::parse(boost::json::serialize(poly_mesh_to_json(source))).as_object(), loaded);
+
+	const baked_mesh original = bake(source.mesh);
+	const baked_mesh read_back = bake(loaded.mesh);
+
+	BOOST_TEST((original.geometry.vertices == read_back.geometry.vertices));
+	BOOST_TEST((original.geometry.indices == read_back.geometry.indices));
 }
 
 BOOST_AUTO_TEST_CASE(AFileWithBrokenValues_FailsWithAMessageThatNamesThePlace)

@@ -9,6 +9,8 @@
 namespace edt::mesh
 {
 	inline constexpr std::uint32_t max_shape_segments = 256;
+	// A size or radius above this gives positions that overflow float arithmetic further on (normals, the bake).
+	inline constexpr float max_shape_extent = 1.0e6f;
 
 	struct box_params
 	{
@@ -55,7 +57,8 @@ namespace edt::mesh
 	};
 
 	// Faces are quads (triangles at poles, n-gons on caps), wound counter-clockwise seen from outside, every corner UV in [0, 1].
-	// A parameter out of range gives no mesh and an error naming it.
+	// A parameter out of range gives no mesh and an error naming it. The v of a surface of revolution runs by rings (every ring the
+	// same step), not by the length of the arc, so a capsule's UV is stretched over its straight part.
 	shape_result make_shape(const shape_params& params);
 
 	std::string_view shape_kind_name(const shape_params& params);

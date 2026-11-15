@@ -11,6 +11,8 @@ namespace edt::mesh
 	using vertex_id = std::uint32_t;
 	using face_id = std::uint32_t;
 	inline constexpr std::uint32_t invalid_id = 0;
+	// Never given out: the id after it would wrap to invalid_id.
+	inline constexpr std::uint32_t reserved_id = 0xFFFFFFFFu;
 
 	// Identity of an edge: its two vertices, the smaller id first. Edges are not stored; they follow from the faces.
 	struct edge_key
@@ -54,15 +56,16 @@ namespace edt::mesh
 	class poly_mesh
 	{
 	public:
+		// invalid_id when the ids ran out (past reserved_id).
 		vertex_id add_vertex(const glm::vec3& position);
-		// invalid_id when fewer than 3 corners, an unknown vertex, or a vertex twice in a row (the last corner counts as the one before the first).
+		// invalid_id when the ids ran out (past reserved_id), fewer than 3 corners, an unknown vertex, or a vertex twice in a row (the last corner counts as the one before the first).
 		face_id add_face(std::vector<corner> corners, std::uint32_t material_slot = 0);
 		bool remove_face(face_id id);
 		// Only a vertex no face uses; false otherwise.
 		bool remove_vertex(vertex_id id);
 		bool set_position(vertex_id id, const glm::vec3& position);
 
-		// Re-inserts an element under a known id (reading a file, undoing a removal). False when the id is taken or invalid.
+		// Re-inserts an element under a known id (reading a file, undoing a removal). False when the id is taken, invalid_id or reserved_id.
 		bool restore_vertex(vertex_id id, const glm::vec3& position);
 		bool restore_face(face_id id, std::vector<corner> corners, std::uint32_t material_slot);
 

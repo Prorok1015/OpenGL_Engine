@@ -12,7 +12,7 @@ namespace edt::mesh
 
 		bool positive(float value)
 		{
-			return std::isfinite(value) && value > 0.f;
+			return std::isfinite(value) && value > 0.f && value <= max_shape_extent;
 		}
 
 		bool in_range(std::uint32_t value, std::uint32_t min)
@@ -77,7 +77,7 @@ namespace edt::mesh
 		shape_result make(const box_params& p)
 		{
 			if (!positive(p.size.x) || !positive(p.size.y) || !positive(p.size.z)) {
-				return { std::nullopt, "box: every size component must be greater than 0" };
+				return { std::nullopt, "box: every size component must be greater than 0 and at most 1e6" };
 			}
 			poly_mesh mesh;
 			const glm::vec3 h = p.size * 0.5f;
@@ -96,7 +96,7 @@ namespace edt::mesh
 		shape_result make(const plane_params& p)
 		{
 			if (!positive(p.size.x) || !positive(p.size.y)) {
-				return { std::nullopt, "plane: both size components must be greater than 0" };
+				return { std::nullopt, "plane: both size components must be greater than 0 and at most 1e6" };
 			}
 			if (!in_range(p.segments_x, 1) || !in_range(p.segments_z, 1)) {
 				return { std::nullopt, std::format("plane: segments must be from 1 to {}", max_shape_segments) };
@@ -126,7 +126,7 @@ namespace edt::mesh
 		shape_result make(const sphere_params& p)
 		{
 			if (!positive(p.radius)) {
-				return { std::nullopt, "sphere: radius must be greater than 0" };
+				return { std::nullopt, "sphere: radius must be greater than 0 and at most 1e6" };
 			}
 			if (!in_range(p.segments, 3) || !in_range(p.rings, 2)) {
 				return { std::nullopt, std::format("sphere: segments must be from 3 and rings from 2, both up to {}", max_shape_segments) };
@@ -143,7 +143,7 @@ namespace edt::mesh
 		shape_result make(const cylinder_params& p)
 		{
 			if (!positive(p.radius) || !positive(p.height)) {
-				return { std::nullopt, "cylinder: radius and height must be greater than 0" };
+				return { std::nullopt, "cylinder: radius and height must be greater than 0 and at most 1e6" };
 			}
 			if (!in_range(p.segments, 3)) {
 				return { std::nullopt, std::format("cylinder: segments must be from 3 to {}", max_shape_segments) };
@@ -184,7 +184,7 @@ namespace edt::mesh
 		shape_result make(const capsule_params& p)
 		{
 			if (!positive(p.radius) || !positive(p.height)) {
-				return { std::nullopt, "capsule: radius and height must be greater than 0" };
+				return { std::nullopt, "capsule: radius and height must be greater than 0 and at most 1e6" };
 			}
 			if (!in_range(p.segments, 3) || !in_range(p.hemisphere_rings, 1)) {
 				return { std::nullopt, std::format("capsule: segments must be from 3 and hemisphere_rings from 1, both up to {}", max_shape_segments) };
