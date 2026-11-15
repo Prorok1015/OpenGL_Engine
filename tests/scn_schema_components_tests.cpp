@@ -13,6 +13,7 @@
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <format>
+#include <mutex>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -123,12 +124,15 @@ struct log_capture {
 	log_capture()
 	{
 		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
-			if (level == engine::log_level::warn) warnings.push_back(std::format("{}: {}", category, message));
+			if (level != engine::log_level::warn) return;
+			std::lock_guard lock(m_mutex);
+			warnings.push_back(std::format("{}: {}", category, message));
 		});
 	}
 
 	std::size_t count(std::string_view part) const
 	{
+		std::lock_guard lock(m_mutex);
 		std::size_t found = 0;
 		for (const auto& w : warnings) {
 			found += w.find(part) != std::string::npos ? 1u : 0u;
@@ -136,6 +140,7 @@ struct log_capture {
 		return found;
 	}
 
+	mutable std::mutex m_mutex;
 	std::vector<std::string> warnings;
 	engine::log_sink_handle sink; // last: removed first
 };

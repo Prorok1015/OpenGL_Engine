@@ -8,7 +8,9 @@
 #include <snk/scene/scn_event_subscriptions.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -229,17 +231,24 @@ BOOST_AUTO_TEST_CASE(ARequestMadeWhileTheNewWorldsAreBuilt_IsKeptForTheNextFrame
 	auto observer = observers.observe<test_util::stat_component>({}, scn::observed::construct, [&](ecs::bus_context& ctx, entt::entity) {
 		if (next && ctx.world() == "b0") scn::request_level(ctx.registry(), *std::exchange(next, std::nullopt));
 	});
+	std::mutex switched_mutex;
 	std::vector<std::string> switched;
 	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view message) {
-		if (message.find("switched to the level") != std::string_view::npos) switched.emplace_back(message);
+		if (message.find("switched to the level") == std::string_view::npos) return;
+		std::lock_guard lock(switched_mutex);
+		switched.emplace_back(message);
 	});
 	BOOST_REQUIRE(scn::request_level(first_world(), level_b));
 	frame();
 	frame();
 	BOOST_REQUIRE((worlds() == names{ "b0" }));
 	BOOST_TEST((mgr.level_set().tag() == level_b));
-	BOOST_REQUIRE(switched.size() == 1u);
-	BOOST_TEST(switched.front().find("lv_b.desc") != std::string::npos); // the level built, not the one asked for during it
+	const auto logged = [&] {
+		std::lock_guard lock(switched_mutex);
+		return switched;
+	}();
+	BOOST_REQUIRE(logged.size() == 1u);
+	BOOST_TEST(logged.front().find("lv_b.desc") != std::string::npos); // the level built, not the one asked for during it
 	BOOST_TEST((scn::level_switch(mgr.level_set().get("b0").state()).level == level_c));
 	frame();
 	frame();
@@ -264,7 +273,7 @@ BOOST_AUTO_TEST_CASE(ASetOfPlayWorlds_KeepsTheirKind_AndTheLevelIsNotTouched)
 BOOST_AUTO_TEST_CASE(TheLevelSetCanBeClosedToRequests_AsInTheEditor_ARequestIsRefusedAtOnce)
 {
 	mgr.set_level_set_switchable(false);
-	std::size_t warnings = 0;
+	std::atomic<std::size_t> warnings = 0;
 	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
 		if (level == engine::log_level::warn && message.find("takes no level switch") != std::string_view::npos) ++warnings;
 	});
@@ -274,7 +283,7 @@ BOOST_AUTO_TEST_CASE(TheLevelSetCanBeClosedToRequests_AsInTheEditor_ARequestIsRe
 		frame();
 		BOOST_TEST(!mgr.level_switch_pending());
 	}
-	BOOST_TEST(warnings == 1u);
+	BOOST_TEST(warnings.load() == 1u);
 	BOOST_TEST((worlds() == names{ "a0", "a1" }));
 	BOOST_TEST((scn::level_switch(first_world()).status == scn::level_switch_status::idle));
 

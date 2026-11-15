@@ -180,6 +180,33 @@ BOOST_AUTO_TEST_CASE(SanitizeText_DropsControlBidiAndInvisibleCharacters)
 	BOOST_TEST(sanitize_text("ok \xC3\xBC", 100) == "ok \xC3\xBC");
 }
 
+// #943: text someone else chose stays one line of a question, with nothing of it hidden.
+BOOST_AUTO_TEST_CASE(EscapedText_WritesOutWhatWouldBreakTheLineOrNotShow)
+{
+	using edt::forge::escaped_text;
+	BOOST_TEST(escaped_text("models/robot \xC3\xBC.glb", 100) == "models/robot \xC3\xBC.glb");
+	BOOST_TEST(escaped_text("a.png  3 bytes\n  harmless.png", 100) == "a.png  3 bytes\\n  harmless.png");
+	BOOST_TEST(escaped_text("a\r\tb\x07" "c\x7F", 100) == "a\\r\\tb\\u{0007}c\\u{007F}");
+	BOOST_TEST(escaped_text("txt\xE2\x80\xAE" "exe\xE2\x80\x8B", 100) == "txt\\u{202E}exe\\u{200B}");
+	BOOST_TEST(escaped_text("a\xFF" "b\xC3", 100) == "a\\x{FF}b\\x{C3}");
+	BOOST_TEST(escaped_text("C:\\models\\n.glb", 100) == "C:\\models\\n.glb");
+	const std::string escaped = escaped_text(std::string(40, '\n'), 100);
+	BOOST_TEST(escaped.find('\n') == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(EscapedText_IsCutAtAWholeCharacterOrEscape)
+{
+	using edt::forge::escaped_text;
+	BOOST_TEST(escaped_text("abcdefghij", 10) == "abcdefghij");
+	BOOST_TEST(escaped_text("abcdefghijk", 10) == "abcdefg...");
+	// "ab" + "\\u{202E}" is 10 bytes; one more byte cuts before the escape, never inside it.
+	BOOST_TEST(escaped_text("ab\xE2\x80\xAE", 10) == "ab\\u{202E}");
+	BOOST_TEST(escaped_text("ab\xE2\x80\xAE" "c", 10) == "ab...");
+	BOOST_TEST(escaped_text("\xC3\xBC\xC3\xBC\xC3\xBC\xC3\xBC", 6) == "\xC3\xBC...");
+	BOOST_TEST(escaped_text("abc", 2) == "");
+	BOOST_TEST(escaped_text("", 0) == "");
+}
+
 BOOST_AUTO_TEST_CASE(SanitizeText_ReplacesInvalidUtf8)
 {
 	BOOST_TEST((edt::forge::sanitize_text("a\xFF" "b\xC3", 100) == "a\xEF\xBF\xBD" "b\xEF\xBF\xBD"));
