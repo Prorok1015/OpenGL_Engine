@@ -1394,20 +1394,25 @@ BOOST_FIXTURE_TEST_CASE(AnEmptyLevelSelection_KeepsThePrefabNodeInTheInspector, 
 	BOOST_TEST(inspector->selected_node() == working_node());
 }
 
-BOOST_FIXTURE_TEST_CASE(TheInspectorFollowsARevert_AndLetsGoOfAPrefabThatCloses, prefab_inspector_fixture)
+BOOST_FIXTURE_TEST_CASE(AClosingPrefabDocument_ReleasesTheInspector, prefab_inspector_fixture)
+{
+	BOOST_REQUIRE(inspector->selected_node() == working_node());
+	editor().context()->documents().close(document->id());
+	BOOST_TEST(inspector->selected_node() == nullptr);
+}
+
+BOOST_FIXTURE_TEST_CASE(TheInspectorFollowsARevert, prefab_inspector_fixture)
 {
 	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
 		desc.get_root().children[0].name = "typed";
 		return true;
 	}));
 	BOOST_REQUIRE(document->is_dirty());
-	BOOST_TEST(document->revert().empty());
+	const std::string error = document->revert();
+	BOOST_REQUIRE_MESSAGE(error.empty(), error);
 	BOOST_REQUIRE(working_node() != nullptr);
 	BOOST_TEST(inspector->selected_node() == working_node());
 	BOOST_TEST(working_node()->name == "plain");
-
-	editor().context()->documents().close(document->id());
-	BOOST_TEST(inspector->selected_node() == nullptr);
 }
 
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
