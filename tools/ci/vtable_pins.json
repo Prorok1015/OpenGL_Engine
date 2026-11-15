@@ -1,0 +1,173 @@
+{
+  "interfaces": [
+    {
+      "class": "module_interface",
+      "header": "core/core/application/include/snk/application/app_module_interface.h",
+      "constant": "module_interface_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~module_interface()",
+        "void register_services(ds::app_data_storage&)",
+        "void initialize_services(ds::app_data_storage&)",
+        "void shutdown_services(ds::app_data_storage&)",
+        "std::string_view name() const",
+        "std::vector<std::string_view> depends_on() const",
+        "bool layered() const"
+      ]
+    },
+    {
+      "class": "module_layer",
+      "header": "core/core/application/include/snk/application/app_module_layer.h",
+      "constant": "module_layer_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~module_layer()",
+        "ds::app_data_storage& storage()",
+        "void activate()",
+        "std::string unload_refusal() const"
+      ]
+    },
+    {
+      "class": "module_layer_factory",
+      "header": "core/core/application/include/snk/application/app_module_layer.h",
+      "constant": "module_layer_factory_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~module_layer_factory()",
+        "std::unique_ptr<module_layer> create(ds::app_data_storage&, std::string_view)"
+      ]
+    },
+    {
+      "class": "resource_entry",
+      "header": "core/core/resource/include/snk/resource/resources/res_resource_base.h",
+      "constant": "resource_entry_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~resource_entry()",
+        "std::string_view kind_name() const"
+      ]
+    },
+    {
+      "class": "desc_base",
+      "header": "core/core/desc/include/snk/desc/desc_base.hpp",
+      "constant": "desc_base_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~desc_base()",
+        "void copy_to(desc_base&) const",
+        "void deserialize(desc::desc_system&, const json::object&)",
+        "void serialize(json::object&) const"
+      ]
+    },
+    {
+      "class": "adapter_interface",
+      "header": "core/core/resource/include/snk/resource/adapters/res_adapter_interface.hpp",
+      "constant": "adapter_interface_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~adapter_interface()",
+        "std::vector<::res::res_dep> collect_dependencies(const ::res::tag&, const std::vector<std::byte>&) const",
+        "std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag&, const std::vector<std::byte>&, const ::res::res_deps&) const",
+        "std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag&, const std::vector<std::byte>&) const",
+        "std::vector<std::byte> serialize(const ::res::tag&, const std::shared_ptr<::res::resource_entry>&) const"
+      ]
+    },
+    {
+      "class": "batch_interface",
+      "header": "core/core/ecs/include/snk/ecs/ecs_entity_changer.hpp",
+      "constant": "batch_interface_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~batch_interface()",
+        "void apply(entt::registry&)"
+      ]
+    },
+    {
+      "class": "bus_slot",
+      "header": "core/core/ecs/include/snk/ecs/ecs_bus.hpp",
+      "constant": "bus_slot_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~bus_slot()",
+        "entt::id_type hash() const",
+        "void fill_window()",
+        "void freeze_subscribers()",
+        "void notify_subscribers()",
+        "size_t queued() const",
+        "size_t window_size() const",
+        "void clear()"
+      ]
+    },
+    {
+      "class": "bus_journal_source",
+      "header": "core/core/ecs/include/snk/ecs/ecs_bus.hpp",
+      "constant": "bus_journal_source_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~bus_journal_source()",
+        "void record(const bus_slot&, uint64_t, bus_journal&) const"
+      ]
+    },
+    {
+      "class": "bus_type",
+      "header": "core/core/ecs/include/snk/ecs/ecs_bus.hpp",
+      "constant": "bus_type_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~bus_type()",
+        "entt::id_type hash() const",
+        "std::string_view name() const",
+        "std::string_view schema() const",
+        "std::unique_ptr<bus_slot> make_slot(const bus_state*) const",
+        "void bind(entt::registry&, bus_slot&) const"
+      ]
+    },
+    {
+      "class": "channel_slot",
+      "header": "core/core/ecs/include/snk/ecs/ecs_channel.hpp",
+      "constant": "channel_slot_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~channel_slot()",
+        "void exchange(std::span<const channel_participant>, size_t, std::string_view)",
+        "void consume(std::span<const channel_participant>)",
+        "void clear()",
+        "size_t pending(std::span<const channel_participant>) const"
+      ]
+    },
+    {
+      "class": "channel_type",
+      "header": "core/core/ecs/include/snk/ecs/ecs_channel.hpp",
+      "constant": "channel_type_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~channel_type()",
+        "entt::id_type hash() const",
+        "std::string_view name() const",
+        "void bind(entt::registry&, std::string_view, const size_t*) const",
+        "std::unique_ptr<channel_slot> make_slot() const"
+      ]
+    },
+    {
+      "class": "task_state_base",
+      "header": "core/core/common/include/snk/common/ds/ds_task_system.hpp",
+      "constant": "task_state_base_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~task_state_base()",
+        "void invoke(task_context&)",
+        "void drop_body() noexcept"
+      ]
+    },
+    {
+      "class": "entity_remap",
+      "header": "core/core/desc/include/snk/desc/desc_schema_ops.h",
+      "constant": "entity_remap_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~entity_remap()",
+        "std::optional<std::uint32_t> find(std::uint32_t) const"
+      ]
+    }
+  ]
+}

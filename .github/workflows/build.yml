@@ -132,6 +132,14 @@ jobs:
             core.setOutput('abi', String(abi));
             core.setOutput('build_matrix', JSON.stringify(matrix));
 
+      # #922: a change of the virtual functions of an interface a module calls or fills (tools/ci/vtable_pins.json) needs
+      # its <interface>_abi_revision raised, which changes the module layout key. In Plan, so every run checks it: no build.
+      - uses: actions/checkout@v4
+      - name: Check the pinned vtables of the module interfaces
+        run: |
+          python3 tools/ci/check_vtable_pins.py --self-test
+          python3 tools/ci/check_vtable_pins.py
+
   # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
   base-marker:
     name: Base ${{ needs.plan.outputs.base }}
