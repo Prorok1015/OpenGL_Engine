@@ -45,7 +45,7 @@ void override_pass_shaders(res::resource_system& rs)
 struct project_overrides_fixture : test_util::null_engine_fixture
 {
 	explicit project_overrides_fixture(bool mount_engine)
-		: null_engine_fixture(false, [mount_engine](res::resource_system& rs) {
+		: null_engine_fixture(true, [mount_engine](res::resource_system& rs) {
 			override_pass_shaders(rs);
 			if (mount_engine) {
 				test_util::mount_dir(rs.registrate_resolver<test_util::ram_resolver>(res::tag::engine), SNK_CORE_RES_DIR, res::tag::engine);
