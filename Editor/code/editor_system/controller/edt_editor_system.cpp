@@ -1657,7 +1657,7 @@ void edt::editor_system::stop_live_build()
 void edt::editor_system::create_play_session(ds::app_data_storage& data)
 {
 	m_play_component = std::make_unique<play_component>(play_component::ports{
-		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .res = m_res,
+		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .resources = m_res,
 		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_hierarchy_panel,
 		.inspector = *m_inspector_panel, .viewport = *m_viewport_panel, .game_view = *m_game_view_panel,
 		.problems = *m_problems_panel, .preflight = m_play_preflight,

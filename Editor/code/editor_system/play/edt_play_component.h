@@ -45,7 +45,7 @@ namespace edt
 			editor_services& services;
 			scene_document& level;
 			world_controller& worlds;
-			res::resource_system& res;
+			res::resource_system& resources;
 			inp::input_router* input_router;
 			editor_layer& layer;
 			module_swap_gate& swap_gate;
