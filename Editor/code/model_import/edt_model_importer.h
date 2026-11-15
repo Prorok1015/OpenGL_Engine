@@ -24,6 +24,10 @@ namespace edt {
 
 	// The largest model file an import a person starts reads into memory (an agent's import has its own, smaller limit).
 	inline constexpr std::uintmax_t k_max_person_source_bytes = 256ull * 1024ull * 1024ull;
+	// How long each decoder step (listing the files, importing) may take: an agent's import, and the one a person starts
+	// (larger models, nobody waiting on a deadline of their own).
+	inline constexpr std::chrono::seconds k_agent_parse_time_limit{ 60 };
+	inline constexpr std::chrono::seconds k_person_parse_time_limit{ 120 };
 
 	// What an import reads. `preloaded`: the bytes of the model file, already read. `allowed`: set for an agent's
 	// import, the files the model may read besides it (what a person was shown).
@@ -46,12 +50,12 @@ namespace edt {
 	public:
 		model_importer(desc::desc_system& ds, res::resource_system& rs);
 
-		// Background-safe phase: Assimp parse + geometry + materials + store.
+		// Background-safe phase: Assimp parse + geometry + materials + store, in this process: the decoder process runs it
+		// (#647); the editor itself imports through process_decoder (#925, #987).
 		// Does NOT touch desc_sys.create_instance or skinning_manager.
 		// `ctx` (null: not cancellable) is checked between the phases and by Assimp while it parses; a stop request
 		// throws ds::task_cancelled. The helpers store textures, descs and materials as they go and the geometry
 		// and prefab at the end; when the job is cancelled or throws, every tag stored so far is erased again.
-		import_intermediate import_background(const std::filesystem::path& abs_path, ds::task_context* ctx = nullptr);
 		// With `source.allowed` set, anything the model refers to outside that list fails the import.
 		import_intermediate import_background(const import_source& source, ds::task_context* ctx = nullptr);
 

@@ -13,6 +13,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
+#include <snk/common/text_escape.h>
 #include "edt_selection_wiring.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
@@ -39,6 +40,7 @@
 #include "edt_process_decoder.h"
 #if SNK_HAS_ASSIMP
 #include "edt_decoded_model_adapter.h"
+#include "edt_person_model_import.h"
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #endif
 #include "edt_asset_exporter.h"
@@ -344,6 +346,8 @@ edt::editor_system::~editor_system()
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
 	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
+	erase_import_folder(m_import_folder);
+	erase_import_folder(m_dialog_import_folder);
 #endif
 	m_agent_access.reset();
 	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
@@ -441,6 +445,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			edt::decoded_model_adapter::steps_of(m_process_decoder));
 		m_model_adapter_registered = true;
 		m_res.warn_on_sync_require(scn::model_importer_adapter::INFO.extensions);
+		// Imports of earlier runs that ended before their folders were erased (a crash, a kill): memory:// is on the disk.
+		std::string earlier_imports = "__imports/";
+		erase_import_folder(earlier_imports);
 		import_options.import = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->import(source, task);
 		};
@@ -1911,6 +1918,9 @@ bool edt::editor_system::poll_import_pipeline()
 		bool still_open = m_export_dialog->render();
 		if (!still_open) {
 			m_export_dialog_active = false;
+#if SNK_HAS_ASSIMP
+			erase_import_folder(m_dialog_import_folder);
+#endif
 			auto exported_tag = m_export_dialog->get_exported_tag();
 			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()
 				&& !refused_during_play(m_play, m_context->dialogs(), "The asset is exported; stop Play to add it to the scene.")) {
@@ -1948,13 +1958,15 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 	m_import_spinner_t = 0.f;
 	m_import_result.reset();
 	m_import_failure.clear();
-	m_import_name = abs_path.filename().string();
-	// compute lane: assimp parsing and mesh building are CPU-bound; the io lane has two threads for blocking files.
+	// The name of a file someone else may have made: shown in the popup, the job list and the log only escaped.
+	m_import_name = text_escape::escaped_text(fs_paths::utf8_of(abs_path.filename()), 256);
+	m_import_folder = edt::person_import_folder(abs_path, ++m_import_serial);
+	// The model is parsed in the decoder process (#987), never here: the job reads the file and waits for the decoder.
 	m_import_job = m_context->jobs().start(ds::lane::compute,
 		{ "Import " + m_import_name, "import" }, m_lifetime,
-		[importer = m_model_importer.get(), abs_path](ds::task_context& ctx) -> edt::import_intermediate {
-			ctx.throw_if_stopped();
-			return importer->import_background(abs_path, &ctx);
+		[decoder = edt::steps_of(m_process_decoder), &resources = m_res, abs_path,
+			folder = m_import_folder](ds::task_context& ctx) -> edt::import_intermediate {
+			return edt::person_model_import(abs_path, folder, decoder, resources, ctx);
 		},
 		[this](ds::task_result<edt::import_intermediate>& result) {
 			if (!m_importing) return;
@@ -1970,6 +1982,7 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 
 void edt::editor_system::finish_import()
 {
+	erase_import_folder(m_import_folder);
 	m_importing = false;
 	m_import_finished = false;
 	m_import_job = 0;
@@ -2022,24 +2035,39 @@ bool edt::editor_system::poll_import_progress()
 	}
 
 	auto intermediate = std::move(*m_import_result);
+	// The dialog takes the folder over; finish_import erases what is left of any other outcome.
+	std::string folder = std::exchange(m_import_folder, std::string{});
+	const std::string name = m_import_name;
 	finish_import();
 
 	if (!intermediate.error.empty()) {
-		egLOG("Editor/Import", "Async import failed: {}", intermediate.error);
-		m_context->dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", intermediate.source_path.filename().string(), intermediate.error));
+		erase_import_folder(folder);
+		egLOG("Editor/Import", "Import of '{}' failed: {}", name, intermediate.error);
+		m_context->dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", name, intermediate.error));
 		return false;
 	}
 
 	auto result = m_model_importer->finalize_on_main(std::move(intermediate));
 	if (result.prefab) {
 		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());
+		m_dialog_import_folder = std::move(folder);
 		m_export_dialog->open(std::move(result));
 		m_export_dialog_active = true;
 		return true;
 	}
 
 	egLOG("Editor/Import", "Failed to finalize import");
+	erase_import_folder(folder);
 	return false;
+}
+
+void edt::editor_system::erase_import_folder(std::string& folder)
+{
+	if (folder.empty()) return;
+	if (const std::optional<res::tag> left = edt::erase_memory_folder(m_res, folder)) {
+		egLOG_WARN("Editor/Import", "'{}' of an import cannot be removed", left->view());
+	}
+	folder.clear();
 }
 #endif
 

@@ -9,6 +9,8 @@
 #include <snk/resource/res_system.h>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -63,5 +65,21 @@ namespace edt {
 		res::resource_system& m_resources;
 		decode_runner_config m_config;
 	};
+
+	// The steps of a decoder as the importers call them: process_decoder's, or a test's.
+	struct decoder_steps
+	{
+		std::function<model_file_scan(const import_source&, ds::task_context*)> scan;
+		std::function<import_intermediate(const import_source&, ds::task_context*)> import;
+		// Empty when the decoder can run.
+		std::function<std::string()> unavailable_reason;
+	};
+
+	// The steps of `decoder`, which they keep alive (a load can outlive the editor_system that made it).
+	decoder_steps steps_of(std::shared_ptr<const process_decoder> decoder);
+
+	// Erases every file below memory://`folder` (ending in '/'): the decoder overwrites nothing, and memory:// is on the disk,
+	// so an earlier run left its files there. The tag of a file that is still there afterwards, if any.
+	std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder);
 
 } // namespace edt
