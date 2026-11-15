@@ -693,7 +693,7 @@ void edt::asset_database::unindex_id(const asset_record& record)
 
 void edt::asset_database::hash_next()
 {
-	if (m_hash_job != 0 || m_unhashed.empty()) {
+	if (m_hash_job != 0 || (m_unhashed.empty() && m_reverify.empty())) {
 		return;
 	}
 	struct item
@@ -706,6 +706,9 @@ void edt::asset_database::hash_next()
 		std::int64_t size = 0;
 		std::int64_t mtime = 0;
 		file_id content_id;
+		// Read again beside the record's hash (m_reverify), checked at this file time.
+		bool verify = false;
+		std::int64_t checked_at = 0;
 	};
 	std::vector<item> batch;
 	while (!m_unhashed.empty() && batch.size() < hash_batch) {
@@ -720,7 +723,23 @@ void edt::asset_database::hash_next()
 		relative.remove_prefix(relative.find("://") + 3);
 		m_in_flight.push_back(key);
 		batch.push_back(item{ std::move(key), m_layers[record.layer], fs_paths::path_from_utf8(relative), record.type == "desc", record.size,
-			record.mtime, record.content_id });
+			record.mtime, record.content_id, false, 0 });
+	}
+	while (!m_reverify.empty() && batch.size() < hash_batch) {
+		auto [key, checked_at] = std::move(m_reverify.back());
+		m_reverify.pop_back();
+		const auto found = m_records.find(key);
+		// Without a hash it is queued the usual way; in flight, its job reads it anyway.
+		if (found == m_records.end() || found->second.content_hash.empty()
+			|| std::ranges::find(m_in_flight, key) != m_in_flight.end()) {
+			continue;
+		}
+		const asset_record& record = found->second;
+		std::string_view relative = record.path.view();
+		relative.remove_prefix(relative.find("://") + 3);
+		m_in_flight.push_back(key);
+		batch.push_back(item{ std::move(key), m_layers[record.layer], fs_paths::path_from_utf8(relative),
+			record.type == "desc", record.size, record.mtime, record.content_id, true, checked_at });
 	}
 	if (batch.empty()) {
 		return;
@@ -735,6 +754,8 @@ void edt::asset_database::hash_next()
 		// Which file the path was before the batch was read and after it.
 		file_id id_before;
 		file_id id_after;
+		bool verify = false;
+		std::int64_t checked_at = 0;
 	};
 	using results = std::vector<hashed>;
 	m_hash_job = m_jobs.start(ds::lane::io, ds::task_desc{ "Hash assets", "assets", true }, m_lifetime,
@@ -759,7 +780,8 @@ void edt::asset_database::hash_next()
 					break;
 				}
 				out.push_back(hashed{ entry.key, entry.size, entry.mtime, entry.content_id,
-					read_asset_content(entry.root, entry.relative, entry.is_desc, max_desc_bytes), {}, {} });
+					read_asset_content(entry.root, entry.relative, entry.is_desc, max_desc_bytes), {}, {}, entry.verify,
+					entry.checked_at });
 			}
 			const std::vector<file_id> after = identities();
 			for (std::size_t index = 0; index < out.size(); ++index) {
@@ -771,12 +793,14 @@ void edt::asset_database::hash_next()
 		[this](ds::task_result<results>& result) {
 			if (result.ok()) {
 				bool changed = false;
+				bool checked = false;
 				const auto queue_again = [this](const std::string& key) {
 					if (std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
 						m_unhashed.push_back(key);
 					}
 				};
-				for (auto& [key, queued_size, queued_mtime, queued_id, content, id_before, id_after] : *result.value) {
+				for (auto& [key, queued_size, queued_mtime, queued_id, content, id_before, id_after, verify, checked_at]
+					: *result.value) {
 					std::erase(m_in_flight, key);
 					++m_files_read;
 					const auto found = m_records.find(key);
@@ -805,8 +829,20 @@ void edt::asset_database::hash_next()
 					}
 					// Written while it was read, now as the record says: hashed again with the next batch.
 					if (!content.unchanged) {
-						queue_again(key);
+						if (verify) {
+							m_reverify.emplace_back(key, checked_at);
+						} else {
+							queue_again(key);
+						}
 						continue;
+					}
+					if (verify) {
+						found->second.content_checked_at = checked_at;
+						// The same bytes: nothing a reader of the records sees has changed.
+						if (content.content_hash == found->second.content_hash) {
+							checked = true;
+							continue;
+						}
 					}
 					found->second.content_hash = std::move(content.content_hash);
 					found->second.desc_type = std::move(content.desc_type);
@@ -821,6 +857,8 @@ void edt::asset_database::hash_next()
 				if (changed) {
 					m_dirty = true;
 					++m_revision;
+				} else if (checked) {
+					m_dirty = true;
 				}
 			} else {
 				// Not retried at once (it would fail again in a loop): the files wait for the next rebuild.
@@ -838,7 +876,7 @@ void edt::asset_database::hash_next()
 
 std::size_t edt::asset_database::pending_hashes() const
 {
-	return m_unhashed.size() + m_in_flight.size();
+	return m_unhashed.size() + m_in_flight.size() + m_reverify.size();
 }
 
 const edt::asset_record* edt::asset_database::find(const res::tag& path) const
@@ -2306,13 +2344,22 @@ void edt::asset_database::queue_new_file(const std::string& key, bool own)
 	}
 }
 
+namespace
+{
+	// The first file time at which a stamp is no longer racy.
+	std::int64_t aged_at(std::int64_t mtime)
+	{
+		return mtime + std::chrono::duration_cast<fs::file_time_type::duration>(res::k_stamp_granularity).count() + 1;
+	}
+}
+
 void edt::asset_database::note_hash(const std::string& key, const asset_record& record)
 {
 	if (record.content_hash.empty() || !racy_stamp(record.mtime, record.content_checked_at)) {
 		return;
 	}
-	std::erase_if(m_aging, [&key](const aging_hash& aging) { return aging.key == key; });
-	m_aging.push_back(aging_hash{ key, record.size, record.mtime });
+	m_aging.insert_or_assign(key, aging_hash{ record.size, record.mtime });
+	m_next_aging = std::min(m_next_aging, aged_at(record.mtime));
 }
 
 void edt::asset_database::rehash_aged()
@@ -2321,32 +2368,40 @@ void edt::asset_database::rehash_aged()
 		return;
 	}
 	const std::int64_t now = m_file_clock ? m_file_clock() : now_ticks();
+	if (now < m_next_aging) {
+		return;
+	}
+	const std::int64_t wait_tick = std::chrono::duration_cast<fs::file_time_type::duration>(poll_interval).count();
+	std::int64_t next = (std::numeric_limits<std::int64_t>::max)();
 	bool queued = false;
-	std::erase_if(m_aging, [&](const aging_hash& aging) {
-		const auto found = m_records.find(aging.key);
-		// Gone, rehashed already, or given a new stamp: the usual way hashes it.
+	for (auto it = m_aging.begin(); it != m_aging.end();) {
+		const auto& [key, aging] = *it;
+		const auto found = m_records.find(key);
+		// Gone, waiting for a hash anyway, or given a new stamp: the usual way hashes it.
 		if (found == m_records.end() || found->second.content_hash.empty() || found->second.size != aging.size
 			|| found->second.mtime != aging.mtime) {
-			return true;
+			it = m_aging.erase(it);
+			continue;
+		}
+		if (racy_stamp(aging.mtime, now)) {
+			next = std::min(next, aged_at(aging.mtime));
+			++it;
+			continue;
 		}
 		// A file waiting for its ID keeps its hash until it has one: that wait reads the hash.
-		if (racy_stamp(aging.mtime, now) || m_pending_ids.contains(aging.key)) {
-			return false;
+		if (m_pending_ids.contains(key)) {
+			next = std::min(next, now + wait_tick);
+			++it;
+			continue;
 		}
 		// A rewrite in the stamp's own tick has happened by now: what is read this time holds.
-		asset_record& record = found->second;
-		record.content_hash.clear();
-		record.desc_type.reset();
-		record.references.reset();
-		record.references_skipped = false;
-		record.content_checked_at = now;
-		if (std::ranges::find(m_in_flight, aging.key) == m_in_flight.end()
-			&& std::ranges::find(m_unhashed, aging.key) == m_unhashed.end()) {
-			m_unhashed.push_back(aging.key);
+		if (std::ranges::find(m_reverify, key, &std::pair<std::string, std::int64_t>::first) == m_reverify.end()) {
+			m_reverify.emplace_back(key, now);
 		}
 		queued = true;
-		return true;
-	});
+		it = m_aging.erase(it);
+	}
+	m_next_aging = next;
 	if (queued) {
 		hash_next();
 	}

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -19,6 +20,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 #include <snk/platform/plt_file_lock.h>
@@ -412,15 +414,19 @@ namespace edt
 		std::vector<asset_orphan> m_orphans;
 		std::vector<std::string> m_unhashed;
 		std::vector<std::string> m_in_flight;
-		// Records whose hash was read while their stamp was racy (#975): hashed once more when the stamp is older than
-		// stamp_granularity, if it is still the same.
+		// Records whose hash was read while their stamp was racy (#975), by key: read once more when the stamp is older
+		// than stamp_granularity, if it is still the same.
 		struct aging_hash
 		{
-			std::string key;
 			std::int64_t size = 0;
 			std::int64_t mtime = 0;
 		};
-		std::vector<aging_hash> m_aging;
+		std::unordered_map<std::string, aging_hash> m_aging;
+		// The file time at which the first of m_aging may be due: poll() looks at none before.
+		std::int64_t m_next_aging = (std::numeric_limits<std::int64_t>::max)();
+		// Hashes read again beside the record's (key, the file time of the check): the record keeps its hash and
+		// references until the new ones come, and changes only when they differ.
+		std::vector<std::pair<std::string, std::int64_t>> m_reverify;
 		std::function<std::int64_t()> m_file_clock;
 		std::uint64_t m_hash_job = 0;
 		std::uint64_t m_scan_job = 0;

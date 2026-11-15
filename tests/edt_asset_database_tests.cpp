@@ -1388,21 +1388,39 @@ BOOST_AUTO_TEST_CASE(a_resource_saved_through_a_rename_is_read_once_and_keeps_it
 	BOOST_TEST(warnings == 0u);
 }
 
-// #973: a .resource rewritten in the tick it was read, to another ID of the same length: the same size, time and file.
-// Its stamp is within the granularity of its check, so the batch reads it again and reports the file changed; an old
-// stamp is still trusted and not read again.
-// #975: a desc saved twice in one tick with the same size (a reference retargeted to a guid of the same length) keeps
-// the stamp it had; its hash, read while the stamp was racy, is read once more when the stamp has aged.
+namespace {
+
+// A stamp racy whenever the database checks it, however slow the run.
+fs::file_time_type racy_stamp_now()
+{
+	return fs::file_time_type::clock::now() + std::chrono::minutes(1);
+}
+
+std::function<std::int64_t()> aged_clock(fs::file_time_type stamp)
+{
+	const auto aged = (stamp + edt::asset_database::stamp_granularity + std::chrono::seconds(1))
+		.time_since_epoch().count();
+	return [aged] { return static_cast<std::int64_t>(aged); };
+}
+
+}
+
+// #975: a desc saved twice in one tick with the same size (a reference retargeted to a guid of the same length)
+// keeps the stamp it had; its hash, read while the stamp was racy, is read once more when the stamp has aged. The
+// record keeps its hash and references until the new ones come, and nothing changes for its readers when the bytes
+// are the same.
 BOOST_AUTO_TEST_CASE(a_hash_read_under_a_racy_stamp_is_read_again_once_the_stamp_has_aged)
 {
 	const fs::path file = upper.write("level.desc", R"({"__type":"level_desc","ref":"res://a.png"})");
-	// Racy whenever the database checks it, however slow the run.
-	const fs::file_time_type stamp = fs::file_time_type::clock::now() + std::chrono::minutes(1);
+	const fs::path same = upper.write("same.desc", R"({"__type":"level_desc"})");
+	const fs::file_time_type stamp = racy_stamp_now();
 	fs::last_write_time(file, stamp);
+	fs::last_write_time(same, stamp);
 	auto& assets = open();
 	const std::string first = record("level.desc").content_hash;
+	const std::string same_hash = record("same.desc").content_hash;
 	BOOST_REQUIRE(!first.empty());
-	BOOST_TEST(assets.aging_hashes() == 1u);
+	BOOST_TEST(assets.aging_hashes() == 2u);
 
 	upper.write("level.desc", R"({"__type":"level_desc","ref":"res://b.png"})");
 	fs::last_write_time(file, stamp);
@@ -1410,24 +1428,111 @@ BOOST_AUTO_TEST_CASE(a_hash_read_under_a_racy_stamp_is_read_again_once_the_stamp
 	test_util::pump(tasks);
 	BOOST_TEST(record("level.desc").content_hash == first);
 
-	const auto aged = (stamp + edt::asset_database::stamp_granularity + std::chrono::seconds(1))
-		.time_since_epoch().count();
-	assets.set_file_clock_for_tests([aged] { return static_cast<std::int64_t>(aged); });
+	assets.set_file_clock_for_tests(aged_clock(stamp));
 	assets.poll(true);
+	// Read beside the record: its hash stays until the new one comes.
+	BOOST_TEST(record("level.desc").content_hash == first);
+	BOOST_TEST(record("same.desc").content_hash == same_hash);
+	const std::uint64_t revision = assets.revision();
 	test_util::pump(tasks);
 	BOOST_TEST(record("level.desc").content_hash != first);
+	BOOST_TEST(record("same.desc").content_hash == same_hash);
+	BOOST_TEST(assets.revision() == revision + 1u);
 	BOOST_TEST(assets.aging_hashes() == 0u);
+	BOOST_TEST(assets.pending_hashes() == 0u);
+
+	// Read once: nothing more after that.
+	const std::size_t read_before = assets.files_read();
 	assets.poll(true);
 	test_util::pump(tasks);
-	BOOST_TEST(assets.pending_hashes() == 0u);
+	BOOST_TEST(assets.files_read() == read_before);
 }
 
-// #975: a hash a move carries over from a racy stamp waits to be read again under the new name.
+// #975: the same with only the .desc rewritten and nothing else of it changed: the record's readers see no change.
+BOOST_AUTO_TEST_CASE(a_racy_hash_read_again_to_the_same_bytes_changes_no_revision)
+{
+	const fs::path file = upper.write("same.desc", R"({"__type":"level_desc"})");
+	const fs::file_time_type stamp = racy_stamp_now();
+	fs::last_write_time(file, stamp);
+	auto& assets = open();
+	const std::uint64_t revision = assets.revision();
+	assets.set_file_clock_for_tests(aged_clock(stamp));
+	const std::size_t read_before = assets.files_read();
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(assets.files_read() == read_before + 1u);
+	BOOST_TEST(assets.revision() == revision);
+	BOOST_TEST(assets.aging_hashes() == 0u);
+}
+
+// #975: a hash a walk or a batch carries over from a racy record waits too; a file deleted while it waits is dropped.
+BOOST_AUTO_TEST_CASE(a_racy_hash_carried_by_a_walk_or_a_batch_ages_and_a_deleted_file_drops_out)
+{
+	const fs::path walked = upper.write("walked.png", "walked");
+	const fs::path batched = upper.write("batched.png", "batched");
+	const fs::path deleted = upper.write("deleted.png", "deleted");
+	const fs::file_time_type stamp = racy_stamp_now();
+	for (const auto& path : { walked, batched, deleted }) fs::last_write_time(path, stamp);
+	auto& assets = open();
+	BOOST_TEST(assets.aging_hashes() == 3u);
+
+	// The walk keeps what it learned (the same stamp): the hash is carried and still ages.
+	assets.rebuild();
+	test_util::pump(tasks);
+	BOOST_TEST(assets.aging_hashes() == 3u);
+	// A batch that finds the same stamp carries it too (record_of).
+	assets.apply_changes(std::vector<res::file_change>{ change("batched.png", res::change_kind::modified) });
+	test_util::pump(tasks);
+	BOOST_TEST(assets.aging_hashes() == 3u);
+
+	fs::remove(deleted);
+	assets.apply_changes(std::vector<res::file_change>{ change("deleted.png", res::change_kind::deleted) });
+	assets.set_file_clock_for_tests(aged_clock(stamp));
+	const std::size_t read_before = assets.files_read();
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(assets.files_read() == read_before + 2u);
+	BOOST_TEST(assets.aging_hashes() == 0u);
+}
+
+// #975: a file from outside waiting for its ID keeps its hash until it has one; it is read again after that.
+BOOST_AUTO_TEST_CASE(a_racy_hash_of_a_file_waiting_for_its_id_is_read_again_once_it_has_one)
+{
+	bool busy = true;
+	auto& assets = open();
+	assets.set_vcs_busy([&busy] { return busy; });
+	const fs::path file = upper.write("pulled.png", "pulled");
+	const fs::file_time_type stamp = racy_stamp_now();
+	fs::last_write_time(file, stamp);
+	assets.apply_changes(std::vector<res::file_change>{ change("pulled.png", res::change_kind::created) });
+	test_util::pump(tasks);
+	assets.poll(true);
+	BOOST_REQUIRE(assets.pending_ids() == 1u);
+	BOOST_TEST(assets.aging_hashes() == 1u);
+
+	std::int64_t now = aged_clock(stamp)();
+	assets.set_file_clock_for_tests([&now] { return now; });
+	const std::size_t read_before = assets.files_read();
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(assets.files_read() == read_before);
+	BOOST_TEST(assets.aging_hashes() == 1u);
+
+	busy = false;
+	now += std::chrono::duration_cast<fs::file_time_type::duration>(std::chrono::seconds(2)).count();
+	assets.poll(true);
+	test_util::pump(tasks);
+	BOOST_TEST(assets.pending_ids() == 0u);
+	BOOST_TEST(assets.files_read() == read_before + 1u);
+	BOOST_TEST(assets.aging_hashes() == 0u);
+}
+
+// #975: a hash a move carries over from a racy stamp waits to be read again under the new name; the old name drops out.
 BOOST_AUTO_TEST_CASE(a_move_with_a_racy_stamp_keeps_its_hash_aging)
 {
 	upper.write("a.png", "a");
 	upper.write("a.png.resource", meta_text(k_guid_a));
-	const fs::file_time_type stamp = fs::file_time_type::clock::now() + std::chrono::minutes(1);
+	const fs::file_time_type stamp = racy_stamp_now();
 	fs::last_write_time(upper.path() / "a.png", stamp);
 	auto& assets = open();
 	BOOST_REQUIRE(!record("a.png").content_hash.empty());
@@ -1441,9 +1546,7 @@ BOOST_AUTO_TEST_CASE(a_move_with_a_racy_stamp_keeps_its_hash_aging)
 	// b.png's, and a.png's until the next poll drops it.
 	BOOST_TEST(assets.aging_hashes() == 2u);
 
-	const auto aged = (stamp + edt::asset_database::stamp_granularity + std::chrono::seconds(1))
-		.time_since_epoch().count();
-	assets.set_file_clock_for_tests([aged] { return static_cast<std::int64_t>(aged); });
+	assets.set_file_clock_for_tests(aged_clock(stamp));
 	const std::size_t read_before = assets.files_read();
 	assets.poll(true);
 	test_util::pump(tasks);
@@ -1451,6 +1554,9 @@ BOOST_AUTO_TEST_CASE(a_move_with_a_racy_stamp_keeps_its_hash_aging)
 	BOOST_TEST(assets.aging_hashes() == 0u);
 }
 
+// #973: a .resource rewritten in the tick it was read, to another ID of the same length: the same size, time and file.
+// Its stamp is within the granularity of its check, so the batch reads it again and reports the file changed; an old
+// stamp is still trusted and not read again.
 BOOST_AUTO_TEST_CASE(a_resource_rewritten_within_its_stamp_granularity_is_read_again)
 {
 	write_aged("a.png", "a");
