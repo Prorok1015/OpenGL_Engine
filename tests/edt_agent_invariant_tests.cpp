@@ -1402,12 +1402,13 @@ BOOST_FIXTURE_TEST_CASE(AClosingPrefabDocument_ReleasesTheInspector, prefab_insp
 }
 
 // Revert reads the prefab's file from the top layer on disk; the null engine keeps res:// in memory, so the layer is mounted over
-// the project folder and the same bytes are written there.
+// the project folder (in place of the memory resolver) and the same bytes are written there.
 struct prefab_on_disk_fixture : prefab_inspector_fixture
 {
 	prefab_on_disk_fixture()
 	{
 		auto& rs = storage.require<res::resource_system>();
+		rs.unregistrate_resolver(res::tag::default_protocol());
 		for (res::mount& mounted : res::resource_system::project_mount_table({}, { project.path() / "res" }, project.path() / ".cache",
 				user.path() / "profile", code_dir())) {
 			if (mounted.protocol == res::tag::default_protocol()) rs.add_mount(std::move(mounted));
