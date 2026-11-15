@@ -1,5 +1,6 @@
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_geometry_holds.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_reference.h>
@@ -66,8 +67,10 @@ void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_nod
 
 	reg.emplace_or_replace<scn::mesh_component>(e, scn::mesh_component{ .mesh = mesh_data });
 
-	if (desc.geometry.is_valid() && !desc.geometry.has_error() && desc.geometry.get_tag().is_valid())
+	if (desc.geometry.is_valid() && !desc.geometry.has_error() && desc.geometry.get_tag().is_valid()) {
 		reg.emplace_or_replace<scn::geometry_component>(e, scn::geometry_component{ .geom_tag = desc.geometry.get_tag() });
+		scn::geometry_holds::of(reg).hold(e, desc.geometry);
+	}
 
 	if (desc.material.is_valid())
 		reg.emplace_or_replace<scn::material_desc_component>(e, scn::material_desc_component{ .mlt_desc = desc.material });

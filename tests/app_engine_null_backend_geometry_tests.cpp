@@ -1,0 +1,77 @@
+#include <boost/test/unit_test.hpp>
+#include "null_engine_fixture.hpp"
+#include <snk/desc/desc_system.h>
+#include <cstddef>
+#include <unordered_map>
+
+// #1021: the geometry a mesh entity draws is read once per load. The entity holds it from its assembly on, so the
+// resource cache still has it when the first frame draws it, and lets go of it once the level is gone.
+
+namespace {
+
+class resolves_by_tag : public test_util::ram_resolver
+{
+public:
+	using test_util::ram_resolver::ram_resolver;
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		++resolves[tag];
+		return test_util::ram_resolver::resolve(tag);
+	}
+
+	mutable std::unordered_map<res::tag, std::size_t> resolves;
+};
+
+const res::tag k_robot_geometry{ "memory://objects/robot/gen_robot.geom.desc" };
+
+}
+
+struct geometry_engine_fixture : test_util::null_engine_fixture
+{
+	geometry_engine_fixture()
+	{
+		auto& rs = storage.require<res::resource_system>();
+		rs.unregistrate_resolver(res::tag::memory);
+		memory = &rs.registrate_resolver<resolves_by_tag>(res::tag::memory);
+	}
+
+	std::size_t robot_geometry_reads() const
+	{
+		const auto found = memory->resolves.find(k_robot_geometry);
+		return found == memory->resolves.end() ? 0u : found->second;
+	}
+
+	void load_and_draw(std::string_view level, int frames)
+	{
+		auto& levels = storage.require<scn::context_manager>();
+		BOOST_REQUIRE(levels.load_level(res::tag::make(level)));
+		test_util::pump(tasks);
+		BOOST_REQUIRE(run_frames(frames) == frames);
+	}
+
+	resolves_by_tag* memory = nullptr;
+};
+
+BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendGeometry, geometry_engine_fixture)
+
+// The robot's meshes come from a .glb: without assimp the level has no geometry.
+BOOST_AUTO_TEST_CASE(TheGeometryOfALoadedLevel_IsReadOnce, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+{
+	load_and_draw("levels/smoke_level.desc", 3);
+	BOOST_TEST(robot_geometry_reads() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AfterTheLevelIsGone_ItsGeometryIsLetGo, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+{
+	load_and_draw("levels/smoke_level.desc", 3);
+	BOOST_REQUIRE(robot_geometry_reads() == 1u);
+
+	load_and_draw("levels/test_level.desc", 1);
+	// Nothing holds it any more: asked for again, it is read again.
+	const auto again = storage.require<res::resource_system>().require_sync<desc::desc_base>(k_robot_geometry);
+	test_util::pump(tasks);
+	BOOST_TEST(robot_geometry_reads() == 2u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
