@@ -18,10 +18,13 @@ namespace fs = std::filesystem;
 
 constexpr std::size_t vertex_stride = 14 * sizeof(float);
 
+// A checkout on Windows may turn the file's line ends into CR LF; the text the generator writes has LF only.
 std::string read_text(const fs::path& path)
 {
 	std::ifstream in(path, std::ios::binary);
-	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	std::string text(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	std::erase(text, '\r');
+	return text;
 }
 
 struct bounds
