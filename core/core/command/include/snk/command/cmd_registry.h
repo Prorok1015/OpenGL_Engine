@@ -72,6 +72,8 @@ namespace cmd
 		//   that spent a ticket a person approved for it: the policy allowing a call that names another ticket (one
 		//   still waiting, one declined) hands the command the call without it (#931).
 		void set_policy_gate(std::shared_ptr<policy_gate> gate);
+		// The gate set with set_policy_gate; null without one.
+		policy_gate* gate() const noexcept { return m_gate.get(); }
 
 		// A rule on the arguments of every call from an agent, asked after the policy gate and before the schema:
 		// a result refuses the call, nullopt lets it go on. Unlike the gate, no policy lifts it (#681). null removes it.

@@ -380,8 +380,10 @@ namespace edt
 		bare.confirmation.clear();
 		cmd::result outcome = run_command(found->command_id, bare);
 		// Still asked (another category it needs: the registry answered with the ticket already waiting), or refused
-		// without the person's answer: the question stays for that answer.
-		if (outcome.code == cmd::codes::confirmation_required || outcome.code == cmd::codes::denied) return;
+		// by the command without the person's answer: the question stays for that answer. A policy that turned to deny
+		// ends it.
+		if (outcome.code == cmd::codes::confirmation_required) return;
+		if (outcome.code == cmd::codes::denied && !policy_denies(*command, bare)) return;
 		found = waiting_of();
 		if (found == m_waiting.end()) return;
 		waiting entry = std::move(*found);
@@ -393,6 +395,12 @@ namespace edt
 		m_commands.discard(entry.ticket);
 		park_or_finish(entry.command_id, std::move(bare), std::move(entry.done), false, std::move(outcome),
 			std::nullopt);
+	}
+
+	bool agent_confirmations::policy_denies(const cmd::command_desc& command, const cmd::call& request) const
+	{
+		cmd::policy_gate* gate = m_commands.gate();
+		return gate != nullptr && gate->decide(command, request).mode == cmd::policy_mode::deny;
 	}
 
 	bool agent_confirmations::answer(std::uint64_t id, confirmation_answer what)

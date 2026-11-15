@@ -312,7 +312,14 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 	const auto same = std::find_if(m_tickets.begin(), m_tickets.end(), [&](const confirmation_ticket& t) {
 		return t.command == command.id && t.args == args && t.session == request.from.session;
 	});
-	if (same != m_tickets.end()) return describe(*same);
+	if (same != m_tickets.end()) {
+		// The policy may have changed since it was asked: the question waiting asks for what is missing now.
+		if (!same->approved) {
+			same->reason = decision.reason;
+			same->category = decision.category != agent_category::unset ? decision.category : command.category;
+		}
+		return describe(*same);
+	}
 
 	const auto of_session = std::count_if(m_tickets.begin(), m_tickets.end(),
 		[&request](const confirmation_ticket& t) { return t.session == request.from.session; });

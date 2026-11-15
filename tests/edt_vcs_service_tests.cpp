@@ -568,7 +568,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_ThroughTheCommands)
 	const fs::path repo = make_repository();
 	make_service(real_options(repo));
 	registrations = edt::register_vcs_commands(commands, *service);
-	BOOST_TEST(registrations.size() == 14u);
+	BOOST_TEST(registrations.size() == 15u); // 14 commands and the ticket probe
 
 	const cmd::result info = commands.invoke("vcs.info", json::object{}, cmd::origin::test());
 	BOOST_REQUIRE_MESSAGE(info.ok, info.error);
