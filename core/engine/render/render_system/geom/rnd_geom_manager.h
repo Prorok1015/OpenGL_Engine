@@ -66,6 +66,8 @@ namespace rnd
 		struct built_geometry
 		{
 			std::unique_ptr<driver::vertex_array_interface> vertex_array;
+			// Held as long as the vertex array: a require of the tag meanwhile gets this block, not a new read (#1021).
+			res::res_handle<rnd::geometry_desc> source;
 			// A copy, not the desc: the vertices, the bounds and the tree are not held for the check.
 			std::vector<std::uint32_t> indices;
 			std::uint64_t vertex_count = 0;

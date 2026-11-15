@@ -7,8 +7,8 @@
 #include <cstddef>
 #include <unordered_map>
 
-// #1021: the geometry a mesh entity draws is read once per load. The entity holds it from its assembly on, so the
-// resource cache still has it when the first frame draws it, and lets go of it once the level is gone.
+// #1021: the geometry a mesh entity draws is read once per load. The root loads it, so the world and the renderer share
+// one block; the entity holds it from its assembly on, so the cache still has it when the first frame draws it.
 
 namespace {
 
@@ -19,10 +19,7 @@ public:
 
 	async_raw_data resolve(const res::tag& tag) const override
 	{
-		const std::size_t count = ++resolves[tag];
-		if (tag.view().ends_with("gen_robot.geom.desc")) {
-			egLOG_INFO("test/geometry", "read {} of {}", count, tag.view());
-		}
+		++resolves[tag];
 		return test_util::ram_resolver::resolve(tag);
 	}
 
@@ -74,45 +71,39 @@ BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendGeometry, geometry_engine_fixture)
 // The robot's meshes come from a .glb: without assimp the level has no geometry.
 BOOST_AUTO_TEST_CASE(TheGeometryOfALoadedLevel_IsReadOnce, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
-	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
-	egLOG_INFO("test/geometry", "reads after load_level: {}, held: {}", robot_geometry_reads(), held());
+	load_and_draw("levels/smoke_level.desc", 3);
+	BOOST_TEST(held() > 0u);
+	BOOST_TEST(robot_geometry_reads() == 1u);
+
+	// Asked for through the root while a world holds it: the same block, not a new read.
+	const auto through_root = storage.require<res::resource_system>().require<rnd::geometry_desc>(k_robot_geometry);
 	test_util::pump(tasks);
-	egLOG_INFO("test/geometry", "reads after the pump: {}, held: {}", robot_geometry_reads(), held());
-	{
-		// Asked for now, while a world holds it: the cache should answer with the block it holds.
-		auto& rs = storage.require<res::resource_system>();
-		const auto fresh = rs.require<rnd::geometry_desc>(k_robot_geometry);
-		test_util::pump(tasks);
-		const void* held_data = nullptr;
-		storage.require<scn::context_manager>().level_set().for_each([&held_data](scn::world_context& world) {
-			const auto* holds = world.state().ctx().find<scn::geometry_holds>();
-			for (const auto entity : world.state().view<scn::geometry_component>()) {
-				if (const auto* handle = holds ? holds->find(entity) : nullptr) held_data = handle->get().get();
-			}
-		});
-		egLOG_INFO("test/geometry", "reads after a require of the test: {}, same data as held: {}, displaced: {}",
-			robot_geometry_reads(), fresh.get().get() == held_data, rs.displaced_count());
-	}
-	for (int frame = 0; frame < 3; ++frame) {
-		BOOST_REQUIRE(run_frames(1) == 1);
-		egLOG_INFO("test/geometry", "reads after frame {}: {}, held: {}", frame, robot_geometry_reads(), held());
-	}
+	const res::res_handle<rnd::geometry_desc>* held_handle = nullptr;
+	storage.require<scn::context_manager>().level_set().for_each([&held_handle](scn::world_context& world) {
+		const auto* holds = world.state().ctx().find<scn::geometry_holds>();
+		for (const auto entity : world.state().view<scn::geometry_component>()) {
+			if (const auto* handle = holds ? holds->find(entity) : nullptr; handle && !held_handle) held_handle = handle;
+		}
+	});
+	BOOST_REQUIRE(held_handle != nullptr);
+	BOOST_TEST((through_root.get_control_block() == held_handle->get_control_block()));
 	BOOST_TEST(robot_geometry_reads() == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(AfterTheLevelIsGone_ItsGeometryIsLetGo, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+BOOST_AUTO_TEST_CASE(AfterTheLevelIsGone_ItsWorldsLetGoOfTheGeometry,
+	* boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_and_draw("levels/smoke_level.desc", 3);
-	BOOST_REQUIRE(robot_geometry_reads() == 1u);
+	BOOST_REQUIRE(held() > 0u);
 
 	// load_level replaces the worlds at once: their registries, and the holds in their ctx, are gone when it returns.
 	load_and_draw("levels/test_level.desc", 1);
-	// Nothing holds it any more: asked for again, it is read again.
-	const auto again = storage.require<res::resource_system>().require_sync<desc::desc_base>(k_robot_geometry);
+	BOOST_TEST(held() == 0u);
+	// The renderer keeps the block as long as its vertex array: asked for again, it is not read again.
+	const auto again = storage.require<res::resource_system>().require_sync<rnd::geometry_desc>(k_robot_geometry);
 	test_util::pump(tasks);
 	BOOST_TEST(again.is_ready());
-	BOOST_TEST(robot_geometry_reads() == 2u);
+	BOOST_TEST(robot_geometry_reads() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
