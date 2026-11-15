@@ -15,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Bind groups on the whole engine frame: the passes bind the sets their pipelines name, the per-draw ring is
@@ -29,17 +30,19 @@ namespace {
 
 struct bind_group_fixture : test_util::null_engine_fixture
 {
-	// Loads the smoke level and lets its assets finish, as the material cache tests do.
-	void load_warm_smoke_level()
+	// Loads the level and lets its assets finish, as the material cache tests do.
+	void load_warm_level(std::string_view path)
 	{
 		auto& levels = storage.require<scn::context_manager>();
-		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+		BOOST_REQUIRE(levels.load_level(res::tag::make(path)));
 		test_util::pump(tasks);
 		// The meshes draw from the first frame, some with placeholder textures while theirs still load: the groups of
 		// those frames go once unused for grace_frames, so warm means past that (#1021).
 		constexpr int warm_frames = static_cast<int>(rnd::material_groups::grace_frames) + 2;
 		BOOST_REQUIRE(run_frames(warm_frames) == warm_frames);
 	}
+
+	void load_warm_smoke_level() { load_warm_level("levels/smoke_level.desc"); }
 
 	// Calls `probe` once per frame right after the passes ran, while the frame's packets are still around.
 	template <class Probe>
@@ -177,9 +180,10 @@ BOOST_AUTO_TEST_CASE(EveryDrawHasTheSetsOfItsPipelineBound, * boost::unit_test::
 	BOOST_TEST(with_set(object_set) < draws);
 }
 
-BOOST_AUTO_TEST_CASE(ObjectOffsetsAreAlignedStartOverEveryFrameAndWrapTheFramesInFlight, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+// Quads alone: the ring is the same for any object, and no model import is needed (#977).
+BOOST_AUTO_TEST_CASE(ObjectOffsetsAreAlignedStartOverEveryFrameAndWrapTheFramesInFlight)
 {
-	load_warm_smoke_level();
+	load_warm_level("levels/smoke_quads.desc");
 	driver()->record_bindings(true);
 	const std::size_t alignment = driver()->uniform_offset_alignment();
 
