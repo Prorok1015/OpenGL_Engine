@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "test_asset_ids_index.hpp"
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_code_commands.h"
@@ -451,6 +452,65 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsAnEscapeOfARefusalOnce)
 	BOOST_TEST(blocked_text.find("--migrate-rollback a\\u{202E}b first") != std::string::npos, blocked_text);
 	BOOST_TEST(blocked_text.find("\\\\u{202E}") == std::string::npos, blocked_text);
 	blocked.reset();
+}
+
+// #920: a world the open level names as {guid, path} is the level's as much as one named by a path.
+BOOST_AUTO_TEST_CASE(AWorldFileTheOpenLevelNamesAsAGuidAndAPath_IsBusyToo)
+{
+	fs::create_directories(res_root / "levels");
+	fs::create_directories(res_root / "worlds");
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://worlds/main.desc"},{"path":"res://worlds/second.desc"}]})");
+	dir.write("res/worlds/main.desc", R"({"__type":"world_desc"})");
+	dir.write("res/worlds/second.desc", R"({"__type":"world_desc"})");
+	open_level = { "levels/open.desc" };
+
+	for (const char* world : { "worlds/main.desc", "worlds/second.desc" }) {
+		BOOST_TEST_CONTEXT(world) {
+			const std::string before = read_file(res_root / world);
+			const auto written = call("desc.write", write_args(world, version_of(world), R"({"__type":"world_desc"})"));
+			BOOST_TEST(written.code == cmd::codes::busy);
+			BOOST_TEST(read_file(res_root / world) == before);
+		}
+	}
+	// A name no file has yet, which the level lists: a new file there would be the level's.
+	dir.write("res/levels/open.desc", R"({"__type":"level_desc","name":"o","worlds":[{"path":"res://worlds/planned.desc"}]})");
+	const auto created = call("desc.create", desc_args("worlds/planned.desc", R"({"__type":"world_desc"})"));
+	BOOST_TEST(created.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "worlds" / "planned.desc"));
+}
+
+// #920: the index moved the guid, the level's `path` is stale: where the world is now and what the path names are both busy.
+BOOST_AUTO_TEST_CASE(AWorldTheIndexMoved_IsBusyAtItsNewPlaceAndAtItsStalePath)
+{
+	fs::create_directories(res_root / "levels");
+	fs::create_directories(res_root / "worlds");
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://worlds/stale.desc"}]})");
+	dir.write("res/worlds/moved.desc", R"({"__type":"world_desc"})");
+	dir.write("res/worlds/stale.desc", R"({"__type":"world_desc"})");
+	open_level = { "levels/open.desc" };
+	auto index = std::make_shared<test_util::asset_ids_index>();
+	index->hold("0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6", "res://worlds/moved.desc");
+	const test_util::asset_index_scope installed{ *rs, index };
+
+	for (const char* world : { "worlds/moved.desc", "worlds/stale.desc" }) {
+		BOOST_TEST_CONTEXT(world) {
+			const std::string before = read_file(res_root / world);
+			const auto written = call("desc.write", write_args(world, version_of(world), R"({"__type":"world_desc"})"));
+			BOOST_TEST(written.code == cmd::codes::busy);
+			BOOST_TEST(read_file(res_root / world) == before);
+		}
+	}
+	// The same two names with no file there: a new file at either would be the level's.
+	for (const char* world : { "worlds/moved.desc", "worlds/stale.desc" }) {
+		BOOST_TEST_CONTEXT(world) {
+			fs::remove(res_root / world);
+			const auto created = call("desc.create", desc_args(world, R"({"__type":"world_desc"})"));
+			BOOST_TEST(created.code == cmd::codes::busy);
+			BOOST_TEST(!fs::exists(res_root / world));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AnOpenLevelThatCannotBeReadOrParsed_MakesEveryWriteBusy)

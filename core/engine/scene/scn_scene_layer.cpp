@@ -24,6 +24,8 @@ scn::scene_layer::scene_layer(res::resource_system& base_resources, ecs_assemble
 
 scn::scene_layer::~scene_layer()
 {
+	// A load of the layer reads its desc registrations and schemas: the loads end before anything of the layer goes (#988).
+	m_resources->stop_loading();
 	// The module's catalog entries hold functions and schema deleters of its binary: they go first.
 	m_catalog.clear();
 	m_blackboard_types.clear();

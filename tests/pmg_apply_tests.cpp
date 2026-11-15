@@ -913,7 +913,8 @@ BOOST_AUTO_TEST_CASE(TheBeneathPrimitives_RefuseAShortNameAlias)
 }
 #endif
 
-// #910 review: a project whose content roots its own rollback would refuse is not migrated at all.
+// #910 review: a project whose content roots its own rollback would refuse is not migrated at all. Since #911 such a
+// manifest does not even read: the refusal is the manifest's, naming the content root.
 BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
 {
 	const std::string manifest_text = read_text(copy.root() / "project.snkproj");
@@ -925,9 +926,10 @@ BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
 			fs::create_directories(copy.root() / extra);
 			const auto before = content_of(copy.root());
 			const pmg::migration_plan plan = pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs), *descs);
-			BOOST_TEST(pmg::plan_refusal(plan).find("could not be rolled back") != std::string::npos, pmg::plan_refusal(plan));
+			const std::string expected = "content root '" + extra + "'";
+			BOOST_TEST(pmg::plan_refusal(plan).find(expected) != std::string::npos, pmg::plan_refusal(plan));
 			const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
-			BOOST_TEST(outcome.refused.find("could not be rolled back") != std::string::npos, outcome.refused);
+			BOOST_TEST(outcome.refused.find(expected) != std::string::npos, outcome.refused);
 			BOOST_TEST((content_of(copy.root()) == before));
 			BOOST_TEST(!fs::exists(copy.root() / ".snk/migrations"));
 		}
