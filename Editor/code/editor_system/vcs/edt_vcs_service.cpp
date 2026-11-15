@@ -2064,6 +2064,7 @@ namespace {
 			text = std::string(edt::vcs::utf8_prefix(text, cap));
 			truncated = true;
 		}
+		// Never add a `code` key here: beside it agent_job_result takes `text` for a message and rewrites the diff's paths.
 		return json::object{ { "text", json::string(text) }, { "truncated", truncated } };
 	}
 }

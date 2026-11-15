@@ -1,4 +1,5 @@
 #include "edt_decode_runner.h"
+#include "edt_environment.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/platform/plt_process.h>
 #include <snk/resource/res_shipping_dirs.h>
@@ -28,30 +29,11 @@ struct folder_guard
 	}
 };
 
-std::optional<std::string> environment_value(const char* name)
-{
-#if defined(_WIN32)
-	// std::getenv is C4996 under /WX; the wide value keeps a path with other letters intact.
-	const std::wstring wide_name(name, name + std::char_traits<char>::length(name));
-	wchar_t* value = nullptr;
-	std::size_t size = 0;
-	if (_wdupenv_s(&value, &size, wide_name.c_str()) != 0 || !value) {
-		return std::nullopt;
-	}
-	const std::u8string text = fs::path(value).u8string();
-	std::free(value);
-	return std::string(text.begin(), text.end());
-#else
-	const char* value = std::getenv(name);
-	return value ? std::optional<std::string>(value) : std::nullopt;
-#endif
-}
-
 std::vector<std::string> clean_environment()
 {
 	std::vector<std::string> env;
 	const auto keep = [&env](const char* name) {
-		if (const auto value = environment_value(name)) {
+		if (const auto value = edt::environment_utf8(name)) {
 			env.push_back(std::string(name) + "=" + *value);
 		}
 	};

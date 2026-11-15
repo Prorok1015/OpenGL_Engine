@@ -7,6 +7,13 @@
 edt::editor_context::editor_context(res::resource_system& resources, rnd::render_system& render,
 	gui::gui_system& gui, editor_services& services, ds::task_system& tasks, cmd::command_registry& commands,
 	document& scene)
+	: editor_context(resources, render, gui, services, tasks, commands, scene, nullptr)
+{
+}
+
+edt::editor_context::editor_context(res::resource_system& resources, rnd::render_system& render,
+	gui::gui_system& gui, editor_services& services, ds::task_system& tasks, cmd::command_registry& commands,
+	document& scene, const cmd::log_read_filter* agent_filter)
 	: m_resources(resources)
 	, m_render(render)
 	, m_gui(gui)
@@ -18,9 +25,9 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 {
 	ASSERT_MSG(services.assembler() && services.descs(), "editor_context needs the desc system and the ecs assembler in the editor services");
 	m_documents.set_preview_kinds(m_asset_kinds, m_services, &m_problems);
-	adopt(register_job_commands(m_actions.commands(), m_jobs));
-	adopt(register_dialog_commands(m_actions.commands(), m_dialogs));
-	adopt(register_problem_commands(m_actions.commands(), m_problems));
+	adopt(register_job_commands(m_actions.commands(), m_jobs, agent_filter));
+	adopt(register_dialog_commands(m_actions.commands(), m_dialogs, agent_filter));
+	adopt(register_problem_commands(m_actions.commands(), m_problems, agent_filter));
 	m_job_failures = report_failed_jobs(m_events, m_jobs, m_dialogs);
 }
 
