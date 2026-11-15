@@ -1967,7 +1967,7 @@ BOOST_AUTO_TEST_CASE(an_edit_rebuilds_the_world_with_its_file_open_and_a_hot_rel
 
 	// The file is not what the edited world shows: a hot reload of it must not rebuild the world over the edit.
 	scn::trigger_hot_reload(*services.assembler(), edited, services.resources()->require_sync<desc::desc_base>(world_file));
-	BOOST_TEST(first_named(edited, "Entity") != entt::null);
+	BOOST_TEST((first_named(edited, "Entity") != entt::null));
 	BOOST_TEST((children_of_named(edited, "A") == std::vector<std::string>{ "tip" }));
 
 	// Without the file (the old rebuild) the record is read as the prefab's own and refused.
