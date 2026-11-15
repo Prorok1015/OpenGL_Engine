@@ -134,11 +134,35 @@ jobs:
 
       # #922: a change of the virtual functions of an interface a module calls or fills (tools/ci/vtable_pins.json) needs
       # its <interface>_abi_revision raised, which changes the module layout key. In Plan, so every run checks it: no build.
+      # The pins are also compared with the base's (the PR's base, the commit before a push), so a pin edited by hand to
+      # match changed headers fails too. By hand there is no base: the headers alone.
       - uses: actions/checkout@v4
       - name: Check the pinned vtables of the module interfaces
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           python3 tools/ci/check_vtable_pins.py --self-test
-          python3 tools/ci/check_vtable_pins.py
+          base=""
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+          esac
+          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$' || ! printf '%s' "$base" | grep -q '[1-9a-f]'; then
+            echo "no base commit for this $EVENT event: the pins are checked against the headers only"
+            python3 tools/ci/check_vtable_pins.py
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$base"
+          if ! git cat-file -e "$base:tools/ci/vtable_pins.json" 2>/dev/null; then
+            echo "$base has no tools/ci/vtable_pins.json yet: the pins are checked against the headers only"
+            python3 tools/ci/check_vtable_pins.py
+            exit 0
+          fi
+          base_pins="$RUNNER_TEMP/base_vtable_pins.json"
+          git show "$base:tools/ci/vtable_pins.json" > "$base_pins"
+          python3 tools/ci/check_vtable_pins.py --base-pins "$base_pins"
 
   # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
   base-marker:

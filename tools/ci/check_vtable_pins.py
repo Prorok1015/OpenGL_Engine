@@ -1,32 +1,42 @@
 #!/usr/bin/env python3
-"""Fails when the virtual functions of an engine interface a module calls or fills change and its ABI revision does not (#922).
+"""Fails when the base classes or virtual functions of an engine interface a module calls or fills change and its ABI
+revision does not (#922).
 
-    check_vtable_pins.py [--pins <file>] [--repo <root>]            check (default: tools/ci/vtable_pins.json, .)
-    check_vtable_pins.py --update [--pins <file>] [--repo <root>]   record the current lists and revisions
+    check_vtable_pins.py [--pins <file>] [--repo <root>] [--base-pins <file>]   check
+    check_vtable_pins.py --update [--pins <file>] [--repo <root>]              record the current lists and revisions
+    (defaults: --pins tools/ci/vtable_pins.json, --repo .)
     check_vtable_pins.py --self-test
 
 A game module built against an engine fills or calls the vtable of these interfaces inline, by slot. The layout key
 (gs::module_layout_key, snk/game/gs_module_layout_key.h) sees no vtable: it mixes in the <interface>_abi_revision
 constant declared next to each interface instead. The pin file holds, per interface, its header, the constant, the
-revision and the ordered list of the virtual functions the class declares. The check fails when:
-  - the list in the header differs from the pinned one while the constant still has the pinned revision: raise the
-    constant by one (gs_module_layout.h raises layout_revision with it, see the rule above SNK_MODULE_API_VERSION) and
-    record the new list with --update;
+revision, the ordered list of its base classes and the ordered list of the virtual functions the class declares. The
+check fails when:
+  - the bases or the virtual functions in the header differ from the pinned ones while the constant still has the pinned
+    revision: raise the constant by one (gs_module_layout.h raises layout_revision with it, see the rule above
+    SNK_MODULE_API_VERSION) and record the new lists with --update;
   - the constant differs from the pinned revision: record it with --update;
-  - the header, the class or the constant is gone, or the key header does not name the constant.
---update refuses the first case too: it records a changed list only with a raised revision.
+  - the header, the class or the constant is gone, or the key header does not name the constant;
+  - with --base-pins (the pin file of the base branch, a path relative to the current directory): an interface pinned in
+    both files has other bases or virtual functions in each and the same revision. This catches a pin file edited by
+    hand to match changed headers. A pin only in this branch is new and passes; one only in the base branch prints a
+    warning. A missing or malformed --base-pins file is an error: the caller leaves the flag out when the base has none.
+--update refuses the first case too: it records changed lists only with a raised revision.
 
-What is pinned: each declaration in the class body (not in a nested class) that contains the word `virtual`, in order,
-as `<return type> <name>(<parameter types>) <qualifiers>`: parameter names, default arguments, `virtual`, `override`,
-`final`, `= 0`, `= default`, an inline body and [[attributes]] are dropped, spaces normalized. So a reorder, a new or a
-removed virtual, another parameter or return type, const, &/&& or noexcept count as a change; a renamed parameter, a
-comment or a new body do not.
+What is pinned: the base specifiers after the class name, in order, as `[access] [virtual] <name as spelled>` (a new,
+removed or reordered base or another one moves the slots of a vtable), and each declaration in the class body (not in a
+nested class) that contains the word `virtual`, in order, as `<return type> <name>(<parameter types>) <qualifiers>`:
+parameter names, default arguments, `virtual`, `override`, `final`, `= 0`, `= default`, an inline body and
+[[attributes]] are dropped, spaces normalized. So a reorder, a new or a removed virtual, another parameter or return
+type, const, &/&& or noexcept count as a change; a renamed parameter, a comment or a new body do not.
 
 It is a text parser, not a compiler. It does not see:
   - a virtual function brought in by a macro, or a class declared by one;
   - an override written without `virtual` (it adds no slot to a single-inheritance vtable; a covariant return can);
-  - a change of a typedef or alias a signature names (the spelling is compared, not the type);
-  - preprocessor branches: every #if branch is read as if it were taken.
+  - a change of a typedef or alias a signature or a base names (the spelling is compared, not the type), nor a change
+    inside a base that is not pinned itself;
+  - preprocessor branches: every #if branch is read as if it were taken;
+  - a class whose head between its name and `{` holds parentheses (alignas, decltype in a base).
 A parameter that is a function pointer or an array keeps its name in the pinned text.
 """
 import json
@@ -41,6 +51,7 @@ TOOL = 'check_vtable_pins'
 BUILTIN_WORDS = {'bool', 'char', 'char8_t', 'char16_t', 'char32_t', 'wchar_t', 'short', 'int', 'long', 'signed',
                  'unsigned', 'float', 'double', 'void', 'auto', 'const', 'volatile'}
 IDENT = re.compile(r'[A-Za-z_]\w*')
+SINGLE_COLON = re.compile(r'(?<!:):(?!:)')
 
 
 def strip_comments(text):
@@ -94,8 +105,8 @@ def find_matching(text, start, open_char, close_char):
     raise ValueError(f'unbalanced {open_char}{close_char}')
 
 
-def class_body(text, name):
-    """The text between the braces of the definition of class/struct `name`, or None."""
+def class_definition(text, name):
+    """(base specifiers, body) of the definition of class/struct `name`, or None."""
     pattern = re.compile(r'\b(?:class|struct)\s+(?:\w+\s+)*?' + re.escape(name) + r'\b')
     for match in pattern.finditer(text):
         rest = match.end()
@@ -107,8 +118,26 @@ def class_body(text, name):
         between = text[rest:brace]
         if '(' in between or ')' in between:
             continue
-        return text[brace + 1:find_matching(text, brace, '{', '}')]
+        return base_specifiers(between), text[brace + 1:find_matching(text, brace, '{', '}')]
     return None
+
+
+def base_specifiers(head):
+    """The base classes after the class name, in order, as `[access] [virtual] <name as spelled>`."""
+    colon = SINGLE_COLON.search(head)
+    if colon is None:
+        return []
+    bases = []
+    for part in split_top_level(head[colon.end():]):
+        words = normalize_spaces(part)
+        if not words:
+            continue
+        # `virtual public b` and `public virtual b` are one base.
+        access = re.search(r'\b(public|protected|private)\b', words)
+        is_virtual = re.search(r'\bvirtual\b', words)
+        name = normalize_spaces(re.sub(r'\b(?:public|protected|private|virtual)\b', ' ', words))
+        bases.append(' '.join(w for w in (access and access.group(1), is_virtual and 'virtual', name) if w))
+    return bases
 
 
 def member_declarations(body):
@@ -127,7 +156,10 @@ def member_declarations(body):
         if c == '{' and depth_paren == 0:
             end = find_matching(body, i, '{', '}')
             head = ''.join(current)
-            if '(' in head:
+            if '(' in head and in_member_initializers(head):
+                # `x() : m{1} {}`: the brace of a member initializer, the body comes after it.
+                current.append(body[i:end + 1])
+            elif '(' in head:
                 # An inline function body ends the declaration.
                 declarations.append(head)
                 current = []
@@ -148,16 +180,33 @@ def member_declarations(body):
     return [d for d in (d.strip() for d in declarations) if d]
 
 
+def in_member_initializers(head):
+    """Whether a `{` after `head` (a declaration with a parameter list) opens a member initializer of a constructor:
+    a single `:` follows the parameter list and the brace follows a name or a `>`."""
+    open_paren = head.index('(')
+    after = head[find_matching(head, open_paren, '(', ')') + 1:]
+    return SINGLE_COLON.search(after) is not None and re.search(r'[\w>]\s*$', head) is not None
+
+
+CLOSING = {')': '(', ']': '[', '}': '{', '>': '<'}
+
+
 def split_top_level(text, separator=','):
+    """`text` split at `separator` outside brackets. `<` and `>` are angle brackets only outside (), [] and {}: the `<`
+    of `int a = (1 < 2)` is a comparison."""
     parts = []
-    depth = 0
+    stack = []
     current = []
     for c in text:
-        if c in '(<[{':
-            depth += 1
-        elif c in ')>]}':
-            depth -= 1
-        if c == separator and depth == 0:
+        if c in '([{' or (c == '<' and (not stack or stack[-1] == '<')):
+            stack.append(c)
+        elif c in ')]}' or (c == '>' and stack and stack[-1] == '<'):
+            # A `)` also closes a `<` left open inside its parentheses.
+            while stack and stack[-1] != CLOSING[c]:
+                stack.pop()
+            if stack:
+                stack.pop()
+        if c == separator and not stack:
             parts.append(''.join(current))
             current = []
         else:
@@ -224,12 +273,19 @@ def signature(declaration):
     return f'{text} {tail}'.strip() if tail else text
 
 
-def virtuals_of(header_text, class_name):
-    """The ordered signatures of the virtual functions `class_name` declares, or None when it is not defined."""
-    body = class_body(skip_preprocessor(strip_comments(header_text)), class_name)
-    if body is None:
+def pin_of(header_text, class_name):
+    """(base specifiers, ordered signatures of the virtual functions) `class_name` declares, or None when it is not
+    defined."""
+    found = class_definition(skip_preprocessor(strip_comments(header_text)), class_name)
+    if found is None:
         return None
-    return [signature(d) for d in member_declarations(body) if re.search(r'\bvirtual\b', d) and '(' in d]
+    bases, body = found
+    return bases, [signature(d) for d in member_declarations(body) if re.search(r'\bvirtual\b', d) and '(' in d]
+
+
+def virtuals_of(header_text, class_name):
+    pin = pin_of(header_text, class_name)
+    return None if pin is None else pin[1]
 
 
 def revision_of(header_text, constant):
@@ -238,49 +294,96 @@ def revision_of(header_text, constant):
 
 
 def current_state(entry, read):
-    """(virtuals, revision, problems) of one pinned interface; `read` maps a repository path to its text or None."""
+    """(pin, revision, problems) of one pinned interface, the pin as {'bases': [...], 'virtuals': [...]}; `read` maps a
+    repository path to its text or None."""
     text = read(entry['header'])
     if text is None:
         return None, None, [f"{entry['header']}: not found (pinned interface {entry['class']})"]
     problems = []
-    virtuals = virtuals_of(text, entry['class'])
-    if virtuals is None:
+    found = pin_of(text, entry['class'])
+    if found is None:
         problems.append(f"{entry['header']}: no definition of class {entry['class']}")
     revision = revision_of(text, entry['constant'])
     if revision is None:
         problems.append(f"{entry['header']}: no `inline constexpr std::uint32_t {entry['constant']} = <n>;`")
-    return virtuals, revision, problems
+    pin = None if found is None else {'bases': found[0], 'virtuals': found[1]}
+    return pin, revision, problems
+
+
+def pinned_of(entry):
+    return {'bases': entry.get('bases'), 'virtuals': entry.get('virtuals')}
+
+
+def differs(before, after):
+    """Whether two pins differ. The bases are compared only when both pins hold them."""
+    if before['virtuals'] != after['virtuals']:
+        return True
+    return before['bases'] is not None and after['bases'] is not None and before['bases'] != after['bases']
+
+
+def describe_change(before, after, labels=('pinned', 'now')):
+    lines = []
+    for key in ('bases', 'virtuals'):
+        old, new = before.get(key), after.get(key)
+        if old is None or new is None or old == new:
+            continue
+        lines += [f'    {key}, {labels[0]}:'] + [f'      {s}' for s in old]
+        lines += [f'    {key}, {labels[1]}:'] + [f'      {s}' for s in new]
+    return '\n'.join(lines)
+
+
+def raise_hint(constant, revision):
+    return (f'A module built before calls them by slot: raise {constant} to {revision + 1} and layout_revision in '
+            f'gs_module_layout.h, then run python3 tools/ci/check_vtable_pins.py --update.')
 
 
 def check(pins, read):
+    """The problems of the pin file against the headers of the same tree."""
     errors = []
     key_text = read(KEY_HEADER)
     for entry in pins['interfaces']:
-        virtuals, revision, problems = current_state(entry, read)
+        pin, revision, problems = current_state(entry, read)
         errors += problems
         if key_text is not None and not re.search(r'\b' + re.escape(entry['constant']) + r'\b', strip_comments(key_text)):
             errors.append(f"{KEY_HEADER}: does not mix {entry['constant']} into the key (interface_abi_revisions)")
         if problems:
             continue
-        pinned = entry.get('virtuals')
+        pinned = pinned_of(entry)
         pinned_revision = entry.get('revision')
         where = f"{entry['header']}: {entry['class']}"
-        if pinned is None:
+        if pinned['virtuals'] is None or pinned['bases'] is None:
             errors.append(f'{where}: not pinned yet: run python3 tools/ci/check_vtable_pins.py --update')
-        elif virtuals != pinned and revision == pinned_revision:
-            errors.append(f'{where}: its virtual functions changed but {entry["constant"]} is still {revision}. A module '
-                          f'built before calls them by slot: raise {entry["constant"]} to {revision + 1} and layout_revision '
-                          f'in gs_module_layout.h, then run python3 tools/ci/check_vtable_pins.py --update.\n'
-                          + describe_change(pinned, virtuals))
+        elif differs(pinned, pin) and revision == pinned_revision:
+            errors.append(f'{where}: its base classes or virtual functions changed but {entry["constant"]} is still '
+                          f'{revision}. {raise_hint(entry["constant"], revision)}\n' + describe_change(pinned, pin))
         elif revision != pinned_revision:
             errors.append(f'{where}: {entry["constant"]} is {revision}, the pin file says {pinned_revision}: run '
                           f'python3 tools/ci/check_vtable_pins.py --update and commit {DEFAULT_PINS}')
     return errors
 
 
-def describe_change(before, after):
-    lines = ['    pinned:'] + [f'      {s}' for s in before] + ['    now:'] + [f'      {s}' for s in after]
-    return '\n'.join(lines)
+def check_against_base(pins, base_pins):
+    """(errors, warnings) of the pin file against the base branch's: a pin edited by hand to match changed headers
+    passes check() but changes here without its revision."""
+    errors = []
+    warnings = []
+    base = {entry['constant']: entry for entry in base_pins['interfaces']}
+    head = {entry['constant']: entry for entry in pins['interfaces']}
+    for constant, entry in head.items():
+        before = base.get(constant)
+        if before is None or before.get('virtuals') is None or entry.get('virtuals') is None:
+            continue
+        revision = entry.get('revision')
+        if differs(pinned_of(before), pinned_of(entry)) and revision == before.get('revision'):
+            errors.append(f"{entry['header']}: {entry['class']}: its pinned base classes or virtual functions differ "
+                          f"from the base branch's pin file but {constant} is still {revision} in both. "
+                          f"{raise_hint(constant, revision)}\n"
+                          + describe_change(pinned_of(before), pinned_of(entry), ('base branch', 'this branch')))
+    for constant, before in base.items():
+        if constant not in head:
+            warnings.append(f"{TOOL}: warning: {before['class']} ({constant}) is pinned in the base branch but not "
+                            f"here: changes of its vtable are no longer checked")
+    return errors, warnings
 
 
 def update(pins, read):
@@ -288,18 +391,34 @@ def update(pins, read):
     errors = []
     updated = []
     for entry in pins['interfaces']:
-        virtuals, revision, problems = current_state(entry, read)
+        pin, revision, problems = current_state(entry, read)
         errors += problems
         if problems:
             continue
-        pinned = entry.get('virtuals')
-        if pinned is not None and virtuals != pinned and revision <= entry.get('revision', 0):
-            errors.append(f"{entry['header']}: {entry['class']}: its virtual functions changed: raise {entry['constant']} "
-                          f"above {entry.get('revision')} before recording them\n" + describe_change(pinned, virtuals))
+        pinned = pinned_of(entry)
+        if pinned['virtuals'] is not None and differs(pinned, pin) and revision <= entry.get('revision', 0):
+            errors.append(f"{entry['header']}: {entry['class']}: its base classes or virtual functions changed: raise "
+                          f"{entry['constant']} above {entry.get('revision')} before recording them\n"
+                          + describe_change(pinned, pin))
             continue
         updated.append({'class': entry['class'], 'header': entry['header'], 'constant': entry['constant'],
-                        'revision': revision, 'virtuals': virtuals})
+                        'revision': revision, 'bases': pin['bases'], 'virtuals': pin['virtuals']})
     return ({'interfaces': updated} if not errors else None), errors
+
+
+def load_pins(path):
+    """The pin file at `path`, or SystemExit naming what is wrong with it: a malformed file never passes as no pins."""
+    try:
+        pins = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'{TOOL}: cannot read the pin file {path}: {error}')
+    entries = pins.get('interfaces') if isinstance(pins, dict) else None
+    named = ('class', 'header', 'constant')
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and all(isinstance(e.get(k), str) for k in named) for e in entries):
+        raise SystemExit(f'{TOOL}: {path} is not a pin file: expected {{"interfaces": [{{"class", "header", '
+                         f'"constant", ...}}]}}')
+    return pins
 
 
 def expect(condition, what):
@@ -309,7 +428,7 @@ def expect(condition, what):
 
 
 def self_test():
-    header = '''#pragma once
+    header = """#pragma once
 #include <cstdint>
 namespace demo {
 	class iface;
@@ -341,23 +460,39 @@ namespace demo {
 		virtual void unnamed_const(const T, long long) = 0;
 	};
 }
-'''
+"""
     expected = ['~iface()', 'entt::id_type hash() const',
                 'std::unique_ptr<slot> make(const state*, std::span<const participant>, int) const',
                 'void bind(entt::registry&, std::string_view) const',
                 'std::vector<std::byte> items(const ::res::tag&, const std::vector<std::byte>&) const',
                 'void invoke(task_context&) noexcept', 'void unnamed(unsigned int, const char*) &&',
                 'void unnamed_const(const T, long long)']
-    got = virtuals_of(header, 'iface')
-    expect(got == expected, f'the parser gives {got}')
+    got = pin_of(header, 'iface')
+    expect(got == (['public base'], expected), f'the parser gives {got}')
     expect(revision_of(header, 'iface_abi_revision') == 1, 'the revision is not read')
     expect(virtuals_of(header, 'missing') is None, 'a missing class is found')
+
+    # A `<` in parentheses compares; the braces of a member initializer are not the constructor's body.
+    parsed = """struct parsed : virtual public a, protected  b<int, c::d>
+	{
+		parsed() : m_value{1}, m_base<int>{} {}
+		virtual void after_ctor();
+		virtual void ranged(int a = (1 < 2), float b = 0.5f) = 0;
+		virtual void arrow(int a = p->x, std::function<void(int, int)> f = {}) = 0;
+		int m_value;
+	};
+"""
+    got = pin_of(parsed, 'parsed')
+    expect(got == (['public virtual a', 'protected b<int, c::d>'],
+                   ['void after_ctor()', 'void ranged(int, float)', 'void arrow(int, std::function<void(int, int)>)']),
+           f'the parser gives {got}')
 
     key = 'using interface_abi_revisions = layout_values<demo::iface_abi_revision>;'
     files = {'h.h': header, KEY_HEADER: key}
     pins_in = {'interfaces': [{'class': 'iface', 'header': 'h.h', 'constant': 'iface_abi_revision'}]}
     pins, errors = update(pins_in, files.get)
     expect(not errors and pins['interfaces'][0]['virtuals'] == expected, f'a first --update gives {errors}')
+    expect(pins['interfaces'][0]['bases'] == ['public base'], 'a first --update records no bases')
     expect(check(pins, files.get) == [], f'an unchanged tree gives {check(pins, files.get)}')
 
     renamed = dict(files, **{'h.h': header.replace('entt::registry& registry', 'entt::registry& reg')})
@@ -374,6 +509,11 @@ namespace demo {
     expect(len(check(pins, added.get)) == 1, 'a new virtual is not a change')
     const_changed = dict(files, **{'h.h': header.replace('hash() const', 'hash()')})
     expect(len(check(pins, const_changed.get)) == 1, 'a lost const is not a change')
+    rebased = dict(files, **{'h.h': header.replace('final : public base', 'final : public other')})
+    errors = check(pins, rebased.get)
+    expect(len(errors) == 1 and 'still 1' in errors[0] and 'public other' in errors[0], f'another base gives {errors}')
+    _, errors = update(pins, rebased.get)
+    expect(len(errors) == 1, f'--update of another base gives {errors}')
 
     bumped = dict(added, **{'h.h': added['h.h'].replace('iface_abi_revision = 1', 'iface_abi_revision = 2')})
     errors = check(pins, bumped.get)
@@ -384,6 +524,22 @@ namespace demo {
     unmixed = dict(files, **{KEY_HEADER: 'using interface_abi_revisions = layout_values<>;'})
     errors = check(pins, unmixed.get)
     expect(len(errors) == 1 and 'does not mix' in errors[0], f'a revision outside the key gives {errors}')
+
+    # Against the base branch: the pin file edited by hand to match changed headers passes check(), not this.
+    expect(check_against_base(pins, pins) == ([], []), 'an unchanged pin file differs from itself')
+    hand_edited = {'interfaces': [dict(pins['interfaces'][0], virtuals=repinned['interfaces'][0]['virtuals'])]}
+    expect(check(hand_edited, added.get) == [], 'a hand-edited pin file does not match its headers')
+    errors, _ = check_against_base(hand_edited, pins)
+    expect(len(errors) == 1 and 'still 1' in errors[0] and 'void plain()' in errors[0], f'a hand edit gives {errors}')
+    hand_rebased = {'interfaces': [dict(pins['interfaces'][0], bases=['public other'])]}
+    errors, _ = check_against_base(hand_rebased, pins)
+    expect(len(errors) == 1 and 'public other' in errors[0], f'a hand-edited base gives {errors}')
+    expect(check_against_base(repinned, pins) == ([], []), 'a raised revision differs from the base branch')
+    second = dict(pins['interfaces'][0], constant='other_abi_revision', virtuals=['void f()'])
+    grown = {'interfaces': pins['interfaces'] + [second]}
+    expect(check_against_base(grown, pins) == ([], []), 'a new pin differs from the base branch')
+    errors, warnings = check_against_base(pins, grown)
+    expect(not errors and len(warnings) == 1 and 'other_abi_revision' in warnings[0], f'a removed pin gives {warnings}')
     print(f'{TOOL}: self-test passed')
 
 
@@ -394,13 +550,16 @@ def main(argv):
         return 0
     do_update = '--update' in args
     args = [a for a in args if a != '--update']
-    options = {'--pins': DEFAULT_PINS, '--repo': '.'}
+    options = {'--pins': DEFAULT_PINS, '--repo': '.', '--base-pins': None}
     while args:
         if len(args) < 2 or args[0] not in options:
             print(__doc__)
             return 2
         options[args[0]] = args[1]
         args = args[2:]
+    if do_update and options['--base-pins'] is not None:
+        print(f'{TOOL}: --base-pins checks, --update records: pass one of them')
+        return 2
     repo = Path(options['--repo'])
     pins_path = repo / options['--pins']
     if not pins_path.is_file():
@@ -411,7 +570,7 @@ def main(argv):
         file = repo / path
         return file.read_text(encoding='utf-8', errors='replace') if file.is_file() else None
 
-    pins = json.loads(pins_path.read_text(encoding='utf-8'))
+    pins = load_pins(pins_path)
     if do_update:
         updated, errors = update(pins, read)
         for error in errors:
@@ -423,12 +582,19 @@ def main(argv):
         print(f'{TOOL}: recorded {len(updated["interfaces"])} interface(s) in {pins_path}')
         return 0
     errors = check(pins, read)
+    if options['--base-pins'] is not None:
+        base_errors, warnings = check_against_base(pins, load_pins(options['--base-pins']))
+        errors += base_errors
+        for warning in warnings:
+            print(warning)
     for error in errors:
         print(error)
     if errors:
         print(f'{TOOL}: {len(errors)} problem(s)')
         return 1
-    print(f'{TOOL}: the virtual functions of {len(pins["interfaces"])} interface(s) match their pinned ABI revisions')
+    against = ' and the base branch\'s pins' if options['--base-pins'] is not None else ''
+    print(f'{TOOL}: the base classes and virtual functions of {len(pins["interfaces"])} interface(s) match their '
+          f'pinned ABI revisions{against}')
     return 0
 
 

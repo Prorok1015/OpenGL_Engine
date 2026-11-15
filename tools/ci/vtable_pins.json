@@ -5,6 +5,7 @@
       "header": "core/core/application/include/snk/application/app_module_interface.h",
       "constant": "module_interface_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~module_interface()",
         "void register_services(ds::app_data_storage&)",
@@ -20,6 +21,7 @@
       "header": "core/core/application/include/snk/application/app_module_layer.h",
       "constant": "module_layer_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~module_layer()",
         "ds::app_data_storage& storage()",
@@ -32,6 +34,7 @@
       "header": "core/core/application/include/snk/application/app_module_layer.h",
       "constant": "module_layer_factory_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~module_layer_factory()",
         "std::unique_ptr<module_layer> create(ds::app_data_storage&, std::string_view)"
@@ -42,6 +45,7 @@
       "header": "core/core/resource/include/snk/resource/resources/res_resource_base.h",
       "constant": "resource_entry_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~resource_entry()",
         "std::string_view kind_name() const"
@@ -52,6 +56,9 @@
       "header": "core/core/desc/include/snk/desc/desc_base.hpp",
       "constant": "desc_base_abi_revision",
       "revision": 1,
+      "bases": [
+        "public res::resource_entry"
+      ],
       "virtuals": [
         "~desc_base()",
         "void copy_to(desc_base&) const",
@@ -64,6 +71,7 @@
       "header": "core/core/resource/include/snk/resource/adapters/res_adapter_interface.hpp",
       "constant": "adapter_interface_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~adapter_interface()",
         "std::vector<::res::res_dep> collect_dependencies(const ::res::tag&, const std::vector<std::byte>&) const",
@@ -77,6 +85,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_entity_changer.hpp",
       "constant": "batch_interface_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~batch_interface()",
         "void apply(entt::registry&)"
@@ -87,6 +96,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_bus.hpp",
       "constant": "bus_slot_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~bus_slot()",
         "entt::id_type hash() const",
@@ -103,6 +113,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_bus.hpp",
       "constant": "bus_journal_source_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~bus_journal_source()",
         "void record(const bus_slot&, uint64_t, bus_journal&) const"
@@ -113,6 +124,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_bus.hpp",
       "constant": "bus_type_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~bus_type()",
         "entt::id_type hash() const",
@@ -127,6 +139,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_channel.hpp",
       "constant": "channel_slot_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~channel_slot()",
         "void exchange(std::span<const channel_participant>, size_t, std::string_view)",
@@ -140,6 +153,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_channel.hpp",
       "constant": "channel_type_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~channel_type()",
         "entt::id_type hash() const",
@@ -153,6 +167,7 @@
       "header": "core/core/common/include/snk/common/ds/ds_task_system.hpp",
       "constant": "task_state_base_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~task_state_base()",
         "void invoke(task_context&)",
@@ -164,6 +179,7 @@
       "header": "core/core/desc/include/snk/desc/desc_schema_ops.h",
       "constant": "entity_remap_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~entity_remap()",
         "std::optional<std::uint32_t> find(std::uint32_t) const"
@@ -174,6 +190,7 @@
       "header": "core/core/ecs/include/snk/ecs/ecs_system_interface.hpp",
       "constant": "system_interface_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~system_interface()"
       ]
@@ -183,6 +200,7 @@
       "header": "core/engine/render/render_system/include/snk/render/rnd_render_context.h",
       "constant": "render_context_abi_revision",
       "revision": 1,
+      "bases": [],
       "virtuals": [
         "~render_context()",
         "std::span<render_packet_t> packets()",
