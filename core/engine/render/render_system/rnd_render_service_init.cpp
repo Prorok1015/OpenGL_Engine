@@ -9,10 +9,12 @@
 #include <snk/driver_validation/rnd_validation_driver.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
+#include <functional>
 #include <string>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include "geom/rnd_geometry_desc_adapter.h"
 #include <snk/render/texture/rnd_texture_desc.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
@@ -128,6 +130,8 @@ void engine::render::render_init(ds::app_data_storage& data)
 	// Per-frame render data shared by the extract and render stages; reset at the end of each frame.
 	data.construct<rnd::frame_context>();
 	register_render_descs(desc_sys);
+	res_sys.registrate_adapter<rnd::geometry_desc_adapter>(rnd::geometry_desc_adapter::INFO, std::ref(res_sys),
+		std::ref(desc_sys));
 	render_system.add_render_pass(std::make_shared<rnd::frame_upload_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::z_prepass>(res_sys.engine_file("shaders/z_prepass.vert"), res_sys.engine_file("shaders/z_prepass.frag")));
 	render_system.add_render_pass(std::make_shared<rnd::opaque_pass>());
@@ -149,6 +153,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 void engine::render::render_term(ds::app_data_storage& data)
 {
 	auto& desc_sys = data.require<desc::desc_system>();
+	data.require<res::resource_system>().unregistrate_adapter(rnd::geometry_desc_adapter::INFO);
 	unregister_render_descs(desc_sys);
 
 	data.destruct<render_commands>();

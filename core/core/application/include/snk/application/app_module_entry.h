@@ -135,6 +135,7 @@
 // #925: res::resource_system::warn_on_sync_require is a new export; its members are the engine's (no type changes: the layout key stays).
 // #922 PR 3: scene_layer, input_actions and app_data_storage accessors behind exports (layout_revision 13).
 // #929: res::resource_system::engine_file and engine::gui::load_ui_font_bytes are new exports (no type changes: the layout key stays).
+// #1021: scn::geometry_holds and scn::hot_reload_manager::resources are new exports (no type changes).
 // #993: scn::prefab_instance gains content_of (the file its node is content of) at its end (layout_revision 14); scn::reconcile and scn::expand_instance gain overloads that name that file, the old exports stay.
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
