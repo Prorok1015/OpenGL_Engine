@@ -1,4 +1,5 @@
 #include "edt_migration_commands.h"
+#include "edt_agent_log_filter.h"
 #include "edt_forge_types.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
@@ -674,7 +675,7 @@ namespace {
 		migration_commands(const migration_commands&) = delete;
 		migration_commands& operator=(const migration_commands&) = delete;
 
-		cmd::result plan(const cmd::call&) const
+		cmd::result plan(const cmd::call& call) const
 		{
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return cmd::result::failure(k_no_project, "no project is open");
@@ -688,8 +689,10 @@ namespace {
 			if (!refused.empty()) code = pmg::k_exit_refused;
 			else if (!plan.empty()) code = pmg::k_exit_migration_needed;
 			else if (!pmg::skipped_by(plan).empty()) code = pmg::k_exit_partial;
-			return cmd::result::success(json::object{ { "code", code }, { "plan", std::move(planned) }, { "text", pmg::plan_text(plan) },
-				{ "fingerprint", fingerprint_text(fingerprint_of(*root, plan, code_identity())) } });
+			const json::value answer = json::object{ { "code", code }, { "plan", std::move(planned) }, { "text", pmg::plan_text(plan) },
+				{ "fingerprint", fingerprint_text(fingerprint_of(*root, plan, code_identity())) } };
+			// A reason of the scan can quote a file by its full path ("'<root>/x.desc' is a symbolic link"): as a job's result.
+			return cmd::result::success(edt::agent_job_result(answer, m_deps.log_filter, call.from));
 		}
 
 		std::optional<std::string> describe(const cmd::call& call)

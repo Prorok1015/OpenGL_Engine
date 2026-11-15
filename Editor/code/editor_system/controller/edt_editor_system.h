@@ -6,6 +6,7 @@
 #include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
 #include "edt_project_trust_service.h"
+#include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
@@ -414,6 +415,8 @@ namespace edt {
 		std::unique_ptr<agent_access> m_agent_access;
 		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
 		cmd::command_registry* m_agent_argument_checks = nullptr;
+		// The engine's filter of log.read, filled in by this system and emptied when it goes.
+		cmd::log_read_filter* m_log_filter = nullptr;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		std::filesystem::path m_agent_server_settings_file;

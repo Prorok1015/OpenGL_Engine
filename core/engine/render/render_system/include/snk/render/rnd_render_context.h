@@ -15,6 +15,9 @@
 
 namespace rnd
 {
+	// +1 on any change to the virtual functions below: the module layout key mixes it in, tools/ci/vtable_pins.json pins them (#922).
+	inline constexpr std::uint32_t render_context_abi_revision = 1;
+
 	// What a render pass sees of the renderer. The texture, shader and geometry managers stay behind it: a pass asks
 	// for a texture, a program or a vertex array and gets the object, it cannot reach the cache that keeps them.
 	// The renderer implements it for the length of one render_frame; a test can implement it to run a pass alone.

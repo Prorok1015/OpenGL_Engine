@@ -90,13 +90,19 @@ namespace edt
 	// What desc.read gives and desc.write takes back is edt::code_version_of(bytes); one call moves at most this many bytes.
 	inline constexpr std::size_t k_desc_file_limit = 1024 * 1024;
 
+	// Whose {guid, path} references are checked. An agent's guid needs a path and, when the asset index holds it, must name
+	// the file of that path, also in an object no schema reads (#954). A person's save needs only the form: the writer
+	// puts the path where the guid is now.
+	enum class reference_rule { agent, person };
+
 	// Every problem of the desc objects under `root` (the file's content): a root that is no object with a `__type`, an
 	// unknown `__type`, a `__version` other than the current one, a field the type does not have or a value that does not
 	// fit it, found in each object with a `__type` at any depth (a field holding an inline desc, an array of them).
 	// One entry per object at most, `json_path` the JSON pointer of the field in `resource`. Nothing is logged. A reference
 	// is a res:// string or {guid, path} (EPIC-57 section 4.4); `resources` (may be null) tells a guid no file holds.
+	// `rule` says whose content it is (reference_rule).
 	std::vector<res::diagnostic> validate_desc_tree(const desc::desc_system& descs, const boost::json::value& root, std::string_view resource,
-		const res::resource_system* resources = nullptr);
+		const res::resource_system* resources = nullptr, reference_rule rule = reference_rule::agent);
 
 	// The root "__guid" string of a desc file's bytes, as the file has it (not checked as an ID); empty when it has none or
 	// is no JSON object. What a save that replaces the file keeps until the project's migration takes it out (#772).
