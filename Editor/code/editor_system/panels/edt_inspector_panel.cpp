@@ -275,7 +275,7 @@ namespace edt
 		// no item is active, i.e. a drag was released. Checkboxes are never active after
 		// the frame that changed them, so they commit at once.
 		if (changed && !m_readonly)
-			m_pending_commit = true;
+			note_edit();
 		commit_if_idle();
 	}
 
@@ -374,8 +374,18 @@ namespace edt
 		}
 
 		if (changed)
-			m_pending_commit = true;
+			note_edit();
 		commit_if_idle();
+	}
+
+	void inspector_panel::flush_pending_commit()
+	{
+		if (!m_pending_commit)
+			return;
+		m_pending_commit = false;
+		invalidate_view();
+		if (m_on_node_changed)
+			m_on_node_changed();
 	}
 
 	void inspector_panel::commit_if_idle()

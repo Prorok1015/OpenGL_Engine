@@ -18,6 +18,7 @@
 #include <entt/entt.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
+#include <algorithm>
 #include <format>
 #include <optional>
 #include <utility>
@@ -147,6 +148,7 @@ void edt::prefab_document::close()
 // copy_to leaves out what names a file (the tag, the __guid, the __parent): the copy is written back over that file.
 void edt::prefab_document::take_from(const scn::prefab_desc& source)
 {
+	++m_replaced;
 	source.copy_to(*m_working);
 	m_working->set_guid(source.get_guid());
 	m_working->set_parent(source.get_parent());
@@ -232,6 +234,34 @@ std::string edt::prefab_document::apply_blocker() const
 	if (m_lower_layer) return "this prefab belongs to a lower layer (the engine or a package): it cannot be written from the project";
 	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) return *why;
 	return {};
+}
+
+scn::prefab_desc::prefab_node* edt::prefab_document::working_node(const std::vector<std::uint64_t>& path)
+{
+	if (!m_open || !m_working || edits_locked()) {
+		return nullptr;
+	}
+	scn::prefab_desc::prefab_node* node = &m_working->get_root();
+	for (const std::uint64_t id : path) {
+		const auto found = std::ranges::find_if(node->children, [id](const scn::prefab_desc::prefab_node& child) { return child.node_id == id; });
+		if (found == node->children.end()) {
+			return nullptr;
+		}
+		node = &*found;
+	}
+	return node;
+}
+
+bool edt::prefab_document::notify_edited()
+{
+	if (!m_open || !m_working || edits_locked()) {
+		return false;
+	}
+	++m_generation;
+	sync_preview();
+	m_dirty = working_form() != m_saved_form;
+	announce();
+	return true;
 }
 
 edt::save_result edt::prefab_document::save()

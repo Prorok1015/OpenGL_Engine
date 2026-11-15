@@ -5,6 +5,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
+#include "edt_project_trust_service.h"
 #include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
@@ -20,6 +21,7 @@
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
+#include "edt_inspector_target.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
 #include "edt_migration_startup.h"
@@ -57,6 +59,7 @@ namespace edt {
 	class agent_sessions;
 	class game_builder;
 	class game_reloader;
+	class project_trust_service;
 	class vcs_service;
 	class forge_service;
 	class forge_account_panel;
@@ -199,6 +202,13 @@ namespace edt {
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
 		void create_live_mode(ds::app_data_storage& data);
+		// #921: "Trust this project?"; after "Trust" the modules that waited load and `on_trusted` runs.
+		void ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted);
+		// project_module_host::load_waiting on a UI frame where no level load, migration or Play holds it back; `then`
+		// runs on the frame after the load.
+		void load_waiting_modules(ds::app_data_storage& data, std::function<void()> then);
+		// Live mode at open (#908): on when the person turned it on for this project and it may run now.
+		void apply_live_consent(ds::app_data_storage& data);
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
@@ -271,6 +281,9 @@ namespace edt {
 		void confirm_prefab_close(std::function<void()> proceed);
 		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
 		void close_prefab_editor();
+		void select_prefab_node(const std::vector<std::uint64_t>& path);
+		void release_inspector_to_level();
+		inspector_target m_inspector_target;
 		// The open prefab document when it has unapplied edits, else null.
 		prefab_document* dirty_prefab();
 
@@ -372,6 +385,10 @@ namespace edt {
 		std::shared_ptr<platform::secret_store> m_secrets;
 		// Pull requests (#458); its commands are in m_registrations, removed before it; after the vcs service it asks.
 		std::unique_ptr<edt::forge_service> m_forge;
+		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
+		// it.
+		std::weak_ptr<edt::project_trust_service> m_trust;
+		edt::trusted_followups m_trust_followups;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
@@ -386,6 +403,7 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
+		std::vector<connection> m_inspector_connections;
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 

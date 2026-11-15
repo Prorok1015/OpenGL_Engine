@@ -56,7 +56,40 @@ namespace edt
 		// Close callback in toolbar may have nulled the context
 		if (!m_ctx || !m_ctx->is_open()) return;
 
+		render_tree();
+		ImGui::SameLine();
 		render_viewport();
+	}
+
+	void prefab_editor_panel::render_tree()
+	{
+		if (ImGui::BeginChild("##prefab_tree", ImVec2(200.f, 0.f), ImGuiChildFlags_Borders)) {
+			if (const scn::prefab_desc* working = m_ctx->working()) {
+				std::vector<std::uint64_t> path;
+				render_tree_node(working->get_root(), path);
+			}
+		}
+		ImGui::EndChild();
+	}
+
+	void prefab_editor_panel::render_tree_node(const scn::prefab_desc::prefab_node& node, std::vector<std::uint64_t>& path)
+	{
+		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+		if (node.children.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
+		if (m_has_selection && m_selected_path == path) flags |= ImGuiTreeNodeFlags_Selected;
+		const std::string label = (node.name.empty() ? std::string{ "(unnamed)" } : node.name) + "##" + std::to_string(node.node_id);
+		const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+			select_node(path);
+		}
+		if (open) {
+			for (const auto& child : node.children) {
+				path.push_back(child.node_id);
+				render_tree_node(child, path);
+				path.pop_back();
+			}
+			ImGui::TreePop();
+		}
 	}
 
 	void prefab_editor_panel::render_toolbar()

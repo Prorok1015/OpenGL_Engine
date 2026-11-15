@@ -2,14 +2,18 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_prefab_document.h"
+#include "edt_inspector_target.h"
+#include "edt_scene_document.h"
 #include "edt_prefab_close.h"
 #include <snk/editor/edt_editor_services.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_model.h>
 #include <entt/entt.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -63,6 +67,8 @@ struct prefab_edit_fixture : test_util::scene_env
 		services.base_assembler = assembler.get();
 		services.base_sfactory = &sf;
 		document = std::make_unique<edt::prefab_document>(services);
+		// The document_manager gives ids; here nothing does, and id 0 means "no document".
+		document->assign_id(7);
 		document->set_files(layout());
 	}
 
@@ -103,14 +109,18 @@ struct prefab_edit_fixture : test_util::scene_env
 
 	std::string arm_name() const { return document->working()->get_root().children[0].name; }
 
-	bool preview_has_node_named(const std::string& name)
+	static bool registry_has_node_named(entt::registry* reg, const std::string& name)
 	{
-		entt::registry* reg = document->get_registry();
 		if (!reg) return false;
 		for (auto&& [entity, component] : reg->view<scn::name_component>().each()) {
 			if (component.name == name) return true;
 		}
 		return false;
+	}
+
+	bool preview_has_node_named(const std::string& name)
+	{
+		return registry_has_node_named(document->get_registry(), name);
 	}
 
 	test_util::temp_dir dir{ "edt_prefab_edit" };
@@ -541,6 +551,138 @@ BOOST_AUTO_TEST_CASE(Revert_OfADeletedFile_ReportsItAndKeepsTheEdits)
 	BOOST_TEST(document->is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(NotifyEdited_AfterAnInPlaceChange_FollowsInThePreviewAndMarksDirty_NothingIsWritten)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+	const std::uint64_t generation = document->generation();
+	scn::prefab_desc::prefab_node* arm = document->working_node({ 0xa1 });
+	BOOST_REQUIRE(arm);
+	arm->name = "arm3";
+
+	BOOST_TEST_REQUIRE(document->notify_edited());
+
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->generation() > generation);
+	BOOST_TEST(preview_has_node_named("arm3"));
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(WorkingNode_ReachesNothingWhileLocked_OrForAWrongPath)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(document->working_node({}) != nullptr);
+	BOOST_TEST(document->working_node({ 0xdead }) == nullptr);
+	document->set_lock_source([] { return true; });
+	BOOST_TEST(document->working_node({}) == nullptr);
+	BOOST_TEST(!document->notify_edited());
+}
+
+BOOST_AUTO_TEST_CASE(Apply_IsSeenByAnInstanceInALevel)
+{
+	entt::registry level;
+	hot->attach_registry(level);
+	auto prefab = rs->require_sync<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(prefab.is_ready());
+	const entt::entity instance = level.create();
+	scn::assemble_prefab(*assembler, level, instance, *prefab, "a", tag);
+	BOOST_REQUIRE(registry_has_node_named(&level, "arm"));
+
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	BOOST_REQUIRE(registry_has_node_named(&level, "arm"));
+	BOOST_TEST_REQUIRE(document->save().saved);
+	for (int frame = 0; frame < 20 && !registry_has_node_named(&level, "arm2"); ++frame) {
+		pump();
+		hot->tick();
+	}
+
+	BOOST_TEST(registry_has_node_named(&level, "arm2"));
+	BOOST_TEST(!registry_has_node_named(&level, "arm"));
+	hot->detach_registry(level);
+}
+
+BOOST_AUTO_TEST_CASE(Apply_WhenTheWriteFails_LeavesTheDocumentEditedAndSaysSo)
+{
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
+		res::mount_access::read_only, res::write_policy::allow_all());
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+
+	const edt::save_result saved = document->save();
+
+	BOOST_TEST(!saved.saved);
+	BOOST_TEST(saved.error.find("could not be written") != std::string::npos);
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(InspectorEdit_OfAPrefabSelection_GoesToTheDocument_AndNeverCommitsTheLevel)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::scene_document level;
+	const std::uint64_t level_generation = level.generation();
+	edt::inspector_target target;
+	target.select_prefab(document->id(), { 0xa1 }, document->working_replaced());
+	scn::prefab_desc::prefab_node* node = document->working_node(target.path());
+	BOOST_REQUIRE(node);
+	node->name = "arm3";
+
+	BOOST_TEST(edt::route_node_changed(target, document.get(), level));
+
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(preview_has_node_named("arm3"));
+	BOOST_TEST(!level.is_dirty());
+	BOOST_TEST(level.generation() == level_generation);
+}
+
+BOOST_AUTO_TEST_CASE(InspectorEdit_OfALevelSelection_CommitsTheLevel)
+{
+	edt::scene_document level;
+	const std::uint64_t level_generation = level.generation();
+	edt::inspector_target target;
+
+	BOOST_TEST(edt::route_node_changed(target, nullptr, level));
+
+	BOOST_TEST(level.generation() == level_generation + 1);
+}
+
+BOOST_AUTO_TEST_CASE(InspectorEdit_OfAPrefabThatIsGone_GoesNowhere)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::scene_document level;
+	const std::uint64_t level_generation = level.generation();
+	edt::inspector_target target;
+	target.select_prefab(document->id() + 1, {}, 0);
+
+	BOOST_TEST(!edt::route_node_changed(target, document.get(), level));
+	BOOST_TEST(!edt::route_node_changed(target, nullptr, level));
+
+	BOOST_TEST(level.generation() == level_generation);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(WorkingReplaced_MovesWithARevert_SoAStalePointerIsKnown)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	const std::uint64_t replaced = document->working_replaced();
+	BOOST_REQUIRE(rename_arm("arm2"));
+	BOOST_TEST(document->working_replaced() == replaced);
+
+	BOOST_TEST_REQUIRE(document->revert().empty());
+
+	BOOST_TEST(document->working_replaced() > replaced);
+}
+
 namespace {
 
 struct close_probe
@@ -645,6 +787,27 @@ BOOST_AUTO_TEST_CASE(Close_UnwatchesTheFile)
 	BOOST_TEST(rs->watched_tag_count() > before);
 	document->close();
 	BOOST_TEST(rs->watched_tag_count() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AnOverrideOnADeletedNode_IsSkippedWithAWarning_WhenAnInstanceIsBuilt)
+{
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}},
+		 "overrides":[{"target":["00000000000000ff"],"component":"stat","path":"/hp","value":9}]}]})");
+	std::vector<std::string> warnings;
+	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view text) {
+		if (level == engine::log_level::warn) warnings.emplace_back(text);
+	});
+	const res::tag user_tag = res::tag::make("prefabs/user.prefab.desc");
+	auto user = rs->require_sync<scn::prefab_desc>(user_tag);
+	BOOST_REQUIRE(user.is_ready());
+	entt::registry level;
+
+	scn::assemble_prefab(*assembler, level, level.create(), *user, "user", user_tag);
+
+	const bool warned = std::ranges::any_of(warnings, [](const std::string& text) { return text.find("override: no node") != std::string::npos; });
+	BOOST_TEST(warned);
+	BOOST_TEST(registry_has_node_named(&level, "Inst"));
 }
 
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)

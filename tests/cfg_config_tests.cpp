@@ -98,6 +98,23 @@ BOOST_AUTO_TEST_CASE(Cli_AllowEngineVersionMismatchSetsItsVariable)
 	BOOST_TEST(static_cast<bool>(allow));
 }
 
+// #921: only the command line trusts a project; a config file's project/trust is overwritten by it.
+BOOST_AUTO_TEST_CASE(Cli_TrustProjectSetsItsVariableAndAConfigFileCannot)
+{
+	// Stands in for the editor's variable of the same name for the length of the test.
+	cfg::variable<bool> trust{ "project/trust", false };
+	BOOST_TEST(run_cli({}) == 1);
+	BOOST_TEST(!static_cast<bool>(trust));
+	BOOST_TEST(run_cli({ "--trust-project" }) == 1);
+	BOOST_TEST(static_cast<bool>(trust));
+
+	// What a config file holding the key does; the flag-less command line takes it back.
+	BOOST_TEST(cfg::load_config_text("project:\n  trust: true\n", std::filesystem::path{}));
+	BOOST_REQUIRE(static_cast<bool>(trust));
+	BOOST_TEST(run_cli({}) == 1);
+	BOOST_TEST(!static_cast<bool>(trust));
+}
+
 BOOST_AUTO_TEST_CASE(Cli_NonInteractiveSetsItsVariableInBothForms)
 {
 	for (const std::string& flag : { std::string{ "--non-interactive" }, std::string{ "-n" } }) {

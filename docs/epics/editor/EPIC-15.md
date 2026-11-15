@@ -1,7 +1,7 @@
 # EPIC-15: Command Pattern — Undo/Redo
 
 **Theme:** editor
-**Status:** in progress
+**Status:** done
 **Issue:** [#29](https://github.com/Prorok1015/OpenGL_Engine/issues/29)
 **Depends on:** EPIC-08, EPIC-09 (операции через desc — легко обернуть в команды)
 
@@ -22,7 +22,7 @@ Undo/Redo для всех правок сцены: история на дифф�
 
 ### Общая история: `document_history` (`snk/editor/edt_document_history.h`)
 
-Не знает типа документа (сцена сейчас, data-документы #146 потом):
+Не знает типа документа (сцена и data-документы; у документа данных своя история на снимках его собственных данных, #794, S56-5):
 
 - `history_change` — разница одной правки: `undo()`, `redo()`, `keys()` (что изменено: узел, поле; две правки
   конфликтуют, если у них общий ключ);
@@ -115,7 +115,7 @@ Edit
 
 - Действия `edit.undo` / `edit.redo` работают с историей **активного документа** (`document_manager::active()`,
   виртуальные `document::undo/redo/next_undo_entry/next_redo_entry`; у документа без истории — «нечего»), так что
-  data-документы (#146) подключатся без правки меню. Результат `{applied, label?, origin?}` — метка записи как есть
+  data-документы (#146, закрыта историей документа данных из #794) работают без правки меню. Результат `{applied, label?, origin?}` — метка записи как есть
   и кто её сделал (`ui`/`test`/`agent`/`game`).
 - `<label>` в меню — `history_record::label` записи, которую применит Undo/Redo; правка агента — с « (agent)».
 - Недоступны во время жеста (`gesture_active` = `ImGui::IsAnyItemActive()`), чтобы undo не попал в середину drag,
