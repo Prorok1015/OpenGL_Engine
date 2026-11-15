@@ -12,7 +12,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include "edt_selection_wiring.h"
-#include "edt_prefab_document.h"
+#include "edt_prefab_editor_component.h"
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document_manager.h>
 
@@ -29,7 +29,6 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include <snk/platform/plt_shell_open.h>
-#include "edt_prefab_editor_panel.h"
 #include "edt_data_document_host.h"
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
@@ -89,7 +88,6 @@
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include "edt_document_cast.h"
-#include "edt_prefab_close.h"
 #include "edt_state_commands.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_loop_service_interface.h>
@@ -146,14 +144,6 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
-	template<class T>
-	std::vector<res::diagnostic> diagnostics_of(const res::res_handle<T>& handle)
-	{
-		res::diagnostics_collector collector;
-		handle.collect_into(collector);
-		return collector.items();
-	}
-
 	// Where the diagnostics of a load of the level lead, by that load (`copy` is its working copy, `file` its own file).
 	edt::desc_problem_publisher::locator level_locator(const res::res_handle<scn::level_desc>& handle, const res::tag& copy,
 		const res::tag& file)
@@ -368,9 +358,7 @@ edt::editor_system::~editor_system()
 		if (m_data_documents) m_data_documents->shutdown();
 		context->documents().shutdown();
 	}
-	if (m_prefab_panel) {
-		m_prefab_panel->set_context(nullptr);
-	}
+	if (m_prefab) m_prefab->detach_document();
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
 		ctx_mgr->set_on_reload_result(nullptr);
@@ -512,50 +500,18 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
 		*m_hierarchy_panel, *m_inspector_panel,
 		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
-	// After wire_selection, which blanks the Inspector on an empty selection (level undo, Esc in the viewport): the prefab node stays.
-	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
-		if (!sel.empty() || !m_inspector_target.is_prefab()) return;
-		prefab_document* prefab = prefab_of(m_context->documents());
-		if (prefab && prefab->id() == m_inspector_target.prefab()) {
-			m_inspector_panel->set_selected_node(prefab->working_node(m_inspector_target.path()));
-		}
-	}));
 	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
 
-	// Create prefab editor panel (EPIC-25)
-	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
-	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
-	m_prefab_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_prefab_node(path); });
-	m_prefab_panel->set_on_apply([this] {
-		prefab_document* prefab = prefab_of(m_context->documents());
-		if (!prefab) return;
-		if (const save_result saved = prefab->save(); !saved.saved) {
-			egLOG_WARN("editor", "{}", saved.error);
-			m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
-		}
-	});
-	m_prefab_panel->set_on_revert([this] {
-		prefab_document* prefab = prefab_of(m_context->documents());
-		if (!prefab) return;
-		m_context->dialogs().choose("Revert prefab", std::format("Drop the edits of '{}' and take the file again?", prefab->title()), { "Revert", "Cancel" },
-			[this, id = prefab->id(), alive = std::weak_ptr<int>(m_prefab_alive)](std::optional<std::size_t> choice) {
-				if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
-				prefab_document* open = prefab_of(m_context->documents());
-				if (!open || open->id() != id) return;
-				if (const std::string error = open->revert(); !error.empty()) {
-					egLOG_WARN("editor", "{}", error);
-					m_context->dialogs().message(message_level::error, std::format("'{}' was not reverted:\n{}", open->title(), error));
-				}
-			});
-	});
-	m_prefab_panel->set_input_router(m_input_router);
+	// Prefab editor (EPIC-25, #1004): after wire_selection, whose Inspector hand-over its selection listener follows.
+	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
+		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_inspector_panel, m_desc_problems });
 
 	asset_kind_hooks asset_hooks;
-	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	asset_hooks.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); };
 	asset_hooks.desc_layout = [this] { return desc_layout(); };
 	asset_hooks.edits_locked = [this] { return m_play && m_play->active(); };
 	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
-		if (m_context->documents().preview() == &open) m_prefab_panel->set_open(true);
+		if (m_context->documents().preview() == &open) m_prefab->show();
 	});
 	m_data_documents->set_asset_source(asset_catalog);
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
@@ -653,7 +609,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	});
 	add_panel(m_input_actions_panel, dock_slot::bottom_right, false);
 	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
-	add_panel(m_prefab_panel, dock_slot::floating, false);
+	m_prefab->install(m_registrations);
 	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
@@ -707,20 +663,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty() || dirty_prefab() != nullptr; };
+	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty() || m_prefab->dirty() != nullptr; };
 	hooks.save_other_documents = [this] {
-		if (prefab_document* prefab = dirty_prefab()) {
-			if (const save_result saved = prefab->save(); !saved.saved) {
-				egLOG_WARN("editor", "{}", saved.error);
-				m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
-				return false;
-			}
-		}
+		if (!m_prefab->apply_dirty()) return false;
 		return m_data_documents->save_all();
 	};
 	hooks.discard_other_documents = [this] {
 		for (const document_id id : m_data_documents->dirty()) m_data_documents->close(id);
-		if (dirty_prefab()) close_prefab_editor();
+		if (m_prefab->dirty()) m_prefab->close();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
@@ -798,7 +748,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return result.ok;
 	};
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo, [this] { return m_inspector_target.is_prefab(); })) {
+			asset_undo_label, asset_undo, [this] { return m_prefab->owns_inspector(); })) {
 		m_registrations.push_back(std::move(action));
 	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
@@ -871,7 +821,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return dirty;
 		};
 		migration.close_documents_and_detach_level = [this] {
-			close_prefab_editor();
+			m_prefab->close();
 			// Every document but the scene: the prefab editor through its panel, data documents through their host, any other
 			// (a module's, an extension's) through document_manager::close, which announces it to whoever shows it.
 			document_manager& documents = m_context->documents();
@@ -1086,7 +1036,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// A second reload waits for the first one's restore (#600): its snapshot would see the set held in Pause.
 		if (m_play && m_play->reloading()) return std::string{ "Play is loading the resources of the last reload" };
 		// The swap closes the prefab editor: its unapplied edits must not go with it.
-		if (dirty_prefab()) return std::string{ "the prefab editor has unapplied edits: apply or revert them first" };
+		if (m_prefab->dirty()) return std::string{ "the prefab editor has unapplied edits: apply or revert them first" };
 		return std::string{};
 	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
@@ -1386,10 +1336,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		quit.discard_changes = [this] {
 			m_state.mark_clean();
-			auto& documents = m_context->documents();
-			if (prefab_document* preview = prefab_of(documents); preview != nullptr && preview->is_dirty()) {
-				documents.close(preview->id());
-			}
+			m_prefab->drop_dirty_document();
 		};
 		quit.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		if (stdio) {
@@ -1825,12 +1772,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
-	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
-	m_world_problem_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
-		if (id == document_id{} || id != m_desc_prefab_document) return;
-		m_desc_prefab_document = document_id{};
-		m_desc_problems.clear(m_context->problems(), "prefab");
-	}));
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_game_view_panel->set_input_blocked([this] {
 		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
@@ -2140,9 +2081,7 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
 		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
 		if (m_play && m_play->active()) m_play->stop(play_reason::user);
-		// Reload, quit and project switch wait for a dirty prefab; this is the way in of anything else (a module loaded by hand).
-		if (dirty_prefab()) egLOG_WARN("editor", "the game layer changes: the prefab editor is closed with unapplied edits");
-		close_prefab_editor();
+		m_prefab->close_for_layer_change();
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
 		if (m_loading_level) {
@@ -2192,32 +2131,6 @@ void edt::editor_system::wire_panel_callbacks()
 	m_hierarchy_panel->set_on_reparent_node([this](uint64_t node_id, uint64_t new_parent_id, int insert_index) {
 		m_scene_editor.reparent_entity(node_id, new_parent_id, insert_index);
 	});
-
-	m_inspector_panel->set_on_node_changed([this]() {
-		route_node_changed(m_inspector_target, prefab_of(m_context->documents()), m_state);
-	});
-	// A level selection takes the Inspector back from the prefab window. Runs before wire_selection (wire_panel_callbacks comes
-	// first), so the pending edit is routed to the prefab before wire_selection hands the Inspector the level's node.
-	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
-		if (!sel.empty()) release_inspector_to_level();
-	}));
-	// The working copy was replaced (Revert, a reload, another prefab): the node pointer the Inspector holds is stale.
-	m_inspector_connections.push_back(m_context->events().document_changed.subscribe([this](document_id id, std::uint64_t) {
-		if (!m_inspector_target.is_prefab() || id != m_inspector_target.prefab()) return;
-		prefab_document* prefab = prefab_of(m_context->documents());
-		if (!prefab || prefab->id() != id) return;
-		if (prefab->working_replaced() == m_inspector_target.replaced()) return;
-		m_inspector_target.set_replaced(prefab->working_replaced());
-		scn::prefab_desc::prefab_node* node = prefab->working_node(m_inspector_target.path());
-		if (!node) {
-			release_inspector_to_level();
-			return;
-		}
-		m_inspector_panel->set_selected_node(node);
-	}));
-	m_inspector_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
-		if (m_inspector_target.is_prefab() && id == m_inspector_target.prefab()) release_inspector_to_level();
-	}));
 
 	m_viewport_panel->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
@@ -2683,86 +2596,6 @@ bool edt::editor_system::poll_pending_desc()
 	return false;
 }
 
-// ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
-
-void edt::editor_system::select_prefab_node(const std::vector<std::uint64_t>& path)
-{
-	prefab_document* prefab = prefab_of(m_context->documents());
-	if (!prefab) return;
-	// The level's selection ends first (its event would otherwise hand the Inspector back to the level).
-	m_context->selection().clear();
-	m_inspector_target.select_prefab(prefab->id(), path, prefab->working_replaced());
-	m_inspector_panel->set_selected_node(prefab->working_node(path));
-}
-
-void edt::editor_system::release_inspector_to_level()
-{
-	if (!m_inspector_target.is_prefab()) return;
-	// A drag or a typed value that has not committed yet belongs to the prefab: route it while the target still says so.
-	m_inspector_panel->flush_pending_commit();
-	m_inspector_target.reset();
-	m_inspector_panel->set_selected_node(nullptr);
-	m_prefab_panel->clear_selection();
-}
-
-edt::prefab_document* edt::editor_system::dirty_prefab()
-{
-	return dirty_prefab_of(m_context->documents());
-}
-
-void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
-{
-	prefab_document* prefab = dirty_prefab();
-	if (prefab) {
-		// The window stays while the question is open (closing it asked, nothing was decided).
-		m_prefab_panel->set_open(true);
-	}
-	const document_id id = prefab ? prefab->id() : document_id{};
-	prefab_close_ports ports;
-	ports.ask = [this](std::function<void(unsaved_choice)> answer) {
-		m_context->dialogs().confirm_unsaved([answer = std::move(answer), alive = std::weak_ptr<int>(m_prefab_alive)](unsaved_choice choice) {
-			if (alive.lock()) answer(choice);
-		});
-	};
-	ports.apply = [this, id]() -> save_result {
-		prefab_document* open = prefab_of(m_context->documents());
-		return open && open->id() == id ? open->save() : save_result::failure("the prefab is not open any more");
-	};
-	ports.report_failure = [this](const std::string& error) {
-		egLOG_WARN("editor", "{}", error);
-		m_context->dialogs().message(message_level::error, std::format("The prefab was not applied and stays open:\n{}", error));
-	};
-	close_prefab_with_question(prefab != nullptr, ports, std::move(proceed));
-}
-
-void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
-{
-	prefab_document* current = prefab_of(m_context->documents());
-	if (current && current->is_open() && current->is_dirty()) {
-		if (current->source_tag() == tag) {
-			m_prefab_panel->set_open(true);
-			return;
-		}
-		confirm_prefab_close([this, tag] { open_prefab_now(tag); });
-		return;
-	}
-	open_prefab_now(tag);
-}
-
-void edt::editor_system::open_prefab_now(const res::tag& tag)
-{
-	release_inspector_to_level();
-	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
-	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
-	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
-	m_desc_problems.report(m_context->problems(), "prefab", diagnostics_of(loaded));
-	m_desc_prefab_document = prefab.is_open() ? prefab.id() : document_id{};
-	if (prefab.is_open()) {
-		m_prefab_panel->set_context(&prefab);
-		m_prefab_panel->set_open(true);
-	}
-}
-
 edt::desc_file_layout edt::editor_system::desc_layout()
 {
 	desc_file_layout layout;
@@ -2796,14 +2629,3 @@ bool edt::editor_system::person_is_editing() const
 		|| (m_viewport_panel && m_viewport_panel->is_dragging_gizmo());
 }
 
-void edt::editor_system::close_prefab_editor()
-{
-	// Before the document goes: the Inspector holds a pointer into its working copy.
-	release_inspector_to_level();
-	auto& documents = m_context->documents();
-	if (prefab_document* prefab = prefab_of(documents)) {
-		documents.close(prefab->id());
-	}
-	m_prefab_panel->set_context(nullptr);
-	m_prefab_panel->set_open(false);
-}

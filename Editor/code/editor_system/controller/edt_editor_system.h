@@ -21,7 +21,6 @@
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
-#include "edt_inspector_target.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
 #include "edt_migration_startup.h"
@@ -87,8 +86,7 @@ namespace edt {
 	class git_panel;
 	class world_systems_panel;
 	class asset_browser_panel;
-	class prefab_editor_panel;
-	class prefab_document;
+	class prefab_editor_component;
 	class play_session;
 	namespace vcs { class repository_watcher; }
 	class editor_mode_controller;
@@ -270,20 +268,10 @@ namespace edt {
 		// The console's feed from the engine log; removed with the editor system.
 		engine::log_sink_handle                m_log_sink;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
-		std::shared_ptr<prefab_editor_panel>   m_prefab_panel;
 
-		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
-		void open_prefab_for_edit(const res::tag& tag);
-		void open_prefab_now(const res::tag& tag);
-		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
-		void confirm_prefab_close(std::function<void()> proceed);
-		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
-		void close_prefab_editor();
-		void select_prefab_node(const std::vector<std::uint64_t>& path);
-		void release_inspector_to_level();
-		inspector_target m_inspector_target;
-		// The open prefab document when it has unapplied edits, else null.
-		prefab_document* dirty_prefab();
+		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
+		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
+		std::unique_ptr<prefab_editor_component> m_prefab;
 
 		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();
@@ -401,7 +389,6 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
-		std::vector<connection> m_inspector_connections;
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
@@ -442,8 +429,6 @@ namespace edt {
 		play_preflight_publisher m_play_preflight;
 		// The source "assets" (S57-4): what the asset database finds, with its fixes for the person.
 		std::unique_ptr<asset_problem_publisher> m_asset_problems;
-		// The prefab preview whose diagnostics the scope "prefab" holds; closing it clears them.
-		document_id m_desc_prefab_document{};
 		std::vector<connection> m_world_problem_connections;
 	};
 }
