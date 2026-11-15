@@ -3056,7 +3056,7 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfCode_NeedsTheCallsConsent_AndCMakeFilesT
 
 	for (const char* branch : { "cmake", "presets" }) {
 		BOOST_TEST_CONTEXT(branch) {
-			for (const edt::vcs_code_consent consent : { none, code }) {
+			for (const edt::vcs_code_consent& consent : { none, code }) {
 				const json::value refused = checkout(branch, consent);
 				BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
 				BOOST_TEST(message_of(refused).find("cmake_changes") != std::string::npos, message_of(refused));
@@ -3241,7 +3241,7 @@ BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_ACodeEditGrant_NeverCoversCMakeFiles)
 	const std::string ticket = text(question.value.as_object().at("ticket"));
 	const auto pending = commands.confirmation_of(ticket);
 	BOOST_REQUIRE(pending.has_value());
-	BOOST_TEST(pending->category == cmd::agent_category::cmake_presets);
+	BOOST_TEST((pending->category == cmd::agent_category::cmake_presets));
 	BOOST_TEST(pending->detail.find("game/code/CMakeLists.txt") != std::string::npos, pending->detail);
 	BOOST_REQUIRE(commands.approve(ticket));
 	const json::value approved = job_of(commands.invoke("vcs.checkout", cmd::call{ cmake_args, agent, 0, ticket }));
