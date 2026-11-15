@@ -219,6 +219,9 @@ if(TARGET snk_model_decoder)
 	# without their models.
 	add_custom_command(TARGET unit_tests POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:snk_model_decoder> $<TARGET_FILE_DIR:unit_tests>)
+	# edt_decoded_model_adapter_tests drives the decoder's assimp IO system directly (its headers only, in a shared build).
+	snk_usage_only(_unit_tests_assimp assimp)
+	target_link_libraries(unit_tests PRIVATE ${_unit_tests_assimp})
 	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>"
 		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
 endif()

@@ -3,6 +3,8 @@
 #include "test_temp_dir.hpp"
 #include "edt_decoded_model_adapter.h"
 #include "edt_process_decoder.h"
+#include "edt_filesystem_assimp_io.h"
+#include <assimp/IOStream.hpp>
 #include <snk/resource/res_mount_table.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
@@ -306,11 +308,14 @@ BOOST_AUTO_TEST_CASE(AModelFromMemoryThatNamesAnotherFile_FailsTheLoad)
 		"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})json";
 	const std::string obj = "mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n";
 
-	for (const auto& [tag, content] : { std::pair{ "res://ram/m.gltf", gltf }, std::pair{ "res://ram/m.obj", obj } }) {
-		BOOST_TEST_CONTEXT(tag) {
-			const std::string error = error_of(adapter(), res::tag(tag), text(content));
-			BOOST_TEST(error.find(tag) != std::string::npos);
-			BOOST_CHECK_MESSAGE(error.find("not a file on the disk") != std::string::npos, error);
+	struct named_file { const char* tag; std::string content; const char* named; };
+	for (const named_file& model : { named_file{ "res://ram/m.gltf", gltf, "the model refers to 'm.bin'" },
+		named_file{ "res://ram/m.obj", obj, "the model refers to 'm.mtl'" } }) {
+		BOOST_TEST_CONTEXT(model.tag) {
+			const std::string error = error_of(adapter(), res::tag(model.tag), text(model.content));
+			BOOST_TEST(error.find(model.tag) != std::string::npos);
+			BOOST_CHECK_MESSAGE(error.find(model.named) != std::string::npos, error);
+			BOOST_CHECK_MESSAGE(error.find("so it cannot read other files") != std::string::npos, error);
 		}
 	}
 }
@@ -319,7 +324,34 @@ BOOST_AUTO_TEST_CASE(BytesFromMemoryThatAreNoModel_FailTheLoad)
 {
 	const std::string error = error_of(adapter(), res::tag("res://ram/broken.glb"), text("glTF this is not a model"));
 	BOOST_TEST(error.find("res://ram/broken.glb") != std::string::npos);
-	BOOST_CHECK_MESSAGE(error.find("is not loaded") != std::string::npos, error);
+	// What the decoder answered: its scan could not read the bytes.
+	BOOST_CHECK_MESSAGE(error.find("is not loaded: the model cannot be read") != std::string::npos, error);
+}
+
+// The reading side of the decoder for a model given only as bytes (#925): the model itself is served, every other name is
+// refused, also when a file of that name lies next to the path.
+BOOST_AUTO_TEST_CASE(TheAssimpIoOfAModelGivenOnlyAsBytes_ServesTheModelAndRefusesEveryOtherFile)
+{
+	dir.write("ram/m.mtl", "newmtl red\n");
+	const fs::path model = dir.path() / "ram" / "m.obj";
+	const std::vector<std::byte> bytes = text("v 0 0 0\n");
+	edt::model_file_access access(model, {}, nullptr, {}, false);
+	edt::filesystem_assimp_io io(model, bytes, &access);
+
+	BOOST_TEST(io.Exists(model.string().c_str()));
+	Assimp::IOStream* stream = io.Open(model.string().c_str(), "rb");
+	BOOST_REQUIRE(stream != nullptr);
+	BOOST_TEST(stream->FileSize() == bytes.size());
+	io.Close(stream);
+
+	const std::string side = (dir.path() / "ram" / "m.mtl").string();
+	for (const std::string& name : { std::string("m.mtl"), side }) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_CHECK_THROW(io.Exists(name.c_str()), std::runtime_error);
+			BOOST_CHECK_THROW(io.Open(name.c_str(), "rb"), std::runtime_error);
+		}
+	}
+	BOOST_TEST(access.files().empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

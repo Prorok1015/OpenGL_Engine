@@ -403,6 +403,12 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 			problem = "the import made a resource of a kind it never makes: '" + cleaned(relative) + "'";
 			return std::nullopt;
 		}
+		// textures/* images are files the model named; a model that is no file on the disk reads none (embedded images
+		// are __embedded_txm/*).
+		if (!request.on_disk && *what == blob_kind::image) {
+			problem = "the import of a model that is not a file on the disk carries the image file '" + cleaned(relative) + "'";
+			return std::nullopt;
+		}
 		if (blob.bytes.size() > blob_limit || (total += blob.bytes.size()) > total_limit) {
 			problem = "the resources of the import are bigger than the request allows";
 			return std::nullopt;

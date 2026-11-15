@@ -377,6 +377,16 @@ BOOST_AUTO_TEST_CASE(AScanAnswer_ForAModelGivenOnlyAsBytes_ListsNoFile)
 	BOOST_CHECK_MESSAGE(problem.find("not a file on the disk") != std::string::npos, problem);
 }
 
+BOOST_AUTO_TEST_CASE(AnImportAnswer_ForAModelGivenOnlyAsBytes_CarriesNoImageFile)
+{
+	// The answer carries textures/t.png, an image file the model named: an honest import from bytes cannot have read one.
+	auto request = request_in();
+	request.on_disk = false;
+	std::string problem;
+	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("not a file on the disk carries the image file 'textures/t.png'") != std::string::npos, problem);
+}
+
 BOOST_AUTO_TEST_CASE(AnImportAnswer_GoesToTheMemoryFolderTheRequestNamed_AndNowhereElse)
 {
 	auto request = request_in();

@@ -675,6 +675,11 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	im.source_path = abs_path;
 	std::vector<res::tag> created_tags;
 	import_tags tags{ im.all_tags, created_tags };
+	if (!source.on_disk && (!source.allowed || !source.preloaded)) {
+		// Without model_file_access the importer reads side files from the folder of `path`, which names no folder here.
+		im.error = "a model that is not a file on the disk is imported from its bytes with the list of files it may read";
+		return im;
+	}
 	std::optional<model_file_access> access;
 	if (source.allowed) {
 		access.emplace(abs_path, source.limits, source.allowed, source.boundary, source.on_disk);

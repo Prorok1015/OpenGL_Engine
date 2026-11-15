@@ -22,8 +22,8 @@ bool edt::filesystem_assimp_io::Exists(const char* pFile) const
 		return true;
 
 	if (m_access && !m_access->on_disk()) {
-		// A model given only as bytes may not go on without a file it names (an .obj loses its .mtl silently otherwise):
-		// the load fails with the reason.
+		// A model given only as bytes fails on any file it names instead of loading without it: Open refuses through
+		// model_file_access, and a loader that asks Exists first (and skips a missing file) is refused here.
 		throw std::runtime_error(m_access->resolve(pFile, model_file_kind::side_file).error);
 	}
 
