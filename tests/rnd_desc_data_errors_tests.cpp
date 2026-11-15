@@ -120,6 +120,37 @@ BOOST_AUTO_TEST_CASE(GeometryBytes_FromZeroTo255_AreRead)
 	BOOST_TEST(desc->bounds[0].second == 7u);
 }
 
+// #1022: the vertices are read in one loop; a model's worth of them gives the same bytes in the same order.
+BOOST_AUTO_TEST_CASE(ManyGeometryBytes_AreReadInOrder)
+{
+	std::vector<std::byte> expected;
+	std::string vertices = "[";
+	for (std::size_t i = 0; i < 100000; ++i) {
+		const unsigned value = static_cast<unsigned>((i * 37u) % 256u);
+		expected.push_back(std::byte(value));
+		if (i != 0) vertices += ',';
+		vertices += std::to_string(value);
+	}
+	vertices += "]";
+	const auto loaded = load<rnd::geometry_desc>("many.desc", geometry(vertices));
+
+	BOOST_REQUIRE_MESSAGE(loaded.is_ready() && !loaded.has_error(), loaded.error_text());
+	const auto desc = loaded.get_sync();
+	BOOST_REQUIRE(desc);
+	BOOST_TEST((desc->vertices == expected));
+}
+
+// A bad byte at the end of a long array fails the load as one at the start does.
+BOOST_AUTO_TEST_CASE(ABadByteAfterManyGoodOnes_FailsTheLoad)
+{
+	std::string vertices = "[";
+	for (std::size_t i = 0; i < 10000; ++i) vertices += "1,";
+	vertices += "256]";
+	const auto loaded = load<rnd::geometry_desc>("late.desc", geometry(vertices));
+	BOOST_TEST(loaded.has_error());
+	BOOST_TEST(loaded.error_text().find("not an integer from 0 to 255") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(ABoundingBox_ThatIsNoPairOfPoints_FailsTheLoad)
 {
 	const char* boxes[] = {
