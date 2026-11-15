@@ -104,7 +104,8 @@ namespace prj::migration
 	};
 
 	// Why apply_migration refuses `plan` before writing anything: a project.snkproj that is newer or invalid, an invalid
-	// file without plan.force, or plan.refused. Empty when it may run.
+	// file without plan.force, or plan.refused. Empty when it may run. A path or a reason from the project's files in it went
+	// through journal_path_text (#991), so the editor shows the message with text_escape::escaped_message.
 	std::string plan_refusal(const migration_plan& plan);
 
 	// Why a project with these content roots is not migrated: its rollback would refuse them (check_journal_paths'
@@ -152,12 +153,11 @@ namespace prj::migration
 	// The hash a journal (and every file of it) is compared by: 16 hex digits.
 	std::string journal_hash(std::string_view bytes);
 
-	// A path (or any text) of a journal as a message or a question shows it: a journal is a file anyone can edit, so what
-	// could forge or hide a part of a line (C0/C1 controls, DEL, bidi controls, U+2028/U+2029, zero-width, invisible and
-	// fill characters, variation selectors, tags, spaces other than U+0020) becomes an escape (a backslash, 'u', the code
-	// point in hex in braces), a byte that is no valid UTF-8 a backslash, 'x' and two hex digits, a backslash two of them;
-	// cut at 8 KiB, never inside a code point or an escape ("..." then). check_journal_paths refuses a path over 1024
-	// bytes, so a journal's path is always shown whole.
+	// A path (or any text) of a journal as a message or a question shows it: a journal is a file anyone can edit, so it goes
+	// through text_escape::escaped_text (#991): a backslash doubled, a line break, carriage return and tab as \n \r \t, any
+	// other hidden code point (controls, bidi, invisible and fill characters, variation selectors, tags, spaces other than
+	// U+0020) as \u{202E}, a byte that is no UTF-8 as \x{FF}; cut at 8 KiB, never inside a code point or an escape ("..."
+	// then). check_journal_paths refuses a path over 1024 bytes, so a journal's path is always shown whole.
 	std::string journal_path_text(std::string_view path);
 
 	// The paths a journal (.snk/migrations/<id>/report.json) names, as a rollback reads them.

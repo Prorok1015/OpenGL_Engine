@@ -14,6 +14,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_stack_allocator.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/shader_serial.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/sha256.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/text_escape.cpp"
 	# Always compiled: profiler entry points are referenced unconditionally (render, gui);
 	# ENGINE_PROFILE_MODE only gates the PROFILE_* macros.
 	"${CMAKE_CURRENT_SOURCE_DIR}/eng_profiler.cpp"

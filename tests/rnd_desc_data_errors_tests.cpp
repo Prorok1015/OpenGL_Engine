@@ -55,19 +55,20 @@ BOOST_AUTO_TEST_CASE(ATextureOfAnUnknownFormat_FailsItsLoad_AndNamesTheValue)
 		R"({"__type":"texture_2d_desc","header":{"type":"texture_2d","data":{"format":"RGBA99\nline two"}}})");
 
 	BOOST_TEST(texture.has_error());
-	BOOST_TEST(texture.error_text().find("unknown texture format 'RGBA99?line two'") != std::string::npos);
+	BOOST_TEST(texture.error_text().find("unknown texture format 'RGBA99\\nline two'") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AnUnknownValue_WithABidiOverrideAndACutMultiByteChar_IsShownWithoutRawControlBytes)
 {
-	// 5 shown chars + 58 'x' = 63 bytes: the 2-byte char that follows would end at byte 65, so it is dropped whole.
-	const std::string name = "ab\\u202Ecd" + std::string(58, 'x') + "\\u00e9z";
+	// "ab\\u{202E}cd" (12 bytes) + 48 'x' = 60: the 2-byte char that follows would end past the 61 bytes that leave room
+	// for "...", so the cut drops it whole.
+	const std::string name = "ab\\u202Ecd" + std::string(48, 'x') + "\\u00e9zzzz";
 	const auto texture = load<rnd::texture_desc>("hidden.desc",
 		R"({"__type":"texture_2d_desc","header":{"type":")" + name + R"("}})");
 
 	BOOST_TEST(texture.has_error());
 	const std::string text = texture.error_text();
-	BOOST_TEST(text.find("unknown texture type 'ab?cd" + std::string(58, 'x') + "'") != std::string::npos);
+	BOOST_TEST(text.find("unknown texture type 'ab\\u{202E}cd" + std::string(48, 'x') + "...'") != std::string::npos);
 	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos);
 	BOOST_TEST(text.find('\xC3') == std::string::npos);
 }
