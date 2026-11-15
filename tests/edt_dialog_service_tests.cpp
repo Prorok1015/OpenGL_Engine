@@ -995,6 +995,27 @@ BOOST_AUTO_TEST_CASE(List_MarksTheDialogThatIsOnScreen)
 	BOOST_TEST(!listed[1].on_screen);
 }
 
+// #935: a message dialog may show a path (a build that could not start, a job that threw).
+BOOST_AUTO_TEST_CASE(DialogListCommand_WithAFilter_RewritesTheText_NotForAPerson)
+{
+	cmd::log_read_filter filter;
+	filter.redact = [](std::string_view text, const cmd::origin& from) {
+		return from.kind == cmd::origin_kind::ui ? std::string(text) : "[" + std::string(text) + "]";
+	};
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_dialog_commands(filtered, service, &filter);
+	service.message(edt::message_level::error, "CMake was not found in /opt/sdk");
+
+	const cmd::result as_agent = filtered.invoke("dialog.list", json::object{}, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	BOOST_TEST(as_agent.value.as_object().at("dialogs").as_array().at(0).as_object().at("text").as_string().c_str()
+		== std::string("[CMake was not found in /opt/sdk]"));
+	const cmd::result as_person = filtered.invoke("dialog.list", json::object{}, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	BOOST_TEST(as_person.value.as_object().at("dialogs").as_array().at(0).as_object().at("text").as_string().c_str()
+		== std::string("CMake was not found in /opt/sdk"));
+}
+
 BOOST_AUTO_TEST_CASE(DialogListCommand_HasTheDocumentedShape)
 {
 	BOOST_TEST(call("dialog.list").value.as_object().at("dialogs").as_array().empty());

@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace cmd { class command_registry; }
+namespace cmd { class command_registry; struct log_read_filter; }
 namespace edt { class agent_access; class editor_events; class job_service; }
 namespace ds { class task_system; }
 
@@ -52,6 +52,8 @@ namespace edt
 		// with its progress forwarded meanwhile (mcp_bridge_options). Both outlive the server.
 		job_service* jobs = nullptr;
 		editor_events* events = nullptr;
+		// What an agent gets of a held job call's texts (mcp_bridge_options::log_filter, #935). Outlives the server.
+		const cmd::log_read_filter* log_filter = nullptr;
 	};
 
 	// The MCP server of the editor (module snk_mcp_server) with everything it needs on the editor's side: the

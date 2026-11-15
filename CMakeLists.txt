@@ -167,6 +167,12 @@ add_subdirectory(apps/game)
 add_subdirectory(tools/project_migration)
 add_subdirectory(tools/desc_resave)
 add_subdirectory(tools/model_decoder)
+# The editor loads the models descs refer to through the decoder, which it starts from its own folder (#925): so in the
+# build tree too the decoder sits next to it, and building the editor builds it.
+if(TARGET snk_model_decoder AND TARGET editor)
+	add_dependencies(editor snk_model_decoder)
+	set_target_properties(snk_model_decoder PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:editor>")
+endif()
 snk_isolate_third_party_warnings()
 
 enable_testing()
@@ -175,7 +181,7 @@ file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp")
 if(NOT SNK_WITH_ASSIMP)
     # These drive the assimp importers, or load the shipped levels that reference models.
-    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|edt_import_export_format_tests|edt_agent_model_scan_tests|desc_repo_roundtrip_tests)\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|edt_import_export_format_tests|edt_agent_model_scan_tests|edt_decoded_model_adapter_tests|desc_repo_roundtrip_tests)\\.cpp$")
 endif()
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
@@ -194,7 +200,7 @@ target_link_libraries(unit_tests PRIVATE ${_snk_test_drivers})
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # White-box tests: PRIVATE access to the internal (non-public) editor_system headers, test-only.
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/assets" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/vcs" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/forge")
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/assets" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/vcs" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/forge" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/play" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/mesh" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/prefab")
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
@@ -209,6 +215,13 @@ endif()
 if(TARGET snk_model_decoder)
 	# The process tests (edt_decode_runner_tests) start the real decoder, and the test build of it for the self-test flags.
 	add_dependencies(unit_tests snk_model_decoder snk_model_decoder_selftest)
+	# The editor the tests start looks for the decoder next to its own executable (#925): without it they load levels
+	# without their models.
+	add_custom_command(TARGET unit_tests POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:snk_model_decoder> $<TARGET_FILE_DIR:unit_tests>)
+	# edt_decoded_model_adapter_tests drives the decoder's assimp IO system directly (its headers only, in a shared build).
+	snk_usage_only(_unit_tests_assimp assimp)
+	target_link_libraries(unit_tests PRIVATE ${_unit_tests_assimp})
 	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>"
 		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
 endif()
@@ -216,6 +229,7 @@ target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURR
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/projects")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
+target_compile_definitions(unit_tests PRIVATE SNK_REPO_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 # prj::current_engine_version() must report exactly this (tests/prj_version_tests.cpp).
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_SDK_VERSION="${SNK_SDK_VERSION}")
 # rnd_render_context_tests reads the sources of the render passes to check what they include.

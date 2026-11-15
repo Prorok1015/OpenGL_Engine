@@ -45,3 +45,108 @@ void scn::scene_layer::stop_tasks()
 		m_task_system->wait_idle(m_tasks);
 	}
 }
+
+res::resource_system& scn::scene_layer::resources()
+{
+	return *m_resources;
+}
+
+desc::desc_system& scn::scene_layer::descs()
+{
+	return *m_descs;
+}
+
+scn::ecs_assembler& scn::scene_layer::assembler()
+{
+	return m_assembler;
+}
+
+ecs::system_factory& scn::scene_layer::systems()
+{
+	return m_systems;
+}
+
+ecs::component_registry& scn::scene_layer::components()
+{
+	return m_components;
+}
+
+scn::component_catalog& scn::scene_layer::catalog()
+{
+	return m_catalog;
+}
+
+const scn::component_catalog& scn::scene_layer::catalog() const
+{
+	return m_catalog;
+}
+
+entt::meta_ctx& scn::scene_layer::meta()
+{
+	return m_meta;
+}
+
+const entt::meta_ctx& scn::scene_layer::meta() const
+{
+	return m_meta;
+}
+
+const std::shared_ptr<scn::hot_reload_manager>& scn::scene_layer::hot_reload() const
+{
+	return m_hot_reload;
+}
+
+ecs::channel_registry& scn::scene_layer::channels()
+{
+	return *m_channels;
+}
+
+const std::shared_ptr<ecs::channel_registry>& scn::scene_layer::channel_types() const
+{
+	return m_channels;
+}
+
+ecs::bus_registry& scn::scene_layer::events()
+{
+	return *m_events;
+}
+
+const std::shared_ptr<ecs::bus_registry>& scn::scene_layer::event_types() const
+{
+	return m_events;
+}
+
+scn::event_subscriptions& scn::scene_layer::subscriptions()
+{
+	return m_subscriptions;
+}
+
+scn::blackboard_catalog& scn::scene_layer::blackboard_types()
+{
+	return m_blackboard_types;
+}
+
+const scn::blackboard_catalog& scn::scene_layer::blackboard_types() const
+{
+	return m_blackboard_types;
+}
+
+const ds::lifetime& scn::scene_layer::tasks() const
+{
+	return m_tasks;
+}
+
+ds::task_system* scn::scene_layer::task_runner() const
+{
+	return m_task_system;
+}
+
+void scn::scene_layer::keep_erased(std::shared_ptr<void> object)
+{
+	m_kept.push_back(std::move(object));
+}
+
+std::size_t scn::scene_layer::kept_count() const
+{
+	return m_kept.size();
+}

@@ -9,6 +9,8 @@
 #include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_component_schema.h>
+#include <snk/scene/scn_geometry_holds.h>
+#include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_animation_clip_desc.h>
 #include <snk/scene/scn_animation_collection_desc.h>
@@ -508,6 +510,36 @@ BOOST_AUTO_TEST_CASE(TheFirstFrameAfterARestoreComputesTheSameTransforms)
 	// What the render extractor draws: a mesh with its geometry, transform and the renderable mark.
 	const entt::entity body = find_named(to, "Body");
 	BOOST_TEST((to.all_of<scn::renderable, scn::mesh_component, scn::world_transform>(body)));
+}
+
+// #1021: a world of a context set holds the geometry a restored mesh draws, as an assembled one does, so the first
+// frame after a restore does not read it again.
+BOOST_AUTO_TEST_CASE(ARestoredMesh_HoldsItsGeometry)
+{
+	descs->register_desc<rnd::geometry_desc>("geometry_desc");
+	const res::tag geometry = put("restored.geom.desc",
+		R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[]})");
+	scn::world_context source{ 1, "main" };
+	const entt::entity mesh = source.state().create();
+	source.state().emplace<scn::geometry_component>(mesh, scn::geometry_component{ .geom_tag = geometry });
+	scn::snapshot_report captured;
+	const json::object snapshot = scn::capture_world(source, layer, captured);
+
+	auto hot_reload = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
+	scn::context_set set("play", hot_reload);
+	scn::world_context& target = set.create_context("main", 0);
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
+	pump();
+
+	const scn::geometry_holds& holds = scn::geometry_holds::of(target.state());
+	BOOST_REQUIRE(holds.size() == 1u);
+	const auto view = target.state().view<scn::geometry_component>();
+	BOOST_REQUIRE(view.size() == 1u);
+	const auto* held = holds.find(view.front());
+	BOOST_REQUIRE(held);
+	BOOST_TEST(held->get_tag() == geometry);
+	BOOST_TEST(held->is_ready());
 }
 
 BOOST_AUTO_TEST_CASE(OnlyAnEmptyWorldTakesASnapshot)

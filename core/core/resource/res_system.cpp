@@ -8,9 +8,12 @@
 #include <snk/resource/res_asset_id.h>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <format>
 #include <functional>
+#include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <string>
@@ -751,6 +754,9 @@ res::resource_system::require_block(const res::tag &tag, std::span<const ds::typ
     start_loading(tag, block, std::move(found));
   }
   if (sync) {
+    if (!is_finished(*block)) {
+      warn_sync_wait(tag);
+    }
     wait_for_block(block);
   }
   return block;
@@ -2433,9 +2439,6 @@ res::mount_table res::resource_system::project_mount_table(
     const std::filesystem::path &cache_dir,
     const std::filesystem::path &user_dir, const std::filesystem::path &code_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
-  if (engine_base.empty()) {
-    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
-  }
 
   std::vector<fs::path> layers;
   if (!engine_base.empty())
@@ -2469,9 +2472,6 @@ res::mount_table res::resource_system::shipping_mount_table(
     const std::vector<std::filesystem::path> &content_roots,
     const std::filesystem::path &user_dir, const std::filesystem::path &scratch_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
-  if (engine_base.empty()) {
-    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
-  }
 
   std::vector<fs::path> layers;
   if (!engine_base.empty())
@@ -2603,6 +2603,35 @@ void res::resource_system::release_in_parents(const res::tag &target) {
 bool res::resource_system::needed_by_layers(const res::tag &tag) const {
   std::lock_guard lock(m_layer_needs_mutex);
   return m_layer_needs.contains(tag);
+}
+
+namespace {
+// engine_file is an export modules call: the path names a file below engine://, never another protocol or a parent of it.
+bool is_engine_relative(std::string_view relative)
+{
+	if (relative.empty() || relative.front() == '/' || relative.front() == '\\' || relative.find("://") != std::string_view::npos) {
+		return false;
+	}
+	std::size_t begin = 0;
+	while (begin <= relative.size()) {
+		const std::size_t end = relative.find_first_of("/\\", begin);
+		if (relative.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin) == "..") {
+			return false;
+		}
+		if (end == std::string_view::npos) {
+			break;
+		}
+		begin = end + 1;
+	}
+	return true;
+}
+}
+
+res::tag res::resource_system::engine_file(std::string_view relative) const
+{
+	ASSERT_MSG(is_engine_relative(relative), "engine_file('{}'): a path below the engine's root, without a protocol, a leading '/' or '..'", relative);
+	const bool engine_mounted = static_cast<bool>(root().resolver_for(tag::engine));
+	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
 }
 
 bool res::resource_system::exists(const tag& tag) const
@@ -3196,6 +3225,25 @@ void res::resource_system::check_sync_require([[maybe_unused]] const res::tag& t
 {
 	ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
 		"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
+}
+
+void res::resource_system::warn_sync_wait(const res::tag& tag) const
+{
+	const resource_system& top = root();
+	if (!top.m_sync_warnings_on.load(std::memory_order_acquire)) return;
+	std::lock_guard lock(top.m_sync_warning_mutex);
+	std::string extension(tag.extension());
+	std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	if (!top.m_slow_sync_extensions.contains(extension) || !top.m_sync_warned.insert(std::string(tag.view())).second) return;
+	egLOG_WARN("resource/require", "require_sync('{}') blocks the main thread while it loads, which can take seconds: require it and wait for the handle instead", tag.view());
+}
+
+void res::resource_system::warn_on_sync_require(std::vector<std::string> extensions)
+{
+	resource_system& top = root();
+	std::lock_guard lock(top.m_sync_warning_mutex);
+	top.m_slow_sync_extensions = std::unordered_set<std::string>(std::make_move_iterator(extensions.begin()), std::make_move_iterator(extensions.end()));
+	top.m_sync_warnings_on.store(!top.m_slow_sync_extensions.empty(), std::memory_order_release);
 }
 
 res::tag res::resource_system::resolve_reference(const reference& ref) const

@@ -2,7 +2,11 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_skinning_desc.h>
 #include <snk/scene/scn_bone_desc.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_reference.h>
 #include <imgui.h>
+#include <optional>
+#include <string>
 
 void edt::edt_cr_skin_register(edt::renderer_registrar& registry)
 {
@@ -12,8 +16,12 @@ void edt::edt_cr_skin_register(edt::renderer_registrar& registry)
 			? static_cast<int>(it->value().as_int64()) : 0;
 		ImGui::TextDisabled("Bone count: %d", count);
 
-		if (auto tag_it = comp.overrides.find("skinning_tag"); tag_it != comp.overrides.end() && tag_it->value().is_string())
-			ImGui::TextDisabled("Skinning tag: %s", std::string(tag_it->value().as_string()).c_str());
+		if (auto tag_it = comp.overrides.find("skinning_tag"); tag_it != comp.overrides.end()) {
+			if (const std::optional<res::reference> tag = res::reference_from_json(tag_it->value())) {
+				const std::string shown = tag->path.view().empty() && !tag->guid.is_nil() ? res::to_text(tag->guid) : std::string(tag->path.view());
+				ImGui::TextDisabled("Skinning tag: %s", shown.c_str());
+			}
+		}
 
 		return false;
 	});

@@ -69,6 +69,18 @@ namespace
 			add(pointer, std::string(value), std::nullopt, owner_type, owner_pointer, place);
 		}
 
+		// `object` has no key but "guid" and "path" (is_reference_shaped), so the copy is small.
+		void reference(const json::object& object, const std::string& pointer, const std::string& owner_type, const std::string& owner_pointer,
+			edt::reference_place place, bool by_guid = true)
+		{
+			const auto read = res::reference_from_json(json::value(object));
+			if (!read) return;
+			const bool has_guid = by_guid && !read->guid.is_nil();
+			if (has_guid || names_project_file(read->path.view())) {
+				add(pointer, std::string(read->path.view()), has_guid ? std::optional{ read->guid } : std::nullopt, owner_type, owner_pointer, place);
+			}
+		}
+
 		void value(const json::value& item, const std::string& pointer, const std::string& owner_type, const std::string& owner_pointer, int depth)
 		{
 			if (depth > k_max_depth) return;
@@ -89,12 +101,7 @@ namespace
 		{
 			const json::value* type = object.if_contains("__type");
 			if (!type && is_reference_shaped(object)) {
-				// Only a small object is copied: one that has no key but "guid" and "path".
-				if (const auto read = res::reference_from_json(json::value(object));
-					read && (!read->guid.is_nil() || names_project_file(read->path.view()))) {
-					add(pointer, std::string(read->path.view()), read->guid.is_nil() ? std::nullopt : std::optional{ read->guid }, outer_type,
-						outer_pointer, edt::reference_place::value);
-				}
+				reference(object, pointer, outer_type, outer_pointer, edt::reference_place::value);
 				return;
 			}
 			const bool typed = type && type->is_string();
@@ -107,6 +114,9 @@ namespace
 				if (key == "__parent") {
 					if (const json::string* parent = member.value().if_string()) {
 						text(view_of(*parent), at, owner_type, owner_pointer, edt::reference_place::parent);
+					} else if (const json::object* written = member.value().if_object(); written && is_reference_shaped(*written)) {
+						// A file's own parent is found by its path only, as the engine's read_parent loads it (#964).
+						reference(*written, at, owner_type, owner_pointer, edt::reference_place::parent, !pointer.empty());
 					}
 					continue;
 				}
@@ -118,6 +128,8 @@ namespace
 						const std::string component_at = at + "/" + token_of(component.key());
 						if (const json::string* tag = component.value().if_string()) {
 							text(view_of(*tag), component_at, owner_type, owner_pointer, edt::reference_place::component);
+						} else if (const json::object* written = component.value().if_object(); written && is_reference_shaped(*written)) {
+							reference(*written, component_at, owner_type, owner_pointer, edt::reference_place::component);
 						} else if (component.value().is_object()) {
 							members(component.value().as_object(), component_at, std::string(view_of(component.key())), component_at, depth + 1);
 						} else {

@@ -4,6 +4,7 @@ add_library(${PROJECT_NAME} STATIC)
 add_library(snk::common ALIAS ${PROJECT_NAME})
 # Memory allocators live here (previously compiled into `core` — see EPIC-49 US-49-2).
 target_sources(${PROJECT_NAME} PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/ds/ds_store.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/ds_task_system.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/engine_assert.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_allocator.cpp"
@@ -13,6 +14,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_stack_allocator.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/shader_serial.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/sha256.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/text_escape.cpp"
 	# Always compiled: profiler entry points are referenced unconditionally (render, gui);
 	# ENGINE_PROFILE_MODE only gates the PROFILE_* macros.
 	"${CMAKE_CURRENT_SOURCE_DIR}/eng_profiler.cpp"

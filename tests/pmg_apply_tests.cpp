@@ -739,14 +739,14 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesAMigrationFolderThatIsALink)
 BOOST_AUTO_TEST_CASE(AJournalPath_IsShownWithItsHiddenCharactersEscaped)
 {
 	BOOST_TEST(pmg::journal_path_text("res/a.desc") == "res/a.desc");
-	BOOST_TEST(pmg::journal_path_text("a\nb\xE2\x80\xAE" "c\xE2\x80\x8B" "d") == "a\\u{000A}b\\u{202E}c\\u{200B}d");
+	BOOST_TEST(pmg::journal_path_text("a\nb\xE2\x80\xAE" "c\xE2\x80\x8B" "d") == "a\\nb\\u{202E}c\\u{200B}d");
 	BOOST_TEST(pmg::journal_path_text("\xC2\x85\xC2\xAD\xEF\xBB\xBF\xE2\x80\xA8\xE2\x81\xA6\xD8\x9C\x7F") ==
 		"\\u{0085}\\u{00AD}\\u{FEFF}\\u{2028}\\u{2066}\\u{061C}\\u{007F}");
-	BOOST_TEST(pmg::journal_path_text("a\xFF" "b\xC3") == "a\\xFFb\\xC3");
+	BOOST_TEST(pmg::journal_path_text("a\xFF" "b\xC3") == "a\\x{FF}b\\x{C3}");
 	BOOST_TEST(pmg::journal_path_text("a\\b") == "a\\\\b");
 	BOOST_TEST(pmg::journal_path_text("caf\xC3\xA9") == "caf\xC3\xA9");
-	BOOST_TEST(pmg::journal_path_text(std::string(8191, 'a') + "\xC3\xA9") == std::string(8191, 'a') + "...");
-	BOOST_TEST(pmg::journal_path_text(std::string(8187, 'a') + "\n") == std::string(8187, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(8191, 'a') + "\xC3\xA9") == std::string(8189, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(8187, 'a') + "\x01") == std::string(8187, 'a') + "...");
 	BOOST_TEST(pmg::journal_path_text(std::string(8192, 'a')) == std::string(8192, 'a'));
 	// The longest path a journal may name, every byte escaped, is still shown whole.
 	std::string escaped_whole;

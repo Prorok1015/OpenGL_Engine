@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 // The files a model may make an agent's import read (#548): its folder without hidden names, images checked by their
 // bytes, a bounded number of files and bytes, and only what the person was shown.
@@ -287,6 +288,53 @@ BOOST_AUTO_TEST_CASE(TheBytesThatAreRead_AreCheckedAgainAsAnImage)
 	swapped.size = fs::file_size(swapped.path);
 	swapped.modified = fs::last_write_time(swapped.path);
 	BOOST_CHECK_THROW(access.read(swapped), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(ABoundary_LetsTheModelReadFromItsContentRoot_ButNotBeyondItOrHiddenFiles)
+{
+	dir.write("content/models/robot.gltf", "{}");
+	dir.write("content/models/near.png", png_bytes);
+	dir.write("content/textures/skin.png", png_bytes);
+	dir.write("content/.hidden/skin.png", png_bytes);
+	edt::model_file_access access(dir.path() / "content" / "models" / "robot.gltf", {}, nullptr, dir.path() / "content");
+
+	const auto shared = access.resolve("../textures/skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(shared.found());
+	BOOST_CHECK_EQUAL(access.relative_name(shared), "textures/skin.png");
+	const auto near = access.resolve("near.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(near.found());
+	// Named from the boundary too: models/near.png and a textures/near.png can never share a name.
+	BOOST_CHECK_EQUAL(access.relative_name(near), "models/near.png");
+
+	const auto beyond = access.resolve("../../outside.png", edt::model_file_kind::texture);
+	BOOST_CHECK(beyond.error.find("outside the content root of the model") != std::string::npos);
+	BOOST_CHECK(!access.resolve("../.hidden/skin.png", edt::model_file_kind::texture).error.empty());
+	BOOST_CHECK(!access.resolve((dir.path() / "outside.png").string(), edt::model_file_kind::texture).error.empty());
+	BOOST_CHECK_EQUAL(access.files().size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ABoundaryThatDoesNotHoldTheModel_KeepsItToItsFolder)
+{
+	edt::model_file_access access(root, {}, nullptr, dir.path() / "elsewhere");
+	BOOST_CHECK(access.resolve("skin.png", edt::model_file_kind::texture).found());
+	const auto outside = access.resolve("../outside.png", edt::model_file_kind::texture);
+	BOOST_CHECK(outside.error.find("outside the folder of the model") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AModelGivenOnlyAsBytes_ReadsNoOtherFile_EvenOneThatIsThere)
+{
+	// skin.png and mesh.bin lie next to the path: a model on the disk would find them (#925).
+	edt::model_file_access access(root, {}, nullptr, {}, false);
+	BOOST_CHECK(!access.on_disk());
+	for (const auto& [reference, kind] : { std::pair{ "skin.png", edt::model_file_kind::texture }, std::pair{ "mesh.bin", edt::model_file_kind::side_file } }) {
+		BOOST_TEST_CONTEXT(reference) {
+			const auto refused = access.resolve(reference, kind);
+			BOOST_CHECK(!refused.found());
+			BOOST_CHECK(refused.error.find("not a file on the disk") != std::string::npos);
+		}
+	}
+	BOOST_CHECK(access.files().empty());
+	BOOST_CHECK_EQUAL(access.listed_bytes(), 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

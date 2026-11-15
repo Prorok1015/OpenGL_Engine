@@ -20,6 +20,7 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -54,6 +55,7 @@ public:
 };
 
 const char* const k_material = R"({"__type":"material_desc","queue":"mix","defines":["A"]})";
+const char* const k_index_wait = "the asset index is still being built, so a guid cannot be checked; call again when it is ready";
 
 // The refusal an agent gets while the open level has a worlds entry the path rules reject (#966).
 bool says_which_entry(std::string_view text)
@@ -104,6 +106,7 @@ struct desc_fixture : test_util::scene_env
 		deps.open_level_files = [this] { return open_level; };
 		deps.events = &events;
 		deps.write_blocker = [this] { return blocked; };
+		deps.asset_index_wait = [this] { return index_pending ? std::optional<std::string>(k_index_wait) : std::nullopt; };
 		registrations = edt::register_desc_file_commands(commands, std::move(deps));
 	}
 
@@ -164,6 +167,7 @@ struct desc_fixture : test_util::scene_env
 	std::vector<edt::registration> registrations;
 	std::vector<std::string> open_level;
 	std::optional<std::string> blocked;
+	bool index_pending = false;
 };
 
 }
@@ -465,6 +469,25 @@ BOOST_AUTO_TEST_CASE(WhileTheProjectMayNotBeWritten_CreateAndWriteAreBusy_WithIt
 
 	blocked.reset();
 	make_material("materials/n.mat.desc");
+}
+
+// #991: a refusal is escaped once. The editor's reason already carries escapes (a migration id through escaped_text):
+// they show as they are; the path the agent sent is escaped where the refusal is built, never twice.
+BOOST_AUTO_TEST_CASE(TheQuestion_ShowsAnEscapeOfARefusalOnce)
+{
+	const cmd::call missing = call_of(write_args("materials/a\xE2\x80\xAE" "b.mat.desc", "v", k_material));
+	const std::string missing_text = *commands.find("desc.write")->describe(missing);
+	BOOST_TEST(missing_text.find("res://materials/a\\u{202E}b.mat.desc") != std::string::npos, missing_text);
+	BOOST_TEST(missing_text.find("\\\\u{202E}") == std::string::npos, missing_text);
+	BOOST_TEST(missing_text.find("\xE2\x80\xAE") == std::string::npos, missing_text);
+
+	make_material("materials/s.mat.desc");
+	blocked = "run editor --migrate-rollback a\\u{202E}b first";
+	const cmd::call request = call_of(write_args("materials/s.mat.desc", version_of("materials/s.mat.desc"), k_material));
+	const std::string blocked_text = *commands.find("desc.write")->describe(request);
+	BOOST_TEST(blocked_text.find("--migrate-rollback a\\u{202E}b first") != std::string::npos, blocked_text);
+	BOOST_TEST(blocked_text.find("\\\\u{202E}") == std::string::npos, blocked_text);
+	blocked.reset();
 }
 
 // #920: a world the open level names as {guid, path} is the level's as much as one named by a path.
@@ -836,6 +859,54 @@ BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagFie
 	}
 }
 
+BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_PassesTheSameChecksAsTheString)
+{
+	for (const char* content : {
+		R"({"__type":"material_desc","__parent":{"path":"user://secret.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"edt://base.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"../x.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"user/xsave.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"user:/xsave.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"materials/other.mat.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res/other.mat.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://a/../../x.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://a/x.png"}})",
+		R"({"__type":"material_desc","__parent":{"path":""}})",
+		R"({"__type":"material_desc","__parent":{"path":5}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://secret.desc"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"not-a-uuid","path":"res://base_material.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc","__type":"material_desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc","other":"user://secret.desc"}})",
+		R"({"__type":"material_desc","__parent":{}})",
+		R"({"__type":"material_desc","__parent":["res://base_material.desc"]})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/t.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "t.mat.desc"));
+		}
+	}
+	for (const char* content : {
+		R"({"__type":"material_desc","__parent":{"path":"res://base_material.desc"}})",
+		R"({"__type":"material_desc","__parent":{"path":"res://materials/other.mat.desc"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto made = call("desc.create", desc_args("materials/ok.mat.desc", content));
+			BOOST_TEST_MESSAGE(made.error);
+			BOOST_TEST(made.ok);
+			fs::remove(res_root / "materials" / "ok.mat.desc");
+		}
+	}
+
+	make_material("materials/w.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
+	const auto guid_only = call("desc.write", write_args("materials/w.mat.desc", version_of("materials/w.mat.desc"),
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})"));
+	BOOST_TEST(guid_only.code == cmd::codes::invalid_args);
+	BOOST_TEST(guid_only.error.find("a \"guid\" alone is not accepted here") != std::string::npos, guid_only.error);
+	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+}
+
 BOOST_AUTO_TEST_CASE(AnUnknownKeyWithTwoUnderscores_IsRefused_SoNoObjectHidesFromTheCheck)
 {
 	const auto hidden = call("desc.create", desc_args("materials/h.mat.desc", R"({"__type":"material_desc","__x":{"__type":"no_such_desc"}})"));
@@ -854,7 +925,7 @@ BOOST_AUTO_TEST_CASE(ManyProblems_AreCappedWithoutLettingTheFilePass)
 	std::string worlds;
 	for (int i = 0; i < 30; ++i) worlds += std::string(i ? "," : "") + R"({"__type":"material_desc","bogus":1})";
 	const std::string content = R"({"__type":"level_desc","worlds":[)" + worlds + "]}";
-	const std::vector<res::diagnostic> found = edt::validate_desc_tree(*descs, json::parse(content), "res://levels/x.desc");
+	const std::vector<res::diagnostic> found = edt::validate_desc_tree(*descs, json::parse(content), "res://levels/x.desc").problems;
 	std::size_t errors = 0;
 	std::size_t warnings = 0;
 	for (const res::diagnostic& item : found) (item.severity == res::diagnostic_severity::error ? errors : warnings)++;
@@ -873,7 +944,7 @@ BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolI
 		{"name":"MoveLeft","bindings":[{"key":"A"},{"key":"LEFT"}]},
 		{"name":"Fire","bindings":[{"mouse":"LEFT"}]}]})";
 	std::size_t errors = 0;
-	for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(actions), "res://input/actions.desc")) {
+	for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(actions), "res://input/actions.desc").problems) {
 		if (item.severity == res::diagnostic_severity::error) ++errors;
 	}
 	BOOST_TEST(errors == 0u);
@@ -883,7 +954,7 @@ BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolI
 			const json::value with_bad = json::parse(std::string(R"({"__type":"input_actions_desc","actions":[{"name":")") + std::string(bad)
 				+ R"(","bindings":[{"key":"A"}]}]})");
 			bool refused = false;
-			for (const res::diagnostic& item : edt::validate_desc_tree(*descs, with_bad, "res://input/actions.desc")) {
+			for (const res::diagnostic& item : edt::validate_desc_tree(*descs, with_bad, "res://input/actions.desc").problems) {
 				if (item.severity == res::diagnostic_severity::error) refused = true;
 			}
 			BOOST_TEST(refused);
@@ -995,7 +1066,7 @@ BOOST_AUTO_TEST_CASE(TheChecksReadTheProtocolAsResTagDoes_AndRefuseEveryTextWith
 {
 	const auto errors_of = [&](const json::value& content) {
 		std::size_t errors = 0;
-		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, content, "res://materials/t.mat.desc")) {
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, content, "res://materials/t.mat.desc").problems) {
 			if (item.severity == res::diagnostic_severity::error) ++errors;
 		}
 		return errors;
@@ -1058,7 +1129,7 @@ struct paths_index final : res::asset_index
 }
 
 // #773: a tag field takes a {guid, path} reference (EPIC-57 section 4.4): its path follows the strict rule, it has no
-// other key, its guid is a UUID that is not nil. Without a path, the asset index must hold the guid.
+// other key, its guid is a UUID that is not nil. A guid alone is refused, whether a file holds it or not.
 BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 {
 	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
@@ -1068,6 +1139,7 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag","extra":1}})",
 		std::string(R"({"__type":"material_desc","shader_fragment":{"guid":"00000000-0000-0000-0000-000000000000"}})"),
 		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":5}})",
+		R"({"__type":"material_desc","shader_fragment":{)" + guid + "}}",
 		R"({"__type":"test.texture_table","textures":{"a":{)" + guid + R"(,"path":"edt://x.png"}}})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto refused = call("desc.create", desc_args("materials/r.mat.desc", content.c_str()));
@@ -1077,7 +1149,6 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 	}
 	for (const std::string& content : {
 		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag"}})",
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + "}}",
 		R"({"__type":"test.texture_table","textures":{"a":{)" + guid + R"(,"path":"res://ok.png"}}})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto made = call("desc.create", desc_args("materials/r.mat.desc", content.c_str()));
@@ -1087,7 +1158,7 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 		}
 	}
 
-	// With an asset index, a guid without a path must be one a file holds.
+	// With an asset index a guid alone is refused the same way, known or not.
 	auto index = std::make_shared<paths_index>();
 	index->paths.emplace(*res::asset_id_from_text("0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"), res::tag{ "res://shaders/b.frag" });
 	rs->set_asset_index(index);
@@ -1104,11 +1175,14 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 	BOOST_REQUIRE_EQUAL(warned.size(), 1u);
 	BOOST_TEST(std::string(warned[0].at("kind").as_string()) == std::string("reference"));
 	BOOST_TEST(std::string(warned[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));
-	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
-	BOOST_REQUIRE(unknown.value.is_object());
-	BOOST_TEST(std::string(unknown.value.at("errors").as_array()[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));
-	BOOST_TEST_MESSAGE(known.error);
-	BOOST_TEST(known.ok);
+	for (const cmd::result* alone : { &unknown, &known }) {
+		BOOST_TEST(alone->code == cmd::codes::invalid_args);
+		BOOST_REQUIRE(alone->value.is_object());
+		const json::value& error = alone->value.at("errors").as_array()[0];
+		BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/shader_fragment"));
+		BOOST_TEST(std::string(error.at("reason").as_string()).find("a \"guid\" alone is not accepted here") != std::string::npos);
+	}
+	BOOST_TEST(!fs::exists(res_root / "materials" / "k.mat.desc"));
 }
 
 namespace {
@@ -1161,6 +1235,264 @@ BOOST_AUTO_TEST_CASE(AWrittenReference_CarriesTheIdOfItsTarget)
 	BOOST_TEST(json::parse(first).at_pointer("/shader_fragment") == expected);
 	BOOST_REQUIRE_MESSAGE(rewritten.ok, rewritten.error);
 	BOOST_TEST(second == first);
+}
+
+// #954: a guid the asset index holds must name the file the path names.
+BOOST_AUTO_TEST_CASE(AParentWithAGuidOfTheSameFile_IsAccepted)
+{
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://base_material.desc" });
+	rs->set_asset_index(index);
+	const auto held = call("desc.create", desc_args("materials/g.mat.desc",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})"));
+	const auto unknown = call("desc.create", desc_args("materials/u.mat.desc",
+		R"({"__type":"material_desc","__parent":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6","path":"res://base_material.desc"}})"));
+	rs->set_asset_index(nullptr);
+
+	BOOST_CHECK_MESSAGE(held.ok, held.error);
+	BOOST_CHECK_MESSAGE(unknown.ok, unknown.error);
+	BOOST_TEST(fs::exists(res_root / "materials" / "g.mat.desc"));
+	BOOST_TEST(fs::exists(res_root / "materials" / "u.mat.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AParentWithAGuidOfAnotherFile_IsRefused_AndNothingIsWritten)
+{
+	const char* content = R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})";
+	make_material("materials/w.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
+	const std::string version = version_of("materials/w.mat.desc");
+
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://materials/other.mat.desc" });
+	rs->set_asset_index(index);
+	const auto created = call("desc.create", desc_args("materials/g.mat.desc", content));
+	const auto written = call("desc.write", write_args("materials/w.mat.desc", version, content));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(created.code == cmd::codes::invalid_args);
+	BOOST_TEST(created.error.find("name different files") != std::string::npos, created.error);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+	BOOST_TEST(written.code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(AReferenceFieldWithAGuidOfAnotherFile_IsRefused_OfTheSameFile_IsWritten)
+{
+	const char* content = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	make_material("materials/f.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "f.mat.desc");
+	const std::string version = version_of("materials/f.mat.desc");
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+
+	auto elsewhere = std::make_shared<paths_index>();
+	elsewhere->paths.emplace(id, res::tag{ "res://shaders/b.frag" });
+	rs->set_asset_index(elsewhere);
+	const auto diverging = call("desc.write", write_args("materials/f.mat.desc", version, content));
+	const std::string kept = read_file(res_root / "materials" / "f.mat.desc");
+	auto same = std::make_shared<paths_index>();
+	same->paths.emplace(id, res::tag{ "res://shaders/a.frag" });
+	rs->set_asset_index(same);
+	const auto consistent = call("desc.write", write_args("materials/f.mat.desc", version, content));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(diverging.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(diverging.value.is_object());
+	const json::value& error = diverging.value.at("errors").as_array()[0];
+	BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/shader_fragment"));
+	BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") != std::string::npos);
+	BOOST_TEST(kept == before);
+	BOOST_REQUIRE_MESSAGE(consistent.ok, consistent.error);
+	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc").find("res://shaders/a.frag") != std::string::npos);
+}
+
+// A path that is no place a file may refer to is named as that, also when the guid is another file's.
+BOOST_AUTO_TEST_CASE(ABadPath_IsReportedBeforeAGuidOfAnotherFile)
+{
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.frag" });
+	rs->set_asset_index(index);
+	const auto field = call("desc.create", desc_args("materials/o.mat.desc",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.frag"}})"));
+	const auto parent = call("desc.create", desc_args("materials/q.mat.desc",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://secret.desc"}})"));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(field.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(field.value.is_object());
+	const json::array& errors = field.value.at("errors").as_array();
+	BOOST_REQUIRE(!errors.empty());
+	BOOST_TEST(std::string(errors[0].at("json_path").as_string()) == std::string("/shader_fragment/path"));
+	for (const json::value& error : errors) {
+		BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") == std::string::npos);
+	}
+	BOOST_TEST(parent.code == cmd::codes::invalid_args);
+	BOOST_TEST(parent.error.find("name different files") == std::string::npos, parent.error);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "o.mat.desc"));
+	BOOST_TEST(!fs::exists(res_root / "materials" / "q.mat.desc"));
+}
+
+// A prefab's components have no schema here: a value shaped as a reference with a guid is held to the agent's rule.
+BOOST_AUTO_TEST_CASE(AReferenceInAPrefabComponent_WithAGuidOfAnotherFile_IsRefused_OfTheSameFile_IsWritten)
+{
+	fs::create_directories(res_root / "prefabs");
+	const char* const empty = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate"}]})";
+	const char* const content = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate","components":)"
+		R"({"material":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/a.mat.desc"}}}]})";
+	const auto made = call("desc.create", desc_args("prefabs/crate.desc", empty));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	const std::string before = read_file(res_root / "prefabs" / "crate.desc");
+	const std::string version = version_of("prefabs/crate.desc");
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+
+	auto elsewhere = std::make_shared<paths_index>();
+	elsewhere->paths.emplace(id, res::tag{ "res://materials/b.mat.desc" });
+	rs->set_asset_index(elsewhere);
+	const auto diverging = call("desc.write", write_args("prefabs/crate.desc", version, content));
+	const std::string kept = read_file(res_root / "prefabs" / "crate.desc");
+	auto same = std::make_shared<paths_index>();
+	same->paths.emplace(id, res::tag{ "res://materials/a.mat.desc" });
+	rs->set_asset_index(same);
+	const auto consistent = call("desc.write", write_args("prefabs/crate.desc", version, content));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(diverging.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(diverging.value.is_object());
+	const json::value& error = diverging.value.at("errors").as_array()[0];
+	BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/children/0/components/material"));
+	BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") != std::string::npos);
+	BOOST_TEST(kept == before);
+	BOOST_REQUIRE_MESSAGE(consistent.ok, consistent.error);
+	BOOST_TEST(read_file(res_root / "prefabs" / "crate.desc").find("res://materials/a.mat.desc") != std::string::npos);
+}
+
+// A "guid" that is no UUID is not a reference (the engine does not read it as one): the object is data and is kept as written.
+BOOST_AUTO_TEST_CASE(AnObjectWithAGuidThatIsNoUuid_InAPrefabComponent_IsPlainData_AndIsWritten)
+{
+	fs::create_directories(res_root / "prefabs");
+	const char* const empty = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate"}]})";
+	const char* const content = R"({"__type":"prefab_desc","children":[{"__id":"00000000000000a1","name":"crate","components":)"
+		R"({"tag":{"guid":"abc"},"link":{"guid":"abc","path":"anything"}}}]})";
+	const auto made = call("desc.create", desc_args("prefabs/crate.desc", empty));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	const std::string version = version_of("prefabs/crate.desc");
+
+	const auto written = call("desc.write", write_args("prefabs/crate.desc", version, content));
+
+	BOOST_REQUIRE_MESSAGE(written.ok, written.error);
+	// Looked for as values, wherever the writer puts them and however it lays the file out.
+	const std::function<bool(const json::value&, const json::value&)> holds = [&holds](const json::value& in, const json::value& what) {
+		if (in == what) return true;
+		if (in.is_object()) {
+			for (const auto& member : in.as_object()) {
+				if (holds(member.value(), what)) return true;
+			}
+		}
+		if (in.is_array()) {
+			for (const json::value& item : in.as_array()) {
+				if (holds(item, what)) return true;
+			}
+		}
+		return false;
+	};
+	const json::value saved = json::parse(read_file(res_root / "prefabs" / "crate.desc"));
+	BOOST_TEST(holds(saved, json::parse(R"({"guid":"abc"})")), json::serialize(saved));
+	BOOST_TEST(holds(saved, json::parse(R"({"guid":"abc","path":"anything"})")), json::serialize(saved));
+
+	const auto created = call("desc.create", desc_args("prefabs/crate2.desc", content));
+	BOOST_TEST(created.ok, created.error);
+}
+
+// #968: while the editor's asset index is not complete a guid cannot be judged, so content that holds one is busy and
+// nothing is written; content without a guid is written as before. The question is the ordinary one plus a line saying the
+// write runs once the index is ready: an approved busy call is retried, so the person approves the write itself.
+BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_ContentWithAGuidIsBusy_AndNothingIsWritten)
+{
+	const char* const with_guid = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	const char* const with_parent = R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})";
+	make_material("materials/w.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
+	const std::string version = version_of("materials/w.mat.desc");
+	const std::optional<std::string> ready_question = commands.find("desc.write")->describe(call_of(write_args("materials/w.mat.desc", version, with_guid)));
+	BOOST_REQUIRE(ready_question.has_value());
+	BOOST_TEST(ready_question->rfind("Replace the desc file", 0) == 0u, *ready_question);
+	index_pending = true;
+
+	const auto written = call("desc.write", write_args("materials/w.mat.desc", version, with_guid));
+	BOOST_TEST(written.code == cmd::codes::busy);
+	BOOST_TEST(written.error.find("the asset index is still being built") != std::string::npos, written.error);
+	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
+	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("materials/w.mat.desc", version, with_guid)));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->rfind(*ready_question, 0) == 0u, *question);
+	BOOST_TEST(question->substr(ready_question->size()).rfind("\nThe asset index is still being built: the file is replaced once it is ready", 0) == 0u, *question);
+
+	const auto created = call("desc.create", desc_args("materials/g.mat.desc", with_guid));
+	BOOST_TEST(created.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+	const auto parent = call("desc.create", desc_args("materials/p.mat.desc", with_parent));
+	BOOST_TEST(parent.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "p.mat.desc"));
+
+	// No guid: nothing waits for the index.
+	const auto plain_create = call("desc.create", desc_args("materials/n.mat.desc", k_material));
+	BOOST_TEST(plain_create.ok, plain_create.error);
+	const auto plain_write = call("desc.write", write_args("materials/w.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	BOOST_TEST(plain_write.ok, plain_write.error);
+
+	index_pending = false;
+	const auto ready = call("desc.create", desc_args("materials/g.mat.desc", with_guid));
+	BOOST_TEST(ready.ok, ready.error);
+	BOOST_TEST(fs::exists(res_root / "materials" / "g.mat.desc"));
+}
+
+// The form of a reference does not depend on the index: it is refused as before, not held back.
+BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_AFormErrorIsStillRefused)
+{
+	index_pending = true;
+	for (const char* content : {
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.frag"}})",
+		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"},"bogus":1})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/f.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "f.mat.desc"));
+		}
+	}
+}
+
+// A guid that names another file than its path: while the index is pending the answer is busy, never a verdict made
+// against an incomplete index; once it is ready the ordinary refusal comes.
+BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedOnceItIsReady)
+{
+	const char* const content = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	make_material("materials/f.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "f.mat.desc");
+	const std::string version = version_of("materials/f.mat.desc");
+	auto elsewhere = std::make_shared<paths_index>();
+	elsewhere->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.frag" });
+	rs->set_asset_index(elsewhere);
+
+	index_pending = true;
+	const auto held = call("desc.write", write_args("materials/f.mat.desc", version, content));
+	const auto held_create = call("desc.create", desc_args("materials/g.mat.desc", content));
+	// No verdict from the pending index: the person is asked about the write, which is refused once the index is ready.
+	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("materials/f.mat.desc", version, content)));
+	index_pending = false;
+	const auto refused = call("desc.write", write_args("materials/f.mat.desc", version, content));
+	rs->set_asset_index(nullptr);
+
+	BOOST_TEST(held.code == cmd::codes::busy);
+	BOOST_TEST(held.error.find("name different files") == std::string::npos, held.error);
+	BOOST_TEST(held_create.code == cmd::codes::busy);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->rfind("Replace the desc file", 0) == 0u, *question);
+	BOOST_TEST(question->find("The asset index is still being built") != std::string::npos, *question);
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_TEST(refused.error.find("name different files") != std::string::npos, refused.error);
+	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc") == before);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -74,6 +74,9 @@ const std::set<std::string> allowed_fixtures = {
 	// The bench's make-up at a tenth of its size: the null-backend checks that need its meshes, not its scale (#898).
 	"levels/bench_10_meshes.desc",
 	"bench/bench_quad.desc",
+	// Camera, light and four quads, no robot or sky: null-backend checks of the frame itself, not of what it
+	// draws (#977).
+	"levels/smoke_quads.desc",
 };
 
 std::string lower(std::string_view text)

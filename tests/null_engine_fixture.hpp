@@ -36,6 +36,7 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -114,7 +115,8 @@ inline void mount_repo_res(test_util::ram_resolver& ram)
 
 struct null_engine_fixture
 {
-	explicit null_engine_fixture(bool validate = true)
+	// `before_render` runs once res:// and edt:// are mounted, before render_init makes the passes.
+	explicit null_engine_fixture(bool validate = true, const std::function<void(res::resource_system&)>& before_render = {})
 	{
 		const phase_timer whole("fixture setup");
 		fs::create_directories("./res"); // resource_system's vfs root
@@ -129,6 +131,9 @@ struct null_engine_fixture
 			const phase_timer mount("mount res:// and edt://");
 			mount_repo_res(rs.registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol()));
 			mount_dir(rs.registrate_resolver<test_util::ram_resolver>("edt"), SNK_EDITOR_DATA_DIR, "edt");
+		}
+		if (before_render) {
+			before_render(rs);
 		}
 
 		auto& descs = storage.construct<desc::desc_system>(std::ref(rs));
@@ -212,13 +217,18 @@ struct null_engine_fixture
 		// What the case did before its frames: the level's load in most cases.
 		using std::chrono::milliseconds;
 		const auto before = std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - m_ready);
-		egLOG_INFO("test/timing", "before run_frames({}): {} ms since the setup or the last run_frames", frames,
+		egLOG_DEBUG("test/timing", "before run_frames({}): {} ms since the setup or the last run_frames", frames,
 			before.count());
 		const phase_timer timer(std::format("run_frames({})", frames));
 		int done = 0;
 		auto& stages = storage.require<app::frame_stage_registry>();
+		auto frame_start = std::chrono::steady_clock::now();
 		stages.add_stage("test_frame_counter", app::builtin_stage::present, app::stage_side::after,
-			[&done, frames](app::stage_context& c) {
+			[&done, &frame_start, frames](app::stage_context& c) {
+				const auto now = std::chrono::steady_clock::now();
+				egLOG_DEBUG("test/timing", "frame {}: {} ms", done,
+					std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_start).count());
+				frame_start = now;
 				if (++done >= frames) {
 					c.storage.require<app::app_loop_service_interface>().request_stop();
 				}

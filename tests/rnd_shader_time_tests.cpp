@@ -202,7 +202,7 @@ BOOST_AUTO_TEST_CASE(EveryPassWritesTheTimeOfItsCamera)
 	}
 	context.use_packets(&packets);
 
-	rnd::z_prepass z;
+	rnd::z_prepass z{ res::tag::make("shaders/z_prepass.vert"), res::tag::make("shaders/z_prepass.frag") };
 	rnd::opaque_pass opaque;
 	rnd::skybox_pass sky;
 	rnd::transparent_pass transparent;

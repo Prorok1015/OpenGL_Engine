@@ -3,6 +3,7 @@
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,9 @@
 
 namespace core::res
 {
+	// +1 on any change to the virtual functions below: the module layout key mixes it in, tools/ci/vtable_pins.json pins them (#922).
+	inline constexpr std::uint32_t adapter_interface_abi_revision = 1;
+
 	// Override deserialize with `deps` when the resource needs others, and collect_dependencies to name them.
 	// Neither of them may wait for a resource: the pipeline loads the dependencies first and hands them in.
 	class adapter_interface

@@ -96,6 +96,7 @@ how_to_apply:
   Never: hardcode filenames in component, always use descriptors
   require_sync<T> is main-thread only (asserts on a pool worker). An adapter that needs another resource declares it: override collect_dependencies() returning res::make_dep<T>(tag), read it from the res_deps given to deserialize(); never wait inside an adapter. res::when_all(system, handles...) joins several requests.
   source: core/core/resource/include/snk/resource/res_system.h require<T>/require_sync<T>/make_dep/when_all
+  Editor: a model file a desc refers to (.glb/.gltf/.obj/.fbx) is parsed only in the decoder process (edt::decoded_model_adapter, #925), never by assimp in the editor: do not register scn::model_importer_adapter there. Its side files may come from its content root (no hidden ones); a model that is no file on the disk (memory, pack) is decoded from its bytes alone and may name no other file; 10 s per decoder step; a require_sync that has to wait for a model warns once per tag (resource_system::warn_on_sync_require).
 
 [CONSTRAINT_11]
 rule: Always use <snk/common/engine_assert.h> (ASSERT_MSG, ASSERT_FAIL)
@@ -167,6 +168,12 @@ how_to_apply:
   res:// = filesystem path (default protocol)
   memory:// = runtime-created data
   Never embed paths in code, always use tags
+  A file the engine itself loads by a fixed path (UI font, render-pass shaders):
+  resources.engine_file("shaders/x.frag") (engine:// when mounted), never res:// —
+  a project file at the same res:// path must not stand in for it (#929).
+  Material descs and their shaders stay res:// on purpose: content a project may replace.
+  Cost: a project can no longer give its own z_prepass.vert, so a material that moves vertices
+  draws apart from the depth prepass until materials name their depth shader (#1028).
 gotcha: single-arg res::tag{"..."} PARSES the protocol out of the string —
   the string must contain "protocol://" or protocol/path/name slices are wrong.
   Use the 2-arg form res::tag{"res", "path"} or res::tag::make(path) to prepend

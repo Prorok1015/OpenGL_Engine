@@ -295,6 +295,11 @@ namespace {
 			return m_deps.write_blocker ? m_deps.write_blocker() : std::nullopt;
 		}
 
+		std::optional<std::string> index_wait() const
+		{
+			return m_deps.asset_index_wait ? m_deps.asset_index_wait() : std::nullopt;
+		}
+
 	private:
 		// One pass over the open level's files and their `worlds`. `is_level(name)`: the level file itself; `is_named(path)`:
 		// an entry the path rules accept; `is_resolved(roots, relative)`: an entry compared as the file a mount over `roots` opens.
@@ -343,8 +348,10 @@ namespace {
 	// Why an agent writes no desc file while the open level has an entry the guard cannot read; `answer.entry` comes from a file.
 	std::string unreadable_entry_text(const level_answer& answer)
 	{
+		// Every piece from the level file escaped once here: the question shows this text through escaped_message (#991).
 		return std::format("the open level '{}' has a worlds entry '{}' that the path rules reject ({}): "
-			"desc files are not written until it is fixed or the level is closed", answer.level, edt::forge::escaped_text(answer.entry, 200), answer.rule);
+			"desc files are not written until it is fixed or the level is closed", edt::forge::escaped_text(answer.level, 200),
+			edt::forge::escaped_text(answer.entry, 200), edt::forge::escaped_text(answer.rule, 300));
 	}
 
 	struct request_path
@@ -377,6 +384,8 @@ namespace {
 		std::vector<res::diagnostic> problems;
 		json::array warnings;
 		std::string error;
+		// Why the content cannot be judged now (busy): it holds a guid and the asset index is not complete (#968).
+		std::string busy;
 	};
 
 	// Where `content` carries a __guid, at any depth: the ID of a file is the editor's to write (EPIC-57).
@@ -400,15 +409,23 @@ namespace {
 		}
 	}
 
+	// What the question adds while the content's guid waits for the asset index (#968).
+	constexpr std::string_view k_waits_for_index = "\nThe asset index is still being built: the file is replaced once it is ready, "
+		"unless a guid then turns out to name another file than its path (then the call is refused and nothing is written).";
+
 	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID. `replaced`:
 	// that file's bytes, whose reference guids are kept the same way (desc_system::write_references).
-	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, const std::string& relative,
+	// `index_wait`: why the asset index is not complete. No guid is looked up in it then (its verdict could be wrong either
+	// way), and content that holds one gets `busy` = that reason once everything else passed; the bytes are still made (#968).
+	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, const std::optional<std::string>& index_wait,
+		const std::string& relative,
 		const json::value& content, const std::string& kept_guid = {}, std::span<const std::byte> replaced = {})
 	{
 		prepared_file out;
 		const std::string resource = "res://" + relative;
 		find_guid_keys(content, "", resource, out.problems);
-		for (res::diagnostic& item : edt::validate_desc_tree(descs, content, resource, &resources)) {
+		edt::desc_tree_check checked = edt::validate_desc_tree(descs, content, resource, index_wait ? nullptr : &resources);
+		for (res::diagnostic& item : checked.problems) {
 			if (item.severity == res::diagnostic_severity::error) out.problems.push_back(std::move(item));
 			else out.warnings.push_back(diagnostic_json(item));
 		}
@@ -423,6 +440,7 @@ namespace {
 			return out;
 		}
 		out.bytes = bytes;
+		if (index_wait && checked.has_guid) out.busy = *index_wait;
 		return out;
 	}
 
@@ -472,8 +490,9 @@ namespace {
 					std::format("'res://{}' is a name of the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", path.relative));
 			}
 			if (level.claim == level_claim::unreadable_entry) return cmd::result::failure(cmd::codes::busy, unreadable_entry_text(level));
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
+			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			// Exclusive: refused when the file appears while it is written (create_sync).
 			const res::file_operation made = m_files.deps().res.create_sync(desc_files::tag_of(path.relative), ready.bytes);
@@ -508,8 +527,10 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"),
+				edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
+			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
 			const res::tag tag = desc_files::tag_of(path.relative);
 			if (!m_files.deps().res.store_sync(tag, ready.bytes)) {
@@ -522,33 +543,43 @@ namespace {
 
 		std::optional<std::string> describe_write(const cmd::call& call) const
 		{
-			// A reason may quote the file or the agent's desc: it stays one line of the question (#943).
-			const auto refused = [](const std::string& why) {
+			// A reason may quote the file or the agent's desc: it stays one line of the question (#943). Each foreign text is
+			// escaped once (#991): a reason that quotes it raw through escaped_text, the editor's blocker (whose foreign
+			// pieces were escaped where it was built) through escaped_message.
+			const auto refused_message = [](std::string_view message) {
+				return std::optional<std::string>("This request will be refused: " + edt::forge::escaped_message(message, 1024));
+			};
+			const auto refused = [](std::string_view why) {
 				return std::optional<std::string>("This request will be refused: " + edt::forge::escaped_text(why, 1024));
 			};
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
-			if (std::optional<std::string> why = m_files.write_blocked()) return refused(*why);
+			if (std::optional<std::string> why = m_files.write_blocked()) return refused_message(*why);
+			const std::string shown_path = edt::forge::escaped_text(path.relative, 1024);
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return refused(found.error);
-			if (!found.found) return refused(std::format("no file 'res://{}'", path.relative));
+			if (!found.found) return refused_message(std::format("no file 'res://{}'", shown_path));
 			const level_answer level = m_files.belongs_to_open_level(found);
-			if (level.claim == level_claim::this_file) return refused(std::format("'res://{}' belongs to the open level", path.relative));
-			if (level.claim == level_claim::unreadable_entry) return refused(unreadable_entry_text(level));
-			if (!m_files.is_top_layer(found)) return refused(std::format("'res://{}' belongs to a lower layer, not to the project's own res/", path.relative));
+			if (level.claim == level_claim::this_file) return refused_message(std::format("'res://{}' belongs to the open level", shown_path));
+			if (level.claim == level_claim::unreadable_entry) return refused_message(unreadable_entry_text(level));
+			if (!m_files.is_top_layer(found)) return refused_message(std::format("'res://{}' belongs to a lower layer, not to the project's own res/", shown_path));
 			const auto current = m_files.read_fresh(path.relative, found);
 			if (!current.ok()) return refused(current.error);
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
-				return refused("the file changed since that version was read");
+				return refused_message("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"),
+				edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));
-			return std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
+			std::string text = std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
 				"If the open level uses this file, the change is applied to it at once (hot reload) and cannot be undone with undo.",
-				edt::forge::escaped_text(path.relative, 1024), type.empty() ? "?" : edt::forge::escaped_text(type, 128), current.bytes.size(),
+				shown_path, type.empty() ? "?" : edt::forge::escaped_text(type, 128), current.bytes.size(),
 				ready.bytes.size());
+			// An approved busy call is retried until the index is ready, so the person approves the write itself (#968).
+			if (!ready.busy.empty()) text += k_waits_for_index;
+			return text;
 		}
 
 	private:
@@ -596,13 +627,17 @@ namespace {
 	}
 }
 
-std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource,
-	const res::resource_system* resources)
+edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, const json::value& root, std::string_view resource,
+	const res::resource_system* resources, reference_rule rule)
 {
-	std::vector<res::diagnostic> out;
+	const bool agent = rule == reference_rule::agent;
+	desc_tree_check checked;
+	std::vector<res::diagnostic>& out = checked.problems;
 	std::size_t errors = 0;
 	std::size_t warnings = 0;
 	std::unordered_set<std::string> unchecked;
+	// Where a reference was checked as a schema's field: the walk over every value does not report it again.
+	std::unordered_set<std::string> referenced;
 	// Errors and warnings are counted apart: a pile of warnings cannot push an error out of the list.
 	const auto add = [&](std::string kind, std::string pointer, std::string reason, res::diagnostic_severity severity = res::diagnostic_severity::error) {
 		std::size_t& count = severity == res::diagnostic_severity::error ? errors : warnings;
@@ -613,11 +648,13 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 	const auto schema_error = [&](std::string pointer, std::string reason) {
 		add(std::string(res::diagnostic_kind::schema), std::move(pointer), std::move(reason));
 	};
-	// A {guid, path} reference (EPIC-57 section 4.4): its form, its path a tag a file may hold; without a path, with an
-	// asset index, its guid must be one a file holds.
+	// A {guid, path} reference (EPIC-57 section 4.4): its form, its path a tag a file may hold, then what the asset index
+	// says of its guid (reference_rule).
 	const auto check_reference = [&](const json::value& value, const std::string& at) {
+		if (!referenced.insert(at).second) return;
 		const json::object& object = value.as_object();
-		if (std::string problem = edt::reference_object_problem(object); !problem.empty()) {
+		if (edt::is_guid_reference(object)) checked.has_guid = true;
+		if (std::string problem = agent ? edt::agent_reference_form_problem(object) : edt::reference_object_problem(object); !problem.empty()) {
 			schema_error(at, std::move(problem));
 			return;
 		}
@@ -625,6 +662,12 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		if (!path.empty()) {
 			if (std::string problem = strict_tag_problem(path); !problem.empty()) {
 				schema_error(at + "/path", std::move(problem));
+				return;
+			}
+		}
+		if (agent) {
+			if (std::string problem = edt::agent_reference_guid_problem(object, resources); !problem.empty()) {
+				schema_error(at, std::move(problem));
 				return;
 			}
 		}
@@ -651,6 +694,11 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 		}
 		if (!value.is_object()) return;
 		const json::object& object = value.as_object();
+		// No schema reads a prefab's component, an override record or a world's content: there the shape tells a reference.
+		if (agent && !pointer.empty() && edt::is_guid_reference(object)) {
+			check_reference(value, pointer);
+			return;
+		}
 		for (const auto& member : object) {
 			const std::string_view key(member.key().data(), member.key().size());
 			if (key.starts_with("__") && !is_allowed_header_key(key)) {
@@ -658,12 +706,29 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 			}
 		}
 		if (const json::value* parent = object.if_contains("__parent")) {
-			if (!parent->is_string()) {
-				schema_error(pointer + "/__parent", "`__parent` must be a string tag");
-			} else if (std::string problem = strict_tag_problem(view_of(parent->as_string())); !problem.empty()) {
+			// The object form is checked by its path as written, like the string.
+			std::optional<std::string> written;
+			if (parent->is_object() && edt::is_guid_reference(parent->as_object())) checked.has_guid = true;
+			if (parent->is_string()) {
+				written = std::string(view_of(parent->as_string()));
+			} else if (!parent->is_object()) {
+				schema_error(pointer + "/__parent", "`__parent` must be a string tag or a {\"guid\", \"path\"} reference");
+			} else if (std::string problem = agent ? edt::agent_reference_form_problem(parent->as_object()) : edt::reference_object_problem(parent->as_object());
+				!problem.empty()) {
 				schema_error(pointer + "/__parent", "`__parent`: " + problem);
-			} else if (const edt::agent_level_path named = edt::check_agent_level_path(view_of(parent->as_string())); !named.ok()) {
-				schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project: " + named.error);
+			} else {
+				written = edt::reference_path_text(parent->as_object());
+			}
+			if (written) {
+				if (std::string problem = strict_tag_problem(*written); !problem.empty()) {
+					schema_error(pointer + "/__parent", "`__parent`: " + problem);
+				} else if (const edt::agent_level_path named = edt::check_agent_level_path(*written); !named.ok()) {
+					schema_error(pointer + "/__parent", "`__parent` must name a desc file of the project: " + named.error);
+				} else if (agent && parent->is_object()) {
+					if (std::string elsewhere = edt::agent_reference_guid_problem(parent->as_object(), resources); !elsewhere.empty()) {
+						schema_error(pointer + "/__parent", "`__parent`: " + elsewhere);
+					}
+				}
 			}
 		}
 		if (const json::value* type_value = object.if_contains("__type")) {
@@ -780,10 +845,10 @@ std::vector<res::diagnostic> edt::validate_desc_tree(const desc::desc_system& de
 
 	if (!root.is_object()) {
 		add(std::string(res::diagnostic_kind::unknown_type), "", "the file must be a JSON object with a `__type`");
-		return out;
+		return checked;
 	}
 	walk(walk, root, std::string{});
-	return out;
+	return checked;
 }
 
 std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps)
@@ -821,14 +886,16 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 		false, false, cmd::agent_category::read, cmd::danger::none, &desc_commands::read);
 	add("desc.create", "Create a desc file (*.desc) in the project's res/ folder from a JSON object with a `__type`; never replaces a file. "
 			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer. "
-			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough",
+			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough. "
+			"Content with a guid is answered `busy` while the editor's asset index is still being built",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"res://levels/a.desc or levels/a.desc: inside the project, *.desc only"},
 			"desc":{"type":"object","description":"the file's content; the editor writes __version and the header order"}},
 			"required":["path","desc"],"additionalProperties":false})json",
 		version_result, true, false, cmd::agent_category::scene_edit, cmd::danger::none, &desc_commands::create);
 	add("desc.write", "Replace an existing desc file of the project's res/ folder (a person confirms each time). `version` must be the one desc.read gave, "
-			"else `stale`; the content is checked against the schemas like desc.create. The file of the open level is refused (`busy`)",
+			"else `stale`; the content is checked against the schemas like desc.create. The file of the open level is refused (`busy`), "
+			"and so is content with a guid while the asset index is still being built",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},
 			"desc":{"type":"object","description":"the whole new content"}},

@@ -38,6 +38,46 @@ gs::input_actions::~input_actions()
 	drop();
 }
 
+std::shared_ptr<const inp::action_map> gs::input_actions::map() const
+{
+	return m_map;
+}
+
+std::shared_ptr<const inp::action_map> gs::input_actions::project_map() const
+{
+	return m_project;
+}
+
+bool gs::input_actions::has_gamepad_bindings() const
+{
+	return m_has_gamepad_bindings;
+}
+
+inp::gamepad_config gs::input_actions::gamepad_config() const
+{
+	return m_gamepad;
+}
+
+const inp::user_bindings& gs::input_actions::user_bindings() const
+{
+	return m_user;
+}
+
+const std::vector<inp::binding_conflict>& gs::input_actions::conflicts() const
+{
+	return m_conflicts;
+}
+
+std::uint64_t gs::input_actions::revision() const
+{
+	return m_revision;
+}
+
+bool gs::input_actions::user_file_saved() const
+{
+	return m_saved;
+}
+
 void gs::input_actions::drop()
 {
 	if (!m_tag.empty()) {

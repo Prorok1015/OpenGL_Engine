@@ -1,4 +1,5 @@
 #include "edt_migration_commands.h"
+#include "edt_agent_log_filter.h"
 #include "edt_forge_types.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
@@ -256,6 +257,20 @@ namespace {
 		return out;
 	}
 
+	// Text from the project's files (a path, a name, a version, a reason that quotes one) as part of one line of the
+	// question a person reads: a line break in it must not forge a line there.
+	std::string shown(std::string_view text, std::size_t max_bytes = 1024)
+	{
+		return edt::forge::escaped_text(text, max_bytes);
+	}
+
+	// A message of our own (a refusal of pmg or of this file) whose foreign pieces went through shown() or
+	// pmg::journal_path_text where it was built: escaped once, never twice.
+	std::string shown_message(std::string_view text, std::size_t max_bytes = 1024)
+	{
+		return edt::forge::escaped_message(text, max_bytes);
+	}
+
 	// What the journal of a migration says it changed, as a rollback would put it back.
 	struct journal_view
 	{
@@ -296,7 +311,7 @@ namespace {
 		const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format(".snk/migrations/{}/report.json", id)),
 			k_max_journal_bytes);
 		if (!text.exists || !text.error.empty()) {
-			out.error = std::format("migration {} has no journal{}", id, text.error.empty() ? "" : ": " + text.error);
+			out.error = std::format("migration {} has no journal{}", id, text.error.empty() ? "" : ": " + shown(text.error));
 			return out;
 		}
 		out.bytes = text.text;
@@ -350,16 +365,9 @@ namespace {
 		return hash.value();
 	}
 
-	// Text from the project's files (a path, a name, a version, a reason that quotes one) as part of one line of the
-	// question a person reads: a line break in it must not forge a line there.
-	std::string shown(std::string_view text, std::size_t max_bytes = 1024)
-	{
-		return edt::forge::escaped_text(text, max_bytes);
-	}
-
 	std::string unfinished_refusal(const std::vector<std::string>& unfinished)
 	{
-		return std::format("migration {} did not finish: run editor --migrate-rollback {} first", unfinished.front(), unfinished.front());
+		return std::format("migration {} did not finish: run editor --migrate-rollback {} first", shown(unfinished.front()), shown(unfinished.front()));
 	}
 
 	json::array strings_of(const std::vector<std::string>& items)
@@ -674,7 +682,7 @@ namespace {
 		migration_commands(const migration_commands&) = delete;
 		migration_commands& operator=(const migration_commands&) = delete;
 
-		cmd::result plan(const cmd::call&) const
+		cmd::result plan(const cmd::call& call) const
 		{
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return cmd::result::failure(k_no_project, "no project is open");
@@ -688,8 +696,10 @@ namespace {
 			if (!refused.empty()) code = pmg::k_exit_refused;
 			else if (!plan.empty()) code = pmg::k_exit_migration_needed;
 			else if (!pmg::skipped_by(plan).empty()) code = pmg::k_exit_partial;
-			return cmd::result::success(json::object{ { "code", code }, { "plan", std::move(planned) }, { "text", pmg::plan_text(plan) },
-				{ "fingerprint", fingerprint_text(fingerprint_of(*root, plan, code_identity())) } });
+			const json::value answer = json::object{ { "code", code }, { "plan", std::move(planned) }, { "text", pmg::plan_text(plan) },
+				{ "fingerprint", fingerprint_text(fingerprint_of(*root, plan, code_identity())) } };
+			// A reason of the scan can quote a file by its full path ("'<root>/x.desc' is a symbolic link"): as a job's result.
+			return cmd::result::success(edt::agent_job_result(answer, m_deps.log_filter, call.from));
 		}
 
 		std::optional<std::string> describe(const cmd::call& call)
@@ -717,7 +727,7 @@ namespace {
 			}
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(*root);
 			const std::string refused = !unfinished.empty() ? unfinished_refusal(unfinished) : pmg::plan_refusal(plan);
-			if (!refused.empty()) text += "  This request will be refused: " + shown(refused) + "\n";
+			if (!refused.empty()) text += "  This request will be refused: " + shown_message(refused) + "\n";
 			if (plan.empty() && refused.empty()) text += "  Nothing to migrate.\n";
 			text += "Open documents are closed, and the level is closed and opened again from disk. "
 				"Every file is backed up under .snk/migrations/ first.";
@@ -780,7 +790,7 @@ namespace {
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
 			std::string text = std::format("Roll back a migration of the project '{}'\n  {}\n", shown(name), shown(fs_paths::generic_utf8_of(*root)));
 			if (!journal.error.empty()) {
-				text += "  This request will be refused: " + shown(journal.error) + "\n";
+				text += "  This request will be refused: " + shown_message(journal.error) + "\n";
 				return text;
 			}
 			text += journal.listing;
@@ -1217,7 +1227,7 @@ namespace {
 				// Put back only in part: as a migration that stopped, the level stays detached and unsaved until a rollback
 				// of this migration finishes.
 				const std::string reason = std::format("the rollback of migration {} did not finish: the level is not loaded from disk again; "
-					"run editor --migrate-rollback {} first", run.id, run.id);
+					"run editor --migrate-rollback {} first", shown(run.id), shown(run.id));
 				if (m_deps.level_left_detached) {
 					m_deps.level_left_detached(run.level, [root = run.root, id = run.id] {
 						const std::vector<std::string> still = pmg::unfinished_migrations(root);
@@ -1261,7 +1271,7 @@ namespace {
 				// What was written is not known: as a rollback that did not finish.
 				const std::vector<std::string> left = pmg::unfinished_migrations(run.root);
 				std::string error = std::format("the migration stopped: {}; the state of the project is unknown", *stopped);
-				if (!left.empty()) error += std::format(": run editor --migrate-rollback {}", left.front());
+				if (!left.empty()) error += std::format(": run editor --migrate-rollback {}", shown(left.front()));
 				run.answer = json::object{ { "code", pmg::k_exit_rollback_failed }, { "status", pmg::to_string(pmg::migration_status::rollback_failed) },
 					{ "error", error }, { "text", pmg::plan_text(plan) } };
 				if (!left.empty()) run.answer["unfinished"] = strings_of(left);
@@ -1307,7 +1317,7 @@ namespace {
 				const std::vector<std::string> left = pmg::unfinished_migrations(run.root);
 				const std::string reason = left.empty()
 					? std::string("the migration stopped: the level is not loaded from disk again")
-					: std::format("the migration stopped: the level is not loaded from disk again; run editor --migrate-rollback {} first", left.front());
+					: std::format("the migration stopped: the level is not loaded from disk again; run editor --migrate-rollback {} first", shown(left.front()));
 				if (m_deps.level_left_detached) {
 					// Rolled back once the journal of this migration is no longer unfinished; without one there is nothing to roll back.
 					std::function<bool()> rolled_back = [root = run.root, id = left.empty() ? std::string{} : left.front()] {

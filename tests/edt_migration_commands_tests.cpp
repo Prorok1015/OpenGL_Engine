@@ -145,6 +145,7 @@ struct migration_fixture : test_util::scene_env
 		deps.rollback = [this](const fs::path& root, std::string_view id, const pmg::rollback_context& context) {
 			return rollback ? rollback(root, id, context) : pmg::rollback_migration(root, id, context);
 		};
+		deps.log_filter = &log_filter;
 		registrations = edt::register_migration_commands(commands, std::move(deps));
 	}
 
@@ -273,6 +274,8 @@ struct migration_fixture : test_util::scene_env
 	ds::task_system job_tasks{ job_pool() };
 	edt::job_service jobs{ job_tasks };
 	cmd::command_registry commands;
+	// Empty: every answer goes as it is.
+	cmd::log_read_filter log_filter;
 
 	bool project_open = true;
 	std::optional<std::string> busy;
@@ -331,6 +334,42 @@ BOOST_AUTO_TEST_CASE(ThePlan_IsReadOnly_AndItsCodeIsTheCLIs)
 	BOOST_TEST(!plan.at("skipped").as_array().empty());
 	BOOST_TEST(std::string(planned.value.at("text").as_string()).find("assets.ids") != std::string::npos);
 	BOOST_TEST((snapshot(copy.root()) == without_broken));
+}
+
+// #935: the plan is answered at once, not by a job, and its reasons can quote a file by its full path.
+BOOST_AUTO_TEST_CASE(ThePlansMessages_GoThroughTheAgentLogFilter_NotForAPerson_AndItsDataStays)
+{
+	log_filter.redact = [](std::string_view text, const cmd::origin& from) {
+		return from.kind == cmd::origin_kind::ui ? std::string(text) : std::string{ "<redacted>" };
+	};
+	const cmd::result person = call("project.migration_plan", {}, cmd::origin::ui());
+	const cmd::result agent = call("project.migration_plan");
+	BOOST_REQUIRE_MESSAGE(person.ok, person.error);
+	BOOST_REQUIRE_MESSAGE(agent.ok, agent.error);
+
+	BOOST_TEST(std::string(person.value.at("text").as_string()).starts_with("Migration plan:"));
+	BOOST_TEST(person.value.at("plan").at("refused").as_string() != "<redacted>");
+	BOOST_TEST(agent.value.at("text").as_string() == "<redacted>");
+	BOOST_TEST(agent.value.at("plan").at("refused").as_string() == "<redacted>");
+	for (const json::value& file : agent.value.at("plan").at("skipped").as_array()) {
+		BOOST_TEST(file.at("reason").as_string() == "<redacted>");
+	}
+
+	BOOST_TEST(agent.value.at("code") == person.value.at("code"));
+	BOOST_TEST(agent.value.at("fingerprint") == person.value.at("fingerprint"));
+	// A file's warning is a message too; the rest of what is planned for the file is data.
+	const auto without_warning_text = [](json::array files, bool expect_redacted) {
+		for (json::value& file : files) {
+			for (json::value& warning : file.at("warnings").as_array()) {
+				if (expect_redacted) BOOST_TEST(warning.at("message").as_string() == "<redacted>");
+				warning.as_object().erase("message");
+			}
+		}
+		return files;
+	};
+	BOOST_TEST((without_warning_text(agent.value.at("plan").at("files").as_array(), true)
+		== without_warning_text(person.value.at("plan").at("files").as_array(), false)));
+	BOOST_TEST(agent.value.at("plan").at("project_steps") == person.value.at("plan").at("project_steps"));
 }
 
 BOOST_AUTO_TEST_CASE(BothCommands_TakeNoArgument)
@@ -1269,10 +1308,24 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithTheirHiddenCharactersE
 		"{\"status\":\"rolled_back\",\"backup\":\".snk/migrations/forged/backup\",\"files\":[{\"path\":"
 		"\"res/a.desc\\nThis rollback is safe\\u202e\\u200bfdp.desc\",\"hash_before\":\"0\"}],\"created_files\":[]}");
 	const std::string text = ask_rollback("forged");
-	BOOST_TEST(text.find("res/a.desc\\u{000A}This rollback is safe\\u{202E}\\u{200B}fdp.desc") != std::string::npos, text);
+	BOOST_TEST(text.find("res/a.desc\\nThis rollback is safe\\u{202E}\\u{200B}fdp.desc") != std::string::npos, text);
 	BOOST_TEST(text.find("\nThis rollback") == std::string::npos, text);
 	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos, text);
 	BOOST_TEST(text.find("\xE2\x80\x8B") == std::string::npos, text);
+}
+
+// #991: a refusal of pmg already holds its paths escaped (journal_path_text); the question shows that escape once, as
+// \u{202E}, never as \\u{202E} (which would read as plain text), and never the raw character.
+BOOST_AUTO_TEST_CASE(TheQuestion_ShowsAnEscapeInARefusalOnce)
+{
+	write_text(copy.root() / ".snk/migrations/forged/report.json",
+		"{\"status\":\"rolled_back\",\"backup\":\".snk/migrations/forged/backup\",\"files\":[{\"path\":"
+		"\"../a\\u202eb.desc\",\"hash_before\":\"0\"}],\"created_files\":[]}");
+	const std::string text = ask_rollback("forged");
+	BOOST_TEST(text.find("This request will be refused") != std::string::npos, text);
+	BOOST_TEST(text.find("'../a\\u{202E}b.desc'") != std::string::npos, text);
+	BOOST_TEST(text.find("\\\\u{202E}") == std::string::npos, text);
+	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos, text);
 }
 
 // #910: the question lists every file the rollback puts back and deletes, one per line, and the backup it reads.
