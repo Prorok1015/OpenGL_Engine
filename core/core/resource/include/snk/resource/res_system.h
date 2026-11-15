@@ -850,6 +850,17 @@ namespace res
 		std::unique_ptr<held_changes> m_held;
 	};
 
+	// The tag a handle with the tag `own` and `block` was asked for: for a handle of resource_system::refused, whose own
+	// tag is empty, the refused tag its block recorded (#952). For messages and writers only: requiring it loads the
+	// refused one after all.
+	SNK_API tag refused_tag(const tag& own, const core::res::res_control_block_base* block);
+
+	template<class T>
+	tag refused_tag(const res_handle<T>& handle)
+	{
+		return refused_tag(handle.get_tag(), handle.get_control_block().get());
+	}
+
 	// A dependency of `target` as T, for adapter_interface::collect_dependencies.
 	template<class T>
 	res_dep make_dep(const res::tag& target)

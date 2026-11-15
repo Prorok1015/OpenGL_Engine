@@ -88,8 +88,16 @@ void edt::asset_problem_publisher::publish(problem_list& problems, const asset_d
 			row.item.severity = fixable ? problem_severity::error : problem_severity::warning;
 			row.item.file = row.path;
 			row.item.code = "asset.duplicate_id";
-			row.item.message = fixable ? std::format("the asset ID {} is also used by {}", res::to_text(id), original)
-				: std::format("the asset ID {} is also used by {} (outside the project: not fixable here)", res::to_text(id), original);
+			if (!fixable) {
+				row.item.message = std::format("the asset ID {} is also used by {} (outside the project: not fixable "
+					"here)", res::to_text(id), original);
+			} else if (holders.front()->layer != top && holders[i]->layer == top) {
+				// #902: an engine file keeps its ID, so references to the copy stay paths until it gets its own.
+				row.item.message = std::format("the asset ID {} belongs to {} of a lower layer, which keeps it: this "
+					"copy has no ID and references to it stay paths; give it a new ID", res::to_text(id), original);
+			} else {
+				row.item.message = std::format("the asset ID {} is also used by {}", res::to_text(id), original);
+			}
 			found.push_back(std::move(row));
 		}
 	}

@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_game_reloader.h"
+#include "edt_project_trust_service.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
@@ -149,6 +150,30 @@ BOOST_AUTO_TEST_CASE(the_action_reloads_the_built_module_and_returns_the_status)
 	BOOST_TEST(outcome.value.as_object().at("status").as_string() == "reloaded");
 	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
 	BOOST_TEST(messages().empty());
+}
+
+// #921: until the project is trusted an agent's reload is denied before anything runs; the person is asked first.
+BOOST_AUTO_TEST_CASE(an_untrusted_project_denies_an_agents_reload)
+{
+	bool trusted = false;
+	std::function<void()> asked;
+	auto opts = options();
+	opts.trusted = [&trusted] { return trusted; };
+	opts.ask_trust = [&asked](std::function<void()> then) { asked = std::move(then); };
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+	const auto agent = actions.invoke(edt::game_reloader::k_action_id, boost::json::object{}, cmd::origin::agent("s1"));
+	BOOST_TEST(!agent.ok);
+	BOOST_TEST(agent.code == cmd::codes::denied);
+	BOOST_TEST(agent.error == std::string(edt::k_untrusted_project_error));
+	BOOST_TEST(reloaded.empty());
+	// The person's Reload Game Module asks first and reloads only after "Trust".
+	BOOST_REQUIRE(actions.activate(edt::game_reloader::k_action_id));
+	BOOST_REQUIRE(asked);
+	BOOST_TEST(reloaded.empty());
+	trusted = true;
+	asked();
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+	BOOST_TEST(actions.invoke(edt::game_reloader::k_action_id, boost::json::object{}, cmd::origin::agent("s1")).ok);
 }
 
 BOOST_AUTO_TEST_CASE(without_a_build_the_action_is_disabled)

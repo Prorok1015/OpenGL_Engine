@@ -5,6 +5,8 @@
 #include "edt_desc_file_commands.h"
 #include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
+#include "edt_project_trust_service.h"
+#include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
@@ -20,6 +22,7 @@
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
+#include "edt_inspector_target.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
 #include "edt_migration_startup.h"
@@ -57,6 +60,7 @@ namespace edt {
 	class agent_sessions;
 	class game_builder;
 	class game_reloader;
+	class project_trust_service;
 	class vcs_service;
 	class forge_service;
 	class forge_account_panel;
@@ -197,6 +201,13 @@ namespace edt {
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
 		void create_live_mode(ds::app_data_storage& data);
+		// #921: "Trust this project?"; after "Trust" the modules that waited load and `on_trusted` runs.
+		void ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted);
+		// project_module_host::load_waiting on a UI frame where no level load, migration or Play holds it back; `then`
+		// runs on the frame after the load.
+		void load_waiting_modules(ds::app_data_storage& data, std::function<void()> then);
+		// Live mode at open (#908): on when the person turned it on for this project and it may run now.
+		void apply_live_consent(ds::app_data_storage& data);
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
@@ -264,7 +275,16 @@ namespace edt {
 
 		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
+		void open_prefab_now(const res::tag& tag);
+		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
+		void confirm_prefab_close(std::function<void()> proceed);
+		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
 		void close_prefab_editor();
+		void select_prefab_node(const std::vector<std::uint64_t>& path);
+		void release_inspector_to_level();
+		inspector_target m_inspector_target;
+		// The open prefab document when it has unapplied edits, else null.
+		prefab_document* dirty_prefab();
 
 		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();
@@ -364,6 +384,10 @@ namespace edt {
 		std::shared_ptr<platform::secret_store> m_secrets;
 		// Pull requests (#458); its commands are in m_registrations, removed before it; after the vcs service it asks.
 		std::unique_ptr<edt::forge_service> m_forge;
+		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
+		// it.
+		std::weak_ptr<edt::project_trust_service> m_trust;
+		edt::trusted_followups m_trust_followups;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
@@ -378,6 +402,7 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
+		std::vector<connection> m_inspector_connections;
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
@@ -388,6 +413,8 @@ namespace edt {
 		std::unique_ptr<agent_access> m_agent_access;
 		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
 		cmd::command_registry* m_agent_argument_checks = nullptr;
+		// The engine's filter of log.read, filled in by this system and emptied when it goes.
+		cmd::log_read_filter* m_log_filter = nullptr;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		std::filesystem::path m_agent_server_settings_file;

@@ -51,6 +51,9 @@ namespace edt
 		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
 		// An edit made in the panel waits for its widget to let go before it is committed.
 		bool has_pending_commit() const { return m_pending_commit; }
+		void note_edit() { m_pending_commit = true; }
+		// Hands an edit that waits for its widget to go idle to the owner now (before the selection it belongs to goes away).
+		void flush_pending_commit();
 		component_ui ui_of(const std::string& component_key) const;
 
 	protected:

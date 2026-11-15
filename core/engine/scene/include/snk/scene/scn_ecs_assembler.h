@@ -1,6 +1,7 @@
 #pragma once
 #pragma once
 #include <snk/desc/desc_system.h>
+#include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_base.hpp>
 #include <entt/fwd.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
@@ -186,5 +187,7 @@ namespace desc {
 		using map = std::unordered_map<std::string, scn::tracked_component_info>;
 		static boost::json::value to_json(const map& tracked);
 		static bool from_json(map& tracked, const boost::json::value& in);
+		// With the desc being read: `source_desc` goes through its resource system, so a guid finds the file it names now.
+		static bool from_json(map& tracked, const boost::json::value& in, const read_context& ctx);
 	};
 }

@@ -159,6 +159,10 @@ namespace ds {
 
 	namespace detail {
 
+		// +1 on any change to the virtual functions of task_state_base: the module layout key mixes it in,
+		// tools/ci/vtable_pins.json pins them (#922).
+		inline constexpr std::uint32_t task_state_base_abi_revision = 1;
+
 		// One task's shared state: owned by the pool queue and by every handle.
 		class SNK_API task_state_base
 		{

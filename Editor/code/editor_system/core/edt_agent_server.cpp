@@ -52,6 +52,7 @@ namespace {
 		edt::mcp_bridge_options out;
 		out.jobs = options.jobs;
 		out.events = options.events;
+		out.log_filter = options.log_filter;
 		return out;
 	}
 
