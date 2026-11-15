@@ -393,6 +393,7 @@ namespace edt {
 		// Stopped in the destructor while the context it reports to is still there.
 		std::unique_ptr<edt::play_component> m_play_component;
 		// The component's session and mode controller, for the areas that ask whether Play runs; null before the component.
+		// Valid only while m_play_component lives: no member destroyed after it may use them.
 		edt::play_session* m_play = nullptr;
 		edt::editor_mode_controller* m_modes = nullptr;
 

@@ -346,9 +346,11 @@ edt::editor_system::~editor_system()
 		editor_layer->set_frame_hook(nullptr);
 	}
 	if (m_play_component) {
+		// Callbacks during Stop see no session, as with the owning pointer before; the abandoned one stays reachable.
+		m_play = nullptr;
+		m_modes = nullptr;
 		m_play_component->shutdown(m_context_alive.lock() != nullptr);
 		m_play = m_play_component->play();
-		m_modes = nullptr;
 	}
 	// The layer may outlive this system; its menu bar must not reach live mode any more.
 	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
