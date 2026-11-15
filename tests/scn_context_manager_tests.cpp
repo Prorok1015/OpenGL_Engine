@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <mutex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -327,17 +328,24 @@ BOOST_AUTO_TEST_CASE(HotReload_ADeletedLevelFileKeepsTheLevelWithoutAnError)
 	int reloads = 0;
 	mgr.set_on_reload([&reloads] { ++reloads; });
 
+	std::mutex errors_mutex;
 	std::vector<std::string> errors;
-	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::error) errors.push_back(std::format("{}: {}", category, message));
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::error) return;
+		std::lock_guard lock(errors_mutex);
+		errors.push_back(std::format("{}: {}", category, message));
 	});
 	BOOST_REQUIRE(ram->erase(tag));
 	rs->signal_changed(tag);
 	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
-	for (const auto& error : errors) BOOST_TEST_MESSAGE(error);
-	BOOST_TEST(errors.empty());
+	const auto logged = [&] {
+		std::lock_guard lock(errors_mutex);
+		return errors;
+	}();
+	for (const auto& error : logged) BOOST_TEST_MESSAGE(error);
+	BOOST_TEST(logged.empty());
 	BOOST_TEST(reloads == 0);
 	auto& lvl = mgr.level_set();
 	BOOST_TEST(lvl.size() == 2u);
