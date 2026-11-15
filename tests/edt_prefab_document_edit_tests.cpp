@@ -6,12 +6,14 @@
 #include "edt_scene_document.h"
 #include "edt_prefab_close.h"
 #include <snk/editor/edt_editor_services.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_model.h>
 #include <entt/entt.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -785,6 +787,27 @@ BOOST_AUTO_TEST_CASE(Close_UnwatchesTheFile)
 	BOOST_TEST(rs->watched_tag_count() > before);
 	document->close();
 	BOOST_TEST(rs->watched_tag_count() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AnOverrideOnADeletedNode_IsSkippedWithAWarning_WhenAnInstanceIsBuilt)
+{
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}},
+		 "overrides":[{"target":["00000000000000ff"],"component":"stat","path":"/hp","value":9}]}]})");
+	std::vector<std::string> warnings;
+	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view text) {
+		if (level == engine::log_level::warn) warnings.emplace_back(text);
+	});
+	const res::tag user_tag = res::tag::make("prefabs/user.prefab.desc");
+	auto user = rs->require_sync<scn::prefab_desc>(user_tag);
+	BOOST_REQUIRE(user.is_ready());
+	entt::registry level;
+
+	scn::assemble_prefab(*assembler, level, level.create(), *user, "user", user_tag);
+
+	const bool warned = std::ranges::any_of(warnings, [](const std::string& text) { return text.find("override: no node") != std::string::npos; });
+	BOOST_TEST(warned);
+	BOOST_TEST(registry_has_node_named(&level, "Inst"));
 }
 
 BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)
