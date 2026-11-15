@@ -17,7 +17,7 @@
                 "scn::animation_system_matrix",
                 "scn::update_camera_matrix_system"
             ],
-            "__id" : "5e7a1c9d3b2f4a68",
+            "__id" : "cbf29ce484222325",
             "components" : {
                 "anchor" : {
                     "__type" : "anchor_desc",
@@ -29,11 +29,7 @@
                     "__id" : "9b1e5d7a3c2f4e61",
                     "name" : "Camera A",
                     "transform" : {
-                        "position" : [
-                            0.0,
-                            0.0,
-                            14.0
-                        ]
+                        "position" : [0.0, 0.0, 14.0]
                     },
                     "components" : {
                         "camera" : {
@@ -56,11 +52,7 @@
                     "__id" : "d3a1f9c27e5b4086",
                     "name" : "quad_00_01",
                     "transform" : {
-                        "position" : [
-                            -7.0,
-                            -9.0,
-                            -6.0
-                        ]
+                        "position" : [-7.0, -9.0, -6.0]
                     },
                     "components" : {
                         "mesh" : {
@@ -85,11 +77,7 @@
                     "__id" : "6c8e2a4f1d7b3e95",
                     "name" : "quad_01_02",
                     "transform" : {
-                        "position" : [
-                            -5.0,
-                            -7.0,
-                            -6.0
-                        ]
+                        "position" : [-5.0, -7.0, -6.0]
                     },
                     "components" : {
                         "mesh" : {
@@ -114,11 +102,7 @@
                     "__id" : "a5f37c1e9b2d6048",
                     "name" : "quad_02_03",
                     "transform" : {
-                        "position" : [
-                            -3.0,
-                            -5.0,
-                            -6.0
-                        ]
+                        "position" : [-3.0, -5.0, -6.0]
                     },
                     "components" : {
                         "mesh" : {
@@ -143,11 +127,7 @@
                     "__id" : "2e9d4b7a6f1c8e30",
                     "name" : "quad_03_04",
                     "transform" : {
-                        "position" : [
-                            -1.0,
-                            -3.0,
-                            -6.0
-                        ]
+                        "position" : [-1.0, -3.0, -6.0]
                     },
                     "components" : {
                         "mesh" : {
