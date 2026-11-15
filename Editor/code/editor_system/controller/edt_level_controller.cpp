@@ -474,13 +474,13 @@ void edt::apply_world_resync(
 	// An empty list is a valid state (idx -1): the arrays are cleared so nothing can index a world that is gone.
 	const int idx = resync_world_arrays(desc_worlds, state.world_descs, state.world_names, state.worlds_systems_list, active_name, is_alive);
 	// A world the reload lists has the file it came from now; one kept from before keeps its own (#993).
+	// The listed ones come first, in desc order: by index, so two worlds of one name keep their own files (#1039).
 	state.world_tags.clear();
-	for (const std::string& name : state.world_names) {
+	for (std::size_t i = 0; i < state.world_names.size(); ++i) {
+		const std::string& name = state.world_names[i];
 		res::tag tag;
-		const auto listed = std::ranges::find_if(desc_worlds, [&name] (const scn::world_desc& w) { return w.get_name() == name; });
-		if (listed != desc_worlds.end()) {
-			const auto at = static_cast<std::size_t>(listed - desc_worlds.begin());
-			if (at < desc_tags.size()) tag = desc_tags[at];
+		if (i < desc_worlds.size()) {
+			if (i < desc_tags.size()) tag = desc_tags[i];
 		} else if (const auto kept = std::ranges::find(names_before, name); kept != names_before.end()) {
 			const auto at = static_cast<std::size_t>(kept - names_before.begin());
 			if (at < tags_before.size()) tag = tags_before[at];

@@ -252,7 +252,7 @@ bool edt::scene_editor::reload_world(std::size_t index)
 	const bool active = static_cast<int>(index) == m_state.active_world_idx;
 	if (active && on_save_camera) on_save_camera(lvl.get(world_name).state());
 	// TODO: Better just save the world on a disk. hot reload system will take care of reloading it in the editor and the game.
-	lvl.reload_context(world_name, world_desc, *m_services.sfactory(), *m_services.assembler());
+	lvl.reload_context(world_name, world_desc, *m_services.sfactory(), *m_services.assembler(), m_state.world_tag(index));
 	if (active && on_inject_camera) on_inject_camera(lvl.get(world_name).state());
 
 	return true;
