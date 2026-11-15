@@ -6,11 +6,13 @@
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_engine_component_list.h>
 #include <snk/scene/level/scn_screen_anchor.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <type_traits>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -126,6 +128,19 @@ namespace
 		const auto* storage = reg.storage(id);
 		return storage && !storage->empty();
 	}
+
+	struct listed_type
+	{
+		entt::id_type id = 0;
+		std::string_view name;
+	};
+
+	// The catalog's id of each type of the list (component_entry::id) with entt's name of it.
+	template<class... Types>
+	std::vector<listed_type> listed_types(scn::type_list<Types...>)
+	{
+		return { listed_type{ entt::type_hash<Types>::value(), entt::type_name<Types>::value() }... };
+	}
 }
 
 BOOST_FIXTURE_TEST_SUITE(EngineComponentCatalog, catalog_fixture)
@@ -199,6 +214,27 @@ BOOST_AUTO_TEST_CASE(EveryEngineEntryHasASchemaOrIsMarked)
 		const bool marked = entry.category == scn::component_category::derived || entry.category == scn::component_category::editor_only;
 		BOOST_TEST((entry.schema || marked), entry.name << " has no schema and is not marked derived or editor-only");
 	});
+}
+
+// #922: the module layout key takes the engine components from scn::engine_component_types, so the list and the
+// catalog must name the same types.
+BOOST_AUTO_TEST_CASE(TheComponentListAndTheCatalogHoldTheSameTypes)
+{
+	const std::vector<listed_type> listed = listed_types(scn::engine_component_types{});
+	std::size_t registered = 0;
+	catalog.for_each([&](const scn::component_entry& entry) {
+		++registered;
+		const bool in_list = std::any_of(listed.begin(), listed.end(), [&](const listed_type& type) { return type.id == entry.id; });
+		BOOST_CHECK_MESSAGE(in_list, "'" << entry.name << "' is registered in the engine's component catalog and missing "
+			"from scn::engine_component_types (scn_engine_component_list.h)");
+	});
+	for (const listed_type& type : listed) {
+		BOOST_CHECK_MESSAGE(catalog.find(type.id) != nullptr, "'" << type.name << "' is in scn::engine_component_types and not "
+			"registered in scn::register_engine_components");
+		const auto same = std::count_if(listed.begin(), listed.end(), [&](const listed_type& other) { return other.id == type.id; });
+		BOOST_CHECK_MESSAGE(same == 1, "'" << type.name << "' is listed " << same << " times in scn::engine_component_types");
+	}
+	BOOST_TEST(registered == listed.size());
 }
 
 BOOST_AUTO_TEST_CASE(AComponentOutsideTheCatalogIsReported)

@@ -9,6 +9,7 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/scn_scene_layer.h>
