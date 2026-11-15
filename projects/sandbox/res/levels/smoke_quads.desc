@@ -1,0 +1,174 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "name" : "smoke_quads",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 4,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "inp::update_actions",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "5e7a1c9d3b2f4a68",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "9b1e5d7a3c2f4e61",
+                    "name" : "Camera A",
+                    "transform" : {
+                        "position" : [
+                            0.0,
+                            0.0,
+                            14.0
+                        ]
+                    },
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 2
+                        }
+                    }
+                },
+                {
+                    "__id" : "4f2a8c6e1b3d5a79",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "d3a1f9c27e5b4086",
+                    "name" : "quad_00_01",
+                    "transform" : {
+                        "position" : [
+                            -7.0,
+                            -9.0,
+                            -6.0
+                        ]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "6c8e2a4f1d7b3e95",
+                    "name" : "quad_01_02",
+                    "transform" : {
+                        "position" : [
+                            -5.0,
+                            -7.0,
+                            -6.0
+                        ]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "a5f37c1e9b2d6048",
+                    "name" : "quad_02_03",
+                    "transform" : {
+                        "position" : [
+                            -3.0,
+                            -5.0,
+                            -6.0
+                        ]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "2e9d4b7a6f1c8e30",
+                    "name" : "quad_03_04",
+                    "transform" : {
+                        "position" : [
+                            -1.0,
+                            -3.0,
+                            -6.0
+                        ]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : {
+                                "guid" : "5b0e7c1a-3d52-4f6e-9a08-7e1c2d4b6f93",
+                                "path" : "res://bench/bench_quad.desc"
+                            },
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : {
+                                "guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+                                "path" : "res://base_material.desc"
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}
