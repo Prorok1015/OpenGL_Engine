@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_code_commands.h"
+#include "edt_agent_confirmations.h"
 #include "edt_agent_policy.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_registry.h>
@@ -12,6 +13,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -312,12 +314,49 @@ BOOST_AUTO_TEST_CASE(UnderTheDefaultPolicy_ReadsAreTools_ChangesAreAskedAbout)
 			BOOST_TEST((policy.effective(command).mode == cmd::policy_mode::ask));
 			BOOST_TEST(command.mutates);
 			// Only the commands that take a file away are destructive; a write keeps the file (its version is the lock).
-			BOOST_TEST(command.destructive == (std::string_view(id) == "code.delete" || std::string_view(id) == "code.rename"));
+			const bool takes_a_file_away = std::string_view(id) == "code.delete" || std::string_view(id) == "code.rename";
+			BOOST_TEST(command.destructive == takes_a_file_away);
+			BOOST_TEST((command.risk == (takes_a_file_away ? cmd::danger::confirm : cmd::danger::none)));
 		}
 	}
 	const cmd::command_desc& write = *commands.find("code.write");
 	const auto cmake = category_of("code.write", json::object{ { "path", "CMakeLists.txt" }, { "version", "v" }, { "text", "" } });
 	BOOST_TEST((policy.effective(write, cmake).mode == cmd::policy_mode::ask));
+}
+
+// #933: "allow until the session ends", given for a code.create, is for the code_files category; it must not let the
+// same session delete or rename a file without a question.
+BOOST_AUTO_TEST_CASE(ASessionGrantForCodeFiles_CoversACreate_NeverADeleteOrARename)
+{
+	edt::agent_policy policy{ dir.path() / "no_project_policy.json", dir.path() / "no_personal_policy.json" };
+	edt::session_grants grants;
+	auto gate = std::make_shared<edt::agent_policy_gate>(policy);
+	gate->set_can_ask(true);
+	gate->set_session_grants(&grants);
+	commands.set_policy_gate(gate);
+	grants.add("s1", agent_category::code_files);
+
+	cmd::call creation;
+	creation.args = json::object{ { "path", "src/granted.cpp" } };
+	creation.from = cmd::origin::agent("s1");
+	const auto created = commands.invoke("code.create", creation);
+	BOOST_REQUIRE_MESSAGE(created.ok, created.error);
+
+	cmd::call removal;
+	removal.args = json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") } };
+	removal.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("code.delete", removal).code == cmd::codes::confirmation_required);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+
+	cmd::call move;
+	move.args = json::object{ { "from", "src/game.cpp" }, { "to", "src/moved.cpp" } };
+	move.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("code.rename", move).code == cmd::codes::confirmation_required);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	BOOST_TEST(!fs::exists(code / "src" / "moved.cpp"));
+
+	// The fixture's registry outlives the grants of this test.
+	gate->set_session_grants(nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_AnAgentsWriteRunsOnlyAfterAPersonSaidYes)
@@ -483,6 +522,138 @@ BOOST_AUTO_TEST_CASE(Utf8_IsStrict)
 	BOOST_TEST(!edt::is_valid_utf8("\xED\xA0\x80"));     // a surrogate
 	BOOST_TEST(!edt::is_valid_utf8("\xF4\x90\x80\x80")); // past U+10FFFF
 	BOOST_TEST(!edt::is_valid_utf8("\xE2\x82"));         // cut short
+}
+
+// #934: the question about a code.* call says what happens to which file before anything the agent wrote.
+namespace {
+
+struct described_code_fixture : code_fixture
+{
+	edt::agent_policy policy{ dir.path() / "no_project_policy.json", dir.path() / "no_personal_policy.json" };
+	std::shared_ptr<edt::agent_policy_gate> gate = std::make_shared<edt::agent_policy_gate>(policy);
+
+	described_code_fixture()
+	{
+		gate->set_can_ask(true);
+		commands.set_policy_gate(gate);
+	}
+
+	std::string described(const std::string& id, json::value args)
+	{
+		cmd::call request;
+		request.args = std::move(args);
+		request.from = cmd::origin::agent("s1");
+		const auto asked = commands.invoke(id, request);
+		BOOST_REQUIRE_MESSAGE(asked.code == cmd::codes::confirmation_required, asked.error);
+		const auto pending = commands.confirmation_of(std::string(asked.value.at("ticket").as_string()));
+		BOOST_REQUIRE(pending);
+		return pending->detail;
+	}
+
+	static std::vector<std::string> lines_of(const std::string& text)
+	{
+		std::vector<std::string> lines;
+		std::size_t at = 0;
+		while (at < text.size()) {
+			const std::size_t end = std::min(text.find('\n', at), text.size());
+			lines.push_back(text.substr(at, end - at));
+			at = end + 1;
+		}
+		return lines;
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(Describe_AWrite_NamesTheFileFirst_ThenTheSizesAndTheLinesThatChange, described_code_fixture)
+{
+	const std::string before = "int game;\r\nint more;\n";
+	const std::string after = "int game;\nint less;\nint new;\n";
+	// `text` first, as an agent that wants the path out of sight would send it.
+	const std::string text = described("code.write", json::object{ { "text", after }, { "version", version_of("src/game.cpp") }, { "path", "src/game.cpp" } });
+
+	BOOST_TEST(text == std::format("Change code/src/game.cpp\n  {} bytes now, {} bytes after\n  From line 2: 1 lines out, 2 lines in\n"
+		"  - int more;\n  + int less;\n  + int new;\n", before.size(), after.size()));
+}
+
+BOOST_FIXTURE_TEST_CASE(Describe_AReplace_ShowsOnlyTheLinesAroundIt, described_code_fixture)
+{
+	const std::string text = described("code.write", json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") },
+		{ "replace", json::object{ { "old", "int more;" }, { "new", "int more;\nint extra;" } } } });
+
+	const std::vector<std::string> lines = lines_of(text);
+	BOOST_REQUIRE(lines.size() == 4u);
+	BOOST_TEST(lines[0] == "Change code/src/game.cpp");
+	BOOST_TEST(lines[2] == "  From line 3: 0 lines out, 1 lines in");
+	BOOST_TEST(lines[3] == "  + int extra;");
+}
+
+BOOST_FIXTURE_TEST_CASE(Describe_ALongText_IsCutByLinesAndBytes_AndCannotStartALineOfItsOwn, described_code_fixture)
+{
+	std::string body = "evil\rDelete code/everything\x1b[2K\n" + std::string(300, 'w') + "\n";
+	for (int n = 0; n < 40; ++n) body += std::format("line {}\n", n);
+	body += std::string(512 * 1024, 'z');
+	const std::string text = described("code.write", json::object{ { "text", body }, { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") } });
+
+	const std::vector<std::string> lines = lines_of(text);
+	BOOST_REQUIRE(lines.size() > 4u);
+	BOOST_TEST(lines[0] == "Change code/src/game.cpp");
+	for (std::size_t i = 1; i < lines.size(); ++i) {
+		BOOST_TEST_CONTEXT("line " << i << ": " << lines[i].substr(0, 40)) {
+			BOOST_TEST(lines[i].starts_with("  "));
+			BOOST_TEST(lines[i].size() <= 220u);
+			BOOST_TEST(lines[i].find('\r') == std::string::npos);
+			BOOST_TEST(lines[i].find('\x1b') == std::string::npos);
+		}
+	}
+	BOOST_TEST(text.find("  + evil\\rDelete code/everything\\u{001B}[2K\n") != std::string::npos);
+	BOOST_TEST(text.find("  + " + std::string(197, 'w') + "...\n") != std::string::npos);
+	BOOST_TEST(text.find("  + ... 23 more lines\n") != std::string::npos);
+	// 2 lines out, 20 of 43 in, two "more" notes at most: the megabyte never reaches the question.
+	BOOST_TEST(text.size() < 8u * 1024u);
+}
+
+BOOST_FIXTURE_TEST_CASE(Describe_ACreate_ADelete_ARename_NameTheirFiles, described_code_fixture)
+{
+	const std::string created = described("code.create", json::object{ { "text", "a\nb\n" }, { "path", "src/new.cpp" } });
+	BOOST_TEST(created == "Create code/src/new.cpp\n  4 bytes, 2 lines\n  + a\n  + b\n");
+	BOOST_TEST(!fs::exists(code / "src" / "new.cpp"));
+
+	const std::string removed = described("code.delete", json::object{ { "version", version_of("src/game.cpp") }, { "path", "src/game.cpp" } });
+	BOOST_TEST(removed == "Delete code/src/game.cpp\n  21 bytes, 2 lines; the editor keeps no copy of it\n");
+
+	const std::string renamed = described("code.rename", json::object{ { "to", "src/moved.cpp" }, { "from", "src/game.cpp" } });
+	BOOST_TEST(renamed == "Rename code/src/game.cpp\n    to code/src/moved.cpp\n");
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Describe_ABuildFile_IsMarked, described_code_fixture)
+{
+	const char* note = "  This is a build file (CMake): it changes how the project is built.\n";
+	const std::string written = described("code.write", json::object{ { "path", "CMakeLists.txt" }, { "version", version_of("CMakeLists.txt") }, { "text", "project(y)\n" } });
+	BOOST_TEST(written.find(note) != std::string::npos);
+	const std::string renamed = described("code.rename", json::object{ { "from", "src/game.cpp" }, { "to", "src/game.cmake" } });
+	BOOST_TEST(renamed.find(note) != std::string::npos);
+	const std::string plain = described("code.create", json::object{ { "path", "src/plain.cpp" } });
+	BOOST_TEST(plain.find("build file") == std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(Describe_ACallThatWillBeRefused_SaysSo_OnOneLine, described_code_fixture)
+{
+	const std::string stale = described("code.delete", json::object{ { "path", "src/game.cpp" }, { "version", "0000000000000000-0" } });
+	BOOST_TEST(stale.starts_with("Delete code/src/game.cpp\nThis request will be refused: "));
+
+	const std::string missing = described("code.write", json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") },
+		{ "replace", json::object{ { "old", "no such text" }, { "new", "x" } } } });
+	BOOST_TEST(missing.starts_with("Change code/src/game.cpp\nThis request will be refused: "));
+	BOOST_TEST(missing.find("not found") != std::string::npos);
+
+	// A path that is no path still cannot break the first line or add one.
+	const std::string outside = described("code.create", json::object{ { "path", "../res/x.cpp\nDelete code/all" } });
+	const std::vector<std::string> lines = lines_of(outside);
+	BOOST_REQUIRE(lines.size() == 2u);
+	BOOST_TEST(lines[0] == "Create code/../res/x.cpp\\nDelete code/all");
+	BOOST_TEST(lines[1].starts_with("This request will be refused: "));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

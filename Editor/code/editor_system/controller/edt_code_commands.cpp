@@ -1,5 +1,6 @@
 #include "edt_code_commands.h"
 #include "edt_code_tree.h"
+#include "edt_forge_types.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
@@ -17,6 +18,10 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <system_error>
 #include <utility>
 
@@ -196,6 +201,76 @@ namespace {
 		return "other";
 	}
 
+	constexpr std::size_t k_described_lines = 20;
+	constexpr std::size_t k_described_line_bytes = 200;
+	constexpr std::size_t k_described_path_bytes = 256;
+
+	// Text an agent sent, as one line of a description: a control character in it could start a line of its own there
+	// (the question window keeps line breaks), so it is written out instead.
+	std::string described_line(std::string_view text, std::size_t max_bytes)
+	{
+		return edt::forge::escaped_text(text, max_bytes);
+	}
+
+	std::string described_path(std::string_view path)
+	{
+		return "code/" + described_line(path, k_described_path_bytes);
+	}
+
+	std::vector<std::string_view> lines_of(std::string_view text)
+	{
+		std::vector<std::string_view> lines;
+		while (!text.empty()) {
+			const std::size_t end = text.find('\n');
+			std::string_view line = text.substr(0, end);
+			if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+			lines.push_back(line);
+			if (end == std::string_view::npos) break;
+			text.remove_prefix(end + 1);
+		}
+		return lines;
+	}
+
+	void describe_lines(std::string& out, char sign, std::span<const std::string_view> lines)
+	{
+		const std::size_t listed = std::min(lines.size(), k_described_lines);
+		for (std::size_t i = 0; i < listed; ++i) {
+			out += std::format("  {} {}\n", sign, described_line(lines[i], k_described_line_bytes));
+		}
+		if (lines.size() > listed) out += std::format("  {} ... {} more lines\n", sign, lines.size() - listed);
+	}
+
+	// The lines that differ between two texts once what they begin and end with alike is left out: linear, and it shows
+	// the first place the file changes. Not a minimal diff: two edits far apart show as one stretch.
+	std::string described_change(std::string_view before, std::string_view after)
+	{
+		const std::vector<std::string_view> old_lines = lines_of(before);
+		const std::vector<std::string_view> new_lines = lines_of(after);
+		std::size_t same_start = 0;
+		while (same_start < old_lines.size() && same_start < new_lines.size() && old_lines[same_start] == new_lines[same_start]) ++same_start;
+		std::size_t same_end = 0;
+		while (same_end < old_lines.size() - same_start && same_end < new_lines.size() - same_start
+			&& old_lines[old_lines.size() - 1 - same_end] == new_lines[new_lines.size() - 1 - same_end]) ++same_end;
+		const std::span<const std::string_view> removed(old_lines.data() + same_start, old_lines.size() - same_start - same_end);
+		const std::span<const std::string_view> added(new_lines.data() + same_start, new_lines.size() - same_start - same_end);
+		if (removed.empty() && added.empty()) return "  No line changes (line endings at most).\n";
+		std::string out = std::format("  From line {}: {} lines out, {} lines in\n", same_start + 1, removed.size(), added.size());
+		describe_lines(out, '-', removed);
+		describe_lines(out, '+', added);
+		return out;
+	}
+
+	std::string described_refusal(std::string_view what, const cmd::result& refused)
+	{
+		return std::format("{}\nThis request will be refused: {}", what, described_line(refused.error, 512));
+	}
+
+	std::string build_file_note(std::string_view path)
+	{
+		const bool build_file = edt::code_call_category(path, cmd::agent_category::code_files) == cmd::agent_category::cmake_presets;
+		return build_file ? "  This is a build file (CMake): it changes how the project is built.\n" : "";
+	}
+
 	class code_commands
 	{
 	public:
@@ -296,7 +371,24 @@ namespace {
 				{ "total_lines", total }, { "from_line", from }, { "line_count", count } });
 		}
 
-		cmd::result write(const cmd::call& call) const
+		// A code.write checked all the way to the bytes it would store, nothing written yet: what the command does and
+		// what a person is told about it (describe) come from the same checks.
+		struct planned_write
+		{
+			std::optional<cmd::result> refused;
+			res::tag tag;
+			std::string current;
+			std::string next;
+		};
+
+		planned_write plan_write(const cmd::call& call) const
+		{
+			planned_write plan;
+			plan.refused = check_write(call, plan);
+			return plan;
+		}
+
+		std::optional<cmd::result> check_write(const cmd::call& call, planned_write& plan) const
 		{
 			const auto code_root = root();
 			if (!code_root) return cmd::result::failure(k_no_project, "the project has no code/ folder");
@@ -315,7 +407,7 @@ namespace {
 			// file right then still can (the store has no compare-and-swap): accepted (#451).
 			const std::string current_version = edt::code_version_of(file.bytes);
 			if (string_arg(call, "version") != current_version) return stale(path, current_version);
-			const std::string current = text_of(file.bytes);
+			std::string current = text_of(file.bytes);
 			if (!edt::is_valid_utf8(current)) return not_text(path);
 
 			std::string next;
@@ -346,6 +438,19 @@ namespace {
 			}
 			if (next.size() > edt::k_code_file_limit) return too_big(path, next.size());
 			if (!edt::is_valid_utf8(next)) return not_text(path);
+			plan.tag = tag;
+			plan.current = std::move(current);
+			plan.next = std::move(next);
+			return std::nullopt;
+		}
+
+		cmd::result write(const cmd::call& call) const
+		{
+			const planned_write plan = plan_write(call);
+			if (plan.refused) return *plan.refused;
+			const std::string_view path = string_arg(call, "path");
+			const res::tag& tag = plan.tag;
+			const std::string& next = plan.next;
 			const std::vector<std::byte> bytes = bytes_of(next);
 			if (!m_deps.res.store_sync(tag, bytes)) {
 				return cmd::result::failure(cmd::codes::failed, std::format("'{}' could not be written", path));
@@ -354,47 +459,93 @@ namespace {
 			return cmd::result::success(json::object{ { "version", edt::code_version_of(bytes) }, { "bytes", bytes.size() } });
 		}
 
-		cmd::result create(const cmd::call& call) const
+		// What a person reads in the question about a call, before its arguments: the first line is always what happens
+		// to which file, whatever the agent put first in its JSON (#934).
+		std::optional<std::string> describe_write(const cmd::call& call) const
 		{
-			if (!root()) return cmd::result::failure(k_no_project, "the project has no code/ folder");
-			const json::object& args = call.args.as_object();
 			const std::string_view path = string_arg(call, "path");
-			if (std::string problem = check_file(path); !problem.empty()) return cmd::result::failure(cmd::codes::failed, std::move(problem));
-			const json::value* text_arg = args.if_contains("text");
+			const std::string what = "Change " + described_path(path);
+			const planned_write plan = plan_write(call);
+			if (plan.refused) return described_refusal(what, *plan.refused);
+			return std::format("{}\n  {} bytes now, {} bytes after\n{}{}", what, plan.current.size(), plan.next.size(),
+				build_file_note(path), described_change(plan.current, plan.next));
+		}
+
+		std::optional<std::string> describe_create(const cmd::call& call) const
+		{
+			const std::string_view path = string_arg(call, "path");
+			const std::string what = "Create " + described_path(path);
+			const json::value* text_arg = call.args.as_object().if_contains("text");
 			const std::string_view text = text_arg ? view_of(text_arg->as_string()) : std::string_view{};
-			if (text.size() > edt::k_code_file_limit) return too_big(path, text.size());
-			if (!edt::is_valid_utf8(text)) return not_text(path);
-			const std::vector<std::byte> bytes = bytes_of(text);
-			// Never over an existing file, also one that appears meanwhile (create_sync).
-			const res::file_operation made = m_deps.res.create_sync(edt::code_actions::tag_of(path), bytes);
-			if (!made.ok) return cmd::result::failure(cmd::codes::failed, std::format("'{}' was not created: {}", path, made.error));
-			changed(call, "code.create", std::string(path), bytes.size());
-			return cmd::result::success(json::object{ { "version", edt::code_version_of(bytes) }, { "bytes", bytes.size() } });
+			if (const std::optional<cmd::result> refused = check_create(path, text)) return described_refusal(what, *refused);
+			const std::vector<std::string_view> lines = lines_of(text);
+			std::string out = std::format("{}\n  {} bytes, {} lines\n{}", what, text.size(), lines.size(), build_file_note(path));
+			describe_lines(out, '+', lines);
+			return out;
 		}
 
-		cmd::result remove(const cmd::call& call) const
+		std::optional<std::string> describe_remove(const cmd::call& call) const
 		{
-			const auto code_root = root();
-			if (!code_root) return cmd::result::failure(k_no_project, "the project has no code/ folder");
 			const std::string_view path = string_arg(call, "path");
-			if (std::string problem = check_file(path); !problem.empty()) return cmd::result::failure(cmd::codes::failed, std::move(problem));
-			const res::tag tag = edt::code_actions::tag_of(path);
-			const file_read file = read_fresh(m_deps.res, *code_root, tag);
-			if (!file.ok()) return cmd::result::failure(cmd::codes::failed, file.error);
-			if (const std::string current = edt::code_version_of(file.bytes); string_arg(call, "version") != current) {
-				return stale(path, current);
-			}
-			const res::file_operation gone = m_deps.res.remove(tag);
-			if (!gone.ok) return cmd::result::failure(cmd::codes::failed, std::format("'{}' was not deleted: {}", path, gone.error));
-			changed(call, "code.delete", std::string(path), file.bytes.size());
-			return cmd::result::success(json::object{});
+			const std::string what = "Delete " + described_path(path);
+			const planned_removal plan = plan_removal(call);
+			if (plan.refused) return described_refusal(what, *plan.refused);
+			return std::format("{}\n  {} bytes, {} lines; the editor keeps no copy of it\n{}", what, plan.bytes,
+				lines_of(plan.text).size(), build_file_note(path));
 		}
 
-		cmd::result rename(const cmd::call& call) const
+		std::optional<std::string> describe_rename(const cmd::call& call) const
 		{
-			if (!root()) return cmd::result::failure(k_no_project, "the project has no code/ folder");
 			const std::string_view from = string_arg(call, "from");
 			const std::string_view to = string_arg(call, "to");
+			const std::string what = std::format("Rename {}\n    to {}", described_path(from), described_path(to));
+			if (const std::optional<cmd::result> refused = check_rename(from, to)) return described_refusal(what, *refused);
+			const std::string note = build_file_note(from);
+			return what + "\n" + (note.empty() ? build_file_note(to) : note);
+		}
+
+		std::optional<cmd::result> check_create(std::string_view path, std::string_view text) const
+		{
+			if (!root()) return cmd::result::failure(k_no_project, "the project has no code/ folder");
+			if (std::string problem = check_file(path); !problem.empty()) return cmd::result::failure(cmd::codes::failed, std::move(problem));
+			if (text.size() > edt::k_code_file_limit) return too_big(path, text.size());
+			if (!edt::is_valid_utf8(text)) return not_text(path);
+			return std::nullopt;
+		}
+
+		struct planned_removal
+		{
+			std::optional<cmd::result> refused;
+			res::tag tag;
+			std::size_t bytes = 0;
+			std::string text;
+		};
+
+		planned_removal plan_removal(const cmd::call& call) const
+		{
+			planned_removal plan;
+			const auto refuse = [&plan](cmd::result why) {
+				plan.refused = std::move(why);
+				return plan;
+			};
+			const auto code_root = root();
+			if (!code_root) return refuse(cmd::result::failure(k_no_project, "the project has no code/ folder"));
+			const std::string_view path = string_arg(call, "path");
+			if (std::string problem = check_file(path); !problem.empty()) return refuse(cmd::result::failure(cmd::codes::failed, std::move(problem)));
+			plan.tag = edt::code_actions::tag_of(path);
+			const file_read file = read_fresh(m_deps.res, *code_root, plan.tag);
+			if (!file.ok()) return refuse(cmd::result::failure(cmd::codes::failed, file.error));
+			if (const std::string current = edt::code_version_of(file.bytes); string_arg(call, "version") != current) {
+				return refuse(stale(path, current));
+			}
+			plan.bytes = file.bytes.size();
+			plan.text = text_of(file.bytes);
+			return plan;
+		}
+
+		std::optional<cmd::result> check_rename(std::string_view from, std::string_view to) const
+		{
+			if (!root()) return cmd::result::failure(k_no_project, "the project has no code/ folder");
 			for (const std::string_view path : { from, to }) {
 				if (std::string problem = check_file(path); !problem.empty()) {
 					return cmd::result::failure(cmd::codes::failed, std::format("'{}': {}", path, problem));
@@ -411,6 +562,40 @@ namespace {
 						std::format("there is no folder '{}' in code/ to move into: code.create makes the folders of a new file", folder));
 				}
 			}
+			return std::nullopt;
+		}
+
+		cmd::result create(const cmd::call& call) const
+		{
+			const json::object& args = call.args.as_object();
+			const std::string_view path = string_arg(call, "path");
+			const json::value* text_arg = args.if_contains("text");
+			const std::string_view text = text_arg ? view_of(text_arg->as_string()) : std::string_view{};
+			if (std::optional<cmd::result> refused = check_create(path, text)) return *refused;
+			const std::vector<std::byte> bytes = bytes_of(text);
+			// Never over an existing file, also one that appears meanwhile (create_sync).
+			const res::file_operation made = m_deps.res.create_sync(edt::code_actions::tag_of(path), bytes);
+			if (!made.ok) return cmd::result::failure(cmd::codes::failed, std::format("'{}' was not created: {}", path, made.error));
+			changed(call, "code.create", std::string(path), bytes.size());
+			return cmd::result::success(json::object{ { "version", edt::code_version_of(bytes) }, { "bytes", bytes.size() } });
+		}
+
+		cmd::result remove(const cmd::call& call) const
+		{
+			const planned_removal plan = plan_removal(call);
+			if (plan.refused) return *plan.refused;
+			const std::string_view path = string_arg(call, "path");
+			const res::file_operation gone = m_deps.res.remove(plan.tag);
+			if (!gone.ok) return cmd::result::failure(cmd::codes::failed, std::format("'{}' was not deleted: {}", path, gone.error));
+			changed(call, "code.delete", std::string(path), plan.bytes);
+			return cmd::result::success(json::object{});
+		}
+
+		cmd::result rename(const cmd::call& call) const
+		{
+			const std::string_view from = string_arg(call, "from");
+			const std::string_view to = string_arg(call, "to");
+			if (std::optional<cmd::result> refused = check_rename(from, to)) return *refused;
 			// Never over an existing file.
 			const res::file_operation moved = m_deps.res.rename(edt::code_actions::tag_of(from), edt::code_actions::tag_of(to));
 			if (!moved.ok) return cmd::result::failure(cmd::codes::failed, std::format("'{}' was not renamed: {}", from, moved.error));
@@ -487,18 +672,23 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 	auto impl = std::make_shared<code_commands>(deps);
 	std::vector<registration> out;
 	const auto add = [&](std::string id, std::string summary, std::string_view args, std::string_view result, bool mutates,
-		bool destructive, cmd::agent_category category, std::function<cmd::agent_category(const cmd::call&)> category_of,
-		cmd::result (code_commands::*body)(const cmd::call&) const) {
+		cmd::danger risk, cmd::agent_category category, std::function<cmd::agent_category(const cmd::call&)> category_of,
+		cmd::result (code_commands::*body)(const cmd::call&) const,
+		std::optional<std::string> (code_commands::*describe)(const cmd::call&) const = nullptr) {
 		cmd::command_desc desc;
 		desc.id = std::move(id);
 		desc.summary = std::move(summary);
 		desc.args_schema = parse_schema(args);
 		desc.result_schema = parse_schema(result);
 		desc.mutates = mutates;
-		desc.destructive = destructive;
+		// A command that takes a file away is asked about every time: the policy reads `risk`, never `destructive`, and
+		// a session grant given for a code.create must not carry a delete (#933).
+		desc.destructive = risk != cmd::danger::none;
+		desc.risk = risk;
 		desc.category = category;
 		desc.category_of = std::move(category_of);
 		desc.invoke = [impl, body](const cmd::call& call) { return ((*impl).*body)(call); };
+		if (describe != nullptr) desc.describe = [impl, describe](const cmd::call& call) { return ((*impl).*describe)(call); };
 		registration added = commands.add(std::move(desc));
 		if (added.active()) out.push_back(std::move(added));
 	};
@@ -515,7 +705,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 				"path":{"type":"string"},"kind":{"type":"string","enum":["file","dir"]},
 				"category":{"type":"string","enum":["source","header","cmake","other"]}},"required":["path","kind"]}},
 			"truncated":{"type":"boolean","description":"more than 5000 entries: list a folder at a time"}},"required":["entries","truncated"]})json",
-		false, false, cmd::agent_category::read, {}, &code_commands::list);
+		false, cmd::danger::none, cmd::agent_category::read, {}, &code_commands::list);
 	add("code.read", "Read a code file (UTF-8) whole or a range of its lines; `version` is what code.write and code.delete take back",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"under code/, '/' separated: src/game.cpp"},
@@ -525,7 +715,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 			"text":{"type":"string","description":"the lines asked for, line endings as they are"},
 			"version":{"type":"string"},"total_lines":{"type":"integer"},"from_line":{"type":"integer"},"line_count":{"type":"integer"}},
 			"required":["text","version","total_lines","from_line","line_count"]})json",
-		false, false, cmd::agent_category::read, {}, &code_commands::read);
+		false, cmd::danger::none, cmd::agent_category::read, {}, &code_commands::read);
 	add("code.write", "Change an existing code file: the whole `text`, or `replace` {old, new} where `old` is found exactly once (byte for byte); `version` must be the one code.read gave, else `stale` and nothing is written",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1},
@@ -534,25 +724,25 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 			"replace":{"type":"object","properties":{"old":{"type":"string","minLength":1},"new":{"type":"string"}},
 				"required":["old","new"],"additionalProperties":false}},
 			"required":["path","version"],"additionalProperties":false})json",
-		k_version_result, true, false, cmd::agent_category::code_edit, by_path(cmd::agent_category::code_edit), &code_commands::write);
+		k_version_result, true, cmd::danger::none, cmd::agent_category::code_edit, by_path(cmd::agent_category::code_edit), &code_commands::write, &code_commands::describe_write);
 	add("code.create", "Create a code file (never over an existing one); folders it needs are made",
 		R"json({"type":"object","properties":{"path":{"type":"string","minLength":1},"text":{"type":"string"}},
 			"required":["path"],"additionalProperties":false})json",
-		k_version_result, true, false, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::create);
+		k_version_result, true, cmd::danger::none, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::create, &code_commands::describe_create);
 	add("code.delete", "Delete a code file; `version` must be the one code.read gave, else `stale` and the file stays",
 		R"json({"type":"object","properties":{"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1}},
 			"required":["path","version"],"additionalProperties":false})json",
-		k_empty_result, true, true, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::remove);
+		k_empty_result, true, cmd::danger::confirm, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::remove, &code_commands::describe_remove);
 	add("code.rename", "Rename or move a code file into an existing folder of code/ (never over an existing file)",
 		R"json({"type":"object","properties":{"from":{"type":"string","minLength":1},"to":{"type":"string","minLength":1}},
 			"required":["from","to"],"additionalProperties":false})json",
-		k_empty_result, true, true, cmd::agent_category::code_files,
+		k_empty_result, true, cmd::danger::confirm, cmd::agent_category::code_files,
 		[](const cmd::call& call) {
 			// The stricter side: a move into or out of a CMake name is a CMake edit.
 			const cmd::agent_category from = code_call_category(string_arg(call, "from"), cmd::agent_category::code_files);
 			const cmd::agent_category to = code_call_category(string_arg(call, "to"), cmd::agent_category::code_files);
 			return from == cmd::agent_category::cmake_presets ? from : to;
 		},
-		&code_commands::rename);
+		&code_commands::rename, &code_commands::describe_rename);
 	return out;
 }

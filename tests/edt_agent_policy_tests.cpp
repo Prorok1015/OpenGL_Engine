@@ -1404,6 +1404,28 @@ BOOST_AUTO_TEST_CASE(TheApprovedCopyOfAProject_IsKeptByItsCanonicalPath)
 	BOOST_TEST(!first.key.empty());
 }
 
+// #908 moved the key into project_settings_key: the approvals people already have must keep their file names.
+BOOST_AUTO_TEST_CASE(TheKeyOfAnApprovedCopy_IsTheOneItWasBefore)
+{
+#ifdef _WIN32
+	const fs::path project = "C:\\Games\\My Game\\";
+	const std::string key = "c:/games/my game";
+	const std::string file = "691b38fbf6b0529f.json";
+#elif defined(__APPLE__)
+	const fs::path project = "/srv/games/My Game/";
+	const std::string key = "/srv/games/my game";
+	const std::string file = "0de3c73364c171d4.json";
+#else
+	const fs::path project = "/srv/games/My Game/";
+	const std::string key = "/srv/games/My Game";
+	const std::string file = "12ecfd8393435d54.json";
+#endif
+	const edt::approved_snapshot_location location = edt::approved_snapshot_for("settings", project);
+	BOOST_TEST(location.key == key);
+	BOOST_TEST(location.file.filename().string() == file);
+	BOOST_TEST(edt::canonical_project_settings_key(project).value_or(std::string{}) == key);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // The --agent-policy file (#452 PR-3): answers to `ask` given in advance, applied only in a headless editor.

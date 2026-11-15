@@ -1,4 +1,5 @@
 #include "edt_migration_commands.h"
+#include "edt_forge_types.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -349,6 +350,13 @@ namespace {
 		return hash.value();
 	}
 
+	// Text from the project's files (a path, a name, a version, a reason that quotes one) as part of one line of the
+	// question a person reads: a line break in it must not forge a line there.
+	std::string shown(std::string_view text, std::size_t max_bytes = 1024)
+	{
+		return edt::forge::escaped_text(text, max_bytes);
+	}
+
 	std::string unfinished_refusal(const std::vector<std::string>& unfinished)
 	{
 		return std::format("migration {} did not finish: run editor --migrate-rollback {} first", unfinished.front(), unfinished.front());
@@ -692,24 +700,24 @@ namespace {
 			remember(key_of(call.from), call.confirmation, fingerprint_of(*root, plan, code_identity()));
 
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
-			std::string text = std::format("Migrate the project '{}' in place\n  {}\n  {} files, {} project steps", name,
-				fs_paths::generic_utf8_of(*root), plan.files.size(), plan.project_steps.size());
+			std::string text = std::format("Migrate the project '{}' in place\n  {}\n  {} files, {} project steps", shown(name),
+				shown(fs_paths::generic_utf8_of(*root)), plan.files.size(), plan.project_steps.size());
 			if (plan.manifest_outdated()) {
-				text += std::format("; engine {} -> {}", plan.scan.manifest.engine_version, plan.completes() ? "this engine" : "kept (files of an unloaded module stay)");
+				text += std::format("; engine {} -> {}", shown(plan.scan.manifest.engine_version, 64), plan.completes() ? "this engine" : "kept (files of an unloaded module stay)");
 			}
 			text += "\n";
 			const std::vector<pmg::skipped_file> skipped = pmg::skipped_by(plan);
 			if (!skipped.empty()) {
 				text += std::format("  Not migrated ({}):", skipped.size());
 				for (std::size_t i = 0; i < skipped.size() && i < k_max_listed; ++i) {
-					text += std::format(" {} ({})", skipped[i].path, pmg::to_string(skipped[i].kind));
+					text += std::format(" {} ({})", shown(skipped[i].path, 200), pmg::to_string(skipped[i].kind));
 				}
 				if (skipped.size() > k_max_listed) text += " ...";
 				text += "\n";
 			}
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(*root);
 			const std::string refused = !unfinished.empty() ? unfinished_refusal(unfinished) : pmg::plan_refusal(plan);
-			if (!refused.empty()) text += "  This request will be refused: " + refused + "\n";
+			if (!refused.empty()) text += "  This request will be refused: " + shown(refused) + "\n";
 			if (plan.empty() && refused.empty()) text += "  Nothing to migrate.\n";
 			text += "Open documents are closed, and the level is closed and opened again from disk. "
 				"Every file is backed up under .snk/migrations/ first.";
@@ -770,9 +778,9 @@ namespace {
 			remember(rollback_key(call.from), call.confirmation, rollback_fingerprint(id, journal));
 
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
-			std::string text = std::format("Roll back a migration of the project '{}'\n  {}\n", name, fs_paths::generic_utf8_of(*root));
+			std::string text = std::format("Roll back a migration of the project '{}'\n  {}\n", shown(name), shown(fs_paths::generic_utf8_of(*root)));
 			if (!journal.error.empty()) {
-				text += "  This request will be refused: " + journal.error + "\n";
+				text += "  This request will be refused: " + shown(journal.error) + "\n";
 				return text;
 			}
 			text += journal.listing;
