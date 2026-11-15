@@ -24,6 +24,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -387,26 +388,33 @@ BOOST_AUTO_TEST_CASE(TheConfirmedWriteOfAnOlderFile_WarnsThatOlderEditorsWillNot
 {
 	descs->register_migration("test.config", 1, [](json::object&) {});
 	const res::tag file = put("old.desc", R"({"__type":"test.config","speed":4.0})");
+	std::mutex warnings_mutex;
 	std::vector<std::string> warnings;
-	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn && category == "Editor/Save") warnings.emplace_back(message);
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || category != "Editor/Save") return;
+		std::lock_guard lock(warnings_mutex);
+		warnings.emplace_back(message);
 	});
+	const auto warned = [&] {
+		std::lock_guard lock(warnings_mutex);
+		return warnings;
+	};
 	edt::data_document document = make();
 	BOOST_REQUIRE(document.open(file).opened);
 	BOOST_TEST(!document.save().saved);
-	BOOST_TEST(warnings.empty());
+	BOOST_TEST(warned().empty());
 
 	document.confirm_version_write();
 	BOOST_REQUIRE(document.save().saved);
-	BOOST_REQUIRE(warnings.size() == 1u);
-	BOOST_TEST(warnings.front() == edt::version_upgrade_text("res://old.desc", 1, 2));
+	BOOST_REQUIRE(warned().size() == 1u);
+	BOOST_TEST(warned().front() == edt::version_upgrade_text("res://old.desc", 1, 2));
 
 	BOOST_REQUIRE(document.edit([](json::value& shown) {
 		shown.as_object()["speed"] = 5.0;
 		return true;
 	}));
 	BOOST_REQUIRE(document.save().saved);
-	BOOST_TEST(warnings.size() == 1u);
+	BOOST_TEST(warned().size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(RestoreOwn_BringsASnapshotBackAndTracksTheSavedState)
