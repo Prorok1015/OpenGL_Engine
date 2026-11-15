@@ -108,31 +108,19 @@ inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::s
 	}
 }
 
-// A 16x16 24-bit BMP of one colour; stb_image reads it by its content whatever the file's extension.
-inline std::vector<std::byte> small_bmp(std::uint8_t r, std::uint8_t g, std::uint8_t b)
+// A 16x16 RGB PNG of one colour; stb_image reads it by its content whatever the file's extension.
+inline std::vector<std::byte> small_png()
 {
-	constexpr std::uint32_t side = 16;
-	constexpr std::uint32_t pixels_offset = 54;
-	constexpr std::uint32_t file_size = pixels_offset + side * side * 3;
-	std::vector<std::byte> bmp(file_size);
-	const auto put = [&bmp](std::size_t at, std::uint32_t value, int bytes) {
-		for (int i = 0; i < bytes; ++i) bmp[at + i] = std::byte(value >> (8 * i));
+	constexpr std::uint8_t png[] = {
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x91, 0x68,
+		0x36, 0x00, 0x00, 0x00, 0x16, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x48, 0x68, 0x38, 0x40,
+		0x12, 0x62, 0x18, 0xd5, 0x30, 0xaa, 0x61, 0xf8, 0x6a, 0x00, 0x00, 0xc8, 0x54, 0xa0, 0x10, 0xff,
+		0x98, 0xeb, 0xde, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 	};
-	bmp[0] = std::byte('B');
-	bmp[1] = std::byte('M');
-	put(2, file_size, 4);
-	put(10, pixels_offset, 4);
-	put(14, 40, 4);
-	put(18, side, 4);
-	put(22, side, 4);
-	put(26, 1, 2);
-	put(28, 24, 2);
-	for (std::size_t at = pixels_offset; at < file_size; at += 3) {
-		bmp[at] = std::byte(b);
-		bmp[at + 1] = std::byte(g);
-		bmp[at + 2] = std::byte(r);
-	}
-	return bmp;
+	std::vector<std::byte> bytes(sizeof(png));
+	std::memcpy(bytes.data(), png, sizeof(png));
+	return bytes;
 }
 
 inline void mount_repo_res(test_util::ram_resolver& ram)
@@ -145,7 +133,7 @@ inline void mount_repo_res(test_util::ram_resolver& ram)
 	for (const char* face : { "right", "left", "top", "bottom", "front", "back" }) {
 		const res::tag tag{ res::tag::default_protocol(), std::string{ "skybox/" } + face + ".jpg" };
 		BOOST_REQUIRE_MESSAGE(ram.files.contains(tag), "the sky face moved: update the small sky of the test fixture");
-		ram.files[tag] = small_bmp(96, 128, 192);
+		ram.files[tag] = small_png();
 	}
 }
 
