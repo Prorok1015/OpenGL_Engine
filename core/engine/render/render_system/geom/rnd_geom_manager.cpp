@@ -3,6 +3,8 @@
 #include <snk/resource/res_system.h>
 #include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <string>
 #include <utility>
 
 rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, res::resource_system& res_sys)
@@ -13,11 +15,16 @@ rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, res::res
 
 rnd::geom_manager::~geom_manager()
 {
+	ASSERT_MSG(on_owner_thread(), "geom_manager destruction: main thread only");
+	for (const auto& [tag, geometry] : cache) {
+		m_res_sys.unwatch(tag, this);
+	}
 }
 
 rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::tag geom_tag)
 {
-    ASSERT_MSG(geom_tag.is_valid(), "geom tag is invalid!");
+	ASSERT_MSG(geom_tag.is_valid(), "geom tag is invalid!");
+	ASSERT_MSG(on_owner_thread(), "geom_manager::require_geometry: main thread only");
 
 	// The tag comes from a component, which anything may have written (#697): the rule of what data may load holds here too.
 	if (std::string why = res::reference_problem(geom_tag); !why.empty()) {
@@ -27,33 +34,49 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 		return nullptr;
 	}
 
-	if (auto* va = find_geometry(geom_tag)) {
-		return va;
+	const auto pending = loading.find(geom_tag);
+	if (const auto cached = cache.find(geom_tag); cached != cache.end()) {
+		cached->second.last_used = m_frame;
+		if (pending == loading.end()) {
+			return cached->second.vertex_array.get();
+		}
+		// Its desc changed: the previous vertex array is drawn until the new one is built.
+		if (pending->second.is_ready()) {
+			res::res_handle<rnd::geometry_desc> changed = pending->second;
+			loading.erase(pending);
+			if (auto rebuilt = build(*changed)) {
+				rebuilt->last_used = m_frame;
+				cached->second = std::move(*rebuilt);
+			} else {
+				egLOG_WARN("render/geometry", "'{}' changed but gives no vertex array: the previous geometry stays",
+					geom_tag.view());
+			}
+		} else if (pending->second.has_error()) {
+			loading.erase(pending);
+			egLOG_WARN("render/geometry", "'{}' changed but failed to load: the previous geometry stays until it "
+				"changes again", geom_tag.view());
+		}
+		return cached->second.vertex_array.get();
 	}
 
-	auto it = loading.find(geom_tag); 
 	res::res_handle<rnd::geometry_desc> handle;
-	if (it == loading.end()) {
+	if (pending == loading.end()) {
 		handle = m_res_sys.require<rnd::geometry_desc>(geom_tag);
 		loading[geom_tag] = handle;
 	} else {
-		handle = it->second;
+		handle = pending->second;
 	}
 
 	if (handle.is_ready()) {
 		loading.erase(geom_tag);
-		rnd::geometry_desc& desc = *handle;
-		// Built aside and moved in last: a failure or an exception leaves no half-made record in the cache.
-		built_geometry geometry;
-		geometry.vertex_array = create_geometry(desc);
-		if (!geometry.vertex_array) {
+		auto geometry = build(*handle);
+		if (!geometry) {
 			return nullptr;
 		}
-		geometry.indices.assign(desc.indices.begin(), desc.indices.end());
-		const std::uint32_t stride = desc.layout.get_stride();
-		geometry.vertex_count = stride == 0 ? std::uint64_t{ 0 } : std::uint64_t{ desc.vertices.size() / stride };
-		rnd::driver::vertex_array_interface* const built = geometry.vertex_array.get();
-		cache.insert_or_assign(geom_tag, std::move(geometry));
+		geometry->last_used = m_frame;
+		rnd::driver::vertex_array_interface* const built = geometry->vertex_array.get();
+		cache.insert_or_assign(geom_tag, std::move(*geometry));
+		m_res_sys.watch(geom_tag, this, [this](const res::tag& changed) { on_changed(changed); });
 		return built;
 	}
 
@@ -63,6 +86,44 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 	}
 
 	return nullptr;
+}
+
+std::optional<rnd::geom_manager::built_geometry> rnd::geom_manager::build(rnd::geometry_desc& desc)
+{
+	// Built aside and moved in last: a failure or an exception leaves no half-made record in the cache.
+	built_geometry geometry;
+	geometry.vertex_array = create_geometry(desc);
+	if (!geometry.vertex_array) {
+		return std::nullopt;
+	}
+	geometry.indices.assign(desc.indices.begin(), desc.indices.end());
+	const std::uint32_t stride = desc.layout.get_stride();
+	geometry.vertex_count = stride == 0 ? std::uint64_t{ 0 } : std::uint64_t{ desc.vertices.size() / stride };
+	return geometry;
+}
+
+void rnd::geom_manager::on_changed(const res::tag& geom_tag)
+{
+	ASSERT_MSG(on_owner_thread(), "geom_manager::on_changed: main thread only");
+	if (!cache.contains(geom_tag)) {
+		return;
+	}
+	// The change evicted the block from the resource cache: this reads the new data, once.
+	loading.insert_or_assign(geom_tag, m_res_sys.require<rnd::geometry_desc>(geom_tag));
+}
+
+void rnd::geom_manager::begin_frame()
+{
+	ASSERT_MSG(on_owner_thread(), "geom_manager::begin_frame: main thread only");
+	++m_frame;
+	for (auto it = cache.begin(); it != cache.end();) {
+		if (it->second.last_used + k_unused_frames_kept < m_frame && !loading.contains(it->first)) {
+			m_res_sys.unwatch(it->first, this);
+			it = cache.erase(it);
+		} else {
+			++it;
+		}
+	}
 }
 
 bool rnd::geom_manager::draw_fits(const res::tag& geom_tag, std::uint32_t count, std::uint32_t base_vertex, std::uint32_t base_index)
