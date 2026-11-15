@@ -7,6 +7,7 @@
 #include "rnd_pass_pipelines.h"
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
+#include <utility>
 
 namespace rnd {
 struct screen_vertex {
@@ -15,7 +16,8 @@ struct screen_vertex {
   glm::vec2 uv;
 };
 
-composition_pass::composition_pass() {}
+composition_pass::composition_pass(res::tag vertex_shader, res::tag fragment_shader)
+    : m_vertex_shader(std::move(vertex_shader)), m_fragment_shader(std::move(fragment_shader)) {}
 
 void composition_pass::execute(render_context &context,
                                driver::driver_interface &drv) {
@@ -99,8 +101,8 @@ void composition_pass::execute(render_context &context,
     rnd::shader_config desc;
     desc.cdata.program =
         rnd::shader_config::shader_program_data::build()
-            .set_vertex_shader(res::tag::make("shaders/composition.vert"))
-            .set_fragment_shader(res::tag::make("shaders/composition.frag"));
+            .set_vertex_shader(m_vertex_shader)
+            .set_fragment_shader(m_fragment_shader);
 
     const auto variant = context.variants().intern(desc.cdata);
     if (pipelines.bind(variant)) {

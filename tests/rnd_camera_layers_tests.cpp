@@ -185,7 +185,7 @@ BOOST_AUTO_TEST_CASE(ZPrepassClearsTheDepthUnlessTheCameraClearsNothing)
 	for (const auto& c : clear_cases) {
 		ds::frame_allocator_reset();
 		single_camera camera(c.mode, false);
-		z_prepass pass;
+		z_prepass pass{ res::tag::make("shaders/z_prepass.vert"), res::tag::make("shaders/z_prepass.frag") };
 		pass.execute(camera.context, camera.drv);
 		const auto& desc = camera.drv.last_render_pass();
 		BOOST_REQUIRE(desc.depth_stencil.has_value());
@@ -206,7 +206,7 @@ BOOST_AUTO_TEST_CASE(AnOverlayGroupKeepsTheColourOfTheGroupBelowItAndClearsOnlyI
 	driver::null::driver drv;
 	test_util::test_render_context context;
 	context.use_packets(&packets);
-	z_prepass z;
+	z_prepass z{ res::tag::make("shaders/z_prepass.vert"), res::tag::make("shaders/z_prepass.frag") };
 	opaque_pass opaque;
 
 	struct seen { driver::load_op depth; driver::load_op color; };
