@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
 #include <snk/desc/desc_system.h>
+#include <snk/scene/scn_geometry_holds.h>
 #include <cstddef>
 #include <unordered_map>
 
@@ -16,7 +17,10 @@ public:
 
 	async_raw_data resolve(const res::tag& tag) const override
 	{
-		++resolves[tag];
+		const std::size_t count = ++resolves[tag];
+		if (tag.view().ends_with("gen_robot.geom.desc")) {
+			egLOG_INFO("test/geometry", "read {} of {}", count, tag.view());
+		}
 		return test_util::ram_resolver::resolve(tag);
 	}
 
@@ -50,6 +54,16 @@ struct geometry_engine_fixture : test_util::null_engine_fixture
 		BOOST_REQUIRE(run_frames(frames) == frames);
 	}
 
+	// The geometry holds of the level's worlds, summed.
+	std::size_t held()
+	{
+		std::size_t count = 0;
+		storage.require<scn::context_manager>().level_set().for_each([&count](scn::world_context& world) {
+			if (const auto* holds = world.state().ctx().find<scn::geometry_holds>()) count += holds->size();
+		});
+		return count;
+	}
+
 	resolves_by_tag* memory = nullptr;
 };
 
@@ -58,7 +72,15 @@ BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendGeometry, geometry_engine_fixture)
 // The robot's meshes come from a .glb: without assimp the level has no geometry.
 BOOST_AUTO_TEST_CASE(TheGeometryOfALoadedLevel_IsReadOnce, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
-	load_and_draw("levels/smoke_level.desc", 3);
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	egLOG_INFO("test/geometry", "reads after load_level: {}, held: {}", robot_geometry_reads(), held());
+	test_util::pump(tasks);
+	egLOG_INFO("test/geometry", "reads after the pump: {}, held: {}", robot_geometry_reads(), held());
+	for (int frame = 0; frame < 3; ++frame) {
+		BOOST_REQUIRE(run_frames(1) == 1);
+		egLOG_INFO("test/geometry", "reads after frame {}: {}, held: {}", frame, robot_geometry_reads(), held());
+	}
 	BOOST_TEST(robot_geometry_reads() == 1u);
 }
 
