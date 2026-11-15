@@ -82,6 +82,31 @@ BOOST_AUTO_TEST_CASE(ARemovedComponentOrEntity_LetsGoOfTheGeometry)
 	BOOST_TEST(scn::geometry_holds::of(reg).size() == 0u);
 }
 
+// A component made by any other path (a snapshot restored, a script) is held through the resources the registry was
+// attached with, as long as the renderer would read its tag.
+BOOST_AUTO_TEST_CASE(AnAttachedRegistry_HoldsAComponentMadeWithoutAnAssembly)
+{
+	entt::registry reg;
+	scn::geometry_holds::attach(reg, rs.get());
+	const scn::mesh_node_desc stored = mesh_of("a.geom.desc");
+	const auto made = reg.create();
+	reg.emplace<scn::geometry_component>(made, scn::geometry_component{ .geom_tag = stored.geometry.get_tag() });
+	const auto* held = scn::geometry_holds::of(reg).find(made);
+	BOOST_REQUIRE(held);
+	BOOST_TEST(held->get_tag() == stored.geometry.get_tag());
+
+	const scn::mesh_node_desc other = mesh_of("b.geom.desc");
+	reg.replace<scn::geometry_component>(made, scn::geometry_component{ .geom_tag = other.geometry.get_tag() });
+	held = scn::geometry_holds::of(reg).find(made);
+	BOOST_REQUIRE(held);
+	BOOST_TEST(held->get_tag() == other.geometry.get_tag());
+
+	const auto refused = reg.create();
+	const res::tag user_file{ "user://saves/slot0.desc" };
+	reg.emplace<scn::geometry_component>(refused, scn::geometry_component{ .geom_tag = user_file });
+	BOOST_TEST(!scn::geometry_holds::of(reg).find(refused));
+}
+
 BOOST_AUTO_TEST_CASE(AMeshWithoutGeometry_HoldsNothing)
 {
 	entt::registry reg;

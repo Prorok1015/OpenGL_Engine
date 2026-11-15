@@ -67,10 +67,12 @@ BOOST_AUTO_TEST_CASE(AfterTheLevelIsGone_ItsGeometryIsLetGo, * boost::unit_test:
 	load_and_draw("levels/smoke_level.desc", 3);
 	BOOST_REQUIRE(robot_geometry_reads() == 1u);
 
+	// load_level replaces the worlds at once: their registries, and the holds in their ctx, are gone when it returns.
 	load_and_draw("levels/test_level.desc", 1);
 	// Nothing holds it any more: asked for again, it is read again.
 	const auto again = storage.require<res::resource_system>().require_sync<desc::desc_base>(k_robot_geometry);
 	test_util::pump(tasks);
+	BOOST_TEST(again.is_ready());
 	BOOST_TEST(robot_geometry_reads() == 2u);
 }
 
