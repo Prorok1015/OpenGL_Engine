@@ -44,41 +44,41 @@ namespace scn
 		scene_layer(scene_layer&&) = delete;
 		scene_layer& operator=(scene_layer&&) = delete;
 
-		res::resource_system& resources() { return *m_resources; }
-		desc::desc_system& descs() { return *m_descs; }
-		ecs_assembler& assembler() { return m_assembler; }
-		ecs::system_factory& systems() { return m_systems; }
-		ecs::component_registry& components() { return m_components; }
+		res::resource_system& resources();
+		desc::desc_system& descs();
+		ecs_assembler& assembler();
+		ecs::system_factory& systems();
+		ecs::component_registry& components();
 		// The runtime types a snapshot of the layer's worlds knows: the engine's, then the module's (with their schemas).
-		component_catalog& catalog() { return m_catalog; }
-		const component_catalog& catalog() const { return m_catalog; }
+		component_catalog& catalog();
+		const component_catalog& catalog() const;
 		// Never attached to a binary's entt::locator: module code passes it explicitly (ecs::register_component(meta()),
 		// entt::resolve(meta(), id)), and the engine finds it through ecs::find_meta.
-		entt::meta_ctx& meta() { return m_meta; }
-		const entt::meta_ctx& meta() const { return m_meta; }
-		const std::shared_ptr<hot_reload_manager>& hot_reload() const { return m_hot_reload; }
+		entt::meta_ctx& meta();
+		const entt::meta_ctx& meta() const;
+		const std::shared_ptr<hot_reload_manager>& hot_reload() const;
 		// The message types of the layer's sets: the base's, then the module's (`channels().add<my_message>()`).
-		ecs::channel_registry& channels() { return *m_channels; }
-		const std::shared_ptr<ecs::channel_registry>& channel_types() const { return m_channels; }
+		ecs::channel_registry& channels();
+		const std::shared_ptr<ecs::channel_registry>& channel_types() const;
 		// The event types of the worlds of the layer's sets (WORLD_BUS.md 3): the base's, then the module's
 		// (`events().add<my_event>()`).
-		ecs::bus_registry& events() { return *m_events; }
-		const std::shared_ptr<ecs::bus_registry>& event_types() const { return m_events; }
+		ecs::bus_registry& events();
+		const std::shared_ptr<ecs::bus_registry>& event_types() const;
 		// Bus subscriptions heard in the worlds of the layer's sets (a module subscribes through
 		// gs::module_context::subscribe, which keeps them here until the layer goes).
-		event_subscriptions& subscriptions() { return m_subscriptions; }
+		event_subscriptions& subscriptions();
 		// The blackboard value types a snapshot of the layer's sets can save (optional: `blackboard_types().add<T>(name,
 		// schema)`); a value of any other type is reported as lost.
-		blackboard_catalog& blackboard_types() { return m_blackboard_types; }
-		const blackboard_catalog& blackboard_types() const { return m_blackboard_types; }
+		blackboard_catalog& blackboard_types();
+		const blackboard_catalog& blackboard_types() const;
 
 		// Owner of the module's tasks: run them with task_system::run(lane, desc, layer.tasks(), fn).
-		const ds::lifetime& tasks() const { return m_tasks; }
+		const ds::lifetime& tasks() const;
 		// Cancels the layer's tasks and waits for them; a task started after that (from one of their continuations) is
 		// cancelled at once. Idempotent and final: the layer does it before its worlds and services go.
 		void stop_tasks();
 		// What the layer's tasks run on; null when nothing is bound to tasks().
-		ds::task_system* task_runner() const { return m_task_system; }
+		ds::task_system* task_runner() const;
 
 		// Holds a registration made in a base registry (cmd::registration, engine::log_sink_handle, ...) until the
 		// layer goes; what is kept is dropped in reverse order. Returns the kept object.
@@ -87,15 +87,18 @@ namespace scn
 		{
 			auto held = std::make_shared<T>(std::move(handle));
 			T& ref = *held;
-			m_kept.push_back(std::move(held));
+			keep_erased(std::move(held));
 			return ref;
 		}
-		std::size_t kept_count() const { return m_kept.size(); }
+		std::size_t kept_count() const;
 
 	private:
+		// The exported half of keep<T>: module code never touches the kept list.
+		void keep_erased(std::shared_ptr<void> object);
+
 		entt::meta_ctx m_meta;
 		std::unique_ptr<res::resource_system> m_resources;
-		// By pointer (#758): the size of desc_system does not move the members a module reads after it.
+		// By pointer (#758): the size of desc_system does not move the members after it.
 		std::unique_ptr<desc::desc_system> m_descs;
 		ecs_assembler m_assembler;
 		ecs::system_factory m_systems;

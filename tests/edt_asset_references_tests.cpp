@@ -190,6 +190,48 @@ BOOST_AUTO_TEST_CASE(ThePrefabRoot_HasComponentsToo)
 	BOOST_TEST((edt::classify_reference(*geometry, descs.get()) == edt::usage_kind::field));
 }
 
+BOOST_AUTO_TEST_CASE(AParentAndAComponentWrittenAsReferenceObjects_KeepTheirPlace)
+{
+	const std::vector<edt::raw_reference> found = edt::collect_raw_references(json::parse(R"({
+		"__type": "prefab_desc",
+		"__parent": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://base.prefab.desc" },
+		"components": {
+			"sky": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://sky.desc" },
+			"fog": { "path": "res://fog.desc" },
+			"inst": { "__type": "prefab_desc", "__parent": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f" } }
+		}
+	})"));
+	const auto found_at = [&found](std::string_view pointer) {
+		const auto item = std::ranges::find_if(found, [pointer](const edt::raw_reference& r) { return r.json_pointer == pointer; });
+		BOOST_REQUIRE_MESSAGE(item != found.end(), std::string(pointer));
+		return *item;
+	};
+	BOOST_TEST(found.size() == 4u);
+
+	const edt::raw_reference parent = found_at("/__parent");
+	BOOST_TEST((parent.place == edt::reference_place::parent));
+	BOOST_TEST(parent.path == "res://base.prefab.desc");
+	// #964: the engine loads a file's own parent by its path, so no guid is kept for it.
+	BOOST_TEST(!parent.guid.has_value());
+	BOOST_TEST((edt::classify_reference(parent, descs.get()) == edt::usage_kind::parent));
+
+	const edt::raw_reference sky = found_at("/components/sky");
+	BOOST_TEST((sky.place == edt::reference_place::component));
+	BOOST_TEST(sky.path == "res://sky.desc");
+	BOOST_REQUIRE(sky.guid.has_value());
+	BOOST_TEST(sky.owner_type == "prefab_desc");
+	BOOST_TEST((edt::classify_reference(sky, descs.get()) == edt::usage_kind::component));
+
+	const edt::raw_reference fog = found_at("/components/fog");
+	BOOST_TEST((fog.place == edt::reference_place::component));
+	BOOST_TEST(!fog.guid.has_value());
+
+	const edt::raw_reference nested = found_at("/components/inst/__parent");
+	BOOST_TEST((nested.place == edt::reference_place::parent));
+	BOOST_TEST(nested.path.empty());
+	BOOST_TEST(nested.guid.has_value());
+}
+
 BOOST_AUTO_TEST_CASE(WithoutADescSystem_OnlyThePlaceSaysAnything)
 {
 	BOOST_TEST((edt::classify_reference(*at(k_node + "/components/mesh/geometry"), nullptr) == edt::usage_kind::loose));

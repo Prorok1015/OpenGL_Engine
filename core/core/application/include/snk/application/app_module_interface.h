@@ -1,9 +1,13 @@
 #pragma once
 #include <snk/common/ds/ds_store.hpp>
+#include <cstdint>
 #include <string_view>
 #include <vector>
 
 namespace app::modules {
+	// +1 on any change to the virtual functions below: the module layout key mixes it in, tools/ci/vtable_pins.json pins them (#922).
+	inline constexpr std::uint32_t module_interface_abi_revision = 1;
+
 	struct module_interface
 	{
 		virtual ~module_interface() = default;

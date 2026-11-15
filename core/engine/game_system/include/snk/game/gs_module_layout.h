@@ -1,22 +1,5 @@
 #pragma once
-// Not used here: the includes this header had before #922, kept for module code that reaches them through it.
-#include <snk/command/cmd_types.h>
-#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
-#include <snk/desc/desc_base.hpp>
-#include <snk/desc/desc_schema_ops.h>
-#include <snk/ecs/ecs_bus.hpp>
-#include <snk/ecs/ecs_signal.hpp>
-#include <snk/ecs/ecs_system_access.hpp>
-#include <snk/ecs/ecs_system_registry.hpp>
-#include <snk/game/gs_input_stack_handle.h>
-#include <snk/input/inp_input_stack.h>
-#include <snk/resource/adapters/res_dependencies.hpp>
-#include <snk/resource/resolvers/res_control_block.hpp>
-#include <snk/resource/resources/res_resource_handle.hpp>
-#include <snk/scene/scn_component_catalog.h>
-#include <snk/scene/scn_event_subscriptions.h>
-#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -31,12 +14,14 @@ namespace scn
 // whose size is compiled into module code: a module constructs, copies or allocates them through engine templates
 // (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION), walks their storage (the engine components) or reads them
 // whole from registry.ctx() and the bus (#922). A type the engine creates and a module only reads through
-// inline accessors (scene_layer, context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
+// inline accessors (context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
 // moves nothing a module reads and is a minor change, while a reorder or removal there is a major bump by hand, or in
-// the window of 4.0 (#758) a new layout_revision. world_context has no inline accessor since #802: its layout is the
-// engine's alone. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
-// fields of one size is not caught, nor a change of a vtable (bus_slot, bus_type, module_interface). A new type, a
-// comment or a rebuilt engine leave the key as it is. Debug and Release differ only where the standard library does
+// the window of 4.0 (#758) a new layout_revision. world_context (#802), scene_layer and input_actions (#922 PR 3) have
+// no inline accessor: their layout is the engine's alone. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
+// fields of one size is not caught. A vtable a module calls or fills enters as the <interface>_abi_revision declared
+// next to it, which tools/ci/check_vtable_pins.py holds to its bases and virtual functions; the versions of EnTT,
+// Boost and glm and the sizes of their types enter too (#922). A new type, a comment or a rebuilt engine leave the
+// key as it is. Debug and Release differ only where the standard library does
 // (MSVC's _ITERATOR_DEBUG_LEVEL); such a mix is refused earlier anyway, by the build flags.
 // The list itself and the headers of its types are in gs_module_layout_key.h, which only the file that declares a module
 // and gs_module_layout.cpp compile: every other file of a module that includes gs_game_module.h stays without them.
@@ -68,7 +53,17 @@ namespace gs
 		// and joins the list (#759).
 		// 11: the engine components (scn::engine_component_types), the ctx types and events a module reads, the channel
 		// types, app_data_storage and the structs passed by value join the list (#922); no type changes.
-		inline constexpr std::uint64_t layout_revision = 11;
+		// 12: the ABI revisions of the interfaces with a vtable, the versions of EnTT, Boost and glm and the sizes of
+		// entt::registry, boost::json::value and glm::mat4 join the key (#922); no type changes.
+		// 13: the accessors of scene_layer and input_actions and the core of app_data_storage are exports; module code no
+		// longer reads their members inline (#922 PR 3).
+		inline constexpr std::uint64_t layout_revision = 13;
+
+		// Numbers the key mixes in as they are, in order: the interfaces' ABI revisions and the third-party versions.
+		template<std::uint64_t... Values>
+		struct layout_values
+		{
+		};
 
 		template<class T>
 		struct layout_part
@@ -90,6 +85,16 @@ namespace gs
 			}
 		};
 
+		template<std::uint64_t... Values>
+		struct layout_part<layout_values<Values...>>
+		{
+			static constexpr std::uint64_t mix(std::uint64_t hash) noexcept
+			{
+				((hash = mix_layout(hash, Values)), ...);
+				return hash;
+			}
+		};
+
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
 		{
@@ -102,7 +107,7 @@ namespace gs
 	namespace detail
 	{
 		// The key of the list, as gs_module_layout_key.h specializes it. A file that declares a module without that header
-		// gets this error, never a key of 0, which no host would check.
+		// gets this error instead of a key of 0, which a host refuses only of a module in a library.
 		template<class List = void>
 		struct listed_layout
 		{
@@ -116,6 +121,7 @@ namespace gs
 	SNK_API std::uint64_t engine_module_layout_key() noexcept;
 }
 
-// SNK_DECLARE_MODULE exports this as snk_module_layout_key; without this header a module reports 0 (not checked).
+// SNK_DECLARE_MODULE exports this as snk_module_layout_key; without this header a module reports 0, which a host
+// refuses of a module in a library (app::modules::check_library_module).
 #undef SNK_DETAIL_MODULE_LAYOUT_KEY
 #define SNK_DETAIL_MODULE_LAYOUT_KEY (::gs::detail::listed_layout<>::key)

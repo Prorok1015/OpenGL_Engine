@@ -2,11 +2,15 @@
 #include <snk/ecs/ecs_entt_abi.h>
 #include <snk/common/ds/ds_type_id.hpp>
 #include <entt/entity/registry.hpp>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 #include <memory>
 
 namespace ecs {
+
+    // +1 on any change to the virtual functions below: the module layout key mixes it in, tools/ci/vtable_pins.json pins them (#922).
+    inline constexpr std::uint32_t batch_interface_abi_revision = 1;
 
     struct batch_interface {
         virtual ~batch_interface() = default;
