@@ -59,6 +59,7 @@ const std::filesystem::path g_failing_path{ SNK_TEST_GAME_DLL_FAILING_PATH };
 const std::filesystem::path g_bad_api_path{ SNK_TEST_GAME_DLL_BAD_API_PATH };
 const std::filesystem::path g_old_api_path{ SNK_TEST_GAME_DLL_OLD_API_PATH };
 const std::filesystem::path g_bad_layout_path{ SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH };
+const std::filesystem::path g_no_layout_path{ SNK_TEST_GAME_DLL_NO_LAYOUT_PATH };
 
 // The editor's options (#614): the engine's layout key is checked.
 core::project_modules_options checked_layouts()
@@ -848,6 +849,24 @@ BOOST_AUTO_TEST_CASE(a_library_built_against_other_layouts_is_not_loaded)
 	BOOST_TEST(report.refused == std::vector<std::string>{ std::string{ dll_game::module_name } });
 	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
 	BOOST_TEST(!std::filesystem::exists(project.copy_folder(0)));
+	root.destruct<prj::project_context>();
+}
+
+// #922: a library that reports no layout key is refused as it is opened, before the loader sees it, whatever the host's key.
+BOOST_AUTO_TEST_CASE(a_library_without_a_layout_key_is_refused_when_opened)
+{
+	app::modules::native_library_source source(g_no_layout_path, g_no_layout_path.parent_path());
+	const std::string problem = source.open();
+	BOOST_CHECK_MESSAGE(problem.find("no layout key") != std::string::npos, problem);
+	BOOST_TEST(!source.is_open());
+
+	dll_project project("dll_no_layout_load", root);
+	project.build(g_no_layout_path);
+	core::project_module_host host(loader, root, core::project_modules_options{});
+	const auto report = host.load_all();
+	BOOST_TEST(report.loaded.empty());
+	BOOST_TEST(report.refused == std::vector<std::string>{ std::string{ dll_game::module_name } });
+	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
 	root.destruct<prj::project_context>();
 }
 

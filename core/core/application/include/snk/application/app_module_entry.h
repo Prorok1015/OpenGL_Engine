@@ -121,10 +121,15 @@
 // #927: rnd::render_context::draw_fits is added at the end of the vtable, the functions before it keep their places (minor: the layout key stays).
 // #922: the layout key also lists the engine components (scn::engine_component_types), the ctx types and events a module
 // reads, the channel types, ds::app_data_storage and the structs passed by value; no type changes (layout_revision 11).
+// #922 PR 2: the key also mixes in the ABI revision of every interface a module calls or fills through a vtable
+// (<interface>_abi_revision next to it, held to its virtual functions by tools/ci/check_vtable_pins.py), the versions of EnTT,
+// Boost and glm and the sizes of entt::registry, boost::json::value and glm::mat4; no type changes (layout_revision 12).
+// A module in a library built with the static C runtime or without a layout key (snk_module_layout_key missing or 0) is
+// refused when it is opened (app::modules::check_library_module); one compiled into the host is not.
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
-// without that header a module reports 0, which the host does not check. With it the file that declares the module
+// without that header a module reports 0, which the host refuses of a module in a library (check_library_module). With it the file that declares the module
 // needs the key's type list, snk/game/gs_module_layout_key.h, or it does not compile: gs_game_module.h included after
 // this header and edt_editor_extension.h bring it.
 #ifndef SNK_DETAIL_MODULE_LAYOUT_KEY
@@ -317,6 +322,7 @@ namespace app::modules {
 
 	// Empty when the module was built against the engine types' layouts the host has (`host_key`,
 	// gs::engine_module_layout_key), or cannot tell (no snk_module_layout_key, key 0, `host_key` 0); otherwise why not.
+	// A module in a library without a key is refused before this, by check_library_module.
 	inline std::string check_module_layout(const module_entry& entry, std::uint64_t host_key)
 	{
 		if (!entry.layout_key || host_key == 0) {
@@ -328,6 +334,33 @@ namespace app::modules {
 		}
 		return std::format("it was built against an engine whose types have another layout (module key {:016x}, engine "
 			"key {:016x}): rebuild the project (Build > Build Game)", key, host_key);
+	}
+
+	// What a module in a shared library must have besides check_module_entry (#922), from its build flags and layout key;
+	// empty when it has it. A static C runtime is a heap of its own that engine objects would cross (a host built with
+	// /MT still takes a module compiled into it), and without a key nothing tells its engine types' layouts from ours.
+	inline std::string library_module_problem(std::uint32_t flags, std::uint64_t layout_key)
+	{
+		if ((flags & build_flag::static_crt) != 0) {
+			return "it was built with the static C runtime (/MT or /MTd): a module in a library must use the DLL runtime "
+				"(/MD or /MDd) to share the engine's heap; rebuild it with CMAKE_MSVC_RUNTIME_LIBRARY "
+				"MultiThreaded$<$<CONFIG:Debug>:Debug>DLL";
+		}
+		if (layout_key == 0) {
+			return "it reports no layout key (snk_module_layout_key missing or 0): declare it with SNK_DECLARE_MODULE in a file "
+				"that includes snk/game/gs_game_module.h and rebuild the project (Build > Build Game)";
+		}
+		return {};
+	}
+
+	// library_module_problem of an entry. An entry check_module_entry refuses passes: the loader then reports that
+	// problem, which says what to change (another major, debug/release).
+	inline std::string check_library_module(const module_entry& entry)
+	{
+		if (!check_module_entry(entry).empty()) {
+			return {};
+		}
+		return library_module_problem(entry.build_info()->flags, entry.layout_key ? entry.layout_key() : 0u);
 	}
 
 }

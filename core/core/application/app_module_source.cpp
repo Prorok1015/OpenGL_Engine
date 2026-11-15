@@ -1,5 +1,6 @@
 #include <snk/application/app_module_source.h>
 #include <snk/common/fs_paths.h>
+#include <snk/common/logger/engine_log.h>
 #include <bit>
 #include <format>
 #include <system_error>
@@ -123,6 +124,11 @@ std::string app::modules::native_library_source::open()
 	m_entry.destroy = find_symbol<decltype(m_entry.destroy)>(m_handle, "snk_destroy_module");
 	m_entry.editor_api_version = find_symbol<decltype(m_entry.editor_api_version)>(m_handle, "snk_editor_api_version");
 	m_entry.layout_key = find_symbol<decltype(m_entry.layout_key)>(m_handle, "snk_module_layout_key");
+	if (std::string problem = check_library_module(m_entry); !problem.empty()) {
+		egLOG_ERROR("app", "refusing the module '{}': {}", real.string(), problem);
+		close();
+		return std::format("refusing '{}': {}", real.string(), problem);
+	}
 	return {};
 }
 
