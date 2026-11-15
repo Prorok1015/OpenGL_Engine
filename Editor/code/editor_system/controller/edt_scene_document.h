@@ -48,6 +48,9 @@ namespace edt
 		std::vector<scn::world_desc> world_descs;
 		std::vector<std::string> world_names;
 		std::vector<std::vector<std::string>> worlds_systems_list;
+		// The file each world was loaded from: world_descs holds copies, and a copy of a desc has no tag (#993).
+		// Empty for a world without one; may be shorter than world_descs, so read it through world_tag().
+		std::vector<res::tag> world_tags;
 		// -1 (or any index outside world_descs) = the level has no worlds; use the accessors below, never index directly.
 		int active_world_idx = 0;
 		// Bumped on every change of the edited descs (and of which one is edited); caches of derived views key on it.
@@ -61,6 +64,8 @@ namespace edt
 		bool has_active_world() const { return active_world_idx >= 0 && active_world_idx < static_cast<int>(world_descs.size()); }
 		scn::world_desc* active_world_desc() { return has_active_world() ? &world_descs[active_world_idx] : nullptr; }
 		const scn::world_desc* active_world_desc() const { return has_active_world() ? &world_descs[active_world_idx] : nullptr; }
+		res::tag world_tag(std::size_t world) const { return world < world_tags.size() ? world_tags[world] : res::tag{}; }
+		res::tag active_world_tag() const { return has_active_world() ? world_tag(static_cast<std::size_t>(active_world_idx)) : res::tag{}; }
 		// Name of the active world as the level knows it, null when there is none.
 		const std::string* active_world_name() const
 		{

@@ -167,6 +167,43 @@ BOOST_AUTO_TEST_CASE(Edit_ChangesTheWorkingCopyAndThePreview_NotTheCacheOrTheFil
 	BOOST_TEST(cached->get_root().children[0].name == "arm");
 }
 
+// The preview is built as content of the edited file from the start (#993): a record of the working copy that instantiates
+// that file itself is refused after open as after an edit, as when the saved file is spawned.
+BOOST_AUTO_TEST_CASE(Open_RefusesARecordThatInstantiatesTheEditedPrefab_AsAnEditDoes)
+{
+	write(res_root, "prefabs/leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"name":"tip"}]})");
+	const res::tag self = res::tag::make("prefabs/self.prefab.desc");
+	write(res_root, "prefabs/self.prefab.desc", std::string(R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000c1","name":"n","components":{"ref":")") + std::string(res::tag::make("prefabs/leaf.prefab.desc").view())
+		+ R"("},"overrides":[{"op":"add_node","target":[],"value":{"__id":"00000000000000e1","name":"added",
+			"components":{"ref":")" + std::string(self.view()) + R"("}}}]}]})");
+
+	// How many children the node `added` has in the preview; none when it is not there.
+	const auto children_of_added = [this] () -> std::optional<std::size_t> {
+		entt::registry* reg = document->get_registry();
+		if (!reg) return std::nullopt;
+		for (auto&& [entity, name] : reg->view<scn::name_component>().each()) {
+			if (name.name != "added") continue;
+			if (reg->all_of<scn::prefab_instance>(entity)) return std::nullopt;
+			const auto* kids = reg->try_get<scn::children_component>(entity);
+			return kids ? kids->children.size() : std::size_t{ 0 };
+		}
+		return std::nullopt;
+	};
+
+	document->open(self);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(preview_has_node_named("tip"));
+	BOOST_TEST((children_of_added() == std::optional<std::size_t>{ 0 }));
+
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
+		prefab.get_root().children[0].name = "n2";
+		return true;
+	}));
+	BOOST_TEST(preview_has_node_named("n2"));
+	BOOST_TEST((children_of_added() == std::optional<std::size_t>{ 0 }));
+}
+
 BOOST_AUTO_TEST_CASE(Edit_BackToWhatTheFileHolds_IsNotDirty)
 {
 	document->open(tag);

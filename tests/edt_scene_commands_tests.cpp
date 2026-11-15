@@ -88,6 +88,7 @@ struct commands_fixture : test_util::scene_env
 			BOOST_REQUIRE(world);
 			scene.world_descs.push_back(*world);
 			scene.world_names.emplace_back(name);
+			scene.world_tags.push_back(world->get_tag()); // as level_controller::populate_worlds_from_level does
 		}
 		scene.active_world_idx = 0;
 		scene.reset_history();
@@ -638,7 +639,7 @@ BOOST_AUTO_TEST_CASE(values_written_inside_an_instance_and_back)
 	BOOST_REQUIRE(call("transform.set", R"({"ref":)" + eye + R"(,"position":[0,5,0]})").ok);
 
 	const prefab_node& inst = *child(root(1), 0xe1);
-	const auto base = edt::override_edit::find_base_node(*assembler, inst, std::vector<std::uint64_t>{ 0xc1 });
+	const auto base = edt::override_edit::find_base_node(*assembler, inst, std::vector<std::uint64_t>{ 0xc1 }, res::tag{});
 	BOOST_REQUIRE(base.has_value());
 	const auto effective = edt::override_edit::effective_component(inst, std::vector<std::uint64_t>{ 0xc1 }, "camera_desc",
 		edt::override_edit::component_json(base->components.at("camera_desc")));
@@ -655,6 +656,49 @@ BOOST_AUTO_TEST_CASE(values_written_inside_an_instance_and_back)
 	auto prefab = load<scn::prefab_desc>(rig);
 	BOOST_REQUIRE(prefab);
 	BOOST_TEST(prefab->get_root().children[0].components.at("camera_desc").overrides.at("fov").to_number<double>() == 40.0);
+}
+
+// A record of the world may instantiate the prefab its instance node instantiates: the editor expands the node with the
+// world's file open, as the spawn of the world does (#993).
+BOOST_AUTO_TEST_CASE(a_record_of_the_world_that_instantiates_the_instances_prefab_again_is_listed_and_edited)
+{
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	const res::tag file = put("w2.desc", R"({"__type":"world_desc","__version":4,"name":"w2","systems":[],"children":[
+		{"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[
+			{"op":"add_node","target":[],"value":{"__id":"00000000000000d2","name":"A",
+				"components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
+	auto world = load<scn::world_desc>(file);
+	BOOST_REQUIRE(world);
+	pump();
+	scene.world_descs.push_back(*world);
+	scene.world_names.emplace_back("w2");
+	scene.world_tags.push_back(world->get_tag());
+	BOOST_REQUIRE(scene.world_tag(2) == file);
+	scene.active_world_idx = 2;
+	scene.reset_history();
+	const prefab_node& owner = *child(root(2), 0xd1);
+
+	edt::override_edit::view_cache cache(services, scene);
+	const auto listed = cache.children(owner, std::span<const std::uint64_t>{});
+	BOOST_REQUIRE(listed->size() == 2u);
+	BOOST_TEST((*listed)[1].node.node_id == 0xd2u);
+	BOOST_TEST((*listed)[1].has_children);
+	const auto below = cache.children(owner, std::vector<std::uint64_t>{ 0xd2 });
+	BOOST_REQUIRE(below->size() == 1u);
+	BOOST_TEST((*below)[0].node.name == "tip");
+
+	const std::string tip = ref({ "00000000000000d1", "00000000000000d2", "00000000000000f1" }, "w2");
+	const auto moved = call("transform.set", R"({"ref":)" + tip + R"(,"position":[0,3,0]})");
+	BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
+	BOOST_TEST(std::ranges::any_of(owner.overrides, [](const scn::override_record& r) {
+		return r.target == std::vector<std::uint64_t>{ 0xd2, 0xf1 };
+	}));
+
+	// Without the file the record is read as the prefab's own and refused: there is no node below it.
+	scene.world_tags.back() = res::tag{};
+	const auto refused = call("transform.set", R"({"ref":)" + tip + R"(,"position":[0,4,0]})");
+	BOOST_TEST(!refused.ok);
+	BOOST_TEST(refused.code == cmd::codes::not_found);
 }
 
 BOOST_AUTO_TEST_CASE(a_script_is_not_held_back_by_a_gesture)
@@ -980,7 +1024,7 @@ BOOST_AUTO_TEST_CASE(a_reference_in_a_patch_replaces_the_value_whole)
 	BOOST_REQUIRE(instance != root(1).children.end());
 	prefab_node& owner = *instance;
 	const std::vector<std::uint64_t> target{ 0xc1 };
-	const auto base_node = oe::find_base_node(*assembler, owner, target);
+	const auto base_node = oe::find_base_node(*assembler, owner, target, res::tag{});
 	BOOST_REQUIRE(base_node.has_value());
 	const json::object base_json = oe::component_json(base_node->components.at("mesh"));
 	json::object edited = oe::effective_component(owner, target, "mesh", base_json);
@@ -1125,7 +1169,7 @@ BOOST_AUTO_TEST_CASE(a_reference_in_an_override_record_is_written_with_its_guid)
 	index->hold(material, "res://m.desc");
 	rs->set_asset_index(index);
 	json::value level(scn::level_desc::build_json("l", scene.world_descs, *descs, ""));
-	edt::override_edit::write_record_references(*descs, *assembler, scene.world_descs, level);
+	edt::override_edit::write_record_references(*descs, *assembler, scene.world_descs, scene.world_tags, level);
 	rs->set_asset_index(nullptr);
 
 	boost::system::error_code ec;

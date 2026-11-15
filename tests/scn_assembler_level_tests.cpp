@@ -387,7 +387,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_DestructionUnhooksRegistryAndWatchers)
 	// manager gone: signalling and mutating the registry must not call into a dead manager
 	BOOST_CHECK_NO_THROW(rs->signal_changed(tag));
 	BOOST_CHECK_NO_THROW(pump());
-	BOOST_CHECK_NO_THROW(reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{ tag, {} }));
+	BOOST_CHECK_NO_THROW(reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{ tag, {}, {} }));
 }
 
 BOOST_AUTO_TEST_CASE(HotReloadManager_ATagSharedByTwoRegistriesStaysWatchedUntilBothAreDetached)
