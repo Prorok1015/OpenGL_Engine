@@ -519,7 +519,8 @@ BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_DescribesAnAllowedRiskyCall_Onc
 	BOOST_TEST(seen.runs == 1);
 }
 
-// Without the flag, without a risk, with invalid arguments, for a person's call, and for a call carrying a ticket nothing more is described.
+// Without the flag, without a risk, with invalid arguments and for a person's call nothing more is described; a call
+// naming a ticket it did not spend as an approved answer is described as one allowed in advance (#931).
 BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_OnlyForTheFlag_ARisk_ValidArgs_AnAgent_WithoutATicket)
 {
 	cmd::command_registry commands;
@@ -542,9 +543,11 @@ BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_OnlyForTheFlag_ARisk_ValidArgs_
 		auto reg = commands.add(described_echo(seen, cmd::danger::confirm, true));
 		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})"), cmd::origin::agent("s1")).code == cmd::codes::invalid_args);
 		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::ui()).ok);
+		BOOST_TEST(seen.described == 0);
 		cmd::call with_ticket{ json_of(R"({"text":"a"})"), cmd::origin::agent("s1"), 0, "0123" };
 		BOOST_TEST(commands.invoke("test.echo", with_ticket).ok);
-		BOOST_TEST(seen.described == 0);
+		BOOST_TEST(seen.described == 1);
+		BOOST_TEST(seen.ticket.empty());
 		BOOST_TEST(seen.runs == 2);
 	}
 }

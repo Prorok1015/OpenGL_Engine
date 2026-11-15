@@ -202,8 +202,9 @@ namespace edt
 		std::chrono::steady_clock::time_point now() const;
 		void finish_waiting(std::uint64_t id, std::optional<confirmation_answer> what, std::string_view why_not);
 		// A waiting question a new grant may cover runs again through the gate without its ticket, as a call answered
-		// in advance: one the gate still asks about stays waiting; otherwise its question goes, the call gets the
-		// outcome.
+		// in advance: one the gate still asks about or refuses stays waiting for its own answer, and so does one whose
+		// command binds its run to what the question showed (describe_before_allowed_invoke); otherwise its question
+		// goes and the call gets the outcome.
 		void settle_by_grant(std::uint64_t id);
 		void expire_late();
 		bool stood_still(std::uint64_t id) const;

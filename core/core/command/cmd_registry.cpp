@@ -260,11 +260,12 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 			});
 		}
 		// A command that keeps what it described (project.migrate) is described here too when it runs without a question (an
-		// answer given in advance). Invalid arguments are left to the schema check that follows.
-		if (command.describe_before_allowed_invoke && command.risk != danger::none && command.describe && request.confirmation.empty()
+		// answer given in advance), also when the call names a ticket it did not spend as an approved answer.
+		// Invalid arguments are left to the schema check that follows.
+		if (command.describe_before_allowed_invoke && command.risk != danger::none && command.describe && !confirmed
 			&& !json_schema::validate(command.args_schema, request.args)) {
 			try {
-				static_cast<void>(command.describe(confirmed ? request : without_confirmation(request)));
+				static_cast<void>(command.describe(without_confirmation(request)));
 			} catch (const std::exception& e) {
 				egLOG_WARN("command", "the description of a call of '{}' could not be made ({}): it is refused", command.id, e.what());
 				return denied("what it would do could not be told");

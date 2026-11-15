@@ -362,6 +362,53 @@ BOOST_AUTO_TEST_CASE(AGrant_SettlesTheQuestionsItCovers_ThroughTheGate_NeverByTh
 	BOOST_TEST(confirmations->pending().front().command == "vcs.switch");
 }
 
+// #931: a grant settles no question whose command binds its run to what the question showed, nor one whose run
+// without the person's answer is refused: each waits for its own answer.
+BOOST_AUTO_TEST_CASE(AGrant_LeavesWaiting_ABoundQuestion_AndOneItsRunRefuses)
+{
+	int bound_runs = 0;
+	int refusing_runs = 0;
+	const auto add_code_files = [this](std::string id, bool bound, std::function<cmd::result()> run) {
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.category = agent_category::code_files;
+		desc.summary = "does " + desc.id;
+		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.describe_before_allowed_invoke = bound;
+		desc.describe = [](const cmd::call&) -> std::optional<std::string> { return std::string("what it does"); };
+		desc.invoke = [run = std::move(run)](const cmd::call&) { return run(); };
+		registrations.push_back(commands.add(std::move(desc)));
+	};
+	add_code_files("vcs.bound", true, [&bound_runs] {
+		++bound_runs;
+		return cmd::result::success();
+	});
+	add_code_files("vcs.refusing", false, [&refusing_runs] {
+		++refusing_runs;
+		return cmd::result::failure(cmd::codes::denied, "not without its own answer");
+	});
+
+	run("vcs.bound");
+	run("vcs.refusing");
+	run("code.create");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 3u);
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->answer(asked[2].id, edt::confirmation_answer::allow_session));
+
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(bound_runs == 0);
+	BOOST_TEST(refusing_runs == 1);
+	const auto left = confirmations->pending();
+	BOOST_REQUIRE(left.size() == 2u);
+	BOOST_TEST(left[0].command == "vcs.bound");
+	BOOST_TEST(left[1].command == "vcs.refusing");
+	BOOST_REQUIRE(finished.size() == 1u);
+
+	BOOST_TEST(confirmations->answer(left[0].id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(bound_runs == 1);
+}
+
 BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_IsShownSanitized_AndBoundToTheQuestion)
 {
 	cmd::command_desc desc;

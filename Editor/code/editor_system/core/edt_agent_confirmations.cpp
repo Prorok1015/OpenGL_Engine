@@ -372,11 +372,16 @@ namespace edt
 		auto found = waiting_of();
 		// A question past its deadline is left to expire_late: a grant given later is no answer to it.
 		if (found == m_waiting.end() || found->request.deadline <= now()) return;
+		// A command that binds its run to what its question showed (a checkout to the commit shown, #931) waits for
+		// the answer to that question.
+		const cmd::command_desc* command = m_commands.find(found->command_id);
+		if (command == nullptr || command->describe_before_allowed_invoke) return;
 		cmd::call bare = found->call;
 		bare.confirmation.clear();
 		cmd::result outcome = run_command(found->command_id, bare);
-		// Still asked (another category it needs): the registry answered with the ticket already waiting.
-		if (outcome.code == cmd::codes::confirmation_required) return;
+		// Still asked (another category it needs: the registry answered with the ticket already waiting), or refused
+		// without the person's answer: the question stays for that answer.
+		if (outcome.code == cmd::codes::confirmation_required || outcome.code == cmd::codes::denied) return;
 		found = waiting_of();
 		if (found == m_waiting.end()) return;
 		waiting entry = std::move(*found);
