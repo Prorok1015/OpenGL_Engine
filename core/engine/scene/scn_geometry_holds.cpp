@@ -82,3 +82,8 @@ const res::res_handle<rnd::geometry_desc>* scn::geometry_holds::find(entt::entit
 	const auto found = m_held.find(entity);
 	return found == m_held.end() ? nullptr : &found->second;
 }
+
+std::size_t scn::geometry_holds::size() const
+{
+	return m_held.size();
+}

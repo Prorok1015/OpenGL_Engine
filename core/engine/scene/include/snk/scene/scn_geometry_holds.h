@@ -30,7 +30,7 @@ namespace scn {
 		void release(entt::entity entity);
 		// Valid until the next hold or release.
 		const res::res_handle<rnd::geometry_desc>* find(entt::entity entity) const;
-		std::size_t size() const { return m_held.size(); }
+		std::size_t size() const;
 
 	private:
 		res::resource_system* m_resources = nullptr;
