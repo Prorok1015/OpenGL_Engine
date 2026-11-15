@@ -107,6 +107,10 @@ namespace prj::migration
 	// file without plan.force, or plan.refused. Empty when it may run.
 	std::string plan_refusal(const migration_plan& plan);
 
+	// Why a project with these content roots is not migrated: its rollback would refuse them (check_journal_paths'
+	// rule). plan_migration puts it in plan.refused, so the plan and a dry run show it; apply_migration checks again.
+	std::optional<std::string> content_roots_refusal(const std::vector<std::filesystem::path>& content_roots);
+
 	// The files a migration of `plan` leaves as they are and reports: unknown_type and newer ones (never migrated), and
 	// the invalid ones plan.force passes over.
 	std::vector<skipped_file> skipped_by(const migration_plan& plan);
@@ -117,7 +121,8 @@ namespace prj::migration
 	// The report as report.json (the journal) has it.
 	boost::json::object report_to_json(const migration_report& report);
 
-	// Refuses what plan_refusal names; a newer file is left as it is (partial). An empty plan writes nothing (status ok, no id). Otherwise creates the
+	// Refuses what plan_refusal names, and content roots its own rollback would refuse (check_journal_paths' rule); a newer
+	// file is left as it is (partial). An empty plan writes nothing (status ok, no id). Otherwise creates the
 	// journal (status in_progress; its folder is taken exclusively, so two processes never share an id) before the first
 	// change and backs every file up, project.snkproj included. Then the pre project steps, the files, the post project
 	// steps, and last project.snkproj with engine_version and migrated_with of this engine and the steps added to
@@ -147,9 +152,44 @@ namespace prj::migration
 	// The hash a journal (and every file of it) is compared by: 16 hex digits.
 	std::string journal_hash(std::string_view bytes);
 
+	// A path (or any text) of a journal as a message or a question shows it: a journal is a file anyone can edit, so what
+	// could forge or hide a part of a line (C0/C1 controls, DEL, bidi controls, U+2028/U+2029, zero-width, invisible and
+	// fill characters, variation selectors, tags, spaces other than U+0020) becomes an escape (a backslash, 'u', the code
+	// point in hex in braces), a byte that is no valid UTF-8 a backslash, 'x' and two hex digits, a backslash two of them;
+	// cut at 8 KiB, never inside a code point or an escape ("..." then). check_journal_paths refuses a path over 1024
+	// bytes, so a journal's path is always shown whole.
+	std::string journal_path_text(std::string_view path);
+
+	// The paths a journal (.snk/migrations/<id>/report.json) names, as a rollback reads them.
+	struct journal_paths
+	{
+		std::string backup;
+		// files[].path ("" for an entry without a string path).
+		std::vector<std::string> files;
+		std::vector<std::string> created;
+	};
+
+	// Why a rollback of migration `id` must not touch what `journal` names (#910); nullopt when every path passes. The
+	// first bad path is named (through journal_path_text) with the reason:
+	// - backup is exactly .snk/migrations/<id>/backup, as apply_migration writes it, whether or not anything is restored;
+	// - the root is a folder and .snk/migrations/<id> is a folder all the way down, no link on the way;
+	// - the content roots come from the backup's project.snkproj when the journal lists it, else from the current one (a
+	//   rollback is a recovery tool: the project need not open); neither reads as a manifest: refused, naming the backup
+	//   to restore by hand. Each root is a relative folder inside the project, not the root itself, and its first folder
+	//   is no reserved one (below);
+	// - every path is at most 1024 bytes and a chain of plain names below the root; a file of files[] is project.snkproj or
+	//   lies inside a content root of that manifest, a created file lies inside a content root;
+	// - and none lies below a first folder prj::is_code_ignored_dir refuses (any '.' name, build, out, ...) or one of
+	//   prj::own_top_dir_names (code, .snk, .cache, build), whatever a content root says.
+	std::optional<std::string> check_journal_paths(const std::filesystem::path& root, std::string_view id, const journal_paths& journal);
+
+	// Reads the journal of migration `id` and checks it with check_journal_paths: the refusal (or why it does not read),
+	// nullopt when a rollback may touch what it names. The editor offers a rollback at open only for a journal that passes.
+	std::optional<std::string> check_journal(const std::filesystem::path& root, std::string_view id);
+
 	// Restores the backup of migration `id` and deletes the files it created. A file already back to its original is
 	// left as it is, so a rollback that stopped half way can be run again. Refuses before writing anything (naming the
-	// files) when a file is neither what the migration wrote nor the original, or a path of the journal is not a
-	// relative path inside the project (a created file: inside a content root). The error; nullopt on success.
+	// files) when a file is neither what the migration wrote nor the original, or the journal fails check_journal_paths.
+	// The error; nullopt on success.
 	std::optional<std::string> rollback_migration(const std::filesystem::path& root, std::string_view id, const rollback_context& context = {});
 }

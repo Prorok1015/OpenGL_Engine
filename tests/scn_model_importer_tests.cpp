@@ -10,6 +10,7 @@
 #include <cmath>
 #include <format>
 #include <initializer_list>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -186,7 +187,9 @@ struct warning_log
 	warning_log()
 	{
 		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
-			if (level == engine::log_level::warn) warnings.emplace_back(message);
+			if (level != engine::log_level::warn) return;
+			std::lock_guard lock(m_mutex);
+			warnings.emplace_back(message);
 		});
 	}
 
@@ -194,12 +197,14 @@ struct warning_log
 	// res://base_material.desc, so the material's parent may warn on its own).
 	bool kept_a_reference() const
 	{
+		std::lock_guard lock(m_mutex);
 		for (const auto& warning : warnings) {
 			if (warning.find("keeping the current") != std::string::npos || warning.find("inline desc") != std::string::npos) return true;
 		}
 		return false;
 	}
 
+	mutable std::mutex m_mutex;
 	std::vector<std::string> warnings;
 	engine::log_sink_handle sink; // last: removed first
 };

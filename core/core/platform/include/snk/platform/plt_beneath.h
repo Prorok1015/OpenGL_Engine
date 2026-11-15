@@ -126,4 +126,9 @@ namespace platform::beneath {
 	// `too_large` too. The folders are let go once the file is open; the open file is what is read. For a hash of any size.
 	SNK_API read_result read_beneath_stream(const read_request& request, const std::function<bool(std::span<const std::byte>)>& sink);
 
+	// Whether `name` could be a Windows short (8.3) alias: every alias holds '~' and a digit. Windows checks each name
+	// by the final path; when the file system gives none (some network redirectors), a read goes on only if no name of
+	// its path is such a one, and a write or a delete is refused.
+	SNK_API bool may_be_short_name(const std::filesystem::path& name);
+
 }

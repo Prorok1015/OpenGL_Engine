@@ -9,6 +9,7 @@
 #include <format>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -172,18 +173,22 @@ struct log_capture
 	log_capture()
 	{
 		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
-			if (level == engine::log_level::warn) warnings.push_back(std::format("{}: {}", category, message));
+			if (level != engine::log_level::warn) return;
+			std::lock_guard lock(m_mutex);
+			warnings.push_back(std::format("{}: {}", category, message));
 		});
 	}
 
 	bool has(std::string_view part) const
 	{
+		std::lock_guard lock(m_mutex);
 		for (const auto& w : warnings) {
 			if (w.find(part) != std::string::npos) return true;
 		}
 		return false;
 	}
 
+	mutable std::mutex m_mutex;
 	std::vector<std::string> warnings;
 	engine::log_sink_handle sink; // last: removed first
 };
