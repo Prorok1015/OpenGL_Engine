@@ -63,11 +63,12 @@ BOOST_AUTO_TEST_CASE(TheRobotsGeometry_Timings, * boost::unit_test::enable_if<(S
 
 	boost::json::value parsed;
 	const double parse_ms = best_ms(3, [&] { parsed = boost::json::parse(text); });
-	const boost::json::array& vertices = parsed.as_object().at("vertices").as_array();
+	const boost::json::value& vertices_value = parsed.as_object().at("vertices");
+	const boost::json::array& vertices = vertices_value.as_array();
 
 	std::size_t old_size = 0;
 	const double old_vertices_ms = best_ms(3, [&] {
-		old_size = boost::json::value_to<std::vector<old_byte>>(vertices).size();
+		old_size = boost::json::value_to<std::vector<old_byte>>(vertices_value).size();
 	});
 
 	// The loop geometry_desc::deserialize now runs, as written there.
