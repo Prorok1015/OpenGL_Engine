@@ -4,6 +4,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <boost/json.hpp>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <variant>
 #include <vector>
@@ -18,7 +19,9 @@ struct actions_fixture : test_util::scene_env
 	actions_fixture()
 	{
 		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
-			if (level == engine::log_level::warn) warnings.emplace_back(message);
+			if (level != engine::log_level::warn) return;
+			std::lock_guard lock(m_mutex);
+			m_warnings.emplace_back(message);
 		});
 	}
 
@@ -31,13 +34,21 @@ struct actions_fixture : test_util::scene_env
 
 	bool warned(std::string_view part) const
 	{
-		for (const auto& w : warnings) {
+		for (const auto& w : warnings()) {
 			if (w.find(part) != std::string::npos) return true;
 		}
 		return false;
 	}
 
-	std::vector<std::string> warnings;
+	// A copy under the lock: the resource system's io thread may log while the test reads.
+	std::vector<std::string> warnings() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_warnings;
+	}
+
+	mutable std::mutex m_mutex;
+	std::vector<std::string> m_warnings;
 	engine::log_sink_handle sink; // last: removed first
 };
 
@@ -52,7 +63,7 @@ BOOST_FIXTURE_TEST_SUITE(ScnInputActionsDescTests, actions_fixture)
 BOOST_AUTO_TEST_CASE(AGoodFileGivesItsActionsInOrder)
 {
 	const auto map = scn::build_action_map(read(GOOD), "res://input/actions.desc");
-	BOOST_TEST(warnings.empty());
+	BOOST_TEST(warnings().empty());
 	BOOST_REQUIRE(map.size() == 2u);
 	BOOST_TEST(map.actions()[0].name == "MoveLeft");
 	BOOST_TEST(map.actions()[0].bindings.size() == 2u);
@@ -96,7 +107,7 @@ BOOST_AUTO_TEST_CASE(AThresholdOnAKeyIsWarnedAboutOnce_AndABindingSkippedForItsN
 	BOOST_REQUIRE(map.size() == 1u);
 	BOOST_TEST(map.actions()[0].bindings.size() == 3u);
 	std::size_t about_threshold = 0;
-	for (const auto& w : warnings) {
+	for (const auto& w : warnings()) {
 		if (w.find("threshold") != std::string::npos) ++about_threshold;
 	}
 	BOOST_TEST(about_threshold == 2u);
@@ -164,7 +175,7 @@ BOOST_AUTO_TEST_CASE(ActionsThatAreNotAnArrayAreWarnedAboutAndEmpty)
 BOOST_AUTO_TEST_CASE(AFileWithoutActionsHasNone)
 {
 	BOOST_TEST(scn::build_action_map(read(R"({ "__type": "input_actions_desc", "__version": 1 })")).size() == 0u);
-	BOOST_TEST(warnings.empty());
+	BOOST_TEST(warnings().empty());
 }
 
 BOOST_AUTO_TEST_CASE(GamepadButtonsAndAxesAreBindings_AndTheirMistakesAreWarnedWithThePath)
@@ -201,7 +212,7 @@ BOOST_AUTO_TEST_CASE(TheGamepadSetting_IsReadWithDefaultsForWhatIsMissing_AndBad
 {
 	const auto defaults = scn::build_gamepad_config(read(GOOD));
 	BOOST_TEST((defaults == inp::gamepad_config{}));
-	BOOST_TEST(warnings.empty());
+	BOOST_TEST(warnings().empty());
 
 	const auto some = scn::build_gamepad_config(read(R"({ "gamepad": { "deadzone": 0.4 } })"));
 	BOOST_TEST(some.deadzone == 0.4f);

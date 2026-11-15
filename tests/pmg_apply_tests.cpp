@@ -7,6 +7,8 @@
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/project/prj_json_text.h>
+#include <snk/project/prj_manifest.h>
+#include <snk/platform/plt_beneath.h>
 #include <algorithm>
 #include <filesystem>
 #include <format>
@@ -14,10 +16,22 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #ifndef SNK_EDITOR_DATA_DIR
 #error "SNK_EDITOR_DATA_DIR must point at Editor/data"
@@ -548,6 +562,376 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileOutsideTheContentRoots)
 	fs::remove(outside);
 	fs::remove(copy.root() / "keep.txt");
 	BOOST_TEST((content_of(copy.root()) == after));
+}
+
+namespace {
+
+// Every file below the root, .snk included: a refused rollback writes nothing anywhere, not even its journal.
+std::map<std::string, std::string> everything_of(const fs::path& root)
+{
+	std::map<std::string, std::string> files;
+	for (const auto& entry : fs::recursive_directory_iterator(root)) {
+		if (entry.is_regular_file()) files[fs::relative(entry.path(), root).generic_string()] = read_text(entry.path());
+	}
+	return files;
+}
+
+// The journal of the fixture's migration, edited by `edit`, then a rollback: it must be refused with nothing written.
+template <class edit_fn>
+void expect_refused(const fs::path& root, edit_fn&& edit, std::string_view why)
+{
+	const fs::path journal_path = root / ".snk/migrations/test-migration/report.json";
+	const std::string original = read_text(journal_path);
+	json::value journal = json::parse(original);
+	edit(journal.as_object());
+	write_text(journal_path, json::serialize(journal));
+	const auto before = everything_of(root);
+	const auto error = pmg::rollback_migration(root, "test-migration");
+	BOOST_REQUIRE(error.has_value());
+	BOOST_TEST(error->find("nothing was written") != std::string::npos, *error);
+	BOOST_TEST(error->find(why) != std::string::npos, *error);
+	BOOST_TEST((everything_of(root) == before));
+	BOOST_TEST(pmg::check_journal(root, "test-migration").has_value());
+	write_text(journal_path, original);
+}
+
+}
+
+// #910: the backup is exactly the folder apply_migration writes, whether or not anything is restored.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesABackupAnywhereElse)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.root() / ".snk/migrations/other/backup/res/cameras/cam_v1.desc", "{}");
+	for (const std::string& backup : std::vector<std::string>{ ".git", "../x", ".snk/migrations/other/backup", "",
+			 ".snk/migrations/test-migration/backup/" }) {
+		BOOST_TEST_CONTEXT(backup) {
+			expect_refused(copy.root(), [&backup](json::object& journal) { journal["backup"] = backup; }, "the backup");
+		}
+	}
+	// Nothing to restore: a wrong backup is refused all the same.
+	expect_refused(copy.root(), [](json::object& journal) {
+		journal["backup"] = ".git";
+		journal["files"] = json::array{};
+		journal["created_files"] = json::array{};
+	}, "the backup '.git'");
+}
+
+// #910: a file of files[] is project.snkproj or lies inside a content root, never below a hidden, build, code or private
+// folder; a hash_after "removed" outside them would otherwise create the file from a backup the journal chose.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAFileOutsideTheContentRoots_AndCreatesNothing)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const std::string payload = "#!/bin/sh\necho owned\n";
+	const fs::path absolute = copy.root().parent_path() / (copy.root().filename().string() + "-absolute.txt");
+	for (const std::string& path : std::vector<std::string>{ ".git/hooks/pre-commit", ".snk/build.json", "code/a.cpp", "CODE/a.cpp",
+			 "build/x", "Build/x", ".cache/x", ".github/x", "other/x.desc", absolute.generic_string(), "..", "res/../x" }) {
+		BOOST_TEST_CONTEXT(path) {
+			if (path.find("..") == std::string::npos && !fs::path(path).is_absolute()) {
+				write_text(copy.root() / ".snk/migrations/test-migration/backup" / path, payload);
+			}
+			expect_refused(copy.root(), [&path, &payload](json::object& journal) {
+				journal["files"].as_array().push_back(json::object{ { "path", path }, { "hash_before", pmg::journal_hash(payload) },
+					{ "hash_after", "removed" }, { "written_as", "json" } });
+			}, "'" + pmg::journal_path_text(path) + "'");
+			if (path != "..") BOOST_TEST(!fs::exists((copy.root() / path).lexically_normal()));
+			BOOST_TEST(!fs::exists(absolute));
+		}
+	}
+}
+
+// #910: a created file is checked as files[] are (project.snkproj is no created file): it is refused and stays.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileInAReservedFolder)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	for (const std::string& path : std::vector<std::string>{ ".git/config", "code/CMakeLists.txt", "build/x", ".snk/agent_policy.json",
+			 "project.snkproj" }) {
+		BOOST_TEST_CONTEXT(path) {
+			if (path != "project.snkproj") write_text(copy.root() / path, "keep");
+			expect_refused(copy.root(), [&path](json::object& journal) { journal["created_files"] = json::array{ json::string(path) }; },
+				"created file");
+			BOOST_TEST(fs::exists(copy.root() / path));
+		}
+	}
+}
+
+// #910: a rollback is a recovery tool: a project that would not open (a writable folder that is a file, a broken
+// project.snkproj) is rolled back all the same, its content roots taken from the backup's project.snkproj.
+BOOST_AUTO_TEST_CASE(ARollback_OfABrokenProject_PutsItBack)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.root() / ".cache", "not a folder");
+	write_text(copy.root() / "project.snkproj", "{");
+	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	fs::remove(copy.root() / ".cache");
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #910: project.snkproj deleted after the migration: the journal lists it, so it comes back from the backup.
+BOOST_AUTO_TEST_CASE(ARollback_PutsBackAMissingManifest)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	fs::remove(copy.root() / "project.snkproj");
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #910: neither the backup's nor the current project.snkproj reads: the content roots are unknown, nothing is written and
+// the refusal names the backup to restore by hand.
+BOOST_AUTO_TEST_CASE(ARollback_WithoutAManifestThatReads_IsRefused_NamingTheBackup)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.root() / "project.snkproj", "{");
+	write_text(copy.root() / ".snk/migrations/test-migration/backup/project.snkproj", "not json");
+	expect_refused(copy.root(), [](json::object&) {}, ".snk/migrations/test-migration/backup");
+}
+
+// #910: the content roots of the manifest pass the lexical checks of an opened project: inside it, not the root itself,
+// not in one of its own folders.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesContentRootsInTheProjectsOwnFolders)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const fs::path saved = copy.root() / ".snk/migrations/test-migration/backup/project.snkproj";
+	const std::string original = read_text(saved);
+	for (const std::string& root : std::vector<std::string>{ ".", ".git", "code", "Build/x", ".cache/memory" }) {
+		BOOST_TEST_CONTEXT(root) {
+			json::value manifest = json::parse(original);
+			manifest.as_object()["content_roots"] = json::array{ json::string(root) };
+			write_text(saved, json::serialize(manifest));
+			if (prj::parse_manifest(json::serialize(manifest)).data) expect_refused(copy.root(), [](json::object&) {}, "content root");
+		}
+	}
+	write_text(saved, original);
+}
+
+// #910: the migration's folder is reached without following a link: a link there would lead the backup reads elsewhere.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAMigrationFolderThatIsALink)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const fs::path folder = copy.root() / ".snk/migrations/test-migration";
+	const fs::path moved = copy.root().parent_path() / (copy.root().filename().string() + "-moved-migration");
+	fs::rename(folder, moved);
+	std::error_code ec;
+	fs::create_directory_symlink(moved, folder, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no symlink here (" << ec.message() << "): skipped");
+		fs::rename(moved, folder);
+		return;
+	}
+	const auto before = everything_of(copy.root());
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE(error.has_value());
+	// The journal is read without following a link, so the read itself refuses the folder.
+	BOOST_TEST(error->find("has no journal") != std::string::npos, *error);
+	BOOST_TEST(pmg::check_journal(copy.root(), "test-migration").has_value());
+	BOOST_TEST((everything_of(copy.root()) == before));
+	fs::remove(folder);
+	fs::remove_all(moved);
+}
+
+// #910: what a message or a question shows of a journal's path: no character that could forge or hide a part of a line,
+// an escape in its place, and a cut that splits neither a code point nor an escape.
+BOOST_AUTO_TEST_CASE(AJournalPath_IsShownWithItsHiddenCharactersEscaped)
+{
+	BOOST_TEST(pmg::journal_path_text("res/a.desc") == "res/a.desc");
+	BOOST_TEST(pmg::journal_path_text("a\nb\xE2\x80\xAE" "c\xE2\x80\x8B" "d") == "a\\u{000A}b\\u{202E}c\\u{200B}d");
+	BOOST_TEST(pmg::journal_path_text("\xC2\x85\xC2\xAD\xEF\xBB\xBF\xE2\x80\xA8\xE2\x81\xA6\xD8\x9C\x7F") ==
+		"\\u{0085}\\u{00AD}\\u{FEFF}\\u{2028}\\u{2066}\\u{061C}\\u{007F}");
+	BOOST_TEST(pmg::journal_path_text("a\xFF" "b\xC3") == "a\\xFFb\\xC3");
+	BOOST_TEST(pmg::journal_path_text("a\\b") == "a\\\\b");
+	BOOST_TEST(pmg::journal_path_text("caf\xC3\xA9") == "caf\xC3\xA9");
+	BOOST_TEST(pmg::journal_path_text(std::string(8191, 'a') + "\xC3\xA9") == std::string(8191, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(8187, 'a') + "\n") == std::string(8187, 'a') + "...");
+	BOOST_TEST(pmg::journal_path_text(std::string(8192, 'a')) == std::string(8192, 'a'));
+	// The longest path a journal may name, every byte escaped, is still shown whole.
+	std::string escaped_whole;
+	for (int i = 0; i < 1024; ++i) escaped_whole += "\\u{0001}";
+	BOOST_TEST(pmg::journal_path_text(std::string(1024, '\x01')) == escaped_whole);
+}
+
+// #910 review: fill characters, variation selectors, tags and spaces that look like U+0020 are escaped too.
+BOOST_AUTO_TEST_CASE(AJournalPath_EscapesFillersSelectorsTagsAndOtherSpaces)
+{
+	const std::vector<std::pair<std::string, std::string>> cases{
+		{ "\xE2\x81\xAA", "206A" }, { "\xE2\x81\xAF", "206F" }, { "\xE1\x85\x9F", "115F" }, { "\xE1\x85\xA0", "1160" },
+		{ "\xE3\x85\xA4", "3164" }, { "\xEF\xBE\xA0", "FFA0" }, { "\xEF\xB8\x80", "FE00" }, { "\xEF\xB8\x8F", "FE0F" },
+		{ "\xF3\xA0\x80\x81", "E0001" }, { "\xF3\xA0\x80\xA0", "E0020" }, { "\xF3\xA0\x81\xBF", "E007F" }, { "\xC2\xA0", "00A0" },
+		{ "\xE2\x80\x80", "2000" }, { "\xE2\x80\x8A", "200A" }, { "\xE2\x80\xAF", "202F" }, { "\xE2\x81\x9F", "205F" },
+		{ "\xE3\x80\x80", "3000" },
+	};
+	for (const auto& [text, code] : cases) {
+		BOOST_TEST_CONTEXT(code) {
+			BOOST_TEST(pmg::journal_path_text("a" + text + "b") == "a\\u{" + code + "}b");
+		}
+	}
+	// A letter of another script stays as it is.
+	BOOST_TEST(pmg::journal_path_text("\xD0\xB6") == "\xD0\xB6");
+}
+
+// #910 review: a journal's path longer than 1024 bytes is refused, so every path a question lists is shown whole.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAPathTooLongToShow)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	const std::string path = "res/" + std::string(1100, 'x') + ".desc";
+	expect_refused(copy.root(), [&path](json::object& journal) {
+		journal["files"].as_array().push_back(json::object{ { "path", path }, { "hash_before", "0" }, { "hash_after", "removed" } });
+	}, "longer than 1024 bytes");
+	expect_refused(copy.root(), [&path](json::object& journal) { journal["created_files"] = json::array{ json::string(path) }; },
+		"longer than 1024 bytes");
+}
+
+// #910 review: a name with '~' and a digit is an ordinary name; aliases are stopped by the Windows primitives (lies_at),
+// so a project that migrates such a file can roll it back too.
+BOOST_AUTO_TEST_CASE(AFileNamedLikeAShortName_MigratesAndRollsBack)
+{
+	write_text(copy.res() / "IMG~1/cam~1.desc", read_text(copy.res() / "cameras/cam_v1.desc"));
+	const auto before = content_of(copy.root());
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_REQUIRE(std::ranges::any_of(outcome.report.files, [](const auto& f) { return f.path == "res/IMG~1/cam~1.desc"; }));
+	BOOST_TEST(read_text(copy.res() / "IMG~1/cam~1.desc") != before.at("res/IMG~1/cam~1.desc"));
+
+	write_text(copy.res() / "IMG~1.PNG", "png");
+	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	journal.as_object()["created_files"] = json::array{ "res/IMG~1.PNG" };
+	write_text(journal_path, json::serialize(journal));
+
+	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+	BOOST_TEST(!pmg::rollback_migration(copy.root(), "test-migration").has_value());
+	BOOST_TEST((content_of(copy.root()) == before));
+	BOOST_TEST(!fs::exists(copy.res() / "IMG~1.PNG"));
+}
+
+// #910 review: the name rule a read falls back on when Windows gives no final path.
+BOOST_AUTO_TEST_CASE(AShortNameLookalike_HasATildeAndADigit)
+{
+	BOOST_TEST(platform::beneath::may_be_short_name("SNK~1"));
+	BOOST_TEST(platform::beneath::may_be_short_name("IMG~12.PNG"));
+	BOOST_TEST(!platform::beneath::may_be_short_name("a~b.desc"));
+	BOOST_TEST(!platform::beneath::may_be_short_name("name~"));
+	BOOST_TEST(!platform::beneath::may_be_short_name("plain.desc"));
+}
+
+#ifdef _WIN32
+namespace {
+	fs::path short_name_given(const fs::path& path)
+	{
+		std::wstring buffer(MAX_PATH + 1, L'\0');
+		const DWORD length = ::GetShortPathNameW(path.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
+		if (length == 0 || length >= buffer.size()) return {};
+		const fs::path alias = fs::path(buffer.substr(0, length)).filename();
+		return alias == path.filename() ? fs::path{} : alias;
+	}
+
+	// The short name of `path`: the one Windows made, else `wanted` set here. Most volumes make no 8.3 names; setting one
+	// needs SeRestorePrivilege, which an administrator (a CI runner) has. Empty when neither works.
+	void set_restore_privilege(bool enabled)
+	{
+		HANDLE token = nullptr;
+		if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)) return;
+		TOKEN_PRIVILEGES privileges{};
+		privileges.PrivilegeCount = 1;
+		if (::LookupPrivilegeValueW(nullptr, L"SeRestorePrivilege", &privileges.Privileges[0].Luid)) {
+			privileges.Privileges[0].Attributes = enabled ? SE_PRIVILEGE_ENABLED : 0;
+			::AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr);
+		}
+		::CloseHandle(token);
+	}
+
+	fs::path short_name_of(const fs::path& path, const wchar_t* wanted)
+	{
+		if (fs::path alias = short_name_given(path); !alias.empty()) return alias;
+		set_restore_privilege(true);
+		const HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		BOOL set = FALSE;
+		if (file != INVALID_HANDLE_VALUE) {
+			set = ::SetFileShortNameW(file, wanted);
+			::CloseHandle(file);
+		}
+		// The rest of unit_tests runs without the privilege, as a person's editor does.
+		set_restore_privilege(false);
+		return set ? short_name_given(path) : fs::path{};
+	}
+}
+
+// #910 review: on Windows the no-follow primitives refuse an alias themselves, in a folder of the chain and at the
+// leaf: a delete, a read, a write (no folder is made inside .snk) and a move through a short name do not reach what it
+// names, and a write does not replace a file through its short name.
+BOOST_AUTO_TEST_CASE(TheBeneathPrimitives_RefuseAShortNameAlias)
+{
+	write_text(copy.root() / ".snk/x", "keep");
+	write_text(copy.root() / "res/a_long_file_name.txt", "kept");
+	const fs::path folder_alias = short_name_of(fs::canonical(copy.root() / ".snk"), L"SNK~1");
+	const fs::path leaf_alias = short_name_of(fs::canonical(copy.root() / "res/a_long_file_name.txt"), L"ALONGF~1.TXT");
+	if (folder_alias.empty() || leaf_alias.empty()) {
+		BOOST_TEST_MESSAGE("TheBeneathPrimitives_RefuseAShortNameAlias: no short names on this volume and none can be set: skipped");
+		return;
+	}
+	BOOST_TEST_MESSAGE(std::format("TheBeneathPrimitives_RefuseAShortNameAlias: runs with {} and {}", folder_alias.string(), leaf_alias.string()));
+
+	const prj::project_file_text read = prj::read_project_file(copy.root(), folder_alias / "x");
+	BOOST_TEST((!read.exists || !read.error.empty()));
+	platform::beneath::pinned_root pinned{ fs::canonical(copy.root()) };
+	BOOST_TEST(!platform::beneath::remove_beneath(pinned, folder_alias, "x", true).empty());
+	BOOST_TEST(read_text(copy.root() / ".snk/x") == "keep");
+
+	const std::string text = "lock";
+	const auto bytes = std::as_bytes(std::span(text));
+	platform::beneath::write_request into_folder{};
+	into_folder.folder = folder_alias / "index.lock";
+	into_folder.leaf = "x";
+	into_folder.tmp_leaf = "x.tmp";
+	into_folder.data = bytes;
+	into_folder.tmp_path = copy.root() / folder_alias / "index.lock/x.tmp";
+	BOOST_TEST(!platform::beneath::write_beneath(pinned, into_folder).empty());
+	BOOST_TEST(!fs::exists(copy.root() / ".snk/index.lock"));
+
+	platform::beneath::rename_request moved{};
+	moved.from_folder = "res";
+	moved.from_leaf = "a_long_file_name.txt";
+	moved.to_folder = folder_alias;
+	moved.to_leaf = "moved.txt";
+	BOOST_TEST(!platform::beneath::rename_beneath(pinned, moved).empty());
+	BOOST_TEST(!fs::exists(copy.root() / ".snk/moved.txt"));
+
+	platform::beneath::write_request over_leaf{};
+	over_leaf.folder = "res";
+	over_leaf.leaf = leaf_alias;
+	over_leaf.tmp_leaf = "replace.tmp";
+	over_leaf.data = bytes;
+	over_leaf.tmp_path = copy.root() / "res/replace.tmp";
+	BOOST_TEST(!platform::beneath::write_beneath(pinned, over_leaf).empty());
+	BOOST_TEST(read_text(copy.root() / "res/a_long_file_name.txt") == "kept");
+	BOOST_TEST(!fs::exists(copy.root() / "res/replace.tmp"));
+}
+#endif
+
+// #910 review: a project whose content roots its own rollback would refuse is not migrated at all.
+BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
+{
+	const std::string manifest_text = read_text(copy.root() / "project.snkproj");
+	for (const std::string& extra : std::vector<std::string>{ "out", ".content", "code/assets" }) {
+		BOOST_TEST_CONTEXT(extra) {
+			json::value manifest = json::parse(manifest_text);
+			manifest.as_object()["content_roots"] = json::array{ "res", json::string(extra) };
+			write_text(copy.root() / "project.snkproj", json::serialize(manifest));
+			fs::create_directories(copy.root() / extra);
+			const auto before = content_of(copy.root());
+			const pmg::migration_plan plan = pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs), *descs);
+			BOOST_TEST(pmg::plan_refusal(plan).find("could not be rolled back") != std::string::npos, pmg::plan_refusal(plan));
+			const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+			BOOST_TEST(outcome.refused.find("could not be rolled back") != std::string::npos, outcome.refused);
+			BOOST_TEST((content_of(copy.root()) == before));
+			BOOST_TEST(!fs::exists(copy.root() / ".snk/migrations"));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(TheProjectTemplate_KeepsMigrationsOutOfGit_ButNotTheAgentPolicy)

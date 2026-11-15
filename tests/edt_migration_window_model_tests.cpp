@@ -50,6 +50,8 @@ struct window_fixture
 	std::optional<cmd::result> plan_answer;
 	std::optional<cmd::result> migrate_answer;
 	std::uint64_t job = 7;
+	std::vector<std::string> listed;
+	edt::rollback_listing listing{ {}, "  Migration m2: .snk/migrations/m2/\n  Backup: .snk/migrations/m2/backup\n", "0123456789abcdef" };
 	edt::migration_window_model model{ events, ports() };
 
 	edt::migration_window_model::ports ports()
@@ -62,6 +64,10 @@ struct window_fixture
 			return cmd::result::success(json::object{ { "job", job } });
 		};
 		out.open_file = [this](const std::string& path) { opened.push_back(path); };
+		out.listing_of = [this](const std::string& id) {
+			listed.push_back(id);
+			return listing;
+		};
 		return out;
 	}
 
@@ -328,6 +334,45 @@ BOOST_AUTO_TEST_CASE(RollBack_IsOfferedForAFailedOrUnfinishedMigration_AndShowsI
 	model.roll_back("m3");
 	BOOST_TEST((model.state() == phase::plan_shown));
 	BOOST_TEST(model.error_code() == cmd::codes::busy);
+}
+
+// #910: Roll Back (the window's button or the startup question) first shows what the rollback would do and runs nothing;
+// only the person's confirmation runs project.migrate_rollback. A journal the listing refuses cannot be confirmed.
+BOOST_AUTO_TEST_CASE(RollBack_ShowsItsListingFirst_AndRunsOnlyOnceConfirmed)
+{
+	model.ask_roll_back("m2");
+	BOOST_TEST(calls.empty());
+	BOOST_TEST((listed == std::vector<std::string>{ "m2" }));
+	BOOST_TEST_REQUIRE(model.question().has_value());
+	BOOST_TEST(model.question()->id == "m2");
+	BOOST_TEST(model.question()->text == listing.text);
+	BOOST_TEST(model.take_question_request());
+	BOOST_TEST(!model.take_question_request());
+	BOOST_TEST(model.can_confirm_roll_back());
+	BOOST_TEST((model.state() == phase::idle));
+
+	model.cancel_roll_back();
+	BOOST_TEST(!model.question().has_value());
+	BOOST_TEST(calls.empty());
+
+	model.ask_roll_back("m2");
+	model.confirm_roll_back();
+	BOOST_REQUIRE(calls.size() == 1u);
+	BOOST_TEST(calls.back().id == "project.migrate_rollback");
+	// Bound to the journal it showed: the run refuses a journal that reads otherwise by then.
+	BOOST_TEST(json::serialize(calls.back().args) == R"({"id":"m2","journal_fingerprint":"0123456789abcdef"})");
+	BOOST_TEST((model.state() == phase::running));
+	BOOST_TEST(!model.question().has_value());
+	finish(json::parse(R"({"code":0,"status":"rolled_back","id":"m2","text":"t"})"));
+	model.close();
+
+	listing = edt::rollback_listing{ "migration m4 cannot be rolled back: the backup '.git' is not .snk/migrations/m4/backup", {}, {} };
+	model.ask_roll_back("m4");
+	BOOST_TEST_REQUIRE(model.question().has_value());
+	BOOST_TEST(model.question()->refused.find("the backup '.git'") != std::string::npos);
+	BOOST_TEST(!model.can_confirm_roll_back());
+	model.confirm_roll_back();
+	BOOST_TEST(calls.size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(TheOpenAction_IsForAPersonOnly)

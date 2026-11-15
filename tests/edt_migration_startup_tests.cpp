@@ -155,6 +155,61 @@ BOOST_AUTO_TEST_CASE(TheStartupChecks_AskOnce_AndHeadlessAsksNothing)
 	BOOST_TEST(warned == 1);
 }
 
+// #910: a journal that fails prj::migration::check_journal is never offered for a rollback: the person is told why (an
+// `inform`, not a question) and the WARN is logged once; a journal that passes is asked about as before.
+BOOST_AUTO_TEST_CASE(AForgedJournal_IsNotOffered_ThePersonIsToldWhy)
+{
+	std::optional<std::string> refusal = std::string("the backup '.git' is not .snk/migrations/20260101T000000Z-0.1.0/backup");
+	std::vector<edt::journal_offer> offers;
+	std::vector<std::string> warnings;
+	std::vector<std::string> checked;
+	const auto ports = [&] {
+		edt::migration_startup::ports out;
+		out.settled = [] { return true; };
+		out.unfinished = [] { return std::vector<std::string>{ "20260101T000000Z-0.1.0" }; };
+		out.journal_refusal = [&refusal, &checked](const std::string& id) {
+			checked.push_back(id);
+			return refusal;
+		};
+		out.ask = [&offers](const edt::journal_offer& offer) { offers.push_back(offer); };
+		out.warn = [&warnings](const std::string& text) { warnings.push_back(text); };
+		return out;
+	};
+
+	edt::migration_startup forged{ ports(), false };
+	BOOST_TEST(!forged.tick());
+	BOOST_TEST(!forged.tick());
+	BOOST_TEST((checked == std::vector<std::string>{ "20260101T000000Z-0.1.0" }));
+	BOOST_REQUIRE(offers.size() == 1u);
+	BOOST_TEST((offers[0].what == edt::journal_offer::kind::inform));
+	BOOST_TEST(offers[0].text.find("not offered for a rollback") != std::string::npos, offers[0].text);
+	BOOST_TEST(offers[0].text.find("the backup '.git'") != std::string::npos, offers[0].text);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0] == offers[0].text);
+
+	offers.clear();
+	warnings.clear();
+	refusal.reset();
+	edt::migration_startup valid{ ports(), false };
+	BOOST_TEST(!valid.tick());
+	BOOST_REQUIRE(offers.size() == 1u);
+	BOOST_TEST((offers[0].what == edt::journal_offer::kind::ask));
+	BOOST_TEST(offers[0].text.find("runs only once you confirm") != std::string::npos, offers[0].text);
+
+	// A journal too long to show: told, with the command line that rolls it back, not asked into a dead end.
+	offers.clear();
+	refusal = std::string("the journal lists too many files to show; roll it back from the command line: editor --migrate-rollback "
+		"20260101T000000Z-0.1.0");
+	edt::migration_startup too_long{ ports(), false };
+	BOOST_TEST(!too_long.tick());
+	BOOST_REQUIRE(offers.size() == 1u);
+	BOOST_TEST((offers[0].what == edt::journal_offer::kind::inform));
+	BOOST_TEST(offers[0].text.find("editor --migrate-rollback 20260101T000000Z-0.1.0") != std::string::npos, offers[0].text);
+
+	refusal = std::string("a path outside the content roots");
+	BOOST_TEST((edt::decide_journal_offer({ "20260101T000000Z-0.1.0" }, true, refusal).what == edt::journal_offer::kind::warn));
+}
+
 // The notice's Later goes to the person's settings: the last edt:// root (else the user data folder), never the project.
 BOOST_AUTO_TEST_CASE(TheNoticeSettings_AreThePersons_NotTheProjects)
 {

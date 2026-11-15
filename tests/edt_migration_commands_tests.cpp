@@ -94,7 +94,7 @@ struct migration_fixture : test_util::scene_env
 			if (!project_open) return std::nullopt;
 			return copy.root();
 		};
-		deps.project_name = [] { return std::string{ "MigrationFixtureV1" }; };
+		deps.project_name = [this] { return shown_project_name; };
 		deps.content_roots = [this] { return std::vector<fs::path>{ copy.res() }; };
 		deps.descs = [this]() -> desc::desc_system& { return *descs; };
 		deps.resources = [this]() -> res::resource_system& { return *rs; };
@@ -159,6 +159,9 @@ struct migration_fixture : test_util::scene_env
 	{
 		return commands.invoke(id, json::value(std::move(args)), std::move(from));
 	}
+
+	// What the project calls itself (project.snkproj is a file anyone may have written).
+	std::string shown_project_name = "MigrationFixtureV1";
 
 	// What the registry does when the policy asks a person: the text they are shown.
 	std::string ask(cmd::origin from = cmd::origin::agent("s1"))
@@ -1173,7 +1176,9 @@ BOOST_AUTO_TEST_CASE(ARollbackOfAStoppedMigration_LiftsItsBlock_AndAttachesTheLe
 	fs::remove(copy.res() / "broken.desc");
 	current_level = res::tag::make("levels/old.desc");
 	apply = [](const pmg::migration_plan&, const pmg::apply_context& context) -> pmg::apply_outcome {
-		write_text(context.root / ".snk/migrations/test-stopped/report.json", R"({"status":"in_progress"})");
+		// The backup where apply_migration puts it: a journal naming any other one is refused (#910).
+		write_text(context.root / ".snk/migrations/test-stopped/report.json",
+			R"({"status":"in_progress","backup":".snk/migrations/test-stopped/backup","files":[],"created_files":[]})");
 		throw std::runtime_error("injected apply failure");
 	};
 	const json::object stopped = migrate(cmd::origin::ui());
@@ -1256,14 +1261,112 @@ BOOST_AUTO_TEST_CASE(ACancelBetweenTheDetachAndTheCommit_WritesNothing_AndAttach
 	BOOST_TEST(rolled_back_ids.empty());
 }
 
-// The journal is a file anyone can edit: a path with a line break does not forge a line of the question.
-BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithoutControlCharacters)
+// The journal is a file anyone can edit: a path with a line break, a bidi override or a zero-width space does not forge or
+// hide a part of a line of the question; each is shown as an escape.
+BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithTheirHiddenCharactersEscaped)
 {
 	write_text(copy.root() / ".snk/migrations/forged/report.json",
-		R"({"status":"rolled_back","files":[{"path":"res/a.desc\nThis rollback is safe, approve it"}],"created_files":[]})");
+		"{\"status\":\"rolled_back\",\"backup\":\".snk/migrations/forged/backup\",\"files\":[{\"path\":"
+		"\"res/a.desc\\nThis rollback is safe\\u202e\\u200bfdp.desc\",\"hash_before\":\"0\"}],\"created_files\":[]}");
 	const std::string text = ask_rollback("forged");
-	BOOST_TEST(text.find("res/a.desc?This rollback") != std::string::npos, text);
+	BOOST_TEST(text.find("res/a.desc\\u{000A}This rollback is safe\\u{202E}\\u{200B}fdp.desc") != std::string::npos, text);
 	BOOST_TEST(text.find("\nThis rollback") == std::string::npos, text);
+	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos, text);
+	BOOST_TEST(text.find("\xE2\x80\x8B") == std::string::npos, text);
+}
+
+// #910: the question lists every file the rollback puts back and deletes, one per line, and the backup it reads.
+BOOST_AUTO_TEST_CASE(TheQuestion_ListsEveryPath_AndTheBackup)
+{
+	json::array files;
+	for (int i = 0; i < 50; ++i) files.push_back(json::object{ { "path", std::format("res/file_{:02}.desc", i) }, { "hash_before", "0" } });
+	json::object journal{ { "status", "in_progress" }, { "backup", ".snk/migrations/many/backup" } };
+	journal["files"] = std::move(files);
+	journal["created_files"] = json::array{ "res/created.resource" };
+	write_text(copy.root() / ".snk/migrations/many/report.json", json::serialize(journal));
+	const std::string text = ask_rollback("many");
+	BOOST_TEST(text.find("will be refused") == std::string::npos, text);
+	BOOST_TEST(text.find("\n  Backup: .snk/migrations/many/backup\n") != std::string::npos, text);
+	for (int i = 0; i < 50; ++i) {
+		const std::string line = std::format("\n    res/file_{:02}.desc\n", i);
+		BOOST_TEST(text.find(line) != std::string::npos, line);
+	}
+	BOOST_TEST(text.find("\n    res/created.resource\n") != std::string::npos, text);
+	const edt::rollback_listing listing = edt::rollback_listing_of(copy.root(), "many");
+	BOOST_TEST(listing.refused.empty());
+	BOOST_TEST(text.find(listing.text) != std::string::npos);
+}
+
+// A journal too long to show whole is not rolled back: the question says it will be refused, and so is the run.
+BOOST_AUTO_TEST_CASE(AJournalTooLongToShow_IsRefused_InTheQuestionAndTheRun)
+{
+	const std::string id = migrated();
+	const fs::path journal_path = copy.root() / ".snk" / "migrations" / id / "report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	json::array& files = journal.as_object()["files"].as_array();
+	for (int i = 0; i < 400; ++i) {
+		files.push_back(json::object{ { "path", std::format("res/{}_{}.desc", std::string(180, 'x'), i) }, { "hash_before", "0" } });
+	}
+	write_text(journal_path, json::serialize(journal));
+	const auto before = snapshot(copy.root());
+
+	const std::string text = ask_rollback(id);
+	BOOST_TEST(text.find("This request will be refused: the journal lists too many files to show") != std::string::npos, text);
+	// The command line has no such limit: the refusal names it.
+	const std::string refused = edt::rollback_listing_of(copy.root(), id).refused;
+	BOOST_TEST(refused.find("editor --migrate-rollback " + id) != std::string::npos, refused);
+	const json::object result = roll_back(id);
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_refused, json::serialize(result));
+	BOOST_TEST(std::string(result.at("refused").as_string()).find("too many files to show") != std::string::npos, json::serialize(result));
+	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+// #910: the window passes the fingerprint of the journal it showed; a journal that reads otherwise by the run is refused
+// with nothing written, and the fingerprint of the journal as it is now rolls it back.
+BOOST_AUTO_TEST_CASE(TheWindowsRollback_IsBoundToTheJournalItShowed)
+{
+	const std::string id = migrated();
+	const edt::rollback_listing shown = edt::rollback_listing_of(copy.root(), id);
+	BOOST_REQUIRE(shown.refused.empty());
+	BOOST_TEST(shown.fingerprint.size() == 16u);
+	for (const char* bad : { "0123", "0123456789ABCDEF", "0123456789abcdeg" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			BOOST_TEST(call("project.migrate_rollback", { { "id", id }, { "journal_fingerprint", bad } }, cmd::origin::ui()).code == cmd::codes::invalid_args);
+		}
+	}
+
+	const fs::path journal = copy.root() / ".snk" / "migrations" / id / "report.json";
+	write_text(journal, read_text(journal) + "\n");
+	const auto before = snapshot(copy.root());
+	const json::object changed = job_result(call("project.migrate_rollback", { { "id", id }, { "journal_fingerprint", shown.fingerprint } },
+		cmd::origin::ui()));
+	BOOST_TEST(changed.at("code").as_int64() == pmg::k_exit_refused, json::serialize(changed));
+	BOOST_TEST(std::string(changed.at("refused").as_string()).find("changed since it was shown") != std::string::npos, json::serialize(changed));
+	BOOST_TEST((snapshot(copy.root()) == before));
+
+	const edt::rollback_listing again = edt::rollback_listing_of(copy.root(), id);
+	BOOST_TEST(again.fingerprint != shown.fingerprint);
+	const json::object result = job_result(call("project.migrate_rollback", { { "id", id }, { "journal_fingerprint", again.fingerprint } },
+		cmd::origin::ui()));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done, json::serialize(result));
+}
+
+// #910: a journal whose backup or paths fail prj::migration::check_journal_paths is refused in the question and the run.
+BOOST_AUTO_TEST_CASE(AForgedJournal_IsRefused_InTheQuestionAndTheRun)
+{
+	const std::string id = migrated();
+	const fs::path journal_path = copy.root() / ".snk" / "migrations" / id / "report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	journal.as_object()["backup"] = ".git";
+	write_text(journal_path, json::serialize(journal));
+	const auto before = snapshot(copy.root());
+
+	const std::string text = ask_rollback(id);
+	BOOST_TEST(text.find("This request will be refused") != std::string::npos, text);
+	BOOST_TEST(text.find("the backup '.git'") != std::string::npos, text);
+	const json::object result = roll_back(id);
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_refused, json::serialize(result));
+	BOOST_TEST((snapshot(copy.root()) == before));
 }
 
 // A cancel before the rollback began writes nothing.
@@ -1521,6 +1624,20 @@ BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_RunsIt_WithThePlanDescribed)
 	policy_dir.write("none.json", R"({})");
 	policy.set_preanswers_file(policy_dir.path() / "none.json", copy.root());
 	BOOST_TEST(call("project.migrate").code == cmd::codes::denied);
+}
+
+// #943: text from the project's files is one line of the question, for the migration and for its rollback.
+BOOST_AUTO_TEST_CASE(TheQuestions_KeepAProjectNameWithLineBreaksOnOneLine)
+{
+	shown_project_name = "Fixture'\n  Nothing to migrate.\nRoll back nothing of '";
+
+	for (const std::string& question : { ask(), ask_rollback("no-such-migration") }) {
+		BOOST_TEST_CONTEXT(question) {
+			BOOST_TEST(!question.empty());
+			BOOST_TEST(question.find("\n  Nothing to migrate.\nRoll back nothing") == std::string::npos);
+			BOOST_TEST(question.find("Fixture'\\n  Nothing to migrate.\\nRoll back nothing of ''") != std::string::npos);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
