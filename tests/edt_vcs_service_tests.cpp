@@ -83,6 +83,21 @@ std::vector<std::string> parent_environment()
 	return out;
 }
 
+#ifdef _WIN32
+// The 8.3 name Windows gave the entry at `path`; empty when it gave none (short names off on that volume).
+std::string short_name_of(const fs::path& path)
+{
+	const DWORD size = GetShortPathNameW(path.c_str(), nullptr, 0);
+	if (size == 0) return {};
+	std::wstring out(size, L'\0');
+	const DWORD written = GetShortPathNameW(path.c_str(), out.data(), size);
+	if (written == 0 || written >= size) return {};
+	out.resize(written);
+	const std::string name = edt::utf8_of(fs::path(out).filename());
+	return name == edt::utf8_of(path.filename()) ? std::string{} : name;
+}
+#endif
+
 bool has_arg(const std::vector<std::string>& args, std::string_view arg)
 {
 	return std::find(args.begin(), args.end(), arg) != args.end();
@@ -1517,7 +1532,9 @@ BOOST_AUTO_TEST_CASE(AnAgentStagesOnlyTheProjectsOwnFiles)
 	refused_paths.push_back({ "game/.Cache" });
 #endif
 #ifdef _WIN32
-	refused_paths.push_back({ "game/SNK~1/mcp.json" });
+	if (const std::string snk = short_name_of(project / ".snk"); !snk.empty()) {
+		refused_paths.push_back({ "game/" + snk + "/mcp.json" });
+	}
 #endif
 	for (const std::vector<std::string>& paths : refused_paths) {
 		BOOST_TEST_CONTEXT(paths.front()) {
@@ -2781,6 +2798,39 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ChecksThePolicyFileOfAProjectInASubfolder)
 	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
 }
 
+// #948 on real git: with the project in a subfolder, an agent's checkout that changes the project's other files goes
+// through, and one that changes its policy file is denied as such (diff-tree without -r took any change in game/).
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfAProjectInASubfolder_IsDeniedOnlyForItsPolicyFile)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("policy_subfolder_changes");
+	const fs::path project = repo / "game";
+	write(project / ".snk" / "agent_policy.json", "{}\n");
+	write(project / "res" / "a.txt", "a\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project with its policy" });
+	const std::string main_head = head_of(repo);
+	const auto branch_with = [&](const std::string& branch, const fs::path& file) {
+		git(repo, { "checkout", "-q", "-b", branch, "main" });
+		write(file, "changed\n");
+		git(repo, { "commit", "-q", "-am", "change " + branch });
+		git(repo, { "checkout", "-q", "main" });
+	};
+	branch_with("res", project / "res" / "a.txt");
+	branch_with("policy", project / ".snk" / "agent_policy.json");
+	make_service(real_options(project));
+
+	const json::value refused = finish(service->start_checkout("policy", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("agent policy file")
+		!= std::string::npos);
+	BOOST_TEST(head_of(repo) == main_head);
+
+	const json::value allowed = finish(service->start_checkout("res", cmd::origin_kind::agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST(head_of(repo) != main_head);
+}
+
 // #909: an agent's checkout must not bring in what decides the code that is built and loaded: the project's .snk/,
 // its manifest, build/ (in any letter case where the file system ignores it) and, while live mode is on, code/. A
 // change elsewhere, or outside the project, goes through; so does a person's checkout.
@@ -2876,7 +2926,9 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfALinkOrAnotherSpellingInTheProject_IsDen
 		{ "120000", "game/build" }, { "160000", "game/build" }, { "120000", "game/code" },
 		{ "120000", "game/res/link" } };
 #ifdef _WIN32
-	denied.emplace_back("100644", "game/SNK~1/build.json");
+	if (const std::string snk = short_name_of(project / ".snk"); !snk.empty()) {
+		denied.emplace_back("100644", "game/" + snk + "/build.json");
+	}
 #endif
 #if defined(_WIN32) || defined(__APPLE__)
 	denied.emplace_back("100644", "game/.s\xC5\xBFnk/build.json");

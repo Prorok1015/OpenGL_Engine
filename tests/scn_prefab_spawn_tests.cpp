@@ -11,6 +11,7 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_transform_system.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -197,7 +198,7 @@ BOOST_AUTO_TEST_CASE(Spawn_IsRefused_InAWorldNotBuiltFromADesc_UnderAParentThatI
 
 BOOST_AUTO_TEST_CASE(Spawn_ByATagNotLoadedYet_LoadsItNow_AndSaysSoOnce)
 {
-	std::size_t waits = 0;
+	std::atomic<std::size_t> waits = 0;
 	const engine::log_sink_handle sink = engine::add_log_sink([&waits](std::string_view, engine::log_level level, std::string_view message) {
 		if (level == engine::log_level::warn && message.find("not loaded yet") != std::string_view::npos) ++waits;
 	});
@@ -208,7 +209,7 @@ BOOST_AUTO_TEST_CASE(Spawn_ByATagNotLoadedYet_LoadsItNow_AndSaysSoOnce)
 	BOOST_TEST((first != entt::null));
 	BOOST_TEST((second != entt::null));
 	BOOST_TEST((at({ own_id(first), 0xa1, 0xa2 }) != entt::null));
-	BOOST_TEST(waits == 1u);
+	BOOST_TEST(waits.load() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(AHotReloadOfThePrefabSpawnedUnder_KeepsTheSpawnedTree)

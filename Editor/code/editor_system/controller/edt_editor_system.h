@@ -213,7 +213,8 @@ namespace edt {
 		void open_agents_panel();
 		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
 		void open_migration_window();
-		// The window, rolling migration `id` back (project.migrate_rollback as a person's call).
+		// The window with the question about rolling migration `id` back (#910): the full listing; it runs
+		// (project.migrate_rollback as a person's call) only once the person confirms there.
 		void open_migration_rollback(const std::string& id);
 		// migration_startup's question (#761): Roll Back / Later for an unfinished migration, or why it cannot be rolled back.
 		void offer_migration_rollback(const journal_offer& offer);

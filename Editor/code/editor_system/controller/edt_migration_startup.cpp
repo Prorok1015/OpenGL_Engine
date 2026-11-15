@@ -53,7 +53,7 @@ namespace {
 	}
 }
 
-edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unfinished, bool headless)
+edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unfinished, bool headless, const std::optional<std::string>& refused)
 {
 	journal_offer offer;
 	if (unfinished.empty()) return offer;
@@ -69,6 +69,13 @@ edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unf
 		offer.text = reason;
 		return offer;
 	}
+	if (refused) {
+		// A journal anyone could have edited: it is never offered, even as a question, and the reason names what is wrong.
+		offer.what = headless ? journal_offer::kind::warn : journal_offer::kind::inform;
+		offer.title = "An unfinished migration";
+		offer.text = std::format("migration {} did not finish{}, but it is not offered for a rollback here: {}", id, others, *refused);
+		return offer;
+	}
 	if (headless) {
 		offer.what = journal_offer::kind::warn;
 		offer.text = std::format("migration {} did not finish{}: the project may be partly migrated; roll it back with "
@@ -78,8 +85,8 @@ edt::journal_offer edt::decide_journal_offer(const std::vector<std::string>& unf
 	offer.what = journal_offer::kind::ask;
 	offer.title = std::format("Migration {} did not finish", id);
 	offer.text = std::format("The migration {} of this project did not finish{}: the project may be partly migrated.\n"
-		"Roll it back now? Every file it wrote is put back from .snk/migrations/{}/backup.\n"
-		"Later: Project > Migrate Project... offers it again, or run editor --migrate-rollback {}.", id, others, id, id);
+		"Roll Back shows every file the rollback puts back or deletes, and it runs only once you confirm there.\n"
+		"Later: Project > Migrate Project... offers it again, or run editor --migrate-rollback {}.", id, others, id);
 	return offer;
 }
 
@@ -90,16 +97,23 @@ edt::migration_startup::migration_startup(ports ports, bool headless) : m_ports(
 bool edt::migration_startup::tick()
 {
 	if (m_done) return false;
-	const auto unfinished = [this] { return m_ports.unfinished ? m_ports.unfinished() : std::vector<std::string>{}; };
+	const auto offer_of = [this](bool headless) {
+		const std::vector<std::string> unfinished = m_ports.unfinished ? m_ports.unfinished() : std::vector<std::string>{};
+		std::optional<std::string> refused;
+		if (!unfinished.empty() && valid_migration_id(unfinished.front()) && m_ports.journal_refusal) {
+			refused = m_ports.journal_refusal(unfinished.front());
+		}
+		return decide_journal_offer(unfinished, headless, refused);
+	};
 	if (m_headless) {
 		m_done = true;
-		const journal_offer offer = decide_journal_offer(unfinished(), true);
+		const journal_offer offer = offer_of(true);
 		if (offer.what == journal_offer::kind::warn && m_ports.warn) m_ports.warn(offer.text);
 		return false;
 	}
 	if (m_ports.settled && !m_ports.settled()) return true;
 	m_done = true;
-	const journal_offer offer = decide_journal_offer(unfinished(), false);
+	const journal_offer offer = offer_of(false);
 	if (offer.what != journal_offer::kind::none) {
 		if (m_ports.warn) m_ports.warn(offer.text);
 		if (m_ports.ask) m_ports.ask(offer);

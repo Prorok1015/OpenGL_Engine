@@ -6,6 +6,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
 #include <format>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -351,17 +352,24 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ADeletedComponentDesc_KeepsTheRegistryWith
 	assembler->assemble_and_apply(reg, e, "", handle(tag), {}, "stat");
 	BOOST_REQUIRE(reg.get<stat_component>(e).label == "kept");
 
+	std::mutex errors_mutex;
 	std::vector<std::string> errors;
-	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::error) errors.push_back(std::format("{}: {}", category, message));
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::error) return;
+		std::lock_guard lock(errors_mutex);
+		errors.push_back(std::format("{}: {}", category, message));
 	});
 	BOOST_REQUIRE(ram->erase(tag));
 	rs->signal_changed(tag);
 	pump();
 	mgr.tick();
 
-	for (const auto& error : errors) BOOST_TEST_MESSAGE(error);
-	BOOST_TEST(errors.empty());
+	const auto logged = [&] {
+		std::lock_guard lock(errors_mutex);
+		return errors;
+	}();
+	for (const auto& error : logged) BOOST_TEST_MESSAGE(error);
+	BOOST_TEST(logged.empty());
 	BOOST_TEST(reg.get<stat_component>(e).hp == 4);
 	BOOST_TEST(reg.get<stat_component>(e).label == "kept");
 }
