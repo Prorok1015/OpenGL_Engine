@@ -1,6 +1,9 @@
 #include "rnd_geom_manager.h"
 #include <snk/driver/rnd_buffer_interface.h>
 #include <snk/resource/res_system.h>
+#include <algorithm>
+#include <cstddef>
+#include <utility>
 
 rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, res::resource_system& res_sys)
 	: m_res_sys(res_sys)
@@ -39,7 +42,19 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 
 	if (handle.is_ready()) {
 		loading.erase(geom_tag);
-		return (cache[geom_tag] = create_geometry(*handle)).get();
+		rnd::geometry_desc& desc = *handle;
+		// Built aside and moved in last: a failure or an exception leaves no half-made record in the cache.
+		built_geometry geometry;
+		geometry.vertex_array = create_geometry(desc);
+		if (!geometry.vertex_array) {
+			return nullptr;
+		}
+		geometry.indices.assign(desc.indices.begin(), desc.indices.end());
+		const std::uint32_t stride = desc.layout.get_stride();
+		geometry.vertex_count = stride == 0 ? std::uint64_t{ 0 } : std::uint64_t{ desc.vertices.size() / stride };
+		rnd::driver::vertex_array_interface* const built = geometry.vertex_array.get();
+		cache.insert_or_assign(geom_tag, std::move(geometry));
+		return built;
 	}
 
 	if (handle.has_error()) {
@@ -50,11 +65,40 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 	return nullptr;
 }
 
+bool rnd::geom_manager::draw_fits(const res::tag& geom_tag, std::uint32_t count, std::uint32_t base_vertex, std::uint32_t base_index)
+{
+	if (count == 0) return true;
+	const auto found = cache.find(geom_tag);
+	if (found == cache.end()) return true;
+	built_geometry& geometry = found->second;
+
+	const checked_range range{ base_index, count, base_vertex };
+	if (const auto known = geometry.checked.find(range); known != geometry.checked.end()) return known->second;
+
+	const std::uint64_t end = static_cast<std::uint64_t>(base_index) + count;
+	bool fits = end <= geometry.indices.size();
+	if (fits) {
+		const auto first = geometry.indices.begin() + static_cast<std::ptrdiff_t>(base_index);
+		const std::uint32_t highest = *std::max_element(first, first + static_cast<std::ptrdiff_t>(count));
+		fits = static_cast<std::uint64_t>(base_vertex) + highest < geometry.vertex_count;
+	}
+	if (!fits && !geometry.warned) {
+		geometry.warned = true;
+		egLOG_WARN("render/geometry", "'{}': draws outside its {} indices and {} vertices are left out; the first is indices {}..{} from vertex {}",
+			geom_tag.view(), geometry.indices.size(), geometry.vertex_count, base_index, end, base_vertex);
+	}
+	// Past the cap a range is checked at every draw rather than answered wrongly.
+	if (geometry.checked.size() < k_checked_ranges_cap) {
+		geometry.checked.emplace(range, fits);
+	}
+	return fits;
+}
+
 rnd::driver::vertex_array_interface* rnd::geom_manager::find_geometry(res::tag geom_tag)
 {
 	auto it = cache.find(geom_tag);
 	if (it != cache.end()) {
-		return it->second.get();
+		return it->second.vertex_array.get();
 	}
 
 	return nullptr;

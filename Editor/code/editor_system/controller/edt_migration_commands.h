@@ -31,7 +31,7 @@ namespace edt
 	// the checks, then the level is opened again). apply_migration runs in the job's io work (#761) while the main thread
 	// keeps drawing the modal and runs the engine's desc loads it hands over (apply_context::on_main); what the mounts
 	// report waits meanwhile (resource_system::hold_changes). The job answers with the report. Main thread only.
-	// project.migrate_rollback {id} (#761) runs prj::migration::rollback_migration through the same run (modal, hand-over
+	// project.migrate_rollback {id, journal_fingerprint?} (#761, #910) runs prj::migration::rollback_migration through the same run (modal, hand-over
 	// to the io work, hold, documents closed and the level opened again) and answers as editor --migrate-rollback exits.
 	struct migration_deps
 	{
@@ -95,6 +95,22 @@ namespace edt
 	// A migration id project.migrate_rollback takes: one folder name of [A-Za-z0-9._+-], at most 128 bytes, not starting with
 	// '.' (apply_migration makes "<UTC>-<engine version>", "-2"...).
 	[[nodiscard]] bool valid_migration_id(std::string_view id);
+
+	// What a rollback of migration `id` would do, as project.migrate_rollback's question and the Project Migration window
+	// show it (#910): `text` names the migration, its backup and, one per line, every file it puts back and every file it
+	// deletes, each through prj::migration::journal_path_text. `refused` (and no text) when the journal is missing, does
+	// not read, fails prj::migration::check_journal_paths or is too long to show whole (64 KiB): the rollback's run reads
+	// the journal the same way and is refused for the same reason.
+	struct rollback_listing
+	{
+		std::string refused;
+		std::string text;
+		// The journal the text was made from (prj::migration::journal_hash of its bytes, 16 hex digits), for
+		// project.migrate_rollback's journal_fingerprint; empty with `refused`.
+		std::string fingerprint;
+	};
+
+	[[nodiscard]] rollback_listing rollback_listing_of(const std::filesystem::path& root, std::string_view id);
 
 	[[nodiscard]] std::vector<registration> register_migration_commands(cmd::command_registry& commands, migration_deps deps);
 }

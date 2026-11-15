@@ -650,9 +650,12 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 		BOOST_FAIL("File > Cancel Level Load is missing");
 		return false;
 	};
+	std::mutex said_mutex;
 	std::vector<std::string> said;
-	const auto sink = engine::add_log_sink([&said](std::string_view category, engine::log_level, std::string_view message) {
-		if (category == "editor") said.emplace_back(message);
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level, std::string_view message) {
+		if (category != "editor") return;
+		std::lock_guard lock(said_mutex);
+		said.emplace_back(message);
 	});
 
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
@@ -676,7 +679,11 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 	BOOST_TEST(!editor().level_load_in_progress());
 	BOOST_TEST(!cancel_item_enabled());
 	BOOST_TEST(editor().watched_level_tag() == watched);
-	BOOST_TEST(std::ranges::any_of(said, [](const std::string& line) {
+	const auto said_now = [&] {
+		std::lock_guard lock(said_mutex);
+		return said;
+	}();
+	BOOST_TEST(std::ranges::any_of(said_now, [](const std::string& line) {
 		return line.find("test_level.desc") != std::string::npos && line.find("cancelled by an agent") != std::string::npos;
 	}));
 
