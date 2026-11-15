@@ -26,6 +26,7 @@ Editor/
     ├── play/                         # Play and the editor/game mode, whole (#1004)
     │   ├── edt_play_session.cpp/h    # play_session: Play of the scene document (set "play", locks, Stop restores)
     │   ├── edt_editor_mode.cpp/h     # editor_mode_controller: editor/game layout and what it does to Play (#294)
+    │   ├── edt_play_component.cpp/h  # play_component (#1004): the session, its locks, the Play/runtime/bus/mode commands, the game layout and the menu-bar status; `editor_system` creates it, calls `install()` and keeps `m_play` / `m_modes` as views of its session and mode controller
     │   ├── edt_play_commands.cpp/h, edt_play_preflight.cpp/h, edt_runtime_commands.cpp/h, edt_bus_commands.cpp/h, edt_editor_mode_commands.cpp/h # the commands and the check around Play
     │
 
