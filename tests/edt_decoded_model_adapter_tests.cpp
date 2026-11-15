@@ -2,15 +2,20 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_decoded_model_adapter.h"
+#include "edt_process_decoder.h"
 #include <snk/resource/res_mount_table.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 // The editor's adapter of the models descs refer to (#925): the model goes to the decoder process with its content root
@@ -161,12 +166,28 @@ BOOST_AUTO_TEST_CASE(WithoutTheDecoder_TheLoadFailsWithItsReason_AndNothingIsPar
 	BOOST_TEST(!imported.has_value());
 }
 
-BOOST_AUTO_TEST_CASE(AModelThatIsNoFileOnTheDisk_IsRefused)
+BOOST_AUTO_TEST_CASE(AModelThatIsNoFileOnTheDisk_GoesToTheDecoderAsItsBytesAlone)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
-	const std::string error = error_of(adapter, res::tag("res://models/none.obj"), bytes());
-	BOOST_TEST(error.find("not a file on the disk") != std::string::npos);
-	BOOST_TEST(!scanned.has_value());
+	const std::vector<std::byte> model = bytes();
+	const auto loaded = adapter.deserialize(res::tag("res://models/none.obj"), model);
+
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	BOOST_TEST(scanned->boundary.empty());
+	BOOST_TEST(scanned->path.filename() == fs::path("none.obj"));
+	BOOST_TEST((scanned->preloaded == &model));
+	BOOST_REQUIRE(imported.has_value());
+	BOOST_TEST(!imported->on_disk);
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(loaded) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AModelOnTheDisk_GoesToTheDecoderAsAFile)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	adapter.deserialize(k_model, bytes());
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(scanned->on_disk);
 }
 
 BOOST_AUTO_TEST_CASE(WhatTheDecoderRefusesOrFailsOn_FailsTheLoadNamingTheModel)
@@ -233,3 +254,74 @@ BOOST_AUTO_TEST_CASE(WhatAnEarlierLoadLeftInTheModelsMemoryFolder_IsGoneBeforeTh
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+#if defined(SNK_MODEL_DECODER_PATH)
+
+// The same loads through the real decoder process, for a model that is no file on the disk (#925): a self-contained .glb
+// decodes; a model that names another file, or bytes that are no model, fail the load with the reason.
+namespace {
+
+struct real_decoder_env : adapter_env
+{
+	edt::decoded_model_adapter adapter()
+	{
+		edt::decode_runner_config config;
+		config.decoder = SNK_MODEL_DECODER_PATH;
+		return edt::decoded_model_adapter(*descs, *rs, edt::decoded_model_adapter::steps_of(std::make_shared<edt::process_decoder>(*rs, config)));
+	}
+
+	static std::vector<std::byte> text(std::string_view content)
+	{
+		std::vector<std::byte> out(content.size());
+		for (std::size_t i = 0; i < content.size(); ++i) out[i] = static_cast<std::byte>(content[i]);
+		return out;
+	}
+};
+
+std::vector<std::byte> file_bytes(const fs::path& path)
+{
+	std::ifstream in(path, std::ios::binary);
+	const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	return real_decoder_env::text(content);
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtDecodedModelAdapterRealDecoderTests, real_decoder_env)
+
+BOOST_AUTO_TEST_CASE(AGlbFromMemory_IsDecoded)
+{
+	const std::vector<std::byte> robot = file_bytes(fs::path(SNK_TEST_PROJECT_DIR) / "res" / "objects" / "robot" / "gen_robot.glb");
+	BOOST_REQUIRE(!robot.empty());
+	const auto loaded = adapter().deserialize(res::tag("res://ram/gen_robot.glb"), robot);
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(loaded) != nullptr);
+	BOOST_TEST((rs->resolve_alias(res::tag("res://ram/gen_robot.glb")) == res::tag("memory://__models/res/ram/gen_robot.glb/gen_robot.prefab.desc")));
+}
+
+BOOST_AUTO_TEST_CASE(AModelFromMemoryThatNamesAnotherFile_FailsTheLoad)
+{
+	const std::string gltf = R"json({"asset":{"version":"2.0"},"buffers":[{"uri":"m.bin","byteLength":36}],
+		"bufferViews":[{"buffer":0,"byteLength":36}],
+		"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],
+		"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})json";
+	const std::string obj = "mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n";
+
+	for (const auto& [tag, content] : { std::pair{ "res://ram/m.gltf", gltf }, std::pair{ "res://ram/m.obj", obj } }) {
+		BOOST_TEST_CONTEXT(tag) {
+			const std::string error = error_of(adapter(), res::tag(tag), text(content));
+			BOOST_TEST(error.find(tag) != std::string::npos);
+			BOOST_CHECK_MESSAGE(error.find("not a file on the disk") != std::string::npos, error);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(BytesFromMemoryThatAreNoModel_FailTheLoad)
+{
+	const std::string error = error_of(adapter(), res::tag("res://ram/broken.glb"), text("glTF this is not a model"));
+	BOOST_TEST(error.find("res://ram/broken.glb") != std::string::npos);
+	BOOST_CHECK_MESSAGE(error.find("is not loaded") != std::string::npos, error);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+#endif

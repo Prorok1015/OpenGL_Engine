@@ -21,6 +21,12 @@ bool edt::filesystem_assimp_io::Exists(const char* pFile) const
 	if (p == m_root_path)
 		return true;
 
+	if (m_access && !m_access->on_disk()) {
+		// A model given only as bytes may not go on without a file it names (an .obj loses its .mtl silently otherwise):
+		// the load fails with the reason.
+		throw std::runtime_error(m_access->resolve(pFile, model_file_kind::side_file).error);
+	}
+
 	std::error_code ec;
 	if (std::filesystem::equivalent(p, m_root_path, ec))
 		return true;
@@ -43,7 +49,7 @@ Assimp::IOStream* edt::filesystem_assimp_io::Open(const char* pFile, const char*
 
 	// Root file — serve from memory
 	std::error_code ec;
-	if (p == m_root_path || std::filesystem::equivalent(p, m_root_path, ec)) {
+	if (p == m_root_path || ((!m_access || m_access->on_disk()) && std::filesystem::equivalent(p, m_root_path, ec))) {
 		return new Assimp::MemoryIOStream(
 			reinterpret_cast<const uint8_t*>(m_root_data.data()),
 			m_root_data.size());

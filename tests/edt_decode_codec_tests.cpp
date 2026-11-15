@@ -130,6 +130,7 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	request.memory_limit_bytes = 2147483648ull;
 	request.boundary = std::filesystem::path("some") / "content";
 	request.memory_folder = "__models/res/some/model/";
+	request.on_disk = false;
 
 	const auto back = edt::decode_request_from_json(edt::to_json(request));
 	BOOST_REQUIRE(back.has_value());
@@ -143,6 +144,7 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	BOOST_CHECK_EQUAL(back->memory_limit_bytes, request.memory_limit_bytes);
 	BOOST_CHECK(back->boundary == request.boundary);
 	BOOST_CHECK_EQUAL(back->memory_folder, request.memory_folder);
+	BOOST_CHECK(!back->on_disk);
 
 	boost::json::object bad_mode = edt::to_json(request);
 	bad_mode["mode"] = "run";
@@ -159,6 +161,9 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	boost::json::object no_boundary = edt::to_json(request);
 	no_boundary.erase("boundary");
 	BOOST_CHECK(!edt::decode_request_from_json(no_boundary).has_value());
+	boost::json::object text_on_disk = edt::to_json(request);
+	text_on_disk["on_disk"] = "false";
+	BOOST_CHECK(!edt::decode_request_from_json(text_on_disk).has_value());
 	BOOST_CHECK(!edt::decode_request_from_json(boost::json::value(3)).has_value());
 }
 

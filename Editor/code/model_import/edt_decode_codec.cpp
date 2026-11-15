@@ -262,6 +262,7 @@ boost::json::object edt::to_json(const decode_request& request)
 	out["memory_limit_bytes"] = u64_to(request.memory_limit_bytes);
 	out["boundary"] = path_text(request.boundary);
 	out["memory_folder"] = request.memory_folder;
+	out["on_disk"] = request.on_disk;
 	return out;
 }
 
@@ -307,8 +308,10 @@ std::optional<edt::decode_request> edt::decode_request_from_json(const boost::js
 
 	const auto boundary = string_from(object.if_contains("boundary"));
 	const auto memory_folder = string_from(object.if_contains("memory_folder"));
-	if (!boundary || !memory_folder) return std::nullopt;
+	const json::value* on_disk = object.if_contains("on_disk");
+	if (!boundary || !memory_folder || !on_disk || !on_disk->is_bool()) return std::nullopt;
 	request.boundary = path_from(*boundary);
 	request.memory_folder = *memory_folder;
+	request.on_disk = on_disk->as_bool();
 	return request;
 }

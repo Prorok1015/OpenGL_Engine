@@ -30,7 +30,8 @@ namespace edt {
 
 	// The editor's adapter for the model files descs refer to (res://x.glb as a level's prefab or a __parent): the model is
 	// parsed in the decoder process, never in the editor (#925). It may read side files anywhere in its content root but
-	// no hidden ones, each decoder step gets k_deadline, and without the decoder the load fails with its reason.
+	// no hidden ones, each decoder step gets k_deadline, and without the decoder the load fails with its reason. A model
+	// that is no file on the disk (served from memory or a pack) is decoded from its bytes alone and may name no other file.
 	class decoded_model_adapter : public core::res::adapter_interface
 	{
 	public:

@@ -75,14 +75,21 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 	if (const std::string why = m_decoder.unavailable_reason ? m_decoder.unavailable_reason() : std::string{}; !why.empty()) {
 		throw refuse(why);
 	}
-	const std::optional<model_location> location = locate(m_resources.mount_roots(tag.protocol()), tag);
-	if (!location) throw refuse("it is not a file on the disk, and the editor reads models only through the decoder");
+	if (raw_data.size() > k_max_person_source_bytes) {
+		throw refuse(std::format("the file is too big: {} bytes, the limit is {}", raw_data.size(), k_max_person_source_bytes));
+	}
 
 	import_source source;
-	source.path = location->file;
 	source.preloaded = &raw_data;
-	source.boundary = location->root;
 	source.memory_folder = memory_folder_of(tag);
+	if (const std::optional<model_location> location = locate(m_resources.mount_roots(tag.protocol()), tag)) {
+		source.path = location->file;
+		source.boundary = location->root;
+	} else {
+		// Served from memory or a pack: the decoder gets only the bytes, and the model may name no other file.
+		source.path = fs_paths::path_from_utf8(source.memory_folder) / fs_paths::path_from_utf8(tag.name());
+		source.on_disk = false;
+	}
 
 	// The decoder's own errors (it failed, was killed, its answer was refused) name the model too.
 	const auto step = [&refuse](auto&& call) {

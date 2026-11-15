@@ -367,6 +367,16 @@ BOOST_AUTO_TEST_CASE(AScanAnswer_WithABoundary_TakesFilesFromAnywhereInIt_ButNot
 	BOOST_CHECK_MESSAGE(problem.find("content root") != std::string::npos, problem);
 }
 
+BOOST_AUTO_TEST_CASE(AScanAnswer_ForAModelGivenOnlyAsBytes_ListsNoFile)
+{
+	auto request = request_in();
+	request.on_disk = false;
+	std::string problem;
+	BOOST_CHECK(edt::accept_scan_answer(scan_answer({}), request, problem).has_value());
+	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a.mtl") }), request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("not a file on the disk") != std::string::npos, problem);
+}
+
 BOOST_AUTO_TEST_CASE(AnImportAnswer_GoesToTheMemoryFolderTheRequestNamed_AndNowhereElse)
 {
 	auto request = request_in();

@@ -91,6 +91,10 @@ std::optional<edt::model_file_scan> edt::accept_scan_answer(const decode_bundle&
 	scan->error = cleaned(scan->error);
 	if (!scan->ok()) return scan;
 
+	if (!request.on_disk && !scan->files.empty()) {
+		problem = "the scan of a model that is not a file on the disk lists files";
+		return std::nullopt;
+	}
 	const fs::path folder = request.boundary.empty() ? request.source_path.parent_path() : request.boundary;
 	if (scan->files.size() > request.limits.max_files) {
 		problem = "the scan lists more files than the limit allows";
@@ -488,6 +492,7 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.limits = source.limits;
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
+	request.on_disk = source.on_disk;
 	const decode_outcome outcome = run(request, source, task);
 	std::string problem;
 	std::optional<model_file_scan> scan = accept_scan_answer(*outcome.bundle, request, problem);
@@ -508,6 +513,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	request.limits = source.limits;
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
+	request.on_disk = source.on_disk;
 	const decode_outcome outcome = run(request, source, task);
 
 	// Nothing of the answer reaches memory:// before it passed every check.

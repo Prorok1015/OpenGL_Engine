@@ -38,6 +38,8 @@ namespace edt {
 		std::filesystem::path boundary;
 		// Empty: "<stem>/". The memory:// folder the import's resources go to, ending in '/'.
 		std::string memory_folder;
+		// False: only `preloaded` is the model, `path` names no file (model_file_access's on_disk).
+		bool on_disk = true;
 	};
 
 	class model_importer {

@@ -46,6 +46,8 @@ namespace edt {
 		std::filesystem::path boundary;
 		// Empty: "<stem>/". The memory:// folder of the import (import_source::memory_folder).
 		std::string memory_folder;
+		// import_source::on_disk.
+		bool on_disk = true;
 	};
 
 	boost::json::object to_json(const decode_request& request);
