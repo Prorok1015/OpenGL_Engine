@@ -1,4 +1,5 @@
 #pragma once
+#include <format>
 #include <snk/common/common.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
@@ -288,6 +289,13 @@ namespace desc
 				// The owner's protocol is unknown for the assembler's untagged copy: the stricter rule applies (#697).
 				if (std::string why = res::reference_problem(reference, owner.get_tag().protocol()); !why.empty()) {
 					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
+					return m_res_system.refused<T>(reference, std::move(why));
+				}
+				// A desc that held a handle to its own file would keep itself alive for good: the block owns the desc, the
+				// desc the block (#952). The reference is refused like one it may not make; an alias of the file is the file.
+				if (reference.is_valid() && (reference == owner.get_tag() || m_res_system.resolve_alias(reference) == owner.get_tag())) {
+					std::string why = std::format("'{}' refers to itself", reference.view());
+					res::report_load_warning(res::diagnostic_kind::cycle, json_path, why);
 					return m_res_system.refused<T>(reference, std::move(why));
 				}
 				auto handle = m_res_system.require<T>(reference);
