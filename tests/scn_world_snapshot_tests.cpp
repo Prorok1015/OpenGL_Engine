@@ -434,6 +434,7 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 	scn::prefab_instance instance;
 	instance.source_prefab = tag_of("p.prefab.desc");
 	instance.local_overrides.name = "Root";
+	instance.content_of = tag_of("outer.prefab.desc");
 	scn::prefab_desc::prefab_node child;
 	child.name = "Child";
 	child.node_id = 0x42;
@@ -466,6 +467,7 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 
 	const auto& restored_instance = to.get<scn::prefab_instance>(find_named(to, "Instance"));
 	BOOST_TEST((restored_instance.source_prefab == instance.source_prefab));
+	BOOST_TEST((restored_instance.content_of == instance.content_of));
 	BOOST_TEST(restored_instance.local_overrides.name == "Root");
 	BOOST_REQUIRE_EQUAL(restored_instance.local_overrides.children.size(), 1u);
 	BOOST_TEST(restored_instance.local_overrides.children[0].name == "Child");

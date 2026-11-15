@@ -280,6 +280,8 @@ namespace {
 		// The ids below `owner`, inside the prefab it instantiates.
 		std::vector<std::uint64_t> target;
 		bool is_root = false;
+		// The file the world was loaded from: an instance node's records are its content (#993).
+		res::tag file;
 	};
 
 	// False with `error` filled when the ref is malformed or leads nowhere.
@@ -288,6 +290,7 @@ namespace {
 		edt::scene_ref::location<const prefab_node> at;
 		if (!edt::scene_ref::locate(scene, ref, at, error)) return false;
 		out.world = { &scene.world_descs[at.world], std::move(at.world_name) };
+		out.file = scene.world_tag(at.world);
 		out.owner = at.owner;
 		out.path = std::move(at.path);
 		out.target = std::move(at.target);
@@ -489,7 +492,7 @@ namespace {
 		std::optional<prefab_node> base;
 		const prefab_node* subject = at.owner;
 		if (!at.target.empty()) {
-			base = edt::override_edit::find_base_node(*sources.services.assembler(), *at.owner, at.target);
+			base = edt::override_edit::find_base_node(*sources.services.assembler(), *at.owner, at.target, at.file);
 			if (!base) return cmd::result::failure(cmd::codes::not_found, "no node at that path inside the prefab instance");
 			subject = &*base;
 		}
@@ -543,7 +546,8 @@ namespace {
 		const bool composed = !at.target.empty() || !at.owner->overrides.empty() || references_prefab(*at.owner);
 		// The cap applies before any child is expanded: expanding costs a copy of the prefab content of each one.
 		if (composed) {
-			for (const auto& listed : edt::override_edit::list_children(*sources.services.assembler(), *at.owner, at.target, max_children_listed, &child_total)) {
+			for (const auto& listed : edt::override_edit::list_children(*sources.services.assembler(), *at.owner, at.target, at.file,
+				max_children_listed, &child_total)) {
 				rows.push_back({ listed.node.node_id, listed.node.name, sorted_keys(listed.node.components), listed.has_children });
 			}
 		} else {

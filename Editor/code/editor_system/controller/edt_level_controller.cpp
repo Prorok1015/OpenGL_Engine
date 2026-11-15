@@ -276,6 +276,7 @@ void edt::level_controller::detach_from_game_layer()
 	m_state.world_descs.clear();
 	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();
+	m_state.world_tags.clear();
 	m_state.reset_history();
 	m_world_ctrl.clear_active_world();
 }
@@ -396,7 +397,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	// Same writer as every other desc save, so level files are indented and diff well.
 	boost::json::value level_file{ std::move(level_json) };
 	if (scn::ecs_assembler* assembler = m_services.assembler()) {
-		override_edit::write_record_references(*m_services.descs(), *assembler, m_state.world_descs, level_file);
+		override_edit::write_record_references(*m_services.descs(), *assembler, m_state.world_descs, m_state.world_tags, level_file);
 	}
 	m_services.descs()->write_references(level_file);
 	const auto bytes = m_services.descs()->serialize_to_bytes(level_file);
@@ -436,15 +437,17 @@ void edt::level_controller::resync_worlds_after_reload()
 	}
 
 	std::vector<scn::world_desc> desc_worlds;
+	std::vector<res::tag> desc_tags;
 	for (const auto& wh : level_res->get_worlds()) {
 		const auto world = wh.get_sync();
 		if (!ENGINE_VERIFY(world, "level '{}': world desc failed to load, skipping", level_res.get_tag().view())) {
 			continue;
 		}
 		desc_worlds.push_back(*world);
+		desc_tags.push_back(world->get_tag());
 	}
 
-	apply_world_resync(m_state, m_world_ctrl, desc_worlds, !level_res->get_worlds().empty(),
+	apply_world_resync(m_state, m_world_ctrl, desc_worlds, desc_tags, !level_res->get_worlds().empty(),
 		[&lvl](const scn::world_desc& w) { return lvl.has(w.get_name()); });
 }
 
@@ -452,6 +455,7 @@ void edt::apply_world_resync(
 	scene_document& state,
 	world_controller& worlds,
 	const std::vector<scn::world_desc>& desc_worlds,
+	const std::vector<res::tag>& desc_tags,
 	bool desc_lists_worlds,
 	const std::function<bool(const scn::world_desc&)>& is_alive)
 {
@@ -465,8 +469,24 @@ void edt::apply_world_resync(
 	std::string active_name;
 	if (const std::string* active = state.active_world_name()) active_name = *active;
 
+	const std::vector<std::string> names_before = state.world_names;
+	const std::vector<res::tag> tags_before = state.world_tags;
 	// An empty list is a valid state (idx -1): the arrays are cleared so nothing can index a world that is gone.
 	const int idx = resync_world_arrays(desc_worlds, state.world_descs, state.world_names, state.worlds_systems_list, active_name, is_alive);
+	// A world the reload lists has the file it came from now; one kept from before keeps its own (#993).
+	state.world_tags.clear();
+	for (const std::string& name : state.world_names) {
+		res::tag tag;
+		const auto listed = std::ranges::find_if(desc_worlds, [&name] (const scn::world_desc& w) { return w.get_name() == name; });
+		if (listed != desc_worlds.end()) {
+			const auto at = static_cast<std::size_t>(listed - desc_worlds.begin());
+			if (at < desc_tags.size()) tag = desc_tags[at];
+		} else if (const auto kept = std::ranges::find(names_before, name); kept != names_before.end()) {
+			const auto at = static_cast<std::size_t>(kept - names_before.begin());
+			if (at < tags_before.size()) tag = tags_before[at];
+		}
+		state.world_tags.push_back(std::move(tag));
+	}
 	// The worlds were reloaded from the files: what the edits changed is gone from them.
 	state.reset_history();
 	if (idx < 0) {
@@ -490,6 +510,7 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 	m_state.world_descs.clear();
 	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();
+	m_state.world_tags.clear();
 	if (!level_res.is_ready()) {
 		m_state.reset_history();
 		return;
@@ -502,6 +523,7 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 			continue;
 		}
 		m_state.world_descs.push_back(*world);
+		m_state.world_tags.push_back(world->get_tag());
 	}
 	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
 	m_state.reset_history();

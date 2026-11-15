@@ -613,13 +613,6 @@ edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system&
 {
 }
 
-edt::import_intermediate edt::model_importer::import_background(const std::filesystem::path& abs_path, ds::task_context* ctx)
-{
-	import_source source;
-	source.path = abs_path;
-	return import_background(source, ctx);
-}
-
 edt::model_file_scan edt::model_importer::scan_files(const import_source& source, ds::task_context* ctx)
 {
 	model_file_scan scan;

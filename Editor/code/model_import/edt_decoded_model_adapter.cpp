@@ -9,29 +9,6 @@
 
 namespace fs = std::filesystem;
 
-namespace {
-
-// The tag of a file that is still there afterwards, if any.
-std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder)
-{
-	const std::vector<fs::path> roots = resources.mount_roots(res::tag::memory);
-	if (roots.empty()) return std::nullopt;
-	const fs::path dir = roots.back() / fs_paths::path_from_utf8(folder);
-	std::error_code ec;
-	if (!fs::is_directory(dir, ec)) return std::nullopt;
-	std::vector<res::tag> found;
-	for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
-		if (it->is_regular_file(ec)) found.emplace_back(res::tag::memory, folder + fs_paths::generic_utf8_of(it->path().lexically_relative(dir)));
-	}
-	for (const res::tag& tag : found) resources.erase(tag);
-	for (const res::tag& tag : found) {
-		if (resources.exists(tag)) return tag;
-	}
-	return std::nullopt;
-}
-
-}
-
 edt::decoded_model_adapter::decoded_model_adapter(desc::desc_system& descs, res::resource_system& resources, decoder_steps decoder)
 	: m_descs(descs)
 	, m_resources(resources)
@@ -41,11 +18,7 @@ edt::decoded_model_adapter::decoded_model_adapter(desc::desc_system& descs, res:
 
 edt::decoded_model_adapter::decoder_steps edt::decoded_model_adapter::steps_of(std::shared_ptr<const process_decoder> decoder)
 {
-	decoder_steps steps;
-	steps.scan = [decoder](const import_source& source, ds::task_context* task) { return decoder->scan(source, task); };
-	steps.import = [decoder](const import_source& source, ds::task_context* task) { return decoder->import(source, task); };
-	steps.unavailable_reason = [decoder] { return decoder->unavailable_reason(); };
-	return steps;
+	return edt::steps_of(std::move(decoder));
 }
 
 std::optional<edt::model_location> edt::decoded_model_adapter::locate(const std::vector<fs::path>& roots, const res::tag& tag)

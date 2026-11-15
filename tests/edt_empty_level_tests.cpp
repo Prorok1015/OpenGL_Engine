@@ -33,7 +33,11 @@ struct empty_level_fixture : test_util::scene_env
 		auto level_res = require_loaded<scn::level_desc>(tag);
 		BOOST_REQUIRE(level_res.is_ready());
 		state.world_descs.clear();
-		for (const auto& wh : level_res->get_worlds()) state.world_descs.push_back(*wh.get_sync());
+		state.world_tags.clear();
+		for (const auto& wh : level_res->get_worlds()) {
+			state.world_descs.push_back(*wh.get_sync());
+			state.world_tags.push_back(wh.get_sync()->get_tag());
+		}
 		edt::derive_world_arrays(state.world_descs, state.world_names, state.worlds_systems_list);
 		state.active_world_idx = state.world_names.empty() ? -1 : 0;
 	}
@@ -46,8 +50,12 @@ struct empty_level_fixture : test_util::scene_env
 		auto level_res = require_loaded<scn::level_desc>(lvl.tag());
 		BOOST_REQUIRE(level_res.is_ready());
 		std::vector<scn::world_desc> desc_worlds;
-		for (const auto& wh : level_res->get_worlds()) desc_worlds.push_back(*wh.get_sync());
-		edt::apply_world_resync(state, world_ctrl, desc_worlds, !level_res->get_worlds().empty(),
+		std::vector<res::tag> desc_tags;
+		for (const auto& wh : level_res->get_worlds()) {
+			desc_worlds.push_back(*wh.get_sync());
+			desc_tags.push_back(wh.get_sync()->get_tag());
+		}
+		edt::apply_world_resync(state, world_ctrl, desc_worlds, desc_tags, !level_res->get_worlds().empty(),
 			[&lvl](const scn::world_desc& w) { return lvl.has(w.get_name()); });
 	}
 
@@ -105,8 +113,26 @@ BOOST_AUTO_TEST_CASE(Reload_ToAnEmptyWorldListClearsTheEditorArrays)
 	BOOST_TEST(state.world_descs.empty());
 	BOOST_TEST(state.world_names.empty());
 	BOOST_TEST(state.worlds_systems_list.empty());
+	BOOST_TEST(state.world_tags.empty());
 	BOOST_TEST(state.active_world_desc() == nullptr);
 	BOOST_TEST(mgr.level_set().size() == 0u);
+}
+
+// The file of each world follows the merged list: a reloaded world takes the tag of the reload, a kept one keeps its own (#993).
+BOOST_AUTO_TEST_CASE(Resync_KeepsTheFileOfEachWorldAlignedWithItsWorld)
+{
+	populate(put("lv.desc", LEVEL_TWO_WORLDS));
+	BOOST_REQUIRE(state.world_names.size() == 2u);
+	state.world_tags = { tag_of("w0.desc"), tag_of("w1.desc") };
+	const std::vector<scn::world_desc> only_w1{ state.world_descs[1] };
+
+	edt::apply_world_resync(state, world_ctrl, only_w1, { tag_of("w1_reloaded.desc") }, true,
+		[](const scn::world_desc&) { return true; });
+
+	BOOST_REQUIRE((state.world_names == std::vector<std::string>{ "w1", "w0" }));
+	BOOST_REQUIRE(state.world_tags.size() == 2u);
+	BOOST_TEST(state.world_tags[0] == tag_of("w1_reloaded.desc"));
+	BOOST_TEST(state.world_tags[1] == tag_of("w0.desc"));
 }
 
 BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
@@ -141,7 +167,7 @@ BOOST_AUTO_TEST_CASE(Resync_TellsThePanelsEvenWhenTheSwitchIsRefused)
 	std::vector<scn::world_desc> only_w0{ state.world_descs[0] };
 
 	// no level manager is attached to the state, so switch_to_world itself refuses
-	edt::apply_world_resync(state, world_ctrl, only_w0, true, [](const scn::world_desc&) { return false; });
+	edt::apply_world_resync(state, world_ctrl, only_w0, {}, true, [](const scn::world_desc&) { return false; });
 
 	BOOST_TEST((switched == std::vector<int>{ 0 }));
 	BOOST_TEST(state.active_world_idx == 0);
@@ -157,7 +183,7 @@ BOOST_AUTO_TEST_CASE(Resync_KeepsTheStateWhenTheDescListsWorldsButNoneLoaded)
 	int switches = 0;
 	world_ctrl.on_world_switched = [&switches](int) { ++switches; };
 
-	edt::apply_world_resync(state, world_ctrl, {}, true, [](const scn::world_desc&) { return false; });
+	edt::apply_world_resync(state, world_ctrl, {}, {}, true, [](const scn::world_desc&) { return false; });
 
 	BOOST_TEST(state.world_names.size() == 2u);
 	BOOST_TEST(state.active_world_idx == 0);

@@ -67,7 +67,9 @@ struct export_format_fixture : test_util::scene_env
 	void import_and_export(std::vector<res::tag>& written)
 	{
 		edt::model_importer importer(*descs, *rs);
-		const edt::import_intermediate imported = importer.import_background(model);
+		edt::import_source source;
+		source.path = model;
+		const edt::import_intermediate imported = importer.import_background(source);
 		BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
 		edt::import_result result;
 		result.root_tag = imported.prefab_tag;
