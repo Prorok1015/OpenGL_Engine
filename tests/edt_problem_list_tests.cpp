@@ -5,8 +5,10 @@
 #include "edt_service_commands.h"
 #include <snk/command/cmd_json_schema.h>
 #include <boost/json/parse.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -203,6 +205,40 @@ BOOST_AUTO_TEST_CASE(ProblemsList_RejectsBadArguments)
 	BOOST_TEST(call(R"({"severity":"fatal"})").code == "invalid_args");
 	BOOST_TEST(call(R"({"source":1})").code == "invalid_args");
 	BOOST_TEST(call(R"({"extra":1})").code == "invalid_args");
+}
+
+// #935: what the filter of log.read keeps from a caller is not handed to it as a problem either.
+BOOST_AUTO_TEST_CASE(ProblemsList_WithAFilter_LeavesOutTheBuildAndRewritesTheTexts_ForWhoeverItSays)
+{
+	cmd::log_read_filter filter;
+	filter.visible = [](std::string_view category, const cmd::origin& from) {
+		return from.kind == cmd::origin_kind::ui || category != "editor/build";
+	};
+	filter.redact = [](std::string_view text, const cmd::origin& from) {
+		return from.kind == cmd::origin_kind::ui ? std::string(text) : "[" + std::string(text) + "]";
+	};
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_problem_commands(filtered, problems, &filter);
+	edt::problem in_a_desc = make(edt::problem_severity::error, "bad field", "/p/res/a.desc");
+	in_a_desc.notes = { "see /p/res/b.desc" };
+	problems.set("desc", { in_a_desc });
+	problems.set("reload", { make(edt::problem_severity::error, "refused") });
+
+	const cmd::result as_agent = filtered.invoke("problems.list", json::object{}, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	BOOST_TEST(!cmd::json_schema::validate(filtered.find("problems.list")->result_schema, as_agent.value).has_value());
+	BOOST_TEST((messages(as_agent) == std::vector<std::string>{ "desc:[bad field]" }));
+	const json::object& only = as_agent.value.as_object().at("problems").as_array()[0].as_object();
+	BOOST_TEST(std::string(only.at("file").as_string()) == "[/p/res/a.desc]");
+	BOOST_TEST(std::string(only.at("notes").as_array()[0].as_string()) == "[see /p/res/b.desc]");
+	BOOST_TEST(messages(filtered.invoke("problems.list", json::parse(R"({"source":"build"})"), cmd::origin::agent("s1"))).empty());
+
+	// The person at the editor gets everything as it is.
+	const cmd::result as_person = filtered.invoke("problems.list", json::object{}, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	std::vector<std::string> all = messages(as_person);
+	std::sort(all.begin(), all.end());
+	BOOST_TEST((all == std::vector<std::string>{ "build:undeclared", "build:unused", "desc:bad field", "reload:refused" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

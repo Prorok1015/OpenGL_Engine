@@ -2,6 +2,7 @@
 #include "edt_vcs_service.h"
 #include "edt_path_text.h"
 #include "edt_agent_confirmations.h"
+#include "edt_agent_log_filter.h"
 #include "edt_agent_policy.h"
 #include "edt_git_panel_model.h"
 #include "edt_repository_watcher.h"
@@ -558,6 +559,9 @@ BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 	const json::value worktree = finish(service->start_diff("a.txt", false, cmd::origin_kind::ui));
 	BOOST_TEST(!worktree.as_object().at("truncated").as_bool());
 	BOOST_TEST(text(worktree.as_object().at("text")).find("+two") != std::string::npos);
+	// #935: exactly {text, truncated}; a `code` key would make agent_job_result rewrite the diff for agents.
+	BOOST_TEST(worktree.as_object().size() == 2u);
+	BOOST_TEST(!worktree.as_object().contains(edt::k_agent_job_result_text_marker));
 	const json::value staged = finish(service->start_diff({}, true, cmd::origin_kind::ui));
 	BOOST_TEST(text(staged.as_object().at("text")).find("c.txt") != std::string::npos);
 	BOOST_TEST(text(staged.as_object().at("text")).find("+two") == std::string::npos);

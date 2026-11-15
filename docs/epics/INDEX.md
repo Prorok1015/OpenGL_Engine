@@ -38,6 +38,7 @@
 | [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора (#20) | planned |
 | [EPIC-40](editor/EPIC-40.md) | Icon Font Integration — иконочный шрифт для UI редактора | frozen — низкий приоритет для «Химеры» |
 | [EPIC-42](editor/EPIC-42.md) | Workspace & Game Project System — разделение движка и игровых данных (#19, переработан по ADR-02) | planned |
+| [EPIC-77](editor/EPIC-77.md) | Mesh Modeller — полноценный моделлер в редакторе: полигональный меш, инструменты, сохранение в `*.geom.desc` (#1007) | design |
 
 ### Desc-Driven Architecture
 

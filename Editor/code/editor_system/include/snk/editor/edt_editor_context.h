@@ -20,6 +20,7 @@ namespace rnd { class render_system; }
 namespace gui { class gui_system; }
 namespace ds { class task_system; }
 namespace cmd { class command_registry; }
+namespace cmd { struct log_read_filter; }
 
 namespace edt
 {
@@ -42,6 +43,11 @@ namespace edt
 		editor_context(res::resource_system& resources, rnd::render_system& render,
 			gui::gui_system& gui, editor_services& services, ds::task_system& tasks, cmd::command_registry& commands,
 			document& scene);
+		// `agent_filter` (may be null; must outlive the context): what a caller that is not the person at the editor
+		// gets of the texts job.*, dialog.list and problems.list hand out, the filter of log.read (#935).
+		editor_context(res::resource_system& resources, rnd::render_system& render,
+			gui::gui_system& gui, editor_services& services, ds::task_system& tasks, cmd::command_registry& commands,
+			document& scene, const cmd::log_read_filter* agent_filter);
 		~editor_context();
 		editor_context(const editor_context&) = delete;
 		editor_context& operator=(const editor_context&) = delete;

@@ -355,6 +355,12 @@ private:
 #define SNK_DETAIL_MODULE_LAYOUT_KEY (::gs::module_layout_key() ^ 1u)
 #endif
 
+#if defined(TEST_DLL_NO_LAYOUT)
+// Built as if without the key's header: the host refuses a library that reports no key (#922).
+#undef SNK_DETAIL_MODULE_LAYOUT_KEY
+#define SNK_DETAIL_MODULE_LAYOUT_KEY 0u
+#endif
+
 #if defined(TEST_DLL_BAD_API) || defined(TEST_DLL_OLD_API)
 namespace {
 #if defined(TEST_DLL_OLD_API)
