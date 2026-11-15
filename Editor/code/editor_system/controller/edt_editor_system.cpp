@@ -359,7 +359,11 @@ edt::editor_system::~editor_system()
 		if (m_data_documents) m_data_documents->shutdown();
 		context->documents().shutdown();
 	}
-	if (m_prefab) m_prefab->detach_document();
+	// Its "prefab" listener of document_closed reaches m_desc_problems, which is declared after it and would go first.
+	if (m_prefab) {
+		m_prefab->detach_document();
+		m_prefab.reset();
+	}
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
 		ctx_mgr->set_on_reload_result(nullptr);

@@ -8,6 +8,7 @@
 #include "edt_scene_document.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_context.h>
+#include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <format>
 #include <memory>
@@ -43,7 +44,11 @@ edt::prefab_editor_component::prefab_editor_component(ports from)
 	});
 }
 
-edt::prefab_editor_component::~prefab_editor_component() = default;
+edt::prefab_editor_component::~prefab_editor_component()
+{
+	// The Inspector outlives the component and its callback holds `this`.
+	m_ports.inspector.set_on_node_changed(nullptr);
+}
 
 void edt::prefab_editor_component::install(std::vector<registration>& out)
 {
