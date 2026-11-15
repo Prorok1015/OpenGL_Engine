@@ -215,6 +215,10 @@ endif()
 if(TARGET snk_model_decoder)
 	# The process tests (edt_decode_runner_tests) start the real decoder, and the test build of it for the self-test flags.
 	add_dependencies(unit_tests snk_model_decoder snk_model_decoder_selftest)
+	# The editor the tests start looks for the decoder next to its own executable (#925): without it they load levels
+	# without their models.
+	add_custom_command(TARGET unit_tests POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:snk_model_decoder> $<TARGET_FILE_DIR:unit_tests>)
 	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>"
 		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
 endif()
