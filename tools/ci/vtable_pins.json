@@ -168,6 +168,40 @@
         "~entity_remap()",
         "std::optional<std::uint32_t> find(std::uint32_t) const"
       ]
+    },
+    {
+      "class": "system_interface",
+      "header": "core/core/ecs/include/snk/ecs/ecs_system_interface.hpp",
+      "constant": "system_interface_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~system_interface()"
+      ]
+    },
+    {
+      "class": "render_context",
+      "header": "core/engine/render/render_system/include/snk/render/rnd_render_context.h",
+      "constant": "render_context_abi_revision",
+      "revision": 1,
+      "virtuals": [
+        "~render_context()",
+        "std::span<render_packet_t> packets()",
+        "driver::texture_handle find_texture(const res::tag&) const",
+        "driver::texture_handle ensure_render_target(const res::tag&, glm::ivec2, driver::texture_header::TYPE, driver::texture_usage, const render_targets::sampling&)",
+        "driver::texture_handle texture(texture_id) const",
+        "driver::vertex_array_interface* geometry(const res::tag&)",
+        "shader_config_cache& variants()",
+        "driver::shader_interface* program(variant_id)",
+        "const set_layouts& layouts() const",
+        "void write_view(const global_params&)",
+        "void write_lights(const lights_params&)",
+        "void bind_frame()",
+        "const compiled_material& material(material_instance_id) const",
+        "void bind_material(material_instance_id)",
+        "void upload_objects(std::span<const object_data>, std::span<const glm::mat4>)",
+        "void bind_object(std::uint32_t, const res::tag&)",
+        "bool draw_fits(const res::tag&, std::uint32_t, std::uint32_t, std::uint32_t)"
+      ]
     }
   ]
 }

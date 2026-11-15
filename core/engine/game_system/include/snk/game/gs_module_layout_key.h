@@ -22,6 +22,7 @@
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/ecs/ecs_signal.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
+#include <snk/ecs/ecs_system_interface.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/game/gs_input_stack_handle.h>
 #include <snk/game/gs_module_layout.h>
@@ -29,6 +30,7 @@
 #include <snk/input/inp_events.hpp>
 #include <snk/input/inp_input_stack.h>
 #include <snk/input/inp_user_bindings.h>
+#include <snk/render/rnd_render_context.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/res_tag.h>
@@ -61,7 +63,8 @@ namespace gs
 			ecs::batch_interface_abi_revision, ecs::detail::bus_slot_abi_revision,
 			ecs::detail::bus_journal_source_abi_revision, ecs::detail::bus_type_abi_revision,
 			ecs::detail::channel_slot_abi_revision, ecs::detail::channel_type_abi_revision,
-			ds::detail::task_state_base_abi_revision, desc::entity_remap_abi_revision>;
+			ds::detail::task_state_base_abi_revision, desc::entity_remap_abi_revision, ecs::system_interface_abi_revision,
+			rnd::render_context_abi_revision>;
 
 		// Module code instantiates EnTT, Boost.JSON and glm from the headers it was built with (on MSVC it links a
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.
