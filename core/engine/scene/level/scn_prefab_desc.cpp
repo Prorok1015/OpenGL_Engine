@@ -1021,7 +1021,9 @@ void scn::spawn_world(
 	const std::string_view name,
 	const res::tag& file
 ) {
-	if (file.string().empty()) {
+	// A desc that carries the file as its own tag opens it itself, as a level load does; opened here too,
+	// its own spawn would be refused as a self-reference and leave the world empty.
+	if (file.string().empty() || desc.get_tag() == file) {
 		assembler.spawn_from_desc(reg, e, desc, name);
 		return;
 	}

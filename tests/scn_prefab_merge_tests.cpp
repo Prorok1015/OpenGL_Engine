@@ -2349,4 +2349,26 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_WithTheWorldsFile_ExpandsARecordThatInstantiates
 	BOOST_TEST(refusals.count() > 0u);
 }
 
+// A world desc that carries its file as its own tag (the cache's) is built as a level load builds it, not refused as
+// a reference to itself.
+BOOST_AUTO_TEST_CASE(SpawnWorld_OfADescWhoseOwnTagIsTheFile_BuildsItAsALevelLoadDoes)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto world_tag = put("tagged.world.desc",
+		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"}}]})");
+	auto world = load<scn::world_desc>(world_tag);
+	BOOST_REQUIRE(world);
+	BOOST_REQUIRE(world->get_tag() == world_tag);
+
+	const log_count refusals(engine::log_level::error, "instantiates itself");
+	entt::registry reg;
+	const auto root = reg.create();
+	scn::spawn_world(*assembler, reg, root, *world, "w", world_tag);
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "tip" }));
+	BOOST_TEST(refusals.count() == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
