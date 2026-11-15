@@ -182,9 +182,10 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesACodeFolderInsideAContentRoot)
 		prj::project_context overlapping = project;
 		overlapping.content_roots = { root };
 
+		// Refused by the rule of #911 (code is the project's own folder) before the overlap with the code folder is looked at.
 		const auto problem = prj::verify_project_mounts(overlapping);
 		BOOST_REQUIRE(problem.has_value());
-		BOOST_TEST(problem->find("overlap") != std::string::npos);
+		BOOST_TEST(problem->find("the project's own folder") != std::string::npos);
 	}
 }
 

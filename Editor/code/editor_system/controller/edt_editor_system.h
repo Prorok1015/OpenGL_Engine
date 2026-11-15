@@ -265,7 +265,13 @@ namespace edt {
 
 		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
+		void open_prefab_now(const res::tag& tag);
+		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
+		void confirm_prefab_close(std::function<void()> proceed);
+		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
 		void close_prefab_editor();
+		// The open prefab document when it has unapplied edits, else null.
+		prefab_document* dirty_prefab();
 
 		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();
