@@ -3099,9 +3099,9 @@ namespace {
 		git_context context = make_context(std::move(git), std::move(environment), std::move(root), std::move(run));
 		context.agent_call = true;
 		context.rev_parse_end_of_options = version_at_least(git_version, 2, 30);
-		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
+		edt::set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
 		context.refuse_partial_clone_read = !version_at_least(git_version, 2, 45);
-		set_variable(context.environment, "GIT_ALLOW_PROTOCOL", "_none");
+		edt::set_variable(context.environment, "GIT_ALLOW_PROTOCOL", "_none");
 		return context;
 	}
 }
