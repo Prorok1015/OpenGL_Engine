@@ -83,6 +83,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <format>
@@ -212,6 +213,31 @@ constexpr const char* HOLDING_LEVEL = R"({"__type":"level_desc","__version":2,"n
 		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
 	{"__type":"world_desc","__version":4,"name":"w1","systems":[]}]})";
+
+namespace {
+
+// Lines a log sink collects: the sink runs on whichever thread logs, the test reads on its own.
+class sink_lines
+{
+public:
+	void add(std::string_view line)
+	{
+		std::lock_guard lock(m_mutex);
+		m_lines.emplace_back(line);
+	}
+
+	std::vector<std::string> get() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_lines;
+	}
+
+private:
+	mutable std::mutex m_mutex;
+	std::vector<std::string> m_lines;
+};
+
+}
 
 // A context variable of the world: the handle goes with the world's registry.
 struct play_only_holder
@@ -2863,9 +2889,9 @@ BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warnin
 {
 	open_level();
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
-	std::vector<std::string> warnings;
-	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn) warnings.emplace_back(message);
+	sink_lines logged;
+	const engine::log_sink_handle sink = engine::add_log_sink([&logged](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn) logged.add(message);
 	});
 
 	play.before_module_swap();
@@ -2875,6 +2901,7 @@ BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warnin
 	BOOST_TEST(!play.active());
 	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
 	BOOST_TEST((modes_seen.back() == edt::editor_mode::editor));
+	const auto warnings = logged.get();
 	BOOST_TEST(std::any_of(warnings.begin(), warnings.end(),
 		[](const std::string& w) { return w.find("did not start again after the module reload") != std::string::npos; }));
 
@@ -2922,9 +2949,9 @@ BOOST_AUTO_TEST_CASE(a_loaded_start_level_enters_the_game_and_ends_the_loading_s
 
 BOOST_AUTO_TEST_CASE(a_failed_or_cancelled_load_stays_in_the_editor_with_an_error)
 {
-	std::vector<std::string> errors;
-	const engine::log_sink_handle sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::error) errors.emplace_back(message);
+	sink_lines logged;
+	const engine::log_sink_handle sink = engine::add_log_sink([&logged](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) logged.add(message);
 	});
 	modes.begin_startup("res://levels/main.desc");
 	open_level();
@@ -2933,6 +2960,7 @@ BOOST_AUTO_TEST_CASE(a_failed_or_cancelled_load_stays_in_the_editor_with_an_erro
 	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
 	BOOST_TEST(!play.active());
 	BOOST_TEST(modes_seen.empty());
+	const auto errors = logged.get();
 	BOOST_TEST(std::any_of(errors.begin(), errors.end(), [](const std::string& e) {
 		return e.find("game mode not entered") != std::string::npos && e.find("res://levels/main.desc") != std::string::npos;
 	}));
@@ -3636,9 +3664,9 @@ BOOST_AUTO_TEST_CASE(an_agent_is_refused_with_the_list_of_problems_and_play_does
 {
 	open_level();
 	preflight_found = { a_preflight(edt::problem_severity::error), a_preflight(edt::problem_severity::warning, "no_spawner") };
-	std::vector<std::string> warnings;
-	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn && category == "play") warnings.emplace_back(message);
+	sink_lines logged;
+	const auto sink = engine::add_log_sink([&logged](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "play") logged.add(message);
 	});
 
 	const edt::action_result refused = actions.invoke("play.start", json::object{}, cmd::origin::agent("agent-1"));
@@ -3650,6 +3678,7 @@ BOOST_AUTO_TEST_CASE(an_agent_is_refused_with_the_list_of_problems_and_play_does
 	BOOST_TEST(problems[1].as_object().at("severity").as_string() == "warning");
 	BOOST_TEST(!play.active());
 	BOOST_TEST(preflight_runs == 1); // one check per start
+	const auto warnings = logged.get();
 	BOOST_REQUIRE(warnings.size() == 1u);
 	BOOST_TEST(warnings[0].find("(agent)") != std::string::npos);
 	BOOST_TEST(warnings[0].find("1 error(s)") != std::string::npos);
@@ -3730,9 +3759,9 @@ BOOST_AUTO_TEST_CASE(headless_nobody_answers_play_stays_off_and_the_log_says_why
 {
 	open_level();
 	preflight_found = { a_preflight(edt::problem_severity::error) };
-	std::vector<std::string> warnings;
-	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn && category == "play") warnings.emplace_back(message);
+	sink_lines logged;
+	const auto sink = engine::add_log_sink([&logged](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "play") logged.add(message);
 	});
 	edt::dialog_auto_answer nobody;
 	nobody.cancel_all = true;
@@ -3745,7 +3774,7 @@ BOOST_AUTO_TEST_CASE(headless_nobody_answers_play_stays_off_and_the_log_says_why
 	BOOST_TEST(dialogs.pending() == 0u);
 	BOOST_TEST(!play.active());
 	// The refusal of start() and the cancelled question.
-	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("nobody allowed it") != std::string::npos; }) == 1);
+	BOOST_TEST(std::ranges::count_if(logged.get(), [](const std::string& w) { return w.find("nobody allowed it") != std::string::npos; }) == 1);
 }
 
 BOOST_AUTO_TEST_CASE(a_refusal_of_another_kind_is_said_not_greyed)
