@@ -12,6 +12,8 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/common/fs_paths.h>
+#include <snk/common/text_escape.h>
 #include <snk/mcp/mcp_endpoint.h>
 #include <snk/command/cmd_registry.h>
 #include <algorithm>
@@ -1097,7 +1099,9 @@ BOOST_FIXTURE_TEST_CASE(AModelImportAsksAboutExactlyThatFile_AndANoReadsNothing,
 	const auto waiting = access.confirmations().pending();
 	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
 	BOOST_TEST(waiting[0].command == "file.import_model");
-	BOOST_TEST(waiting[0].detail.find((dir.path() / "models" / "robot.glb").string()) != std::string::npos);
+	// The path as the question shows it (#991): '/' separators, escaped.
+	const std::string shown = text_escape::escaped_text(fs_paths::generic_utf8_of(dir.path() / "models" / "robot.glb"), 1024);
+	BOOST_TEST(waiting[0].detail.find(shown) != std::string::npos);
 	BOOST_TEST(waiting[0].detail.find("3 bytes") != std::string::npos);
 	BOOST_TEST(waiting[0].detail.find("assets/robot") != std::string::npos);
 	BOOST_TEST(!waiting[0].can_grant_session);

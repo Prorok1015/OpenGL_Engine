@@ -423,22 +423,28 @@ namespace {
 
 		std::optional<std::string> describe_write(const cmd::call& call) const
 		{
-			// A reason may quote the file or the agent's desc: it stays one line of the question (#943).
-			const auto refused = [](const std::string& why) {
+			// A reason may quote the file or the agent's desc: it stays one line of the question (#943). Each foreign text is
+			// escaped once (#991): a reason that quotes it raw through escaped_text, the editor's blocker (whose foreign
+			// pieces were escaped where it was built) through escaped_message.
+			const auto refused_message = [](std::string_view message) {
+				return std::optional<std::string>("This request will be refused: " + edt::forge::escaped_message(message, 1024));
+			};
+			const auto refused = [](std::string_view why) {
 				return std::optional<std::string>("This request will be refused: " + edt::forge::escaped_text(why, 1024));
 			};
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
-			if (std::optional<std::string> why = m_files.write_blocked()) return refused(*why);
+			if (std::optional<std::string> why = m_files.write_blocked()) return refused_message(*why);
+			const std::string shown_path = edt::forge::escaped_text(path.relative, 1024);
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return refused(found.error);
-			if (!found.found) return refused(std::format("no file 'res://{}'", path.relative));
-			if (m_files.belongs_to_open_level(found)) return refused(std::format("'res://{}' belongs to the open level", path.relative));
-			if (!m_files.is_top_layer(found)) return refused(std::format("'res://{}' belongs to a lower layer, not to the project's own res/", path.relative));
+			if (!found.found) return refused_message(std::format("no file 'res://{}'", shown_path));
+			if (m_files.belongs_to_open_level(found)) return refused_message(std::format("'res://{}' belongs to the open level", shown_path));
+			if (!m_files.is_top_layer(found)) return refused_message(std::format("'res://{}' belongs to a lower layer, not to the project's own res/", shown_path));
 			const auto current = m_files.read_fresh(path.relative, found);
 			if (!current.ok()) return refused(current.error);
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
-				return refused("the file changed since that version was read");
+				return refused_message("the file changed since that version was read");
 			}
 			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, path.relative, call.args.as_object().at("desc"), edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
@@ -446,7 +452,7 @@ namespace {
 			const std::string type = type_of_text(text_of(current.bytes));
 			return std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
 				"If the open level uses this file, the change is applied to it at once (hot reload) and cannot be undone with undo.",
-				edt::forge::escaped_text(path.relative, 1024), type.empty() ? "?" : edt::forge::escaped_text(type, 128), current.bytes.size(),
+				shown_path, type.empty() ? "?" : edt::forge::escaped_text(type, 128), current.bytes.size(),
 				ready.bytes.size());
 		}
 

@@ -6,6 +6,8 @@
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/common/fs_paths.h>
+#include <snk/common/text_escape.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json/parse.hpp>
 #include <chrono>
@@ -25,6 +27,12 @@ namespace {
 
 namespace fs = std::filesystem;
 namespace json = boost::json;
+
+// A path as the question shows it (#991): '/' separators, escaped as the describe escapes it.
+std::string shown_path(const fs::path& path)
+{
+	return text_escape::escaped_text(fs_paths::generic_utf8_of(path), 1024);
+}
 
 std::string read_file(const fs::path& p)
 {
@@ -316,7 +324,7 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 {
 	const std::optional<std::string> text = service->describe(request("hero", "models"), agent);
 	BOOST_REQUIRE(text.has_value());
-	BOOST_CHECK(text->find(source.string()) != std::string::npos);
+	BOOST_CHECK(text->find(shown_path(source)) != std::string::npos);
 	BOOST_CHECK(text->find("22 bytes") != std::string::npos);
 	BOOST_CHECK(text->find("res://models/") != std::string::npos);
 	BOOST_CHECK(text->find("'hero'") != std::string::npos);
@@ -325,6 +333,18 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 	const std::optional<std::string> refused = service->describe({ "relative.glb", "", "" }, agent);
 	BOOST_REQUIRE(refused.has_value());
 	BOOST_CHECK(refused->rfind("This request will be refused", 0) == 0u);
+}
+
+// #991: the refusal escapes the agent's path where it is built, and the question shows that escape once.
+BOOST_AUTO_TEST_CASE(Describe_ARefusalShowsAnEscapeOfThePathOnce)
+{
+	const std::string missing = fs_paths::generic_utf8_of(fs::weakly_canonical(dir.path() / "outside")) + "/miss\xE2\x80\xAE" "ing.glb";
+	const std::optional<std::string> refused = service->describe({ missing, "hero", "models" }, agent);
+	BOOST_REQUIRE(refused.has_value());
+	BOOST_TEST(refused->rfind("This request will be refused", 0) == 0u, *refused);
+	BOOST_TEST(refused->find("/miss\\u{202E}ing.glb") != std::string::npos, *refused);
+	BOOST_TEST(refused->find("\\\\u{202E}") == std::string::npos, *refused);
+	BOOST_TEST(refused->find("\xE2\x80\xAE") == std::string::npos, *refused);
 }
 
 #ifndef _WIN32
@@ -347,7 +367,7 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsOnlyThePathTheSizeAndTheDestination_AndParses
 	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
 	const std::optional<std::string> text = service->describe(request("hero", "models"), agent);
 	BOOST_REQUIRE(text.has_value());
-	BOOST_CHECK(text->find(source.string()) != std::string::npos);
+	BOOST_CHECK(text->find(shown_path(source)) != std::string::npos);
 	BOOST_CHECK(text->find("skin.png") == std::string::npos);
 	BOOST_CHECK(text->find("Nothing is copied into the project until") != std::string::npos);
 	BOOST_CHECK_EQUAL(scans, 0);
@@ -394,7 +414,7 @@ BOOST_AUTO_TEST_CASE(TheSecondCall_ShowsEveryFileWithTheTotal_AndImportsExactlyT
 	const std::optional<std::string> text = service->describe(second, agent);
 	BOOST_REQUIRE(text.has_value());
 	BOOST_CHECK(text->rfind("This request will be refused", 0) != 0u);
-	for (const auto& file : listed_files) BOOST_TEST_CONTEXT(file.path.string()) { BOOST_CHECK(text->find(file.path.string()) != std::string::npos); }
+	for (const auto& file : listed_files) BOOST_TEST_CONTEXT(file.path.string()) { BOOST_CHECK(text->find(shown_path(file.path)) != std::string::npos); }
 	BOOST_CHECK(text->find("25 files") != std::string::npos);
 	BOOST_CHECK(text->find("2500 bytes") != std::string::npos);
 
@@ -808,7 +828,7 @@ BOOST_AUTO_TEST_CASE(AnAgent_GetsTheBackgroundImport_NeverTheDialog)
 	// Asked for: the registry puts the question, then runs the call with its ticket.
 	const std::optional<std::string> text = actions.commands().find("file.import_model")->describe({ json::parse(path_json()), agent });
 	BOOST_REQUIRE(text.has_value());
-	BOOST_CHECK(text->find(source.string()) != std::string::npos);
+	BOOST_CHECK(text->find(shown_path(source)) != std::string::npos);
 
 	const cmd::result result = call(agent, path_json(), "ticket");
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);

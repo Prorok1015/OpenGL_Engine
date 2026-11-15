@@ -16,29 +16,9 @@
 
 namespace {
 
+	using text_escape::escaped_message;
 	using text_escape::escaped_text;
 	using text_escape::is_hidden_code_point;
-
-	struct code_range
-	{
-		char32_t first;
-		char32_t last;
-	};
-
-	// The hidden classes as the contract lists them, kept apart from the implementation on purpose.
-	const std::vector<code_range> k_hidden_ranges{
-		{ 0x0000, 0x001F }, { 0x007F, 0x00A0 }, { 0x00AD, 0x00AD }, { 0x061C, 0x061C }, { 0x115F, 0x1160 }, { 0x180E, 0x180E },
-		{ 0x2000, 0x200F }, { 0x2028, 0x202F }, { 0x205F, 0x206F }, { 0x3000, 0x3000 }, { 0x3164, 0x3164 }, { 0xFE00, 0xFE0F },
-		{ 0xFEFF, 0xFEFF }, { 0xFFA0, 0xFFA0 }, { 0xFFF9, 0xFFFB }, { 0xE0000, 0xE007F },
-	};
-
-	bool in_hidden_ranges(char32_t c)
-	{
-		for (const code_range& range : k_hidden_ranges) {
-			if (c >= range.first && c <= range.last) return true;
-		}
-		return false;
-	}
 
 	// UTF-8 bytes of `c`, surrogates included (a caller that wants a malformed sequence asks for one).
 	std::string encoded(char32_t c)
@@ -145,35 +125,45 @@ BOOST_AUTO_TEST_CASE(ALineBreakACarriageReturnAndATab_AreTwoVisibleCharacters)
 	BOOST_TEST(escaped_text("a\tb", 100) == "a\\tb");
 }
 
-BOOST_AUTO_TEST_CASE(EveryHiddenClass_IsShownAsItsCodePoint)
+BOOST_AUTO_TEST_CASE(EachCodePointOfTheHandTable_IsShownAsWritten)
 {
-	const std::vector<std::pair<std::string, std::string>> cases{
-		{ "\x01", "0001" }, { "\x1B", "001B" }, { "\x1F", "001F" }, { "\x7F", "007F" }, { "\xC2\x85", "0085" },
-		{ "\xC2\xAD", "00AD" }, { "\xD8\x9C", "061C" }, { "\xE1\xA0\x8E", "180E" }, { "\xEF\xBB\xBF", "FEFF" },
-		{ "\xE2\x80\x8B", "200B" }, { "\xE2\x80\xAE", "202E" }, { "\xE2\x81\xA6", "2066" }, { "\xEF\xBF\xB9", "FFF9" },
-		{ "\xF3\xA0\x80\x81", "E0001" }, { "\xF3\xA0\x81\x81", "E0041" }, { "\xE1\x85\x9F", "115F" }, { "\xE3\x85\xA4", "3164" },
-		{ "\xEF\xBE\xA0", "FFA0" }, { "\xEF\xB8\x8F", "FE0F" }, { "\xC2\xA0", "00A0" }, { "\xE2\x80\x83", "2003" },
-		{ "\xE2\x80\xAF", "202F" }, { "\xE2\x81\x9F", "205F" }, { "\xE3\x80\x80", "3000" },
+	struct expected_shown
+	{
+		char32_t code;
+		std::string_view shown;
+		bool hidden;
 	};
-	for (const auto& [text, code] : cases) {
-		BOOST_TEST_CONTEXT(code) {
-			BOOST_TEST(escaped_text("a" + text + "b", 100) == "a\\u{" + code + "}b");
+	// Written by hand from the contract (controls, format characters, spaces but U+0020, separators,
+	// Default_Ignorable_Code_Point, noncharacters, U+2800), not from the implementation's table. U+FFFC (So, the object
+	// replacement glyph) draws something and is copied; so are the neighbours of the hidden ranges.
+	const std::vector<expected_shown> table{
+		{ 0x0000, "\\u{0000}", true }, { 0x001F, "\\u{001F}", true }, { 0x007F, "\\u{007F}", true }, { 0x0085, "\\u{0085}", true },
+		{ 0x00A0, "\\u{00A0}", true }, { 0x00AD, "\\u{00AD}", true }, { 0x034F, "\\u{034F}", true }, { 0x061C, "\\u{061C}", true },
+		{ 0x115F, "\\u{115F}", true }, { 0x1160, "\\u{1160}", true }, { 0x1680, "\\u{1680}", true }, { 0x17B4, "\\u{17B4}", true },
+		{ 0x17B5, "\\u{17B5}", true }, { 0x180B, "\\u{180B}", true }, { 0x180C, "\\u{180C}", true }, { 0x180D, "\\u{180D}", true },
+		{ 0x180E, "\\u{180E}", true }, { 0x180F, "\\u{180F}", true }, { 0x2000, "\\u{2000}", true }, { 0x200A, "\\u{200A}", true },
+		{ 0x200B, "\\u{200B}", true }, { 0x200F, "\\u{200F}", true }, { 0x2028, "\\u{2028}", true }, { 0x2029, "\\u{2029}", true },
+		{ 0x202A, "\\u{202A}", true }, { 0x202E, "\\u{202E}", true }, { 0x202F, "\\u{202F}", true }, { 0x205F, "\\u{205F}", true },
+		{ 0x2060, "\\u{2060}", true }, { 0x206F, "\\u{206F}", true }, { 0x2800, "\\u{2800}", true }, { 0x3000, "\\u{3000}", true },
+		{ 0x3164, "\\u{3164}", true }, { 0xFDD0, "\\u{FDD0}", true }, { 0xFDEF, "\\u{FDEF}", true }, { 0xFE00, "\\u{FE00}", true },
+		{ 0xFE0F, "\\u{FE0F}", true }, { 0xFEFF, "\\u{FEFF}", true }, { 0xFFA0, "\\u{FFA0}", true }, { 0xFFF0, "\\u{FFF0}", true },
+		{ 0xFFF8, "\\u{FFF8}", true }, { 0xFFF9, "\\u{FFF9}", true }, { 0xFFFB, "\\u{FFFB}", true }, { 0xFFFE, "\\u{FFFE}", true },
+		{ 0xFFFF, "\\u{FFFF}", true }, { 0x13430, "\\u{13430}", true }, { 0x1343F, "\\u{1343F}", true }, { 0x1BCA0, "\\u{1BCA0}", true },
+		{ 0x1BCA3, "\\u{1BCA3}", true }, { 0x1D173, "\\u{1D173}", true }, { 0x1D17A, "\\u{1D17A}", true }, { 0x1FFFE, "\\u{1FFFE}", true },
+		{ 0xE0000, "\\u{E0000}", true }, { 0xE0001, "\\u{E0001}", true }, { 0xE007F, "\\u{E007F}", true }, { 0xE0080, "\\u{E0080}", true },
+		{ 0xE0100, "\\u{E0100}", true }, { 0xE01EF, "\\u{E01EF}", true }, { 0xE0FFF, "\\u{E0FFF}", true }, { 0x10FFFF, "\\u{10FFFF}", true },
+		{ 0x0041, "A", false }, { 0x00A1, "\xC2\xA1", false }, { 0x034E, "\xCD\x8E", false }, { 0x0350, "\xCD\x90", false },
+		{ 0x17B3, "\xE1\x9E\xB3", false }, { 0x17B6, "\xE1\x9E\xB6", false }, { 0x1681, "\xE1\x9A\x81", false }, { 0x27FF, "\xE2\x9F\xBF", false },
+		{ 0x2801, "\xE2\xA0\x81", false }, { 0xFDCF, "\xEF\xB7\x8F", false }, { 0xFDF0, "\xEF\xB7\xB0", false }, { 0xFFFC, "\xEF\xBF\xBC", false },
+		{ 0xFFFD, "\xEF\xBF\xBD", false }, { 0x1D172, "\xF0\x9D\x85\xB2", false }, { 0x1D17B, "\xF0\x9D\x85\xBB", false }, { 0xE1000, "\xF3\xA1\x80\x80", false },
+		{ 0x0416, "\xD0\x96", false }, { 0x4E2D, "\xE4\xB8\xAD", false }, { 0x1F600, "\xF0\x9F\x98\x80", false },
+	};
+	for (const expected_shown& entry : table) {
+		BOOST_TEST_CONTEXT(std::format("U+{:04X}", static_cast<std::uint32_t>(entry.code))) {
+			BOOST_TEST(escaped_text(encoded(entry.code), 64) == entry.shown);
+			BOOST_TEST(is_hidden_code_point(entry.code) == entry.hidden);
 		}
 	}
-}
-
-BOOST_AUTO_TEST_CASE(IsHiddenCodePoint_IsExactlyTheListedClasses)
-{
-	std::optional<char32_t> wrong;
-	for (char32_t c = 0; c <= 0x10FFFF && !wrong; ++c) {
-		if (is_hidden_code_point(c) != in_hidden_ranges(c)) wrong = c;
-	}
-	BOOST_TEST(!wrong.has_value(), "first code point classified otherwise: " << (wrong ? static_cast<std::uint32_t>(*wrong) : 0u));
-	BOOST_TEST(!is_hidden_code_point(U' '));
-	BOOST_TEST(!is_hidden_code_point(U'a'));
-	BOOST_TEST(!is_hidden_code_point(0xA1));
-	BOOST_TEST(!is_hidden_code_point(0x2010));
-	BOOST_TEST(!is_hidden_code_point(0x1F600));
 }
 
 BOOST_AUTO_TEST_CASE(OrdinaryTextOfAnyScript_IsCopied)
@@ -220,17 +210,17 @@ BOOST_AUTO_TEST_CASE(ACut_KeepsWholePieces_AndNeverGoesOverTheLimit)
 			const std::string shown = escaped_text(k_mixed, max_bytes);
 			const auto problem = contract_problem(shown, max_bytes);
 			BOOST_TEST(!problem.has_value(), problem.value_or(""));
-			if (shown == full) continue;
-			std::string kept = shown;
-			if (max_bytes >= 3) {
-				BOOST_TEST(shown.ends_with("..."));
-				kept.resize(kept.size() - std::min<std::size_t>(3, kept.size()));
+			// A cut result never looks whole: "..." at the end, or nothing when that does not fit.
+			if (max_bytes < 3) {
+				BOOST_TEST(shown.empty(), shown);
+				continue;
 			}
+			BOOST_REQUIRE(shown.ends_with("..."));
+			const std::string kept = shown.substr(0, shown.size() - 3);
 			BOOST_TEST(whole_prefixes.contains(kept), kept);
 			// The longest whole prefix that fits is kept.
-			const std::size_t room = max_bytes >= 3 ? max_bytes - 3 : max_bytes;
 			for (const std::string& prefix : whole_prefixes) {
-				if (prefix.size() <= room) BOOST_TEST(prefix.size() <= kept.size(), prefix);
+				if (prefix.size() + 3 <= max_bytes) BOOST_TEST(prefix.size() <= kept.size(), prefix);
 			}
 		}
 	}
@@ -238,39 +228,86 @@ BOOST_AUTO_TEST_CASE(ACut_KeepsWholePieces_AndNeverGoesOverTheLimit)
 	BOOST_TEST(full.size() > 40);
 }
 
-BOOST_AUTO_TEST_CASE(ATinyLimit_KeepsWhatFits_WithoutDots)
+// The 9-byte escape of U+E0001: a cut at any byte of it keeps it whole or leaves it out.
+BOOST_AUTO_TEST_CASE(ACutAtTheLongestEscape_KeepsItWholeOrLeavesItOut)
+{
+	const std::string text = "ab\xF3\xA0\x80\x81" "c";
+	const std::string full = "ab\\u{E0001}c";
+	const std::vector<std::string> whole_prefixes{ "", "a", "ab", "ab\\u{E0001}", full };
+	for (std::size_t max_bytes = 0; max_bytes <= full.size(); ++max_bytes) {
+		BOOST_TEST_CONTEXT("max_bytes " << max_bytes) {
+			const std::string shown = escaped_text(text, max_bytes);
+			std::string expected;
+			if (max_bytes >= full.size()) {
+				expected = full;
+			} else if (max_bytes >= 3) {
+				for (const std::string& prefix : whole_prefixes) {
+					if (prefix.size() + 3 <= max_bytes) expected = prefix + "...";
+				}
+			}
+			BOOST_TEST(shown == expected);
+			BOOST_TEST(!contract_problem(shown, max_bytes).has_value());
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ATinyLimit_ShowsNothingOfACutText)
 {
 	BOOST_TEST(escaped_text("abc", 0) == "");
-	BOOST_TEST(escaped_text("abc", 1) == "a");
-	BOOST_TEST(escaped_text("abc", 2) == "ab");
+	BOOST_TEST(escaped_text("abc", 1) == "");
+	BOOST_TEST(escaped_text("abc", 2) == "");
+	BOOST_TEST(escaped_text("ab", 2) == "ab");
+	BOOST_TEST(escaped_text("a", 1) == "a");
 	BOOST_TEST(escaped_text("\n", 1) == "");
-	BOOST_TEST(escaped_text("a\n", 2) == "a");
+	BOOST_TEST(escaped_text("\n", 2) == "\\n");
+	BOOST_TEST(escaped_text("a\n", 2) == "");
 	BOOST_TEST(escaped_text("\xC3\xA9\xC3\xA9", 3) == "...");
-	BOOST_TEST(escaped_text("\xC3\xA9\xC3\xA9", 2) == "\xC3\xA9");
+	BOOST_TEST(escaped_text("\xC3\xA9\xC3\xA9", 2) == "");
+	BOOST_TEST(escaped_text("\xC3\xA9", 2) == "\xC3\xA9");
 	BOOST_TEST(escaped_text("", 0) == "");
 	BOOST_TEST(escaped_text("abc", 3) == "abc");
 	BOOST_TEST(escaped_text("abcd", 3) == "...");
 }
 
-// Whatever the input, the output keeps the contract: valid UTF-8, no control, no C1, no hidden code point.
+// A message of our own that already holds escapes shows them once; whatever raw slipped in is still escaped.
+BOOST_AUTO_TEST_CASE(AMessage_KeepsItsBackslashes_AndEscapesTheRest)
+{
+	BOOST_TEST(escaped_message("C:\\models\\n.glb", 100) == "C:\\models\\n.glb");
+	const std::string piece = escaped_text("a\xE2\x80\xAE" "b\nc\\d", 100);
+	BOOST_TEST(piece == "a\\u{202E}b\\nc\\\\d");
+	BOOST_TEST(escaped_message("'" + piece + "' is refused", 100) == "'" + piece + "' is refused");
+	BOOST_TEST(escaped_message("x\xE2\x80\xAEy\nz\t\xFF", 100) == "x\\u{202E}y\\nz\\t\\x{FF}");
+	BOOST_TEST(escaped_message("abcd", 3) == "...");
+	BOOST_TEST(escaped_message("abc", 2) == "");
+}
+
+// Whatever the input, the output of either function keeps the contract: valid UTF-8, no control, no C1, no hidden code
+// point, never longer than its limit (escaped_message may hold a backslash that starts no escape: not checked).
 BOOST_AUTO_TEST_CASE(AnyInput_GivesALineThatHidesNothing)
 {
 	std::vector<std::string> inputs;
 	for (int code = 0; code < 256; ++code) inputs.emplace_back(1, static_cast<char>(code));
-	std::vector<char32_t> points;
-	for (char32_t c = 0; c < 0x4000; ++c) points.push_back(c);
-	for (char32_t c = 0x4000; c <= 0x10FFFF; c += 16) points.push_back(c);
-	for (const code_range& range : k_hidden_ranges) {
-		for (const std::uint32_t c : { std::uint32_t{ range.first }, std::uint32_t{ range.last } }) {
-			for (const std::uint32_t next_to : { c - 1, c, c + 1 }) {
-				if (next_to <= 0x10FFFF) points.push_back(static_cast<char32_t>(next_to));
-			}
-		}
+	std::vector<std::uint32_t> points;
+	for (std::uint32_t c = 0; c < 0x4000; ++c) points.push_back(c);
+	for (std::uint32_t c = 0x4000; c <= 0x10FFFF; c += 16) points.push_back(c);
+	const auto every_one = [&points](std::uint32_t first, std::uint32_t last) {
+		for (std::uint32_t c = first; c <= last; ++c) points.push_back(c);
+	};
+	every_one(0xFDC0, 0xFE1F);
+	every_one(0xFFF0, 0xFFFF);
+	every_one(0xE0000, 0xE01FF);
+	// Every edge of the hidden set, found by walking it (the test keeps no copy of its table), with 64 code points on
+	// each side.
+	bool was_hidden = is_hidden_code_point(0);
+	for (std::uint32_t c = 1; c <= 0x10FFFF; ++c) {
+		const bool hidden = is_hidden_code_point(static_cast<char32_t>(c));
+		if (hidden == was_hidden) continue;
+		was_hidden = hidden;
+		every_one(c < 64 ? 0 : c - 64, std::min<std::uint32_t>(c + 64, 0x10FFFF));
 	}
-	points.push_back(0x10FFFF);
-	for (const char32_t c : points) {
+	for (const std::uint32_t c : points) {
 		if (c >= 0xD800 && c <= 0xDFFF) continue;
-		inputs.push_back(encoded(c));
+		inputs.push_back(encoded(static_cast<char32_t>(c)));
 	}
 	// Surrogates encoded as if they were code points: never valid UTF-8.
 	for (char32_t c = 0xD800; c <= 0xDFFF; ++c) inputs.push_back(encoded(c));
@@ -284,8 +321,13 @@ BOOST_AUTO_TEST_CASE(AnyInput_GivesALineThatHidesNothing)
 	for (const std::string& input : inputs) {
 		for (const std::string& text : { input, "a" + input + "b" }) {
 			for (const std::size_t max_bytes : { std::size_t{ 64 }, std::size_t{ 7 } }) {
-				const auto problem = contract_problem(escaped_text(text, max_bytes), max_bytes);
-				if (problem && !first_problem) first_problem = hex_of(text) + std::format("(max {}): ", max_bytes) + *problem;
+				for (const bool message : { false, true }) {
+					const std::string shown = message ? escaped_message(text, max_bytes) : escaped_text(text, max_bytes);
+					const auto problem = contract_problem(shown, max_bytes);
+					if (problem && !first_problem) {
+						first_problem = hex_of(text) + std::format("({}, max {}): ", message ? "message" : "text", max_bytes) + *problem;
+					}
+				}
 			}
 		}
 	}

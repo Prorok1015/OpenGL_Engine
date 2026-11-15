@@ -434,6 +434,25 @@ BOOST_AUTO_TEST_CASE(WhileTheProjectMayNotBeWritten_CreateAndWriteAreBusy_WithIt
 	make_material("materials/n.mat.desc");
 }
 
+// #991: a refusal is escaped once. The editor's reason already carries escapes (a migration id through escaped_text):
+// they show as they are; the path the agent sent is escaped where the refusal is built, never twice.
+BOOST_AUTO_TEST_CASE(TheQuestion_ShowsAnEscapeOfARefusalOnce)
+{
+	const cmd::call missing = call_of(write_args("materials/a\xE2\x80\xAE" "b.mat.desc", "v", k_material));
+	const std::string missing_text = *commands.find("desc.write")->describe(missing);
+	BOOST_TEST(missing_text.find("res://materials/a\\u{202E}b.mat.desc") != std::string::npos, missing_text);
+	BOOST_TEST(missing_text.find("\\\\u{202E}") == std::string::npos, missing_text);
+	BOOST_TEST(missing_text.find("\xE2\x80\xAE") == std::string::npos, missing_text);
+
+	make_material("materials/s.mat.desc");
+	blocked = "run editor --migrate-rollback a\\u{202E}b first";
+	const cmd::call request = call_of(write_args("materials/s.mat.desc", version_of("materials/s.mat.desc"), k_material));
+	const std::string blocked_text = *commands.find("desc.write")->describe(request);
+	BOOST_TEST(blocked_text.find("--migrate-rollback a\\u{202E}b first") != std::string::npos, blocked_text);
+	BOOST_TEST(blocked_text.find("\\\\u{202E}") == std::string::npos, blocked_text);
+	blocked.reset();
+}
+
 BOOST_AUTO_TEST_CASE(AnOpenLevelThatCannotBeReadOrParsed_MakesEveryWriteBusy)
 {
 	fs::create_directories(res_root / "levels");

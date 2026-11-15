@@ -104,7 +104,8 @@ namespace prj::migration
 	};
 
 	// Why apply_migration refuses `plan` before writing anything: a project.snkproj that is newer or invalid, an invalid
-	// file without plan.force, or plan.refused. Empty when it may run.
+	// file without plan.force, or plan.refused. Empty when it may run. A path or a reason from the project's files in it went
+	// through journal_path_text (#991), so the editor shows the message with text_escape::escaped_message.
 	std::string plan_refusal(const migration_plan& plan);
 
 	// Why a project with these content roots is not migrated: its rollback would refuse them (check_journal_paths'

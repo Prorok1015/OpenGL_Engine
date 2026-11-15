@@ -191,6 +191,11 @@ std::string edt::forge::escaped_text(std::string_view text, std::size_t max_byte
 	return text_escape::escaped_text(text, max_bytes);
 }
 
+std::string edt::forge::escaped_message(std::string_view text, std::size_t max_bytes)
+{
+	return text_escape::escaped_message(text, max_bytes);
+}
+
 bool edt::forge::is_plain_text(std::string_view text, bool allow_line_breaks)
 {
 	std::size_t i = 0;

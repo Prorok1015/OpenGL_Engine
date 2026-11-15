@@ -1275,6 +1275,20 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithTheirHiddenCharactersE
 	BOOST_TEST(text.find("\xE2\x80\x8B") == std::string::npos, text);
 }
 
+// #991: a refusal of pmg already holds its paths escaped (journal_path_text); the question shows that escape once, as
+// \u{202E}, never as \\u{202E} (which would read as plain text), and never the raw character.
+BOOST_AUTO_TEST_CASE(TheQuestion_ShowsAnEscapeInARefusalOnce)
+{
+	write_text(copy.root() / ".snk/migrations/forged/report.json",
+		"{\"status\":\"rolled_back\",\"backup\":\".snk/migrations/forged/backup\",\"files\":[{\"path\":"
+		"\"../a\\u202eb.desc\",\"hash_before\":\"0\"}],\"created_files\":[]}");
+	const std::string text = ask_rollback("forged");
+	BOOST_TEST(text.find("This request will be refused") != std::string::npos, text);
+	BOOST_TEST(text.find("'../a\\u{202E}b.desc'") != std::string::npos, text);
+	BOOST_TEST(text.find("\\\\u{202E}") == std::string::npos, text);
+	BOOST_TEST(text.find("\xE2\x80\xAE") == std::string::npos, text);
+}
+
 // #910: the question lists every file the rollback puts back and deletes, one per line, and the backup it reads.
 BOOST_AUTO_TEST_CASE(TheQuestion_ListsEveryPath_AndTheBackup)
 {

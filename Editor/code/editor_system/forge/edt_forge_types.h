@@ -67,9 +67,12 @@ namespace edt::forge
 	// sanitize_text nothing is hidden, what would break the line or not show is written out, through
 	// text_escape::escaped_text (#991). A backslash is doubled; a line break, a carriage return and a tab become "\n",
 	// "\r", "\t"; any other code point of text_escape::is_hidden_code_point becomes "\u{202E}"; a byte that is no UTF-8
-	// becomes "\x{FF}". The result is one line of at most `max_bytes`, "..." at the end when cut (never inside a
-	// character or an escape). For every command_desc::describe that shows such text (#943).
+	// becomes "\x{FF}". The result is one line of at most `max_bytes`; when cut it ends with "..." or is empty (never cut
+	// inside a character or an escape). For every command_desc::describe that shows such text (#943).
 	std::string escaped_text(std::string_view text, std::size_t max_bytes);
+	// text_escape::escaped_message: a message of our own whose foreign pieces already went through escaped_text where it
+	// was built (a refusal shown in a describe); never raw foreign text. A backslash is kept, so those escapes show once.
+	std::string escaped_message(std::string_view text, std::size_t max_bytes);
 	bool is_valid_utf8(std::string_view text);
 	// Valid UTF-8 with none of what sanitize_text would replace: no control character (C0, DEL, C1), bidi control or
 	// invisible character. `allow_line_breaks`: tab, line feed and carriage return are allowed (a body, not a title).

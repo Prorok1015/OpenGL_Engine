@@ -204,7 +204,7 @@ BOOST_AUTO_TEST_CASE(EscapedText_IsCutAtAWholeCharacterOrEscape)
 	BOOST_TEST(escaped_text("ab\xE2\x80\xAE", 10) == "ab\\u{202E}");
 	BOOST_TEST(escaped_text("ab\xE2\x80\xAE" "c", 10) == "ab...");
 	BOOST_TEST(escaped_text("\xC3\xBC\xC3\xBC\xC3\xBC\xC3\xBC", 6) == "\xC3\xBC...");
-	BOOST_TEST(escaped_text("abc", 2) == "ab");
+	BOOST_TEST(escaped_text("abc", 2) == "");
 	BOOST_TEST(escaped_text("", 0) == "");
 }
 

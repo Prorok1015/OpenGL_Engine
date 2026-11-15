@@ -1011,11 +1011,13 @@ std::string prj::migration::plan_refusal(const migration_plan& plan)
 {
 	const manifest_state& manifest = plan.scan.manifest;
 	if (manifest.kind == file_class::newer || manifest.kind == file_class::invalid) {
-		return std::format("project.snkproj: {} {}", to_string(manifest.kind), manifest.reason);
+		return std::format("project.snkproj: {} {}", to_string(manifest.kind), journal_path_text(manifest.reason));
 	}
 	if (!plan.force) {
 		for (const scanned_file& file : plan.scan.files) {
-			if (file.kind == file_class::invalid) return std::format("{}: {} {} (--force leaves it as it is)", file.path, to_string(file.kind), file.reason);
+			if (file.kind == file_class::invalid) {
+				return std::format("{}: {} {} (--force leaves it as it is)", journal_path_text(file.path), to_string(file.kind), journal_path_text(file.reason));
+			}
 		}
 	}
 	return plan.refused;
@@ -1266,10 +1268,10 @@ std::optional<std::string> prj::migration::check_journal_paths(const fs::path& r
 	}
 	if (!manifest) {
 		return std::format("{} does not read as a manifest{}, so the content roots are unknown; restore the files by hand from {}",
-			k_manifest_path, restores_manifest ? std::format(", nor does {}", saved_manifest) : std::string{}, backup);
+			k_manifest_path, restores_manifest ? std::format(", nor does {}", journal_path_text(saved_manifest)) : std::string{}, journal_path_text(backup));
 	}
 	const std::vector<std::string> reserved = reserved_top_names();
-	if (auto error = content_root_error(manifest->content_roots, reserved)) return std::format("{} ({})", *error, source);
+	if (auto error = content_root_error(manifest->content_roots, reserved)) return std::format("{} ({})", *error, journal_path_text(source));
 	for (const std::string& path : journal.files) {
 		if (auto error = journal_path_error(path, true, manifest->content_roots, reserved)) return error;
 	}
@@ -1283,7 +1285,7 @@ std::optional<std::string> prj::migration::check_journal(const fs::path& root, s
 {
 	if (!is_plain_relative(id) || id.find('/') != std::string_view::npos) return std::format("'{}' does not name a migration", journal_path_text(id));
 	const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format("{}/{}/report.json", k_migrations_dir, id)));
-	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", journal_path_text(id), text.error.empty() ? "" : ": " + text.error);
+	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", journal_path_text(id), text.error.empty() ? "" : ": " + journal_path_text(text.error));
 	boost::system::error_code error;
 	const json::value journal = json::parse(text.text, error, {}, parse_options());
 	if (error || !journal.is_object()) return std::format("the journal of migration {} cannot be read", journal_path_text(id));
@@ -1297,7 +1299,7 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 	const project_writer writer = context.write ? context.write : project_writer{ default_write };
 	const std::string journal_path = std::format("{}/{}/report.json", k_migrations_dir, id);
 	const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(journal_path));
-	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", shown_id, text.error.empty() ? "" : ": " + text.error);
+	if (!text.exists || !text.error.empty()) return std::format("migration {} has no journal{}", shown_id, text.error.empty() ? "" : ": " + journal_path_text(text.error));
 	if (!context.journal_hash.empty() && hash_of(text.text) != context.journal_hash) {
 		return std::format("the journal of migration {} changed since it was checked, nothing was written", shown_id);
 	}
