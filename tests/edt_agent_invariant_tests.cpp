@@ -1407,15 +1407,12 @@ struct prefab_on_disk_fixture : prefab_inspector_fixture
 {
 	prefab_on_disk_fixture()
 	{
-		// Written before the mount: the file resolver lists its folder when it is mounted.
 		project.write("res/prefabs/inspector_target.prefab.desc",
 			R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 		auto& rs = storage.require<res::resource_system>();
-		rs.unregistrate_resolver(res::tag::default_protocol());
-		for (res::mount& mounted : res::resource_system::project_mount_table({}, { project.path() / "res" }, project.path() / ".cache",
-				user.path() / "profile", code_dir())) {
-			if (mounted.protocol == res::tag::default_protocol()) rs.add_mount(std::move(mounted));
-		}
+		// The resource system already has a res:// mount (its roots are what mount_roots answers: the first mount of a protocol),
+		// so the project's folder takes its place; a second mount of the protocol would never be asked.
+		BOOST_REQUIRE_MESSAGE(rs.remount(res::tag::default_protocol(), { project.path() / "res" }), "res:// is not mounted");
 	}
 };
 
