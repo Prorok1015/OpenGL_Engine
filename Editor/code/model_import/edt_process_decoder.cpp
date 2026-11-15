@@ -93,7 +93,11 @@ std::optional<edt::model_file_scan> edt::accept_scan_answer(const decode_bundle&
 	scan->error = cleaned(scan->error);
 	if (!scan->ok()) return scan;
 
-	const fs::path folder = request.source_path.parent_path();
+	if (!request.on_disk && !scan->files.empty()) {
+		problem = "the scan of a model that is not a file on the disk lists files";
+		return std::nullopt;
+	}
+	const fs::path folder = request.boundary.empty() ? request.source_path.parent_path() : request.boundary;
 	if (scan->files.size() > request.limits.max_files) {
 		problem = "the scan lists more files than the limit allows";
 		return std::nullopt;
@@ -102,7 +106,7 @@ std::optional<edt::model_file_scan> edt::accept_scan_answer(const decode_bundle&
 	std::unordered_set<std::string> seen;
 	for (const referenced_file& file : scan->files) {
 		if (!lies_in(file.path, folder)) {
-			problem = "the scan lists a file outside the folder of the model";
+			problem = request.boundary.empty() ? "the scan lists a file outside the folder of the model" : "the scan lists a file outside the content root of the model";
 			return std::nullopt;
 		}
 		if (file.size > request.limits.max_file_bytes || (total += file.size) > request.limits.max_total_bytes) {
@@ -339,10 +343,13 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		return imported;
 	}
 
-	// The folder of the import is the stem of the model, as the importer makes it; it is the editor's, not the child's.
+	// The folder of the import is the stem of the model (or the folder the request named), as the importer makes it; it is
+	// the editor's, not the child's.
 	const std::string stem = request.source_path.stem().string();
-	const std::string prefix = "memory://" + stem + "/";
-	if (stem.empty() || windows_segment_problem(stem) || !is_bundle_tag(prefix + "x", bundle_limits{}.max_tag_bytes)) {
+	const std::string folder = request.memory_folder.empty() ? stem + "/" : request.memory_folder;
+	const std::string prefix = "memory://" + folder;
+	if (stem.empty() || windows_segment_problem(stem) || !folder.ends_with('/') || windows_path_problem(std::string_view(folder).substr(0, folder.size() - 1))
+		|| !is_bundle_tag(prefix + "x", bundle_limits{}.max_tag_bytes)) {
 		problem = "the name of the model cannot be the folder of an import";
 		return std::nullopt;
 	}
@@ -396,6 +403,12 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		const std::optional<blob_kind> what = classify(relative, stem);
 		if (!what) {
 			problem = "the import made a resource of a kind it never makes: '" + cleaned(relative) + "'";
+			return std::nullopt;
+		}
+		// textures/* images are files the model named; a model that is no file on the disk reads none (embedded images
+		// are __embedded_txm/*).
+		if (!request.on_disk && *what == blob_kind::image) {
+			problem = "the import of a model that is not a file on the disk carries the image file '" + cleaned(relative) + "'";
 			return std::nullopt;
 		}
 		if (blob.bytes.size() > blob_limit || (total += blob.bytes.size()) > total_limit) {
@@ -454,7 +467,7 @@ std::string edt::process_decoder::unavailable_reason() const
 {
 	std::error_code ec;
 	if (fs::is_regular_file(m_config.decoder, ec)) return {};
-	return std::format("model import for agents is not available: the model decoder '{}' was not found next to the editor (reinstall the editor)",
+	return std::format("the model decoder '{}' was not found next to the editor (reinstall the editor)",
 		text_escape::escaped_text(fs_paths::generic_utf8_of(m_config.decoder), 1024));
 }
 
@@ -484,6 +497,9 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.mode = decode_request::mode_kind::scan;
 	request.source_path = source.path;
 	request.limits = source.limits;
+	request.boundary = source.boundary;
+	request.memory_folder = source.memory_folder;
+	request.on_disk = source.on_disk;
 	const decode_outcome outcome = run(request, source, task);
 	std::string problem;
 	std::optional<model_file_scan> scan = accept_scan_answer(*outcome.bundle, request, problem);
@@ -502,6 +518,9 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	request.source_path = source.path;
 	request.allowed = *source.allowed;
 	request.limits = source.limits;
+	request.boundary = source.boundary;
+	request.memory_folder = source.memory_folder;
+	request.on_disk = source.on_disk;
 	const decode_outcome outcome = run(request, source, task);
 
 	// Nothing of the answer reaches memory:// before it passed every check.

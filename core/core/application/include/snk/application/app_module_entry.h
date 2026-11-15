@@ -132,6 +132,7 @@
 // #922 PR 2: the key also mixes in the ABI revisions of the interfaces a module calls or fills through a vtable, the
 // versions of EnTT, Boost and glm and the sizes of their types; no type changes (layout_revision 12). A library module
 // built with the static C runtime or without a layout key is refused when opened; one compiled into the host is not.
+// #925: res::resource_system::warn_on_sync_require is a new export; its members are the engine's (no type changes: the layout key stays).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

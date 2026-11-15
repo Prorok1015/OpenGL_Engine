@@ -55,10 +55,15 @@ namespace edt {
 	// beside an .obj; a bounded number of files and bytes. Without `allowed` it only collects what the model refers to
 	// (the scan the person is shown); with `allowed` it refuses everything the person was not shown, or whose size or
 	// modification time changed. `read` checks again what it read, down to its bytes.
+	// `boundary` (a folder that holds the model's folder) widens "its own folder" to that folder: a res:// model of the
+	// project may read side files anywhere in its content root (#925). Empty, or not around the model: the model's folder.
 	class model_file_access
 	{
 	public:
-		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr);
+		// `on_disk` false: the model was only given as bytes (served from memory or a pack, #925). It has no folder, so every
+		// file it refers to is refused and nothing is read from the disk.
+		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr,
+			const std::filesystem::path& boundary = {}, bool on_disk = true);
 
 		// Nothing found and no error: the file is not there (the importer skips such a texture).
 		resolved_reference resolve(std::string_view reference, model_file_kind kind);
@@ -72,13 +77,17 @@ namespace edt {
 		const std::vector<referenced_file>& files() const { return m_files; }
 		std::uintmax_t listed_bytes() const { return m_listed_bytes; }
 		const model_file_limits& limits() const { return m_limits; }
+		bool on_disk() const { return m_on_disk; }
 
 	private:
 		std::filesystem::path m_root_file;
 		std::filesystem::path m_dir;
+		// m_dir, or the folder around it the import may read from.
+		std::filesystem::path m_boundary;
 		std::string m_root_extension;
 		model_file_limits m_limits;
 		const std::vector<referenced_file>* m_allowed;
+		bool m_on_disk = true;
 		std::vector<referenced_file> m_files;
 		std::unordered_set<std::string> m_seen;
 		std::uintmax_t m_listed_bytes = 0;
