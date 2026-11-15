@@ -11,6 +11,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/editor/edt_editor_context.h>
+#include <snk/project/prj_code.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
