@@ -2,6 +2,8 @@
 #include "null_engine_fixture.hpp"
 #include <snk/desc/desc_system.h>
 #include <snk/scene/scn_geometry_holds.h>
+#include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/scene/scn_model.h>
 #include <cstddef>
 #include <unordered_map>
 
@@ -77,6 +79,21 @@ BOOST_AUTO_TEST_CASE(TheGeometryOfALoadedLevel_IsReadOnce, * boost::unit_test::e
 	egLOG_INFO("test/geometry", "reads after load_level: {}, held: {}", robot_geometry_reads(), held());
 	test_util::pump(tasks);
 	egLOG_INFO("test/geometry", "reads after the pump: {}, held: {}", robot_geometry_reads(), held());
+	{
+		// Asked for now, while a world holds it: the cache should answer with the block it holds.
+		auto& rs = storage.require<res::resource_system>();
+		const auto fresh = rs.require<rnd::geometry_desc>(k_robot_geometry);
+		test_util::pump(tasks);
+		const void* held_data = nullptr;
+		storage.require<scn::context_manager>().level_set().for_each([&held_data](scn::world_context& world) {
+			const auto* holds = world.state().ctx().find<scn::geometry_holds>();
+			for (const auto entity : world.state().view<scn::geometry_component>()) {
+				if (const auto* handle = holds ? holds->find(entity) : nullptr) held_data = handle->get().get();
+			}
+		});
+		egLOG_INFO("test/geometry", "reads after a require of the test: {}, same data as held: {}, displaced: {}",
+			robot_geometry_reads(), fresh.get().get() == held_data, rs.displaced_count());
+	}
 	for (int frame = 0; frame < 3; ++frame) {
 		BOOST_REQUIRE(run_frames(1) == 1);
 		egLOG_INFO("test/geometry", "reads after frame {}: {}, held: {}", frame, robot_geometry_reads(), held());
