@@ -117,7 +117,7 @@ namespace gs
 			inp::input_capture, scn::node_index, ecs::event<int>,
 			// Engine events a module's event_reader<T> copies out of the bus.
 			inp::action_event, scn::animation_finished,
-			// All inline: module code runs find_entry over its members.
+			// The module constructs and moves it, so its size stays in the key; its logic is behind exports since #922 PR 3.
 			ds::app_data_storage,
 			// register_desc_spawner builds the pair and inserts it into the assembler's map in module code;
 			// component_registry is inline too.

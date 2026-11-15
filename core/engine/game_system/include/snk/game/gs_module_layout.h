@@ -55,7 +55,9 @@ namespace gs
 		// types, app_data_storage and the structs passed by value join the list (#922); no type changes.
 		// 12: the ABI revisions of the interfaces with a vtable, the versions of EnTT, Boost and glm and the sizes of
 		// entt::registry, boost::json::value and glm::mat4 join the key (#922); no type changes.
-		inline constexpr std::uint64_t layout_revision = 12;
+		// 13: the accessors of scene_layer and input_actions and the core of app_data_storage are exports; module code no
+		// longer reads their members inline (#922 PR 3).
+		inline constexpr std::uint64_t layout_revision = 13;
 
 		// Numbers the key mixes in as they are, in order: the interfaces' ABI revisions and the third-party versions.
 		template<std::uint64_t... Values>

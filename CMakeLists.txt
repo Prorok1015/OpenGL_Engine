@@ -216,6 +216,7 @@ target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURR
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/projects")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
+target_compile_definitions(unit_tests PRIVATE SNK_REPO_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 # prj::current_engine_version() must report exactly this (tests/prj_version_tests.cpp).
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_SDK_VERSION="${SNK_SDK_VERSION}")
 # rnd_render_context_tests reads the sources of the render passes to check what they include.
