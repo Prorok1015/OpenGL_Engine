@@ -1525,7 +1525,7 @@ BOOST_AUTO_TEST_CASE(a_racy_hash_of_a_file_waiting_for_its_id_is_read_again_once
 	assets.poll(true);
 	test_util::pump(tasks);
 	BOOST_TEST(assets.pending_ids() == 0u);
-	BOOST_TEST(assets.files_read() == read_before + 1u);
+	BOOST_TEST(assets.files_read() == read_before + 2u); // its new .resource and pulled.png again
 	BOOST_TEST(assets.aging_hashes() == 0u);
 }
 
