@@ -1,6 +1,8 @@
 #include <snk/scene/scn_geometry_holds.h>
 #include <snk/scene/scn_model.h>
 #include <snk/resource/res_tag.h>
+#include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/engine_assert.h>
 #include <entt/entity/registry.hpp>
 #include <utility>
 
@@ -60,6 +62,10 @@ void scn::geometry_holds::hold(entt::entity entity, res::res_handle<rnd::geometr
 
 void scn::geometry_holds::hold(entt::entity entity, const res::tag& geometry)
 {
+	// A layer's resources are asked on the main thread only; every path that makes a geometry_component in a world
+	// (an assembly, a restored snapshot, a level load, a spawned prefab) runs there.
+	ASSERT_MSG(!ds::task_system::on_worker(),
+		"geometry_holds: a geometry_component is made or retagged on the main thread only");
 	if (!m_resources || !geometry.is_valid() || !res::reference_problem(geometry).empty()) {
 		return;
 	}
