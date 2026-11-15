@@ -23,6 +23,7 @@
 #include <functional>
 #include <initializer_list>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -165,6 +166,26 @@ std::string arg_starting_with(const std::vector<std::string>& args, std::string_
 	return found == args.end() ? std::string{} : *found;
 }
 
+// The repositories the cases start from, made once per run (#977): git runs in a sample only while it is made, and
+// every case gets a fresh copy of it, so no case sees what another did.
+struct sample_repositories
+{
+	fs::path root;
+	std::map<std::string, fs::path, std::less<>> made;
+
+	~sample_repositories()
+	{
+		std::error_code ec;
+		fs::remove_all(root, ec);
+	}
+};
+
+sample_repositories& samples()
+{
+	static sample_repositories store;
+	return store;
+}
+
 struct vcs_fixture
 {
 	vcs_fixture()
@@ -241,11 +262,44 @@ struct vcs_fixture
 		out.write(content.data(), static_cast<std::streamsize>(content.size()));
 	}
 
+	// A fresh copy at `to` of the sample `kind`, which `make` builds in an empty folder the first time it is asked
+	// for, with no system or global git config. A copy with an index has its stat data refreshed, as if git had made
+	// it there.
+	fs::path copy_of_sample(std::string_view kind, const fs::path& to, const std::function<void(const fs::path&)>& make)
+	{
+		sample_repositories& store = samples();
+		if (store.root.empty()) {
+			store.root = fs::temp_directory_path() / std::format("snk_edt_vcs_samples_{}",
+				std::chrono::steady_clock::now().time_since_epoch().count());
+			fs::create_directories(store.root);
+			write(store.root / "global.gitconfig", "");
+		}
+		auto found = store.made.find(kind);
+		if (found == store.made.end()) {
+			const fs::path sample = store.root / kind;
+			fs::create_directories(sample);
+			const std::vector<std::string> saved = environment;
+			edt::set_variable(environment, "GIT_CEILING_DIRECTORIES", edt::utf8_of(store.root));
+			edt::set_variable(environment, "GIT_CONFIG_NOSYSTEM", "1");
+			edt::set_variable(environment, "GIT_CONFIG_GLOBAL", edt::utf8_of(store.root / "global.gitconfig"));
+			make(sample);
+			environment = saved;
+			found = store.made.emplace(std::string(kind), sample).first;
+		}
+		fs::create_directories(to);
+		fs::copy(found->second, to, fs::copy_options::recursive);
+		if (fs::exists(to / ".git" / "index")) git(to, { "update-index", "-q", "--refresh" });
+		return to;
+	}
+
 	// <base>/repo: two commits on main, a branch `feature`, a.txt modified, a staged rename, an untracked UTF-8 file.
 	fs::path make_repository()
 	{
-		const fs::path repo = base / "repo";
-		fs::create_directories(repo);
+		return copy_of_sample("full", base / "repo", [this](const fs::path& repo) { make_full_repository(repo); });
+	}
+
+	void make_full_repository(const fs::path& repo)
+	{
 		git(repo, { "init", "-q" });
 		git(repo, { "symbolic-ref", "HEAD", "refs/heads/main" });
 		git(repo, { "config", "user.name", "Test User" });
@@ -262,7 +316,6 @@ struct vcs_fixture
 		write(repo / "a.txt", "one\ntwo\n");
 		git(repo, { "mv", "dir with space/b.txt", "dir with space/c.txt" });
 		write(repo / path_of("new " + u_umlaut + ".txt"), "new\n");
-		return repo;
 	}
 
 	// What git prints on stdout, as it wrote it.
@@ -315,8 +368,11 @@ struct vcs_fixture
 	// <base>/<name>: one commit of a.txt on main.
 	fs::path make_plain_repository(std::string_view name)
 	{
-		const fs::path repo = base / name;
-		fs::create_directories(repo);
+		return copy_of_sample("plain", base / name, [this](const fs::path& repo) { make_plain_sample(repo); });
+	}
+
+	void make_plain_sample(const fs::path& repo)
+	{
 		git(repo, { "init", "-q" });
 		git(repo, { "symbolic-ref", "HEAD", "refs/heads/main" });
 		git(repo, { "config", "user.name", "Test User" });
@@ -325,7 +381,6 @@ struct vcs_fixture
 		write(repo / "a.txt", "one\n");
 		git(repo, { "add", "a.txt" });
 		git(repo, { "commit", "-q", "-m", "first commit" });
-		return repo;
 	}
 
 	// An empty commit by `author` with author and committer date `time` (unix seconds).
@@ -349,16 +404,15 @@ struct vcs_fixture
 	// <base>/<name>: an empty repository on main.
 	fs::path make_empty_repository(std::string_view name)
 	{
-		const fs::path repo = base / name;
-		fs::create_directories(repo);
-		git(repo, { "init", "-q" });
-		git(repo, { "symbolic-ref", "HEAD", "refs/heads/main" });
-		git(repo, { "config", "user.name", "Test User" });
-		git(repo, { "config", "user.email", "test@example.com" });
-		git(repo, { "config", "commit.gpgsign", "false" });
-		git(repo, { "config", "tag.gpgsign", "false" });
-		git(repo, { "config", "core.autocrlf", "false" });
-		return repo;
+		return copy_of_sample("empty", base / name, [this](const fs::path& repo) {
+			git(repo, { "init", "-q" });
+			git(repo, { "symbolic-ref", "HEAD", "refs/heads/main" });
+			git(repo, { "config", "user.name", "Test User" });
+			git(repo, { "config", "user.email", "test@example.com" });
+			git(repo, { "config", "commit.gpgsign", "false" });
+			git(repo, { "config", "tag.gpgsign", "false" });
+			git(repo, { "config", "core.autocrlf", "false" });
+		});
 	}
 
 	std::vector<std::string> subjects_of(const json::value& page)
@@ -378,11 +432,10 @@ struct vcs_fixture
 	// <base>/<name>: a bare repository whose HEAD is main.
 	fs::path make_bare(std::string_view name)
 	{
-		const fs::path remote = base / name;
-		fs::create_directories(remote);
-		git(remote, { "init", "-q", "--bare" });
-		git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
-		return remote;
+		return copy_of_sample("bare", base / name, [this](const fs::path& remote) {
+			git(remote, { "init", "-q", "--bare" });
+			git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+		});
 	}
 
 	static std::string file_url(const fs::path& path)
