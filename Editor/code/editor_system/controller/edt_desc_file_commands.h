@@ -101,4 +101,7 @@ namespace edt
 	// The root "__guid" string of a desc file's bytes, as the file has it (not checked as an ID); empty when it has none or
 	// is no JSON object. What a save that replaces the file keeps until the project's migration takes it out (#772).
 	std::string desc_root_guid(std::span<const std::byte> bytes);
+	// The root __version of a desc file: 1 when it has none, 0 when the bytes are no JSON object or the version is no
+	// whole number of at least 1.
+	int desc_root_version(std::span<const std::byte> bytes);
 }

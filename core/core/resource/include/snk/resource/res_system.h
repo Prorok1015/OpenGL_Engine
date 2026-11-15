@@ -278,6 +278,9 @@ namespace res
 		// Read-only: how many sweeps of the hot reload graph have run. For tests and diagnostics.
 		std::size_t edge_sweep_count() const;
 
+		// Read-only: the signals queued for the main thread and not delivered yet, over all keys. For tests.
+		std::size_t undelivered_signal_count() const;
+
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
 			std::shared_ptr<T> made = std::make_unique<T>(prt, std::forward<ARGS>(args)...);
@@ -285,9 +288,8 @@ namespace res
 			add_resolver(prt, std::move(made));
 			return registered;
 		}
-		// Not root, not a protocol that has one already (asserts).
-		void add_resolver(protocol prt, resolver added);
-
+		// Main thread. Returns once the calls into the resolver that are running elsewhere have ended, and destroys it here:
+		// its io thread is joined on this thread, never on its own (#938).
 		void unregistrate_resolver(protocol prt);
 
 		template<class T, class... ARGS>
@@ -316,8 +318,9 @@ namespace res
 		std::optional<tag> asset_path_of(const asset_id& guid) const;
 		// An asset index is set (set_asset_index): asset_path_of can tell an unknown guid.
 		bool has_asset_index() const;
-		// The ID of the file `tag` names by the asset index now; nullopt without an index, for a file without an ID and for
-		// a duplicate. What a writer puts into a {guid, path} reference (EPIC-57 section 4.4, #773).
+		// The ID of the file `tag` names by the asset index now; nullopt without an index and for a file without an ID. Of
+		// files that carry one ID, only the holder res::holds_id_before puts first answers it (the editor's index); the
+		// copies answer nullopt. What a writer puts into a {guid, path} reference (EPIC-57 section 4.4, #773).
 		std::optional<asset_id> asset_id_of(const tag& tag) const;
 
 		template<class RESOURCE>
@@ -554,7 +557,11 @@ namespace res
 
 		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
-		void deliver_to_watchers(const res::tag& node, std::uint64_t signal_epoch);
+		// `only`: these owners' watchers of `node` (by watch key), not all of them.
+		void deliver_to_watchers(const res::tag& node, std::uint64_t signal_epoch,
+			const std::vector<std::pair<void*, std::string>>* only = nullptr);
+		// A queued signal of `node` was delivered: it no longer counts in m_undelivered.
+		void signal_delivered(const res::tag& node);
 		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
 		// lands in between still reaches `dependent`. A load that was evicted meanwhile (`block` is no longer cached
 		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
@@ -679,6 +686,36 @@ namespace res
 
 
 	private:
+		// A resolver held for one call into it: what keeps a resolver unmounted meanwhile alive, and what
+		// unregistrate_resolver waits for. Marks the thread as calling it, so that unmounting it from inside that call
+		// asserts instead of waiting for itself.
+		class resolver_lease
+		{
+		public:
+			explicit resolver_lease(resolver held);
+			~resolver_lease();
+			resolver_lease(const resolver_lease&) = delete;
+			resolver_lease& operator=(const resolver_lease&) = delete;
+
+			explicit operator bool() const { return static_cast<bool>(m_held); }
+			core::res::res_resolver_interface* operator->() const { return m_held.get(); }
+
+		private:
+			resolver m_held;
+		};
+		// The root's resolver of `protocol`, or an empty lease: not mounted.
+		resolver_lease resolver_for(std::string_view protocol) const;
+		// Waits until `removed` is held by nobody else, then destroys it on this thread (#938).
+		static void release_resolver(resolver removed, std::string_view protocol);
+		// Not root, not a protocol that has one already (asserts). Private: a copy kept outside a resolver_lease would make
+		// unregistrate_resolver wait for it forever.
+		void add_resolver(protocol prt, resolver added);
+		// The vfs resolver of a mount, its change callbacks wired, not registered yet.
+		resolver make_mount_resolver(const mount& mounted);
+
+		// Guards the registry: m_resolvers, m_adapters, m_adapter_infos and m_extensions_with_magic. A leaf of the lock
+		// order: nothing is called while it is held, a resolver or an adapter is copied out and called after (#938).
+		mutable std::shared_mutex m_registry_mutex;
 		mutable std::shared_mutex m_cache_mutex;
 		mutable std::shared_mutex m_pinning_mutex;
 		mutable std::shared_mutex m_alias_mutex;
@@ -745,6 +782,10 @@ namespace res
 		std::vector<change_subscription> m_change_subscriptions;
 		std::uint64_t m_next_subscription = 0;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
+		// How many signals of each key are queued for the main thread and not delivered yet, guarded by m_cache_mutex. A
+		// rebind that moves the watchers of such a key delivers to them again under the new key: the queued delivery
+		// looks under the old one and finds nobody (#940).
+		std::unordered_map<res::tag, std::uint32_t> m_undelivered;
 
 		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it
 		// (what signal_changed follows) and tag -> its dependencies (to replace them when the tag loads again).

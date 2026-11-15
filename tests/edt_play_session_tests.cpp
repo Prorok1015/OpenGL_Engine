@@ -24,6 +24,7 @@
 #include "edt_agent_access.h"
 #include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
+#include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_scene_commands.h"
 #include "edt_scene_document.h"
@@ -45,6 +46,7 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
@@ -81,6 +83,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <format>
@@ -210,6 +213,31 @@ constexpr const char* HOLDING_LEVEL = R"({"__type":"level_desc","__version":2,"n
 		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
 	{"__type":"world_desc","__version":4,"name":"w1","systems":[]}]})";
+
+namespace {
+
+// Lines a log sink collects: the sink runs on whichever thread logs, the test reads on its own.
+class sink_lines
+{
+public:
+	void add(std::string_view line)
+	{
+		std::lock_guard lock(m_mutex);
+		m_lines.emplace_back(line);
+	}
+
+	std::vector<std::string> get() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_lines;
+	}
+
+private:
+	mutable std::mutex m_mutex;
+	std::vector<std::string> m_lines;
+};
+
+}
 
 // A context variable of the world: the handle goes with the world's registry.
 struct play_only_holder
@@ -1746,7 +1774,8 @@ BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 	{
 		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
 		edt::play_session session(state, services, world_ctrl, selection, events,
-			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = { editor_profile } });
+			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = { editor_profile },
+				.project_root = base });
 		const res::tag settings{ "user://settings.txt" };
 		std::ofstream(editor_profile / "settings.txt") << "editor";
 		auto held = profile_rs.require_sync<res::text_resource>(settings);
@@ -1768,6 +1797,102 @@ BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 		session.stop();
 		BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ editor_profile }));
 	}
+	fs::remove_all(base);
+}
+
+// #936: the profile is emptied at every start and Play writes into it. A project whose .cache or play_profile is a link
+// would send both outside the project.
+BOOST_AUTO_TEST_CASE(play_is_refused_when_the_play_profile_is_behind_a_link)
+{
+	open_level();
+	namespace fs = std::filesystem;
+	const fs::path base = fs::temp_directory_path() / "snk_edt_play_profile_link_tests";
+	fs::remove_all(base);
+	const fs::path editor_profile = base / "user_profile";
+	const fs::path outside = base / "outside";
+	fs::create_directories(editor_profile);
+	fs::create_directories(outside / "play_profile");
+	std::ofstream(outside / "play_profile" / "keep.txt") << "not the project's";
+	std::ofstream(outside / "keep.txt") << "not the project's";
+
+	const auto starts = [&](const fs::path& project) {
+		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
+		edt::play_session session(state, services, world_ctrl, selection, events,
+			{ .profile_resources = &profile_rs, .play_profile = project / ".cache" / "play_profile", .editor_profile = { editor_profile },
+				.project_root = project });
+		const bool started = session.start();
+		if (started) session.stop();
+		else BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ editor_profile }));
+		return started;
+	};
+
+	// A plain project: the profile is made and used.
+	const fs::path plain = base / "plain";
+	fs::create_directories(plain);
+	BOOST_TEST(starts(plain));
+	BOOST_TEST(fs::is_directory(plain / ".cache" / "play_profile"));
+
+	std::error_code no_links;
+	const fs::path cache_linked = base / "cache_linked";
+	fs::create_directories(cache_linked);
+	fs::create_directory_symlink(outside, cache_linked / ".cache", no_links);
+	const fs::path profile_linked = base / "profile_linked";
+	fs::create_directories(profile_linked / ".cache");
+	if (!no_links) fs::create_directory_symlink(outside, profile_linked / ".cache" / "play_profile", no_links);
+	if (no_links) {
+		// No right to make links here (Windows without developer mode): nothing to check.
+		BOOST_TEST_MESSAGE("links cannot be made here: " << no_links.message());
+	} else {
+		BOOST_TEST(!starts(cache_linked));
+		BOOST_TEST(!starts(profile_linked));
+		BOOST_TEST(fs::exists(outside / "play_profile" / "keep.txt"));
+		BOOST_TEST(fs::exists(outside / "keep.txt"));
+	}
+	fs::remove_all(base);
+}
+
+BOOST_AUTO_TEST_CASE(play_profile_checks_the_project_root_a_link_a_file_and_no_root)
+{
+	open_level();
+	namespace fs = std::filesystem;
+	const fs::path base = fs::temp_directory_path() / "snk_edt_play_profile_root_tests";
+	fs::remove_all(base);
+	const fs::path editor_profile = base / "user_profile";
+	fs::create_directories(editor_profile);
+
+	const auto starts = [&](const fs::path& project, const fs::path& profile) {
+		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
+		edt::play_session session(state, services, world_ctrl, selection, events,
+			{ .profile_resources = &profile_rs, .play_profile = profile, .editor_profile = { editor_profile }, .project_root = project });
+		const bool started = session.start();
+		if (started) session.stop();
+		return started;
+	};
+
+	// The project folder itself may be a link: the profile is still inside the project.
+	const fs::path real_project = base / "real_project";
+	fs::create_directories(real_project);
+	std::error_code no_links;
+	fs::create_directory_symlink(real_project, base / "linked_project", no_links);
+	if (no_links) {
+		// No right to make links here (Windows without developer mode): nothing to check.
+		BOOST_TEST_MESSAGE("links cannot be made here: " << no_links.message());
+	} else {
+		const fs::path linked = base / "linked_project";
+		BOOST_TEST(starts(linked, linked / ".cache" / "play_profile"));
+		BOOST_TEST(fs::is_directory(real_project / ".cache" / "play_profile"));
+	}
+
+	// A file where the profile folder should be.
+	const fs::path file_project = base / "file_project";
+	fs::create_directories(file_project / ".cache");
+	std::ofstream(file_project / ".cache" / "play_profile") << "not a folder";
+	BOOST_TEST(!starts(file_project, file_project / ".cache" / "play_profile"));
+	BOOST_TEST(fs::is_regular_file(file_project / ".cache" / "play_profile"));
+
+	// Without a project folder the profile cannot be checked, so it is not emptied.
+	BOOST_TEST(!starts({}, base / "unchecked_profile"));
+	BOOST_TEST(!std::filesystem::exists(base / "unchecked_profile"));
 	fs::remove_all(base);
 }
 
@@ -2764,9 +2889,9 @@ BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warnin
 {
 	open_level();
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
-	std::vector<std::string> warnings;
-	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn) warnings.emplace_back(message);
+	sink_lines logged;
+	const engine::log_sink_handle sink = engine::add_log_sink([&logged](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn) logged.add(message);
 	});
 
 	play.before_module_swap();
@@ -2776,6 +2901,7 @@ BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warnin
 	BOOST_TEST(!play.active());
 	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
 	BOOST_TEST((modes_seen.back() == edt::editor_mode::editor));
+	const auto warnings = logged.get();
 	BOOST_TEST(std::any_of(warnings.begin(), warnings.end(),
 		[](const std::string& w) { return w.find("did not start again after the module reload") != std::string::npos; }));
 
@@ -2823,9 +2949,9 @@ BOOST_AUTO_TEST_CASE(a_loaded_start_level_enters_the_game_and_ends_the_loading_s
 
 BOOST_AUTO_TEST_CASE(a_failed_or_cancelled_load_stays_in_the_editor_with_an_error)
 {
-	std::vector<std::string> errors;
-	const engine::log_sink_handle sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::error) errors.emplace_back(message);
+	sink_lines logged;
+	const engine::log_sink_handle sink = engine::add_log_sink([&logged](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) logged.add(message);
 	});
 	modes.begin_startup("res://levels/main.desc");
 	open_level();
@@ -2834,6 +2960,7 @@ BOOST_AUTO_TEST_CASE(a_failed_or_cancelled_load_stays_in_the_editor_with_an_erro
 	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
 	BOOST_TEST(!play.active());
 	BOOST_TEST(modes_seen.empty());
+	const auto errors = logged.get();
 	BOOST_TEST(std::any_of(errors.begin(), errors.end(), [](const std::string& e) {
 		return e.find("game mode not entered") != std::string::npos && e.find("res://levels/main.desc") != std::string::npos;
 	}));
@@ -3007,6 +3134,7 @@ BOOST_AUTO_TEST_CASE(with_play_on_ask_a_persons_yes_to_the_toggle_is_enough_to_s
 	const auto waiting = access.confirmations().pending();
 	BOOST_REQUIRE(waiting.size() == 1u);
 	BOOST_TEST(waiting.front().command == "editor.mode.toggle");
+	test_util::show_confirmations_and_wait(access.confirmations(), now);
 	BOOST_REQUIRE(access.confirmations().answer(waiting.front().id, edt::confirmation_answer::allow_once));
 	pump();
 	BOOST_REQUIRE(outcome.has_value());
@@ -3536,9 +3664,9 @@ BOOST_AUTO_TEST_CASE(an_agent_is_refused_with_the_list_of_problems_and_play_does
 {
 	open_level();
 	preflight_found = { a_preflight(edt::problem_severity::error), a_preflight(edt::problem_severity::warning, "no_spawner") };
-	std::vector<std::string> warnings;
-	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn && category == "play") warnings.emplace_back(message);
+	sink_lines logged;
+	const auto sink = engine::add_log_sink([&logged](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "play") logged.add(message);
 	});
 
 	const edt::action_result refused = actions.invoke("play.start", json::object{}, cmd::origin::agent("agent-1"));
@@ -3550,6 +3678,7 @@ BOOST_AUTO_TEST_CASE(an_agent_is_refused_with_the_list_of_problems_and_play_does
 	BOOST_TEST(problems[1].as_object().at("severity").as_string() == "warning");
 	BOOST_TEST(!play.active());
 	BOOST_TEST(preflight_runs == 1); // one check per start
+	const auto warnings = logged.get();
 	BOOST_REQUIRE(warnings.size() == 1u);
 	BOOST_TEST(warnings[0].find("(agent)") != std::string::npos);
 	BOOST_TEST(warnings[0].find("1 error(s)") != std::string::npos);
@@ -3630,9 +3759,9 @@ BOOST_AUTO_TEST_CASE(headless_nobody_answers_play_stays_off_and_the_log_says_why
 {
 	open_level();
 	preflight_found = { a_preflight(edt::problem_severity::error) };
-	std::vector<std::string> warnings;
-	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
-		if (level == engine::log_level::warn && category == "play") warnings.emplace_back(message);
+	sink_lines logged;
+	const auto sink = engine::add_log_sink([&logged](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "play") logged.add(message);
 	});
 	edt::dialog_auto_answer nobody;
 	nobody.cancel_all = true;
@@ -3645,7 +3774,7 @@ BOOST_AUTO_TEST_CASE(headless_nobody_answers_play_stays_off_and_the_log_says_why
 	BOOST_TEST(dialogs.pending() == 0u);
 	BOOST_TEST(!play.active());
 	// The refusal of start() and the cancelled question.
-	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("nobody allowed it") != std::string::npos; }) == 1);
+	BOOST_TEST(std::ranges::count_if(logged.get(), [](const std::string& w) { return w.find("nobody allowed it") != std::string::npos; }) == 1);
 }
 
 BOOST_AUTO_TEST_CASE(a_refusal_of_another_kind_is_said_not_greyed)

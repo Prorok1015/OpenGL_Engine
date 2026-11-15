@@ -1,4 +1,5 @@
 #include "edt_live_mode.h"
+#include "edt_project_trust_service.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/res_system.h>
@@ -196,6 +197,7 @@ std::optional<std::string> edt::live_mode::set_enabled(bool enabled, bool store)
 {
 	if (enabled && !m_build.enabled()) {
 		if (std::string reason = unavailable_reason(); !reason.empty()) return reason;
+		if (!trusted()) return std::string(k_untrusted_project_error);
 	}
 	if (store && m_options.store_enabled) {
 		if (auto problem = m_options.store_enabled(enabled)) {
@@ -207,14 +209,6 @@ std::optional<std::string> edt::live_mode::set_enabled(bool enabled, bool store)
 	egLOG_INFO("editor/build", "live mode is {}", enabled ? "on" : "off");
 	if (m_options.on_toggled) m_options.on_toggled();
 	return std::nullopt;
-}
-
-void edt::live_mode::follow_settings(const build_settings& settings)
-{
-	if (settings.live_enabled == m_build.enabled()) return;
-	if (auto refused = set_enabled(settings.live_enabled, false)) {
-		egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
-	}
 }
 
 void edt::live_mode::on_changes(std::span<const res::file_change> changes)
@@ -292,6 +286,19 @@ void edt::live_mode::register_commands(action_registry& actions)
 		if (auto refused = set_enabled(!m_build.enabled(), true)) return action_result::failure(cmd::codes::disabled, *refused);
 		return action_result::success();
 	};
+	toggle.activate = [this] {
+		const auto turn_on = [this, alive = std::weak_ptr<int>(m_alive)] {
+			if (alive.expired()) return;
+			if (auto refused = set_enabled(true, true)) egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+		};
+		if (m_build.enabled()) {
+			set_enabled(false, true);
+		} else if (!trusted() && m_options.ask_trust) {
+			m_options.ask_trust(turn_on);
+		} else {
+			turn_on();
+		}
+	};
 	toggle.expose_as_tool = false;
 	// The switch is the person's consent: an agent never flips it.
 	toggle.category = cmd::agent_category::not_for_agents;
@@ -325,6 +332,7 @@ void edt::live_mode::register_commands(action_registry& actions)
 	rebuild.category = cmd::agent_category::live;
 	rebuild.enabled = live_on;
 	rebuild.invoke = [this](const cmd::call&) {
+		if (!trusted()) return cmd::result::failure(cmd::codes::denied, std::string(k_untrusted_project_error));
 		if (auto problem = m_build.rebuild_now()) return cmd::result::failure(cmd::codes::failed, *problem);
 		return cmd::result::success(json::object{ { "started", m_build.status().state == live_state::building } });
 	};
@@ -341,6 +349,7 @@ void edt::live_mode::register_commands(action_registry& actions)
 	reload.category = cmd::agent_category::live;
 	reload.enabled = live_on;
 	reload.invoke = [this](const cmd::call&) {
+		if (!trusted()) return cmd::result::failure(cmd::codes::denied, std::string(k_untrusted_project_error));
 		const reload_now_result outcome = m_build.reload_now();
 		switch (outcome.kind) {
 		case reload_now_kind::requested:

@@ -31,12 +31,19 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_model.h>
+#include "edt_inspector_panel.h"
+#include "edt_prefab_editor_panel.h"
+#include "edt_prefab_document.h"
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -643,9 +650,12 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 		BOOST_FAIL("File > Cancel Level Load is missing");
 		return false;
 	};
+	std::mutex said_mutex;
 	std::vector<std::string> said;
-	const auto sink = engine::add_log_sink([&said](std::string_view category, engine::log_level, std::string_view message) {
-		if (category == "editor") said.emplace_back(message);
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level, std::string_view message) {
+		if (category != "editor") return;
+		std::lock_guard lock(said_mutex);
+		said.emplace_back(message);
 	});
 
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/smoke_level.desc" } }).ok);
@@ -669,7 +679,11 @@ BOOST_FIXTURE_TEST_CASE(AnAgentCancelsALoad_AndSaveAndOpenWorkAgain, agent_edito
 	BOOST_TEST(!editor().level_load_in_progress());
 	BOOST_TEST(!cancel_item_enabled());
 	BOOST_TEST(editor().watched_level_tag() == watched);
-	BOOST_TEST(std::ranges::any_of(said, [](const std::string& line) {
+	const auto said_now = [&] {
+		std::lock_guard lock(said_mutex);
+		return said;
+	}();
+	BOOST_TEST(std::ranges::any_of(said_now, [](const std::string& line) {
 		return line.find("test_level.desc") != std::string::npos && line.find("cancelled by an agent") != std::string::npos;
 	}));
 
@@ -1249,6 +1263,89 @@ BOOST_FIXTURE_TEST_CASE(GoingToAWorldRow_MakesItsWorldActive, desc_problems_fixt
 	editor().go_to_problem("world", world_rows[0]);
 	BOOST_REQUIRE(scene.active_world_name());
 	BOOST_TEST(*scene.active_world_name() == "w1");
+}
+
+// #147: Apply writes the prefab, the instance in the level follows by hot reload, and the level itself is untouched.
+BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevelStaysClean, desc_problems_fixture)
+{
+	const res::tag prefab = res::tag::make("prefabs/apply_instance.prefab.desc");
+	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000d1","name":"inst","components":{"p":{"__type":"prefab_desc","__parent":"res://prefabs/apply_instance.prefab.desc"}}}]}]})json");
+	auto& contexts = storage.require<scn::context_manager>();
+	const auto world_has = [&contexts](std::string_view name) {
+		scn::world_context* world = contexts.level_set().find("w0");
+		if (!world) return false;
+		for (auto&& [entity, named] : world->state().view<scn::name_component>().each()) {
+			if (named.name == name) return true;
+		}
+		return false;
+	};
+	const auto settle = [&](const std::function<bool()>& done) {
+		for (int i = 0; i < 3000 && !done(); ++i) {
+			test_util::pump(tasks);
+			contexts.update(std::chrono::duration<float>(0.001f));
+		}
+	};
+	settle([&] { return world_has("plain"); });
+	BOOST_REQUIRE(world_has("plain"));
+	const edt::scene_document& scene = edt::scene_of(editor().context()->documents());
+	const bool dirty_before = scene.is_dirty();
+	const std::uint64_t generation_before = scene.generation();
+
+	open_prefab(prefab);
+	edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
+		desc.get_root().children[0].name = "renamed";
+		return true;
+	}));
+	BOOST_TEST(world_has("plain"));
+	BOOST_TEST(!world_has("renamed"));
+
+	const edt::save_result saved = document->save();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	settle([&] { return world_has("renamed"); });
+
+	BOOST_TEST(world_has("renamed"));
+	BOOST_TEST(!world_has("plain"));
+	BOOST_TEST(scene.is_dirty() == dirty_before);
+	BOOST_TEST(scene.generation() == generation_before);
+}
+
+// #147: an edit that waits for its widget to go idle belongs to the prefab it was made in, whatever takes the Inspector next.
+BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_WhenALevelSelectionTakesTheInspector, desc_problems_fixture)
+{
+	const res::tag prefab = res::tag::make("prefabs/pending_edit.prefab.desc");
+	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000d1","name":"other"}]}]})json");
+	edt::editor_context& context = *editor().context();
+	auto* inspector = dynamic_cast<edt::inspector_panel*>(context.panels().find("inspector"));
+	auto* tree = dynamic_cast<edt::prefab_editor_panel*>(context.panels().find("prefab_editor"));
+	BOOST_REQUIRE(inspector && tree);
+	const edt::scene_document& scene = edt::scene_of(context.documents());
+	const std::uint64_t generation_before = scene.generation();
+
+	open_prefab(prefab);
+	edt::prefab_document* document = edt::prefab_of(context.documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_REQUIRE(!document->is_dirty());
+	tree->select_node({ 0xe1 });
+	document->working_node({ 0xe1 })->name = "typed";
+	inspector->note_edit();
+
+	edt::selection level_selection;
+	level_selection.document = context.documents().scene().id();
+	level_selection.world = "w0";
+	level_selection.path = { 0xd1 };
+	context.selection().select(level_selection);
+
+	BOOST_TEST(!inspector->has_pending_commit());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(scene.generation() == generation_before);
 }
 
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)

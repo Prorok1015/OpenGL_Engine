@@ -66,6 +66,10 @@
 #include "edt_curl_transport.h"
 #include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
+#include "edt_live_consent.h"
+#include "edt_project_trust_service.h"
+#include "edt_agent_policy.h"
+#include "edt_settings.h"
 #include "edt_play_commands.h"
 #include "edt_runtime_commands.h"
 #include "edt_bus_commands.h"
@@ -85,6 +89,7 @@
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include "edt_document_cast.h"
+#include "edt_prefab_close.h"
 #include "edt_state_commands.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_loop_service_interface.h>
@@ -98,6 +103,7 @@
 #include <snk/project/prj_project.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/platform/plt_process.h>
 #include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
@@ -136,6 +142,8 @@
 CFG_VAR_EXT_PATH(cfg_edt_data_path);
 // --headless (edt_editor_init.cpp).
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
+// --trust-project (#921), also read by main.cpp: known here before live mode at open is decided.
+CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
 	template<class T>
@@ -449,6 +457,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		nobody.warn_headless = true;
 		m_context->dialogs().set_auto_answer(nobody);
 	}
+	// #921: main's trust_library of the project's modules finds it in the storage; build.* and live mode ask it.
+	if (!data.has_value<project_trust_service>()) {
+		const std::optional<std::string> trust_key = data.has_value<prj::project_context>()
+			? canonical_project_settings_key(data.require<prj::project_context>().root) : std::nullopt;
+		data.construct<project_trust_service>(m_res, trust_key, static_cast<bool>(cfg_edt_trust_project));
+	}
+	m_trust = data.require_shared<project_trust_service>();
+	m_registrations.push_back(m_context->actions().add({ .id = "project.trust", .label = "Trust Project Modules...",
+		.menu_path = "Project", .disabled_tooltip = "Open a project first",
+		.execute = no_args([this, &data] { ask_trust(data, nullptr); }),
+		.expose_as_tool = false,
+		.enabled = [this] {
+			const auto trust = m_trust.lock();
+			return trust && trust->has_project();
+		},
+		// Only the person grants trust: an agent never sees or answers this question.
+		.category = cmd::agent_category::not_for_agents }));
 	// The panels own input routing: whichever scene image is hovered feeds its context, nothing else does.
 	m_input_router = &data.require<inp::input_router>();
 	m_input_router->set_default_target(std::nullopt);
@@ -487,15 +512,48 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
 		*m_hierarchy_panel, *m_inspector_panel,
 		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
+	// After wire_selection, which blanks the Inspector on an empty selection (level undo, Esc in the viewport): the prefab node stays.
+	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
+		if (!sel.empty() || !m_inspector_target.is_prefab()) return;
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (prefab && prefab->id() == m_inspector_target.prefab()) {
+			m_inspector_panel->set_selected_node(prefab->working_node(m_inspector_target.path()));
+		}
+	}));
 	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
 
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
-	m_prefab_panel->set_on_close([this] { close_prefab_editor(); });
+	m_prefab_panel->set_on_close([this] { confirm_prefab_close([this] { close_prefab_editor(); }); });
+	m_prefab_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_prefab_node(path); });
+	m_prefab_panel->set_on_apply([this] {
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab) return;
+		if (const save_result saved = prefab->save(); !saved.saved) {
+			egLOG_WARN("editor", "{}", saved.error);
+			m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
+		}
+	});
+	m_prefab_panel->set_on_revert([this] {
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab) return;
+		m_context->dialogs().choose("Revert prefab", std::format("Drop the edits of '{}' and take the file again?", prefab->title()), { "Revert", "Cancel" },
+			[this, id = prefab->id(), alive = std::weak_ptr<int>(m_prefab_alive)](std::optional<std::size_t> choice) {
+				if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
+				prefab_document* open = prefab_of(m_context->documents());
+				if (!open || open->id() != id) return;
+				if (const std::string error = open->revert(); !error.empty()) {
+					egLOG_WARN("editor", "{}", error);
+					m_context->dialogs().message(message_level::error, std::format("'{}' was not reverted:\n{}", open->title(), error));
+				}
+			});
+	});
 	m_prefab_panel->set_input_router(m_input_router);
 
 	asset_kind_hooks asset_hooks;
 	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	asset_hooks.desc_layout = [this] { return desc_layout(); };
+	asset_hooks.edits_locked = [this] { return m_play && m_play->active(); };
 	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
 		if (m_context->documents().preview() == &open) m_prefab_panel->set_open(true);
 	});
@@ -649,10 +707,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty(); };
-	hooks.save_other_documents = [this] { return m_data_documents->save_all(); };
+	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty() || dirty_prefab() != nullptr; };
+	hooks.save_other_documents = [this] {
+		if (prefab_document* prefab = dirty_prefab()) {
+			if (const save_result saved = prefab->save(); !saved.saved) {
+				egLOG_WARN("editor", "{}", saved.error);
+				m_context->dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab->title(), saved.error));
+				return false;
+			}
+		}
+		return m_data_documents->save_all();
+	};
 	hooks.discard_other_documents = [this] {
 		for (const document_id id : m_data_documents->dirty()) m_data_documents->close(id);
+		if (dirty_prefab()) close_prefab_editor();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
@@ -730,7 +798,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return result.ok;
 	};
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo)) {
+			asset_undo_label, asset_undo, [this] { return m_inspector_target.is_prefab(); })) {
 		m_registrations.push_back(std::move(action));
 	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
@@ -898,6 +966,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}
 			egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
 		};
+		ports.listing_of = [&data](const std::string& id) {
+			if (!data.has_value<prj::project_context>()) return rollback_listing{ "no project is open", {}, {} };
+			return rollback_listing_of(data.require<prj::project_context>().root, id);
+		};
 		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));
 		add_panel(m_migration_panel, dock_slot::floating, false);
 		m_registrations.push_back(register_migration_window_action(m_context->actions(),
@@ -931,6 +1003,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	build_options.events = &m_context->events();
 	build_options.auto_jobs = [] { return estimate_jobs().jobs; };
 	build_options.start_blocker = [this] { return migration_blocker(); };
+	build_options.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	build_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
+	build_options.own_build = [this](std::string_view module, std::string_view digest) {
+		if (const auto trust = m_trust.lock()) trust->record_own_build_digest(module, digest);
+	};
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
@@ -982,6 +1062,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
 	reload_options.stop_background = [this] { stop_live_build(); };
 	reload_options.events = &m_context->events();
+	reload_options.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	reload_options.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
 			fn();
@@ -1000,6 +1085,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		// A second reload waits for the first one's restore (#600): its snapshot would see the set held in Pause.
 		if (m_play && m_play->reloading()) return std::string{ "Play is loading the resources of the last reload" };
+		// The swap closes the prefab editor: its unapplied edits must not go with it.
+		if (dirty_prefab()) return std::string{ "the prefab editor has unapplied edits: apply or revert them first" };
 		return std::string{};
 	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
@@ -1020,6 +1107,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
+	settings_command.live_enabled = [this] { return m_live_mode && m_live_mode->enabled(); };
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -1030,6 +1118,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
 	};
+	vcs.live_mode_on = [this] { return m_live_mode && m_live_mode->enabled(); };
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
 	edt::vcs::repository_watcher::ports watch_ports;
 	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
@@ -1054,16 +1143,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		usage_sources.assets = [this]() -> const asset_database* { return m_assets.get(); };
 		usage_sources.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		// The project context lives in the app data storage as long as the editor.
-		usage_sources.manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
-		usage_sources.manifest = [manifest = &project] {
+		const auto manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
+		const auto manifest_references = [manifest = &project] {
 			std::vector<manifest_reference> out;
 			if (!manifest->data.start_scene.empty()) out.push_back(manifest_reference{ "/start_scene", manifest->data.start_scene });
 			if (!manifest->data.input_actions.empty()) out.push_back(manifest_reference{ "/input_actions", manifest->data.input_actions });
 			return out;
 		};
+		usage_sources.manifest_file = manifest_file;
+		usage_sources.manifest = manifest_references;
 		for (auto& command : register_asset_usage_commands(m_context->actions().commands(), std::move(usage_sources))) {
 			m_registrations.push_back(std::move(command));
 		}
+		m_asset_browser_panel->set_usages(
+			[this, manifest_file, manifest_references, index = std::make_shared<usage_index>()](const res::tag& asset) -> std::optional<usage_report> {
+				if (!m_assets) return std::nullopt;
+				const std::vector<manifest_reference> manifest = manifest_references();
+				return index->find(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
+			},
+			[this, manifest_references] {
+				return usage_stamp{ m_assets ? m_assets->revision() : std::uint64_t{ 0 }, m_game_layer_generation, manifest_references() };
+			});
 	}
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
@@ -1161,6 +1261,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				|| editor_layer->has_implicit_prefix("edt/load_level"));
 		};
 		startup_ports.unfinished = [root] { return prj::migration::unfinished_migrations(root); };
+		startup_ports.journal_refusal = [root](const std::string& id) -> std::optional<std::string> {
+			rollback_listing listing = rollback_listing_of(root, id);
+			if (listing.refused.empty()) return std::nullopt;
+			return std::move(listing.refused);
+		};
 		startup_ports.warn = [](const std::string& text) { egLOG_WARN("project/migrate", "{}", text); };
 		startup_ports.ask = [this](const journal_offer& offer) { offer_migration_rollback(offer); };
 		startup_ports.start_scan = [this, root] { start_migration_scan(root); };
@@ -1169,6 +1274,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// wait for: the project's game modules load after it (#428), and the scan's types are theirs.
 		if (headless) static_cast<void>(startup->tick());
 		else editor_layer->register_implicit("edt/migration_journal", [startup] { return startup->tick(); });
+	}
+
+	// #921: main loads the project's modules after init, so the first frame knows which wait for the person's answer.
+	// Headless nobody is asked: they stay unloaded unless --trust-project was given.
+	if (!project_held) {
+		editor_layer->register_implicit("edt/project_trust", [this, &data, headless] {
+			const auto trust = m_trust.lock();
+			if (!trust || !trust->waiting()) return false;
+			if (headless) {
+				egLOG_WARN("editor/trust", "not loaded: {}: project modules are not trusted: pass --trust-project",
+					module_list(trust->waiting_modules()));
+			} else {
+				ask_trust(data, nullptr);
+			}
+			return false;
+		});
 	}
 
 	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
@@ -1336,6 +1457,9 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 {
 	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
 		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
+	// No key, no consent: live mode is neither read on nor stored for a project whose path cannot be made canonical.
+	const std::optional<std::string> project_key = snk_dir ? canonical_project_settings_key(snk_dir->parent_path())
+		: std::nullopt;
 	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
 
 	live_mode_options live;
@@ -1373,13 +1497,16 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
 	};
-	if (snk_dir) {
-		live.store_enabled = [this, dir = *snk_dir](bool enabled) {
-			auto problem = update_build_settings(dir,[enabled](build_settings& settings) { settings.live_enabled = enabled; });
-			m_build_settings_panel->refresh_if_clean();
-			return problem;
+	if (project_key) {
+		live.store_enabled = [this, key = *project_key](bool enabled) {
+			return store_live_consent(m_res, key, enabled);
 		};
 	}
+	live.trusted = [this] {
+		const auto trust = m_trust.lock();
+		return trust && trust->trusted();
+	};
+	live.ask_trust = [this, &data](std::function<void()> then) { ask_trust(data, std::move(then)); };
 	live.on_toggled = [this] {
 		if (m_agent_server) m_agent_server->notify_tools_changed();
 	};
@@ -1393,13 +1520,110 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	};
 	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
 	m_live_mode->watch(m_res);
-	m_build_settings_panel->set_on_settings_applied([this](const build_settings& settings) { m_live_mode->follow_settings(settings); });
 	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
+	m_build_settings_panel->set_live_switch([this] { return m_live_mode->enabled(); }, [this, &data](bool enabled) {
+		const auto apply = [this, enabled] {
+			if (auto refused = m_live_mode->set_enabled(enabled, true)) {
+				egLOG_WARN("editor/build", "live mode stays off: {}", *refused);
+			}
+		};
+		if (enabled && !m_live_mode->enabled() && !m_live_mode->trusted()) {
+			ask_trust(data, apply);
+			return;
+		}
+		apply();
+	});
 	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
 
-	if (snk_dir && load_build_settings(*snk_dir).live_enabled) {
+	apply_live_consent(data);
+}
+
+void edt::editor_system::ask_trust(ds::app_data_storage& data, std::function<void()> on_trusted)
+{
+	const auto answered = [this, &data, on_trusted = std::move(on_trusted)](trust_answer answer) {
+		const auto trust = m_trust.lock();
+		if (answer == trust_answer::trusted) {
+			// Always: the host retries every module the gate refused, those of a stored "Don't Trust" too.
+			load_waiting_modules(data, [this, &data, on_trusted] {
+				apply_live_consent(data);
+				if (on_trusted) on_trusted();
+			});
+			return;
+		}
+		m_trust_followups.drop();
+		if (trust && trust->waiting()) {
+			egLOG_WARN("editor/trust", "the project runs without its modules ({}): you did not trust it",
+				module_list(trust->waiting_modules()));
+		}
+		if (m_game_builder && m_game_builder->is_building()) {
+			m_game_builder->cancel();
+			egLOG_WARN("editor/trust", "the running build was cancelled: {}", k_untrusted_project_error);
+		}
+		if (trust && trust->allowed_any()) {
+			// A loaded library cannot be taken back safely while its objects live in the editor.
+			m_context->dialogs().message(message_level::info, "The project's modules that are already loaded keep "
+				"running until you restart the editor; from then on they are not loaded.");
+		}
+		if (m_live_mode && m_live_mode->enabled()) {
+			// Not stored: the person's switch comes back once they trust the project again.
+			static_cast<void>(m_live_mode->set_enabled(false, false));
+			egLOG_WARN("editor/trust", "live mode is off: {}", k_untrusted_project_error);
+		}
+	};
+	edt::ask_project_trust(m_context->dialogs(), m_trust, answered);
+}
+
+void edt::editor_system::load_waiting_modules(ds::app_data_storage& data, std::function<void()> then)
+{
+	// Kept here, not in the callback: register_implicit ignores the id while an earlier load still waits.
+	m_trust_followups.queue(std::move(then));
+	// Not inside the dialog's answer, nor under a level load, a migration or Play: the game layer changes with it.
+	editor_layer->register_implicit("edt/project_trust/load", [this, &data, logged = std::make_shared<std::string>()] {
+		std::string reason;
+		if (auto migrating = migration_blocker()) {
+			reason = *migrating;
+		} else if (auto loading = load_in_progress()) {
+			reason = *loading;
+		} else if (m_play && m_play->active()) {
+			reason = "Play runs";
+		}
+		if (!reason.empty()) {
+			if (*logged != reason) {
+				*logged = reason;
+				egLOG_INFO("editor/trust", "the project's modules load once this ends: {}", reason);
+			}
+			return true;
+		}
+		if (const auto trust = m_trust.lock()) trust->clear_waiting();
+		const core::project_modules_report report = data.has_value<core::project_module_host>()
+			? data.require<core::project_module_host>().load_waiting() : core::project_modules_report{};
+		if (!report.loaded.empty()) {
+			egLOG_INFO("editor/trust", "trusted modules loaded: {}", module_list(report.loaded));
+		}
+		if (!report.refused.empty() || !report.untrusted.empty() || !report.missing_required.empty()) {
+			egLOG_WARN("editor/trust", "modules not loaded after trust: refused {}; untrusted {}; missing {}",
+				module_list(report.refused), module_list(report.untrusted), module_list(report.missing_required));
+		}
+		m_trust_followups.loaded();
+		// A frame later: a build or live mode started now would run beside the layer change of this load.
+		editor_layer->register_implicit("edt/project_trust/after", [this] {
+			const auto trust = m_trust.lock();
+			m_trust_followups.run_ready(trust && trust->trusted());
+			return false;
+		});
+		return false;
+	});
+}
+
+void edt::editor_system::apply_live_consent(ds::app_data_storage& data)
+{
+	if (!m_live_mode || m_live_mode->enabled() || !data.has_value<prj::project_context>()) return;
+	const std::filesystem::path snk_dir = data.require<prj::project_context>().snk_dir();
+	const std::optional<std::string> project_key = canonical_project_settings_key(snk_dir.parent_path());
+	if (!project_key) return;
+	if (live_mode_at_open(load_build_settings(snk_dir), read_setting(m_res, k_live_mode_settings), *project_key)) {
 		if (auto refused = m_live_mode->set_enabled(true, false)) {
-			egLOG_WARN("editor/build", "live mode is on in .snk/build.json but stays off: {}", *refused);
+			egLOG_WARN("editor/build", "live mode was on for this project but stays off: {}", *refused);
 		}
 	}
 }
@@ -1598,6 +1822,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
+	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
 	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
 	// However the preview goes (another prefab, another kind of preview, a module unloading, quitting).
@@ -1615,6 +1840,12 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		draw_agent_status();
 		draw_play_status();
+		draw_save_notice();
+		if (const auto trust = m_trust.lock()) {
+			if (const auto held = held_modules_status(trust->held_modules())) {
+				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", held->c_str());
+			}
+		}
 		m_live_mode->draw_status();
 	});
 }
@@ -1630,7 +1861,7 @@ void edt::editor_system::open_migration_rollback(const std::string& id)
 {
 	if (m_migration_panel == nullptr) return;
 	m_context->panels().set_open(m_migration_panel->get_id(), true);
-	m_migration_panel->show_and_roll_back(id);
+	m_migration_panel->show_rollback_question(id);
 }
 
 void edt::editor_system::offer_migration_rollback(const journal_offer& offer)
@@ -1669,9 +1900,11 @@ void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
 	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation, m_migration_runs };
 	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
 	// dropped, never shown.
-	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs())](ds::task_context& task) {
+	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs()),
+					read_only = prj::migration::read_only_layers(m_res, root)](ds::task_context& task) {
 		prj::migration::scan_options options;
 		options.stop = [&task] { return task.stop.stop_requested(); };
+		options.read_only_layers = read_only;
 		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
 		if (scan.incomplete) throw ds::task_cancelled{};
 		prj::migration::project_step_registry steps;
@@ -1820,6 +2053,13 @@ void edt::editor_system::draw_play_status()
 		paused ? "Play: paused" : "Play: playing");
 }
 
+void edt::editor_system::draw_save_notice()
+{
+	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
+	if (!text) return;
+	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
+}
+
 void edt::editor_system::create_panels(bool capture_log)
 {
 	m_hierarchy_panel = std::make_shared<scene_hierarchy_panel>();
@@ -1900,6 +2140,8 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
 		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
 		if (m_play && m_play->active()) m_play->stop(play_reason::user);
+		// Reload, quit and project switch wait for a dirty prefab; this is the way in of anything else (a module loaded by hand).
+		if (dirty_prefab()) egLOG_WARN("editor", "the game layer changes: the prefab editor is closed with unapplied edits");
 		close_prefab_editor();
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
@@ -1952,8 +2194,30 @@ void edt::editor_system::wire_panel_callbacks()
 	});
 
 	m_inspector_panel->set_on_node_changed([this]() {
-		m_state.commit("Edit node");
+		route_node_changed(m_inspector_target, prefab_of(m_context->documents()), m_state);
 	});
+	// A level selection takes the Inspector back from the prefab window. Runs before wire_selection (wire_panel_callbacks comes
+	// first), so the pending edit is routed to the prefab before wire_selection hands the Inspector the level's node.
+	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
+		if (!sel.empty()) release_inspector_to_level();
+	}));
+	// The working copy was replaced (Revert, a reload, another prefab): the node pointer the Inspector holds is stale.
+	m_inspector_connections.push_back(m_context->events().document_changed.subscribe([this](document_id id, std::uint64_t) {
+		if (!m_inspector_target.is_prefab() || id != m_inspector_target.prefab()) return;
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (!prefab || prefab->id() != id) return;
+		if (prefab->working_replaced() == m_inspector_target.replaced()) return;
+		m_inspector_target.set_replaced(prefab->working_replaced());
+		scn::prefab_desc::prefab_node* node = prefab->working_node(m_inspector_target.path());
+		if (!node) {
+			release_inspector_to_level();
+			return;
+		}
+		m_inspector_panel->set_selected_node(node);
+	}));
+	m_inspector_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
+		if (m_inspector_target.is_prefab() && id == m_inspector_target.prefab()) release_inspector_to_level();
+	}));
 
 	m_viewport_panel->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
@@ -2132,6 +2396,7 @@ bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 	cancel_level_settle();
 	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
 	m_loading_level_tag = original_tag;
+	m_loading_file_version = level_bytes ? desc_root_version(*level_bytes) : 0;
 
 	if (level_bytes) m_services.writable_resources()->store(m_loading_editor_tag, *level_bytes);
 
@@ -2231,7 +2496,7 @@ bool edt::editor_system::poll_level_load(bool* loaded_out)
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
 	const res::tag editor_tag_before = m_state.editor_tag;
-	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag);
+	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag, m_loading_file_version);
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
@@ -2420,8 +2685,73 @@ bool edt::editor_system::poll_pending_desc()
 
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
+void edt::editor_system::select_prefab_node(const std::vector<std::uint64_t>& path)
+{
+	prefab_document* prefab = prefab_of(m_context->documents());
+	if (!prefab) return;
+	// The level's selection ends first (its event would otherwise hand the Inspector back to the level).
+	m_context->selection().clear();
+	m_inspector_target.select_prefab(prefab->id(), path, prefab->working_replaced());
+	m_inspector_panel->set_selected_node(prefab->working_node(path));
+}
+
+void edt::editor_system::release_inspector_to_level()
+{
+	if (!m_inspector_target.is_prefab()) return;
+	// A drag or a typed value that has not committed yet belongs to the prefab: route it while the target still says so.
+	m_inspector_panel->flush_pending_commit();
+	m_inspector_target.reset();
+	m_inspector_panel->set_selected_node(nullptr);
+	m_prefab_panel->clear_selection();
+}
+
+edt::prefab_document* edt::editor_system::dirty_prefab()
+{
+	return dirty_prefab_of(m_context->documents());
+}
+
+void edt::editor_system::confirm_prefab_close(std::function<void()> proceed)
+{
+	prefab_document* prefab = dirty_prefab();
+	if (prefab) {
+		// The window stays while the question is open (closing it asked, nothing was decided).
+		m_prefab_panel->set_open(true);
+	}
+	const document_id id = prefab ? prefab->id() : document_id{};
+	prefab_close_ports ports;
+	ports.ask = [this](std::function<void(unsaved_choice)> answer) {
+		m_context->dialogs().confirm_unsaved([answer = std::move(answer), alive = std::weak_ptr<int>(m_prefab_alive)](unsaved_choice choice) {
+			if (alive.lock()) answer(choice);
+		});
+	};
+	ports.apply = [this, id]() -> save_result {
+		prefab_document* open = prefab_of(m_context->documents());
+		return open && open->id() == id ? open->save() : save_result::failure("the prefab is not open any more");
+	};
+	ports.report_failure = [this](const std::string& error) {
+		egLOG_WARN("editor", "{}", error);
+		m_context->dialogs().message(message_level::error, std::format("The prefab was not applied and stays open:\n{}", error));
+	};
+	close_prefab_with_question(prefab != nullptr, ports, std::move(proceed));
+}
+
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
+	prefab_document* current = prefab_of(m_context->documents());
+	if (current && current->is_open() && current->is_dirty()) {
+		if (current->source_tag() == tag) {
+			m_prefab_panel->set_open(true);
+			return;
+		}
+		confirm_prefab_close([this, tag] { open_prefab_now(tag); });
+		return;
+	}
+	open_prefab_now(tag);
+}
+
+void edt::editor_system::open_prefab_now(const res::tag& tag)
+{
+	release_inspector_to_level();
 	prefab_document& prefab = edt::open_prefab(m_context->documents(), tag);
 	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
 	const auto loaded = m_services.resources()->require_sync<scn::prefab_desc>(tag);
@@ -2468,6 +2798,8 @@ bool edt::editor_system::person_is_editing() const
 
 void edt::editor_system::close_prefab_editor()
 {
+	// Before the document goes: the Inspector holds a pointer into its working copy.
+	release_inspector_to_level();
 	auto& documents = m_context->documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
 		documents.close(prefab->id());

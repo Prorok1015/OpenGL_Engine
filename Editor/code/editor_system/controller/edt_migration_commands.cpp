@@ -1,4 +1,5 @@
 #include "edt_migration_commands.h"
+#include "edt_forge_types.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -8,6 +9,7 @@
 #include <snk/project/prj_manifest.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_assets.h>
 #include <snk/project_migration/pmg_command.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
@@ -85,7 +87,8 @@ namespace {
 	}
 
 	constexpr std::string_view k_rollback_args_schema = R"json({"type":"object","properties":{
-		"id":{"type":"string","minLength":1,"description":"the migration to roll back: a folder name under .snk/migrations (project.migration_plan lists unfinished ones)"}},
+		"id":{"type":"string","minLength":1,"description":"the migration to roll back: a folder name under .snk/migrations (project.migration_plan lists unfinished ones)"},
+		"journal_fingerprint":{"type":"string","minLength":16,"description":"the journal that was shown (16 lowercase hex digits of its bytes): the rollback is refused when the journal reads otherwise by then"}},
 		"required":["id"],"additionalProperties":false})json";
 
 	// A journal's report.json is read at most this big (a project of many files keeps a long list).
@@ -184,7 +187,7 @@ namespace {
 	}
 
 	// The plan as the answer gives it (every file's steps and warnings, the project steps, what is skipped, the manifest),
-	// every byte of the project it was made from, and the code that would migrate it.
+	// every byte of the project it was made from, the read-only layers' .resource files, and the code that would migrate it.
 	std::uint64_t fingerprint_of(const fs::path& root, const pmg::migration_plan& plan, std::uint64_t code_identity)
 	{
 		const std::uintmax_t max_bytes = pmg::scan_options{}.max_file_bytes;
@@ -196,8 +199,8 @@ namespace {
 		std::vector<std::pair<std::string, std::string>> files;
 		files.reserve(plan.scan.files.size());
 		for (const pmg::scanned_file& file : plan.scan.files) {
-			std::string facts = std::format("{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
-				file.resource_path, file.resource_unreadable);
+			std::string facts = std::format("{}|{}|{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
+				file.resource_path, file.resource_unreadable, file.reference_fixes, file.outdated_references);
 			for (const std::string& type : file.unknown_types) facts += "|" + type;
 			files.emplace_back(file.path, std::move(facts));
 		}
@@ -206,6 +209,14 @@ namespace {
 			hash.add_part(path);
 			hash.add_part(facts);
 			hash.add_file(root, fs_paths::path_from_utf8(path), max_bytes, rewritten_by_migration(path));
+		}
+		// The layers below the project the IDs of references come from (assets.refs, #776), and every .resource there by
+		// what it is, its size and its time, as a file the migration never rewrites.
+		for (const fs::path& layer : plan.read_only_layers) hash.add_part(fs_paths::generic_utf8_of(layer));
+		for (const pmg::read_only_resource& meta : plan.scan.read_only_resources) {
+			hash.add_part(fs_paths::generic_utf8_of(meta.layer));
+			hash.add_part(meta.path);
+			hash.add_file(meta.layer, fs_paths::path_from_utf8(meta.path), max_bytes, false);
 		}
 		return hash.value();
 	}
@@ -248,13 +259,32 @@ namespace {
 	// What the journal of a migration says it changed, as a rollback would put it back.
 	struct journal_view
 	{
-		// Why there is nothing to roll back (no journal, one that does not read); empty: it reads.
+		// Why there is nothing to roll back (no journal, one that does not read, one that fails
+		// prj::migration::check_journal_paths, one too long to show); empty: it may be rolled back.
 		std::string error;
 		std::string bytes;
 		// files[].path, then created_files: what a rollback restores or deletes.
 		std::vector<std::string> restored;
 		std::vector<std::string> created;
+		// What a person is shown before the rollback runs (rollback_listing_of); empty with an error.
+		std::string listing;
 	};
+
+	// The listing of a rollback, every path on its own line: past this it is not shown, and the rollback is refused.
+	constexpr std::size_t k_max_listing_bytes = std::size_t{ 64 } * 1024;
+
+	std::string listing_of(std::string_view id, const pmg::journal_paths& paths)
+	{
+		std::string out = std::format("  Migration {}: .snk/migrations/{}/\n", id, id);
+		out += std::format("  Backup: {}\n", pmg::journal_path_text(paths.backup));
+		out += std::format("  Puts back from its backup ({}):\n", paths.files.size());
+		for (const std::string& path : paths.files) out += "    " + pmg::journal_path_text(path) + "\n";
+		if (!paths.created.empty()) {
+			out += std::format("  Deletes the files it created ({}):\n", paths.created.size());
+			for (const std::string& path : paths.created) out += "    " + pmg::journal_path_text(path) + "\n";
+		}
+		return out;
+	}
 
 	journal_view read_journal(const fs::path& root, std::string_view id)
 	{
@@ -277,17 +307,35 @@ namespace {
 			return out;
 		}
 		const json::object& object = journal.as_object();
+		pmg::journal_paths paths;
+		if (const json::value* backup = object.if_contains("backup"); backup && backup->is_string()) paths.backup = std::string(backup->as_string());
 		if (const json::value* files = object.if_contains("files"); files && files->is_array()) {
 			for (const json::value& file : files->as_array()) {
-				const json::value* path = file.is_object() ? file.as_object().if_contains("path") : nullptr;
-				if (path && path->is_string()) out.restored.emplace_back(path->as_string());
+				if (!file.is_object()) continue;
+				const json::value* path = file.as_object().if_contains("path");
+				paths.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
 			}
 		}
 		if (const json::value* created = object.if_contains("created_files"); created && created->is_array()) {
 			for (const json::value& path : created->as_array()) {
-				if (path.is_string()) out.created.emplace_back(path.as_string());
+				if (path.is_string()) paths.created.emplace_back(path.as_string());
 			}
 		}
+		// The same check rollback_migration makes before its first write: what is shown is what may run.
+		if (auto refused = pmg::check_journal_paths(root, id, paths)) {
+			out.error = std::format("migration {} cannot be rolled back: {}", id, *refused);
+			return out;
+		}
+		// A journal that cannot be shown whole is not rolled back: describe and the run both read it here.
+		std::string listing = listing_of(id, paths);
+		if (listing.size() > k_max_listing_bytes) {
+			// The command line shows nothing and has no such limit: the way out is named.
+			out.error = std::format("the journal lists too many files to show; roll it back from the command line: editor --migrate-rollback {}", id);
+			return out;
+		}
+		out.listing = std::move(listing);
+		out.restored = std::move(paths.files);
+		out.created = std::move(paths.created);
 		return out;
 	}
 
@@ -302,21 +350,11 @@ namespace {
 		return hash.value();
 	}
 
-	// At most k_max_listed paths of a journal, each cut short and without control characters: a journal is a file anyone
-	// can edit, and a line break in a path must not forge a line of the question a person reads.
-	std::string listed(const std::vector<std::string>& paths)
+	// Text from the project's files (a path, a name, a version, a reason that quotes one) as part of one line of the
+	// question a person reads: a line break in it must not forge a line there.
+	std::string shown(std::string_view text, std::size_t max_bytes = 1024)
 	{
-		std::string out;
-		for (std::size_t i = 0; i < paths.size() && i < k_max_listed; ++i) {
-			std::string path = paths[i].size() > 200 ? paths[i].substr(0, 200) + "..." : paths[i];
-			std::ranges::replace_if(path, [](char c) {
-				const auto byte = static_cast<unsigned char>(c);
-				return byte < 0x20 || byte == 0x7f;
-			}, '?');
-			out += (i == 0 ? " " : ", ") + path;
-		}
-		if (paths.size() > k_max_listed) out += ", ...";
-		return out;
+		return edt::forge::escaped_text(text, max_bytes);
 	}
 
 	std::string unfinished_refusal(const std::vector<std::string>& unfinished)
@@ -605,6 +643,8 @@ namespace {
 		bool rollback = false;
 		std::string id;
 		std::vector<std::string> journal_files;
+		// journal_fingerprint of the call: the journal the caller was shown; none: not checked (the rules still are).
+		std::optional<std::string> shown_journal;
 
 		void fulfil(json::value value)
 		{
@@ -660,24 +700,24 @@ namespace {
 			remember(key_of(call.from), call.confirmation, fingerprint_of(*root, plan, code_identity()));
 
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
-			std::string text = std::format("Migrate the project '{}' in place\n  {}\n  {} files, {} project steps", name,
-				fs_paths::generic_utf8_of(*root), plan.files.size(), plan.project_steps.size());
+			std::string text = std::format("Migrate the project '{}' in place\n  {}\n  {} files, {} project steps", shown(name),
+				shown(fs_paths::generic_utf8_of(*root)), plan.files.size(), plan.project_steps.size());
 			if (plan.manifest_outdated()) {
-				text += std::format("; engine {} -> {}", plan.scan.manifest.engine_version, plan.completes() ? "this engine" : "kept (files of an unloaded module stay)");
+				text += std::format("; engine {} -> {}", shown(plan.scan.manifest.engine_version, 64), plan.completes() ? "this engine" : "kept (files of an unloaded module stay)");
 			}
 			text += "\n";
 			const std::vector<pmg::skipped_file> skipped = pmg::skipped_by(plan);
 			if (!skipped.empty()) {
 				text += std::format("  Not migrated ({}):", skipped.size());
 				for (std::size_t i = 0; i < skipped.size() && i < k_max_listed; ++i) {
-					text += std::format(" {} ({})", skipped[i].path, pmg::to_string(skipped[i].kind));
+					text += std::format(" {} ({})", shown(skipped[i].path, 200), pmg::to_string(skipped[i].kind));
 				}
 				if (skipped.size() > k_max_listed) text += " ...";
 				text += "\n";
 			}
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(*root);
 			const std::string refused = !unfinished.empty() ? unfinished_refusal(unfinished) : pmg::plan_refusal(plan);
-			if (!refused.empty()) text += "  This request will be refused: " + refused + "\n";
+			if (!refused.empty()) text += "  This request will be refused: " + shown(refused) + "\n";
 			if (plan.empty() && refused.empty()) text += "  Nothing to migrate.\n";
 			text += "Open documents are closed, and the level is closed and opened again from disk. "
 				"Every file is backed up under .snk/migrations/ first.";
@@ -738,14 +778,12 @@ namespace {
 			remember(rollback_key(call.from), call.confirmation, rollback_fingerprint(id, journal));
 
 			const std::string name = m_deps.project_name ? m_deps.project_name() : std::string{};
-			std::string text = std::format("Roll back a migration of the project '{}'\n  {}\n", name, fs_paths::generic_utf8_of(*root));
+			std::string text = std::format("Roll back a migration of the project '{}'\n  {}\n", shown(name), shown(fs_paths::generic_utf8_of(*root)));
 			if (!journal.error.empty()) {
-				text += "  This request will be refused: " + journal.error + "\n";
+				text += "  This request will be refused: " + shown(journal.error) + "\n";
 				return text;
 			}
-			text += std::format("  Migration {}: .snk/migrations/{}/\n", id, id);
-			text += std::format("  Puts back from its backup ({}):{}\n", journal.restored.size(), listed(journal.restored));
-			if (!journal.created.empty()) text += std::format("  Deletes the files it created ({}):{}\n", journal.created.size(), listed(journal.created));
+			text += journal.listing;
 			text += "A file changed since the migration wrote it refuses the whole rollback; nothing is written then. "
 				"Open documents are closed, and the level is closed and opened again from disk.";
 			return text;
@@ -759,6 +797,8 @@ namespace {
 			if (!valid_migration_id(id)) {
 				return cmd::result::failure(cmd::codes::invalid_args, "id is not the name of a migration (a folder under .snk/migrations)");
 			}
+			std::optional<std::optional<std::string>> journal_fingerprint = journal_fingerprint_of(call);
+			if (!journal_fingerprint) return cmd::result::failure(cmd::codes::invalid_args, "journal_fingerprint is not a fingerprint of a journal");
 			// As project.migrate: a person's own call is its own confirmation; an agent's is bound to the journal it was shown.
 			const bool person = call.from.kind == cmd::origin_kind::ui;
 			const std::string key = rollback_key(call.from);
@@ -780,6 +820,7 @@ namespace {
 			run->root = *root;
 			run->rollback = true;
 			run->id = id;
+			run->shown_journal = std::move(*journal_fingerprint);
 			if (shown) {
 				run->shown = shown->fingerprint;
 				std::erase_if(m_shown, [&key](const shown_plan& entry) { return entry.key == key; });
@@ -868,6 +909,17 @@ namespace {
 			return key_of(from) + "|rollback";
 		}
 
+		// journal_fingerprint of a rollback call: nullopt when it is not 16 lowercase hex digits; an empty inner value when the
+		// call names none.
+		static std::optional<std::optional<std::string>> journal_fingerprint_of(const cmd::call& call)
+		{
+			const json::value* given = call.args.is_object() ? call.args.as_object().if_contains("journal_fingerprint") : nullptr;
+			using result = std::optional<std::optional<std::string>>;
+			if (!given) return result{ std::in_place };
+			if (!given->is_string() || !parse_fingerprint(given->as_string())) return std::nullopt;
+			return result{ std::in_place, std::string(given->as_string()) };
+		}
+
 		static std::string id_of(const cmd::call& call)
 		{
 			const json::value* id = call.args.is_object() ? call.args.as_object().if_contains("id") : nullptr;
@@ -926,6 +978,7 @@ namespace {
 			pmg::plan_options options;
 			options.project_steps = &m_steps;
 			options.force = false;
+			options.scan.read_only_layers = pmg::read_only_layers(m_deps.resources(), root);
 			return pmg::plan_migration(root, pmg::scan_project(root, descs, options.scan), descs, options);
 		}
 
@@ -1071,6 +1124,11 @@ namespace {
 			show_progress(true);
 			if (std::optional<json::value> refused = refusal_now(run)) return stop(run, std::move(*refused));
 			const journal_view journal = read_journal(run.root, run.id);
+			if (run.shown_journal && pmg::journal_hash(journal.bytes) != *run.shown_journal) {
+				const std::string why = std::format("the journal of migration {} changed since it was shown; open it again", run.id);
+				return stop(run, json::object{ { "code", pmg::k_exit_refused }, { "status", pmg::journal_status(run.root, run.id) }, { "id", run.id },
+					{ "refused", why }, { "text", std::format("rollback of {}: {}", run.id, why) } });
+			}
 			if (run.shown && rollback_fingerprint(run.id, journal) != *run.shown) {
 				return stop(run, error_value(cmd::codes::denied, "the journal of the migration changed since the question: ask again"));
 			}
@@ -1355,4 +1413,11 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	rollback.describe_before_allowed_invoke = true;
 	if (registration added = commands.add(std::move(rollback)); added.active()) out.push_back(std::move(added));
 	return out;
+}
+
+edt::rollback_listing edt::rollback_listing_of(const std::filesystem::path& root, std::string_view id)
+{
+	journal_view journal = read_journal(root, id);
+	std::string fingerprint = journal.error.empty() ? pmg::journal_hash(journal.bytes) : std::string{};
+	return rollback_listing{ std::move(journal.error), std::move(journal.listing), std::move(fingerprint) };
 }

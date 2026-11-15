@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_scan.h>
+#include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_project_steps.h>
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/common/fs_paths.h>
@@ -16,6 +17,10 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -185,8 +190,10 @@ namespace
 		file.unknown_types.clear();
 	}
 
-	// Reads and parses a desc file; on a refusal `file` is invalid and the result is null.
-	json::value read_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, std::uintmax_t max_bytes)
+	// Reads and parses a desc file; on a refusal `file` is invalid and the result is null. `text` (may be null) gets the
+	// text of a file that parsed.
+	json::value read_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, std::uintmax_t max_bytes,
+		std::string* text = nullptr)
 	{
 		read_result read = read_file(project, path, max_bytes);
 		if (!read.error.empty()) {
@@ -203,6 +210,7 @@ namespace
 			set_invalid(file, "the root is not a JSON object");
 			return {};
 		}
+		if (text) *text = std::move(read.text);
 		return root;
 	}
 
@@ -243,11 +251,19 @@ namespace
 		file.kind = kind;
 	}
 
+	// By the path of a desc: the text of one assets.refs reads that may hold a reference. reference_fixes can only be
+	// counted once the index of every layer exists, after the walk; the text is kept in memory until then so no desc is
+	// read twice, and only for these candidates, not for every file.
+	using reference_texts = std::map<std::string, std::string>;
+
 	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
-		std::uintmax_t max_bytes)
+		std::uintmax_t max_bytes, reference_texts& texts)
 	{
-		const json::value root = read_desc(file, project, path, max_bytes);
-		if (root.is_object()) classify(file, root.as_object(), descs);
+		std::string text;
+		const json::value root = read_desc(file, project, path, max_bytes, &text);
+		if (!root.is_object()) return;
+		classify(file, root.as_object(), descs);
+		if (prj::migration::reads_references(file) && prj::migration::may_hold_references(text)) texts.emplace(file.path, std::move(text));
 	}
 
 	std::string_view without_bom(std::string_view text)
@@ -354,6 +370,7 @@ namespace
 		const fs::path& project;
 		const type_source& descs;
 		const prj::migration::scan_options& options;
+		reference_texts& texts;
 
 		void refuse(const fs::path& path, std::string reason)
 		{
@@ -399,7 +416,7 @@ namespace
 				file.has_resource = owner != owners.end();
 				if (file.has_resource) file.resource_path = fs_paths::generic_utf8_of((path.parent_path() / fs_paths::path_from_utf8(owner->second)).lexically_relative(project));
 				if (extension == ".desc") {
-					scan_desc(file, project, path, descs, options.max_file_bytes);
+					scan_desc(file, project, path, descs, options.max_file_bytes, texts);
 				} else {
 					file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
 				}
@@ -438,9 +455,9 @@ namespace
 	};
 
 	void scan_root(prj::migration::scan_result& result, const fs::path& project, const fs::path& content_root, const type_source& descs,
-		const prj::migration::scan_options& options)
+		const prj::migration::scan_options& options, reference_texts& texts)
 	{
-		root_walk walk{ result, project, descs, options };
+		root_walk walk{ result, project, descs, options, texts };
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(content_root, ec);
 		if (ec || status.type() == fs::file_type::not_found) return;
@@ -620,6 +637,81 @@ namespace
 	}
 }
 
+namespace
+{
+	bool holds_reference(const json::value& value, int depth)
+	{
+		if (depth > 128) return false;
+		if (const json::string* text = value.if_string()) return std::string_view(*text).starts_with("res://");
+		if (const json::array* items = value.if_array()) {
+			return std::ranges::any_of(*items, [depth](const json::value& item) { return holds_reference(item, depth + 1); });
+		}
+		if (const json::object* object = value.if_object()) {
+			if (object->contains("guid")) return true;
+			for (const auto& member : *object) {
+				if (member.key() == "__parent") continue;
+				if (holds_reference(member.value(), depth + 1)) return true;
+			}
+		}
+		return false;
+	}
+
+	// scanned_file::reference_fixes of every desc whose text the walk kept, by the walker of the editor's save
+	// (desc::write_references_with) over `assets`. A file assets.ids gives a .resource in the same migration
+	// (gets_resource_from_ids) answers an ID as well: its references change in that migration, so the step is planned for
+	// them. The ID itself is never written.
+	void count_reference_fixes(prj::migration::scan_result& result, const prj::migration::type_catalog& types,
+		const prj::migration::project_assets& assets, const reference_texts& texts, const prj::migration::scan_options& options)
+	{
+		std::set<std::string> gets_id;
+		for (const prj::migration::scanned_file& file : result.files) {
+			if (!prj::migration::gets_resource_from_ids(file)) continue;
+			if (const auto listed = assets.assets().find(file.path); listed != assets.assets().end()) {
+				gets_id.insert(res::asset_name_key(listed->second.res_path, res::asset_names_case_insensitive));
+			}
+		}
+		const res::asset_id will_get_one{ 0, 1 };
+		desc::reference_ids ids;
+		ids.id_of = [&](const res::tag& tag) -> std::optional<res::asset_id> {
+			if (std::optional<res::asset_id> id = assets.id_of(tag)) return id;
+			if (tag.protocol() != res::tag::default_protocol()) return std::nullopt;
+			const std::string_view res_path = tag.view().substr(tag.protocol().size() + 3);
+			return gets_id.contains(res::asset_name_key(res_path, res::asset_names_case_insensitive)) ? std::optional{ will_get_one } : std::nullopt;
+		};
+		ids.path_of = [&assets](const res::asset_id& id) { return assets.path_of(id); };
+		const desc::schema_lookup schema_of = [&types](std::string_view type) { return types.find_schema(type); };
+
+		for (prj::migration::scanned_file& file : result.files) {
+			if (!prj::migration::reads_references(file)) continue;
+			const auto text = texts.find(file.path);
+			if (text == texts.end()) continue;
+			if (!result.incomplete && options.stop && options.stop()) result.incomplete = true;
+			if (result.incomplete) return;
+			boost::system::error_code error;
+			json::value root = parse_desc_json(text->second, error);
+			if (error || !root.is_object()) continue;
+			file.outdated_references = file.kind == file_class::outdated && holds_reference(root, 0);
+			file.reference_fixes = desc::write_references_with(root, schema_of, ids).total();
+		}
+	}
+}
+
+bool prj::migration::gets_resource_from_ids(const scanned_file& file)
+{
+	return !file.has_resource && file.kind != file_class::invalid;
+}
+
+bool prj::migration::reads_references(const scanned_file& file)
+{
+	return (file.kind == file_class::current || file.kind == file_class::outdated)
+		&& lower(fs_paths::utf8_of(fs_paths::path_from_utf8(file.path).extension())) == ".desc";
+}
+
+bool prj::migration::may_hold_references(std::string_view text)
+{
+	return text.find("res://") != std::string_view::npos || text.find("\"guid\"") != std::string_view::npos;
+}
+
 std::string_view prj::migration::to_string(file_class kind)
 {
 	switch (kind) {
@@ -694,7 +786,9 @@ prj::migration::type_catalog prj::migration::type_catalog::from(const desc::desc
 	type_catalog catalog;
 	for (std::string& type : game_layer.type_names()) {
 		// As is_known of the scan (a member of the same name hides it here).
-		const entry value{ game_layer.is_registered(type) || game_layer.find_schema(type) != nullptr, game_layer.current_version(type) };
+		const desc::type_schema* schema = game_layer.find_schema(type);
+		const entry value{ game_layer.is_registered(type) || schema != nullptr, game_layer.current_version(type) };
+		if (schema) catalog.add_schema(type, *schema);
 		catalog.add(std::move(type), value);
 	}
 	return catalog;
@@ -717,6 +811,17 @@ int prj::migration::type_catalog::current_version(std::string_view type) const
 	return found == m_types.end() ? 1 : found->second.current_version;
 }
 
+void prj::migration::type_catalog::add_schema(std::string type, desc::type_schema schema)
+{
+	m_schemas.insert_or_assign(std::move(type), std::move(schema));
+}
+
+const desc::type_schema* prj::migration::type_catalog::find_schema(std::string_view type) const
+{
+	const auto found = m_schemas.find(type);
+	return found == m_schemas.end() ? nullptr : &found->second;
+}
+
 prj::migration::scan_result prj::migration::scan_project(const fs::path& root, const desc::desc_system& game_layer, const scan_options& options)
 {
 	return scan_project(root, type_catalog::from(game_layer), options);
@@ -730,8 +835,9 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 	result.manifest = scan_manifest(project, manifest);
 	if (!manifest) return result;
 
+	reference_texts texts;
 	for (const auto& content_root : manifest->content_roots) {
-		scan_root(result, project, normalized(project / content_root), types, options);
+		scan_root(result, project, normalized(project / content_root), types, options, texts);
 	}
 	std::ranges::sort(result.files, {}, &scanned_file::path);
 
@@ -749,7 +855,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 	// What the editor lists has a .resource when the editor pairs one with it, in any content root (a file of a higher
 	// root may take its .resource from a lower one); a file it does not list, one a higher root covers, by its own
 	// folder. assets.ids decides by this alone, so its plan and what it does agree.
-	project_assets assets(project, manifest->content_roots);
+	project_assets assets(project, manifest->content_roots, options.read_only_layers);
 	assets.rebuild();
 	for (scanned_file& file : result.files) {
 		if (res::is_asset_meta_sidecar(file.path)) continue;
@@ -763,6 +869,11 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 			}
 		}
 	}
+	count_reference_fixes(result, types, assets, texts, options);
+	result.read_only_resources = assets.read_only_resources();
+	std::ranges::sort(result.read_only_resources, {}, [](const read_only_resource& file) {
+		return std::pair{ fs_paths::generic_utf8_of(file.layer), file.path };
+	});
 	return result;
 }
 
@@ -773,9 +884,15 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 	plan.scan = scan;
 	plan.resource_meta_version = options.scan.resource_meta_version;
 	plan.force = options.force;
+	plan.read_only_layers = options.scan.read_only_layers;
 	if (const int steps_to = game_layer.current_version(res::asset_meta_type); steps_to != options.scan.resource_meta_version) {
 		plan.refused = std::format("the steps of {} lead to version {}, but the engine reads version {}: a step must raise "
 			"res::asset_meta_version with it", res::asset_meta_type, steps_to, options.scan.resource_meta_version);
+	}
+	if (plan.refused.empty()) {
+		if (const prj::manifest_result manifest = prj::load_manifest(root); manifest.data) {
+			if (auto why = content_roots_refusal(manifest.data->content_roots)) plan.refused = std::move(*why);
+		}
 	}
 	for (scanned_file& file : plan.scan.files) {
 		if (file.kind != file_class::outdated) continue;

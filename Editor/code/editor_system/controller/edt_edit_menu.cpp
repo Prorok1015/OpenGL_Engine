@@ -49,15 +49,18 @@ namespace {
 
 std::vector<edt::registration> edt::register_edit_actions(
 	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active,
-	std::function<std::optional<std::string>()> asset_undo_label, std::function<bool()> asset_undo)
+	std::function<std::optional<std::string>()> asset_undo_label, std::function<bool()> asset_undo, std::function<bool()> history_blocked)
 {
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
 	};
 	// The active document follows the focus of the windows: a data window that has it is the one Undo and Redo act on (its
 	// own history), the scene otherwise. The read-only prefab preview has nothing to undo, so the items are off there.
-	const auto undo_target = [&documents]() -> document* { return documents.active(); };
-	const auto redo_target = [&documents]() -> document* { return documents.active(); };
+	const auto history_target = [&documents, history_blocked = std::move(history_blocked)]() -> document* {
+		return history_blocked && history_blocked() ? nullptr : documents.active();
+	};
+	const auto undo_target = history_target;
+	const auto redo_target = history_target;
 	// A data document has no agent changes (an agent writes the file with desc.write): Accept is the scene's.
 	const auto accept_target = [&documents]() -> document* {
 		document* current = documents.active();

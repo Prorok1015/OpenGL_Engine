@@ -57,6 +57,14 @@ namespace rnd
 		virtual void upload_objects(std::span<const object_data> objects, std::span<const glm::mat4> bones) = 0;
 		// Binds element `index` of the uploaded objects; a skinned draw names its skin.
 		virtual void bind_object(std::uint32_t index, const res::tag& skin) = 0;
+
+		// Whether a draw of `count` indices of that geometry from `base_index`, offset by `base_vertex`, stays inside its
+		// buffers (#927): a pass leaves out a draw that does not. Not pure, and true by default: a context that owns no
+		// geometry (the tests' ones) has nothing to check against. Last: the functions above keep their places.
+		virtual bool draw_fits(const res::tag& /*geometry*/, std::uint32_t /*count*/, std::uint32_t /*base_vertex*/, std::uint32_t /*base_index*/)
+		{
+			return true;
+		}
 	};
 
 	// Binds what a draw of `material` reads from set 2.

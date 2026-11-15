@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
+#include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/res_tag_json.h>
 #include <snk/desc/desc_base.hpp>
@@ -18,7 +19,9 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -74,6 +77,36 @@ namespace desc
 		std::string_view m_file;
 		std::vector<migration_warning>* m_sink = nullptr;
 	};
+
+	// The asset index a writer of references asks (write_references_with): the ID of the file a res:// path names (none
+	// for a file without one or a duplicate), and the file that holds an ID now. An empty function answers none.
+	struct reference_ids
+	{
+		std::function<std::optional<res::asset_id>(const res::tag&)> id_of;
+		std::function<std::optional<res::tag>(const res::asset_id&)> path_of;
+	};
+
+	// What a write of references changed.
+	struct reference_counts
+	{
+		// A path (a string, or an object without a guid) that became {"guid", "path"}.
+		std::size_t ids_written = 0;
+		// A {guid, path} whose path became the one its guid's file has now.
+		std::size_t paths_repaired = 0;
+
+		std::size_t total() const { return ids_written + paths_repaired; }
+	};
+
+	// The schema of a type by its name; nullptr for a type without one.
+	using schema_lookup = std::function<const type_schema*(std::string_view type_name)>;
+
+	// The rule of desc_system::write_references (EPIC-57 section 4.4) with the index `ids` and the schemas of `schema_of`:
+	// what the editor's save writes and what the migration step assets.refs writes into a project's files (#776). There
+	// is no replaced file here: a path whose file `ids` gives no ID stays as it is. Returns what changed in `root`.
+	SNK_API reference_counts write_references_with(json::value& root, const schema_lookup& schema_of, const reference_ids& ids);
+
+	// `resources`' asset index as reference_ids (asset_id_of, asset_path_of): what write_references asks.
+	SNK_API reference_ids asset_index_ids(const res::resource_system& resources);
 
 	class SNK_API desc_system
 	{
@@ -143,6 +176,7 @@ namespace desc
 
 		void unregister_desc(std::string_view type_name);
 
+		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
 		// current_version(name). Migrations registered later move the stored schema's version along, so the order
 		// does not matter.
@@ -151,6 +185,8 @@ namespace desc
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema);
 
+		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
+		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
 		const type_schema* find_schema(std::string_view type_name) const;
 
 		const schema_registry& schemas() const;
@@ -230,6 +266,9 @@ namespace desc
 		// record has no "__type", the component it applies to gives the schema. `merged_into` (the base value at `pointer`,
 		// may be null): where it holds an object, a path stays a string, since the record's value is merged into it.
 		void write_references(const type_schema& schema, std::string_view pointer, json::value& value, const json::value* merged_into = nullptr) const;
+		// desc::write_references_with with the schemas of this system and the index `ids` (another one than the resource
+		// system's: a migration's index of the project on the disk).
+		reference_counts write_references_with(json::value& root, const reference_ids& ids) const;
 
 		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
 		// its memory:// copy's diagnostics go to the owner's file at that path (#595).
@@ -295,12 +334,13 @@ namespace desc
 		using migration_step_fn = std::function<void(json::object&)>;
 		using migration_steps = std::map<int, migration_step_fn>;
 
-		const factory_fn* find_factory(std::string_view type_name) const;
+		// Shared with the registry: a factory or a step that is running outlives the unregistration of its type (#988).
+		std::shared_ptr<const factory_fn> find_factory(std::string_view type_name) const;
 
 		// Why `schema` cannot be a document (empty: it can); see mark_document.
 		std::string document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const;
 
-		const migration_steps* find_migrations(std::string_view type) const;
+		std::shared_ptr<const migration_steps> find_migrations(std::string_view type) const;
 
 		bool owned_by_parent(std::string_view type_name) const;
 
@@ -334,9 +374,13 @@ namespace desc
 
 		res::resource_system& m_res_system;
 		const desc_system* m_parent = nullptr;
-		std::unordered_map<std::string, factory_fn> factory_map;
-		std::unordered_map<std::string, migration_steps> m_migrations;
+		std::unordered_map<std::string, std::shared_ptr<const factory_fn>> factory_map;
+		// Copy on write: a change publishes a new map of the type, a load keeps the one it took.
+		std::unordered_map<std::string, std::shared_ptr<const migration_steps>> m_migrations;
 		std::vector<std::string> m_component_type_names;
 		schema_registry m_schemas;
+		// Guards the four registries above against loads that read them on other threads (#988). A leaf of the lock order:
+		// only lookups and copies under it; a factory or a step runs after it is released, and so does a call to m_parent.
+		mutable std::shared_mutex m_registry_mutex;
 	};
 }

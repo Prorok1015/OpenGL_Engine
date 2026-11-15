@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <format>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,12 +71,15 @@ struct log_capture
 	log_capture()
 	{
 		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
-			if (level >= engine::log_level::warn) lines.push_back(std::format("{}: {}", category, message));
+			if (level < engine::log_level::warn) return;
+			std::lock_guard lock(m_mutex);
+			lines.push_back(std::format("{}: {}", category, message));
 		});
 	}
 
 	size_t count(std::string_view part) const
 	{
+		std::lock_guard lock(m_mutex);
 		size_t n = 0;
 		for (const auto& l : lines) {
 			if (l.find(part) != std::string::npos) ++n;
@@ -83,6 +87,7 @@ struct log_capture
 		return n;
 	}
 
+	mutable std::mutex m_mutex;
 	std::vector<std::string> lines;
 	engine::log_sink_handle sink; // last: removed first
 };

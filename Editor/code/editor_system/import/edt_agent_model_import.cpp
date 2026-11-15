@@ -1,5 +1,6 @@
 #include "edt_agent_model_import.h"
 #include "edt_file_menu.h"
+#include "edt_forge_types.h"
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <boost/json/array.hpp>
@@ -38,6 +39,13 @@ namespace {
 	fs::path from_utf8(const std::string& text)
 	{
 		return fs::path(std::u8string(text.begin(), text.end()));
+	}
+
+	// A name from the disk or from the model, as part of one line of the question: a line break in a file's name must
+	// not forge a line of the list a person approves (#943).
+	std::string shown(std::string_view text)
+	{
+		return edt::forge::escaped_text(text, 1024);
 	}
 
 	std::string to_utf8(const fs::path& path)
@@ -388,9 +396,9 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 std::optional<std::string> edt::agent_model_import::describe(const agent_import_request& request, const cmd::origin& caller)
 {
 	agent_import_plan plan = resolve(request);
-	if (!plan.ok()) return "This request will be refused: " + plan.error;
+	if (!plan.ok()) return "This request will be refused: " + shown(plan.error);
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
-		to_utf8(plan.source), size_text(plan.size), plan.folder, plan.name, plan.prefab);
+		shown(to_utf8(plan.source)), size_text(plan.size), shown(plan.folder), shown(plan.name), shown(plan.prefab));
 	if (request.files_token.empty()) {
 		text += "Allowing this reads the model, and the .bin/.mtl files it needs to be parsed, to list the files it refers to. Nothing is copied into the project until you approve that list in a second question (none, when the model is self-contained).";
 	} else {
@@ -407,7 +415,7 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		plan.files_bytes = found->plan.files_bytes;
 		plan.scanned = true;
 		text += std::format("The model makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
-		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", to_utf8(file.path), size_text(file.size));
+		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", shown(to_utf8(file.path)), size_text(file.size));
 	}
 	remember(call_key(request, caller), caller.session, std::move(plan));
 	return text;

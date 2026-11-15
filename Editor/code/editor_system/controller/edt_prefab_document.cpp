@@ -1,4 +1,6 @@
 #include "edt_prefab_document.h"
+#include "edt_code_commands.h"
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
@@ -16,10 +18,19 @@
 #include <entt/entt.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
+#include <algorithm>
+#include <format>
+#include <optional>
+#include <utility>
 
 edt::prefab_document::prefab_document(editor_services& services)
 	: m_services(services)
 {
+}
+
+edt::prefab_document::~prefab_document()
+{
+	unwatch_source();
 }
 
 void edt::prefab_document::open(const res::tag& prefab_tag)
@@ -83,15 +94,31 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	// Inject prefab camera with separate render targets
 	inject_camera(reg);
 
+	// The preview shows the working copy: an edit changes it, never the desc the resource cache holds.
+	m_working = std::make_unique<scn::prefab_desc>();
+	take_from(*prefab_handle);
+
 	// Load the prefab into the world
-	entt::entity prefab_root = reg.create();
-	scn::assemble_prefab(*m_services.assembler(), reg, prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
+	m_root = reg.create();
+	// Not under the prefab's own tag: a hot reload of that tag rebuilds an instance from the file and would wipe the edits.
+	// The file is watched by the document itself (changed_on_disk).
+	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_working, m_working->get_root().name, res::tag{ k_working_tag });
 
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
 	m_open = true;
 	m_dirty = false;
+	m_changed_on_disk = false;
+	m_saved_form = working_form();
+	m_disk_version.clear();
+	m_lower_layer = false;
+	if (m_files.top_layer) {
+		const desc_file_read on_disk = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, prefab_tag);
+		m_disk_version = on_disk.version;
+		m_lower_layer = on_disk.located && !on_disk.top_layer;
+	}
 
+	watch_source();
 	egLOG("Editor/PrefabCtx", "Opened prefab '{}' for editing", prefab_tag.view());
 }
 
@@ -99,17 +126,314 @@ void edt::prefab_document::close()
 {
 	if (!m_open) return;
 
+	unwatch_source();
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->destroy_preview(m_source_tag.view());
 	}
 
 	m_open = false;
 	m_dirty = false;
+	m_changed_on_disk = false;
+	m_working.reset();
+	m_root = entt::null;
+	m_saved_form.clear();
+	m_disk_version.clear();
 	m_set_name.clear();
 	m_source_tag = res::tag::null;
 	m_prefab_name.clear();
 
 	egLOG("Editor/PrefabCtx", "Closed prefab editor");
+}
+
+// copy_to leaves out what names a file (the tag, the __guid, the __parent): the copy is written back over that file.
+void edt::prefab_document::take_from(const scn::prefab_desc& source)
+{
+	++m_replaced;
+	source.copy_to(*m_working);
+	m_working->set_guid(source.get_guid());
+	m_working->set_parent(source.get_parent());
+}
+
+// What the copy holds, without a file read: the "is it edited" test runs on every edit, an Apply builds the bytes.
+std::string edt::prefab_document::working_form() const
+{
+	if (!m_working) {
+		return {};
+	}
+	namespace json = boost::json;
+	json::object body;
+	m_working->serialize(body);
+	body["__type"] = std::string(scn::prefab_desc::__type);
+	body["__guid"] = m_working->get_guid();
+	body["__parent"] = std::string(m_working->get_parent().view());
+	return json::serialize(body);
+}
+
+std::vector<std::byte> edt::prefab_document::working_bytes() const
+{
+	desc::desc_system* descs = m_services.descs();
+	if (!m_working || !descs) {
+		return {};
+	}
+	namespace json = boost::json;
+	json::object body;
+	m_working->serialize(body);
+	descs->reduce_to_parent(*m_working, body);
+	body["__type"] = std::string(scn::prefab_desc::__type);
+	// A __guid the file had stays until the project's migration takes it out; none is made up (the adapter does the same).
+	if (!m_working->get_guid().empty()) {
+		body["__guid"] = m_working->get_guid();
+	}
+	descs->stamp_tree(body);
+	json::value file{ std::move(body) };
+	descs->write_references_over(file, m_source_tag);
+	return descs->serialize_to_bytes(file);
+}
+
+void edt::prefab_document::sync_preview()
+{
+	entt::registry* reg = get_registry();
+	scn::ecs_assembler* assembler = m_services.assembler();
+	if (reg && assembler && m_working && m_root != entt::null && reg->valid(m_root)) {
+		scn::reconcile(*assembler, *reg, m_root, m_working->get_root(), scn::reconcile_mode::reload);
+		// reconcile moves the children only: the root's own transform is placed here, whether or not the file spells it out.
+		reg->emplace_or_replace<scn::local_transform>(m_root, m_working->get_root().get_local_transform());
+		if (reg->ctx().contains<ecs::event<scn::transform_updated>>()) {
+			reg->ctx().get<ecs::event<scn::transform_updated>>().emit(m_root);
+		}
+	}
+}
+
+void edt::prefab_document::announce()
+{
+	if (m_events) {
+		m_events->document_changed.emit(id(), m_generation);
+	}
+}
+
+bool edt::prefab_document::edit(const std::function<bool(scn::prefab_desc&)>& change)
+{
+	if (!m_open || !m_working || edits_locked()) {
+		return false;
+	}
+	if (!change(*m_working)) {
+		return false;
+	}
+	++m_generation;
+	sync_preview();
+	m_dirty = working_form() != m_saved_form;
+	announce();
+	return true;
+}
+
+std::string edt::prefab_document::apply_blocker() const
+{
+	if (!m_open) return "the prefab is not open";
+	if (edits_locked()) return "Stop Play to apply the prefab";
+	if (!m_files.top_layer) return "the project files are not known";
+	if (m_lower_layer) return "this prefab belongs to a lower layer (the engine or a package): it cannot be written from the project";
+	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) return *why;
+	return {};
+}
+
+scn::prefab_desc::prefab_node* edt::prefab_document::working_node(const std::vector<std::uint64_t>& path)
+{
+	if (!m_open || !m_working || edits_locked()) {
+		return nullptr;
+	}
+	scn::prefab_desc::prefab_node* node = &m_working->get_root();
+	for (const std::uint64_t id : path) {
+		const auto found = std::ranges::find_if(node->children, [id](const scn::prefab_desc::prefab_node& child) { return child.node_id == id; });
+		if (found == node->children.end()) {
+			return nullptr;
+		}
+		node = &*found;
+	}
+	return node;
+}
+
+bool edt::prefab_document::notify_edited()
+{
+	if (!m_open || !m_working || edits_locked()) {
+		return false;
+	}
+	++m_generation;
+	sync_preview();
+	m_dirty = working_form() != m_saved_form;
+	announce();
+	return true;
+}
+
+edt::save_result edt::prefab_document::save()
+{
+	if (!m_open || !m_working) {
+		return save_result::failure("the prefab is not open");
+	}
+	if (edits_locked()) {
+		return save_result::failure("Stop Play to apply the prefab");
+	}
+	if (!m_dirty) {
+		return save_result::ok();
+	}
+	if (!m_files.top_layer) {
+		return save_result::failure("the project files are not known: nothing was written");
+	}
+	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+		return save_result::failure(*why);
+	}
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	res::resource_system* writer = m_services.writable_resources();
+	if (!descs || !reader || !writer) {
+		return save_result::failure("the project resources are not available");
+	}
+	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
+	if (!on_disk.error.empty() && !on_disk.located) {
+		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_source_tag.view(), on_disk.error));
+	}
+	if (!on_disk.top_layer) {
+		return save_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", m_source_tag.view()));
+	}
+	if (on_disk.in_open_level) {
+		return save_result::failure(std::format("{} belongs to the open level now: nothing was written", m_source_tag.view()));
+	}
+	if (on_disk.version != m_disk_version) {
+		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", m_source_tag.view()));
+	}
+	const std::vector<std::byte> bytes = working_bytes();
+	if (bytes.size() > k_desc_file_limit) {
+		return save_result::failure(std::format("{} would be {} bytes: a prefab holds at most {}", m_source_tag.view(), bytes.size(), k_desc_file_limit));
+	}
+	if (!writer->store_sync(m_source_tag, bytes)) {
+		return save_result::failure(std::format("{} could not be written", m_source_tag.view()));
+	}
+	writer->signal_changed(m_source_tag);
+	m_saved_form = working_form();
+	m_disk_version = code_version_of(bytes);
+	m_dirty = false;
+	m_changed_on_disk = false;
+	announce();
+	return save_result::ok();
+}
+
+edt::save_result edt::prefab_document::overwrite()
+{
+	if (!m_open || !m_working) {
+		return save_result::failure("the prefab is not open");
+	}
+	// Nothing to write: the file as it is now is what the document takes.
+	if (!m_dirty) {
+		const std::string error = reload();
+		return error.empty() ? save_result::ok() : save_result::failure(error);
+	}
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	if (!descs || !reader || !m_files.top_layer) {
+		return save_result::failure("the project files are not known: nothing was written");
+	}
+	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
+	if (!on_disk.error.empty() && !on_disk.located) {
+		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_source_tag.view(), on_disk.error));
+	}
+	const std::string previous_version = std::exchange(m_disk_version, on_disk.version);
+	const save_result saved = save();
+	if (!saved.saved) {
+		m_disk_version = previous_version;
+		m_changed_on_disk = true;
+	}
+	return saved;
+}
+
+void edt::prefab_document::watch_source()
+{
+	unwatch_source();
+	m_watching = m_services.writable_resources();
+	if (m_watching) {
+		m_watching->watch(m_source_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
+	}
+}
+
+void edt::prefab_document::unwatch_source()
+{
+	if (m_watching) {
+		m_watching->unwatch(m_source_tag, this);
+		m_watching = nullptr;
+	}
+}
+
+void edt::prefab_document::on_source_changed(const res::tag& changed)
+{
+	if (!m_open || changed != m_source_tag || !m_files.top_layer) {
+		return;
+	}
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	if (!descs || !reader) {
+		return;
+	}
+	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
+	if (on_disk.version == m_disk_version) {
+		if (m_changed_on_disk) {
+			m_changed_on_disk = false;
+			announce();
+		}
+		return;
+	}
+	if (!m_dirty && !edits_locked()) {
+		if (const std::string error = revert(); error.empty()) {
+			return;
+		} else {
+			egLOG_WARN("editor", "{}", error);
+		}
+	}
+	if (!m_changed_on_disk) {
+		m_changed_on_disk = true;
+		announce();
+	}
+}
+
+std::string edt::prefab_document::revert()
+{
+	if (!m_open || !m_working) {
+		return "the prefab is not open";
+	}
+	if (edits_locked()) {
+		return "Stop Play to revert the prefab";
+	}
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	res::resource_system* writer = m_services.writable_resources();
+	if (!descs || !reader || !writer) {
+		return "the project resources are not available";
+	}
+	std::string version;
+	if (m_files.top_layer) {
+		const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
+		if (!on_disk.error.empty()) {
+			return std::format("{} cannot be read: {}", m_source_tag.view(), on_disk.error);
+		}
+		version = on_disk.version;
+	}
+	// The cache may hold an older read of the file: drop it, then take the prefab fresh.
+	// Nothing written: only a file that differs from what the open instances read needs the others told.
+	if (!version.empty() && version != m_disk_version) {
+		writer->signal_changed(m_source_tag);
+	} else {
+		writer->evict_cached(m_source_tag);
+	}
+	auto handle = reader->require_sync<scn::prefab_desc>(m_source_tag);
+	if (!handle.is_ready()) {
+		return std::format("{} could not be loaded", m_source_tag.view());
+	}
+	take_from(*handle);
+	++m_generation;
+	sync_preview();
+	m_saved_form = working_form();
+	m_disk_version = std::move(version);
+	m_dirty = false;
+	m_changed_on_disk = false;
+	announce();
+	return {};
 }
 
 entt::registry* edt::prefab_document::get_registry()

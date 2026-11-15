@@ -1,15 +1,18 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include "edt_desc_file_commands.h"
 #include "edt_file_menu.h"
 #include "edt_level_controller.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
+#include "edt_version_notice.h"
 #include "edt_world_controller.h"
 #include <boost/json.hpp>
 #include <filesystem>
@@ -17,10 +20,13 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 // Saving a level writes through the resource system, never to a path of its own (#394): a Save As path that leaves
 // the resource root, or a level file that is a symlink, is refused and nothing is written outside the root. The save
@@ -385,6 +391,78 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 	BOOST_TEST(file.at("__guid") == boost::json::value("11111111-2222-4333-8444-555555555555"), "the level's own __guid stays with an index");
 	BOOST_REQUIRE(second);
 	BOOST_TEST(read_file(content / "levels" / "sky.desc") == written);
+}
+
+// R26 of EPIC-58 (#761): a level file of an older version is saved in the current one, with a WARN and the text for the
+// menu bar; the next save of the same file says nothing, and a file of the current version never does.
+BOOST_AUTO_TEST_CASE(SavingALevelOfAnOlderVersion_WarnsOnce_ThatOlderEditorsWillNotOpenIt)
+{
+	std::mutex warnings_mutex;
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || category != "Editor/Save") return;
+		std::lock_guard lock(warnings_mutex);
+		warnings.emplace_back(message);
+	});
+	const auto warned = [&] {
+		std::lock_guard lock(warnings_mutex);
+		return warnings;
+	};
+	std::vector<std::string> shown;
+	level_ctrl.on_file_upgraded = [&shown](const std::string& text) { shown.push_back(text); };
+
+	dir.write("content/levels/old.desc", R"({"__type":"level_desc","name":"old","worlds":[]})");
+	const auto old = res::tag::make("levels/old.desc");
+	state.editor_tag = old;
+	state.level_tag = old;
+	auto handle = rs->require_sync<scn::level_desc>(old);
+	pump();
+	BOOST_REQUIRE(handle.is_ready());
+	// The version of the bytes the load read, as editor_system::begin_level_load takes it.
+	const std::string old_text = read_file(content / "levels" / "old.desc");
+	const int read_version = edt::desc_root_version(std::as_bytes(std::span{ old_text.data(), old_text.size() }));
+	BOOST_TEST(read_version == 1);
+	BOOST_REQUIRE(level_ctrl.finish_level_load(handle, read_version));
+	BOOST_TEST(state.level_file_version == 1);
+	const int current = descs->current_version(scn::level_desc::__type);
+	BOOST_REQUIRE(current > 1);
+
+	state.commit("edit", edt::commit_mode::state_only);
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	const auto saved = boost::json::parse(read_file(content / "levels" / "old.desc")).as_object();
+	BOOST_TEST(saved.at("__version").to_number<int>() == current);
+	const std::string expected = edt::version_upgrade_text("res://levels/old.desc", 1, current);
+	BOOST_REQUIRE(warned().size() == 1u);
+	BOOST_TEST(warned().front() == expected);
+	BOOST_REQUIRE(shown.size() == 1u);
+	BOOST_TEST(shown.front() == expected);
+	BOOST_TEST(state.level_file_version == current);
+
+	state.commit("edit", edt::commit_mode::state_only);
+	BOOST_REQUIRE(level_ctrl.quick_save_level());
+	BOOST_TEST(warned().size() == 1u);
+	BOOST_TEST(shown.size() == 1u);
+
+	// Save As over another file of an older version says so too, a new file does not.
+	dir.write("content/levels/other.desc", R"({"__type":"level_desc","name":"other","worlds":[]})");
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/other.desc"));
+	BOOST_TEST(warned().size() == 2u);
+	BOOST_REQUIRE(level_ctrl.save_level_as("levels/fresh.desc"));
+	BOOST_TEST(warned().size() == 2u);
+	BOOST_TEST(shown.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(TheSaveNotice_ShowsItsTextForItsTimeOnly)
+{
+	using namespace std::chrono_literals;
+	edt::timed_notice notice{ 5s };
+	const edt::timed_notice::clock::time_point start{};
+	BOOST_TEST(!notice.text(start).has_value());
+	notice.show("upgraded", start);
+	BOOST_TEST(notice.text(start + 4s).value_or("") == "upgraded");
+	BOOST_TEST(!notice.text(start + 5s).has_value());
+	notice.show("again", start + 10s);
+	BOOST_TEST(notice.text(start + 11s).value_or("") == "again");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -2,6 +2,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
+#include <cstddef>
 #include <unordered_map>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/level/scn_override_record.h>
@@ -129,4 +130,11 @@ namespace scn {
 
 	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	SNK_API void assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
+
+	namespace detail
+	{
+		// For the engine's tests only, not for game modules: the most nodes one outer spawn or hot reload call builds.
+		// Returns the limit it replaced. Not thread-safe.
+		SNK_API std::size_t set_spawn_node_limit(std::size_t nodes);
+	}
 }

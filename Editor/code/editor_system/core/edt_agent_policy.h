@@ -197,6 +197,12 @@ namespace edt
 	};
 	approved_snapshot_location approved_snapshot_for(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root);
 
+	// How the person's own settings name a project: its canonical path, '/'-separated, without a trailing '/', in lower
+	// case where the file system ignores case (Windows, macOS). `canonical` is weakly_canonical's already.
+	std::string project_settings_key(const std::filesystem::path& canonical);
+	// project_settings_key of `project_root` made canonical; nullopt when it cannot be (nothing is kept for it then).
+	std::optional<std::string> canonical_project_settings_key(const std::filesystem::path& project_root);
+
 	// The git rules of the two layers: push_branches and remotes are the project's lists (else the defaults of vcs_policy),
 	// narrowed by the personal layer's to the entries both name; protected_branches are main, master and both layers'
 	// entries; a flag is on only when the project turns it on and the personal layer does not turn it off. A layer that

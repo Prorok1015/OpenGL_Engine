@@ -5,6 +5,7 @@
 #include <snk/resource/res_reference.h>
 #include <snk/resource/res_tag_json.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -12,7 +13,10 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,8 +27,7 @@
 namespace
 {
 	// What register_migration with a summary stores in the registry. Its type stays in the engine: only the engine asks
-	// a step for it (std::function::target), so the summary needs no table of its own and desc_system keeps its size
-	// (scn::scene_layer holds one by value and modules read the members after it, #751).
+	// a step for it (std::function::target), so the summary needs no table of its own.
 	struct described_step
 	{
 		std::string type;
@@ -39,6 +42,13 @@ namespace
 			fn(obj, context);
 		}
 	};
+
+	// What current_version reports for a type with these steps (null: none).
+	template<class Steps>
+	int version_after(const Steps* steps)
+	{
+		return steps && !steps->empty() ? steps->rbegin()->first + 1 : 1;
+	}
 }
 
 desc::migration_context::migration_context(std::string_view type, int from_version, std::string_view file,
@@ -70,7 +80,7 @@ void desc::desc_system::register_migration(std::string_view type, int from_versi
 
 std::string desc::desc_system::migration_summary(std::string_view type, int from_version) const
 {
-	const migration_steps* steps = find_migrations(type);
+	const std::shared_ptr<const migration_steps> steps = find_migrations(type);
 	if (!steps) return {};
 	const auto step = steps->find(from_version);
 	if (step == steps->end()) return {};
@@ -130,16 +140,17 @@ void desc::desc_system::migrate_typed(json::object& obj, const std::string& type
 		}
 	}
 
-	const int current = current_version(type);
+	// One copy for the version and the steps: an unregistration meanwhile neither splits them nor ends a running step.
+	const std::shared_ptr<const migration_steps> steps = find_migrations(type);
+	const int current = version_after(steps.get());
 	const int version = static_cast<int>(parsed);
 	if (version > current) {
 		throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
 	}
 	if (version < current) {
-		const auto& steps = *find_migrations(type);
 		for (int from = version; from < current; ++from) {
-			auto step = steps.find(from);
-			if (step == steps.end()) {
+			auto step = steps->find(from);
+			if (step == steps->end()) {
 				throw std::runtime_error(std::format("{}: no migration for '{}' from version {}", context, type, from));
 			}
 			run(step->second, obj, type, from);
@@ -150,8 +161,15 @@ void desc::desc_system::migrate_typed(json::object& obj, const std::string& type
 
 void desc::desc_system::unregister_desc(std::string_view type_name)
 {
-	factory_map.erase(std::string{ type_name });
-	std::erase(m_component_type_names, std::string{ type_name });
+	const std::string name{ type_name };
+	// Destroyed after the lock; a load that took the factory keeps it until its call ends.
+	std::shared_ptr<const factory_fn> removed;
+	std::unique_lock lock(m_registry_mutex);
+	if (const auto it = factory_map.find(name); it != factory_map.end()) {
+		removed = std::move(it->second);
+		factory_map.erase(it);
+	}
+	std::erase(m_component_type_names, name);
 	m_schemas.remove(type_name);
 }
 
@@ -163,21 +181,51 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 	}
 	ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
 		schema.name, schema.version, current_version(schema.name));
-	ASSERT_MSG(!m_schemas.contains(schema.name), "Schema '{}' is already registered!", schema.name);
-	const type_schema* stored = m_schemas.add(std::move(schema));
-	if (stored && !factory_map.contains(stored->name)) {
-		if (auto factory = make_dynamic_factory(*stored, m_schemas)) {
-			factory_map[stored->name] = std::move(factory);
-			if (stored->is_component) {
-				m_component_type_names.push_back(stored->name);
+	ASSERT_MSG(find_schema(schema.name) == nullptr, "Schema '{}' is already registered!", schema.name);
+	if (schema.is_document) {
+		std::string problem;
+		{
+			std::shared_lock lock(m_registry_mutex);
+			if (!m_schemas.contains(schema.name) && !m_schemas.find(schema.id)) {
+				problem = desc::document_problem(schema, m_schemas);
 			}
 		}
+		// What schema_registry::add would log under the lock: logged here, so add() stores it without is_document quietly.
+		if (!problem.empty()) {
+			egLOG_ERROR("desc/error", "Schema '{}' is stored without is_document: {}", schema.name, problem);
+			schema.is_document = false;
+		}
+	}
+	const type_schema* stored = nullptr;
+	{
+		std::unique_lock lock(m_registry_mutex);
+		stored = m_schemas.add(std::move(schema));
+	}
+	if (!stored) {
+		return nullptr;
+	}
+	{
+		std::shared_lock lock(m_registry_mutex);
+		if (factory_map.contains(stored->name)) {
+			return stored;
+		}
+	}
+	// Off the lock: it logs a schema it cannot bind.
+	factory_fn factory = make_dynamic_factory(*stored, m_schemas);
+	if (!factory) {
+		return stored;
+	}
+	auto shared = std::make_shared<const factory_fn>(std::move(factory));
+	std::unique_lock lock(m_registry_mutex);
+	if (factory_map.try_emplace(stored->name, std::move(shared)).second && stored->is_component) {
+		m_component_type_names.push_back(stored->name);
 	}
 	return stored;
 }
 
 const desc::type_schema* desc::desc_system::find_schema(std::string_view type_name) const
 {
+	std::shared_lock lock(m_registry_mutex);
 	return m_schemas.find(type_name);
 }
 
@@ -199,10 +247,13 @@ bool desc::desc_system::is_registered(std::string_view type_name) const
 std::vector<std::string> desc::desc_system::type_names() const
 {
 	std::vector<std::string> names = m_parent ? m_parent->type_names() : std::vector<std::string>{};
-	names.reserve(names.size() + factory_map.size() + m_migrations.size());
-	for (const auto& entry : factory_map) names.push_back(entry.first);
-	for (const auto& entry : m_migrations) names.push_back(entry.first);
-	for (std::string& name : m_schemas.type_names()) names.push_back(std::move(name));
+	{
+		std::shared_lock lock(m_registry_mutex);
+		names.reserve(names.size() + factory_map.size() + m_migrations.size());
+		for (const auto& entry : factory_map) names.push_back(entry.first);
+		for (const auto& entry : m_migrations) names.push_back(entry.first);
+		for (std::string& name : m_schemas.type_names()) names.push_back(std::move(name));
+	}
 	std::ranges::sort(names);
 	const auto [first, last] = std::ranges::unique(names);
 	names.erase(first, last);
@@ -212,6 +263,7 @@ std::vector<std::string> desc::desc_system::type_names() const
 std::vector<std::string> desc::desc_system::get_component_type_names() const
 {
 	std::vector<std::string> names = m_parent ? m_parent->get_component_type_names() : std::vector<std::string>{};
+	std::shared_lock lock(m_registry_mutex);
 	names.insert(names.end(), m_component_type_names.begin(), m_component_type_names.end());
 	return names;
 }
@@ -222,25 +274,46 @@ void desc::desc_system::register_migration(std::string_view type, int from_versi
 		egLOG_ERROR("desc/error", "Migration for '{}' not registered: the type belongs to the parent desc system", type);
 		return;
 	}
-	auto& steps = m_migrations[std::string{ type }];
-	ASSERT_MSG(!steps.contains(from_version), "Migration for '{}' from version {} is already registered!", type, from_version);
-	steps.emplace(from_version, std::move(fn));
-	m_schemas.set_version(type, current_version(type));
+	const std::string key{ type };
+	std::shared_ptr<const migration_steps> published;
+	{
+		std::shared_lock lock(m_registry_mutex);
+		if (const auto it = m_migrations.find(key); it != m_migrations.end()) {
+			published = it->second;
+		}
+	}
+	// Copied off the lock: the copy runs the copy constructors of what the steps capture.
+	auto steps = published ? std::make_shared<migration_steps>(*published) : std::make_shared<migration_steps>();
+	const bool added = steps->emplace(from_version, std::move(fn)).second;
+	ASSERT_MSG(added, "Migration for '{}' from version {} is already registered!", type, from_version);
+	if (!added) {
+		return;
+	}
+	const int version = version_after(steps.get());
+	published = std::move(steps);
+	std::unique_lock lock(m_registry_mutex);
+	m_migrations[key].swap(published);
+	m_schemas.set_version(type, version);
 }
 
 void desc::desc_system::unregister_migrations(std::string_view type)
 {
-	m_migrations.erase(std::string{ type });
-	m_schemas.set_version(type, current_version(type));
+	// Does not wait for a running step: it holds its own copy of the steps. A module's steps stay loaded because its
+	// scene_layer stops its loads before its desc_system is destroyed.
+	const int fallback_version = m_parent ? m_parent->current_version(type) : 1;
+	std::shared_ptr<const migration_steps> removed;
+	std::unique_lock lock(m_registry_mutex);
+	if (const auto it = m_migrations.find(std::string{ type }); it != m_migrations.end()) {
+		removed = std::move(it->second);
+		m_migrations.erase(it);
+	}
+	m_schemas.set_version(type, fallback_version);
 }
 
 int desc::desc_system::current_version(std::string_view type) const
 {
-	const auto* steps = find_migrations(type);
-	if (!steps || steps->empty()) {
-		return 1;
-	}
-	return steps->rbegin()->first + 1;
+	const std::shared_ptr<const migration_steps> steps = find_migrations(type);
+	return version_after(steps.get());
 }
 
 void desc::desc_system::migrate_tree(json::object& root, std::string_view context) const
@@ -440,7 +513,7 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 
 std::shared_ptr<desc::desc_base> desc::desc_system::create_instance(std::string_view type_id, const res::tag& tag) const
 {
-	const auto* factory = find_factory(type_id);
+	const std::shared_ptr<const factory_fn> factory = find_factory(type_id);
 	if (!factory) {
 		egLOG("desc/error", "Failed to create desc instance of type '{0}': type not registered", type_id);
 		return nullptr;
@@ -452,27 +525,34 @@ std::shared_ptr<desc::desc_base> desc::desc_system::create_instance(std::string_
 	return instance;
 }
 
-const desc::desc_system::factory_fn* desc::desc_system::find_factory(std::string_view type_name) const
+std::shared_ptr<const desc::desc_system::factory_fn> desc::desc_system::find_factory(std::string_view type_name) const
 {
-	auto it = factory_map.find(std::string{ type_name });
-	if (it != factory_map.end()) {
-		return &it->second;
+	const std::string key{ type_name };
+	{
+		std::shared_lock lock(m_registry_mutex);
+		if (const auto it = factory_map.find(key); it != factory_map.end()) {
+			return it->second;
+		}
 	}
 	return m_parent ? m_parent->find_factory(type_name) : nullptr;
 }
 
-const desc::desc_system::migration_steps* desc::desc_system::find_migrations(std::string_view type) const
+std::shared_ptr<const desc::desc_system::migration_steps> desc::desc_system::find_migrations(std::string_view type) const
 {
-	auto it = m_migrations.find(std::string{ type });
-	if (it != m_migrations.end()) {
-		return &it->second;
+	const std::string key{ type };
+	{
+		std::shared_lock lock(m_registry_mutex);
+		if (const auto it = m_migrations.find(key); it != m_migrations.end()) {
+			return it->second;
+		}
 	}
 	return m_parent ? m_parent->find_migrations(type) : nullptr;
 }
 
 bool desc::desc_system::owned_by_parent(std::string_view type_name) const
 {
-	return m_parent && (m_parent->is_registered(type_name) || m_parent->find_schema(type_name) || m_parent->find_migrations(type_name));
+	return m_parent
+		&& (m_parent->is_registered(type_name) || m_parent->find_schema(type_name) || m_parent->find_migrations(type_name) != nullptr);
 }
 
 bool desc::desc_system::add_desc_entry(std::string_view type_name, schema_kind kind, factory_fn factory, std::vector<enum_schema> enums,
@@ -482,16 +562,26 @@ bool desc::desc_system::add_desc_entry(std::string_view type_name, schema_kind k
 		egLOG_ERROR("desc/error", "Desc type '{}' not registered: the type belongs to the parent desc system", type_name);
 		return false;
 	}
-	ASSERT_MSG(!factory_map.contains(std::string{ type_name }), "That desc type is already registered!");
-	factory_map[std::string{ type_name }] = std::move(factory);
-	for (auto& enumeration : enums) {
-		m_schemas.add_enum(std::move(enumeration));
+	const std::string name{ type_name };
+	[[maybe_unused]] const bool taken = [this, &name] {
+		std::shared_lock lock(m_registry_mutex);
+		return factory_map.contains(name);
+	}();
+	ASSERT_MSG(!taken, "That desc type is already registered!");
+	{
+		auto shared = std::make_shared<const factory_fn>(std::move(factory));
+		std::unique_lock lock(m_registry_mutex);
+		factory_map[name].swap(shared);
+		for (auto& enumeration : enums) {
+			m_schemas.add_enum(std::move(enumeration));
+		}
 	}
 	if (schema) {
 		register_schema(std::move(*schema));
 	}
 	if (kind == schema_kind::component) {
-		m_component_type_names.push_back(std::string{ type_name });
+		std::unique_lock lock(m_registry_mutex);
+		m_component_type_names.push_back(name);
 	}
 	return true;
 }
@@ -525,6 +615,7 @@ desc::desc_system::desc_system(res::resource_system& res_system_, const desc_sys
 
 std::string desc::desc_system::document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const
 {
+	std::shared_lock lock(m_registry_mutex);
 	return desc::document_problem(schema, m_schemas, codec_fields);
 }
 
@@ -534,7 +625,7 @@ bool desc::desc_system::mark_document(std::string_view type_name, std::span<cons
 		egLOG_ERROR("desc/error", "Desc type '{}' not marked as a document: the type belongs to the parent desc system", type_name);
 		return false;
 	}
-	const type_schema* schema = m_schemas.find(type_name);
+	const type_schema* schema = find_schema(type_name);
 	if (!schema) {
 		egLOG_ERROR("desc/error", "Desc type '{}' not marked as a document: it has no schema (it is not on the generic desc schema)", type_name);
 		return false;
@@ -546,15 +637,19 @@ bool desc::desc_system::mark_document(std::string_view type_name, std::span<cons
 		egLOG_ERROR("desc/error", "Desc type '{}' not marked as a document: {}", type_name, problem);
 		return false;
 	}
+	std::unique_lock lock(m_registry_mutex);
 	return m_schemas.set_document(type_name, true);
 }
 
 std::vector<std::string> desc::desc_system::document_types() const
 {
 	std::vector<std::string> names;
-	for (const std::string& name : m_schemas.type_names()) {
-		if (const type_schema* schema = m_schemas.find(name); schema && schema->is_document) {
-			names.push_back(name);
+	{
+		std::shared_lock lock(m_registry_mutex);
+		for (const std::string& name : m_schemas.type_names()) {
+			if (const type_schema* schema = m_schemas.find(name); schema && schema->is_document) {
+				names.push_back(name);
+			}
 		}
 	}
 	std::ranges::sort(names);
@@ -616,24 +711,57 @@ namespace
 		}
 	}
 
+	desc::schema_lookup schema_lookup_of(const desc::desc_system& descs)
+	{
+		return [&descs](std::string_view type_name) { return descs.find_schema(type_name); };
+	}
+
 	struct reference_writer
 	{
-		const desc::desc_system& descs;
-		const res::resource_system& resources;
+		const desc::schema_lookup& schema_of;
+		const desc::reference_ids& ids;
 		bool has_index = false;
 		const kept_guids* kept = nullptr;
 		// What the edited value replaces (a component an override record applies to): where it holds an object, a path stays a
 		// string, since an object would be merged into it.
 		const json::value* merged_into = nullptr;
+		desc::reference_counts* counts = nullptr;
+
+		std::optional<res::asset_id> index_id(const res::tag& path) const
+		{
+			if (!has_index || !ids.id_of) {
+				return std::nullopt;
+			}
+			auto id = ids.id_of(path);
+			return id && !id->is_nil() ? id : std::nullopt;
+		}
+
+		std::optional<res::tag> index_path(const res::asset_id& guid) const
+		{
+			if (!has_index || !ids.path_of || guid.is_nil()) {
+				return std::nullopt;
+			}
+			return ids.path_of(guid);
+		}
+
+		void count(std::size_t desc::reference_counts::* what) const
+		{
+			if (counts) {
+				++(counts->*what);
+			}
+		}
+
+		const desc::type_schema* find_schema(std::string_view type_name) const
+		{
+			return schema_of ? schema_of(type_name) : nullptr;
+		}
 
 		// The index's ID for `path`, else the guid the replaced file had for it: a writer never drops a guid the file had,
 		// unless the index puts that guid on another file.
 		std::optional<res::asset_id> id_for(const res::tag& path) const
 		{
-			if (has_index) {
-				if (auto id = resources.asset_id_of(path)) {
-					return id;
-				}
+			if (auto id = index_id(path)) {
+				return id;
 			}
 			if (!kept) {
 				return std::nullopt;
@@ -642,10 +770,8 @@ namespace
 			if (found == kept->end() || !found->second) {
 				return std::nullopt;
 			}
-			if (has_index) {
-				if (const auto now = resources.asset_path_of(*found->second); now && !(*now == path)) {
-					return std::nullopt;
-				}
+			if (const auto now = index_path(*found->second); now && !(*now == path)) {
+				return std::nullopt;
 			}
 			return found->second;
 		}
@@ -666,6 +792,7 @@ namespace
 				}
 				if (const auto guid = id_for(path)) {
 					value = reference_object(*guid, path);
+					count(&desc::reference_counts::ids_written);
 				}
 				return;
 			}
@@ -681,12 +808,13 @@ namespace
 				if (!has_index) {
 					return;
 				}
-				const auto now = resources.asset_path_of(read->guid);
+				const auto now = index_path(read->guid);
 				// Already where the file is, however it is spelled: left as written, so no file changes for nothing.
 				if (!now || now->protocol() != res::tag::default_protocol() || *now == read->path) {
 					return;
 				}
 				value = reference_object(read->guid, *now);
+				count(&desc::reference_counts::paths_repaired);
 				return;
 			}
 			if (read->path.protocol() != res::tag::default_protocol()) {
@@ -694,6 +822,7 @@ namespace
 			}
 			if (const auto guid = id_for(read->path)) {
 				value = reference_object(*guid, read->path);
+				count(&desc::reference_counts::ids_written);
 			}
 		}
 
@@ -703,7 +832,7 @@ namespace
 				reference(value, where);
 			}
 			else if (kind == desc::field_kind::structure && value.is_object()) {
-				if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+				if (const desc::type_schema* nested = find_schema(field.ref_type)) {
 					fields(*nested, value, where, depth + 1);
 				}
 			}
@@ -754,8 +883,8 @@ namespace
 		{
 			if (json::object* object = value.if_object()) {
 				if (const json::value* type = object->if_contains("__type"); type && type->is_string()) {
-					if (const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()))) {
-						fields(*schema, value, where, 0);
+					if (const desc::type_schema* typed = find_schema(std::string_view(type->as_string()))) {
+						fields(*typed, value, where, 0);
 					}
 				}
 				for (auto& member : *object) {
@@ -803,13 +932,13 @@ namespace
 							element(field, field.element, value, where, depth);
 						}
 						else if (field.element == desc::field_kind::structure) {
-							if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+							if (const desc::type_schema* nested = find_schema(field.ref_type)) {
 								at(*nested, rest.subspan(1), value, where, depth + 1);
 							}
 						}
 					}
 					else if (field.kind == desc::field_kind::structure) {
-						if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) {
+						if (const desc::type_schema* nested = find_schema(field.ref_type)) {
 							at(*nested, rest, value, where, depth + 1);
 						}
 					}
@@ -844,7 +973,9 @@ namespace
 		if (replaced) {
 			collect_kept(*replaced, kept, file, 0);
 		}
-		const reference_writer writer{ descs, resources, resources.has_asset_index(), kept.empty() ? nullptr : &kept };
+		const desc::schema_lookup schema_of = schema_lookup_of(descs);
+		const desc::reference_ids ids = desc::asset_index_ids(resources);
+		const reference_writer writer{ schema_of, ids, resources.has_asset_index(), kept.empty() ? nullptr : &kept, nullptr, nullptr };
 		if (writer.has_index || writer.kept) {
 			writer.tree(root, {});
 		}
@@ -905,13 +1036,35 @@ void desc::desc_system::write_references(const type_schema& schema, std::string_
 	if (!desc::json_pointer_tokens(pointer, tokens)) {
 		return;
 	}
-	reference_writer writer{ *this, m_res_system, m_res_system.has_asset_index() };
-	if (!writer.has_index) {
+	if (!m_res_system.has_asset_index()) {
 		return;
 	}
-	writer.merged_into = merged_into;
+	const desc::schema_lookup schema_of = schema_lookup_of(*this);
+	const desc::reference_ids ids = desc::asset_index_ids(m_res_system);
+	const reference_writer writer{ schema_of, ids, true, nullptr, merged_into, nullptr };
 	writer.at(schema, tokens, value, {}, 0);
 	writer.tree(value, {});
+}
+
+desc::reference_counts desc::desc_system::write_references_with(json::value& root, const reference_ids& ids) const
+{
+	return desc::write_references_with(root, schema_lookup_of(*this), ids);
+}
+
+desc::reference_counts desc::write_references_with(json::value& root, const schema_lookup& schema_of, const reference_ids& ids)
+{
+	reference_counts counts;
+	const reference_writer writer{ schema_of, ids, true, nullptr, nullptr, &counts };
+	writer.tree(root, {});
+	return counts;
+}
+
+desc::reference_ids desc::asset_index_ids(const res::resource_system& resources)
+{
+	reference_ids ids;
+	ids.id_of = [&resources](const res::tag& path) { return resources.asset_id_of(path); };
+	ids.path_of = [&resources](const res::asset_id& guid) { return resources.asset_path_of(guid); };
+	return ids;
 }
 
 std::optional<res::tag> desc::reference_tag(const json::value& in, const read_context& ctx)

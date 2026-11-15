@@ -51,11 +51,13 @@ namespace
 		bool operator==(const file_stat&) const = default;
 	};
 
-	// The stamps a batch reports as a change of the file.
+	// What a batch reports as a change of the file: its stamps, and what its .resource says, which a racy stamp hides
+	// (#973: the same size and time, another ID).
 	bool same_stamps(const edt::asset_record& a, const edt::asset_record& b)
 	{
 		return a.layer == b.layer && a.size == b.size && a.mtime == b.mtime && a.meta_layer == b.meta_layer && a.meta_size == b.meta_size
-			&& a.meta_mtime == b.meta_mtime && a.content_id == b.content_id && a.meta_id == b.meta_id;
+			&& a.meta_mtime == b.meta_mtime && a.content_id == b.content_id && a.meta_id == b.meta_id && a.id == b.id
+			&& a.flags == b.flags && a.meta_error == b.meta_error;
 	}
 
 	bool carries_id(const edt::asset_record& record)
@@ -94,12 +96,22 @@ namespace
 		return static_cast<std::int64_t>(fs::file_time_type::clock::now().time_since_epoch().count());
 	}
 
-	// Whether what `before` read of a .resource holds for the one now at `now`'s path: the same stamp of the same file. A
-	// file without a known identity is read again (a .resource is a few dozen bytes).
+	// A stamp within the granularity of the time it was checked may hide a change made in the same tick (a file saved
+	// twice, or replaced by one of the same size and time: cp -p, rsync, #973).
+	bool racy_stamp(std::int64_t mtime, std::int64_t checked_at)
+	{
+		const std::int64_t margin = std::chrono::duration_cast<fs::file_time_type::duration>(
+			edt::asset_database::stamp_granularity).count();
+		return mtime >= checked_at - margin;
+	}
+
+	// Whether what `before` read of a .resource holds for the one now at `now`'s path: the same stamp of the same file,
+	// one older than its check (racy_stamp). Anything else is read again (a .resource is a few dozen bytes).
 	bool same_meta(const edt::asset_record& before, const edt::asset_record& now)
 	{
 		return before.has_meta && before.meta_layer == now.meta_layer && before.meta_size == now.meta_size
-			&& before.meta_mtime == now.meta_mtime && edt::known_file_id(now.meta_id) && before.meta_id == now.meta_id;
+			&& before.meta_mtime == now.meta_mtime && edt::known_file_id(now.meta_id) && before.meta_id == now.meta_id
+			&& !racy_stamp(before.meta_mtime, before.meta_checked_at);
 	}
 
 	// Whether `before`'s hash holds for the file now at `now`'s path: the same size, time and file. Without a known
@@ -144,7 +156,7 @@ bool edt::known_file_id(const file_id& id)
 // What it orders by is what same_for_index compares: a field added here moves id_revision too.
 bool edt::holds_id_before(const asset_record& a, const asset_record& b)
 {
-	return std::tie(a.layer, a.mtime, a.path.string()) < std::tie(b.layer, b.mtime, b.path.string());
+	return res::holds_id_before(res::asset_id_claim{ a.layer, a.mtime, a.path.view() }, res::asset_id_claim{ b.layer, b.mtime, b.path.view() });
 }
 
 std::string edt::asset_type_of(std::string_view path)
@@ -1245,18 +1257,16 @@ namespace
 		return record;
 	}
 
-	// A stamp within the granularity of the time it was checked may hide a change made in the same tick (a file saved
-	// twice, or replaced by one of the same size and time: cp -p, rsync): what was learned from it is read again.
+	// What the cache learned from a racy stamp is read again.
 	void distrust_racy_stamps(edt::asset_record& record)
 	{
-		const std::int64_t margin = std::chrono::duration_cast<fs::file_time_type::duration>(edt::asset_database::stamp_granularity).count();
-		if (record.mtime >= record.content_checked_at - margin) {
+		if (racy_stamp(record.mtime, record.content_checked_at)) {
 			record.content_hash.clear();
 			record.desc_type.reset();
 			record.references.reset();
 			record.references_skipped = false;
 		}
-		if (record.has_meta && record.meta_mtime >= record.meta_checked_at - margin) {
+		if (record.has_meta && racy_stamp(record.meta_mtime, record.meta_checked_at)) {
 			// No stamp of a real file: the walk reads the .resource again.
 			record.meta_size = -1;
 		}

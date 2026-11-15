@@ -102,6 +102,26 @@ BOOST_AUTO_TEST_CASE(undo_and_redo_go_through_the_active_document)
 	BOOST_TEST(scene.is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(a_blocked_history_leaves_undo_and_redo_disabled_until_it_is_released)
+{
+	bool blocked = false;
+	edt::action_registry own;
+	const std::vector<edt::registration> own_menus = edt::register_builtin_menus(own);
+	const std::vector<edt::registration> own_actions = edt::register_edit_actions(own, documents, dialogs, {}, {}, {}, [&blocked] { return blocked; });
+	rename("b");
+	BOOST_REQUIRE(own.invoke("edit.undo", boost::json::object{}).ok);
+	BOOST_TEST(own.is_enabled("edit.redo"));
+	rename("c");
+	BOOST_TEST(own.is_enabled("edit.undo"));
+
+	blocked = true;
+	BOOST_TEST(!own.is_enabled("edit.undo"));
+	BOOST_TEST(!own.is_enabled("edit.redo"));
+
+	blocked = false;
+	BOOST_TEST(own.is_enabled("edit.undo"));
+}
+
 BOOST_AUTO_TEST_CASE(ctrl_shift_z_redoes_too)
 {
 	rename("b");

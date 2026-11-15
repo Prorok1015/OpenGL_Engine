@@ -1,7 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_agent_confirmations.h"
 #include "edt_agent_policy.h"
+#include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
@@ -85,6 +87,21 @@ struct confirmations_fixture
 		registrations.push_back(commands.add(std::move(desc)));
 	}
 
+	void add_described(std::string id, std::string text)
+	{
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.category = agent_category::vcs_forge;
+		desc.summary = "does " + desc.id;
+		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.describe = [text = std::move(text)](const cmd::call&) -> std::optional<std::string> { return text; };
+		desc.invoke = [this](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		registrations.push_back(commands.add(std::move(desc)));
+	}
+
 	cmd::call agent_call(std::string session = "s1") const
 	{
 		cmd::call request;
@@ -159,6 +176,7 @@ BOOST_AUTO_TEST_CASE(TheSameRequestAskedAgain_IsNotAskedTwice)
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
 	BOOST_TEST(finished[0].error.find("already waiting") != std::string::npos);
 
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_once);
 	BOOST_TEST(finished.size() == 2u);
 	BOOST_TEST(finished[1].ok);
@@ -168,6 +186,7 @@ BOOST_AUTO_TEST_CASE(TheSameRequestAskedAgain_IsNotAskedTwice)
 BOOST_AUTO_TEST_CASE(AllowOnce_RunsTheCallOnce_AndTheNextCallAsksAgain)
 {
 	run("code.create");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_once));
 
 	BOOST_REQUIRE(finished.size() == 1u);
@@ -195,6 +214,7 @@ BOOST_AUTO_TEST_CASE(Deny_DeclinesTheCall_AndForgetsTheTicket)
 BOOST_AUTO_TEST_CASE(AllowForTheSession_CoversThatCategoryOfThatSessionOnly)
 {
 	run("code.create", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 	BOOST_TEST(runs == 1);
 
@@ -215,6 +235,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_CoversThatCategoryOfThatSessionOnly)
 BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverCoversACommandWithARisk_ListThenCreate)
 {
 	run("forge.list", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session));
 	BOOST_TEST(grants.has("s1", agent_category::vcs_forge));
 	BOOST_TEST(runs == 1);
@@ -233,6 +254,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverCoversACommandWithARisk_ListThenCre
 BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverCoversACommandWithARisk_CreateThenDelete)
 {
 	run("code.create", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 	BOOST_TEST(grants.has("s1", agent_category::code_files));
 
@@ -265,6 +287,7 @@ BOOST_AUTO_TEST_CASE(ARequestWithARisk_IsNotOfferedTheSessionGrant_AndAnswerSess
 	BOOST_TEST(asked[1].command == "code.create");
 	BOOST_TEST(asked[1].can_grant_session);
 
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(asked[0].id, edt::confirmation_answer::allow_session));
 
 	BOOST_TEST(!grants.has("s1", agent_category::code_files));
@@ -281,6 +304,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_DoesNotSettleAWaitingRequestWithARisk)
 	const auto asked = confirmations->pending();
 	BOOST_REQUIRE(asked.size() == 2u);
 
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(asked[1].id, edt::confirmation_answer::allow_session));
 
 	BOOST_TEST(grants.has("s1", agent_category::code_files));
@@ -309,6 +333,117 @@ BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_IsShownSanitized_AndBoundToTheQuestio
 	const auto asked = confirmations->pending();
 	BOOST_REQUIRE(asked.size() == 1u);
 	BOOST_TEST(asked[0].detail == "in github.com/o/r   end");
+}
+
+// #932: the description reaches the person whole, line by line; one too long to show refuses the call.
+BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_KeepsItsLines_AndIsMadePlainLineByLine)
+{
+	add_described("import.described", "Import the model\r\n  a.png  3 bytes\r  b\tc\n\n\x07x\xE2\x80\xAEy \xFF\n\n\n");
+
+	run("import.described", "s1");
+
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].detail == "Import the model\n  a.png  3 bytes\n  b    c\n\n x y \xEF\xBF\xBD");
+}
+
+BOOST_AUTO_TEST_CASE(ADescriptionAtTheLimit_IsShownWhole_OneByteOrLineMore_RefusesTheCall)
+{
+	const std::size_t bytes = edt::agent_confirmations::k_max_detail;
+	const std::size_t lines = edt::agent_confirmations::k_max_detail_lines;
+	std::string many_lines;
+	for (std::size_t i = 0; i < lines; ++i) many_lines += i == 0 ? "x" : "\nx";
+	add_described("fits.bytes", std::string(bytes, 'a'));
+	add_described("fits.lines", many_lines);
+	add_described("long.bytes", std::string(bytes + 1, 'a'));
+	add_described("long.lines", many_lines + "\nx");
+
+	run("fits.bytes", "s1");
+	run("fits.lines", "s2");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+	BOOST_TEST(asked[0].detail.size() == bytes);
+	BOOST_TEST(asked[1].detail == many_lines);
+	BOOST_TEST(finished.empty());
+	const std::size_t tickets = commands.pending_confirmations();
+
+	for (const char* id : { "long.bytes", "long.lines" }) {
+		BOOST_TEST_CONTEXT(id) {
+			finished.clear();
+			run(id, "s3");
+			BOOST_REQUIRE(finished.size() == 1u);
+			BOOST_TEST(finished[0].code == cmd::codes::denied);
+			BOOST_TEST(finished[0].error.find("too long to show") != std::string::npos);
+			BOOST_TEST(confirmations->pending().size() == 2u);
+			BOOST_TEST(commands.pending_confirmations() == tickets);
+		}
+	}
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(TheTextOfADescription_IsNeverCut)
+{
+	BOOST_TEST(edt::confirmation_detail_text("").value_or("?") == "");
+	BOOST_TEST(edt::confirmation_detail_text("one").value_or("?") == "one");
+	BOOST_TEST(edt::confirmation_detail_text("a\r\nb\rc\nd").value_or("?") == "a\nb\nc\nd");
+	BOOST_TEST(edt::confirmation_detail_text("a\n\n\r\n").value_or("?") == "a");
+	// Characters that become one space: the text that is left is what counts against the limit.
+	std::string invisible = "x";
+	for (std::size_t i = 1; i < edt::agent_confirmations::k_max_detail - 1; ++i) invisible += "\xE2\x80\x8B";
+	invisible += "x";
+	const auto shown = edt::confirmation_detail_text(invisible);
+	BOOST_REQUIRE(shown.has_value());
+	BOOST_TEST(shown->size() == edt::agent_confirmations::k_max_detail);
+	BOOST_TEST(!edt::confirmation_detail_text(invisible + "x").has_value());
+	BOOST_TEST(!edt::confirmation_detail_text(std::string(edt::agent_confirmations::k_max_detail * 4 + 1, 'a')).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(BlankLinesBeforeTheText_AreRemoved)
+{
+	BOOST_TEST(edt::confirmation_detail_text("\n\r\n\rone\ntwo").value_or("?") == "one\ntwo");
+	BOOST_TEST(edt::confirmation_detail_text("   \n\t\n \xE2\x80\x8B \none").value_or("?") == "one");
+	BOOST_TEST(edt::confirmation_detail_text("\n \n\t").value_or("?") == "");
+	BOOST_TEST(edt::confirmation_detail_text(std::string(12, '\n') + "  indented").value_or("?") == "  indented");
+}
+
+BOOST_AUTO_TEST_CASE(ARunOfBlankLines_BecomesOneEmptyLine)
+{
+	BOOST_TEST(edt::confirmation_detail_text("a\n\n\n\nb").value_or("?") == "a\n\nb");
+	BOOST_TEST(edt::confirmation_detail_text("a\r\n  \r\n\t\r\n\x07\r\n\xE2\x80\x8B\r\nb").value_or("?") == "a\n\nb");
+	BOOST_TEST(edt::confirmation_detail_text("a\n" + std::string(12, '\n') + "b\n \n \nc\n \n").value_or("?") == "a\n\nb\n\nc");
+}
+
+BOOST_AUTO_TEST_CASE(LinesWithTextAndSingleBlankLines_StayAsTheyAre)
+{
+	BOOST_TEST(edt::confirmation_detail_text("a\n\nb\n\nc").value_or("?") == "a\n\nb\n\nc");
+	BOOST_TEST(edt::confirmation_detail_text("  a  \n b\nc ").value_or("?") == "  a  \n b\nc ");
+	BOOST_TEST(edt::confirmation_detail_text("a\n  -\n\n  .").value_or("?") == "a\n  -\n\n  .");
+}
+
+BOOST_AUTO_TEST_CASE(TheLimits_CountWhatIsLeftOfTheBlankLines)
+{
+	const std::size_t bytes = edt::agent_confirmations::k_max_detail;
+	const std::size_t lines = edt::agent_confirmations::k_max_detail_lines;
+
+	// Far more blank lines than the limit of lines: three lines are left.
+	const auto few = edt::confirmation_detail_text("a\n" + std::string(lines * 2, '\n') + "b");
+	BOOST_TEST(few.value_or("?") == "a\n\nb");
+
+	// The line that is left of a run counts.
+	std::string spaced;
+	for (std::size_t i = 0; i < lines / 2; ++i) spaced += i == 0 ? "x" : "\n\n\nx";
+	const auto fits = edt::confirmation_detail_text(spaced);
+	BOOST_REQUIRE(fits.has_value());
+	BOOST_TEST(static_cast<std::size_t>(std::count(fits->begin(), fits->end(), '\n')) == lines - 2);
+	BOOST_TEST(edt::confirmation_detail_text(spaced + "\nx").has_value());
+	BOOST_TEST(!edt::confirmation_detail_text(spaced + "\n\n\nx").has_value());
+
+	// So do its bytes.
+	const std::string half(bytes / 2 - 1, 'a');
+	const auto whole = edt::confirmation_detail_text("\n\n" + half + "\n \n\t\n" + half + "\n\n");
+	BOOST_REQUIRE(whole.has_value());
+	BOOST_TEST(whole->size() == bytes);
+	BOOST_TEST(!edt::confirmation_detail_text(half + "\n \n\n" + half + "a").has_value());
 }
 
 BOOST_AUTO_TEST_CASE(ADescriptionThatThrows_RefusesTheCall_WithNobodyAsked)
@@ -354,6 +489,7 @@ BOOST_AUTO_TEST_CASE(ARetryAfterBusy_RunsWithATicketApprovedInternally)
 	registrations.push_back(commands.add(std::move(desc)));
 
 	run("project.migrate");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(seen.size() == 1u);
 	BOOST_TEST(!seen[0].first.empty());
@@ -415,6 +551,7 @@ BOOST_FIXTURE_TEST_CASE(AllowForTheSession_GrantsTheCategoryTheCallWasAskedFor, 
 	write("CMakeLists.txt");
 	BOOST_REQUIRE(confirmations->pending().size() == 1u);
 	BOOST_TEST((confirmations->pending().front().category == agent_category::cmake_presets));
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 
 	BOOST_TEST(grants.has("s1", agent_category::cmake_presets));
@@ -446,6 +583,7 @@ BOOST_FIXTURE_TEST_CASE(WhenOnlyTheCommandsCategoryAsks_ItsGrantIsTheOneNeeded, 
 	write("CMakeLists.txt");
 	BOOST_REQUIRE(confirmations->pending().size() == 1u);
 	BOOST_TEST((confirmations->pending().front().category == agent_category::code_edit));
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 
 	BOOST_TEST(grants.has("s1", agent_category::code_edit));
@@ -469,6 +607,7 @@ BOOST_FIXTURE_TEST_CASE(ACategoryOfThatThrows_IsRefused_WithNobodyAskedAndNoTick
 BOOST_AUTO_TEST_CASE(AllowForTheSession_IsDroppedWithTheSession)
 {
 	run("code.create", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 	BOOST_TEST(grants.has("s1", agent_category::code_files));
 
@@ -482,6 +621,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_IsDroppedWithTheSession)
 BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverLiftsAProjectDeny)
 {
 	run("code.create", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 	BOOST_TEST(runs == 1);
 
@@ -507,6 +647,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_IsKeptInMemoryOnly_NothingIsWrittenAnywh
 	const auto before = files_under_dir();
 
 	run("code.create", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 	BOOST_TEST(grants.has("s1", agent_category::code_files));
 
@@ -521,6 +662,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_IsKeptInMemoryOnly_NothingIsWrittenAnywh
 BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverLiftsAPersonalDenyEither)
 {
 	run("code.create", "s1");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
 	dir.write("personal.json", R"({"categories":{"code_files":"deny"}})");
 
@@ -551,6 +693,7 @@ BOOST_AUTO_TEST_CASE(AnAnswerPastTheDeadline_IsRefused_EvenBeforeTick)
 	current += 61s;
 
 	BOOST_TEST(confirmations->pending().empty());
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(finished.size() == 1u);
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
@@ -566,6 +709,7 @@ BOOST_AUTO_TEST_CASE(ACommandUnregisteredWhileItsRequestWaits_IsDenied)
 	registrations[1].reset();
 	BOOST_TEST(commands.find("code.create") == nullptr);
 
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(finished.size() == 1u);
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
@@ -605,6 +749,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_SettlesTheWaitingRequestsOfThatSessionAn
 	BOOST_REQUIRE(confirmations->pending().size() == 4u);
 	const std::uint64_t id = confirmations->pending().front().id;
 
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(id, edt::confirmation_answer::allow_session);
 
 	BOOST_REQUIRE(finished.size() == 2u);
@@ -629,20 +774,26 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_DoesNotApproveARequestThatAlreadyTimedOu
 	confirmations->invoke("code.create", early, record);
 	current += 50s;
 	confirmations->invoke("code.create", later, record);
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	current += 20s;
 	// The first is past its deadline (no tick() yet) and hidden; the second still waits.
 	const auto visible = confirmations->pending();
 	BOOST_REQUIRE(visible.size() == 1u);
 
+	// The answer times the first out, which moves the second up: its "allow" is not taken yet.
+	BOOST_TEST(!confirmations->answer(visible.front().id, edt::confirmation_answer::allow_session));
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(finished[0].error.find("nobody answered") != std::string::npos);
+	BOOST_TEST(runs == 0);
+
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(visible.front().id, edt::confirmation_answer::allow_session));
 
 	BOOST_REQUIRE(finished.size() == 2u);
-	BOOST_TEST_INFO("first: " << finished[0].code << ": " << finished[0].error);
-	BOOST_TEST(finished[0].ok);
 	BOOST_TEST_INFO("second: " << finished[1].code << ": " << finished[1].error);
-	BOOST_TEST(finished[1].code == cmd::codes::denied);
+	BOOST_TEST(finished[1].ok);
 	BOOST_TEST(runs == 1);
-	BOOST_TEST(finished[1].error.find("nobody answered") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AllowForTheSession_AfterThePolicyTurnedToDeny_DeniesTheSettledRequestsToo)
@@ -658,6 +809,7 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_AfterThePolicyTurnedToDeny_DeniesTheSett
 	const std::uint64_t id = confirmations->pending().front().id;
 
 	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"deny"}})");
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	confirmations->answer(id, edt::confirmation_answer::allow_session);
 
 	BOOST_TEST(runs == 0);
@@ -675,6 +827,7 @@ BOOST_AUTO_TEST_CASE(TheGrant_IsGivenOnlyWhenTheTicketIsApproved)
 	// The registry's ticket is gone (it lives 120 s) while the question (60 s) still waits.
 	registry_time += cmd::command_registry::confirmation_lifetime + 1s;
 
+	test_util::show_confirmations_and_wait(*confirmations, current);
 	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_session));
 
 	BOOST_REQUIRE(finished.size() == 1u);
@@ -682,6 +835,388 @@ BOOST_AUTO_TEST_CASE(TheGrant_IsGivenOnlyWhenTheTicketIsApproved)
 	BOOST_TEST(finished[0].error.find("expired") != std::string::npos);
 	BOOST_TEST(!grants.has("s1", agent_category::code_files));
 	BOOST_TEST(runs == 0);
+}
+
+// #913: an "allow" is taken only for a button the window has drawn at one place for input_guard.
+
+BOOST_AUTO_TEST_CASE(AnAllowForARequestTheWindowNeverDrew_IsNotTaken)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	current += 10s;
+
+	BOOST_TEST(!confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(finished.empty());
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnAllow_IsTakenOnlyAfterTheButtonStoodStillForTheGuard)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+
+	test_util::show_confirmations(*confirmations);
+	test_util::show_confirmations(*confirmations);
+	current += edt::agent_confirmations::input_guard - 1ms;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(!confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_session));
+	BOOST_TEST(finished.empty());
+	BOOST_TEST(!grants.has("s1", agent_category::code_files));
+
+	current += 1ms;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+// The main thread hung: the request is older than the guard, but the frame that takes the click is the first to show it.
+BOOST_AUTO_TEST_CASE(TheFirstFrameThatShowsARequest_TakesNoAllow_HoweverOldTheRequestIs)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	current += 5s;
+
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+
+	// A second frame right away is still no time to read it: the guard counts from the frame that proves it was shown.
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 0);
+
+	current += edt::agent_confirmations::input_guard;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ADeny_IsTakenAtAnyTime)
+{
+	run("code.create");
+
+	BOOST_TEST(confirmations->answer(only_pending_id(), edt::confirmation_answer::deny));
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(WhenTheRequestAboveTimesOut_TheOneBelowWaitsAgain)
+{
+	for (const bool with_tick : { true, false }) {
+		BOOST_TEST_CONTEXT("tick() before the answer: " << with_tick) {
+			finished.clear();
+			runs = 0;
+			run("code.create", "attacker");
+			current += 30s;
+			run("code.delete", "victim");
+			test_util::show_confirmations_and_wait(*confirmations, current);
+			current += 30s;
+			if (with_tick) confirmations->tick();
+			const std::uint64_t below = only_pending_id();
+
+			BOOST_TEST(!confirmations->answer(below, edt::confirmation_answer::allow_once));
+			BOOST_TEST(runs == 0);
+
+			test_util::show_confirmations_and_wait(*confirmations, current);
+			BOOST_TEST(confirmations->answer(below, edt::confirmation_answer::allow_once));
+			BOOST_TEST(runs == 1);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WhenTheSessionOfTheRequestAboveEnds_TheOneBelowWaitsAgain)
+{
+	run("code.create", "attacker");
+	run("code.delete", "victim");
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->pending().back().can_allow);
+
+	confirmations->drop_session("attacker");
+	const std::uint64_t below = only_pending_id();
+
+	BOOST_TEST(!confirmations->answer(below, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 0);
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->answer(below, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ASecondClickAfterAnAnswer_DoesNotAllowTheRequestThatMovedUp)
+{
+	run("code.create", "s1");
+	run("code.delete", "s2");
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+
+	BOOST_TEST(confirmations->answer(asked[0].id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(!confirmations->answer(asked[1].id, edt::confirmation_answer::allow_once));
+	// The next frame draws it where the first one was: the wait starts there.
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(!confirmations->answer(asked[1].id, edt::confirmation_answer::allow_once));
+
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+// The window is as wide as its widest request and scrolls: a request leaving below moves the buttons above it too.
+BOOST_AUTO_TEST_CASE(AButtonThatMovedSidewaysOrWithTheScroll_WaitsAgain_ThoughNothingAboveItChanged)
+{
+	run("code.create", "s1");
+	const std::uint64_t id = only_pending_id();
+	const edt::shown_rect at{ 10.f, 40.f, 110.f, 60.f };
+	const auto show_at = [this, id](const edt::shown_rect& allow) {
+		const std::vector<edt::shown_request> frame{ edt::shown_request{ id, allow } };
+		confirmations->note_shown(frame);
+	};
+	show_at(at);
+	show_at(at);
+	current += edt::agent_confirmations::input_guard;
+	show_at(at);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+
+	for (const edt::shown_rect& moved : { edt::shown_rect{ 230.f, 40.f, 330.f, 60.f }, edt::shown_rect{ 10.f, 180.f, 110.f, 200.f } }) {
+		show_at(moved);
+		BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+		show_at(moved);
+		current += edt::agent_confirmations::input_guard;
+		show_at(moved);
+		BOOST_TEST(confirmations->pending().front().can_allow);
+	}
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AFrameThatDrewNoRequest_StartsTheWaitAgain)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+
+	// The window was collapsed for a frame.
+	confirmations->note_shown({});
+	test_util::show_confirmations(*confirmations);
+
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 0);
+}
+
+// A person's modal popup is open: draw_agent_confirmations leaves the window out and reports an empty frame.
+BOOST_AUTO_TEST_CASE(WhileAModalIsOpen_NoAllowIsTaken_HoweverLongItLasts)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+
+	for (int frame = 0; frame < 5; ++frame) {
+		confirmations->note_shown({});
+		BOOST_TEST(!confirmations->pending().front().can_allow);
+		BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+		BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_session));
+		current += edt::agent_confirmations::input_guard * 4;
+	}
+	BOOST_TEST(finished.empty());
+	BOOST_TEST(runs == 0);
+
+	// A request that came while the modal was open was never shown either.
+	run("code.delete", "s2");
+	confirmations->note_shown({});
+	current += edt::agent_confirmations::input_guard;
+	for (const edt::confirmation_request& request : confirmations->pending()) {
+		BOOST_TEST(!request.can_allow);
+	}
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::deny));
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AfterAModalCloses_AnAllowNeedsTwoFramesAndTheGuardAgain)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	confirmations->note_shown({});
+	current += edt::agent_confirmations::input_guard * 2;
+	confirmations->note_shown({});
+
+	// One frame, however long it stays, proves nothing.
+	test_util::show_confirmations(*confirmations);
+	current += edt::agent_confirmations::input_guard * 2;
+	BOOST_TEST(!confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+
+	// Two frames without the time are not enough.
+	test_util::show_confirmations(*confirmations);
+	current += edt::agent_confirmations::input_guard - 1ms;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(!confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 0);
+
+	current += 1ms;
+	test_util::show_confirmations(*confirmations);
+	BOOST_TEST(confirmations->pending().front().can_allow);
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ARequestLeavingBelow_HoldsTheOneAbove_OnlyIfItsButtonMoved)
+{
+	run("code.create", "s1");
+	run("code.delete", "s2");
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	const std::uint64_t above = confirmations->pending().front().id;
+
+	confirmations->drop_session("s2");
+	test_util::show_confirmations(*confirmations);
+
+	BOOST_TEST(confirmations->pending().front().can_allow);
+	BOOST_TEST(confirmations->answer(above, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(NewRequestsOfAnotherSession_DoNotHoldTheOnesAlreadyShown)
+{
+	run("code.create", "s1");
+	const std::uint64_t first = only_pending_id();
+	test_util::show_confirmations(*confirmations);
+	for (int n = 0; n < 3; ++n) {
+		current += 500ms;
+		cmd::call request = agent_call("other");
+		request.args = boost::json::object{ { "n", n } };
+		confirmations->invoke("code.delete", std::move(request), [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
+		test_util::show_confirmations(*confirmations);
+	}
+	BOOST_REQUIRE(confirmations->pending().size() == 4u);
+
+	BOOST_TEST(confirmations->pending().front().can_allow);
+	BOOST_TEST(!confirmations->pending().back().can_allow);
+	BOOST_TEST(confirmations->answer(first, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ASession_HasAFewRequestsWaitingAtMost_OneMoreIsRefusedWithNoTicketLeft)
+{
+	const auto ask = [this](const std::string& session, int n) {
+		cmd::call request = agent_call(session);
+		request.args = boost::json::object{ { "n", n } };
+		confirmations->invoke("code.create", std::move(request), [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
+	};
+	const int limit = static_cast<int>(edt::agent_confirmations::max_waiting_per_session);
+	for (int n = 0; n < limit; ++n) ask("greedy", n);
+	BOOST_TEST(finished.empty());
+	const std::size_t tickets = commands.pending_confirmations();
+
+	ask("greedy", limit);
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(finished[0].error.find("already wait") != std::string::npos);
+	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit));
+	BOOST_TEST(commands.pending_confirmations() == tickets);
+
+	// The same call again while the session is at its limit is the question that already waits: its ticket stays, and the
+	// person's "allow" still runs it.
+	finished.clear();
+	ask("greedy", 0);
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].error.find("already waiting") != std::string::npos);
+	BOOST_TEST(commands.pending_confirmations() == tickets);
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->answer(confirmations->pending().front().id, edt::confirmation_answer::allow_once));
+	BOOST_TEST(runs == 1);
+
+	// Another session is not held back by it, and an answered request frees a place.
+	ask("modest", 0);
+	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit));
+	ask("greedy", limit);
+	BOOST_TEST(confirmations->pending().size() == static_cast<std::size_t>(limit) + 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtConfirmationLayout)
+
+namespace {
+
+	using layout_time = edt::confirmation_layout::time_point;
+
+	edt::shown_request shown_at(std::uint64_t id, float left, float top)
+	{
+		return edt::shown_request{ id, edt::shown_rect{ left, top, left + 100.f, top + 20.f } };
+	}
+
+}
+
+BOOST_AUTO_TEST_CASE(AButton_IsSteadyFromTheSecondOfTwoFramesAtOnePlace)
+{
+	const layout_time start{};
+	edt::confirmation_layout layout;
+	const std::vector<edt::shown_request> frame{ shown_at(1, 10.f, 0.f) };
+
+	layout.settle(frame, start);
+	BOOST_TEST(!layout.steady_since(1).has_value());
+	layout.settle(frame, start + 1s);
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
+	layout.settle(frame, start + 2s);
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
+	BOOST_TEST(!layout.steady_since(2).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AButtonThatMoved_StartsAgain_TheOthersKeepTheirTime)
+{
+	const layout_time start{};
+	edt::confirmation_layout layout;
+	const std::vector<edt::shown_request> before{ shown_at(1, 10.f, 0.f), shown_at(2, 10.f, 100.f), shown_at(3, 10.f, 200.f) };
+	layout.settle(before, start);
+	layout.settle(before, start + 1s);
+
+	// A request put in above the second one: whatever the list's order is, only what is drawn elsewhere waits again.
+	const std::vector<edt::shown_request> inserted{ shown_at(1, 10.f, 0.f), shown_at(4, 10.f, 100.f), shown_at(2, 10.f, 200.f),
+		shown_at(3, 10.f, 300.f) };
+	layout.settle(inserted, start + 2s);
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
+	BOOST_TEST(!layout.steady_since(2).has_value());
+	BOOST_TEST(!layout.steady_since(3).has_value());
+	BOOST_TEST(!layout.steady_since(4).has_value());
+	layout.settle(inserted, start + 3s);
+	BOOST_TEST((layout.steady_since(2) == start + 3s));
+	BOOST_TEST((layout.steady_since(4) == start + 3s));
+
+	// The first one left: everything is drawn a row higher.
+	const std::vector<edt::shown_request> removed{ shown_at(4, 10.f, 0.f), shown_at(2, 10.f, 100.f), shown_at(3, 10.f, 200.f) };
+	layout.settle(removed, start + 4s);
+	layout.settle(removed, start + 5s);
+	BOOST_TEST(!layout.steady_since(1).has_value());
+	BOOST_TEST((layout.steady_since(2) == start + 5s));
+	BOOST_TEST((layout.steady_since(3) == start + 5s));
+}
+
+BOOST_AUTO_TEST_CASE(ARequestNotDrawnForAFrame_OrForgotten_StartsAgain)
+{
+	const layout_time start{};
+	edt::confirmation_layout layout;
+	const std::vector<edt::shown_request> both{ shown_at(1, 10.f, 0.f), shown_at(2, 10.f, 100.f) };
+	const std::vector<edt::shown_request> first_only{ shown_at(1, 10.f, 0.f) };
+	layout.settle(both, start);
+	layout.settle(both, start + 1s);
+
+	layout.settle(first_only, start + 2s);
+	layout.settle(both, start + 3s);
+	BOOST_TEST((layout.steady_since(1) == start + 1s));
+	BOOST_TEST(!layout.steady_since(2).has_value());
+
+	layout.forget(1);
+	BOOST_TEST(!layout.steady_since(1).has_value());
+	layout.settle(both, start + 4s);
+	BOOST_TEST(!layout.steady_since(1).has_value());
+	BOOST_TEST((layout.steady_since(2) == start + 4s));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

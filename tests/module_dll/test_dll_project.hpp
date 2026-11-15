@@ -2,6 +2,7 @@
 #include "../test_temp_dir.hpp"
 #include "test_game_dll_api.h"
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/core/core_project_modules.h>
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
 #include <boost/test/unit_test.hpp>
@@ -16,6 +17,14 @@ namespace test_util {
 	// Whether the image is still mapped (a leftover reference, or GNU_UNIQUE symbols pinning it on Linux). Defined in
 	// app_module_dll_tests.cpp, so that <windows.h> and its macros stay out of the files including this one.
 	bool resident(const std::filesystem::path& file);
+
+	// The options of a host whose person trusted the project (#921): the libraries of build/bin may be loaded.
+	inline core::project_modules_options trusting_options()
+	{
+		core::project_modules_options options;
+		options.trust_library = [](std::string_view, const std::filesystem::path&) { return true; };
+		return options;
+	}
 
 	// The file name core::load_project_modules looks for in <root>/build/bin; the built test library may carry a debug
 	// postfix.

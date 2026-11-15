@@ -102,11 +102,13 @@ namespace edt
 		bool save_level_as(const std::string& rel_path);
 		bool quick_save_level();
 
-		// True when the level is in the context manager and its worlds are known.
-		bool finish_level_load(res::res_handle<scn::level_desc>& handle);
+		// True when the level is in the context manager and its worlds are known. `file_version`: the root __version of
+		// the bytes the load read (desc_root_version; 0 unknown), kept for the warning of a save over an older file.
+		bool finish_level_load(res::res_handle<scn::level_desc>& handle, int file_version = 0);
 		// The document takes `level_tag` (read from its working copy `editor_tag`) only when finish_level_load takes it;
 		// a refusal leaves the document's tags as they were and watches its level again (#613).
-		bool take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag, const res::tag& editor_tag);
+		bool take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag, const res::tag& editor_tag,
+			int file_version = 0);
 
 		boost::json::object load_desc_template(const std::string& filename);
 		boost::json::object build_level_json() const;
@@ -140,6 +142,8 @@ namespace edt
 		// The worlds of the level were replaced or dropped (a new level, a game layer change, a hot reload): what is
 		// derived from their plans has to be read again.
 		std::function<void()> on_worlds_replaced;
+		// A save wrote the level over a file of an older version; the text says so (it is in the log as a WARN already).
+		std::function<void(const std::string&)> on_file_upgraded;
 
 	private:
 		scene_document& m_state;

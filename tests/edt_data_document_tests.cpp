@@ -4,10 +4,12 @@
 #include "edt_data_document.h"
 #include "edt_document_creator.h"
 #include "edt_migration_startup.h"
+#include "edt_version_notice.h"
 #include "test_fake_asset_catalog.hpp"
 #include "edt_schema_inspector.h"
 #include "edt_data_document_panel.h"
 #include "edt_data_document_view.h"
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
@@ -22,6 +24,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -377,6 +380,41 @@ BOOST_AUTO_TEST_CASE(AFileOfAnOlderVersion_IsMigratedInMemoryAndWrittenInTheCurr
 	BOOST_TEST(saved.at("__version").to_number<int>() == 2);
 	BOOST_TEST(!saved.contains("velocity"));
 	BOOST_TEST(saved.at("speed").to_number<double>() == 5.0);
+}
+
+// R26 of EPIC-58 (#761): the confirmed write of a file of an older version says, as a WARN, that older editors will not
+// open it; the next save of the same file says nothing.
+BOOST_AUTO_TEST_CASE(TheConfirmedWriteOfAnOlderFile_WarnsThatOlderEditorsWillNotOpenIt)
+{
+	descs->register_migration("test.config", 1, [](json::object&) {});
+	const res::tag file = put("old.desc", R"({"__type":"test.config","speed":4.0})");
+	std::mutex warnings_mutex;
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || category != "Editor/Save") return;
+		std::lock_guard lock(warnings_mutex);
+		warnings.emplace_back(message);
+	});
+	const auto warned = [&] {
+		std::lock_guard lock(warnings_mutex);
+		return warnings;
+	};
+	edt::data_document document = make();
+	BOOST_REQUIRE(document.open(file).opened);
+	BOOST_TEST(!document.save().saved);
+	BOOST_TEST(warned().empty());
+
+	document.confirm_version_write();
+	BOOST_REQUIRE(document.save().saved);
+	BOOST_REQUIRE(warned().size() == 1u);
+	BOOST_TEST(warned().front() == edt::version_upgrade_text("res://old.desc", 1, 2));
+
+	BOOST_REQUIRE(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 5.0;
+		return true;
+	}));
+	BOOST_REQUIRE(document.save().saved);
+	BOOST_TEST(warned().size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(RestoreOwn_BringsASnapshotBackAndTracksTheSavedState)
@@ -916,6 +954,34 @@ BOOST_AUTO_TEST_CASE(DiskChangeSerial_MovesForANewOutsideVersionOnly)
 	rs->signal_changed(file);
 	pump();
 	BOOST_TEST(document.disk_change_serial() == first + 1);
+}
+
+// #966: a worlds entry the agents' path rules reject is compared by file for a person: only the world it names is the level's.
+BOOST_AUTO_TEST_CASE(AnOddWorldEntryOfTheOpenLevel_KeepsOnlyTheFileItNamesFromAPerson)
+{
+	fs::create_directories(res_root / "worlds");
+	fs::create_directories(res_root / "levels");
+	const res::tag world = put("worlds/x.desc", R"({"__type":"test.config","speed":1.0})");
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	put("levels/a.desc",
+		R"({"__type":"level_desc","worlds":[{"path":"res://worlds//x.desc"},{"path":"res://worlds/../gone.desc"},{"path":"res://worlds/./missing.desc"}]})");
+	open_level = { "levels/a.desc" };
+
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(file);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const edt::save_result saved = document.save();
+	BOOST_TEST_MESSAGE(saved.error);
+	BOOST_TEST(saved.saved);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
+
+	const edt::open_result of_level = make().open(world);
+	BOOST_TEST(!of_level.opened);
+	BOOST_TEST(of_level.error.find("open level") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(SaveOver_OfAGoneWorldOfTheOpenLevel_IsRefused)

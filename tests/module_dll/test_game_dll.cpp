@@ -12,6 +12,7 @@
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/res_tag.h>
