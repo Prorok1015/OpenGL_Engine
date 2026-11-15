@@ -52,6 +52,11 @@ namespace edt
 		// game_module_built is taken from here: a build that is not live mode's (`background` false) clears its errors
 		// (live_build::on_manual_build_succeeded). Null: none. Must outlive the live_mode.
 		editor_events* events = nullptr;
+		// Whether the person trusts the project (#921): untrusted, live mode cannot be turned on (it builds and loads
+		// the project's code) and its tools are denied; Build > Live Mode asks `ask_trust` first and turns it on once
+		// `then` runs. Null: trusted.
+		std::function<bool()> trusted;
+		std::function<void(std::function<void()> then)> ask_trust;
 		// Items of the status popup; null: not shown.
 		std::function<void()> open_problems;
 		std::function<void()> open_settings;
@@ -79,8 +84,9 @@ namespace edt
 
 		[[nodiscard]] bool enabled() const { return m_build.enabled(); }
 		[[nodiscard]] std::string unavailable_reason() const;
+		[[nodiscard]] bool trusted() const { return !m_options.trusted || m_options.trusted(); }
 		// `store`: the person's settings too (a failed write is logged; the switch still flips for this session).
-		// Turning on while unavailable is refused with the reason.
+		// Turning on while unavailable or untrusted is refused with the reason.
 		std::optional<std::string> set_enabled(bool enabled, bool store);
 
 		void on_changes(std::span<const res::file_change> changes);

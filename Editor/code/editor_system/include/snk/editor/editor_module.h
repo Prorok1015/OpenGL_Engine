@@ -1,5 +1,7 @@
 #pragma once
 #include <snk/application/app_module_interface.h>
+#include <filesystem>
+#include <functional>
 #include <string_view>
 #include <vector>
 
@@ -10,6 +12,12 @@ namespace editor
 	// per-user default), so the window layout is never written into the folder the process was started from (#713). A value
 	// the config or --set gave stays. Call after cfg::initialize_configs.
 	void apply_default_settings();
+
+	// core::project_modules_options::trust_library of the editor (#921): the person's trust in the project, kept by
+	// the editor (edt::project_trust_service in `data`, made by the editor's init); `trust_flag` (--trust-project)
+	// trusts everything for this run. Without the editor in `data`, only the flag counts. `data` outlives the gate.
+	std::function<bool(std::string_view name, const std::filesystem::path& copy)> project_trust_gate(
+		ds::app_data_storage& data, bool trust_flag);
 
 	class editor_module : public app::modules::module_interface
 	{

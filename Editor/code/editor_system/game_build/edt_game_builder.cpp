@@ -1,11 +1,13 @@
 #include "edt_game_builder.h"
 #include "edt_build_diagnostics.h"
 #include "edt_path_text.h"
+#include "edt_project_trust_service.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/core/core_project_modules.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <imgui.h>
@@ -62,7 +64,7 @@ namespace {
 		std::vector<edt::game_build_result::module_file> out;
 		for (const auto& module : modules) {
 			const auto names = edt::module_file_names(module);
-			edt::game_build_result::module_file file{ module, dir / names.front(), false };
+			edt::game_build_result::module_file file{ module, dir / names.front(), false, std::nullopt };
 			for (const auto& name : names) {
 				if (fs::exists(dir / name, ec)) {
 					file.path = dir / name;
@@ -162,6 +164,16 @@ namespace {
 		result.problems = parser.take();
 		result.tail.assign(tail.begin(), tail.end());
 		result.modules = find_modules(in.root, in.modules);
+		// Here, not on the main thread: the libraries can be large. One digest of build/bin: every module's copy
+		// takes the whole folder's libraries along.
+		if (result.ok()) {
+			std::optional<std::optional<std::string>> digest;
+			for (auto& module : result.modules) {
+				if (!module.exists) continue;
+				if (!digest) digest = core::module_library_set_digest(module.path.parent_path());
+				module.digest = *digest;
+			}
+		}
 		return result;
 	}
 }
@@ -288,6 +300,9 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 	command.risk = cmd::danger::deny_by_default;
 	command.enabled = [this] { return disabled_reason().empty(); };
 	command.invoke = [this](const cmd::call& request) {
+		if (request.from.kind != cmd::origin_kind::ui && m_options.trusted && !m_options.trusted()) {
+			return action_result::failure(cmd::codes::denied, std::string(k_untrusted_project_error));
+		}
 		std::string configuration;
 		if (const json::value* chosen = request.args.as_object().if_contains("configuration")) {
 			configuration = std::string(chosen->as_string());
@@ -301,8 +316,18 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 	ui.shortcut = "Ctrl+B";
 	ui.disabled_tooltip = std::move(tooltip);
 	ui.activate = [this, &actions] {
-		const auto outcome = actions.invoke(k_action_id, json::object{});
-		if (!outcome.ok) m_dialogs.message(message_level::warning, std::format("The game was not built: {}", outcome.error));
+		const auto build = [this, &actions, alive = std::weak_ptr<int>(m_alive)] {
+			if (alive.expired()) return;
+			const auto outcome = actions.invoke(k_action_id, json::object{});
+			if (!outcome.ok) {
+				m_dialogs.message(message_level::warning, std::format("The game was not built: {}", outcome.error));
+			}
+		};
+		if (m_options.trusted && !m_options.trusted() && m_options.ask_trust) {
+			m_options.ask_trust(build);
+			return;
+		}
+		build();
 	};
 	m_action = actions.add(std::move(command), std::move(ui));
 }
@@ -532,6 +557,12 @@ edt::build_outcome edt::game_builder::finish(game_build_result& result, const bu
 			outcome.modules.push_back(
 				game_module_build_result{ module.name, module.path, request.configuration, outcome.job, request.reload_after,
 					request.preemptible });
+		}
+		// Before game_module_built: a slot reloads the module, whose copy must already pass as the editor's own build.
+		if (m_options.own_build) {
+			for (const auto& module : result.modules) {
+				if (module.exists && module.digest) m_options.own_build(module.name, *module.digest);
+			}
 		}
 		if (m_options.events) {
 			// A slot may start the next build.
