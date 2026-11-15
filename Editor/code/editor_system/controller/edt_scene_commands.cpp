@@ -120,11 +120,30 @@ namespace {
 		std::string why;
 	};
 
+	// What the walk over a patch's references looks a guid up in, and what it saw.
+	struct reference_scope
+	{
+		// Null: no guid is looked up, the path is what loads.
+		const res::resource_system* index = nullptr;
+		// Set for an agent's call while the asset index is not complete (#968): why a guid is not judged now.
+		std::optional<std::string> index_wait;
+		bool saw_guid = false;
+	};
+
+	// After every other check of the call passed: content with a guid waits for the asset index.
+	std::optional<cmd::result> held_back(const reference_scope& scope)
+	{
+		if (scope.index_wait && scope.saw_guid) return cmd::result::failure(cmd::codes::busy, *scope.index_wait);
+		return std::nullopt;
+	}
+
 	// A {guid, path} reference (EPIC-57 section 4.4) is held to the rule of #697 where it leads: the file that holds its
 	// guid, else its path, after the agent's rule of edt_reference.h (#954): its form, then its path, then its guid.
-	std::optional<reference_issue> reference_object_refusal(const json::value& value, const res::resource_system* resources,
+	std::optional<reference_issue> reference_object_refusal(const json::value& value, reference_scope& scope,
 		std::string_view owner_protocol)
 	{
+		if (edt::is_guid_reference(value.as_object())) scope.saw_guid = true;
+		const res::resource_system* resources = scope.index;
 		if (std::string why = edt::agent_reference_form_problem(value.as_object()); !why.empty()) return reference_issue{ {}, std::move(why) };
 		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
 		if (!target) return reference_issue{ {}, "not a reference" };
@@ -148,7 +167,7 @@ namespace {
 
 	// The walk goes over the patch; `merged` is the same place in the component as it will be after the patch (null when
 	// it has none), which names the type of an inline desc a partial patch leaves out (#740).
-	std::optional<reference_issue> references_of(const desc::desc_system& descs, const res::resource_system* resources, const desc::type_schema& schema, const json::value& data,
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, reference_scope& scope, const desc::type_schema& schema, const json::value& data,
 		const json::value* merged, std::string_view owner_protocol, int depth);
 
 	const json::value* merged_at(const json::value* merged, std::string_view pointer)
@@ -173,7 +192,7 @@ namespace {
 	// A tag, a {guid, path} reference, or a desc written inline: then its __parent and the references its own schema names,
 	// since the desc_system loads them as it reads the inline copy. An inline desc of a type without a schema cannot be
 	// checked, so it is refused.
-	std::optional<reference_issue> reference_of(const desc::desc_system& descs, const res::resource_system* resources, const json::value& value, const json::value* merged,
+	std::optional<reference_issue> reference_of(const desc::desc_system& descs, reference_scope& scope, const json::value& value, const json::value* merged,
 		std::string_view owner_protocol, int depth)
 	{
 		if (const auto* text = value.if_string()) {
@@ -184,14 +203,14 @@ namespace {
 		if (!inline_desc) return std::nullopt;
 		// An object that names no type, nor does the component it patches (#740), is a {guid, path} reference.
 		const json::value* type = type_of_inline(*inline_desc, merged);
-		if (!type) return reference_object_refusal(value, resources, owner_protocol);
+		if (!type) return reference_object_refusal(value, scope, owner_protocol);
 		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
 		const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()));
 		if (!schema) return reference_issue{ {}, "an inline desc of a type without a schema: its references cannot be checked" };
 		if (const json::value* parent = inline_desc->if_contains("__parent")) {
-			if (auto issue = reference_of(descs, resources, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
+			if (auto issue = reference_of(descs, scope, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
 		}
-		return references_of(descs, resources, *schema, value, merged, owner_protocol, depth + 1);
+		return references_of(descs, scope, *schema, value, merged, owner_protocol, depth + 1);
 	}
 
 	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
@@ -218,28 +237,28 @@ namespace {
 		return std::nullopt;
 	}
 
-	std::optional<reference_issue> structure_references(const desc::desc_system& descs, const res::resource_system* resources, const desc::field_schema& field, const json::value& value,
+	std::optional<reference_issue> structure_references(const desc::desc_system& descs, reference_scope& scope, const desc::field_schema& field, const json::value& value,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
 		const desc::type_schema* nested = value.is_object() ? descs.find_schema(field.ref_type) : nullptr;
 		if (!nested) return std::nullopt;
 		if (depth >= k_max_inline_depth) return reference_issue{ {}, "structures nested too deep" };
-		return references_of(descs, resources, *nested, value, merged, owner_protocol, depth + 1);
+		return references_of(descs, scope, *nested, value, merged, owner_protocol, depth + 1);
 	}
 
-	std::optional<reference_issue> field_references(const desc::desc_system& descs, const res::resource_system* resources, const desc::field_schema& field, const json::value& value,
+	std::optional<reference_issue> field_references(const desc::desc_system& descs, reference_scope& scope, const desc::field_schema& field, const json::value& value,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
-		if (is_tag_kind(field.kind)) return reference_of(descs, resources, value, merged, owner_protocol, depth);
-		if (field.kind == desc::field_kind::structure) return structure_references(descs, resources, field, value, merged, owner_protocol, depth);
+		if (is_tag_kind(field.kind)) return reference_of(descs, scope, value, merged, owner_protocol, depth);
+		if (field.kind == desc::field_kind::structure) return structure_references(descs, scope, field, value, merged, owner_protocol, depth);
 		if (field.kind == desc::field_kind::custom) return tags_in(value, owner_protocol);
 		if (field.kind == desc::field_kind::map) {
 			const json::object* entries = value.if_object();
 			if (!entries) return std::nullopt;
 			for (const auto& entry : *entries) {
 				std::optional<reference_issue> issue;
-				if (is_tag_kind(field.element)) issue = reference_of(descs, resources, entry.value(), nullptr, owner_protocol, depth);
-				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, resources, field, entry.value(), nullptr, owner_protocol, depth);
+				if (is_tag_kind(field.element)) issue = reference_of(descs, scope, entry.value(), nullptr, owner_protocol, depth);
+				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, scope, field, entry.value(), nullptr, owner_protocol, depth);
 				else if (field.element == desc::field_kind::custom) issue = tags_in(entry.value(), owner_protocol);
 				if (issue) return under(std::move(issue), res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
 			}
@@ -249,8 +268,8 @@ namespace {
 		if (field.kind != desc::field_kind::array || !items) return std::nullopt;
 		for (std::size_t i = 0; i < items->size(); ++i) {
 			std::optional<reference_issue> issue;
-			if (is_tag_kind(field.element)) issue = reference_of(descs, resources, (*items)[i], merged_item(merged, i), owner_protocol, depth);
-			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, resources, field, (*items)[i], merged_item(merged, i), owner_protocol, depth);
+			if (is_tag_kind(field.element)) issue = reference_of(descs, scope, (*items)[i], merged_item(merged, i), owner_protocol, depth);
+			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, scope, field, (*items)[i], merged_item(merged, i), owner_protocol, depth);
 			else if (field.element == desc::field_kind::custom) issue = tags_in((*items)[i], owner_protocol);
 			if (issue) return under(std::move(issue), std::to_string(i));
 		}
@@ -264,7 +283,7 @@ namespace {
 
 	// Every reference `data` (a patch or a whole component of `schema`) holds, in its own fields and through structures,
 	// arrays and inline descs, read where the desc reads it: the field's key or one of its read aliases.
-	std::optional<reference_issue> references_of(const desc::desc_system& descs, const res::resource_system* resources, const desc::type_schema& schema, const json::value& data,
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, reference_scope& scope, const desc::type_schema& schema, const json::value& data,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
 		for (const desc::field_schema& field : schema.fields) {
@@ -273,7 +292,7 @@ namespace {
 			for (const std::string& pointer : pointers) {
 				const json::value* value = desc::json_pointer_get(data, pointer);
 				if (!value || value->is_null()) continue;
-				if (auto issue = field_references(descs, resources, field, *value, merged_at(merged, pointer), owner_protocol, depth)) {
+				if (auto issue = field_references(descs, scope, field, *value, merged_at(merged, pointer), owner_protocol, depth)) {
 					return under(std::move(issue), std::string_view(pointer).substr(1));
 				}
 			}
@@ -347,7 +366,7 @@ namespace {
 	// through structure fields, quietly, and names the full path of the first field that does not fit. Every reference in
 	// it, nested ones and those of inline descs included, follows the rule of #697 for a desc of `owner_protocol` (the
 	// level's), as it would when loaded.
-	std::optional<cmd::result> check_fields(const desc::desc_system& descs, const res::resource_system* resources, const std::string& type, const json::object& patch,
+	std::optional<cmd::result> check_fields(const desc::desc_system& descs, reference_scope& scope, const std::string& type, const json::object& patch,
 		const json::object& edited, std::string_view owner_protocol)
 	{
 		const desc::type_schema* schema = descs.find_schema(type);
@@ -362,7 +381,7 @@ namespace {
 				expected.empty() ? "" : ": expected ", expected));
 		}
 		const json::value whole(edited);
-		if (auto issue = references_of(descs, resources, *schema, json::value(patch), &whole, owner_protocol, 0)) {
+		if (auto issue = references_of(descs, scope, *schema, json::value(patch), &whole, owner_protocol, 0)) {
 			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, issue->path, issue->why));
 		}
 		return std::nullopt;
@@ -555,15 +574,24 @@ namespace {
 			return std::nullopt;
 		}
 
+		// Where the call's references look a guid up. Only an agent's call waits for the asset index (as for a gesture): a
+		// person's or a test's guid is judged against what the index holds now.
+		reference_scope references_for(const cmd::call& call) const
+		{
+			std::optional<std::string> wait;
+			if (call.from.kind == cmd::origin_kind::agent && sources.asset_index_wait) wait = sources.asset_index_wait();
+			return reference_scope{ wait ? nullptr : sources.services.resources(), std::move(wait) };
+		}
+
 		// A component of `type` with `fields`, checked against the type.
 		std::optional<cmd::result> make_component(const std::string& type, const json::object& fields,
-			std::string_view owner_protocol, scn::prefab_desc::prefab_comp_node& out) const
+			std::string_view owner_protocol, reference_scope& scope, scn::prefab_desc::prefab_comp_node& out) const
 		{
 			if (auto bad = check_type(type)) return bad;
 			json::object kept = fields;
 			strip_nulls(kept);
 			if (!kept.empty()) {
-				if (auto bad = check_fields(*sources.services.descs(), sources.services.resources(), type, kept, kept, owner_protocol)) return bad;
+				if (auto bad = check_fields(*sources.services.descs(), scope, type, kept, kept, owner_protocol)) return bad;
 			}
 			out.type_name = type;
 			out.overrides = std::move(kept);
@@ -575,7 +603,7 @@ namespace {
 
 	cmd::result node_create(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Create node", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+		return ctx.run(call, "Create node", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
 			mutable_location parent;
 			cmd::result error;
 			if (!ctx.locate(scene, args.at("parent"), parent, error)) return error;
@@ -586,6 +614,7 @@ namespace {
 			const json::value* name = args.if_contains("name");
 			node.name = name ? std::string(name->as_string()) : std::string("Entity");
 			if (auto bad = check_name(node.name)) return *bad;
+			reference_scope scope = ctx.references_for(call);
 			if (const json::value* components = args.if_contains("components")) {
 				for (const auto& [key, spec] : components->as_object()) {
 					if (auto bad = check_component_key(key)) return *bad;
@@ -597,12 +626,13 @@ namespace {
 					}
 					scn::prefab_desc::prefab_comp_node component;
 					if (auto bad = ctx.make_component(std::string(type->as_string()),
-							fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), component)) {
+							fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), scope, component)) {
 						return *bad;
 					}
 					node.components[std::string(key)] = std::move(component);
 				}
 			}
+			if (auto busy = held_back(scope)) return *busy;
 
 			const std::uint64_t id = node.node_id;
 			changing();
@@ -720,7 +750,7 @@ namespace {
 
 	cmd::result component_add(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Add component", [&ctx](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+		return ctx.run(call, "Add component", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
 			mutable_location at;
 			cmd::result error;
 			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
@@ -733,9 +763,12 @@ namespace {
 			}
 			const json::value* fields = args.if_contains("fields");
 			scn::prefab_desc::prefab_comp_node component;
-			if (auto bad = ctx.make_component(std::string(args.at("type").as_string()), fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), component)) {
+			reference_scope scope = ctx.references_for(call);
+			if (auto bad = ctx.make_component(std::string(args.at("type").as_string()), fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), scope,
+					component)) {
 				return *bad;
 			}
+			if (auto busy = held_back(scope)) return *busy;
 			changing();
 			at.owner->components[key] = std::move(component);
 			return cmd::result::success();
@@ -762,7 +795,7 @@ namespace {
 
 	cmd::result component_set(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Edit component", [&ctx](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+		return ctx.run(call, "Edit component", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
 			mutable_location at;
 			cmd::result error;
 			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
@@ -777,7 +810,9 @@ namespace {
 					return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
 				}
 				json::object edited = patched_fields(*descs, type_of(component->second), component->second.overrides, patch);
-				if (auto bad = check_fields(*descs, ctx.sources.services.resources(), type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+				reference_scope scope = ctx.references_for(call);
+				if (auto bad = check_fields(*descs, scope, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+				if (auto busy = held_back(scope)) return *busy;
 				if (edited == component->second.overrides) return cmd::result::success();
 				changing();
 				component->second.overrides = std::move(edited);
@@ -796,7 +831,9 @@ namespace {
 			const json::object base_json = edt::override_edit::component_json(component->second);
 			const json::object effective = edt::override_edit::effective_component(*at.owner, at.target, key, base_json);
 			json::object edited = patched_fields(*descs, type_of(component->second), effective, patch);
-			if (auto bad = check_fields(*descs, ctx.sources.services.resources(), type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+			reference_scope scope = ctx.references_for(call);
+			if (auto bad = check_fields(*descs, scope, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+			if (auto busy = held_back(scope)) return *busy;
 			if (edited == effective) return cmd::result::success();
 			changing();
 			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited, descs, descs->find_schema(type_of(component->second)));
@@ -1062,13 +1099,15 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		args_with(std::string(R"("ref":@REF@,"parent":@REF@,)") + std::string(index_arg_schema), R"("ref","parent")"), ref_result, &node_reparent);
 	add("scene.node.rename", "Rename a node (names are for display: nodes are addressed by id)",
 		args_with(R"("ref":@REF@,"name":{"type":"string","minLength":1})", R"("ref","name")"), generation_result, &node_rename);
-	add("component.add", "Add a component of desc `type` under `key`, with `fields` checked against the type's schema",
+	add("component.add", "Add a component of desc `type` under `key`, with `fields` checked against the type's schema. "
+		"A reference with a guid is answered `busy` while the editor's asset index is still being built",
 		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"type":{"type":"string","minLength":1},"fields":{"type":"object"})",
 			R"("ref","key","type")"),
 		generation_result, &component_add);
 	add("component.remove", "Remove the component `key` of a node", args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1})", R"("ref","key")"),
 		generation_result, &component_remove);
-	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field: on a node of the scene the field falls back to the referenced desc's value, inside a prefab instance to the prefab's); inside a prefab instance the change becomes override records",
+	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field: on a node of the scene the field falls back to the referenced desc's value, inside a prefab instance to the prefab's); inside a prefab instance the change becomes override records. "
+		"A reference with a guid is answered `busy` while the editor's asset index is still being built",
 		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"patch":{"type":"object"})", R"("ref","key","patch")"),
 		generation_result, &component_set);
 	add("transform.set", "Set position, rotation (Euler degrees) and/or scale of a node; inside a prefab instance as override records",

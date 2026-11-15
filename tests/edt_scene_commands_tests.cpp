@@ -98,7 +98,8 @@ struct commands_fixture : test_util::scene_env
 		services.base_descs = descs.get();
 		services.base_resources = rs.get();
 		services.base_assembler = assembler.get();
-		registrations = edt::register_scene_commands(commands, { documents, selection, services, [this] { return gesture; } });
+		registrations = edt::register_scene_commands(commands, { documents, selection, services, [this] { return gesture; },
+			[this] { return index_pending ? std::optional<std::string>("the asset index is still being built, so a guid cannot be checked; call again when it is ready") : std::nullopt; } });
 	}
 
 	cmd::result call(const std::string& id, const std::string& args, cmd::origin from = cmd::origin::agent("s1"))
@@ -138,6 +139,7 @@ struct commands_fixture : test_util::scene_env
 	edt::selection_service selection{ events };
 	cmd::command_registry commands;
 	bool gesture = false;
+	bool index_pending = false;
 	int pushes = 0;
 	std::vector<std::size_t> reloaded;
 	std::vector<edt::registration> registrations;
@@ -1055,6 +1057,51 @@ BOOST_AUTO_TEST_CASE(a_reference_is_checked_by_its_guid_and_its_written_path)
 	BOOST_CHECK_MESSAGE(moved.error.find("name different files") != std::string::npos, moved.error);
 	BOOST_CHECK_MESSAGE(same.ok, same.error);
 	BOOST_CHECK_MESSAGE(not_held.ok, not_held.error);
+}
+
+// #968: while the asset index is not complete an agent's guid is answered busy and the scene stays as it was, whatever an
+// incomplete index would say of it; a value without a guid, a person's call and a form error are answered as before.
+BOOST_AUTO_TEST_CASE(an_agents_guid_waits_for_the_asset_index)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto set = [&](const std::string& material, cmd::origin from = cmd::origin::agent("s1")) {
+		return call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":)" + material + "}}", from);
+	};
+	const std::string elsewhere = R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/old.mat.desc"})";
+	const std::string same_file = R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://materials/moved.mat.desc"})";
+	auto index = std::make_shared<paths_index>();
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://materials/moved.mat.desc" });
+	rs->set_asset_index(index);
+	index_pending = true;
+
+	const std::uint64_t generation = scene.generation();
+	const json::object overrides = child(root(), 0xa4)->components.at("mesh").overrides;
+	const auto held = set(elsewhere);
+	const auto held_same = set(same_file);
+	const auto held_add = call("component.add", R"({"ref":)" + crate + R"(,"key":"other","type":"mesh_node_desc","fields":{"material":)" + same_file + "}}");
+	const bool scene_kept = scene.generation() == generation && child(root(), 0xa4)->components.at("mesh").overrides == overrides
+		&& !child(root(), 0xa4)->components.contains("other");
+	const auto guid_alone = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})");
+	const auto bad_path = set(R"({"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://saves/m.desc"})");
+	const auto plain = set(R"("res://materials/plain.mat.desc")");
+	const auto person = set(same_file, cmd::origin::ui());
+	index_pending = false;
+	const auto refused = set(elsewhere);
+	rs->set_asset_index(nullptr);
+
+	for (const cmd::result* busy : { &held, &held_same, &held_add }) {
+		BOOST_TEST(busy->code == cmd::codes::busy);
+		BOOST_CHECK_MESSAGE(busy->error.find("the asset index is still being built") != std::string::npos, busy->error);
+	}
+	BOOST_TEST(scene_kept);
+	BOOST_TEST(guid_alone.code == cmd::codes::invalid_args);
+	BOOST_TEST(bad_path.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(plain.ok, plain.error);
+	BOOST_CHECK_MESSAGE(person.ok, person.error);
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(refused.error.find("name different files") != std::string::npos, refused.error);
 }
 
 // #773: an override record has no __type. The level writer reads its value by the schema of the component the instance
