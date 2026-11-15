@@ -176,7 +176,8 @@ namespace edt
 	// every layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are
 	// skipped. `stopped` (may be empty) ends the walk early.
 	// `known` (may be null): records by path text, from the cache or the last walk; a file whose .resource has the size
-	// and time recorded there keeps the record's ID and flags without the .resource being read again.
+	// and time recorded there, older than stamp_granularity before its check, keeps the record's ID and flags without
+	// the .resource being read again.
 	// `id_of` (empty: file_id_of) gives the files' identities.
 	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {},
 		const std::map<std::string, asset_record>* known = nullptr, bool case_insensitive = platform_case_insensitive,
@@ -206,7 +207,10 @@ namespace edt
 		static constexpr std::size_t max_deferred_changes = 4096;
 		// A larger cache is not read (the walk then reads every file).
 		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
-		// A cache file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s).
+		// A file stamp within this of the time it was checked is not trusted (FAT and SMB keep 2 s): a .resource with
+		// one is read again by every walk and batch, a file's hash only after a restart (#973). The polling watcher
+		// (res::diff_snapshots, state_of) compares size and time only, so it may not report such a rewrite at all
+		// (#975).
 		static constexpr std::chrono::seconds stamp_granularity{ 2 };
 		// A git index or HEAD written this recently means a git operation may still be writing files (#765).
 		static constexpr std::chrono::seconds git_quiet_time{ 5 };

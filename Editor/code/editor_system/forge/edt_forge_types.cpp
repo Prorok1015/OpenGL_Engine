@@ -1,4 +1,6 @@
 #include "edt_forge_types.h"
+#include <cstdint>
+#include <format>
 #include <algorithm>
 #include <cctype>
 
@@ -178,6 +180,47 @@ std::string edt::forge::sanitize_text(std::string_view text, std::size_t max_byt
 			out.resize(back);
 		}
 		out += "...";
+	}
+	return out;
+}
+
+std::string edt::forge::escaped_text(std::string_view text, std::size_t max_bytes)
+{
+	std::string out;
+	out.reserve(std::min(text.size(), max_bytes));
+	// The longest prefix of whole pieces that still leaves room for "...".
+	std::size_t room_for_dots = 0;
+	bool cut = false;
+	std::size_t i = 0;
+	while (i < text.size()) {
+		char32_t code = 0;
+		std::size_t length = decode_utf8(text.substr(i), code);
+		std::string piece;
+		if (length == 0) {
+			length = 1;
+			piece = std::format("\\x{{{:02X}}}", static_cast<unsigned>(static_cast<unsigned char>(text[i])));
+		} else if (code == U'\n') {
+			piece = "\\n";
+		} else if (code == U'\r') {
+			piece = "\\r";
+		} else if (code == U'\t') {
+			piece = "\\t";
+		} else if (is_unsafe_to_show(code)) {
+			piece = std::format("\\u{{{:04X}}}", static_cast<std::uint32_t>(code));
+		} else {
+			piece = text.substr(i, length);
+		}
+		if (out.size() + piece.size() > max_bytes) {
+			cut = true;
+			break;
+		}
+		out += piece;
+		i += length;
+		if (out.size() + 3 <= max_bytes) room_for_dots = out.size();
+	}
+	if (cut) {
+		out.resize(room_for_dots);
+		if (max_bytes >= 3) out += "...";
 	}
 	return out;
 }

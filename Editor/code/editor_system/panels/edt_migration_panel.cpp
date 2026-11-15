@@ -2,6 +2,7 @@
 #include <imgui.h>
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -54,11 +55,11 @@ void edt::migration_panel::show_and_plan()
 	m_model.request_plan();
 }
 
-void edt::migration_panel::show_and_roll_back(const std::string& id)
+void edt::migration_panel::show_rollback_question(const std::string& id)
 {
 	m_open = true;
 	m_focus = true;
-	m_model.roll_back(id);
+	m_model.ask_roll_back(id);
 }
 
 void edt::migration_panel::on_before_begin()
@@ -96,25 +97,44 @@ void edt::migration_panel::draw_rollback_button()
 	const std::string id = m_model.rollback_id();
 	if (id.empty()) return;
 	ImGui::SameLine();
-	if (ImGui::Button("Roll Back...")) {
-		m_rollback_asked = id;
-		ImGui::OpenPopup("Roll back migration?##edt_migration_rollback");
-	}
+	if (ImGui::Button("Roll Back...")) m_model.ask_roll_back(id);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ("Put the files back from .snk/migrations/" + id + "/backup").c_str());
 }
 
 void edt::migration_panel::draw_rollback_question()
 {
-	if (!ImGui::BeginPopupModal("Roll back migration?##edt_migration_rollback", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
-	wrapped("Roll back migration " + m_rollback_asked + "?");
-	ImGui::TextUnformatted("Every file it wrote is put back from its backup and the files it created are deleted.");
-	ImGui::TextUnformatted("Open documents are closed and the level is opened again from disk.");
+	constexpr const char* popup = "Roll back migration?##edt_migration_rollback";
+	if (m_model.take_question_request()) ImGui::OpenPopup(popup);
+	if (!ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	const std::optional<migration_window_model::rollback_question>& question = m_model.question();
+	if (!question) {
+		ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		return;
+	}
+	wrapped("Roll back migration " + question->id + "?");
+	if (!question->refused.empty()) {
+		coloured(k_error, "This rollback would be refused: " + question->refused);
+	} else {
+		// Every path of the journal, however many: a long list scrolls inside its own region.
+		if (ImGui::BeginChild("##rollback_files", ImVec2(640.0f, 280.0f), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+			ImGui::TextUnformatted(question->text.c_str(), question->text.c_str() + question->text.size());
+		}
+		ImGui::EndChild();
+		ImGui::TextUnformatted("A file changed since the migration wrote it refuses the whole rollback; nothing is written then.");
+		ImGui::TextUnformatted("Open documents are closed and the level is opened again from disk.");
+	}
+	ImGui::BeginDisabled(!m_model.can_confirm_roll_back());
 	if (ImGui::Button("Roll Back")) {
-		m_model.roll_back(m_rollback_asked);
+		m_model.confirm_roll_back();
 		ImGui::CloseCurrentPopup();
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
-	if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+	if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+		m_model.cancel_roll_back();
+		ImGui::CloseCurrentPopup();
+	}
 	ImGui::EndPopup();
 }
 

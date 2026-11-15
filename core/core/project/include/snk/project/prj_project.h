@@ -1,7 +1,6 @@
 #pragma once
 #include <filesystem>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -11,13 +10,18 @@
 
 namespace prj
 {
-	inline constexpr std::string_view k_code_dir_name = "code";
-	inline constexpr std::string_view k_snk_dir_name = ".snk";
+	// The project's own folders, by their names below its root: never content (project_context names them below `root`).
 	inline constexpr std::string_view k_cache_dir_name = ".cache";
+	inline constexpr std::string_view k_snk_dir_name = ".snk";
+	inline constexpr std::string_view k_code_dir_name = "code";
 	inline constexpr std::string_view k_build_dir_name = "build";
 
-	// The project's own folders at its root: code/ and the private ones (project_context).
-	SNK_API std::span<const std::string_view> own_top_dir_names();
+	// The top-level folders of any project that are never content: the writable folders all lie inside .cache. Needs no
+	// healthy project (a rollback of a broken one checks a journal against them).
+	inline std::vector<std::string_view> own_top_dir_names()
+	{
+		return { k_code_dir_name, k_snk_dir_name, k_cache_dir_name, k_build_dir_name };
+	}
 
 	// Why a content root (relative to the project, '/' separated) may not be one, naming the root and the rule; nullopt
 	// when it may. Refused (ASCII case folded, so one manifest means the same on every file system): a part starting with
@@ -41,7 +45,7 @@ namespace prj
 		version_match engine_match = version_match::exact;
 
 		// <root>/.cache: regenerated data, never committed.
-		std::filesystem::path cache_dir() const { return root / k_cache_dir_name; }
+		std::filesystem::path cache_dir() const { return root / std::filesystem::path(k_cache_dir_name); }
 		// memory:// (data made at runtime, e.g. imports) inside the cache.
 		std::filesystem::path memory_dir() const { return cache_dir() / "memory"; }
 		// user:// while the editor runs: a test profile, so the editor never touches the player's real data.
@@ -51,11 +55,11 @@ namespace prj
 		// What the resource system mounts for writing besides the content roots, parents first.
 		std::vector<std::filesystem::path> writable_dirs() const { return { cache_dir(), memory_dir(), user_profile_dir() }; }
 		// <root>/.snk: the editor's own files (the MCP connection file with its token, the agent policy).
-		std::filesystem::path snk_dir() const { return root / k_snk_dir_name; }
+		std::filesystem::path snk_dir() const { return root / std::filesystem::path(k_snk_dir_name); }
 		// <root>/code: the game module's sources, mounted as code:// when the folder exists (#450).
-		std::filesystem::path code_dir() const { return root / k_code_dir_name; }
+		std::filesystem::path code_dir() const { return root / std::filesystem::path(k_code_dir_name); }
 		// <root>/build: where the game code is built (#160/#217). Not mounted; nothing writes there yet.
-		std::filesystem::path build_dir() const { return root / k_build_dir_name; }
+		std::filesystem::path build_dir() const { return root / std::filesystem::path(k_build_dir_name); }
 		// Never content: no content root may be, contain or lie inside one of them.
 		std::vector<std::filesystem::path> private_dirs() const { return { cache_dir(), snk_dir(), build_dir() }; }
 	};

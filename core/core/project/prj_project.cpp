@@ -2,7 +2,6 @@
 #include <snk/common/fs_paths.h>
 #include <snk/project/prj_code.h>
 #include <algorithm>
-#include <array>
 #include <format>
 #include <system_error>
 #include <utility>
@@ -72,9 +71,6 @@ bool prj::refuse_without_asking(version_action action, bool non_interactive)
 }
 
 namespace {
-
-	constexpr std::array<std::string_view, 4> k_own_top_dirs{ prj::k_code_dir_name, prj::k_snk_dir_name, prj::k_cache_dir_name,
-		prj::k_build_dir_name };
 
 	std::string folded(std::string_view text)
 	{
@@ -274,11 +270,6 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		return problem;
 	}
 	return std::nullopt;
-}
-
-std::span<const std::string_view> prj::own_top_dir_names()
-{
-	return k_own_top_dirs;
 }
 
 std::optional<std::string> prj::content_root_error(std::string_view relative)

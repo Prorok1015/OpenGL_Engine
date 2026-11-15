@@ -1,4 +1,5 @@
 #pragma once
+// Not used here: the includes this header had before #922, kept for module code that reaches them through it.
 #include <snk/command/cmd_types.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
@@ -17,11 +18,19 @@
 #include <snk/scene/scn_event_subscriptions.h>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
+
+namespace scn
+{
+	template<class...>
+	struct type_list;
+}
 
 // The layout key of a module binary (#614): a module built against headers in which one of these types has another
 // size or alignment is refused by the host before it is created ("rebuild the project"). The list holds the types
 // whose size is compiled into module code: a module constructs, copies or allocates them through engine templates
-// (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION). A type the engine creates and a module only reads through
+// (MODULE_LAYER.md, rule next to SNK_MODULE_API_VERSION), walks their storage (the engine components) or reads them
+// whole from registry.ctx() and the bus (#922). A type the engine creates and a module only reads through
 // inline accessors (scene_layer, context_set, module_context, ecs::bus_context...) stays out: a field appended at its end
 // moves nothing a module reads and is a minor change, while a reorder or removal there is a major bump by hand, or in
 // the window of 4.0 (#758) a new layout_revision. world_context has no inline accessor since #802: its layout is the
@@ -29,6 +38,8 @@
 // fields of one size is not caught, nor a change of a vtable (bus_slot, bus_type, module_interface). A new type, a
 // comment or a rebuilt engine leave the key as it is. Debug and Release differ only where the standard library does
 // (MSVC's _ITERATOR_DEBUG_LEVEL); such a mix is refused earlier anyway, by the build flags.
+// The list itself and the headers of its types are in gs_module_layout_key.h, which only the file that declares a module
+// and gs_module_layout.cpp compile: every other file of a module that includes gs_game_module.h stays without them.
 namespace gs
 {
 	namespace detail
@@ -55,55 +66,56 @@ namespace gs
 		// module code builds too, join the list (#861).
 		// 10: cmd::command_desc, which a module builds for gs::game_module::add_command, gains describe_before_allowed_invoke
 		// and joins the list (#759).
-		inline constexpr std::uint64_t layout_revision = 10;
+		// 11: the engine components (scn::engine_component_types), the ctx types and events a module reads, the channel
+		// types, app_data_storage and the structs passed by value join the list (#922); no type changes.
+		inline constexpr std::uint64_t layout_revision = 11;
+
+		template<class T>
+		struct layout_part
+		{
+			static constexpr std::uint64_t mix(std::uint64_t hash) noexcept
+			{
+				return mix_layout(mix_layout(hash, sizeof(T)), alignof(T));
+			}
+		};
+
+		// A scn::type_list in the list stands for its types, in order: the key is the same as with them written out.
+		template<class... Types>
+		struct layout_part<scn::type_list<Types...>>
+		{
+			static constexpr std::uint64_t mix(std::uint64_t hash) noexcept
+			{
+				((hash = layout_part<Types>::mix(hash)), ...);
+				return hash;
+			}
+		};
 
 		template<class... Types>
 		constexpr std::uint64_t layout_of() noexcept
 		{
 			std::uint64_t hash = mix_layout(0xcbf29ce484222325ull, layout_revision);
-			((hash = mix_layout(mix_layout(hash, sizeof(Types)), alignof(Types))), ...);
+			((hash = layout_part<Types>::mix(hash)), ...);
 			return hash;
 		}
 	}
 
-	// The one list of the key: evaluated in whichever binary includes this header.
-	constexpr std::uint64_t module_layout_key() noexcept
+	namespace detail
 	{
-		return detail::layout_of<
-			// register_system builds the parts of an entry in module code: the desc, the access list and the instance its
-			// factory makes. The entry and the registry's map node are the engine's (system_registry::add, #785).
-			ecs::system_desc, ecs::system_instance, ecs::access_entry,
-			// bus_type_impl<T> makes the slot of an event type of the module; writers and readers are its system
-			// arguments. Their members do not depend on T, so <int> stands for every T.
-			ecs::detail::bus_slot_impl<int>, ecs::event_writer<int>, ecs::event_reader<int>,
-			// The engine makes every resource block (pin_block, #758), but the handle reads it inline (is_ready, has_error);
-			// require<T> builds the handle the module keeps (in components the engine reads), make_dep<T> the dependency.
-			// The handle's members do not depend on T.
-			core::res::res_resource_block, core::res::res_handle<int>, res::res_dep,
-			// component_catalog::add<T> builds the entry, desc::bind_described<T> the schema binding, its field ops and its
-			// schema with the fields (described_schema<T>).
-			scn::component_entry, desc::schema_binding, desc::field_ops, desc::type_schema, desc::field_schema,
-			// A module reads a component without a C++ type through find_schema_component and may build one to hand to
-			// emplace_schema_component (a const reference: the world keeps the engine's copy, #785).
-			desc::dyn_blob,
-			// A module's desc types derive from desc_base (schema_desc<T>) and are created by its factories.
-			desc::desc_base,
-			// module_context::subscribe/observe build the filter, the slot and the connection the engine keeps.
-			scn::event_filter, scn::observer_slot, ecs::connection,
-			// module_context::run takes the task's description from module code.
-			ds::task_desc,
-			// module_context::input_stack hands the module an input_stack_handle by value; the module builds the layers it
-			// passes (stack_layer_desc), and a system that takes input_stack_control& gets it made in module code by
-			// ecs_invoker's reg.ctx().emplace<T>(), so the module allocates and destroys it.
-			gs::input_stack_handle, inp::stack_layer_desc, inp::input_stack_control, inp::action_binding,
-			// game_module::add_command takes the command a module describes.
-			cmd::command_desc>();
+		// The key of the list, as gs_module_layout_key.h specializes it. A file that declares a module without that header
+		// gets this error, never a key of 0, which no host would check.
+		template<class List = void>
+		struct listed_layout
+		{
+			static_assert(!std::is_void_v<List>,
+				"SNK_DECLARE_MODULE needs the module layout key: #include <snk/game/gs_module_layout_key.h> in this file, "
+				"before the macro");
+		};
 	}
 
-	// module_layout_key() as the engine was built: what the host compares a module's key with.
+	// The key of gs_module_layout_key.h as the engine was built: what the host compares a module's key with.
 	SNK_API std::uint64_t engine_module_layout_key() noexcept;
 }
 
 // SNK_DECLARE_MODULE exports this as snk_module_layout_key; without this header a module reports 0 (not checked).
 #undef SNK_DETAIL_MODULE_LAYOUT_KEY
-#define SNK_DETAIL_MODULE_LAYOUT_KEY (::gs::module_layout_key())
+#define SNK_DETAIL_MODULE_LAYOUT_KEY (::gs::detail::listed_layout<>::key)
