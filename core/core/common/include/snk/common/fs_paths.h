@@ -35,4 +35,23 @@ namespace fs_paths
 		}
 		return true;
 	}
+
+	// As is_inside, each part compared with ASCII letters folded: the same folder on a case-insensitive file system.
+	inline bool is_inside_any_case(const std::filesystem::path& dir, const std::filesystem::path& candidate)
+	{
+		const auto folded = [](const std::filesystem::path& part) {
+			std::string text = generic_utf8_of(part);
+			for (char& ch : text) {
+				if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+			}
+			return text;
+		};
+		auto cand_it = candidate.begin();
+		for (auto dir_it = dir.begin(); dir_it != dir.end(); ++dir_it, ++cand_it) {
+			if (cand_it == candidate.end() || folded(*dir_it) != folded(*cand_it)) {
+				return false;
+			}
+		}
+		return true;
+	}
 }
