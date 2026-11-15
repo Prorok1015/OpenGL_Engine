@@ -4,8 +4,10 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -128,11 +130,22 @@ BOOST_AUTO_TEST_CASE(AChangeThatFailsToLoad_KeepsThePreviousGeometry_AndTheNextC
 	rnd::driver::vertex_array_interface* const before = build(geometry, tag);
 	BOOST_REQUIRE(before != nullptr);
 
+	std::mutex said_mutex;
+	std::size_t warned = 0;
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level, std::string_view message) {
+		if (category != "render/geometry" || message.find("broken.geom.desc") == std::string_view::npos) return;
+		std::lock_guard lock(said_mutex);
+		warned += message.find("failed to load") != std::string_view::npos ? 1u : 0u;
+	});
 	change(tag, "not a desc");
 	for (int i = 0; i < 16; ++i) {
 		BOOST_TEST_CONTEXT("frame " << i) { BOOST_TEST(frame(geometry, tag) == before); }
 	}
 	BOOST_TEST(!geometry.draw_fits(tag, 6, 0, 0));
+	{
+		std::lock_guard lock(said_mutex);
+		BOOST_TEST(warned == 1u);
+	}
 
 	// The watch stays: a later good change is drawn.
 	change(tag, triangles_text(2));
@@ -190,6 +203,45 @@ BOOST_AUTO_TEST_CASE(AGeometryNotDrawn_IsLetGo_AndBuiltAgainWithoutReadingTheFil
 	}
 	// The destructor lets go of its watches.
 	BOOST_TEST(root().watched_tag_count() == watched);
+}
+
+// A level unloaded, then its file changed: the reload in flight does not keep the geometry, and ends harmlessly.
+BOOST_AUTO_TEST_CASE(AnUndrawnGeometryWhoseReloadIsInFlight_IsLetGo)
+{
+	const res::tag tag{ "memory://geom_reload/stale.geom.desc" };
+	write(tag, triangles_text(1));
+	const std::size_t watched = root().watched_tag_count();
+	rnd::geom_manager geometry(gpu(), root());
+	BOOST_REQUIRE(build(geometry, tag) != nullptr);
+
+	change(tag, triangles_text(2));
+	test_util::pump(tasks);
+	for (std::uint64_t i = 0; i <= rnd::k_unused_frames_kept + 1; ++i) {
+		geometry.begin_frame();
+	}
+	BOOST_TEST(geometry.find_geometry(tag) == nullptr);
+	BOOST_TEST(root().watched_tag_count() == watched);
+
+	test_util::pump(tasks);
+	BOOST_TEST(build(geometry, tag) != nullptr);
+	BOOST_TEST(geometry.draw_fits(tag, 6, 0, 0));
+}
+
+// The watch is there from the first require: a change before the vertex array is built is not lost.
+BOOST_AUTO_TEST_CASE(AChangeWhileTheFirstLoadRuns_IsTheGeometryBuilt)
+{
+	const res::tag tag{ "memory://geom_reload/early.geom.desc" };
+	write(tag, triangles_text(1));
+	rnd::geom_manager geometry(gpu(), root());
+	BOOST_REQUIRE(geometry.require_geometry(tag) == nullptr);
+	test_util::pump(tasks);
+
+	change(tag, triangles_text(2));
+	BOOST_REQUIRE(build(geometry, tag) != nullptr);
+	for (int i = 0; i < 16 && !geometry.draw_fits(tag, 6, 0, 0); ++i) {
+		BOOST_REQUIRE(frame(geometry, tag) != nullptr);
+	}
+	BOOST_TEST(geometry.draw_fits(tag, 6, 0, 0));
 }
 
 BOOST_AUTO_TEST_CASE(AGeometryDrawnEveryFrame_StaysPastTheUnusedFrames)

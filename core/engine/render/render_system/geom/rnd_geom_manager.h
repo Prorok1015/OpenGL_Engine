@@ -80,6 +80,8 @@ namespace rnd
 			std::uint64_t vertex_count = 0;
 			std::unordered_map<checked_range, bool, checked_range_hash> checked;
 			bool warned = false;
+			// The frame it was last asked for (require_geometry, draw_fits): begin_frame drops it after
+			// k_unused_frames_kept more.
 			std::uint64_t last_used = 0;
 		};
 
@@ -87,6 +89,8 @@ namespace rnd
 		// Empty when the desc gives no vertex array.
 		std::optional<built_geometry> build(rnd::geometry_desc& desc);
 		void on_changed(const res::tag& geom_tag);
+		void watch(const res::tag& geom_tag);
+		void unwatch(const res::tag& geom_tag);
 		bool on_owner_thread() const noexcept { return std::this_thread::get_id() == m_owner_thread; }
 
 	private:
@@ -95,6 +99,8 @@ namespace rnd
 		std::unordered_map<res::tag, built_geometry> cache;
 		std::unordered_map<res::tag, res::res_handle<rnd::geometry_desc>> loading;
 		std::unordered_set<res::tag> refused;
+		// From the first require of a tag on, so a change while it first loads is not missed.
+		std::unordered_set<res::tag> watched;
 		std::uint64_t m_frame = 0;
 		std::thread::id m_owner_thread = std::this_thread::get_id();
 	};
