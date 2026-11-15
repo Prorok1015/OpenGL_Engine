@@ -765,6 +765,14 @@ res::resource_system::refused_block(const res::tag &tag, std::string reason) {
   return block;
 }
 
+res::tag res::refused_tag(const res::tag &own, const core::res::res_control_block_base *block) {
+  if (own.is_valid() || !block || block->status.load() != core::res::res_status::error) {
+    return own;
+  }
+  const std::string recorded = block->diagnostics.read().resource;
+  return recorded.empty() ? own : res::tag{recorded};
+}
+
 void res::resource_system::start_loading(const res::tag &tag,
                                          const std::shared_ptr<resource_handle> &block,
                                          adapter ad) {

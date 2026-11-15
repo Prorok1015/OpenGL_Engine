@@ -519,7 +519,8 @@ BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_DescribesAnAllowedRiskyCall_Onc
 	BOOST_TEST(seen.runs == 1);
 }
 
-// Without the flag, without a risk, with invalid arguments, for a person's call, and for a call carrying a ticket nothing more is described.
+// Without the flag, without a risk, with invalid arguments and for a person's call nothing more is described; a call
+// naming a ticket it did not spend as an approved answer is described as one allowed in advance (#931).
 BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_OnlyForTheFlag_ARisk_ValidArgs_AnAgent_WithoutATicket)
 {
 	cmd::command_registry commands;
@@ -542,11 +543,52 @@ BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_OnlyForTheFlag_ARisk_ValidArgs_
 		auto reg = commands.add(described_echo(seen, cmd::danger::confirm, true));
 		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})"), cmd::origin::agent("s1")).code == cmd::codes::invalid_args);
 		BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})"), cmd::origin::ui()).ok);
+		BOOST_TEST(seen.described == 0);
 		cmd::call with_ticket{ json_of(R"({"text":"a"})"), cmd::origin::agent("s1"), 0, "0123" };
 		BOOST_TEST(commands.invoke("test.echo", with_ticket).ok);
-		BOOST_TEST(seen.described == 0);
+		BOOST_TEST(seen.described == 1);
+		BOOST_TEST(seen.ticket.empty());
 		BOOST_TEST(seen.runs == 2);
 	}
+}
+
+// #931: a command sees a call's confirmation only when the call spent a ticket a person approved for it; a call the
+// policy allows that names its own ticket still waiting, or one already gone, reaches the command without it.
+BOOST_AUTO_TEST_CASE(ACommandSeesTheConfirmation_OnlyOfAnApprovedTicketTheCallSpent)
+{
+	cmd::command_registry commands;
+	auto gate = std::make_shared<fixed_gate>();
+	commands.set_policy_gate(gate);
+	int runs = 0;
+	std::vector<std::string> seen;
+	cmd::command_desc desc = echo_command(runs);
+	desc.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(request.confirmation);
+		return cmd::result::success(boost::json::object{ { "echo", "x" } });
+	};
+	auto reg = commands.add(std::move(desc));
+	const boost::json::value args = json_of(R"({"text":"a"})");
+	const auto ticket_of = [](const cmd::result& asked) {
+		return std::string(asked.value.as_object().at("ticket").as_string());
+	};
+
+	gate->mode = cmd::policy_mode::ask;
+	const std::string waiting = ticket_of(commands.invoke("test.echo", args, cmd::origin::agent("s1")));
+	gate->mode = cmd::policy_mode::allow;
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, waiting }).ok);
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, "gone" }).ok);
+
+	gate->mode = cmd::policy_mode::ask;
+	const std::string approved = ticket_of(commands.invoke("test.echo", args, cmd::origin::agent("s1")));
+	BOOST_REQUIRE(commands.approve(approved));
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, approved }).ok);
+	// Approved, then allowed outright meanwhile (a grant given with the answer): still that person's answer.
+	const std::string granted = ticket_of(commands.invoke("test.echo", args, cmd::origin::agent("s1")));
+	BOOST_REQUIRE(commands.approve(granted));
+	gate->mode = cmd::policy_mode::allow;
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, granted }).ok);
+
+	BOOST_TEST((seen == std::vector<std::string>{ "", "", approved, granted }));
 }
 
 BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_ADescriptionThatThrows_RefusesTheCall)

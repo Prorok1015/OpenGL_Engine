@@ -70,6 +70,15 @@ namespace prj::migration
 		std::string resource_path;
 		// The .resource that pairs with the file does not read (has_resource is true): it has no ID to replace a __guid.
 		bool resource_unreadable = false;
+		// Its .resource holds the ID of a file of a read-only layer (the engine's), which keeps it: the res:// tag of
+		// that file; assets.ids_below gives this one a new ID (#902). Empty: none.
+		std::string id_held_below;
+		// The .resource assets.ids_below rewrites: the one the walk paired with the file (project-relative), which
+		// may be in another content root than the file.
+		std::string id_held_below_meta;
+		// The res:// paths this desc names that become {guid, path} only because assets.ids_below gives their file an
+		// ID in the same migration (#902).
+		std::vector<std::string> references_to_copies;
 		// The references of a desc that assets.refs changes (#776), by desc::write_references_with over the scan's index: a
 		// res:// path whose file has an ID, or gets one from assets.ids, and a {guid, path} whose path is stale. Read from
 		// the file as it is, with the current schemas.
