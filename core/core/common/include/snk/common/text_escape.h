@@ -23,6 +23,8 @@ namespace text_escape
 	// A message of our own as the edge shows it: the input may consist ONLY of our own fixed text plus pieces that already
 	// went through escaped_text; raw foreign text is not allowed here (pass it through escaped_text where the message is
 	// built). The rules and the contract of escaped_text, except that a backslash is copied as it is, so an escape
-	// already in the message is shown once; a raw control, hidden code point or invalid byte is still escaped.
+	// already in the message is shown once; a raw control, hidden code point or invalid byte is still escaped. A cut
+	// goes between characters of the message, so it may split an escape already in it ("...\u{20..."): no hidden
+	// character can be forged that way, but escaped_text's "never inside an escape" does not hold for those pieces.
 	SNK_API std::string escaped_message(std::string_view text, std::size_t max_bytes);
 }

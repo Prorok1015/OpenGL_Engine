@@ -208,8 +208,8 @@ namespace
 
 	std::optional<std::string> created_file_error(const std::string& path, const std::vector<fs::path>& content_roots)
 	{
-		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", path);
-		if (!tag_of(path, content_roots)) return std::format("'{}' is not inside a content root", path);
+		if (!is_plain_relative(path)) return std::format("'{}' is not a relative path inside the project", journal_path_text(path));
+		if (!tag_of(path, content_roots)) return std::format("'{}' is not inside a content root", journal_path_text(path));
 		return std::nullopt;
 	}
 

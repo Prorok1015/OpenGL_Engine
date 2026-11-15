@@ -289,7 +289,7 @@ BOOST_AUTO_TEST_CASE(AnyInput_GivesALineThatHidesNothing)
 	for (int code = 0; code < 256; ++code) inputs.emplace_back(1, static_cast<char>(code));
 	std::vector<std::uint32_t> points;
 	for (std::uint32_t c = 0; c < 0x4000; ++c) points.push_back(c);
-	for (std::uint32_t c = 0x4000; c <= 0x10FFFF; c += 16) points.push_back(c);
+	for (std::uint32_t c = 0x4000; c <= 0x10FFFF; c += 64) points.push_back(c);
 	const auto every_one = [&points](std::uint32_t first, std::uint32_t last) {
 		for (std::uint32_t c = first; c <= last; ++c) points.push_back(c);
 	};

@@ -256,7 +256,6 @@ namespace {
 		return out;
 	}
 
-	// What the journal of a migration says it changed, as a rollback would put it back.
 	// Text from the project's files (a path, a name, a version, a reason that quotes one) as part of one line of the
 	// question a person reads: a line break in it must not forge a line there.
 	std::string shown(std::string_view text, std::size_t max_bytes = 1024)
@@ -271,6 +270,7 @@ namespace {
 		return edt::forge::escaped_message(text, max_bytes);
 	}
 
+	// What the journal of a migration says it changed, as a rollback would put it back.
 	struct journal_view
 	{
 		// Why there is nothing to roll back (no journal, one that does not read, one that fails
