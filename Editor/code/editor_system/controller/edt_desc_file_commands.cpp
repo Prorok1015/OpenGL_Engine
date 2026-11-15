@@ -344,7 +344,7 @@ namespace {
 	std::string unreadable_entry_text(const level_answer& answer)
 	{
 		return std::format("the open level '{}' has a worlds entry '{}' that the path rules reject ({}): "
-			"desc files are not written until it is fixed or the level is closed", answer.level, edt::forge::sanitize_text(answer.entry, 200), answer.rule);
+			"desc files are not written until it is fixed or the level is closed", answer.level, edt::forge::escaped_text(answer.entry, 200), answer.rule);
 	}
 
 	struct request_path
