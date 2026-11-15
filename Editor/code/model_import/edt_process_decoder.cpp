@@ -12,6 +12,9 @@
 #include <iterator>
 #include <stdexcept>
 #include <stop_token>
+#include <system_error>
+#include <utility>
+#include <vector>
 #include <unordered_set>
 #include <initializer_list>
 #include <unordered_set>
@@ -447,6 +450,33 @@ std::uint64_t edt::decoder_memory_limit(std::int64_t configured_mb, std::string&
 		mb = k_max_memory_mb;
 	}
 	return mb * k_mib;
+}
+
+edt::decoder_steps edt::steps_of(std::shared_ptr<const process_decoder> decoder)
+{
+	decoder_steps steps;
+	steps.scan = [decoder](const import_source& source, ds::task_context* task) { return decoder->scan(source, task); };
+	steps.import = [decoder](const import_source& source, ds::task_context* task) { return decoder->import(source, task); };
+	steps.unavailable_reason = [decoder] { return decoder->unavailable_reason(); };
+	return steps;
+}
+
+std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources, const std::string& folder)
+{
+	const std::vector<fs::path> roots = resources.mount_roots(res::tag::memory);
+	if (roots.empty()) return std::nullopt;
+	const fs::path dir = roots.back() / fs_paths::path_from_utf8(folder);
+	std::error_code ec;
+	if (!fs::is_directory(dir, ec)) return std::nullopt;
+	std::vector<res::tag> found;
+	for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+		if (it->is_regular_file(ec)) found.emplace_back(res::tag::memory, folder + fs_paths::generic_utf8_of(it->path().lexically_relative(dir)));
+	}
+	for (const res::tag& tag : found) resources.erase(tag);
+	for (const res::tag& tag : found) {
+		if (resources.exists(tag)) return tag;
+	}
+	return std::nullopt;
 }
 
 edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config)

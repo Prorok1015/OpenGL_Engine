@@ -69,6 +69,14 @@ struct cancel_fixture : test_util::scene_env
 		return ctx;
 	}
 
+	// The in-process import the decoder runs, reading the model from the disk.
+	static edt::import_source source_of(const std::filesystem::path& file)
+	{
+		edt::import_source source;
+		source.path = file;
+		return source;
+	}
+
 	std::filesystem::path dir;
 	std::filesystem::path model;
 };
@@ -86,7 +94,7 @@ BOOST_AUTO_TEST_CASE(Import_OfAFileBeyondThePersonLimit_FailsBeforeReadingIt)
 	if (ec) return;
 
 	edt::model_importer importer(*descs, *rs);
-	const edt::import_intermediate result = importer.import_background(huge, nullptr);
+	const edt::import_intermediate result = importer.import_background(source_of(huge), nullptr);
 	BOOST_CHECK(result.error.find("too big") != std::string::npos);
 	BOOST_CHECK(result.all_tags.empty());
 }
@@ -127,7 +135,7 @@ BOOST_AUTO_TEST_CASE(Import_StoppedBeforeItStarts_ThrowsCancelledAndStoresNothin
 	source.request_stop();
 	ds::task_context ctx = context_of(source.get_token());
 
-	BOOST_CHECK_THROW(importer.import_background(model, &ctx), ds::task_cancelled);
+	BOOST_CHECK_THROW(importer.import_background(source_of(model), &ctx), ds::task_cancelled);
 	BOOST_TEST(ram->files.empty());
 }
 
@@ -139,7 +147,7 @@ BOOST_AUTO_TEST_CASE(Import_StoppedAfterTheMaterialPhase_LeavesNoMemoryTagBehind
 	edt::model_importer importer(*descs, *rs);
 	ds::task_context ctx = context_of(source.get_token());
 
-	BOOST_CHECK_THROW(importer.import_background(model, &ctx), ds::task_cancelled);
+	BOOST_CHECK_THROW(importer.import_background(source_of(model), &ctx), ds::task_cancelled);
 
 	BOOST_TEST(stopping.stores >= 1); // something was stored before the stop
 	BOOST_TEST(stopping.files.empty());
@@ -152,7 +160,7 @@ BOOST_AUTO_TEST_CASE(Import_ReImportCancelled_KeepsTheTagsOfTheFirstImport)
 	auto& stopping = rs->registrate_resolver<stopping_resolver>(res::tag::memory, &source);
 	stopping.armed = false;
 	edt::model_importer importer(*descs, *rs);
-	BOOST_REQUIRE(importer.import_background(model).error.empty());
+	BOOST_REQUIRE(importer.import_background(source_of(model)).error.empty());
 	std::vector<res::tag> before;
 	for (const auto& [tag, data] : stopping.files) {
 		before.push_back(tag);
@@ -162,7 +170,7 @@ BOOST_AUTO_TEST_CASE(Import_ReImportCancelled_KeepsTheTagsOfTheFirstImport)
 	// The same model again: everything exists already, the stop comes with the first store (the geometry).
 	stopping.armed = true;
 	ds::task_context ctx = context_of(source.get_token());
-	BOOST_CHECK_THROW(importer.import_background(model, &ctx), ds::task_cancelled);
+	BOOST_CHECK_THROW(importer.import_background(source_of(model), &ctx), ds::task_cancelled);
 
 	for (const auto& tag : before) {
 		BOOST_TEST_CONTEXT(tag.string()) BOOST_TEST(stopping.files.contains(tag));
@@ -176,7 +184,7 @@ BOOST_AUTO_TEST_CASE(Import_WithAContextThatIsNotStopped_RunsToTheEnd)
 	std::stop_source source;
 	ds::task_context ctx = context_of(source.get_token());
 
-	const edt::import_intermediate result = importer.import_background(model, &ctx);
+	const edt::import_intermediate result = importer.import_background(source_of(model), &ctx);
 
 	BOOST_TEST(result.error.empty());
 	BOOST_TEST(result.prefab_tag.is_valid());
@@ -187,7 +195,7 @@ BOOST_AUTO_TEST_CASE(Import_WithoutAContext_StillWorks)
 {
 	edt::model_importer importer(*descs, *rs);
 
-	const edt::import_intermediate result = importer.import_background(model);
+	const edt::import_intermediate result = importer.import_background(source_of(model));
 
 	BOOST_TEST(result.error.empty());
 }

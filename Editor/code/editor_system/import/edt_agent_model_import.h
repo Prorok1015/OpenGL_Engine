@@ -81,7 +81,7 @@ namespace edt {
 		// The largest model file an agent may import: the job reads it into memory and parses it.
 		std::uintmax_t max_source_bytes = 64ull * 1024ull * 1024ull;
 		// How long the job may parse a model before it fails.
-		std::chrono::seconds parse_time_limit{ 60 };
+		std::chrono::seconds parse_time_limit{ k_agent_parse_time_limit };
 		// What the model may make the import read besides itself.
 		model_file_limits file_limits;
 	};

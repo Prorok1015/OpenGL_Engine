@@ -190,6 +190,10 @@ namespace edt {
 		std::optional<import_intermediate> m_import_result;
 		// Set when the job itself failed (exception); a failed import reports through m_import_result->error.
 		std::string m_import_failure;
+		// The memory:// copies of the import the export dialog shows (#987): erased when it closes.
+		std::vector<res::tag> m_import_memory_tags;
+		std::uint64_t m_import_serial = 0;
+		void erase_import_memory_copies();
 		// Owner of the job callbacks; after the import state and the importer/dialog they touch, so it dies (and cancels) first.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		void start_import(const std::filesystem::path& abs_path);

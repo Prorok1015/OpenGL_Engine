@@ -2,6 +2,7 @@
 #include "edt_async_import_task.h"
 #include "edt_model_file_access.h"
 #include "edt_model_importer.h"
+#include "edt_process_decoder.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
@@ -19,8 +20,6 @@
 
 namespace edt {
 
-	class process_decoder;
-
 	// Where a model a tag names lies on the disk: the file, and the mount root (content root) it was found in.
 	struct model_location
 	{
@@ -35,13 +34,7 @@ namespace edt {
 	class decoded_model_adapter : public core::res::adapter_interface
 	{
 	public:
-		struct decoder_steps
-		{
-			std::function<model_file_scan(const import_source&, ds::task_context*)> scan;
-			std::function<import_intermediate(const import_source&, ds::task_context*)> import;
-			// Empty when the decoder can run.
-			std::function<std::string()> unavailable_reason;
-		};
+		using decoder_steps = edt::decoder_steps;
 
 		// Shorter than an agent's import: a level waits for its models.
 		static constexpr std::chrono::seconds k_deadline{ 10 };
