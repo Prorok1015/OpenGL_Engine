@@ -80,9 +80,7 @@ namespace edt
 		const std::string label = (node.name.empty() ? std::string{ "(unnamed)" } : node.name) + "##" + std::to_string(node.node_id);
 		const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
 		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-			m_selected_path = path;
-			m_has_selection = true;
-			if (m_on_node_selected) m_on_node_selected(path);
+			select_node(path);
 		}
 		if (open) {
 			for (const auto& child : node.children) {

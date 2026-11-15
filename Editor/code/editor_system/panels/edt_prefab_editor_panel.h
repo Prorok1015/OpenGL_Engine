@@ -31,6 +31,12 @@ namespace edt
 		void set_on_revert(std::function<void()> cb) { m_on_revert = std::move(cb); }
 		// A node picked in the tree (ids from the root, empty: the root): the editor shows it in the Inspector.
 		void set_on_node_selected(std::function<void(const std::vector<std::uint64_t>&)> cb) { m_on_node_selected = std::move(cb); }
+		void select_node(const std::vector<std::uint64_t>& path)
+		{
+			m_selected_path = path;
+			m_has_selection = true;
+			if (m_on_node_selected) m_on_node_selected(path);
+		}
 		void clear_selection() { m_selected_path.clear(); m_has_selection = false; }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
 		void set_input_router(inp::input_router* router) { m_router = router; }

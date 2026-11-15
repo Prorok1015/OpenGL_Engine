@@ -492,6 +492,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
 		*m_hierarchy_panel, *m_inspector_panel,
 		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
+	// After wire_selection, which blanks the Inspector on an empty selection (level undo, Esc in the viewport): the prefab node stays.
+	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
+		if (!sel.empty() || !m_inspector_target.is_prefab()) return;
+		prefab_document* prefab = prefab_of(m_context->documents());
+		if (prefab && prefab->id() == m_inspector_target.prefab()) {
+			m_inspector_panel->set_selected_node(prefab->working_node(m_inspector_target.path()));
+		}
+	}));
 	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
 
 	// Create prefab editor panel (EPIC-25)
@@ -770,7 +778,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return result.ok;
 	};
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo)) {
+			asset_undo_label, asset_undo, [this] { return m_inspector_target.is_prefab(); })) {
 		m_registrations.push_back(std::move(action));
 	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
@@ -2027,7 +2035,8 @@ void edt::editor_system::wire_panel_callbacks()
 	m_inspector_panel->set_on_node_changed([this]() {
 		route_node_changed(m_inspector_target, prefab_of(m_context->documents()), m_state);
 	});
-	// A level selection takes the Inspector back from the prefab window.
+	// A level selection takes the Inspector back from the prefab window. Runs before wire_selection (wire_panel_callbacks comes
+	// first), so the pending edit is routed to the prefab before wire_selection hands the Inspector the level's node.
 	m_inspector_connections.push_back(m_context->events().selection_changed.subscribe([this](const selection& sel) {
 		if (!sel.empty()) release_inspector_to_level();
 	}));
@@ -2038,7 +2047,12 @@ void edt::editor_system::wire_panel_callbacks()
 		if (!prefab || prefab->id() != id) return;
 		if (prefab->working_replaced() == m_inspector_target.replaced()) return;
 		m_inspector_target.set_replaced(prefab->working_replaced());
-		m_inspector_panel->set_selected_node(prefab->working_node(m_inspector_target.path()));
+		scn::prefab_desc::prefab_node* node = prefab->working_node(m_inspector_target.path());
+		if (!node) {
+			release_inspector_to_level();
+			return;
+		}
+		m_inspector_panel->set_selected_node(node);
 	}));
 	m_inspector_connections.push_back(m_context->events().document_closed.subscribe([this](document_id id) {
 		if (m_inspector_target.is_prefab() && id == m_inspector_target.prefab()) release_inspector_to_level();
@@ -2523,6 +2537,8 @@ void edt::editor_system::select_prefab_node(const std::vector<std::uint64_t>& pa
 void edt::editor_system::release_inspector_to_level()
 {
 	if (!m_inspector_target.is_prefab()) return;
+	// A drag or a typed value that has not committed yet belongs to the prefab: route it while the target still says so.
+	m_inspector_panel->flush_pending_commit();
 	m_inspector_target.reset();
 	m_inspector_panel->set_selected_node(nullptr);
 	m_prefab_panel->clear_selection();

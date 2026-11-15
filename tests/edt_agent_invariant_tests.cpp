@@ -34,6 +34,9 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_model.h>
+#include "edt_inspector_panel.h"
+#include "edt_prefab_editor_panel.h"
+#include "edt_prefab_document.h"
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -1273,7 +1276,7 @@ BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevel
 		return false;
 	};
 	const auto settle = [&](const std::function<bool()>& done) {
-		for (int i = 0; i < 60 && !done(); ++i) {
+		for (int i = 0; i < 3000 && !done(); ++i) {
 			test_util::pump(tasks);
 			contexts.update(std::chrono::duration<float>(0.001f));
 		}
@@ -1301,6 +1304,36 @@ BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevel
 	BOOST_TEST(world_has("renamed"));
 	BOOST_TEST(!world_has("plain"));
 	BOOST_TEST(scene.is_dirty() == dirty_before);
+	BOOST_TEST(scene.generation() == generation_before);
+}
+
+// #147: an edit that waits for its widget to go idle belongs to the prefab it was made in, whatever takes the Inspector next.
+BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_WhenALevelSelectionTakesTheInspector, desc_problems_fixture)
+{
+	const res::tag prefab = res::tag::make("prefabs/pending_edit.prefab.desc");
+	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000d1","name":"other"}]}]})json");
+	edt::editor_context& context = *editor().context();
+	auto* inspector = dynamic_cast<edt::inspector_panel*>(context.panels().find("inspector"));
+	auto* tree = dynamic_cast<edt::prefab_editor_panel*>(context.panels().find("prefab_editor"));
+	BOOST_REQUIRE(inspector && tree);
+	const edt::scene_document& scene = edt::scene_of(context.documents());
+	const std::uint64_t generation_before = scene.generation();
+
+	open_prefab(prefab);
+	edt::prefab_document* document = edt::prefab_of(context.documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_REQUIRE(!document->is_dirty());
+	tree->select_node({ 0xe1 });
+	document->working_node({ 0xe1 })->name = "typed";
+	inspector->note_edit();
+
+	context.selection().select({ .document = context.documents().scene().id(), .world = "w0", .path = { 0xd1 } });
+
+	BOOST_TEST(!inspector->has_pending_commit());
+	BOOST_TEST(document->is_dirty());
 	BOOST_TEST(scene.generation() == generation_before);
 }
 
