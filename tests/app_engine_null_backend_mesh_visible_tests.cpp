@@ -64,10 +64,10 @@ struct mesh_visible_fixture : test_util::null_engine_fixture
 		return draws;
 	}
 
-	void load_bench_level()
+	void load_quads_level()
 	{
 		auto& levels = storage.require<scn::context_manager>();
-		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/bench_10_meshes.desc")));
+		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 		test_util::pump(tasks);
 		BOOST_REQUIRE(run_frames(3) == 3);
 	}
@@ -79,7 +79,7 @@ BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendMeshVisible, mesh_visible_fixture)
 
 BOOST_AUTO_TEST_CASE(AMeshWithoutTheRenderableMark_IsNotInTheRenderData_AndComesBackWithIt)
 {
-	load_bench_level();
+	load_quads_level();
 	const mesh_ref mesh = first_drawn_mesh();
 	BOOST_REQUIRE(mesh.reg);
 
