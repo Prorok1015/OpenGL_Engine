@@ -289,6 +289,49 @@ BOOST_AUTO_TEST_CASE(TheChainIsMergedFromTheFarthestParentToTheNearest)
 	BOOST_TEST(!document.inherited().contains("__parent"));
 }
 
+// #964: the engine loads a file's parent by its path; until it follows the guid the document does the same.
+BOOST_AUTO_TEST_CASE(AParentWrittenAsAReferenceObject_IsFoundByItsPath)
+{
+	put("parent.desc", R"({"__type":"test.config","speed":2.5})");
+	put("moved.desc", R"({"__type":"test.config","speed":6.5})");
+	const res::tag by_path = put("by_path.desc", R"({"__type":"test.config","__parent":{"path":"res://parent.desc"}})");
+	const res::tag by_id = put("by_id.desc",
+		R"({"__type":"test.config","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://parent.desc"}})");
+
+	edt::data_document plain = make();
+	const edt::open_result opened = plain.open(by_path);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(plain.shown().at("speed").to_number<double>() == 2.5);
+	BOOST_REQUIRE(plain.parents().size() == 1u);
+	BOOST_TEST(plain.parents().front().view() == "res://parent.desc");
+
+	edt::data_document unindexed = make();
+	BOOST_REQUIRE(unindexed.open(by_id).opened);
+	BOOST_TEST(unindexed.shown().at("speed").to_number<double>() == 2.5, "without an asset index the path is the parent");
+
+	auto index = std::make_shared<ids_index>();
+	index->hold(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), "res://moved.desc");
+	rs->set_asset_index(index);
+	edt::data_document indexed = make();
+	const edt::open_result followed = indexed.open(by_id);
+	const double speed = followed.opened ? indexed.shown().at("speed").to_number<double>() : 0.0;
+	const std::vector<res::tag> parents = indexed.parents();
+	rs->set_asset_index(nullptr);
+	BOOST_REQUIRE_MESSAGE(followed.opened, followed.error);
+	BOOST_TEST(speed == 2.5, "the path is the parent, wherever the guid leads");
+	BOOST_REQUIRE(parents.size() == 1u);
+	BOOST_TEST(parents.front().view() == "res://parent.desc");
+
+	const auto refused = [this](const res::tag& file) {
+		const edt::open_result result = make().open(file);
+		BOOST_TEST(!result.opened);
+		BOOST_TEST(result.error.find("res://") != std::string::npos, result.error);
+	};
+	refused(put("user_ref.desc", R"({"__type":"test.config","__parent":{"path":"user://p.desc"}})"));
+	refused(put("guid_only.desc", R"({"__type":"test.config","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})"));
+	refused(put("other_key.desc", R"({"__type":"test.config","__parent":{"path":"res://parent.desc","x":1}})"));
+}
+
 BOOST_AUTO_TEST_CASE(AParentMayLiveInALowerLayer_TheDocumentItselfMayNot)
 {
 	write(lower, "engine.desc", R"({"__type":"test.config","speed":8.0})");
@@ -954,6 +997,34 @@ BOOST_AUTO_TEST_CASE(DiskChangeSerial_MovesForANewOutsideVersionOnly)
 	rs->signal_changed(file);
 	pump();
 	BOOST_TEST(document.disk_change_serial() == first + 1);
+}
+
+// #966: a worlds entry the agents' path rules reject is compared by file for a person: only the world it names is the level's.
+BOOST_AUTO_TEST_CASE(AnOddWorldEntryOfTheOpenLevel_KeepsOnlyTheFileItNamesFromAPerson)
+{
+	fs::create_directories(res_root / "worlds");
+	fs::create_directories(res_root / "levels");
+	const res::tag world = put("worlds/x.desc", R"({"__type":"test.config","speed":1.0})");
+	const res::tag file = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	put("levels/a.desc",
+		R"({"__type":"level_desc","worlds":[{"path":"res://worlds//x.desc"},{"path":"res://worlds/../gone.desc"},{"path":"res://worlds/./missing.desc"}]})");
+	open_level = { "levels/a.desc" };
+
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(file);
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_TEST(document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 9.0;
+		return true;
+	}));
+	const edt::save_result saved = document.save();
+	BOOST_TEST_MESSAGE(saved.error);
+	BOOST_TEST(saved.saved);
+	BOOST_TEST(parsed("config.desc").at("speed").as_double() == 9.0);
+
+	const edt::open_result of_level = make().open(world);
+	BOOST_TEST(!of_level.opened);
+	BOOST_TEST(of_level.error.find("open level") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(SaveOver_OfAGoneWorldOfTheOpenLevel_IsRefused)
@@ -1839,6 +1910,33 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
 	BOOST_TEST(held == expected);
 	BOOST_REQUIRE_MESSAGE(again.saved, again.error);
 	BOOST_TEST(parsed("linked.desc").at("texture") == expected);
+}
+
+// #954: a person's save is not held to the agent's rule: a reference whose file moved is saved, with its path put where
+// the guid is now.
+BOOST_AUTO_TEST_CASE(Save_OfAReferenceWhoseFileMoved_Succeeds_AndWritesWhereTheGuidIsNow)
+{
+	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
+	auto index = std::make_shared<ids_index>();
+	index->hold(id, "res://textures/moved.png");
+	rs->set_asset_index(index);
+	const res::tag linked = put("linked.desc",
+		R"({"__type":"test.linked","speed":2.0,"texture":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://textures/old.png"}})");
+	edt::data_document document = make();
+	const edt::open_result opened = document.open(linked);
+	const bool edited = opened.opened && document.edit([](json::value& shown) {
+		shown.as_object()["speed"] = 3.0;
+		return true;
+	});
+	const edt::save_result saved = edited ? document.save() : edt::save_result::failure("not edited");
+	rs->set_asset_index(nullptr);
+
+	BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
+	BOOST_REQUIRE(edited);
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	const json::value expected = json::object{ { "guid", res::to_text(id) }, { "path", "res://textures/moved.png" } };
+	BOOST_TEST(parsed("linked.desc").at("texture") == expected);
+	BOOST_TEST(parsed("linked.desc").at("speed").to_number<double>() == 3.0);
 }
 
 // #773: in a __parent chain a reference field of the nearer file replaces the farther one's value whole. Merged key by

@@ -292,6 +292,9 @@ int main(int argc, char** argv)
 	import.path = request->source_path;
 	import.preloaded = source;
 	import.limits = request->limits;
+	import.boundary = request->boundary;
+	import.memory_folder = request->memory_folder;
+	import.on_disk = request->on_disk;
 	if (request->mode == edt::decode_request::mode_kind::import) {
 		import.allowed = &request->allowed;
 	}

@@ -7,12 +7,10 @@
 #include <snk/game/gs_input_actions.h>
 #include "edt_editor_system.h"
 #include "edt_data_protocol.h"
+#include "edt_project_trust_service.h"
 #include <snk/common/fs_paths.h>
 #include <snk/config/cfg_variables.h>
 #include <filesystem>
-#if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
-#endif
 #include <snk/desc/desc_system.h>
 #include <snk/project/prj_project.h>
 
@@ -39,6 +37,18 @@ void editor::apply_default_settings()
 	cfg::set_variable("gui/layout_file", fs_paths::utf8_of(user_data / "settings" / "layout_settings.ini"));
 }
 
+std::function<bool(std::string_view, const std::filesystem::path&)> editor::project_trust_gate(
+	ds::app_data_storage& data, bool trust_flag)
+{
+	if (data.has_value<edt::project_trust_service>()) {
+		data.require<edt::project_trust_service>().set_flag_trust(trust_flag);
+	}
+	return [&data, trust_flag](std::string_view name, const std::filesystem::path& copy) {
+		if (!data.has_value<edt::project_trust_service>()) return trust_flag;
+		return data.require<edt::project_trust_service>().allow_library(name, copy);
+	};
+}
+
 void editor::editor_module::register_services(ds::app_data_storage& data)
 {
 	using namespace components;
@@ -58,10 +68,8 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 		data.require<gs::input_actions>().set_user_folder(user_data_path / "settings" / "input_bindings");
 	}
 
-#if SNK_HAS_ASSIMP
-	auto& desc_system = data.require<desc::desc_system>();
-	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(res));
-#else
+	// With assimp, editor_system::init registers the adapter of .glb/.gltf/.obj/.fbx: through the decoder process (#925).
+#if !SNK_HAS_ASSIMP
 	egLOG_WARN("Editor/Import", "built without assimp (SNK_WITH_ASSIMP=OFF): .glb/.gltf/.obj/.fbx models cannot be loaded or imported");
 #endif
 
@@ -83,7 +91,4 @@ void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
 	editor_term(data);
-#if SNK_HAS_ASSIMP
-	data.require<res::resource_system>().unregistrate_adapter(scn::model_importer_adapter::INFO);
-#endif
 }

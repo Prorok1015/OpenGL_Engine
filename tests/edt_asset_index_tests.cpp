@@ -623,4 +623,150 @@ BOOST_AUTO_TEST_CASE(a_hash_pass_takes_no_full_refresh)
 	BOOST_TEST((link.index().path_of(*res::asset_id_from_text(k_guid_b)) == std::optional{ res::tag{ "res://b.txt" } }));
 }
 
+// #968: when an agent's guid cannot be judged yet. No project (no link) is never pending; before the first walk is
+// applied, while files are hashed and after dropped changes detached the link it is.
+BOOST_AUTO_TEST_CASE(the_index_is_pending_until_it_is_attached_and_every_file_is_hashed)
+{
+	project.write("res/a.txt", "a");
+	project.write("res/a.txt.resource", meta_text(k_guid_a));
+	make_system();
+	BOOST_TEST(!edt::asset_index_wait(nullptr).has_value());
+	assets->set_max_deferred_for_tests(1);
+	edt::asset_index_link link(*assets, *resources);
+	assets->rebuild();
+	link.poll();
+	BOOST_TEST(!link.attached());
+	BOOST_TEST(edt::asset_index_wait(&link).has_value());
+
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	BOOST_TEST(!edt::asset_index_wait(&link).has_value());
+
+	// A new file without a .resource, old enough to get its ID once hashed: pending while its hash is not known.
+	project.write("res/x.txt", "x");
+	fs::last_write_time(content / "x.txt", fs::file_time_type::clock::now() - std::chrono::hours(1));
+	apply({ change("x.txt", res::change_kind::created) });
+	link.poll();
+	BOOST_TEST(link.attached());
+	BOOST_TEST(assets->pending_hashes() > 0u);
+	BOOST_TEST(edt::asset_index_wait(&link).has_value());
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u && assets->pending_ids() == 0u; }));
+	link.poll();
+	BOOST_TEST(!edt::asset_index_wait(&link).has_value());
+
+	// Changes dropped behind a walk detach the link until the next walk is applied.
+	assets->rebuild();
+	res::file_change first;
+	first.tag = res::tag{ "res://x.txt" };
+	first.kind = res::change_kind::modified;
+	res::file_change second = first;
+	second.tag = res::tag{ "res://y.txt" };
+	assets->apply_changes(std::vector<res::file_change>{ first, second });
+	BOOST_TEST(assets->changes_dropped() >= 1u);
+	link.poll();
+	BOOST_TEST(!link.attached());
+	BOOST_TEST(edt::asset_index_wait(&link).has_value());
+
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u && assets->pending_ids() == 0u; }));
+	BOOST_TEST(!edt::asset_index_wait(&link).has_value());
+}
+
+// #968: a new file from outside (a git pull) waits for its ID after its hash; until then its guid is unknown, so the
+// index is pending, also while a git operation holds the ID back.
+BOOST_AUTO_TEST_CASE(a_new_file_waiting_for_its_id_keeps_the_index_pending)
+{
+	make_system();
+	bool git_busy = true;
+	assets->set_vcs_busy([&git_busy] { return git_busy; });
+	edt::asset_index_link link(*assets, *resources);
+	assets->rebuild();
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	BOOST_TEST(!edt::asset_index_wait(&link).has_value());
+
+	project.write("res/pulled.txt", "pulled");
+	fs::last_write_time(content / "pulled.txt", fs::file_time_type::clock::now() - std::chrono::hours(1));
+	apply({ change("pulled.txt", res::change_kind::created) });
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	link.poll();
+	BOOST_TEST(assets->pending_ids() == 1u);
+	BOOST_TEST(assets->ids_held_by_git());
+	BOOST_TEST(edt::asset_index_wait(&link).has_value());
+
+	git_busy = false;
+	assets->poll(true);
+	BOOST_TEST(assets->pending_ids() == 0u);
+	BOOST_REQUIRE(wait_for([&] { return !link.pending(); }));
+	link.poll();
+	BOOST_TEST(!edt::asset_index_wait(&link).has_value());
+}
+
+// #968: the busy text names why the index waits only once the wait is longer than k_detail_after, one clause per reason.
+BOOST_AUTO_TEST_CASE(a_long_wait_names_its_reasons)
+{
+	make_system();
+	std::chrono::steady_clock::time_point now{};
+	edt::asset_index_link link(*assets, *resources);
+	link.set_clock_for_tests([&now] { return now; });
+	const std::string base(edt::k_guid_index_pending);
+	const auto text = [&link] { return edt::asset_index_wait(&link).value_or("ready"); };
+	const auto past_detail = edt::asset_index_link::k_detail_after + std::chrono::seconds(1);
+
+	assets->rebuild();
+	link.poll();
+	BOOST_TEST(text() == base);
+	now += past_detail;
+	BOOST_TEST(text().find("; the index is not attached yet (the first scan is running)") != std::string::npos, text());
+
+	pump();
+	link.poll();
+	BOOST_REQUIRE(link.attached());
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	link.poll();
+	BOOST_TEST(text() == "ready");
+
+	// Hashes: a fresh wait shows the base text, a long one the count.
+	project.write("res/x.txt", "x");
+	project.write("res/y.txt", "y");
+	apply({ change("x.txt", res::change_kind::created), change("y.txt", res::change_kind::created) });
+	link.poll();
+	BOOST_TEST(text() == base);
+	now += past_detail;
+	BOOST_TEST(text().find("; 2 file(s) are still being hashed") != std::string::npos, text());
+
+	// Hashed, but written just now: the files wait for their quiet time before they get an ID.
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u; }));
+	link.poll();
+	BOOST_REQUIRE(assets->pending_ids() == 2u);
+	BOOST_TEST(text().find("; 2 new file(s) wait for an ID") != std::string::npos, text());
+	BOOST_TEST(text().find("hashed") == std::string::npos, text());
+
+	// Old enough now, but a git operation runs.
+	bool git_busy = true;
+	assets->set_vcs_busy([&git_busy] { return git_busy; });
+	fs::last_write_time(content / "x.txt", fs::file_time_type::clock::now() - std::chrono::hours(1));
+	fs::last_write_time(content / "y.txt", fs::file_time_type::clock::now() - std::chrono::hours(1));
+	apply({ change("x.txt", res::change_kind::modified), change("y.txt", res::change_kind::modified) });
+	BOOST_REQUIRE(wait_for([&] { return assets->pending_hashes() == 0u && assets->ids_held_by_git(); }));
+	link.poll();
+	BOOST_TEST(text().find("; git is busy, new files wait for their IDs") != std::string::npos, text());
+
+	git_busy = false;
+	assets->poll(true);
+	BOOST_REQUIRE(wait_for([&] { return !link.pending(); }));
+	link.poll();
+	BOOST_TEST(text() == "ready");
+	// A wait that begins again is measured from its own start.
+	project.write("res/z.txt", "z");
+	apply({ change("z.txt", res::change_kind::created) });
+	link.poll();
+	BOOST_TEST(text() == base);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

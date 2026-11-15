@@ -1,11 +1,16 @@
 #pragma once
 #include <snk/resource/res_tag.h>
+#include <cstdint>
 #include <memory>
 #include <string_view>
 
 namespace res
 {
 	class resource_system;
+
+	// +1 on any change to the virtual functions below: the module layout key mixes it in, tools/ci/vtable_pins.json pins them (#922).
+	inline constexpr std::uint32_t resource_entry_abi_revision = 1;
+
 	class resource_entry
 	{
 		friend res::resource_system;

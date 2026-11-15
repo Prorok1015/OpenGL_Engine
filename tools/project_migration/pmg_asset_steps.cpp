@@ -11,6 +11,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -63,13 +64,19 @@ namespace
 
 			res::asset_meta meta;
 			if (const std::optional<res::asset_id> guid = guid_of(context.files, file.path)) {
-				if (const auto taken = holders.find(*guid); taken == holders.end()) {
+				std::optional<std::string> holder;
+				if (const auto taken = holders.find(*guid); taken != holders.end()) {
+					holder = taken->second;
+				} else if (const std::optional<res::tag> below = context.assets.path_of(*guid)) {
+					holder = std::format("{} (a layer below the project)", below->view());
+				}
+				if (!holder) {
 					meta.guid = *guid;
 					context.warn(std::format("{}: ID {} from its __guid", file.path, res::to_text(*guid)));
 				} else {
 					meta.guid = res::generate_asset_id();
 					context.warn(std::format("{}: its __guid {} is already the ID of {}; it gets the new ID {} (assets.ids_drop_desc_guid takes the __guid out)",
-						file.path, res::to_text(*guid), taken->second, res::to_text(meta.guid)));
+						file.path, res::to_text(*guid), *holder, res::to_text(meta.guid)));
 				}
 			} else {
 				meta.guid = res::generate_asset_id();
@@ -79,6 +86,42 @@ namespace
 			++created;
 		}
 		context.warn(std::format("{} .resource files created", created));
+	}
+
+	bool ids_below_needed(const scan_result& scan)
+	{
+		return std::ranges::any_of(scan.files, [](const scanned_file& file) { return !file.id_held_below.empty(); });
+	}
+
+	// A project file whose .resource carries the ID of a file below the project (a copy of an engine asset): the
+	// engine's file keeps the ID, so the copy gets a new one; its importer, settings and flags stay (#902).
+	void ids_below_apply(project_step_context& context)
+	{
+		std::size_t renewed = 0;
+		for (const scanned_file& file : context.scan.files) {
+			if (file.id_held_below.empty()) continue;
+			const std::string& sidecar = file.id_held_below_meta;
+			const res::asset_meta_result read = res::read_asset_meta(context.files.read(sidecar));
+			if (!read.meta) {
+				throw std::runtime_error(std::format("{}: cannot read it again to give {} a new ID", sidecar,
+					file.path));
+			}
+			res::asset_meta meta = *read.meta;
+			const res::asset_id old = meta.guid;
+			const std::optional<res::tag> holder =
+				context.assets.held_below(old) ? context.assets.path_of(old) : std::nullopt;
+			if (!holder || holder->view() != file.id_held_below) {
+				context.warn(std::format("{}: {} no longer carries the ID of {}; left as it is", file.path, sidecar,
+					file.id_held_below));
+				continue;
+			}
+			meta.guid = res::generate_asset_id();
+			context.files.write(sidecar, res::write_asset_meta(meta));
+			context.warn(std::format("{}: its ID {} belongs to {} of a layer below the project; it gets the new ID {} "
+				"({})", file.path, res::to_text(old), file.id_held_below, res::to_text(meta.guid), sidecar));
+			++renewed;
+		}
+		context.warn(std::format("{} .resource files with a new ID", renewed));
 	}
 
 	// What drop_guid_apply takes a __guid out of: a desc whose .resource reads, or one without a .resource, which assets.ids
@@ -153,8 +196,26 @@ namespace
 	void refs_apply(project_step_context& context)
 	{
 		if (!context.descs) throw std::runtime_error("assets.refs: no game layer to read the references by");
+		// The files assets.ids_below gave a new ID: a path to one that turns into {guid, path} is a line of the report.
+		std::set<std::string> renewed;
+		for (const scanned_file& file : context.scan.files) {
+			if (file.id_held_below.empty()) continue;
+			if (const auto listed = context.assets.assets().find(file.path); listed != context.assets.assets().end()) {
+				renewed.insert(res::asset_name_key(listed->second.res_path, res::asset_names_case_insensitive));
+			}
+		}
+		std::set<std::string> to_copies;
 		desc::reference_ids ids;
-		ids.id_of = [&context](const res::tag& tag) { return context.assets.id_of(tag); };
+		ids.id_of = [&context, &renewed, &to_copies](const res::tag& tag) {
+			std::optional<res::asset_id> id = context.assets.id_of(tag);
+			if (id && tag.protocol() == res::tag::default_protocol()) {
+				const std::string_view res_path = tag.view().substr(tag.protocol().size() + 3);
+				if (renewed.contains(res::asset_name_key(res_path, res::asset_names_case_insensitive))) {
+					to_copies.insert(std::string(tag.view()));
+				}
+			}
+			return id;
+		};
 		ids.path_of = [&context](const res::asset_id& id) { return context.assets.path_of(id); };
 
 		desc::reference_counts total;
@@ -170,8 +231,13 @@ namespace
 			options.max_depth = 128;
 			json::value root = json::parse(text, error, {}, options);
 			if (error || !root.is_object()) throw std::runtime_error(std::format("{}: no JSON object after the migration of its types", file.path));
+			to_copies.clear();
 			const desc::reference_counts counts = context.descs->write_references_with(root, ids);
 			if (counts.total() == 0) continue;
+			for (const std::string& copy : to_copies) {
+				context.warn(std::format("{}: {} turned into {{guid, path}} with the new ID of the copy", file.path,
+					copy));
+			}
 			const std::vector<std::byte> bytes = desc::pretty_json_bytes(root);
 			context.files.write(file.path, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 			context.warn(std::format("{}: {} references turned into {{guid, path}}, {} paths repaired", file.path, counts.ids_written, counts.paths_repaired));
@@ -206,6 +272,14 @@ void prj::migration::register_asset_project_steps(project_step_registry& registr
 	ids.needed = &ids_needed;
 	ids.apply = &ids_apply;
 	registry.add(std::move(ids));
+
+	project_step ids_below;
+	ids_below.id = "assets.ids_below";
+	ids_below.phase = project_phase::pre;
+	ids_below.summary = "a new ID for every project file whose .resource carries the ID of an engine file";
+	ids_below.needed = &ids_below_needed;
+	ids_below.apply = &ids_below_apply;
+	registry.add(std::move(ids_below));
 
 	project_step drop_guid;
 	drop_guid.id = "assets.ids_drop_desc_guid";

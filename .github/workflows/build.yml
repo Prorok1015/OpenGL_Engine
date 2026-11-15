@@ -132,6 +132,38 @@ jobs:
             core.setOutput('abi', String(abi));
             core.setOutput('build_matrix', JSON.stringify(matrix));
 
+      # #922: a change of the virtual functions of an interface a module calls or fills (tools/ci/vtable_pins.json) needs
+      # its <interface>_abi_revision raised, which changes the module layout key. In Plan, so every run checks it: no build.
+      # The pins are also compared with the base's (the PR's base, the commit before a push), so a pin edited by hand to
+      # match changed headers fails too. By hand there is no base: the headers alone.
+      - uses: actions/checkout@v4
+      - name: Check the pinned vtables of the module interfaces
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          python3 tools/ci/check_vtable_pins.py --self-test
+          base=""
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+          esac
+          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$' || ! printf '%s' "$base" | grep -q '[1-9a-f]'; then
+            echo "no base commit for this $EVENT event: the pins are checked against the headers only"
+            python3 tools/ci/check_vtable_pins.py
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$base"
+          if ! git cat-file -e "$base:tools/ci/vtable_pins.json" 2>/dev/null; then
+            echo "$base has no tools/ci/vtable_pins.json yet: the pins are checked against the headers only"
+            python3 tools/ci/check_vtable_pins.py
+            exit 0
+          fi
+          base_pins="$RUNNER_TEMP/base_vtable_pins.json"
+          git show "$base:tools/ci/vtable_pins.json" > "$base_pins"
+          python3 tools/ci/check_vtable_pins.py --base-pins "$base_pins"
+
   # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
   base-marker:
     name: Base ${{ needs.plan.outputs.base }}
@@ -460,11 +492,12 @@ jobs:
           if ls "$proj/build/bin" | grep -qE "game(_editor)?d\."; then echo "::error::a module has a debug postfix"; exit 1; fi
 
       # The shared editor opens the project and loads the module from build/bin (#428). The template's
-      # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag.
+      # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag; a project's modules
+      # load only when it is trusted (#921), hence --trust-project.
       - name: The editor loads the template's game module
         run: |
           tools/run_headless.sh --editor build/ci-linux-gcc-debug/Editor/editor --frames 30 --shot headless_out/template/final.png \
-            -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch
+            -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch --trust-project
           grep -E "module 'game' (loaded|refused)" headless_out/template/editor.log || true
           grep -q "module 'game' loaded" headless_out/template/editor.log
           grep -q "editor module 'game_editor' loaded" headless_out/template/editor.log
@@ -498,7 +531,9 @@ jobs:
 
           template="${RUNNER_TEMP}/template_project"
           before="$(tree_hash "$template")"
-          expect 1 --project "$template" --migrate --dry-run
+          expect 2 --project "$template" --migrate --dry-run
+          grep -q "project modules are not trusted" "$log"
+          expect 1 --project "$template" --migrate --dry-run --trust-project
           grep -q "module 'game' loaded" "$log"
           if [ "$(tree_hash "$template")" != "$before" ]; then echo "::error::--dry-run wrote into the template project"; exit 1; fi
 

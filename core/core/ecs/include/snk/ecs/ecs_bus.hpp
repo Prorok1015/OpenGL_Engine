@@ -92,6 +92,12 @@ struct bus_state
 	bool on_owner_thread() const { return std::this_thread::get_id() == owner; }
 };
 
+// +1 on any change to the virtual functions of bus_slot, bus_journal_source or bus_type: the module layout key mixes
+// them in, tools/ci/vtable_pins.json pins them (#922).
+inline constexpr std::uint32_t bus_slot_abi_revision = 1;
+inline constexpr std::uint32_t bus_journal_source_abi_revision = 1;
+inline constexpr std::uint32_t bus_type_abi_revision = 1;
+
 class bus_slot
 {
 public:

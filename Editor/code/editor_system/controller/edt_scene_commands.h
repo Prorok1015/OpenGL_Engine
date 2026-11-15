@@ -2,6 +2,8 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
 #include <functional>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace edt
@@ -18,6 +20,9 @@ namespace edt
 		const editor_services& services;
 		// A person's gesture is in progress (a drag, an edit waiting in a field): an agent's edit gets `busy`. Null: never.
 		std::function<bool()> gesture_active;
+		// Why the asset index cannot judge a guid now: an agent's edit whose references hold a guid gets `busy` with it
+		// instead of a verdict from that index (#968). Null or nullopt: judged now.
+		std::function<std::optional<std::string>()> asset_index_wait = {};
 	};
 
 	// scene.node.create/delete/duplicate/reparent/rename, component.add/remove/set, transform.set. A node is named by a

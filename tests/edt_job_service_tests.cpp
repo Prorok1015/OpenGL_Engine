@@ -2,14 +2,17 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_dialog_service.h>
 #include "edt_service_commands.h"
+#include "edt_agent_log_filter.h"
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // job_service on a manual task_system: no threads, the test runs the lanes (run_one) and the main drain by hand.
@@ -761,6 +764,31 @@ BOOST_AUTO_TEST_CASE(JobGet_OfAFailedJob_CarriesTheError)
 	BOOST_TEST(failed.value.as_object().at("error").as_string().c_str() == std::string("boom"));
 }
 
+// #935: the text of an exception may name a file on the disk; the filter of log.read rewrites it for whoever it says.
+BOOST_AUTO_TEST_CASE(JobGetAndList_WithAFilter_RewriteTheTexts_NotForAPerson)
+{
+	cmd::log_read_filter filter;
+	filter.redact = [](std::string_view text, const cmd::origin& from) {
+		return from.kind == cmd::origin_kind::ui ? std::string(text) : "[" + std::string(text) + "]";
+	};
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_job_commands(filtered, *jobs, &filter);
+	const auto id = start("work", [](ds::task_context&) -> int { throw std::runtime_error("cannot open /home/dev/x"); });
+	run_lane();
+	deliver();
+	const json::value args = json::parse(std::format(R"({{"id":{}}})", id));
+
+	const cmd::result as_agent = filtered.invoke("job.get", args, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	BOOST_TEST(as_agent.value.as_object().at("error").as_string().c_str() == std::string("[cannot open /home/dev/x]"));
+	BOOST_TEST(as_agent.value.as_object().at("label").as_string().c_str() == std::string("[work]"));
+
+	const cmd::result as_person = filtered.invoke("job.get", args, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	BOOST_TEST(as_person.value.as_object().at("error").as_string().c_str() == std::string("cannot open /home/dev/x"));
+	BOOST_TEST(as_person.value.as_object().at("label").as_string().c_str() == std::string("work"));
+}
+
 BOOST_AUTO_TEST_CASE(JobCancel_StopsARunningJob_AndRefusesUnknownAndFinishedOnes)
 {
 	bool ran = false;
@@ -829,6 +857,84 @@ BOOST_AUTO_TEST_CASE(JobGet_OfADoneJobWithAResult_ReturnsIt)
 	const json::object& job = got.value.as_object();
 	BOOST_REQUIRE(job.contains("result"));
 	BOOST_TEST(job.at("result").as_object().at("clean").as_bool());
+}
+
+// #935: a job's result is its command's answer; an agent gets its message fields rewritten, its data (a diff) as it is.
+BOOST_AUTO_TEST_CASE(JobGet_WithAFilter_RewritesTheMessageFieldsOfAResult_NotADiff_NotForAPerson)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
+	cmd::log_read_filter filter;
+	edt::install_agent_log_filter(filter, [] { return false; }, roots);
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_job_commands(filtered, *jobs, &filter);
+
+	const std::string diff = "--- a/x\n+++ b/x\n+open /etc/secret/key\n";
+	const std::string tail = "warning: /home/dev/games/demo/a.txt\nfatal: cannot read /etc/secret/key";
+	const auto id = jobs->start_with_result(ds::lane::io, { "vcs.diff", "test" }, owner, [diff, tail](ds::task_context&) {
+		return boost::json::value(boost::json::object{ { "text", diff }, { "truncated", false },
+			{ "error", boost::json::object{ { "code", "git_failed" }, { "stderr_tail", tail } } } });
+	});
+	run_lane(ds::lane::io);
+	deliver();
+	const json::value args = json::parse(std::format(R"({{"id":{}}})", id));
+
+	const cmd::result as_agent = filtered.invoke("job.get", args, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	const json::object& shown = as_agent.value.as_object().at("result").as_object();
+	BOOST_TEST(shown.at("error").as_object().at("stderr_tail").as_string().c_str()
+		== std::string("warning: <project>/a.txt\nfatal: cannot read <path>"));
+	BOOST_TEST(shown.at("error").as_object().at("code").as_string().c_str() == std::string("git_failed"));
+	BOOST_TEST(shown.at("text").as_string().c_str() == diff);
+	BOOST_TEST(!shown.at("truncated").as_bool());
+
+	const cmd::result as_person = filtered.invoke("job.get", args, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	const json::object& raw = as_person.value.as_object().at("result").as_object();
+	BOOST_TEST(raw.at("error").as_object().at("stderr_tail").as_string().c_str() == tail);
+	BOOST_TEST(raw.at("text").as_string().c_str() == diff);
+}
+
+// #935: a migration answer's `text` (beside `code`) is a message; the {text, truncated} of a diff is not.
+BOOST_AUTO_TEST_CASE(JobGet_WithAFilter_RewritesTheTextOfAMigrationAnswer_NotOfADiff_NotForAPerson)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
+	cmd::log_read_filter filter;
+	edt::install_agent_log_filter(filter, [] { return false; }, roots);
+	cmd::command_registry filtered;
+	const std::vector<edt::registration> filtered_registrations = edt::register_job_commands(filtered, *jobs, &filter);
+
+	const std::string report = "rollback of m1: cannot open /etc/secret/key";
+	const std::string diff = "--- a/x\n+++ b/x\n+open /etc/secret/key\n";
+	const auto migration = jobs->start_with_result(ds::lane::io, { "project.migrate_rollback", "test" }, owner, [report](ds::task_context&) {
+		return boost::json::value(boost::json::object{ { "code", 2 }, { "status", "refused" }, { "id", "m1" }, { "text", report } });
+	});
+	const auto diffed = jobs->start_with_result(ds::lane::io, { "vcs.diff", "test" }, owner, [diff](ds::task_context&) {
+		return boost::json::value(boost::json::object{ { "text", diff }, { "truncated", false } });
+	});
+	run_lane(ds::lane::io);
+	deliver();
+	const json::value migration_args = json::parse(std::format(R"({{"id":{}}})", migration));
+	const json::value diff_args = json::parse(std::format(R"({{"id":{}}})", diffed));
+
+	const cmd::result as_agent = filtered.invoke("job.get", migration_args, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(as_agent.ok, as_agent.error);
+	const json::object& shown = as_agent.value.as_object().at("result").as_object();
+	BOOST_TEST(shown.at("text").as_string().c_str() == std::string("rollback of m1: cannot open <path>"));
+	BOOST_TEST(shown.at("code").as_int64() == 2);
+
+	const cmd::result as_person = filtered.invoke("job.get", migration_args, cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(as_person.ok, as_person.error);
+	BOOST_TEST(as_person.value.as_object().at("result").as_object().at("text").as_string().c_str() == report);
+
+	const cmd::result diff_as_agent = filtered.invoke("job.get", diff_args, cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(diff_as_agent.ok, diff_as_agent.error);
+	const json::object& untouched = diff_as_agent.value.as_object().at("result").as_object();
+	BOOST_TEST(untouched.at("text").as_string().c_str() == diff);
+	BOOST_TEST(untouched.size() == 2u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

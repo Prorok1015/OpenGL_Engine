@@ -36,7 +36,8 @@
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
 // 3.6 (#614): the optional export snk_module_layout_key, the key of the layouts of the engine types whose size is compiled
 // into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
-// own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
+// own before it creates it; one without the export (3.5 and older) or with key 0 was checked by version only (#922:
+// a library module without a key is refused).
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
 // #631 (no bump, from 3.6 on): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
 // 3.7 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
@@ -125,12 +126,19 @@
 // Its members are out of line (#786) and scene_layer holds it by pointer (#758), so its new size is not seen by a module;
 // only the private find_factory/find_migrations change their signatures, no public export changes.
 // #920: the codec of component_tracker's map gains from_json with a read_context, a new export (no type changes).
+// #952 (no bump): desc_system::get_field_desc, inline in module code, refuses a reference to the owner itself (or to an alias
+// of it) through the exports that are there; a module built before keeps such a handle until rebuilt. No layout changes.
+// res::refused_tag (the tag a refused handle was asked for) is a new export (no type changes: the layout key stays).
+// #922 PR 2: the key also mixes in the ABI revisions of the interfaces a module calls or fills through a vtable, the
+// versions of EnTT, Boost and glm and the sizes of their types; no type changes (layout_revision 12). A library module
+// built with the static C runtime or without a layout key is refused when opened; one compiled into the host is not.
+// #925: res::resource_system::warn_on_sync_require is a new export; its members are the engine's (no type changes: the layout key stays).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
-// without that header a module reports 0, which the host does not check. With it the file that declares the module
-// needs the key's type list, snk/game/gs_module_layout_key.h, or it does not compile: gs_game_module.h included after
-// this header and edt_editor_extension.h bring it.
+// without that header a module reports 0, which the host refuses of a module in a library (check_library_module).
+// With it the file that declares the module needs the key's type list, snk/game/gs_module_layout_key.h, or it does not
+// compile: gs_game_module.h included after this header and edt_editor_extension.h bring it.
 #ifndef SNK_DETAIL_MODULE_LAYOUT_KEY
 #define SNK_DETAIL_MODULE_LAYOUT_KEY 0u
 #endif
@@ -321,6 +329,7 @@ namespace app::modules {
 
 	// Empty when the module was built against the engine types' layouts the host has (`host_key`,
 	// gs::engine_module_layout_key), or cannot tell (no snk_module_layout_key, key 0, `host_key` 0); otherwise why not.
+	// A module in a library without a key is refused before this, by check_library_module.
 	inline std::string check_module_layout(const module_entry& entry, std::uint64_t host_key)
 	{
 		if (!entry.layout_key || host_key == 0) {
@@ -332,6 +341,32 @@ namespace app::modules {
 		}
 		return std::format("it was built against an engine whose types have another layout (module key {:016x}, engine "
 			"key {:016x}): rebuild the project (Build > Build Game)", key, host_key);
+	}
+
+	// Why a library module is refused besides check_module_entry (#922), or empty: a static C runtime is a heap of its
+	// own that engine objects would cross, and without a key nothing tells its engine types' layouts from ours.
+	inline std::string library_module_problem(std::uint32_t flags, std::uint64_t layout_key)
+	{
+		if ((flags & build_flag::static_crt) != 0) {
+			return "it was built with the static C runtime (/MT or /MTd): a module in a library must use the DLL runtime "
+				"(/MD or /MDd) to share the engine's heap; rebuild it with CMAKE_MSVC_RUNTIME_LIBRARY "
+				"MultiThreaded$<$<CONFIG:Debug>:Debug>DLL";
+		}
+		if (layout_key == 0) {
+			return "it reports no layout key (snk_module_layout_key missing or 0): declare it with SNK_DECLARE_MODULE in a file "
+				"that includes snk/game/gs_game_module.h and rebuild the project (Build > Build Game)";
+		}
+		return {};
+	}
+
+	// library_module_problem of an entry. An entry check_module_entry refuses passes: the loader then reports that
+	// problem, which says what to change (another major, debug/release).
+	inline std::string check_library_module(const module_entry& entry)
+	{
+		if (!check_module_entry(entry).empty()) {
+			return {};
+		}
+		return library_module_problem(entry.build_info()->flags, entry.layout_key ? entry.layout_key() : 0u);
 	}
 
 }

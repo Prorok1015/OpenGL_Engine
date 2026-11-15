@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
@@ -86,5 +87,43 @@ namespace edt
 		out.stale_path = !read->path.view().empty() && read->path.view() != held->view();
 		out.tag = *held;
 		return out;
+	}
+
+	// An object that can only be a reference with a guid: no key but "guid" and "path", and a "guid" that is a UUID that
+	// is not nil. Any other "guid" is plain data: res::reference_from_json does not read it as a reference either.
+	inline bool is_guid_reference(const boost::json::object& object)
+	{
+		for (const auto& member : object) {
+			const std::string_view key(member.key().data(), member.key().size());
+			if (key != "guid" && key != "path") return false;
+		}
+		const boost::json::value* guid = object.if_contains("guid");
+		if (!guid || !guid->is_string()) return false;
+		const std::optional<res::asset_id> id = res::asset_id_from_text(std::string_view(guid->as_string().data(), guid->as_string().size()));
+		return id && !id->is_nil();
+	}
+
+	// The form an agent may write (#954), empty when fine: reference_object_problem, and no guid without a path.
+	inline std::string agent_reference_form_problem(const boost::json::object& object)
+	{
+		if (std::string form = reference_object_problem(object); !form.empty()) return form;
+		if (object.contains("guid") && reference_path_text(object).empty()) {
+			return "a reference needs a \"path\": a \"guid\" alone is not accepted here";
+		}
+		return {};
+	}
+
+	// Empty unless the asset index holds the guid of a well-formed reference for another file than its path (#954). Asked
+	// after the path's own check, so a bad path is named as one.
+	inline std::string agent_reference_guid_problem(const boost::json::object& object, const res::resource_system* resources)
+	{
+		if (!object.contains("guid")) return {};
+		const std::optional<reference_target> target = target_of(boost::json::value(object), resources);
+		if (!target || !target->stale_path) return {};
+		// As the asset database pairs names: letter case does not tell two files apart where the file system does not.
+		const bool folded = res::asset_names_case_insensitive;
+		if (res::asset_name_key(target->reference.path.view(), folded) == res::asset_name_key(target->tag.view(), folded)) return {};
+		return std::format("\"guid\" and \"path\" name different files: {} is the ID of '{}'", res::to_text(target->reference.guid),
+			target->tag.view());
 	}
 }
