@@ -36,7 +36,8 @@
 // gained a parameter, like inp::update_actions_system and action_state::update: a module calls none of them.
 // 3.6 (#614): the optional export snk_module_layout_key, the key of the layouts of the engine types whose size is compiled
 // into module code (gs::module_layout_key, gs_module_layout.h). The host refuses a module whose key differs from its
-// own before it creates it; a module without the export (3.5 and older) or with key 0 is checked by version only.
+// own before it creates it; one without the export (3.5 and older) or with key 0 was checked by version only (#922:
+// a library module without a key is refused).
 // Changing the size or alignment of a type of that list is a major bump: the key refuses only modules that have it.
 // #631 (no bump, from 3.6 on): res::tag parses its protocol inline; a module built before #631 parses its own strings the old way until rebuilt.
 // 3.7 (#625): the input stack from game code. gs::module_context::input_stack(set) and gs::input_stack_handle (exported
@@ -121,17 +122,15 @@
 // #927: rnd::render_context::draw_fits is added at the end of the vtable, the functions before it keep their places (minor: the layout key stays).
 // #922: the layout key also lists the engine components (scn::engine_component_types), the ctx types and events a module
 // reads, the channel types, ds::app_data_storage and the structs passed by value; no type changes (layout_revision 11).
-// #922 PR 2: the key also mixes in the ABI revision of every interface a module calls or fills through a vtable
-// (<interface>_abi_revision next to it, held to its virtual functions by tools/ci/check_vtable_pins.py), the versions of EnTT,
-// Boost and glm and the sizes of entt::registry, boost::json::value and glm::mat4; no type changes (layout_revision 12).
-// A module in a library built with the static C runtime or without a layout key (snk_module_layout_key missing or 0) is
-// refused when it is opened (app::modules::check_library_module); one compiled into the host is not.
+// #922 PR 2: the key also mixes in the ABI revisions of the interfaces a module calls or fills through a vtable, the
+// versions of EnTT, Boost and glm and the sizes of their types; no type changes (layout_revision 12). A library module
+// built with the static C runtime or without a layout key is refused when opened; one compiled into the host is not.
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;
-// without that header a module reports 0, which the host refuses of a module in a library (check_library_module). With it the file that declares the module
-// needs the key's type list, snk/game/gs_module_layout_key.h, or it does not compile: gs_game_module.h included after
-// this header and edt_editor_extension.h bring it.
+// without that header a module reports 0, which the host refuses of a module in a library (check_library_module).
+// With it the file that declares the module needs the key's type list, snk/game/gs_module_layout_key.h, or it does not
+// compile: gs_game_module.h included after this header and edt_editor_extension.h bring it.
 #ifndef SNK_DETAIL_MODULE_LAYOUT_KEY
 #define SNK_DETAIL_MODULE_LAYOUT_KEY 0u
 #endif
@@ -336,9 +335,8 @@ namespace app::modules {
 			"key {:016x}): rebuild the project (Build > Build Game)", key, host_key);
 	}
 
-	// What a module in a shared library must have besides check_module_entry (#922), from its build flags and layout key;
-	// empty when it has it. A static C runtime is a heap of its own that engine objects would cross (a host built with
-	// /MT still takes a module compiled into it), and without a key nothing tells its engine types' layouts from ours.
+	// Why a library module is refused besides check_module_entry (#922), or empty: a static C runtime is a heap of its
+	// own that engine objects would cross, and without a key nothing tells its engine types' layouts from ours.
 	inline std::string library_module_problem(std::uint32_t flags, std::uint64_t layout_key)
 	{
 		if ((flags & build_flag::static_crt) != 0) {

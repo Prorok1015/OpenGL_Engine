@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <type_traits>
 #include <boost/json/value.hpp>
 #include <boost/version.hpp>
 #include <entt/config/version.h>
@@ -55,8 +56,8 @@ namespace gs
 {
 	namespace detail
 	{
-		// Every engine interface whose vtable module code calls inline or fills with an override. A change of its virtual
-		// functions raises its revision: tools/ci/check_vtable_pins.py fails the change that does not (#922).
+		// Every engine interface whose vtable module code calls inline or fills with an override. A change of its bases or
+		// virtual functions raises its revision: tools/ci/check_vtable_pins.py fails the change that does not (#922).
 		using interface_abi_revisions = layout_values<app::modules::module_interface_abi_revision,
 			app::modules::module_layer_abi_revision, app::modules::module_layer_factory_abi_revision,
 			res::resource_entry_abi_revision, desc::desc_base_abi_revision, core::res::adapter_interface_abi_revision,
@@ -70,12 +71,10 @@ namespace gs
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.
 		using third_party_versions = layout_values<ENTT_VERSION_MAJOR, ENTT_VERSION_MINOR, ENTT_VERSION_PATCH, BOOST_VERSION,
 			GLM_VERSION_MAJOR, GLM_VERSION_MINOR, GLM_VERSION_PATCH>;
-	}
 
-	// The one list of the key: evaluated in whichever binary includes this header.
-	constexpr std::uint64_t module_layout_key() noexcept
-	{
-		return detail::layout_of<
+		// The one list of the key, in order. A scn::type_list mixes in as its types written out (layout_part), so naming
+		// the list leaves the key as it was.
+		using module_layout_types = scn::type_list<
 			// register_system builds the parts of an entry in module code: the desc, the access list and the instance its
 			// factory makes. The entry and the registry's map node are the engine's (system_registry::add, #785).
 			ecs::system_desc, ecs::system_instance, ecs::access_entry,
@@ -139,7 +138,31 @@ namespace gs
 			inp::rebind_result, inp::binding_conflict, ecs::rng::position,
 			// The third-party types every module holds or passes: the registry of a world, a JSON value, a transform.
 			entt::registry, boost::json::value, glm::mat4,
-			detail::interface_abi_revisions, detail::third_party_versions>();
+			interface_abi_revisions, third_party_versions>;
+
+		template<class T, class List>
+		struct list_contains : std::false_type
+		{
+		};
+
+		template<class T, class... Types>
+		struct list_contains<T, scn::type_list<Types...>> : std::bool_constant<(std::is_same_v<T, Types> || ...)>
+		{
+		};
+
+		// The parts added by #922 must stay in the key: dropping one would pass every other test.
+		static_assert(list_contains<interface_abi_revisions, module_layout_types>::value
+			&& list_contains<third_party_versions, module_layout_types>::value
+			&& list_contains<entt::registry, module_layout_types>::value
+			&& list_contains<boost::json::value, module_layout_types>::value
+			&& list_contains<glm::mat4, module_layout_types>::value,
+			"the module layout key must mix in the interface ABI revisions, the third-party versions and their types");
+	}
+
+	// Evaluated in whichever binary includes this header.
+	constexpr std::uint64_t module_layout_key() noexcept
+	{
+		return detail::layout_of<detail::module_layout_types>();
 	}
 
 	namespace detail

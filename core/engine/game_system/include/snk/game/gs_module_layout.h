@@ -19,7 +19,7 @@ namespace scn
 // the window of 4.0 (#758) a new layout_revision. world_context has no inline accessor since #802: its layout is the
 // engine's alone. Only sizes and alignments: offsetof is not portable on non-standard-layout types, so a reorder of
 // fields of one size is not caught. A vtable a module calls or fills enters as the <interface>_abi_revision declared
-// next to it, which tools/ci/check_vtable_pins.py holds to the list of its virtual functions; the versions of EnTT,
+// next to it, which tools/ci/check_vtable_pins.py holds to its bases and virtual functions; the versions of EnTT,
 // Boost and glm and the sizes of their types enter too (#922). A new type, a comment or a rebuilt engine leave the
 // key as it is. Debug and Release differ only where the standard library does
 // (MSVC's _ITERATOR_DEBUG_LEVEL); such a mix is refused earlier anyway, by the build flags.
@@ -105,7 +105,7 @@ namespace gs
 	namespace detail
 	{
 		// The key of the list, as gs_module_layout_key.h specializes it. A file that declares a module without that header
-		// gets this error, never a key of 0, which no host would check.
+		// gets this error instead of a key of 0, which a host refuses only of a module in a library.
 		template<class List = void>
 		struct listed_layout
 		{
