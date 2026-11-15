@@ -307,6 +307,10 @@ namespace res
 
 		void unregistrate_adapter(extension extension);
 
+		// A require_sync of a tag with one of these extensions (lower case) logs a warning, once per tag: its adapter may
+		// block the main thread for seconds (the editor's models, parsed in the decoder process, #925). Kept by the root.
+		void warn_on_sync_require(std::vector<std::string> extensions);
+
 		data fetch_data(const tag& tag) const;
 
 		// The tag a reference read from a file loads: the file that holds its guid now, by the asset index; otherwise its
@@ -532,6 +536,8 @@ namespace res
 		ds::task_system* handle_tasks();
 		// require_sync's check, in the engine.
 		void check_sync_require(const res::tag& tag) const;
+		// warn_on_sync_require's warning, for a require_sync that has to wait for `tag`.
+		void warn_sync_wait(const res::tag& tag) const;
 		void serialize_pinned(const res::tag& tag, std::shared_ptr<resource_handle> block, adapter ad);
 
 		struct await_state;
@@ -842,9 +848,25 @@ namespace res
 		std::uint64_t m_delivering_batch = 0;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
+		// Root only (warn_on_sync_require). The flag spares every other require_sync the lock.
+		std::atomic<bool> m_sync_warnings_on{ false };
+		mutable std::mutex m_sync_warning_mutex;
+		std::unordered_set<std::string> m_slow_sync_extensions;
+		mutable std::unordered_set<std::string> m_sync_warned;
 		// Root only (hold_changes). Last, so the members inline code reads keep their offsets.
 		std::unique_ptr<held_changes> m_held;
 	};
+
+	// The tag a handle with the tag `own` and `block` was asked for: for a handle of resource_system::refused, whose own
+	// tag is empty, the refused tag its block recorded (#952). For messages and writers only: requiring it loads the
+	// refused one after all.
+	SNK_API tag refused_tag(const tag& own, const core::res::res_control_block_base* block);
+
+	template<class T>
+	tag refused_tag(const res_handle<T>& handle)
+	{
+		return refused_tag(handle.get_tag(), handle.get_control_block().get());
+	}
 
 	// A dependency of `target` as T, for adapter_interface::collect_dependencies.
 	template<class T>

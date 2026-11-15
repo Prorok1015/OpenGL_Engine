@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
 #include <snk/project_migration/pmg_apply.h>
@@ -88,6 +89,9 @@ namespace edt
 		// Tests only: stands in for prj::migration::rollback_migration, on the io lane like it; null: the real one.
 		std::function<std::optional<std::string>(const std::filesystem::path& root, std::string_view id,
 			const prj::migration::rollback_context& context)> rollback;
+		// What project.migration_plan's answer goes through for a caller that is not a person (#935), as a job's
+		// result does: a reason may quote a file by its full path. Null: the answer goes as it is (tests).
+		const cmd::log_read_filter* log_filter = nullptr;
 	};
 
 	inline constexpr std::string_view k_migration_frame_id = "edt/migrate_project";

@@ -9,12 +9,17 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/resource/resources/res_resource_base.h>
+#include <cstdint>
 
 namespace json = boost::json;
 
 namespace desc
 {
 	class desc_system;
+
+	// +1 on any change to the virtual functions desc_base declares (resource_entry has its own): the module layout key mixes
+	// it in, tools/ci/vtable_pins.json pins them (#922).
+	inline constexpr std::uint32_t desc_base_abi_revision = 1;
 
 	class desc_base : public res::resource_entry
 	{

@@ -3,16 +3,21 @@
 #include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_access.h"
+#include "edt_agent_log_filter.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/gui/gui_ui_font.h>
+#include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_registry.h>
+#include <snk/common/logger/engine_log.h>
 #include <imgui.h>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -306,6 +311,87 @@ BOOST_AUTO_TEST_CASE(SessionClosedAfterTheBridgeIsGone_IsHarmless)
 	bridge.reset();
 
 	BOOST_CHECK_NO_THROW(tasks.drain_main(std::chrono::hours(1)));
+}
+
+// #935: the filter the editor installs for log.read, over the real policy and the registry's gate.
+BOOST_AUTO_TEST_CASE(AnAgentsLogRead_HasTheBuildOnlyWhileThePolicyAllowsTheBuild_APersonReadsEverythingAsItIs)
+{
+	struct journal_scope
+	{
+		std::size_t capacity = engine::log_journal_capacity();
+		std::optional<engine::log_level> level = engine::log_journal_min_level();
+		journal_scope()
+		{
+			engine::set_log_journal_capacity(1000);
+			engine::set_log_journal_min_level(engine::log_level::trace);
+		}
+		~journal_scope()
+		{
+			engine::set_log_journal_capacity(capacity);
+			engine::set_log_journal_min_level(level);
+		}
+	} journal;
+
+	cmd::command_desc build;
+	build.id = "build.game_module";
+	build.category = agent_category::build;
+	build.risk = cmd::danger::deny_by_default;
+	build.summary = "builds the game module";
+	build.args_schema = boost::json::value{ { "type", "object" } };
+	build.invoke = [](const cmd::call&) { return cmd::result::success(); };
+	registrations.push_back(commands.add(std::move(build)));
+
+	cmd::log_read_filter filter;
+	edt::agent_log_roots roots;
+	roots.project = { dir.path() };
+	// Again after every change of the policy: the filter keeps the policy's answer for a moment.
+	const auto install = [&] {
+		edt::install_agent_log_filter(filter, [this] { return edt::agent_build_output_allowed(access->policy(), commands); }, roots);
+	};
+	registrations.push_back(cmd::register_log_commands(commands, &filter));
+
+	const std::uint64_t first = engine::log_journal_next_seq();
+	const std::string file = (dir.path() / "code" / "a.cpp").generic_string();
+	egLOG_WARN("editor/build", "{}: error: boom", file);
+	egLOG_INFO("edt_agent_access_log_test", "saved {}", file);
+	const auto read = [&](const char* category, cmd::origin from) {
+		const cmd::result got = commands.invoke("log.read",
+			boost::json::object{ { "category", category }, { "since_seq", first } }, std::move(from));
+		BOOST_REQUIRE_MESSAGE(got.ok, got.error);
+		std::vector<std::string> texts;
+		for (const auto& entry : got.value.as_object().at("entries").as_array()) {
+			texts.emplace_back(entry.as_object().at("text").as_string());
+		}
+		return texts;
+	};
+	const std::vector<std::string> raw_build{ file + ": error: boom" };
+
+	dir.write(".snk/agent_policy.json", R"({"categories":{"build":"deny"}})");
+	install();
+	BOOST_TEST(!edt::agent_build_output_allowed(access->policy(), commands));
+	BOOST_TEST(read("editor/build", cmd::origin::agent("s1")).empty());
+	BOOST_TEST((read("edt_agent_access_log_test", cmd::origin::agent("s1")) == std::vector<std::string>{ "saved <project>/code/a.cpp" }));
+	BOOST_TEST((read("editor/build", cmd::origin::ui()) == raw_build));
+	BOOST_TEST((read("edt_agent_access_log_test", cmd::origin::ui()) == std::vector<std::string>{ "saved " + file }));
+
+	// Asking a person before each build is not leave to read what a build printed.
+	const auto approve_as_a_person = [this](const char* policy_text) {
+		dir.write(".snk/agent_policy.json", policy_text);
+		access->policy().set_approval_allowed(true);
+		access->policy().refresh();
+		const edt::policy_layer reviewed = access->policy().project();
+		const std::optional<std::string> refused = access->policy().approve_project_layer(reviewed);
+		BOOST_REQUIRE_MESSAGE(!refused.has_value(), refused.value_or(""));
+	};
+	approve_as_a_person(R"({"commands":{"build.game_module":"ask"}})");
+	install();
+	BOOST_TEST(read("editor/build", cmd::origin::agent("s1")).empty());
+
+	approve_as_a_person(R"({"commands":{"build.game_module":"allow"}})");
+	install();
+	BOOST_TEST(edt::agent_build_output_allowed(access->policy(), commands));
+	BOOST_TEST((read("editor/build", cmd::origin::agent("s1")) == std::vector<std::string>{ "<project>/code/a.cpp: error: boom" }));
+	BOOST_TEST((read("editor/build", cmd::origin::ui()) == raw_build));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

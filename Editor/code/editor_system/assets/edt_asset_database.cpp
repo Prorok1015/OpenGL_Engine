@@ -976,7 +976,7 @@ namespace
 	constexpr std::string_view k_cache_type = "asset_db";
 	// Raise it with any change of the hash, of how desc_type is found or of this format: an older cache is then
 	// dropped, never read with other meanings.
-	constexpr std::int64_t k_cache_version = 4;
+	constexpr std::int64_t k_cache_version = 5;
 	constexpr std::string_view k_hash_prefix = "fnv1a64:";
 
 	boost::json::array layer_texts(const std::vector<fs::path>& layers)
@@ -2430,6 +2430,9 @@ void edt::asset_database::poll(bool force)
 
 void edt::asset_database::give_pending_ids()
 {
+	if (m_pending_ids.empty()) {
+		m_ids_held_by_git = false;
+	}
 	if (m_pending_ids.empty() || m_giving_ids || m_scanning || !m_walked_once) {
 		return;
 	}
@@ -2498,6 +2501,7 @@ void edt::asset_database::give_pending_ids()
 		ready.push_back(key);
 		it = m_pending_ids.erase(it);
 	}
+	m_ids_held_by_git = busy.value_or(false) && !m_pending_ids.empty();
 	for (const std::string& key : ready) {
 		give_id(key);
 		m_root_guids.erase(key);
