@@ -10,7 +10,9 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -20,7 +22,9 @@
 #include <boost/asio.hpp>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/resource/res_file_change.h>
+#include <snk/resource/res_stamp.h>
 
 namespace fs = std::filesystem;
 namespace res {
@@ -40,10 +44,43 @@ namespace res {
         bool operator==(const watch_file_state&) const = default;
     };
 
+    // A file whose stamp was racy (res::racy_stamp) when a poll recorded it: a rewrite in the same tick with the same
+    // size changes neither its time nor its size (#975).
+    struct racy_file {
+        watch_file_state state;
+        // The content then, for a file up to k_racy_hash_limit; nullopt: larger, or it could not be read.
+        std::optional<std::string> hash;
+        // Written by the watcher's owner (mark_written): what it holds is known, nothing is reported for it.
+        bool own = false;
+        // Small enough, but not hashed yet: the poll's budget was spent.
+        bool waiting = false;
+    };
+
+    // A racy file up to this is hashed; a larger one gets one more `modified` once its stamp is no longer racy.
+    inline constexpr std::uintmax_t k_racy_hash_limit = 1024 * 1024;
+
+    // What one poll may read to hash racy files (a checkout writes thousands of them at once); the rest waits for the
+    // next polls, and a file that ages before it was hashed is reported.
+    struct racy_budget {
+        std::size_t files = 1024;
+        std::uintmax_t bytes = 32 * 1024 * 1024;
+
+        bool take(std::uintmax_t size) {
+            if (files == 0 || size > bytes) return false;
+            --files;
+            bytes -= size;
+            return true;
+        }
+    };
+
     struct watch_snapshot {
         std::map<fs::path, watch_file_state> files;
         std::set<fs::path> dirs;
+        std::map<fs::path, racy_file> racy;
     };
+
+    // The content hash of a file (res::content_hasher), nullopt when it cannot be read.
+    using content_hash_source = std::function<std::optional<std::string>(const fs::path&)>;
 
     // A file that vanished while another with the same size and modification time appeared is a rename, but only
     // when exactly one of each has that key: two candidates are reported as they are, never matched by a guess.
@@ -140,6 +177,56 @@ namespace res {
         }
         return still;
     }
+
+    // After diff_snapshots: the racy files of `after` (at `now`, taken before the scan) are remembered with their
+    // content. One of `before`'s whose stamp has aged unchanged is `modified` if its content differs from then, or if
+    // that cannot be told (larger than k_racy_hash_limit, unreadable now or then, never hashed); its own writes never
+    // are. What lies at or below an `unread` path is kept as it was, neither read nor reported. Reads stop at `budget`:
+    // a file not hashed yet waits, an aged one is decided by the next poll.
+    inline std::vector<raw_change> recheck_racy(const std::map<fs::path, racy_file>& before, watch_snapshot& after,
+        fs::file_time_type now, const content_hash_source& hash_of, const std::vector<fs::path>& unread,
+        racy_budget& budget) {
+        std::vector<raw_change> changed;
+        after.racy.clear();
+        const auto is_unread = [&unread](const fs::path& path) {
+            return std::ranges::any_of(unread, [&path](const fs::path& top) { return is_at_or_below(path, top); });
+        };
+        const auto first_look = [&](const watch_file_state& state, const fs::path& path) {
+            racy_file entry{ state, std::nullopt, false, false };
+            if (state.size > k_racy_hash_limit) return entry;
+            if (budget.take(state.size)) entry.hash = hash_of(path);
+            else entry.waiting = true;
+            return entry;
+        };
+        for (const auto& [path, state] : after.files) {
+            const auto was = before.find(path);
+            const bool same = was != before.end() && was->second.state == state;
+            if (is_unread(path)) {
+                if (was != before.end()) after.racy.emplace(path, was->second);
+                continue;
+            }
+            if (racy_stamp(state.modified, now)) {
+                if (!same) after.racy.emplace(path, first_look(state, path));
+                else if (was->second.waiting) after.racy.emplace(path, first_look(state, path));
+                else after.racy.emplace(path, was->second);
+                continue;
+            }
+            if (!same || was->second.own) continue;
+            if (!was->second.hash) {
+                changed.push_back({ path, {}, change_kind::modified, false });
+                continue;
+            }
+            if (!budget.take(state.size)) {
+                after.racy.emplace(path, was->second);
+                continue;
+            }
+            const std::optional<std::string> now_hash = hash_of(path);
+            if (!now_hash || *now_hash != *was->second.hash) {
+                changed.push_back({ path, {}, change_kind::modified, false });
+            }
+        }
+        return changed;
+    }
     }
 
     class file_watcher {
@@ -173,10 +260,17 @@ namespace res {
             m_fails_to_read = std::move(fails);
         }
 
+        // Test seams (batch mode): the clock a stamp is judged racy by, and one poll now.
+        void set_clock_for_test(std::function<fs::file_time_type()> clock) { m_clock = std::move(clock); }
+        void poll_for_test() { poll_changes(); }
+
         void start() {
             if (m_batch_mode) {
-                std::lock_guard lock(m_state_mutex);
+                const fs::file_time_type now = clock_now();
                 scan_result scan = scan_all();
+                detail::racy_budget budget;
+                static_cast<void>(detail::recheck_racy({}, scan.found, now, hash_source(), scan.unread, budget));
+                std::lock_guard lock(m_state_mutex);
                 m_snapshot = std::move(scan.found);
                 m_unread_at_start.insert(scan.unread.begin(), scan.unread.end());
             }
@@ -204,6 +298,8 @@ namespace res {
                 if (ec) return;
                 std::lock_guard lock(m_state_mutex);
                 m_snapshot.files[path] = state;
+                m_snapshot.racy[path] = detail::racy_file{ state, std::nullopt, true, false };
+                m_own_since[path] = state;
                 for (fs::path parent = path.parent_path(); is_below_a_root(parent); parent = parent.parent_path()) {
                     m_snapshot.dirs.insert(parent);
                 }
@@ -222,6 +318,8 @@ namespace res {
             if (!m_batch_mode) return;
             std::lock_guard lock(m_state_mutex);
             m_snapshot.files.erase(path);
+            m_snapshot.racy.erase(path);
+            m_own_since[path] = std::nullopt;
         }
 
         void mark_renamed(const fs::path& from, const fs::path& to) {
@@ -230,8 +328,12 @@ namespace res {
             const auto state = state_of(to, ec);
             std::lock_guard lock(m_state_mutex);
             m_snapshot.files.erase(from);
+            m_snapshot.racy.erase(from);
+            m_own_since[from] = std::nullopt;
             if (ec) return;
             m_snapshot.files[to] = state;
+            m_snapshot.racy[to] = detail::racy_file{ state, std::nullopt, true, false };
+            m_own_since[to] = state;
             for (fs::path parent = to.parent_path(); is_below_a_root(parent); parent = parent.parent_path()) {
                 m_snapshot.dirs.insert(parent);
             }
@@ -245,6 +347,38 @@ namespace res {
             state.size = fs::file_size(path, ec);
             return state;
         }
+
+        // Read as the resolver reads (no link followed below the root), at most detail::k_racy_hash_limit.
+        std::optional<std::string> content_hash_of(const fs::path& path) const {
+            const auto root = std::ranges::find_if(watch_paths, [&path](const fs::path& top) {
+                return path != top && detail::is_at_or_below(path, top);
+            });
+            if (root == watch_paths.end()) return std::nullopt;
+            platform::beneath::read_request request;
+            request.root = *root;
+            const fs::path folder = path.parent_path().lexically_relative(*root);
+            request.folder = folder == fs::path{ "." } ? fs::path{} : folder;
+            request.leaf = path.filename();
+            request.max_bytes = detail::k_racy_hash_limit;
+            res::content_hasher hasher;
+            const auto read = platform::beneath::read_beneath_stream(request,
+                [&hasher](std::span<const std::byte> chunk) {
+                    hasher.update(chunk);
+                    return true;
+                });
+            if (read.status != platform::beneath::read_status::ok) {
+                egLOG_DEBUG("resource", "the watcher could not read '{}' to compare it: {}", fs_paths::utf8_of(path),
+                    read.error);
+                return std::nullopt;
+            }
+            return hasher.text();
+        }
+
+        detail::content_hash_source hash_source() const {
+            return [this](const fs::path& path) { return content_hash_of(path); };
+        }
+
+        fs::file_time_type clock_now() const { return m_clock ? m_clock() : fs::file_time_type::clock::now(); }
 
         bool is_below_a_root(const fs::path& path) const {
             return std::ranges::any_of(watch_paths, [&path](const fs::path& root) {
@@ -353,17 +487,43 @@ namespace res {
         }
 
         void poll_changes() {
+            // Before the scan: a long walk must not age the stamps it reads.
+            const fs::file_time_type now = clock_now();
             scan_result scan = scan_all();
             std::vector<raw_change> batch;
+            std::map<fs::path, detail::racy_file> racy_before;
             {
                 std::lock_guard lock(m_state_mutex);
+                m_own_since.clear();
                 if (!m_unread_at_start.empty()) {
                     m_unread_at_start = detail::adopt_first_read(m_unread_at_start, scan.unread, scan.found, m_snapshot);
                 }
                 detail::keep_unread(m_snapshot, scan.unread, scan.found);
                 batch = detail::diff_snapshots(m_snapshot, scan.found);
+                racy_before = m_snapshot.racy;
+            }
+            // Read without the lock: the owner's mark_written on the main thread does not wait for the hashing.
+            detail::racy_budget budget;
+            std::vector<raw_change> aged = detail::recheck_racy(racy_before, scan.found, now, hash_source(),
+                scan.unread, budget);
+            {
+                std::lock_guard lock(m_state_mutex);
+                // What the owner wrote meanwhile is as it said, not as the scan saw it.
+                for (const auto& [path, state] : m_own_since) {
+                    if (state) {
+                        scan.found.files[path] = *state;
+                        scan.found.racy[path] = detail::racy_file{ *state, std::nullopt, true, false };
+                    }
+                    else {
+                        scan.found.files.erase(path);
+                        scan.found.racy.erase(path);
+                    }
+                    std::erase_if(aged, [&path](const raw_change& change) { return change.path == path; });
+                }
+                m_own_since.clear();
                 m_snapshot = std::move(scan.found);
             }
+            std::ranges::move(aged, std::back_inserter(batch));
             for (const auto& change : batch) {
                 if (m_notify_cb && !change.is_directory
                     && (change.kind == change_kind::created || change.kind == change_kind::modified)) {
@@ -453,5 +613,8 @@ namespace res {
         bool m_batch_mode = false;
         detail::watch_snapshot m_snapshot;
         std::set<fs::path> m_unread_at_start;
+        // The owner's writes (nullopt: removed) since the poll that runs took the snapshot.
+        std::map<fs::path, std::optional<detail::watch_file_state>> m_own_since;
+        std::function<fs::file_time_type()> m_clock;
     };
 }

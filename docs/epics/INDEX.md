@@ -27,7 +27,7 @@
 | [EPIC-05](editor/EPIC-05.md) | Entity Management — продвинутые операции над сущностями | done |
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor (#35) | planned |
-| [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo (#29) | planned |
+| [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo (#29) | done |
 | [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | done |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
 | [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов (#30) | in_progress |
@@ -38,6 +38,7 @@
 | [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора (#20) | planned |
 | [EPIC-40](editor/EPIC-40.md) | Icon Font Integration — иконочный шрифт для UI редактора | frozen — низкий приоритет для «Химеры» |
 | [EPIC-42](editor/EPIC-42.md) | Workspace & Game Project System — разделение движка и игровых данных (#19, переработан по ADR-02) | planned |
+| [EPIC-77](editor/EPIC-77.md) | Mesh Modeller — полноценный моделлер в редакторе: полигональный меш, инструменты, сохранение в `*.geom.desc` (#1007) | design |
 
 ### Desc-Driven Architecture
 

@@ -1,5 +1,6 @@
 #include "edt_mcp_bridge_host.h"
 #include "edt_agent_access.h"
+#include "edt_agent_log_filter.h"
 
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
@@ -266,20 +267,22 @@ namespace {
 
 	// The job's outcome added to the command's answer. The answer goes out twice (structuredContent and its text copy),
 	// so a job result over half the response limit is left out (`result_dropped`; job.get still has it) rather than
-	// turning the whole answer into a "too large" error that would lose the job and its status.
+	// turning the whole answer into a "too large" error that would lose the job and its status. `error` and the result's
+	// message fields go out as `filter` shows them to `from`, like job.get's (#935).
 	mcp::call_result job_outcome(json::object answer, edt::job_status status, const std::string& error,
-		const std::optional<json::value>& result, bool result_dropped)
+		const std::optional<json::value>& result, bool result_dropped, const cmd::log_read_filter* filter, const cmd::origin& from)
 	{
 		answer["status"] = edt::job_status_name(status);
 		if (result) {
-			if (json::serialize(*result).size() > agent_max_response_bytes / 2) {
+			json::value shown = edt::agent_job_result(*result, filter, from);
+			if (json::serialize(shown).size() > agent_max_response_bytes / 2) {
 				result_dropped = true;
 			} else {
-				answer["result"] = *result;
+				answer["result"] = std::move(shown);
 			}
 		}
 		if (status == edt::job_status::failed || !error.empty()) {
-			answer["error"] = json::string(std::string_view(error));
+			answer["error"] = json::string(edt::agent_shown_text(filter, error, from));
 		}
 		if (result_dropped) {
 			answer["result_dropped"] = true;
@@ -375,10 +378,12 @@ struct edt::mcp_bridge_host::state
 		return options.clock ? options.clock() : std::chrono::steady_clock::now();
 	}
 
-	static void send(held_call& call, float fraction, const std::string& note, time_point at)
+	void send(held_call& call, float fraction, const std::string& note, time_point at) const
 	{
 		if (call.progress) {
-			call.progress(static_cast<double>(fraction), 1.0, note);
+			// A job's note may name a file anywhere on the disk: the agent gets it as job.get would give it (#935).
+			const std::string shown = agent_shown_text(options.log_filter, note, cmd::origin::agent(call.session));
+			call.progress(static_cast<double>(fraction), 1.0, shown);
 		}
 		call.last_sent = at;
 		call.sent_any = true;
@@ -386,7 +391,7 @@ struct edt::mcp_bridge_host::state
 		call.waiting.reset();
 	}
 
-	static void send_waiting(held_call& call, time_point at)
+	void send_waiting(held_call& call, time_point at) const
 	{
 		if (call.waiting) {
 			const std::pair<float, std::string> latest = std::move(*call.waiting);
@@ -428,7 +433,8 @@ struct edt::mcp_bridge_host::state
 			return false;
 		}
 		if (info->status != job_status::running) {
-			done(job_outcome(std::move(answer), info->status, info->error, info->result, info->result_dropped));
+			done(job_outcome(std::move(answer), info->status, info->error, info->result, info->result_dropped, options.log_filter,
+				cmd::origin::agent(session)));
 			return true;
 		}
 		held_call call;
@@ -473,7 +479,8 @@ struct edt::mcp_bridge_host::state
 		const time_point at = now();
 		for (held_call& call : ended) {
 			send_waiting(call, at);
-			call.done(job_outcome(std::move(call.answer), status, error, result, false));
+			call.done(job_outcome(std::move(call.answer), status, error, result, false, options.log_filter,
+				cmd::origin::agent(call.session)));
 		}
 	}
 
