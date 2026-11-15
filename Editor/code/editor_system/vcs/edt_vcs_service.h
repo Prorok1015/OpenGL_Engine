@@ -18,6 +18,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace edt::vcs_detail
@@ -354,6 +355,9 @@ namespace edt
 			vcs_code_consent consent);
 		std::optional<std::string> describe_pull(const std::string& remote, const std::string& branch,
 			const cmd::origin& caller, vcs_code_consent consent);
+		// Whether the registry still holds a ticket (waiting or approved, not yet spent): a remembered target whose
+		// ticket is gone (declined, expired, refused) gives way first. Null: none is told gone.
+		void set_ticket_probe(std::function<bool(std::string_view)> known) { m_ticket_known = std::move(known); }
 
 		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's
 		// (ui) means the protected read. The work may throw ds::task_cancelled.
@@ -409,7 +413,7 @@ namespace edt
 			std::function<std::string(const vcs_detail::git_context&, std::string&, std::stop_token)>;
 		std::optional<std::string> describe_code_target(std::string key, std::string what, vcs_code_consent consent,
 			const target_resolver& resolve);
-		void remember_described(std::string key, std::string target);
+		void remember_described(std::string key, std::string ticket, std::string target);
 		// The target described for `key`, once; "" when none was (or it expired).
 		std::string take_described(const std::string& key);
 
@@ -436,11 +440,13 @@ namespace edt
 		struct described_target
 		{
 			std::string key;
+			std::string ticket;
 			// A commit OID; "refused" when it could not be told.
 			std::string target;
 			std::chrono::steady_clock::time_point at;
 		};
 		std::vector<described_target> m_described;
+		std::function<bool(std::string_view)> m_ticket_known;
 		// Last: its jobs are stopped before the rest goes.
 		ds::lifetime m_life{ ds::lifetime_option::cancel_on_destroy };
 	};

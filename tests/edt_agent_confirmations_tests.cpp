@@ -314,6 +314,54 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_DoesNotSettleAWaitingRequestWithARisk)
 	BOOST_TEST(finished.size() == 1u);
 }
 
+// #931: "Allow for this session" on one question settles the others it covers by running them through the gate
+// again, never by their own tickets: a command must not take a call nobody looked at for one a person was asked
+// about, and one the gate still asks about (another category it needs) keeps waiting.
+BOOST_AUTO_TEST_CASE(AGrant_SettlesTheQuestionsItCovers_ThroughTheGate_NeverByTheirTickets)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc desc;
+	desc.id = "vcs.switch";
+	desc.category = agent_category::vcs_branch;
+	desc.summary = "does vcs.switch";
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.category_of = [](const cmd::call&) { return agent_category::code_files; };
+	desc.invoke = [&seen](const cmd::call& call) {
+		seen.push_back(call.confirmation);
+		return cmd::result::success();
+	};
+	registrations.push_back(commands.add(std::move(desc)));
+
+	run("vcs.switch");
+	run("code.create");
+	const auto asked = confirmations->pending();
+	BOOST_REQUIRE(asked.size() == 2u);
+	BOOST_TEST(asked[0].command == "vcs.switch");
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->answer(asked[1].id, edt::confirmation_answer::allow_session));
+
+	BOOST_TEST(runs == 1);
+	BOOST_REQUIRE(seen.size() == 1u);
+	BOOST_TEST(seen[0].empty());
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST(finished[0].ok);
+	BOOST_TEST(finished[1].ok);
+
+	// The command's own category asks too: the grant of the call's alone settles nothing.
+	write_project(R"({"categories":{"vcs_branch":"ask"}})");
+	grants.drop_session("s1");
+	run("vcs.switch");
+	run("code.create");
+	const auto again = confirmations->pending();
+	BOOST_REQUIRE(again.size() == 2u);
+	test_util::show_confirmations_and_wait(*confirmations, current);
+	BOOST_TEST(confirmations->answer(again[1].id, edt::confirmation_answer::allow_session));
+	BOOST_TEST(seen.size() == 1u);
+	BOOST_REQUIRE(confirmations->pending().size() == 1u);
+	BOOST_TEST(confirmations->pending().front().command == "vcs.switch");
+}
+
 BOOST_AUTO_TEST_CASE(TheDescriptionOfACall_IsShownSanitized_AndBoundToTheQuestion)
 {
 	cmd::command_desc desc;

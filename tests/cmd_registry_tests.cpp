@@ -549,6 +549,45 @@ BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_OnlyForTheFlag_ARisk_ValidArgs_
 	}
 }
 
+// #931: a command sees a call's confirmation only when the call spent a ticket a person approved for it; a call the
+// policy allows that names its own ticket still waiting, or one already gone, reaches the command without it.
+BOOST_AUTO_TEST_CASE(ACommandSeesTheConfirmation_OnlyOfAnApprovedTicketTheCallSpent)
+{
+	cmd::command_registry commands;
+	auto gate = std::make_shared<fixed_gate>();
+	commands.set_policy_gate(gate);
+	int runs = 0;
+	std::vector<std::string> seen;
+	cmd::command_desc desc = echo_command(runs);
+	desc.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(request.confirmation);
+		return cmd::result::success(boost::json::object{ { "echo", "x" } });
+	};
+	auto reg = commands.add(std::move(desc));
+	const boost::json::value args = json_of(R"({"text":"a"})");
+	const auto ticket_of = [](const cmd::result& asked) {
+		return std::string(asked.value.as_object().at("ticket").as_string());
+	};
+
+	gate->mode = cmd::policy_mode::ask;
+	const std::string waiting = ticket_of(commands.invoke("test.echo", args, cmd::origin::agent("s1")));
+	gate->mode = cmd::policy_mode::allow;
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, waiting }).ok);
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, "gone" }).ok);
+
+	gate->mode = cmd::policy_mode::ask;
+	const std::string approved = ticket_of(commands.invoke("test.echo", args, cmd::origin::agent("s1")));
+	BOOST_REQUIRE(commands.approve(approved));
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, approved }).ok);
+	// Approved, then allowed outright meanwhile (a grant given with the answer): still that person's answer.
+	const std::string granted = ticket_of(commands.invoke("test.echo", args, cmd::origin::agent("s1")));
+	BOOST_REQUIRE(commands.approve(granted));
+	gate->mode = cmd::policy_mode::allow;
+	BOOST_TEST(commands.invoke("test.echo", cmd::call{ args, cmd::origin::agent("s1"), 0, granted }).ok);
+
+	BOOST_TEST((seen == std::vector<std::string>{ "", "", approved, granted }));
+}
+
 BOOST_AUTO_TEST_CASE(DescribeBeforeAllowedInvoke_ADescriptionThatThrows_RefusesTheCall)
 {
 	cmd::command_registry commands;

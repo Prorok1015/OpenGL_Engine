@@ -1426,7 +1426,8 @@ namespace {
 
 	// As many as questions may wait: a waiting question never loses its target to others.
 	constexpr std::size_t k_max_described = cmd::command_registry::max_pending_confirmations;
-	constexpr std::chrono::minutes k_described_lifetime{ 5 };
+	// A target lives no longer than the question it was shown in.
+	constexpr auto k_described_lifetime = cmd::command_registry::confirmation_lifetime;
 	constexpr std::string_view k_refused_target = "refused";
 
 	struct target_entry
@@ -3264,14 +3265,15 @@ bool edt::vcs_service::run_bounded_now(const std::function<void(std::stop_token)
 	return !cancelled;
 }
 
-void edt::vcs_service::remember_described(std::string key, std::string target)
+void edt::vcs_service::remember_described(std::string key, std::string ticket, std::string target)
 {
 	const auto now = std::chrono::steady_clock::now();
 	std::erase_if(m_described, [&](const described_target& described) {
-		return described.key == key || now - described.at > k_described_lifetime;
+		return described.key == key || now - described.at > k_described_lifetime
+			|| (m_ticket_known && !m_ticket_known(described.ticket));
 	});
 	if (m_described.size() >= k_max_described) m_described.erase(m_described.begin());
-	m_described.push_back({ std::move(key), std::move(target), now });
+	m_described.push_back({ std::move(key), std::move(ticket), std::move(target), now });
 }
 
 std::string edt::vcs_service::take_described(const std::string& key)
@@ -3332,7 +3334,7 @@ std::optional<std::string> edt::vcs_service::describe_code_target(std::string ke
 		}
 	}
 	// Only a question has a ticket to bind the target to; without one nothing would ever take it.
-	if (!consent.ticket.empty()) remember_described(std::move(key), std::move(target));
+	if (!consent.ticket.empty()) remember_described(std::move(key), consent.ticket, std::move(target));
 	return text;
 }
 
@@ -3606,6 +3608,13 @@ namespace {
 std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry& commands, vcs_service& service)
 {
 	std::vector<registration> out;
+
+	service.set_ticket_probe([&commands](std::string_view ticket) {
+		return commands.confirmation_of(ticket).has_value();
+	});
+	// Held by the handle's own function, so the handle always finds it alive and takes the probe back.
+	auto probe_alive = std::make_shared<int>(0);
+	out.emplace_back(probe_alive, [&service, probe_alive] { service.set_ticket_probe({}); });
 
 	cmd::command_desc info;
 	info.id = "vcs.info";

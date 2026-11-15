@@ -3199,6 +3199,7 @@ BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_ACodeEditGrant_NeverCoversCMakeFiles)
 	};
 	branch_with("code", "game/code/src/a.cpp");
 	branch_with("cmake", "game/code/CMakeLists.txt");
+	branch_with("tool", "game/code/tools/gen.py");
 	make_service(real_options(project));
 
 	edt::agent_policy policy{ base / "policy" / ".snk" / "agent_policy.json", base / "policy" / "personal.json" };
@@ -3247,6 +3248,22 @@ BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_ACodeEditGrant_NeverCoversCMakeFiles)
 	BOOST_TEST(!approved.as_object().contains("error"), json::serialize(approved));
 	BOOST_TEST(head_of(repo) != main_head);
 	back_to_main();
+
+	// A generator script comes in only through a question about the call: neither a grant, nor a grant plus the ticket
+	// of a question nobody answered, which the registry does not hand the command.
+	const json::value tool_by_grant = job_of(commands.invoke("vcs.checkout",
+		json::object{ { "ref", "tool" }, { "code_changes", true } }, agent));
+	BOOST_TEST(is_error(tool_by_grant, "denied"), json::serialize(tool_by_grant));
+	const json::value tool_args = json::object{ { "ref", "tool" }, { "cmake_changes", true } };
+	const cmd::result tool_question = commands.invoke("vcs.checkout", tool_args, agent);
+	BOOST_REQUIRE_MESSAGE(tool_question.code == cmd::codes::confirmation_required, tool_question.code);
+	const std::string unanswered = text(tool_question.value.as_object().at("ticket"));
+	grants.add("s1", cmd::agent_category::cmake_presets);
+	const json::value forged = job_of(commands.invoke("vcs.checkout", cmd::call{ tool_args, agent, 0, unanswered }));
+	BOOST_TEST(is_error(forged, "denied"), json::serialize(forged));
+	BOOST_TEST(text(forged.as_object().at("error").as_object().at("message")).find("neither sources nor headers")
+		!= std::string::npos);
+	BOOST_TEST(head_of(repo) == main_head);
 
 	// The same call in two spellings is two questions: each answer runs only toward the commit its own question named,
 	// whatever the other one showed later.

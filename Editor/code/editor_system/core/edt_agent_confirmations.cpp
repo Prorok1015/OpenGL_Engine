@@ -347,8 +347,9 @@ namespace edt
 		park_or_finish(entry.command_id, entry.call, std::move(entry.done), true, std::move(outcome), std::nullopt);
 
 		if (grant) {
-			// What already waits for the same session and category is covered by the answer just given: settle it the way
-			// "Allow once" would, so the person is not asked about each of them again.
+			// What already waits for the same session and category may be covered by the answer just given, so the
+			// person is not asked about each of them again. Never by the ticket of its own question: nobody answered
+			// that one, and the command would take the call for one a person looked at (#931).
 			std::vector<std::uint64_t> covered;
 			for (const waiting& other : m_waiting) {
 				if (other.request.can_grant_session && other.request.session == entry.request.session
@@ -357,9 +358,36 @@ namespace edt
 				}
 			}
 			for (const std::uint64_t id : covered) {
-				finish_waiting(id, confirmation_answer::allow_once, {});
+				settle_by_grant(id);
 			}
 		}
+	}
+
+	void agent_confirmations::settle_by_grant(std::uint64_t id)
+	{
+		const auto waiting_of = [this, id] {
+			return std::find_if(m_waiting.begin(), m_waiting.end(),
+				[id](const waiting& w) { return w.request.id == id; });
+		};
+		auto found = waiting_of();
+		// A question past its deadline is left to expire_late: a grant given later is no answer to it.
+		if (found == m_waiting.end() || found->request.deadline <= now()) return;
+		cmd::call bare = found->call;
+		bare.confirmation.clear();
+		cmd::result outcome = run_command(found->command_id, bare);
+		// Still asked (another category it needs): the registry answered with the ticket already waiting.
+		if (outcome.code == cmd::codes::confirmation_required) return;
+		found = waiting_of();
+		if (found == m_waiting.end()) return;
+		waiting entry = std::move(*found);
+		for (auto below = found + 1; below != m_waiting.end(); ++below) {
+			m_layout.forget(below->request.id);
+		}
+		m_layout.forget(entry.request.id);
+		m_waiting.erase(found);
+		m_commands.discard(entry.ticket);
+		park_or_finish(entry.command_id, std::move(bare), std::move(entry.done), false, std::move(outcome),
+			std::nullopt);
 	}
 
 	bool agent_confirmations::answer(std::uint64_t id, confirmation_answer what)

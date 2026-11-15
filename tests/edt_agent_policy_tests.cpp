@@ -775,7 +775,12 @@ BOOST_FIXTURE_TEST_CASE(AGrantOfTheCallsCategory_CoversAnotherKindOfActionOnlyWi
 	BOOST_TEST(call("vcs.switch").ok);
 
 	write_project(R"({"categories":{"vcs_branch":"ask"}})");
-	BOOST_TEST(call("vcs.switch").code == cmd::codes::confirmation_required);
+	const cmd::result missing = call("vcs.switch");
+	BOOST_REQUIRE(missing.code == cmd::codes::confirmation_required);
+	// What the grant does not cover yet is what is asked for, so "allow for this session" completes it.
+	const auto question = commands.confirmation_of(std::string(missing.value.as_object().at("ticket").as_string()));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST((question->category == agent_category::vcs_branch));
 	grants.add("s1", agent_category::vcs_branch);
 	BOOST_TEST(call("vcs.switch").ok);
 
