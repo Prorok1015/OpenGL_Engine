@@ -1348,6 +1348,68 @@ BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_Whe
 	BOOST_TEST(scene.generation() == generation_before);
 }
 
+struct prefab_inspector_fixture : desc_problems_fixture
+{
+	prefab_inspector_fixture()
+	{
+		store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+		open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+			{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+				{"__id":"00000000000000d1","name":"other"}]}]})json");
+		inspector = dynamic_cast<edt::inspector_panel*>(editor().context()->panels().find("inspector"));
+		tree = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
+		BOOST_REQUIRE(inspector && tree);
+		open_prefab(prefab);
+		document = edt::prefab_of(editor().context()->documents());
+		BOOST_REQUIRE(document && document->is_open());
+		tree->select_node({ 0xe1 });
+	}
+
+	scn::prefab_desc::prefab_node* working_node() { return document->working_node({ 0xe1 }); }
+
+	const res::tag prefab = res::tag::make("prefabs/inspector_target.prefab.desc");
+	edt::inspector_panel* inspector = nullptr;
+	edt::prefab_editor_panel* tree = nullptr;
+	edt::prefab_document* document = nullptr;
+};
+
+BOOST_FIXTURE_TEST_CASE(APrefabNodePickedInTheWindow_IsTheInspectorsNode_UntilALevelSelectionTakesItBack, prefab_inspector_fixture)
+{
+	BOOST_REQUIRE(working_node() != nullptr);
+	BOOST_TEST(inspector->selected_node() == working_node());
+
+	edt::selection level_selection;
+	level_selection.document = editor().context()->documents().scene().id();
+	level_selection.world = "w0";
+	level_selection.path = { 0xd1 };
+	editor().context()->selection().select(level_selection);
+
+	BOOST_TEST(inspector->selected_node() != working_node());
+}
+
+BOOST_FIXTURE_TEST_CASE(AnEmptyLevelSelection_KeepsThePrefabNodeInTheInspector, prefab_inspector_fixture)
+{
+	editor().context()->selection().clear();
+	BOOST_REQUIRE(working_node() != nullptr);
+	BOOST_TEST(inspector->selected_node() == working_node());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheInspectorFollowsARevert_AndLetsGoOfAPrefabThatCloses, prefab_inspector_fixture)
+{
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
+		desc.get_root().children[0].name = "typed";
+		return true;
+	}));
+	BOOST_REQUIRE(document->is_dirty());
+	BOOST_TEST(document->revert().empty());
+	BOOST_REQUIRE(working_node() != nullptr);
+	BOOST_TEST(inspector->selected_node() == working_node());
+	BOOST_TEST(working_node()->name == "plain");
+
+	editor().context()->documents().close(document->id());
+	BOOST_TEST(inspector->selected_node() == nullptr);
+}
+
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
 {
 	const res::tag odd = res::tag::make("prefabs/desc_problems_odd.prefab.desc");
