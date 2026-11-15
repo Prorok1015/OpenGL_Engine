@@ -7,6 +7,7 @@
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/resource/resources/res_resource_text.h>

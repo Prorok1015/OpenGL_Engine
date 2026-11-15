@@ -46,6 +46,7 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/game/gs_module_layout_key.h>
 #include <snk/input/inp_action_state.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>

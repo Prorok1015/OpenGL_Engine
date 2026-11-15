@@ -59,6 +59,10 @@ namespace {
 		}
 
 		rnd::driver::vertex_array_interface* geometry(const res::tag& tag) override { return m_geometry.require_geometry(tag); }
+		bool draw_fits(const res::tag& tag, std::uint32_t count, std::uint32_t base_vertex, std::uint32_t base_index) override
+		{
+			return m_geometry.draw_fits(tag, count, base_vertex, base_index);
+		}
 
 		rnd::shader_config_cache& variants() override { return m_shaders.variants(); }
 		rnd::driver::shader_interface* program(rnd::variant_id variant) override { return m_shaders.program(variant); }

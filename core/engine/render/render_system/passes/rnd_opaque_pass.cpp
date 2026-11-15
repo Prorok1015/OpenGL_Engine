@@ -88,6 +88,8 @@ void opaque_pass::execute(render_context &context,
       auto *va = context.geometry(packet.geometry_of(dc));
       if (!va)
         continue;
+      if (!context.draw_fits(packet.geometry_of(dc), dc.indices_count, dc.vx_begin, dc.ind_begin))
+        continue;
 
       if (!pipelines.bind(context.material(dc.material).opaque))
         continue;
