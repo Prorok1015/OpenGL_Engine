@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/application/app_module_loader.hpp>
+#include <cstdint>
 #include <stdexcept>
+#include <string>
 
 // The C entry point of a game module, exercised without dlopen: the exported functions are
 // declared in this binary and their addresses are put into a module_entry (EPIC-52 #21 will
@@ -186,7 +188,8 @@ BOOST_AUTO_TEST_CASE(WrongApiMajorIsRefusedBeforeAnythingIsCreated)
 	BOOST_TEST(!loader.state("sample").has_value());
 }
 
-// Without snk/game/gs_module_layout.h the generated export reports 0, which no host checks. This TU does not include it,
+// Without snk/game/gs_module_layout.h the generated export reports 0, which check_module_layout lets through (a module in a
+// library is refused earlier, by check_library_module). This TU does not include it,
 // and neither does the shared PCH (cmake/pch/snk_pch.h: standard and third-party headers only); if either did, the
 // export would report the engine's key and this test would fail.
 BOOST_AUTO_TEST_CASE(AModuleThatDoesNotKnowTheLayoutsReportsZeroAndIsNotChecked)
@@ -195,6 +198,43 @@ BOOST_AUTO_TEST_CASE(AModuleThatDoesNotKnowTheLayoutsReportsZeroAndIsNotChecked)
 	BOOST_REQUIRE(entry.layout_key != nullptr);
 	BOOST_TEST(entry.layout_key() == 0u);
 	BOOST_TEST(app::modules::check_module_layout(entry, 0x1234u).empty());
+}
+
+// #922: what native_library_source::open refuses of a module in a library before the loader sees it.
+BOOST_AUTO_TEST_CASE(AModuleInALibraryWithoutALayoutKeyIsRefused)
+{
+	using app::modules::build_flag::static_crt;
+	BOOST_TEST(app::modules::library_module_problem(0u, 0u).find("no layout key") != std::string::npos);
+	BOOST_TEST(app::modules::library_module_problem(0u, 0x1234u).empty());
+
+	// This TU's export reports 0 (see above), as a module built without the key header does.
+	auto entry = generated_entry();
+	if ((app::modules::make_build_info().flags & static_crt) == 0) {
+		BOOST_TEST(app::modules::check_library_module(entry).find("no layout key") != std::string::npos);
+		entry.layout_key = nullptr;
+		BOOST_TEST(app::modules::check_library_module(entry).find("no layout key") != std::string::npos);
+		entry.layout_key = +[]() -> std::uint64_t { return 0x1234u; };
+		BOOST_TEST(app::modules::check_library_module(entry).empty());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AModuleInALibraryBuiltWithTheStaticCrtIsRefused)
+{
+	using app::modules::build_flag::static_crt;
+	const std::string problem = app::modules::library_module_problem(static_crt, 0x1234u);
+	BOOST_TEST(problem.find("static C runtime") != std::string::npos);
+	BOOST_TEST(problem.find("/MD") != std::string::npos);
+	BOOST_TEST(app::modules::library_module_problem(app::modules::build_flag::debug, 0x1234u).empty());
+}
+
+// The loader's own message (another major here) says what to change; the library check stays out of its way.
+BOOST_AUTO_TEST_CASE(AnEntryTheLoaderRefusesIsLeftToTheLoader)
+{
+	auto entry = generated_entry();
+	entry.api_version = &wrong_major_version;
+	entry.build_info = &wrong_major_info;
+	BOOST_TEST(app::modules::check_library_module(entry).empty());
+	BOOST_TEST(!app::modules::check_module_entry(entry).empty());
 }
 
 BOOST_AUTO_TEST_CASE(ModuleNeedingNewerMinorIsRefused)
