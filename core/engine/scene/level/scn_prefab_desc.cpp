@@ -8,6 +8,7 @@
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>
@@ -103,7 +104,10 @@ namespace scn {
 		prefab_comp_node parse_component(desc::desc_system& desc_system, const desc::desc_base& owner, const json::value& val,
 			std::string_view explicit_type, std::string_view json_path = {})
 		{
-			if (val.is_string()) {
+			// A component written as one reference, in either form a file writes it: an object that is {guid, path} is that
+			// reference, not a component with the overrides "guid" and "path" (#920). Under the key of a registered type
+			// an object stays that type's component: its fields may well be called "path".
+			if (val.is_string() || (!desc_system.is_registered(explicit_type) && res::reference_from_json(val))) {
 				return prefab_comp_node{
 					.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, val, json_path)
 				};
@@ -688,7 +692,11 @@ namespace {
 			}
 			return;
 		}
-		if (record.path.empty() && record.value.is_string()) {
+		// The component's type decides, not the record's key: a typed component may well have a field called "path".
+		const prefab_comp_node& held = it->second;
+		const bool has_fields = !held.type_name.empty() && (desc_system.is_registered(held.type_name) || held.parent_desc.is_valid());
+		const bool whole_reference = record.value.is_string() || (!has_fields && res::reference_from_json(record.value));
+		if (record.path.empty() && whole_reference) {
 			// a plain reference to a desc replaces the component whole
 			it->second = scn::parse_component(desc_system, owner, record.value, record.component);
 			return;

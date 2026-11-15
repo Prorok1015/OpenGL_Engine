@@ -124,6 +124,7 @@
 // #988 (no bump): desc_system guards its registries with a lock and keeps a migration step or a factory alive while it runs.
 // Its members are out of line (#786) and scene_layer holds it by pointer (#758), so its new size is not seen by a module;
 // only the private find_factory/find_migrations change their signatures, no public export changes.
+// #920: the codec of component_tracker's map gains from_json with a read_context, a new export (no type changes).
 // #952 (no bump): desc_system::get_field_desc, inline in module code, refuses a reference to the owner itself (or to an alias
 // of it) through the exports that are there; a module built before keeps such a handle until rebuilt. No layout changes.
 // res::refused_tag (the tag a refused handle was asked for) is a new export (no type changes: the layout key stays).
