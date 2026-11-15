@@ -37,9 +37,10 @@ namespace edt::mesh
 	// belongs to the UV tools and is not read here. Faces the bake cannot triangulate (no area, a vertex used twice, a
 	// position that is not finite, a polygon that crosses itself, winds twice or is concave with more than 64 corners)
 	// are left out and listed in `skipped_faces`. In a convex fan the triangles of zero area (a collinear vertex 0) are dropped and the
-	// vertex stays unused by them, so a neighbour that splits that edge can meet it in a T-junction. The thresholds 1e-9 (turn),
-	// 1e-12 (area) and 1e-4 (UV) are absolute or relative to the UV edges, not to the size of the mesh: a mesh far from unit scale
-	// may lose its thinnest faces. Layout is always position vec3, normal vec3, uv vec2,
+	// vertex stays unused by them, so a neighbour that splits that edge can meet it in a T-junction. The tolerances of the triangulation
+	// (turn, area, a vertex on an ear) are 1e-6 of the squared size of the face, measured from its first corner, so they hold far from
+	// the world origin; the UV threshold (1e-4) is relative to the UV edges; the no-area limit (1e-12 of the Newell sum) is absolute.
+	// Layout is always position vec3, normal vec3, uv vec2,
 	// tangent vec3, bitangent vec3 in that order (a shader input is the element's place in the layout), `bounds` stay empty.
 	baked_mesh bake(const poly_mesh& mesh, const bake_settings& settings = {});
 }

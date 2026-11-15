@@ -2,6 +2,7 @@
 #include "edt_mesh_bake.h"
 #include "edt_mesh_shapes.h"
 #include <cmath>
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -65,7 +66,7 @@ poly_mesh folded_strip(bool add_vertices_backwards = false, bool add_faces_backw
 	return mesh;
 }
 
-poly_mesh polygon(std::initializer_list<glm::vec3> outline)
+poly_mesh polygon(const std::vector<glm::vec3>& outline)
 {
 	poly_mesh mesh;
 	std::vector<corner> corners;
@@ -261,33 +262,53 @@ BOOST_AUTO_TEST_CASE(AFaceWithoutArea_IsLeftOut_AndReported)
 	BOOST_TEST(baked.ranges.empty());
 }
 
-BOOST_AUTO_TEST_CASE(AConcaveFace_IsTriangulatedWithoutLosingItsArea)
+bool inside_xy(const std::vector<glm::vec3>& outline, const glm::vec2& point)
 {
-	poly_mesh mesh;
-	const glm::vec3 outline[] = { { 0.f, 0.f, 0.f }, { 2.f, 0.f, 0.f }, { 2.f, 1.f, 0.f }, { 1.f, 1.f, 0.f }, { 1.f, 2.f, 0.f }, { 0.f, 2.f, 0.f } };
-	std::vector<corner> corners;
-	for (const glm::vec3& p : outline) {
-		corners.push_back({ mesh.add_vertex(p) });
+	bool inside = false;
+	for (std::size_t i = 0, j = outline.size() - 1; i < outline.size(); j = i++) {
+		const glm::vec3& a = outline[i];
+		const glm::vec3& b = outline[j];
+		if ((a.y > point.y) != (b.y > point.y) && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) {
+			inside = !inside;
+		}
 	}
-	mesh.add_face(std::move(corners));
+	return inside;
+}
 
-	const baked_mesh baked = bake(mesh);
-	const std::vector<baked_vertex> vertices = read_vertices(baked.geometry);
+// The L has a reflex corner D(1,1) on the diagonal F-B of the ear at A. Cutting the ear at B next would cover F-D-C, ground outside
+// the face; the triangles must stay inside and add up to the area of the L.
+BOOST_AUTO_TEST_CASE(AConcaveFace_WithAVertexOnAnEarsDiagonal_IsTriangulatedInsideItself_Anywhere)
+{
+	const std::vector<glm::vec3> base = { { 0.f, 0.f, 0.f }, { 2.f, 0.f, 0.f }, { 2.f, 1.f, 0.f }, { 1.f, 1.f, 0.f }, { 1.f, 2.f, 0.f }, { 0.f, 2.f, 0.f } };
+	for (const glm::vec3& offset : { glm::vec3{ 0.f }, glm::vec3{ 1000.f, 1000.f, 1000.f } }) {
+		for (const bool reversed : { false, true }) {
+			BOOST_TEST_CONTEXT("offset " << offset.x << (reversed ? ", reversed" : "")) {
+				std::vector<glm::vec3> outline;
+				for (const glm::vec3& p : base) {
+					outline.push_back(p + offset);
+				}
+				if (reversed) {
+					std::ranges::reverse(outline);
+				}
 
-	// The first ear candidate has the reflex corner on its diagonal: cutting it would cover ground outside the face.
-	BOOST_REQUIRE(baked.geometry.indices.size() % 3 == 0);
-	BOOST_REQUIRE(baked.geometry.indices.size() >= 9u);
-	BOOST_REQUIRE(baked.geometry.indices.size() <= 12u);
-	float area = 0.f;
-	for (std::size_t i = 0; i < baked.geometry.indices.size(); i += 3) {
-		const glm::vec3& p0 = vertices[baked.geometry.indices[i]].position;
-		const glm::vec3& p1 = vertices[baked.geometry.indices[i + 1]].position;
-		const glm::vec3& p2 = vertices[baked.geometry.indices[i + 2]].position;
-		const float signed_area = glm::cross(p1 - p0, p2 - p0).z * 0.5f;
-		BOOST_TEST(signed_area > 0.f);
-		area += signed_area;
+				const baked_mesh baked = bake(polygon(outline));
+				const std::vector<baked_vertex> vertices = read_vertices(baked.geometry);
+
+				BOOST_TEST(baked.skipped_faces.empty());
+				BOOST_REQUIRE(baked.geometry.indices.size() == 12u);
+				float area = 0.f;
+				for (std::size_t i = 0; i < 12; i += 3) {
+					const glm::vec3& p0 = vertices[baked.geometry.indices[i]].position;
+					const glm::vec3& p1 = vertices[baked.geometry.indices[i + 1]].position;
+					const glm::vec3& p2 = vertices[baked.geometry.indices[i + 2]].position;
+					const glm::vec3 centroid = (p0 + p1 + p2) / 3.f;
+					BOOST_TEST(inside_xy(outline, { centroid.x, centroid.y }));
+					area += glm::length(glm::cross(p1 - p0, p2 - p0)) * 0.5f;
+				}
+				BOOST_TEST(std::abs(area - 3.f) < 1e-4f);
+			}
+		}
 	}
-	BOOST_TEST(std::abs(area - 3.f) < 1e-4f);
 }
 
 BOOST_AUTO_TEST_CASE(MaterialSlots_GetTheirOwnRanges_WithIndicesCountedFromTheRangeStart)
@@ -369,8 +390,7 @@ BOOST_AUTO_TEST_CASE(AStarShapedFace_OfFewCorners_IsTriangulated_AndOfManyIsRepo
 {
 	const baked_mesh few = bake(star(16));
 	BOOST_TEST(few.skipped_faces.empty());
-	BOOST_TEST(few.geometry.indices.size() / 3 >= 12u);
-	BOOST_TEST(few.geometry.indices.size() / 3 <= 14u);
+	BOOST_TEST(few.geometry.indices.size() == 14u * 3u);
 
 	const auto started = std::chrono::steady_clock::now();
 	const baked_mesh many = bake(star(1024));

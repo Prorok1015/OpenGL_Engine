@@ -59,12 +59,12 @@ namespace edt::mesh
 		}
 
 		// The boundary counts as inside: a vertex on the diagonal of an ear means the ear would cover ground outside the polygon.
-		bool inside_triangle(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b, const glm::vec2& c)
+		bool inside_triangle(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b, const glm::vec2& c, float tolerance)
 		{
 			const auto side = [](const glm::vec2& p0, const glm::vec2& p1, const glm::vec2& q) {
 				return (p1.x - p0.x) * (q.y - p0.y) - (p1.y - p0.y) * (q.x - p0.x);
 			};
-			return side(a, b, p) >= -1e-9f && side(b, c, p) >= -1e-9f && side(c, a, p) >= -1e-9f;
+			return side(a, b, p) >= -tolerance && side(b, c, p) >= -tolerance && side(c, a, p) >= -tolerance;
 		}
 
 		// Cost of the concave path is cubic in the corner count; a bigger concave face is reported, not triangulated.
@@ -84,9 +84,15 @@ namespace edt::mesh
 			const glm::vec3 v_axis = glm::cross(normal, u_axis);
 			std::vector<glm::vec2> flat;
 			flat.reserve(count);
+			// Measured from the first corner: far from the world origin the float error of a dot with the absolute position would
+			// swamp the tolerance below. The tolerance scales with the size of the face for the same reason.
+			float extent = 1e-20f;
 			for (const glm::vec3& p : points) {
-				flat.emplace_back(glm::dot(p, u_axis), glm::dot(p, v_axis));
+				const glm::vec3 local = p - points[0];
+				flat.emplace_back(glm::dot(local, u_axis), glm::dot(local, v_axis));
+				extent = std::max({ extent, std::abs(flat.back().x), std::abs(flat.back().y) });
 			}
+			const float tolerance = 1e-6f * extent * extent;
 			const auto turn = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c) {
 				return (flat[b].x - flat[a].x) * (flat[c].y - flat[b].y) - (flat[b].y - flat[a].y) * (flat[c].x - flat[b].x);
 			};
@@ -99,7 +105,7 @@ namespace edt::mesh
 				const glm::vec2 first = flat[b] - flat[i];
 				const glm::vec2 second = flat[c] - flat[b];
 				turning += std::atan2(first.x * second.y - first.y * second.x, glm::dot(first, second));
-				convex = convex && turn(i, b, c) >= -1e-9f;
+				convex = convex && turn(i, b, c) >= -tolerance;
 			}
 			if (std::abs(turning - 2.f * std::numbers::pi_v<float>) > 0.1f) {
 				return std::nullopt;
@@ -108,7 +114,7 @@ namespace edt::mesh
 			triangles.reserve(count - 2);
 			if (convex) {
 				for (std::uint32_t i = 1; i + 1 < count; ++i) {
-					if (std::abs(turn(0, i, i + 1)) > 1e-12f) {
+					if (std::abs(turn(0, i, i + 1)) > tolerance) {
 						triangles.push_back({ 0, i, i + 1 });
 					}
 				}
@@ -144,11 +150,11 @@ namespace edt::mesh
 					const std::uint32_t prev = rest[(i + rest.size() - 1) % rest.size()];
 					const std::uint32_t curr = rest[i];
 					const std::uint32_t next = rest[(i + 1) % rest.size()];
-					if (turn(prev, curr, next) <= 0.f) {
+					if (turn(prev, curr, next) <= tolerance) {
 						continue;
 					}
 					const bool empty = std::ranges::none_of(rest, [&](std::uint32_t other) {
-						return other != prev && other != curr && other != next && inside_triangle(flat[other], flat[prev], flat[curr], flat[next]);
+						return other != prev && other != curr && other != next && inside_triangle(flat[other], flat[prev], flat[curr], flat[next], tolerance);
 					});
 					if (empty) {
 						ear = i;
@@ -162,7 +168,7 @@ namespace edt::mesh
 				triangles.push_back({ prev, rest[*ear], next });
 				rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(*ear));
 			}
-			if (turn(rest[0], rest[1], rest[2]) > 0.f) {
+			if (turn(rest[0], rest[1], rest[2]) > tolerance) {
 				triangles.push_back({ rest[0], rest[1], rest[2] });
 			}
 			return triangles;
