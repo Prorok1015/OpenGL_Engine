@@ -383,9 +383,13 @@ namespace edt
 		// by the command without the person's answer: the question stays for that answer. A policy that turned to deny
 		// ends it.
 		if (outcome.code == cmd::codes::confirmation_required) return;
-		if (outcome.code == cmd::codes::denied && !policy_denies(*command, bare)) return;
 		found = waiting_of();
 		if (found == m_waiting.end()) return;
+		if (outcome.code == cmd::codes::denied) {
+			// The run may have changed the registry: what it holds now is asked, and a command gone ends the question.
+			const cmd::command_desc* current = m_commands.find(found->command_id);
+			if (current != nullptr && !policy_denies(*current, bare)) return;
+		}
 		waiting entry = std::move(*found);
 		for (auto below = found + 1; below != m_waiting.end(); ++below) {
 			m_layout.forget(below->request.id);
