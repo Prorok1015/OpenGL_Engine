@@ -1,6 +1,7 @@
 #include <snk/scene/level/scn_context_set.h>
 #include "scn_level_switch_slot.h"
 #include <snk/scene/scn_scene_layer.h>
+#include <snk/scene/scn_geometry_holds.h>
 #include <algorithm>
 #include <utility>
 #include <snk/common/eng_profiler.h>
@@ -239,6 +240,10 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 		w.set_meta(&m_layer->meta());
 		w.set_catalog(&m_layer->catalog());
 	}
+	// The layer's resources, else the base ones the set's hot reload watches (a set without either: none).
+	res::resource_system* resources = m_layer ? &m_layer->resources()
+		: m_hot_reload_manager ? &m_hot_reload_manager->resources() : nullptr;
+	scn::geometry_holds::attach(w.state(), resources);
 	m_channel.attach(id, w.get_name(), w.state());
 	w.state().ctx().insert_or_assign(detail::level_switch_port{ this });
 	bind_events(w).set_mode(m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue);

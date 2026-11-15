@@ -3,6 +3,7 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_tag.h>
+#include <snk/resource/resources/res_resource_handle.hpp>
 #include <functional>
 #include <map>
 #include <optional>
@@ -12,6 +13,15 @@
 
 namespace edt
 {
+	// What a load left on its handle: the warnings and errors of the descs it read.
+	template<class T>
+	std::vector<res::diagnostic> diagnostics_of(const res::res_handle<T>& handle)
+	{
+		res::diagnostics_collector collector;
+		handle.collect_into(collector);
+		return collector.items();
+	}
+
 	// What went wrong in the descs the editor loaded, as the problems of the source "desc" (#596): one set per scope
 	// ("level", "drop", "prefab"), so a clean load of one does not hide the errors of another. The source holds the
 	// union of the scopes and goes away when every scope is empty. Main thread only.

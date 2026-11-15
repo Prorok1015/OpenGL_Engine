@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
+#include <snk/render/rnd_material_groups.h>
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_frame_context.h>
 #include <snk/render/rnd_material_instance_cache.h>
@@ -35,7 +36,10 @@ struct material_set_fixture : test_util::null_engine_fixture
 		auto& levels = storage.require<scn::context_manager>();
 		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
 		test_util::pump(tasks);
-		BOOST_REQUIRE(run_frames(3) == 3);
+		// The meshes draw from the first frame, some with placeholder textures while theirs still load: the groups of
+		// those frames go once unused for grace_frames, so warm means past that (#1021).
+		constexpr int warm_frames = static_cast<int>(rnd::material_groups::grace_frames) + 2;
+		BOOST_REQUIRE(run_frames(warm_frames) == warm_frames);
 	}
 
 	// The packets of the frame being rendered: only there while a frame is in progress.
