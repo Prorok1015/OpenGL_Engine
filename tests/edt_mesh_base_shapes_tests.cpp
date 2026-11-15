@@ -77,6 +77,17 @@ BOOST_AUTO_TEST_CASE(TheCommittedFiles_AreWhatTheBakeWrites)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(TheFileVersion_IsTheEnginesGeometryVersion_AndTheTextIsPrettyWithANewline)
+{
+	BOOST_TEST(base_shape_file_version == storage.require<desc::desc_system>().current_version("geometry_desc"));
+	for (const base_shape& shape : base_shapes()) {
+		const std::string text = base_shape_file_text(shape);
+		BOOST_TEST(text.starts_with("{\n    \"__type\" : \"geometry_desc\",\n    \"__version\" : 1,\n"));
+		BOOST_TEST(text.back() == '\n');
+		BOOST_TEST(text.find("__parent") == std::string::npos);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(EveryShape_HasItsOwnName_AndPointsAtAGeomDescFile)
 {
 	std::set<std::string_view> names;

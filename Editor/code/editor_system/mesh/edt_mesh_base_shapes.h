@@ -15,12 +15,15 @@ namespace edt::mesh
 		shape_params params;
 	};
 
+	// __version of a geometry_desc file; a test keeps it equal to the engine's.
+	inline constexpr int base_shape_file_version = 1;
+
 	std::span<const base_shape> base_shapes();
 	const base_shape* find_base_shape(std::string_view name);
 
 	// res://shapes/<name>.geom.desc
 	std::string base_shape_path(const base_shape& shape);
-	// The whole file, deterministic: the bake of the generated mesh without `bounds`.
+	// The whole file in the form of the repository's descs (pretty JSON, version, a newline at the end): deterministic, the bake of the generated mesh.
 	std::string base_shape_file_text(const base_shape& shape);
 	// The range of the one mesh in the file, as a mesh node writes it (vx_begin, vx_end, ind_begin, ind_end).
 	material_range base_shape_range(const base_shape& shape);
