@@ -10,6 +10,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <algorithm>
@@ -80,11 +81,29 @@ namespace
 		if (!field) {
 			return std::nullopt;
 		}
-		if (!field->is_string() || !std::string_view{ field->as_string() }.starts_with("res://")) {
+		const auto refuse = [&] {
 			error = std::format("{} /__parent: a parent is written as res://<path> (a path inside the project)", where(file));
 			return std::nullopt;
+		};
+		const std::optional<res::reference> read = res::reference_from_json(*field);
+		if (!read) {
+			return refuse();
 		}
-		return res::tag{ std::string_view{ field->as_string() } };
+		// The text as written: res::tag turns a backslash into a slash.
+		std::string_view written;
+		if (const json::string* text = field->if_string()) {
+			written = std::string_view{ *text };
+		} else if (const json::value* path = field->as_object().if_contains("path")) {
+			written = std::string_view{ path->as_string() };
+		}
+		if (!written.empty() && !written.starts_with("res://")) {
+			return refuse();
+		}
+		// By its path only, as the engine's read_parent loads a file's parent until it follows a guid (#964).
+		if (!read->path.view().starts_with("res://")) {
+			return refuse();
+		}
+		return read->path;
 	}
 }
 
@@ -722,7 +741,8 @@ edt::save_result edt::data_document::write_checked(bool over)
 	}
 
 	json::value content(m_own);
-	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view(), reader)) {
+	// A person's rule: a reference whose file moved is the one write_references below repairs.
+	for (const res::diagnostic& item : validate_desc_tree(*descs, content, m_source.view(), reader, reference_rule::person)) {
 		if (item.severity == res::diagnostic_severity::error) {
 			return save_result::failure(std::format("{}: {}", where(m_source, item.json_path), item.reason));
 		}
