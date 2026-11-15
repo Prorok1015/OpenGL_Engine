@@ -202,6 +202,7 @@ struct project_step {
 |---|---|---|---|
 | `engine.manifest_format` | pre | EPIC-58 | поднимает `format_version` манифеста до текущего |
 | `assets.ids` | pre | EPIC-57 (S57-12, #776) | создаёт отсутствующие `.resource`, id берёт из `__guid` desc |
+| `assets.ids_below` | pre | EPIC-57 (#902) | новый ID файлу проекта, чей `.resource` несёт ID файла движка (копия): ID остаётся у файла движка; ссылки на копию — в `assets.refs` того же прогона, а `{guid, path}` с guid движка не переводятся |
 | `assets.ids_drop_desc_guid` | post | EPIC-57 (S57-8, #772) | снимает корневой `__guid` у desc с `.resource`; `__guid` ≠ ID — строка в отчёте |
 | `assets.refs` | post | EPIC-57 (S57-12, #776) | переписывает ссылки на форму с id; после S57-9 (#773) |
 
