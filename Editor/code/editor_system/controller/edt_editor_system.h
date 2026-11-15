@@ -211,7 +211,8 @@ namespace edt {
 		void open_agents_panel();
 		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
 		void open_migration_window();
-		// The window, rolling migration `id` back (project.migrate_rollback as a person's call).
+		// The window with the question about rolling migration `id` back (#910): the full listing; it runs
+		// (project.migrate_rollback as a person's call) only once the person confirms there.
 		void open_migration_rollback(const std::string& id);
 		// migration_startup's question (#761): Roll Back / Later for an unfinished migration, or why it cannot be rolled back.
 		void offer_migration_rollback(const journal_offer& offer);
@@ -263,7 +264,13 @@ namespace edt {
 
 		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
+		void open_prefab_now(const res::tag& tag);
+		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
+		void confirm_prefab_close(std::function<void()> proceed);
+		std::shared_ptr<int> m_prefab_alive = std::make_shared<int>();
 		void close_prefab_editor();
+		// The open prefab document when it has unapplied edits, else null.
+		prefab_document* dirty_prefab();
 
 		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
 		desc_file_layout desc_layout();

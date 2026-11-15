@@ -4,6 +4,7 @@
 #include "edt_file_menu.h"
 #include "edt_reference.h"
 #include "edt_tag_text.h"
+#include <snk/resource/res_reference.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -26,6 +27,7 @@
 #include <system_error>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace {
 	namespace json = boost::json;
@@ -163,12 +165,25 @@ namespace {
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
-					if (!world.is_string()) continue;
-					const edt::agent_level_path named = edt::check_agent_folder(view_of(world.as_string()));
-					if (named.ok() && same_file(locate(named.path))) return true;
+					for (const res::tag& world_file : world_files_of(world)) {
+						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
+						if (named.ok() && same_file(locate(named.path))) return true;
+					}
 				}
 			}
 			return false;
+		}
+
+		// The files an entry of a level's `worlds` names, as a path or as {guid, path}: where the guid is now and what `path`
+		// spells, since the index may have moved the guid while the stale path still names a world (#920). None when inline.
+		std::vector<res::tag> world_files_of(const json::value& world) const
+		{
+			std::vector<res::tag> files;
+			const std::optional<res::reference> reference = res::reference_from_json(world);
+			if (!reference) return files;
+			files.push_back(m_deps.res.resolve_reference(*reference));
+			if (!(reference->path == files.front())) files.push_back(reference->path);
+			return files;
 		}
 
 		// The same question for a path no file has: it is the open level's own name or one of the names in its `worlds`, so a
@@ -190,9 +205,10 @@ namespace {
 				const json::value* worlds = parsed.as_object().if_contains("worlds");
 				if (!worlds || !worlds->is_array()) continue;
 				for (const json::value& world : worlds->as_array()) {
-					if (!world.is_string()) continue;
-					const edt::agent_level_path named = edt::check_agent_folder(view_of(world.as_string()));
-					if (named.ok() && name_key(named.path) == wanted) return true;
+					for (const res::tag& world_file : world_files_of(world)) {
+						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
+						if (named.ok() && name_key(named.path) == wanted) return true;
+					}
 				}
 			}
 			return false;
@@ -390,6 +406,10 @@ namespace {
 			if (found.found) {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
+			}
+			if (m_files.names_open_level(path.relative)) {
+				return cmd::result::failure(cmd::codes::busy,
+					std::format("'res://{}' is a name of the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", path.relative));
 			}
 			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);

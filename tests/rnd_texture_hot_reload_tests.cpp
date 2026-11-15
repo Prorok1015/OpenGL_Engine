@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
+#include "test_asset_ids_index.hpp"
 #include <snk/render/rnd_material_groups.h>
 #include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/shader/rnd_material_compiler.h>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -393,6 +395,55 @@ BOOST_AUTO_TEST_CASE(QueuedSourceNotificationDoesNotOutliveTheTextureManager)
 	}
 	test_util::pump(tasks); // a queued callback must not dereference the destroyed manager (ASan/TSan)
 	BOOST_TEST(gpu.live_textures() == live);
+}
+
+// #920: `data` of a cubemap is one picture when it is a reference in either form a file writes it, and six faces only
+// for an object with the faces' keys. {guid, path} used to be read as six faces with none of them set.
+BOOST_AUTO_TEST_CASE(CubemapData_AGuidAndAPath_IsOnePicture_FoundByItsGuid)
+{
+	const std::string_view guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+	const res::tag image{ "memory://reload/sky_new_place.raw" };
+	picture(image, 42);
+	auto index = std::make_shared<test_util::asset_ids_index>();
+	index->hold(guid, image.view());
+	const test_util::asset_index_scope installed{ resources(), index };
+
+	const res::tag single{ "memory://reload/sky_single.desc" };
+	description(single, { { "__type", "texture_cubemap_desc" },
+		{ "data", json::parse(test_util::reference_text(guid, "memory://reload/sky_old_place.raw")) } });
+	const auto loaded = resources().require_sync<rnd::texture_desc>(single);
+	BOOST_REQUIRE(loaded.is_ready());
+	test_util::pump(tasks);
+	json::object saved;
+	loaded.get_sync()->serialize(saved);
+	BOOST_REQUIRE(saved.contains("data"));
+	BOOST_TEST(saved.at("data") == json::value(std::string(image.view())));
+
+	// A face is a reference too, and the object of faces stays six faces.
+	const res::tag faced{ "memory://reload/sky_faces.desc" };
+	json::object faces;
+	for (const char* name : { "right", "left", "bottom", "top", "front", "back" }) faces[name] = std::string(image.view());
+	faces["top"] = json::parse(test_util::reference_text(guid, "memory://reload/sky_old_place.raw"));
+	description(faced, { { "__type", "texture_cubemap_desc" }, { "data", faces } });
+	const auto six = resources().require_sync<rnd::texture_desc>(faced);
+	BOOST_REQUIRE(six.is_ready());
+	test_util::pump(tasks);
+	json::object saved_faces;
+	six.get_sync()->serialize(saved_faces);
+	BOOST_REQUIRE(saved_faces.at("data").is_object());
+	for (const char* name : { "right", "left", "bottom", "top", "front", "back" }) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(saved_faces.at("data").at(name) == json::value(std::string(image.view())));
+		}
+	}
+
+	// A 2D texture reads its picture the same way.
+	const res::tag flat{ "memory://reload/flat_by_guid.desc" };
+	description(flat, { { "__type", "texture_2d_desc" },
+		{ "data", json::parse(test_util::reference_text(guid, "memory://reload/sky_old_place.raw")) } });
+	const auto flat_desc = material(flat);
+	settle(flat_desc);
+	expect_pixels(textures.binding(textures.id_of(flat)).handle, 0, 42);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
