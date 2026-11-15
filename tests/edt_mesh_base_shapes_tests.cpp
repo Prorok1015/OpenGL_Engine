@@ -22,7 +22,7 @@ constexpr std::size_t vertex_stride = 14 * sizeof(float);
 std::string read_text(const fs::path& path)
 {
 	std::ifstream in(path, std::ios::binary);
-	std::string text(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 	std::erase(text, '\r');
 	return text;
 }
