@@ -48,7 +48,7 @@ bool near(const glm::vec3& a, const glm::vec3& b, float eps = 1e-4f)
 }
 
 // Two quads sharing the edge b0-b1, the second one standing up at 90 degrees; the UV runs on across the edge.
-poly_mesh folded_strip(bool add_vertices_backwards = false)
+poly_mesh folded_strip(bool add_vertices_backwards = false, bool add_faces_backwards = false)
 {
 	const glm::vec3 positions[6] = { { 0.f, 0.f, 0.f }, { 0.f, 0.f, 1.f }, { 1.f, 0.f, 0.f }, { 1.f, 0.f, 1.f }, { 1.f, 1.f, 0.f }, { 1.f, 1.f, 1.f } };
 	poly_mesh mesh;
@@ -58,8 +58,10 @@ poly_mesh folded_strip(bool add_vertices_backwards = false)
 		ids[i] = mesh.add_vertex(positions[i]);
 	}
 	const vertex_id a0 = ids[0], a1 = ids[1], b0 = ids[2], b1 = ids[3], c0 = ids[4], c1 = ids[5];
-	mesh.add_face({ { a0, { 0.f, 0.f } }, { a1, { 0.f, 1.f } }, { b1, { 0.5f, 1.f } }, { b0, { 0.5f, 0.f } } });
-	mesh.add_face({ { b0, { 0.5f, 0.f } }, { b1, { 0.5f, 1.f } }, { c1, { 1.f, 1.f } }, { c0, { 1.f, 0.f } } });
+	const std::vector<corner> flat_quad = { { a0, { 0.f, 0.f } }, { a1, { 0.f, 1.f } }, { b1, { 0.5f, 1.f } }, { b0, { 0.5f, 0.f } } };
+	const std::vector<corner> raised_quad = { { b0, { 0.5f, 0.f } }, { b1, { 0.5f, 1.f } }, { c1, { 1.f, 1.f } }, { c0, { 1.f, 0.f } } };
+	mesh.add_face(add_faces_backwards ? raised_quad : flat_quad);
+	mesh.add_face(add_faces_backwards ? flat_quad : raised_quad);
 	return mesh;
 }
 
@@ -311,13 +313,16 @@ BOOST_AUTO_TEST_CASE(MaterialSlots_GetTheirOwnRanges_WithIndicesCountedFromTheRa
 	}
 }
 
-BOOST_AUTO_TEST_CASE(TheBake_DoesNotDependOnTheOrderTheVerticesWereAdded)
+BOOST_AUTO_TEST_CASE(TheBake_DoesNotDependOnTheIdsOfTheVertices_ButFollowsTheOrderOfTheFaces)
 {
-	const baked_mesh forwards = bake(folded_strip(false));
-	const baked_mesh backwards = bake(folded_strip(true));
+	const baked_mesh forwards = bake(folded_strip());
+	const baked_mesh other_vertex_ids = bake(folded_strip(true));
+	const baked_mesh other_face_order = bake(folded_strip(false, true));
 
-	BOOST_TEST((forwards.geometry.vertices == backwards.geometry.vertices));
-	BOOST_TEST((forwards.geometry.indices == backwards.geometry.indices));
+	BOOST_TEST((forwards.geometry.vertices == other_vertex_ids.geometry.vertices));
+	BOOST_TEST((forwards.geometry.indices == other_vertex_ids.geometry.indices));
+	BOOST_TEST((forwards.geometry.vertices != other_face_order.geometry.vertices));
+	BOOST_TEST(forwards.geometry.vertices.size() == other_face_order.geometry.vertices.size());
 }
 
 BOOST_AUTO_TEST_CASE(FacesThatAreNoSimplePolygon_AreLeftOutAndReported)
