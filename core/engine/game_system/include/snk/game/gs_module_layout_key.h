@@ -117,7 +117,7 @@ namespace gs
 			inp::input_capture, scn::node_index, ecs::event<int>,
 			// Engine events a module's event_reader<T> copies out of the bus.
 			inp::action_event, scn::animation_finished,
-			// All inline: module code runs find_entry over its members.
+			// The module constructs and moves it, so its size stays in the key; its logic is behind exports since #922 PR 3.
 			ds::app_data_storage,
 			// register_desc_spawner builds the pair and inserts it into the assembler's map in module code;
 			// component_registry is inline too.
@@ -132,7 +132,7 @@ namespace gs
 			// task_system::run makes the task's state in module code and then_main hands its callback the result.
 			// task_result<void> is an explicit specialization: <int> stands for the primary template.
 			ds::task_result<void>, ds::task_result<int>, ds::detail::task_state<void>,
-			// gs::input_actions' inline accessors copy or hand out these members.
+			// Module code copies them: gs::input_actions' exports return them by value or by reference.
 			inp::gamepad_config, inp::user_bindings,
 			// Returned by value from the exports of user_bindings; rng::save and rng::load are inline.
 			inp::rebind_result, inp::binding_conflict, ecs::rng::position,
