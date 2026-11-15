@@ -254,7 +254,7 @@ namespace edt
 		std::uint64_t changes_dropped() const { return m_changes_dropped; }
 		// Tests only: the limit of changes waiting behind a walk (max_deferred_changes).
 		void set_max_deferred_for_tests(std::size_t limit) { m_max_deferred = limit; }
-		// Files whose hash is not known yet (queued or running).
+		// Files whose hash is not known yet (queued or running); not those read again beside a hash they keep (#975).
 		std::size_t pending_hashes() const;
 		// This database holds the lock of the cache and writes it.
 		bool writes_cache() const { return m_lock != nullptr; }
@@ -427,6 +427,8 @@ namespace edt
 		// Hashes read again beside the record's (key, the file time of the check): the record keeps its hash and
 		// references until the new ones come, and changes only when they differ.
 		std::vector<std::pair<std::string, std::int64_t>> m_reverify;
+		// Those of m_reverify a hashing job is reading now.
+		std::vector<std::pair<std::string, std::int64_t>> m_verifying;
 		std::function<std::int64_t()> m_file_clock;
 		std::uint64_t m_hash_job = 0;
 		std::uint64_t m_scan_job = 0;

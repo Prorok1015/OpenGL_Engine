@@ -512,6 +512,8 @@ void edt::asset_database::requeue_in_flight()
 		}
 	}
 	m_in_flight.clear();
+	std::ranges::move(m_verifying, std::back_inserter(m_reverify));
+	m_verifying.clear();
 	m_hash_job = 0;
 }
 
@@ -730,14 +732,15 @@ void edt::asset_database::hash_next()
 		m_reverify.pop_back();
 		const auto found = m_records.find(key);
 		// Without a hash it is queued the usual way; in flight, its job reads it anyway.
+		const auto verifying = [&key](const auto& entry) { return entry.first == key; };
 		if (found == m_records.end() || found->second.content_hash.empty()
-			|| std::ranges::find(m_in_flight, key) != m_in_flight.end()) {
+			|| std::ranges::find(m_in_flight, key) != m_in_flight.end() || std::ranges::any_of(m_verifying, verifying)) {
 			continue;
 		}
 		const asset_record& record = found->second;
 		std::string_view relative = record.path.view();
 		relative.remove_prefix(relative.find("://") + 3);
-		m_in_flight.push_back(key);
+		m_verifying.emplace_back(key, checked_at);
 		batch.push_back(item{ std::move(key), m_layers[record.layer], fs_paths::path_from_utf8(relative),
 			record.type == "desc", record.size, record.mtime, record.content_id, true, checked_at });
 	}
@@ -801,7 +804,11 @@ void edt::asset_database::hash_next()
 				};
 				for (auto& [key, queued_size, queued_mtime, queued_id, content, id_before, id_after, verify, checked_at]
 					: *result.value) {
-					std::erase(m_in_flight, key);
+					if (verify) {
+						std::erase_if(m_verifying, [&key](const auto& entry) { return entry.first == key; });
+					} else {
+						std::erase(m_in_flight, key);
+					}
 					++m_files_read;
 					const auto found = m_records.find(key);
 					if (found == m_records.end()) {
@@ -876,7 +883,9 @@ void edt::asset_database::hash_next()
 
 std::size_t edt::asset_database::pending_hashes() const
 {
-	return m_unhashed.size() + m_in_flight.size() + m_reverify.size();
+	// Not the hashes read again beside their records (m_reverify): those records keep theirs, so a reader of the
+	// references has nothing to wait for.
+	return m_unhashed.size() + m_in_flight.size();
 }
 
 const edt::asset_record* edt::asset_database::find(const res::tag& path) const

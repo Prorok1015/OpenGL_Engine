@@ -1430,9 +1430,11 @@ BOOST_AUTO_TEST_CASE(a_hash_read_under_a_racy_stamp_is_read_again_once_the_stamp
 
 	assets.set_file_clock_for_tests(aged_clock(stamp));
 	assets.poll(true);
-	// Read beside the record: its hash stays until the new one comes.
+	// Read beside the record: its hash stays until the new one comes, and asset.usages (complete = walked and no
+	// pending hash) does not wait for it.
 	BOOST_TEST(record("level.desc").content_hash == first);
 	BOOST_TEST(record("same.desc").content_hash == same_hash);
+	BOOST_TEST(assets.pending_hashes() == 0u);
 	const std::uint64_t revision = assets.revision();
 	test_util::pump(tasks);
 	BOOST_TEST(record("level.desc").content_hash != first);
