@@ -65,6 +65,8 @@ struct prefab_edit_fixture : test_util::scene_env
 		services.base_assembler = assembler.get();
 		services.base_sfactory = &sf;
 		document = std::make_unique<edt::prefab_document>(services);
+		// The document_manager gives ids; here nothing does, and id 0 means "no document".
+		document->assign_id(7);
 		document->set_files(layout());
 	}
 
