@@ -197,8 +197,9 @@ struct threaded_env
 		rs->stop_loading();
 		scope.reset();
 		assembler.reset();
-		descs.reset();
+		// The desc adapter of the resource system holds the desc_system by reference.
 		rs.reset();
+		descs.reset();
 	}
 
 	ds::task_system tasks{ one_io_worker() };
