@@ -4,12 +4,16 @@
 #include "edt_decoded_model_adapter.h"
 #include "edt_process_decoder.h"
 #include "edt_filesystem_assimp_io.h"
+#include "edt_file_identity.h"
 #include <assimp/IOStream.hpp>
+#include <snk/common/hash/sha256.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -253,6 +257,180 @@ BOOST_AUTO_TEST_CASE(WhatAnEarlierLoadLeftInTheModelsMemoryFolder_IsGoneBeforeTh
 	BOOST_REQUIRE(left_over.has_value());
 	BOOST_TEST(!*left_over);
 	BOOST_TEST(rs->exists(other));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// A model loaded again with the same bytes is not decoded again (#999). The stand-in decoder stores an import that passes
+// the checks of a real answer (a prefab and a geometry in the model's memory:// folder) and lists one side file it read.
+namespace {
+
+const res::tag k_geom("memory://__models/res/models/m.obj/m.geom.desc");
+const fs::path k_side_file = fs::path("content") / "models" / "m.mtl";
+
+std::vector<std::byte> text_bytes(std::string_view text)
+{
+	std::vector<std::byte> out(text.size());
+	for (std::size_t i = 0; i < text.size(); ++i) out[i] = static_cast<std::byte>(text[i]);
+	return out;
+}
+
+struct cache_env : adapter_env
+{
+	cache_env() { dir.write(k_side_file.generic_string(), "newmtl a"); }
+
+	edt::decoded_model_adapter::decoder_steps decoding()
+	{
+		edt::decoded_model_adapter::decoder_steps steps;
+		steps.unavailable_reason = [] { return std::string{}; };
+		steps.version = [this] { return version; };
+		steps.scan = [this](const edt::import_source&, ds::task_context*) {
+			++scans;
+			const fs::path side = dir.path() / k_side_file;
+			const std::vector<std::byte> bytes = text_bytes("newmtl a");
+			edt::referenced_file file;
+			file.path = side;
+			file.size = bytes.size();
+			file.digest = edt::digest_of(bytes);
+			file.hashed = true;
+			edt::model_file_scan found;
+			found.files.push_back(file);
+			found.total_bytes = file.size;
+			return found;
+		};
+		steps.import = [this](const edt::import_source&, ds::task_context*) {
+			++imports;
+			BOOST_REQUIRE(rs->store_sync(k_prefab, text_bytes(R"({"__type":"prefab_desc"})")));
+			BOOST_REQUIRE(rs->store_sync(k_geom, text_bytes(R"({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})")));
+			edt::import_intermediate answer;
+			answer.prefab_tag = k_prefab;
+			answer.geom_tag = k_geom;
+			answer.created_tags = { k_prefab, k_geom };
+			answer.all_tags = answer.created_tags;
+			answer.prefab_json = boost::json::parse(R"({ "__type": "prefab_desc" })").as_object();
+			descs->migrate_tree(answer.prefab_json, "test");
+			return answer;
+		};
+		return steps;
+	}
+
+	std::string version = "decoder-1";
+	int scans = 0;
+	int imports = 0;
+};
+
+struct warnings
+{
+	warnings()
+	{
+		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn) lines.push_back(std::format("{}: {}", category, message));
+		});
+	}
+
+	std::size_t count(std::string_view part) const
+	{
+		std::size_t n = 0;
+		for (const std::string& line : lines) {
+			if (line.find(part) != std::string::npos) ++n;
+		}
+		return n;
+	}
+
+	std::vector<std::string> lines;
+	engine::log_sink_handle sink;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtDecodedModelCacheTests, cache_env)
+
+BOOST_AUTO_TEST_CASE(TheSameBytesLoadedAgain_AreNotDecodedAgain_AndGiveThePrefab)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
+	const warnings warned;
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
+	BOOST_TEST(scans == 1);
+	BOOST_TEST(imports == 1);
+	BOOST_TEST((rs->resolve_alias(k_model) == k_prefab));
+	BOOST_TEST(warned.count("edt/decoder") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(OtherBytesOfTheModel_AreDecoded)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	adapter.deserialize(k_model, text_bytes("o n"));
+	BOOST_TEST(imports == 2);
+	adapter.deserialize(k_model, text_bytes("o n"));
+	BOOST_TEST(imports == 2, "the new bytes are the ones reused now");
+}
+
+BOOST_AUTO_TEST_CASE(ASideFileTheScanListedThatChanged_IsDecodedAgain)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	dir.write(k_side_file.generic_string(), "newmtl b");
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(scans == 2);
+	BOOST_TEST(imports == 2);
+}
+
+BOOST_AUTO_TEST_CASE(AnotherBuildOfTheDecoder_DecodesAgain)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	version = "decoder-2";
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(imports == 2);
+}
+
+BOOST_AUTO_TEST_CASE(WithoutTheVersionOfTheDecoder_NothingIsReused)
+{
+	version.clear();
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(imports == 2);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceChangedInMemory_IsRefusedAsADecodersAnswerWouldBe_AndTheModelIsDecodedAgain)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	BOOST_REQUIRE(rs->store_sync(k_geom, text_bytes(R"({"__type":"geometry_desc","__parent":"res://levels/secret.desc"})")));
+	const warnings warned;
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
+	BOOST_TEST(imports == 2);
+	BOOST_TEST(warned.count("the earlier decode of 'res://models/m.obj' was refused") == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceGoneFromMemory_IsDecodedAgain)
+{
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	adapter.deserialize(k_model, bytes());
+	rs->erase(k_geom);
+	BOOST_REQUIRE(!rs->exists(k_geom));
+	adapter.deserialize(k_model, bytes());
+	BOOST_TEST(imports == 2);
+	BOOST_TEST(rs->exists(k_geom));
+}
+
+BOOST_AUTO_TEST_CASE(TheVersionOfTheDecoderProcess_IsTheSha256OfItsFile_AndEmptyWithoutIt)
+{
+	const fs::path file = dir.write("bin/snk_model_decoder", "decoder bytes");
+	edt::decode_runner_config config;
+	config.decoder = file;
+	const edt::process_decoder decoder(*rs, config);
+	BOOST_TEST(decoder.version() == cmn::sha256_file_hex(file).value());
+
+	config.decoder = dir.path() / "bin" / "missing";
+	const edt::process_decoder missing(*rs, config);
+	const warnings warned;
+	BOOST_TEST(missing.version().empty());
+	BOOST_TEST(missing.version().empty());
+	BOOST_TEST(warned.count("cannot be read") == 1u, "one warning, however often it is asked");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
