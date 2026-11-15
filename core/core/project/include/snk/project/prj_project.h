@@ -23,6 +23,12 @@ namespace prj
 		return { k_code_dir_name, k_snk_dir_name, k_cache_dir_name, k_build_dir_name };
 	}
 
+	// Why a content root (relative to the project, '/' separated) may not be one, naming the root and the rule; nullopt
+	// when it may. Refused (ASCII case folded, so one manifest means the same on every file system): a part starting with
+	// '.' anywhere (.git, .github, .snk, assets/.hidden), and a first part that is one of own_top_dir_names() or a folder
+	// is_code_ignored_dir names (build output, fetched dependencies). Pure, no file system access (#911).
+	SNK_API std::optional<std::string> content_root_error(std::string_view relative);
+
 	// The open project. Lives in app_data_storage from before resource_system (which mounts its content roots)
 	// until after it, and is absent when the editor runs without a project.
 	struct project_context
@@ -73,7 +79,9 @@ namespace prj
 	// - every content root is an existing directory inside the canonical project root, symlinks resolved;
 	// - no content root lies inside another one, and none lies inside `engine_base` or contains it (empty: no base);
 	// - no content root is, contains or lies inside a private dir (.cache, .snk, build): res:// would expose the agent
-	//   token, write the test profile or serve build output;
+	//   token, write the test profile or serve build output. Compared with letter case folded and, where both exist, by
+	//   fs::equivalent: on Windows and macOS .SNK is .snk;
+	// - the path of each content root, symlinks resolved, passes content_root_error: a link to .git is refused too;
 	// - each writable dir, and .snk, that exists is a real directory (not a symlink) inside the project;
 	// - code/, when it exists, is a real directory (not a symlink or junction) inside the project that no content root
 	//   contains or lies inside, and that is none of the private dirs: code:// would otherwise write through a link or
