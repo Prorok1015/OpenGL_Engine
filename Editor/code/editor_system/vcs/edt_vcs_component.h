@@ -30,9 +30,9 @@ namespace edt
 			editor_context& context;
 			git_panel& git;
 			// The open project's root; nullopt: no project.
-			std::function<std::optional<std::filesystem::path>()> project_root;
+			std::function<std::optional<std::filesystem::path>()> project_root{};
 			// Live mode is on: an agent's checkout or pull must not bring code in meanwhile (#909).
-			std::function<bool()> live_mode_on;
+			std::function<bool()> live_mode_on{};
 		};
 
 		explicit vcs_component(ports from);
