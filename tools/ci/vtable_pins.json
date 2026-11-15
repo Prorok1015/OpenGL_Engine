@@ -1,4 +1,5 @@
 {
+  "layout_revision": 12,
   "interfaces": [
     {
       "class": "module_interface",
@@ -221,5 +222,6 @@
         "bool draw_fits(const res::tag&, std::uint32_t, std::uint32_t, std::uint32_t)"
       ]
     }
-  ]
+  ],
+  "retired": []
 }
