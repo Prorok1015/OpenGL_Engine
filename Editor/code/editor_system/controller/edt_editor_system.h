@@ -42,7 +42,6 @@ namespace rnd  { class render_system; }
 namespace gui  { class gui_system; }
 namespace scn  { class ecs_assembler; class level_desc; }
 namespace ecs  { class system_factory; }
-namespace platform { class secret_store; }
 namespace inp  { class input_router; }
 namespace cmd  { class command_registry; }
 
@@ -60,9 +59,7 @@ namespace edt {
 	class game_builder;
 	class game_reloader;
 	class project_trust_service;
-	class vcs_service;
-	class forge_service;
-	class forge_account_panel;
+	class vcs_component;
 	class migration_panel;
 	class migration_notice_model;
 	struct journal_offer;
@@ -90,7 +87,6 @@ namespace edt {
 	class asset_browser_panel;
 	class prefab_editor_component;
 	class play_session;
-	namespace vcs { class repository_watcher; }
 	class editor_mode_controller;
 
 	class editor_system
@@ -129,8 +125,7 @@ namespace edt {
 		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file
 		// opened when an asset kind opens it; nothing for a node that is gone or a level that is not open (#596).
 		void go_to_problem(const std::string& source, const problem& item);
-		// The repository watcher's frame (#485): the `editor_vcs` frame stage. Re-arms it when a probe changed the
-		// service's cached state (never probes itself) and raises editor_events::repository_changed.
+		// The repository watcher's frame (#485): the `editor_vcs` frame stage, see vcs_component::tick.
 		void tick_repository_watcher();
 		// The source "assets" of Problems follows the asset database: the `editor_assets` frame stage.
 		void tick_asset_problems();
@@ -254,12 +249,8 @@ namespace edt {
 		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
 		std::shared_ptr<git_panel>             m_git_panel;
 		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
-		// Git Account (#458 PR-4): the person sets the forge tokens here; floating, closed by default.
-		std::shared_ptr<forge_account_panel>   m_forge_account_panel;
 		// Project Migration (EPIC-58 S8, #761): floating, closed by default.
 		std::shared_ptr<migration_panel>       m_migration_panel;
-		// Owner of the Git Account jobs (token save/remove/probe): not under SNK_HAS_ASSIMP like the import's, so it is here.
-		ds::lifetime                           m_forge_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		// The console's feed from the engine log; removed with the editor system.
 		engine::log_sink_handle                m_log_sink;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
@@ -351,21 +342,16 @@ namespace edt {
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
 		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
 		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
-		// Version control (#454); its commands are in m_registrations, removed before it.
-		std::unique_ptr<edt::vcs_service> m_vcs;
-		// After the service whose write observer reaches it, so it is destroyed first.
-		std::unique_ptr<edt::vcs::repository_watcher> m_repo_watcher;
+		// Version control and the code host (#458, #1004): git, the repository watcher, pull requests, the tokens and the Git
+		// Account window; its commands are in m_registrations, removed before it. Before the asset database, whose callbacks ask it
+		// whether a git write runs, so the database goes first.
+		std::unique_ptr<edt::vcs_component> m_vcs;
 		// The asset database (#760): follows res:// from init, writes its cache when it goes.
 		std::unique_ptr<edt::asset_database> m_assets;
 		// What the reference pickers choose from; reads m_assets, so it goes first.
 		std::unique_ptr<edt::picker::database_catalog> m_asset_catalog;
 		// resource_system's asset index over m_assets (S57-7, #770); after it, so it detaches before the database goes.
 		std::unique_ptr<edt::asset_index_link> m_asset_index;
-		// Forge tokens (#458): the OS store, shared with the forge service (and the settings UI later). Its calls block: only jobs
-		// make them.
-		std::shared_ptr<platform::secret_store> m_secrets;
-		// Pull requests (#458); its commands are in m_registrations, removed before it; after the vcs service it asks.
-		std::unique_ptr<edt::forge_service> m_forge;
 		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
 		// it.
 		std::weak_ptr<edt::project_trust_service> m_trust;
