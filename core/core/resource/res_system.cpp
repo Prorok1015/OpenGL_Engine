@@ -875,7 +875,13 @@ void res::resource_system::deserialize_stage(const res::tag &tag,
   }
   try {
     const res::load_scope scope(block);
+    const auto started = std::chrono::steady_clock::now();
     block->set_ready(ad->deserialize(tag, raw->data, deps));
+    // Where a slow test spends its loads (#977): only what takes long enough to matter.
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+    if (took >= std::chrono::milliseconds{20}) {
+      egLOG_DEBUG("res/timing", "{}: deserialized in {} ms", tag.view(), took.count());
+    }
   } catch (const res::load_error &e) {
     res::add_while_unsettled(*block, e.what_diagnostic());
     block->set_error(std::string{"Adapter error: "} + e.what());

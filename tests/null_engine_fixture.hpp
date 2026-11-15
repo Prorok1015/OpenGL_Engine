@@ -217,8 +217,13 @@ struct null_engine_fixture
 		const phase_timer timer(std::format("run_frames({})", frames));
 		int done = 0;
 		auto& stages = storage.require<app::frame_stage_registry>();
+		auto frame_start = std::chrono::steady_clock::now();
 		stages.add_stage("test_frame_counter", app::builtin_stage::present, app::stage_side::after,
-			[&done, frames](app::stage_context& c) {
+			[&done, &frame_start, frames](app::stage_context& c) {
+				const auto now = std::chrono::steady_clock::now();
+				egLOG_INFO("test/timing", "frame {}: {} ms", done,
+					std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_start).count());
+				frame_start = now;
 				if (++done >= frames) {
 					c.storage.require<app::app_loop_service_interface>().request_stop();
 				}
