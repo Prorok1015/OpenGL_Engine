@@ -193,10 +193,13 @@ struct threaded_env
 
 	~threaded_env()
 	{
+		// Loads on the pool run the types the scope registers: they end before those are unregistered and destroyed.
+		rs->stop_loading();
 		scope.reset();
 		assembler.reset();
-		descs.reset();
+		// The desc adapter of the resource system holds the desc_system by reference.
 		rs.reset();
+		descs.reset();
 	}
 
 	ds::task_system tasks{ one_io_worker() };
