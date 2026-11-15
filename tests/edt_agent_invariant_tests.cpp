@@ -31,12 +31,16 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_model.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -1249,6 +1253,55 @@ BOOST_FIXTURE_TEST_CASE(GoingToAWorldRow_MakesItsWorldActive, desc_problems_fixt
 	editor().go_to_problem("world", world_rows[0]);
 	BOOST_REQUIRE(scene.active_world_name());
 	BOOST_TEST(*scene.active_world_name() == "w1");
+}
+
+// #147: Apply writes the prefab, the instance in the level follows by hot reload, and the level itself is untouched.
+BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevelStaysClean, desc_problems_fixture)
+{
+	const res::tag prefab = res::tag::make("prefabs/apply_instance.prefab.desc");
+	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000d1","name":"inst","components":{"p":{"__type":"prefab_desc","__parent":"res://prefabs/apply_instance.prefab.desc"}}}]}]})json");
+	auto& contexts = storage.require<scn::context_manager>();
+	const auto world_has = [&contexts](std::string_view name) {
+		scn::world_context* world = contexts.level_set().find("w0");
+		if (!world) return false;
+		for (auto&& [entity, named] : world->state().view<scn::name_component>().each()) {
+			if (named.name == name) return true;
+		}
+		return false;
+	};
+	const auto settle = [&](const std::function<bool()>& done) {
+		for (int i = 0; i < 60 && !done(); ++i) {
+			test_util::pump(tasks);
+			contexts.update(std::chrono::duration<float>(0.001f));
+		}
+	};
+	settle([&] { return world_has("plain"); });
+	BOOST_REQUIRE(world_has("plain"));
+	const edt::scene_document& scene = edt::scene_of(editor().context()->documents());
+	const bool dirty_before = scene.is_dirty();
+	const std::uint64_t generation_before = scene.generation();
+
+	open_prefab(prefab);
+	edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
+		desc.get_root().children[0].name = "renamed";
+		return true;
+	}));
+	BOOST_TEST(world_has("plain"));
+	BOOST_TEST(!world_has("renamed"));
+
+	const edt::save_result saved = document->save();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	settle([&] { return world_has("renamed"); });
+
+	BOOST_TEST(world_has("renamed"));
+	BOOST_TEST(!world_has("plain"));
+	BOOST_TEST(scene.is_dirty() == dirty_before);
+	BOOST_TEST(scene.generation() == generation_before);
 }
 
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
