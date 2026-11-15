@@ -168,6 +168,12 @@ how_to_apply:
   res:// = filesystem path (default protocol)
   memory:// = runtime-created data
   Never embed paths in code, always use tags
+  A file the engine itself loads by a fixed path (UI font, render-pass shaders):
+  resources.engine_file("shaders/x.frag") (engine:// when mounted), never res:// —
+  a project file at the same res:// path must not stand in for it (#929).
+  Material descs and their shaders stay res:// on purpose: content a project may replace.
+  Cost: a project can no longer give its own z_prepass.vert, so a material that moves vertices
+  draws apart from the depth prepass until materials name their depth shader (#1028).
 gotcha: single-arg res::tag{"..."} PARSES the protocol out of the string —
   the string must contain "protocol://" or protocol/path/name slices are wrong.
   Use the 2-arg form res::tag{"res", "path"} or res::tag::make(path) to prepend

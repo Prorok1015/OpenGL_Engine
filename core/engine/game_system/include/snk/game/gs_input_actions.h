@@ -44,18 +44,18 @@ namespace gs
 
 		// The map the worlds read: the project's with the player's bindings applied. Null while there is no tag, or until the
 		// desc has loaded once. The ids of its actions are the project's, whatever the player changed.
-		std::shared_ptr<const inp::action_map> map() const { return m_map; }
+		std::shared_ptr<const inp::action_map> map() const;
 		// The project's map as written, for a UI that offers "reset". Null when map() is.
-		std::shared_ptr<const inp::action_map> project_map() const { return m_project; }
+		std::shared_ptr<const inp::action_map> project_map() const;
 		// True when map() has a gamepad button or axis binding.
-		bool has_gamepad_bindings() const { return m_has_gamepad_bindings; }
+		bool has_gamepad_bindings() const;
 		// The "gamepad" setting of the desc (the defaults without one), shared by the bindings of a device.
-		inp::gamepad_config gamepad_config() const { return m_gamepad; }
+		inp::gamepad_config gamepad_config() const;
 
 		// The player's bindings live in `folder`, one file per project named by the hash of the project name (#736); an empty folder keeps them in memory only. They
 		// are read when the project opens and written after each change.
 		void set_user_folder(std::filesystem::path folder);
-		const inp::user_bindings& user_bindings() const { return m_user; }
+		const inp::user_bindings& user_bindings() const;
 		// `allow_conflict`: a binding another action has is put all the same (both keep it, conflicts() names the pair).
 		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding, bool allow_conflict);
 		// The export of 3.16 (a module built for it imports this symbol): a conflict is refused.
@@ -63,14 +63,14 @@ namespace gs
 		rebind_outcome remove_binding(std::string_view action, std::size_t slot);
 		// The bindings two actions of map() share that the project's own map does not (what the player's changes or an edit of
 		// the desc made); rebuilt with the map.
-		const std::vector<inp::binding_conflict>& conflicts() const { return m_conflicts; }
+		const std::vector<inp::binding_conflict>& conflicts() const;
 		// Changes with every map built (a desc edit, a change of the player's bindings): lets a view rebuild only when needed.
-		std::uint64_t revision() const { return m_revision; }
+		std::uint64_t revision() const;
 		// False when the action had no change; the file of the others is written again.
 		bool reset_binding(std::string_view action);
 		void reset_all_bindings();
 		// False after a change the file could not take, until the next one that it does.
-		bool user_file_saved() const { return m_saved; }
+		bool user_file_saved() const;
 
 	private:
 		void drop();

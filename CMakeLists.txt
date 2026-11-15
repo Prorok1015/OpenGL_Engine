@@ -200,7 +200,7 @@ target_link_libraries(unit_tests PRIVATE ${_snk_test_drivers})
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # White-box tests: PRIVATE access to the internal (non-public) editor_system headers, test-only.
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/assets" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/vcs" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/forge" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/play" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/live")
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/assets" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/vcs" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/forge" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/play" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/mesh" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/prefab" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/live")
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
@@ -229,6 +229,7 @@ target_compile_definitions(unit_tests PRIVATE SNK_TEST_PROJECT_DIR="${CMAKE_CURR
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/projects")
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
+target_compile_definitions(unit_tests PRIVATE SNK_REPO_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 # prj::current_engine_version() must report exactly this (tests/prj_version_tests.cpp).
 target_compile_definitions(unit_tests PRIVATE SNK_TEST_SDK_VERSION="${SNK_SDK_VERSION}")
 # rnd_render_context_tests reads the sources of the render passes to check what they include.

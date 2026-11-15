@@ -1,6 +1,7 @@
 #include "edt_agent_model_import.h"
 #include "edt_file_menu.h"
 #include "edt_forge_types.h"
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <boost/json/array.hpp>
@@ -46,6 +47,19 @@ namespace {
 	std::string shown(std::string_view text)
 	{
 		return edt::forge::escaped_text(text, 1024);
+	}
+
+	// A path on the disk as the question shows it: '/' separators on every system, so a Windows path does not read with
+	// every backslash doubled.
+	std::string shown_path(const fs::path& path)
+	{
+		return shown(fs_paths::generic_utf8_of(path));
+	}
+
+	// A refusal of our own whose foreign pieces went through shown() where it was built (resolve): shown once.
+	std::string shown_message(std::string_view text)
+	{
+		return edt::forge::escaped_message(text, 1024);
 	}
 
 	std::string to_utf8(const fs::path& path)
@@ -334,7 +348,7 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	if (!given.is_absolute()) return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
-	if (ec || status.type() == fs::file_type::not_found) return refuse(cmd::codes::not_found, "no such file: " + request.path);
+	if (ec || status.type() == fs::file_type::not_found) return refuse(cmd::codes::not_found, "no such file: " + shown(request.path));
 	if (status.type() == fs::file_type::symlink) return refuse(cmd::codes::invalid_args, "the source is a link: name the file itself");
 	if (status.type() != fs::file_type::regular) return refuse(cmd::codes::invalid_args, "the source is not a regular file");
 
@@ -368,7 +382,7 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 		std::string folded = name.path;
 		std::transform(folded.begin(), folded.end(), folded.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		for (const std::string_view extension : k_model_extensions) {
-			if (folded == extension.substr(1)) return refuse(cmd::codes::invalid_args, "the asset name cannot be the extension of a model format ('" + name.path + "'): give another name");
+			if (folded == extension.substr(1)) return refuse(cmd::codes::invalid_args, "the asset name cannot be the extension of a model format ('" + shown(name.path) + "'): give another name");
 		}
 	}
 	plan.name = name.path;
@@ -381,9 +395,9 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	switch (state_in_layers(layers, plan.folder + "/" + plan.name + ".prefab.desc")) {
 	case level_file_state::missing: break;
 	case level_file_state::file:
-		return refuse("needs_input", std::format("'{}' exists: choose another name or folder, or ask a person to overwrite it in the editor", plan.prefab));
+		return refuse("needs_input", std::format("'{}' exists: choose another name or folder, or ask a person to overwrite it in the editor", shown(plan.prefab)));
 	case level_file_state::unsafe:
-		return refuse(cmd::codes::invalid_args, std::format("'{}' is not a plain file", plan.prefab));
+		return refuse(cmd::codes::invalid_args, std::format("'{}' is not a plain file", shown(plan.prefab)));
 	}
 
 	if (m_options.blocker) {
@@ -396,9 +410,9 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 std::optional<std::string> edt::agent_model_import::describe(const agent_import_request& request, const cmd::origin& caller)
 {
 	agent_import_plan plan = resolve(request);
-	if (!plan.ok()) return "This request will be refused: " + shown(plan.error);
+	if (!plan.ok()) return "This request will be refused: " + shown_message(plan.error);
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
-		shown(to_utf8(plan.source)), size_text(plan.size), shown(plan.folder), shown(plan.name), shown(plan.prefab));
+		shown_path(plan.source), size_text(plan.size), shown(plan.folder), shown(plan.name), shown(plan.prefab));
 	if (request.files_token.empty()) {
 		text += "Allowing this reads the model, and the .bin/.mtl files it needs to be parsed, to list the files it refers to. Nothing is copied into the project until you approve that list in a second question (none, when the model is self-contained).";
 	} else {
@@ -415,7 +429,7 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		plan.files_bytes = found->plan.files_bytes;
 		plan.scanned = true;
 		text += std::format("The model makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
-		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", shown(to_utf8(file.path)), size_text(file.size));
+		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", shown_path(file.path), size_text(file.size));
 	}
 	remember(call_key(request, caller), caller.session, std::move(plan));
 	return text;
