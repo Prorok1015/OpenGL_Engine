@@ -37,7 +37,7 @@ namespace edt::mesh
 			return json::value(static_cast<std::uint64_t>(value));
 		}
 
-		const json::array& array_of(const json::value& value, const std::string& where)
+		const json::array& array_of(const json::value& value, std::string_view where)
 		{
 			if (!value.is_array()) {
 				fail(where, "is not an array");
@@ -74,7 +74,7 @@ namespace edt::mesh
 			fail(where, "is not an integer from 0 to 4294967295");
 		}
 
-		const json::array& tuple_of(const json::value& value, std::size_t size, const std::string& where)
+		const json::array& tuple_of(const json::value& value, std::size_t size, std::string_view where)
 		{
 			const json::array& items = array_of(value, where);
 			if (items.size() != size) {
