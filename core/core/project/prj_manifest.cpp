@@ -1,4 +1,5 @@
 #include <snk/project/prj_manifest.h>
+#include <snk/project/prj_project.h>
 #include <cctype>
 #include <cstdint>
 #include <format>
@@ -324,6 +325,9 @@ namespace
 				const std::string_view text = require_string(array[i], path);
 				if (!is_safe_relative_dir(text)) {
 					fail(path, "expected a relative directory inside the project");
+				}
+				if (const auto reserved = prj::content_root_error(normalized_dir(text))) {
+					fail(path, *reserved);
 				}
 				if (!seen.insert(normalized_dir(text)).second) {
 					fail(path, "duplicate content root");

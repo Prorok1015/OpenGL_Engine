@@ -308,16 +308,16 @@ namespace
 	}
 
 	// The checks of the project's mounts that need no healthy tree (a rollback is a recovery tool): each content root is a
-	// relative folder inside the project, neither the root itself nor in or over one of the project's own folders.
-	std::optional<std::string> content_root_error(const std::vector<fs::path>& content_roots, const std::vector<std::string>& reserved)
+	// relative folder inside the project, not the root itself, and passes the rule of an opened project's roots
+	// (prj::content_root_error: no hidden part, not in or over one of the project's own or build folders, #911).
+	std::optional<std::string> content_roots_error(const std::vector<fs::path>& content_roots)
 	{
 		for (const fs::path& content_root : content_roots) {
 			std::string text = fs_paths::generic_utf8_of(content_root.lexically_normal());
 			while (!text.empty() && text.back() == '/') text.pop_back();
 			const std::string shown = journal_path_text(text);
 			if (text.empty() || text == "." || !is_plain_relative(text)) return std::format("the content root '{}' is not a folder inside the project", shown);
-			const std::string_view top = first_component(text);
-			if (is_reserved_top(top, reserved)) return std::format("the content root '{}' lies in '{}', which is never content", shown, journal_path_text(top));
+			if (auto why = prj::content_root_error(text)) return why;
 		}
 		return std::nullopt;
 	}
@@ -1066,7 +1066,7 @@ std::string prj::migration::plan_refusal(const migration_plan& plan)
 
 std::optional<std::string> prj::migration::content_roots_refusal(const std::vector<fs::path>& content_roots)
 {
-	if (auto why = content_root_error(content_roots, reserved_top_names())) {
+	if (auto why = content_roots_error(content_roots)) {
 		return std::format("project.snkproj: {}; a migration of it could not be rolled back", *why);
 	}
 	return std::nullopt;
@@ -1328,7 +1328,7 @@ std::optional<std::string> prj::migration::check_journal_paths(const fs::path& r
 			k_manifest_path, restores_manifest ? std::format(", nor does {}", saved_manifest) : std::string{}, backup);
 	}
 	const std::vector<std::string> reserved = reserved_top_names();
-	if (auto error = content_root_error(manifest->content_roots, reserved)) return std::format("{} ({})", *error, source);
+	if (auto error = content_roots_error(manifest->content_roots)) return std::format("{} ({})", *error, source);
 	for (const std::string& path : journal.files) {
 		if (auto error = journal_path_error(path, true, manifest->content_roots, reserved)) return error;
 	}

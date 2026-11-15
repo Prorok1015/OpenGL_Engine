@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_project.h>
+#include <snk/common/fs_paths.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -230,8 +231,70 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsOverPrivateFolders)
 
 		const auto opened = prj::open_project(dir.path());
 		BOOST_TEST(!opened.context.has_value());
-		BOOST_TEST(opened.error.find("private folder") != std::string::npos);
+		// The manifest refuses them by name now (#911); verify_project_mounts still compares the real paths.
+		BOOST_TEST(opened.error.find("may not be or lie in") != std::string::npos);
 	}
+}
+
+#if !defined(_WIN32)
+// #911: a content root that is a link to .git, or to the build folder spelled otherwise, is refused by its real path.
+BOOST_AUTO_TEST_CASE(Verify_RefusesAContentRootLinkedToAHiddenOrOwnFolder)
+{
+	for (const std::string_view target : { ".git", "BUILD", ".snk/agent" }) {
+		BOOST_TEST_INFO("link to: " << target);
+		test_util::temp_dir dir("prj_root_link");
+		dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0",
+			"content_roots": ["assets"] })");
+		fs::create_directories(dir.path() / target);
+		std::error_code ec;
+		fs::create_directory_symlink(dir.path() / target, dir.path() / "assets", ec);
+		BOOST_REQUIRE(!ec);
+
+		const auto opened = prj::open_project(dir.path());
+		BOOST_TEST(!opened.context.has_value());
+		BOOST_TEST(opened.error.find("may not be or lie in") != std::string::npos);
+		BOOST_TEST(opened.error.find("'assets' leads there") != std::string::npos, "the refusal names the written root");
+	}
+}
+
+// #911: a private folder that is the content root by another name (here a link, as .SNK would be on Windows or macOS) is
+// found by fs::equivalent, not only by its spelling.
+BOOST_AUTO_TEST_CASE(Verify_FindsAPrivateFolderThatIsTheContentRootByAnotherName)
+{
+	test_util::temp_dir dir("prj_private_alias");
+	fs::create_directories(dir.path() / "assets");
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "assets", dir.path() / ".snk", ec);
+	BOOST_REQUIRE(!ec);
+
+	prj::project_context project;
+	project.root = fs::canonical(dir.path());
+	project.content_roots = { project.root / "assets" };
+	const auto problem = prj::verify_project_mounts(project);
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("private folder") != std::string::npos);
+}
+#endif
+
+BOOST_AUTO_TEST_CASE(ContentRootError_NamesTheRootAndTheRule)
+{
+	BOOST_TEST(!prj::content_root_error("res").has_value());
+	BOOST_TEST(!prj::content_root_error("res/build").has_value(), "only the first part is one of the project's folders");
+	const auto hidden = prj::content_root_error("assets/.cache");
+	BOOST_REQUIRE(hidden.has_value());
+	BOOST_TEST(hidden->find("assets/.cache") != std::string::npos);
+	BOOST_TEST(hidden->find("hidden") != std::string::npos);
+	const auto own = prj::content_root_error("Code/res");
+	BOOST_REQUIRE(own.has_value());
+	BOOST_TEST(own->find("own folder") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(IsInsideAnyCase_FoldsLettersPartByPart)
+{
+	BOOST_TEST(fs_paths::is_inside_any_case(fs::path{ "/game/.SNK" }, fs::path{ "/game/.snk/agent.json" }));
+	BOOST_TEST(fs_paths::is_inside_any_case(fs::path{ "/game/Build" }, fs::path{ "/game/BUILD" }));
+	BOOST_TEST(!fs_paths::is_inside_any_case(fs::path{ "/game/res" }, fs::path{ "/game/res2" }));
+	BOOST_TEST(!fs_paths::is_inside_any_case(fs::path{ "/game/res" }, fs::path{ "/game" }));
 }
 
 BOOST_AUTO_TEST_CASE(BuildDir_IsPrivateButNotMounted)
