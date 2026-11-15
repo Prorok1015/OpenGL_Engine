@@ -1401,6 +1401,36 @@ BOOST_FIXTURE_TEST_CASE(AClosingPrefabDocument_ReleasesTheInspector, prefab_insp
 	BOOST_TEST(inspector->selected_node() == nullptr);
 }
 
+// Revert reads the prefab's file from the top layer on disk; the null engine keeps res:// in memory, so the layer is mounted over
+// the project folder and the same bytes are written there.
+struct prefab_on_disk_fixture : prefab_inspector_fixture
+{
+	prefab_on_disk_fixture()
+	{
+		auto& rs = storage.require<res::resource_system>();
+		for (res::mount& mounted : res::resource_system::project_mount_table({}, { project.path() / "res" }, project.path() / ".cache",
+				user.path() / "profile", code_dir())) {
+			if (mounted.protocol == res::tag::default_protocol()) rs.add_mount(std::move(mounted));
+		}
+		project.write("res/prefabs/inspector_target.prefab.desc",
+			R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	}
+};
+
+BOOST_FIXTURE_TEST_CASE(TheInspectorFollowsARevert, prefab_on_disk_fixture)
+{
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
+		desc.get_root().children[0].name = "typed";
+		return true;
+	}));
+	BOOST_REQUIRE(document->is_dirty());
+	const std::string error = document->revert();
+	BOOST_REQUIRE_MESSAGE(error.empty(), error);
+	BOOST_REQUIRE(working_node() != nullptr);
+	BOOST_TEST(inspector->selected_node() == working_node());
+	BOOST_TEST(working_node()->name == "plain");
+}
+
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
 {
 	const res::tag odd = res::tag::make("prefabs/desc_problems_odd.prefab.desc");
