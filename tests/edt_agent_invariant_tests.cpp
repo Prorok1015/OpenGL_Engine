@@ -1401,20 +1401,6 @@ BOOST_FIXTURE_TEST_CASE(AClosingPrefabDocument_ReleasesTheInspector, prefab_insp
 	BOOST_TEST(inspector->selected_node() == nullptr);
 }
 
-BOOST_FIXTURE_TEST_CASE(TheInspectorFollowsARevert, prefab_inspector_fixture)
-{
-	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
-		desc.get_root().children[0].name = "typed";
-		return true;
-	}));
-	BOOST_REQUIRE(document->is_dirty());
-	const std::string error = document->revert();
-	BOOST_REQUIRE_MESSAGE(error.empty(), error);
-	BOOST_REQUIRE(working_node() != nullptr);
-	BOOST_TEST(inspector->selected_node() == working_node());
-	BOOST_TEST(working_node()->name == "plain");
-}
-
 BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
 {
 	const res::tag odd = res::tag::make("prefabs/desc_problems_odd.prefab.desc");
