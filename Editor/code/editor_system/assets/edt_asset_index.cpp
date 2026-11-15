@@ -3,6 +3,7 @@
 #include "edt_asset_layers.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
+#include <format>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -221,6 +222,16 @@ void edt::asset_index_link::apply(std::span<const std::pair<res::tag, res::tag>>
 
 void edt::asset_index_link::poll()
 {
+	follow();
+	if (!pending()) {
+		m_pending_since.reset();
+	} else if (!m_pending_since) {
+		m_pending_since = now();
+	}
+}
+
+void edt::asset_index_link::follow()
+{
 	if (!follow_drops()) {
 		return;
 	}
@@ -254,8 +265,32 @@ void edt::asset_index_link::on_batch(const asset_batch& batch)
 	apply(batch.moved);
 }
 
-bool edt::asset_index_pending(const asset_index_link* link, const asset_database* assets)
+bool edt::asset_index_link::pending() const
 {
-	if (!link || !assets) return false;
-	return !link->attached() || assets->pending_hashes() > 0;
+	return !m_attached || m_assets.pending_hashes() > 0 || m_assets.pending_ids() > 0;
+}
+
+std::optional<std::string> edt::asset_index_link::guid_wait() const
+{
+	if (!pending()) return std::nullopt;
+	std::string text(k_guid_index_pending);
+	// Pending since the last poll: the wait has only begun.
+	if (!m_pending_since || now() - *m_pending_since <= k_detail_after) return text;
+	if (!m_attached) {
+		text += m_assets.walks_applied() == 0 ? "; the index is not attached yet (the first scan is running)"
+			: "; the index waits for the next scan (changes were dropped)";
+	}
+	if (const std::size_t hashes = m_assets.pending_hashes(); hashes > 0) {
+		text += std::format("; {} file(s) are still being hashed", hashes);
+	}
+	if (const std::size_t ids = m_assets.pending_ids(); ids > 0) {
+		text += m_assets.ids_held_by_git() ? std::string("; git is busy, new files wait for their IDs")
+			: std::format("; {} new file(s) wait for an ID", ids);
+	}
+	return text;
+}
+
+std::optional<std::string> edt::asset_index_wait(const asset_index_link* link)
+{
+	return link ? link->guid_wait() : std::nullopt;
 }

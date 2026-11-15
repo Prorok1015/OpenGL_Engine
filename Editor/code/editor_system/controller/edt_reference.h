@@ -103,9 +103,6 @@ namespace edt
 		return id && !id->is_nil();
 	}
 
-	// The `busy` answer to an agent's guid while the editor's asset index is not complete (#968).
-	inline constexpr std::string_view k_guid_index_pending = "the asset index is still being built, so a guid cannot be checked; call again when it is ready";
-
 	// The form an agent may write (#954), empty when fine: reference_object_problem, and no guid without a path.
 	inline std::string agent_reference_form_problem(const boost::json::object& object)
 	{

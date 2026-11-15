@@ -297,8 +297,10 @@ namespace edt
 		// Looks at the files waiting for an ID again (a git operation may have ended); at most every poll_interval
 		// unless `force`. Cheap when none waits. Main thread, once per frame.
 		void poll(bool force = false);
-		// Files from outside waiting for an ID. For tests.
+		// Files from outside waiting for an ID (their hash, the quiet time, the end of a git operation).
 		std::size_t pending_ids() const { return m_pending_ids.size(); }
+		// The last look at those files found a git operation running, so they wait for it.
+		bool ids_held_by_git() const { return m_ids_held_by_git; }
 		// Tests only: the steady time the database reads (poll throttle, move_window, pending_timeout).
 		void set_clock_for_tests(std::function<std::chrono::steady_clock::time_point()> clock) { m_clock = std::move(clock); }
 
@@ -473,6 +475,7 @@ namespace edt
 		};
 		std::vector<gone_file> m_gone_without_id;
 		std::function<bool()> m_vcs_busy;
+		bool m_ids_held_by_git = false;
 		std::function<std::optional<std::filesystem::path>()> m_git_dir;
 		// An ID is being written: the batch its refresh applies gives none itself.
 		bool m_giving_ids = false;

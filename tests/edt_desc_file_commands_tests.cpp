@@ -53,6 +53,7 @@ public:
 };
 
 const char* const k_material = R"({"__type":"material_desc","queue":"mix","defines":["A"]})";
+const char* const k_index_wait = "the asset index is still being built, so a guid cannot be checked; call again when it is ready";
 
 struct desc_fixture : test_util::scene_env
 {
@@ -72,7 +73,7 @@ struct desc_fixture : test_util::scene_env
 		deps.open_level_files = [this] { return open_level; };
 		deps.events = &events;
 		deps.write_blocker = [this] { return blocked; };
-		deps.asset_index_pending = [this] { return index_pending; };
+		deps.asset_index_wait = [this] { return index_pending ? std::optional<std::string>(k_index_wait) : std::nullopt; };
 		registrations = edt::register_desc_file_commands(commands, std::move(deps));
 	}
 
@@ -1037,7 +1038,8 @@ BOOST_AUTO_TEST_CASE(AnObjectWithAGuidThatIsNoUuid_InAPrefabComponent_IsPlainDat
 }
 
 // #968: while the editor's asset index is not complete a guid cannot be judged, so content that holds one is busy and
-// nothing is written; content without a guid is written as before, and the question says the request will be refused.
+// nothing is written; content without a guid is written as before. The question is the ordinary one plus a line saying the
+// write runs once the index is ready: an approved busy call is retried, so the person approves the write itself.
 BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_ContentWithAGuidIsBusy_AndNothingIsWritten)
 {
 	const char* const with_guid = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
@@ -1045,6 +1047,9 @@ BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_ContentWithAGuidIsBusy_AndNothi
 	make_material("materials/w.mat.desc");
 	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
 	const std::string version = version_of("materials/w.mat.desc");
+	const std::optional<std::string> ready_question = commands.find("desc.write")->describe(call_of(write_args("materials/w.mat.desc", version, with_guid)));
+	BOOST_REQUIRE(ready_question.has_value());
+	BOOST_TEST(ready_question->rfind("Replace the desc file", 0) == 0u, *ready_question);
 	index_pending = true;
 
 	const auto written = call("desc.write", write_args("materials/w.mat.desc", version, with_guid));
@@ -1053,8 +1058,8 @@ BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_ContentWithAGuidIsBusy_AndNothi
 	BOOST_TEST(read_file(res_root / "materials" / "w.mat.desc") == before);
 	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("materials/w.mat.desc", version, with_guid)));
 	BOOST_REQUIRE(question.has_value());
-	BOOST_TEST(question->rfind("This request will be refused", 0) == 0u, *question);
-	BOOST_TEST(question->find("the asset index is still being built") != std::string::npos, *question);
+	BOOST_TEST(question->rfind(*ready_question, 0) == 0u, *question);
+	BOOST_TEST(question->substr(ready_question->size()).rfind("\nThe asset index is still being built: the file is replaced once it is ready", 0) == 0u, *question);
 
 	const auto created = call("desc.create", desc_args("materials/g.mat.desc", with_guid));
 	BOOST_TEST(created.code == cmd::codes::busy);
@@ -1107,6 +1112,8 @@ BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedO
 	index_pending = true;
 	const auto held = call("desc.write", write_args("materials/f.mat.desc", version, content));
 	const auto held_create = call("desc.create", desc_args("materials/g.mat.desc", content));
+	// No verdict from the pending index: the person is asked about the write, which is refused once the index is ready.
+	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("materials/f.mat.desc", version, content)));
 	index_pending = false;
 	const auto refused = call("desc.write", write_args("materials/f.mat.desc", version, content));
 	rs->set_asset_index(nullptr);
@@ -1115,6 +1122,9 @@ BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedO
 	BOOST_TEST(held.error.find("name different files") == std::string::npos, held.error);
 	BOOST_TEST(held_create.code == cmd::codes::busy);
 	BOOST_TEST(!fs::exists(res_root / "materials" / "g.mat.desc"));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->rfind("Replace the desc file", 0) == 0u, *question);
+	BOOST_TEST(question->find("The asset index is still being built") != std::string::npos, *question);
 	BOOST_TEST(refused.code == cmd::codes::invalid_args);
 	BOOST_TEST(refused.error.find("name different files") != std::string::npos, refused.error);
 	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc") == before);

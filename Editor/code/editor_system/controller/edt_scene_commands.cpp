@@ -125,15 +125,15 @@ namespace {
 	{
 		// Null: no guid is looked up, the path is what loads.
 		const res::resource_system* index = nullptr;
-		// An agent's call while the asset index is not complete (#968): a guid is not judged, the call is held back.
-		bool hold_guids = false;
+		// Set for an agent's call while the asset index is not complete (#968): why a guid is not judged now.
+		std::optional<std::string> index_wait;
 		bool saw_guid = false;
 	};
 
 	// After every other check of the call passed: content with a guid waits for the asset index.
 	std::optional<cmd::result> held_back(const reference_scope& scope)
 	{
-		if (scope.hold_guids && scope.saw_guid) return cmd::result::failure(cmd::codes::busy, std::string(edt::k_guid_index_pending));
+		if (scope.index_wait && scope.saw_guid) return cmd::result::failure(cmd::codes::busy, *scope.index_wait);
 		return std::nullopt;
 	}
 
@@ -578,8 +578,9 @@ namespace {
 		// person's or a test's guid is judged against what the index holds now.
 		reference_scope references_for(const cmd::call& call) const
 		{
-			const bool hold = call.from.kind == cmd::origin_kind::agent && sources.asset_index_pending && sources.asset_index_pending();
-			return reference_scope{ hold ? nullptr : sources.services.resources(), hold };
+			std::optional<std::string> wait;
+			if (call.from.kind == cmd::origin_kind::agent && sources.asset_index_wait) wait = sources.asset_index_wait();
+			return reference_scope{ wait ? nullptr : sources.services.resources(), std::move(wait) };
 		}
 
 		// A component of `type` with `fields`, checked against the type.
@@ -1098,13 +1099,15 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		args_with(std::string(R"("ref":@REF@,"parent":@REF@,)") + std::string(index_arg_schema), R"("ref","parent")"), ref_result, &node_reparent);
 	add("scene.node.rename", "Rename a node (names are for display: nodes are addressed by id)",
 		args_with(R"("ref":@REF@,"name":{"type":"string","minLength":1})", R"("ref","name")"), generation_result, &node_rename);
-	add("component.add", "Add a component of desc `type` under `key`, with `fields` checked against the type's schema",
+	add("component.add", "Add a component of desc `type` under `key`, with `fields` checked against the type's schema. "
+		"A reference with a guid is answered `busy` while the editor's asset index is still being built",
 		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"type":{"type":"string","minLength":1},"fields":{"type":"object"})",
 			R"("ref","key","type")"),
 		generation_result, &component_add);
 	add("component.remove", "Remove the component `key` of a node", args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1})", R"("ref","key")"),
 		generation_result, &component_remove);
-	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field: on a node of the scene the field falls back to the referenced desc's value, inside a prefab instance to the prefab's); inside a prefab instance the change becomes override records",
+	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field: on a node of the scene the field falls back to the referenced desc's value, inside a prefab instance to the prefab's); inside a prefab instance the change becomes override records. "
+		"A reference with a guid is answered `busy` while the editor's asset index is still being built",
 		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"patch":{"type":"object"})", R"("ref","key","patch")"),
 		generation_result, &component_set);
 	add("transform.set", "Set position, rotation (Euler degrees) and/or scale of a node; inside a prefab instance as override records",

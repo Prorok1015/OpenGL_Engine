@@ -743,7 +743,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// #968: until the asset index is complete, an agent's guid is answered `busy` rather than judged against it.
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
 			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); },
-				[this] { return asset_index_pending(m_asset_index.get(), m_assets.get()); } })) {
+				[this] { return asset_index_wait(m_asset_index.get()); } })) {
 		m_registrations.push_back(std::move(command));
 	}
 	m_agent_sessions = std::make_unique<agent_sessions>(m_context->documents());
@@ -762,7 +762,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		desc_files.layers = std::move(layout.layers);
 		desc_files.open_level_files = std::move(layout.open_level_files);
 		desc_files.write_blocker = std::move(layout.write_blocker);
-		desc_files.asset_index_pending = std::move(layout.asset_index_pending);
+		desc_files.asset_index_wait = std::move(layout.asset_index_wait);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
@@ -2487,7 +2487,7 @@ edt::desc_file_layout edt::editor_system::desc_layout()
 	};
 	layout.write_blocker = [this] { return project_write_blocker(); };
 	// Read when asked: the asset database and its link exist only while a project is open.
-	layout.asset_index_pending = [this] { return asset_index_pending(m_asset_index.get(), m_assets.get()); };
+	layout.asset_index_wait = [this] { return asset_index_wait(m_asset_index.get()); };
 	return layout;
 }
 

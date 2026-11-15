@@ -50,9 +50,9 @@ namespace edt
 		// Why nothing may be written into the project now (a migration runs, or one stopped half way and is not rolled back,
 		// #761): desc.create and desc.write answer busy with it. Null or nullopt: they write.
 		std::function<std::optional<std::string>()> write_blocker;
-		// The asset index is not complete yet (not attached, or files still hashing): content with a guid answers busy,
-		// since a guid judged against it could pass or fail wrongly (#968). Null or false: the guid is judged now.
-		std::function<bool()> asset_index_pending;
+		// Why the asset index cannot judge a guid now (not attached, files waiting for a hash or an ID): content with a
+		// guid answers busy with it, since a verdict from it could be wrong either way (#968). Null or nullopt: judged now.
+		std::function<std::optional<std::string>()> asset_index_wait;
 	};
 
 	[[nodiscard]] std::vector<registration> register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps);
@@ -67,8 +67,8 @@ namespace edt
 		// Why nothing may be written into the project now (a migration that runs, or one that stopped half way and is not
 		// rolled back yet, #761): a data document's save refuses with it. Null or nullopt: it writes.
 		std::function<std::optional<std::string>()> write_blocker = {};
-		// As desc_file_deps::asset_index_pending; only the desc.* commands read it (a person's save needs no guid judged).
-		std::function<bool()> asset_index_pending = {};
+		// As desc_file_deps::asset_index_wait; only the desc.* commands read it (a person's save needs no guid judged).
+		std::function<std::optional<std::string>()> asset_index_wait = {};
 	};
 
 	// A desc file read the way desc.read does, with what desc.write asks before it replaces one: `tag` must be a res://

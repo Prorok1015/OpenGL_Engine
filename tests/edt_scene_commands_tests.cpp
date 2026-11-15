@@ -98,7 +98,8 @@ struct commands_fixture : test_util::scene_env
 		services.base_descs = descs.get();
 		services.base_resources = rs.get();
 		services.base_assembler = assembler.get();
-		registrations = edt::register_scene_commands(commands, { documents, selection, services, [this] { return gesture; }, [this] { return index_pending; } });
+		registrations = edt::register_scene_commands(commands, { documents, selection, services, [this] { return gesture; },
+			[this] { return index_pending ? std::optional<std::string>("the asset index is still being built, so a guid cannot be checked; call again when it is ready") : std::nullopt; } });
 	}
 
 	cmd::result call(const std::string& id, const std::string& args, cmd::origin from = cmd::origin::agent("s1"))

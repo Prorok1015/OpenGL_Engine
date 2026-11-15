@@ -251,9 +251,9 @@ namespace {
 			return m_deps.write_blocker ? m_deps.write_blocker() : std::nullopt;
 		}
 
-		bool index_pending() const
+		std::optional<std::string> index_wait() const
 		{
-			return m_deps.asset_index_pending && m_deps.asset_index_pending();
+			return m_deps.asset_index_wait ? m_deps.asset_index_wait() : std::nullopt;
 		}
 
 	private:
@@ -315,26 +315,27 @@ namespace {
 		}
 	}
 
+	// What the question adds while the content's guid waits for the asset index (#968).
+	constexpr std::string_view k_waits_for_index = "\nThe asset index is still being built: the file is replaced once it is ready, "
+		"unless a guid then turns out to name another file than its path (then the call is refused and nothing is written).";
+
 	// `kept_guid`: the __guid of the file being replaced, written back so a desc.write does not drop the file's ID. `replaced`:
 	// that file's bytes, whose reference guids are kept the same way (desc_system::write_references).
-	// `index_pending`: the asset index is not complete, so no guid is looked up in it (its verdict could be wrong either way)
-	// and content that holds one is `busy` once its form passed (#968).
-	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, bool index_pending, const std::string& relative,
+	// `index_wait`: why the asset index is not complete. No guid is looked up in it then (its verdict could be wrong either
+	// way), and content that holds one gets `busy` = that reason once everything else passed; the bytes are still made (#968).
+	prepared_file prepare(const desc::desc_system& descs, const res::resource_system& resources, const std::optional<std::string>& index_wait,
+		const std::string& relative,
 		const json::value& content, const std::string& kept_guid = {}, std::span<const std::byte> replaced = {})
 	{
 		prepared_file out;
 		const std::string resource = "res://" + relative;
 		find_guid_keys(content, "", resource, out.problems);
-		edt::desc_tree_check checked = edt::validate_desc_tree(descs, content, resource, index_pending ? nullptr : &resources);
+		edt::desc_tree_check checked = edt::validate_desc_tree(descs, content, resource, index_wait ? nullptr : &resources);
 		for (res::diagnostic& item : checked.problems) {
 			if (item.severity == res::diagnostic_severity::error) out.problems.push_back(std::move(item));
 			else out.warnings.push_back(diagnostic_json(item));
 		}
 		if (!out.problems.empty()) return out;
-		if (index_pending && checked.has_guid) {
-			out.busy = std::string(edt::k_guid_index_pending);
-			return out;
-		}
 		json::value stamped = content;
 		if (!kept_guid.empty() && stamped.is_object()) stamped.as_object()["__guid"] = kept_guid;
 		descs.stamp_tree(stamped);
@@ -345,6 +346,7 @@ namespace {
 			return out;
 		}
 		out.bytes = bytes;
+		if (index_wait && checked.has_guid) out.busy = *index_wait;
 		return out;
 	}
 
@@ -388,7 +390,7 @@ namespace {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_pending(), path.relative, call.args.as_object().at("desc"));
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"));
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
@@ -423,7 +425,7 @@ namespace {
 			if (!current.ok()) return cmd::result::failure(cmd::codes::failed, current.error);
 			const std::string version = edt::code_version_of(current.bytes);
 			if (view_of(call.args.as_object().at("version").as_string()) != version) return stale(path.relative, version);
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_pending(), path.relative, call.args.as_object().at("desc"),
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"),
 				edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
@@ -453,15 +455,17 @@ namespace {
 			if (view_of(call.args.as_object().at("version").as_string()) != edt::code_version_of(current.bytes)) {
 				return refused("the file changed since that version was read");
 			}
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_pending(), path.relative, call.args.as_object().at("desc"),
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"),
 				edt::desc_root_guid(current.bytes), current.bytes);
 			if (!ready.problems.empty()) return refused(one_line(ready.problems));
-			if (!ready.busy.empty()) return refused(ready.busy);
 			if (!ready.error.empty()) return refused(ready.error);
 			const std::string type = type_of_text(text_of(current.bytes));
-			return std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
+			std::string text = std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
 				"If the open level uses this file, the change is applied to it at once (hot reload) and cannot be undone with undo.",
 				path.relative, type.empty() ? "?" : type, current.bytes.size(), ready.bytes.size());
+			// An approved busy call is retried until the index is ready, so the person approves the write itself (#968).
+			if (!ready.busy.empty()) text += k_waits_for_index;
+			return text;
 		}
 
 	private:
@@ -754,14 +758,16 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 		false, false, cmd::agent_category::read, cmd::danger::none, &desc_commands::read);
 	add("desc.create", "Create a desc file (*.desc) in the project's res/ folder from a JSON object with a `__type`; never replaces a file. "
 			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer. "
-			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough",
+			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough. "
+			"Content with a guid is answered `busy` while the editor's asset index is still being built",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"res://levels/a.desc or levels/a.desc: inside the project, *.desc only"},
 			"desc":{"type":"object","description":"the file's content; the editor writes __version and the header order"}},
 			"required":["path","desc"],"additionalProperties":false})json",
 		version_result, true, false, cmd::agent_category::scene_edit, cmd::danger::none, &desc_commands::create);
 	add("desc.write", "Replace an existing desc file of the project's res/ folder (a person confirms each time). `version` must be the one desc.read gave, "
-			"else `stale`; the content is checked against the schemas like desc.create. The file of the open level is refused (`busy`)",
+			"else `stale`; the content is checked against the schemas like desc.create. The file of the open level is refused (`busy`), "
+			"and so is content with a guid while the asset index is still being built",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},
 			"desc":{"type":"object","description":"the whole new content"}},
