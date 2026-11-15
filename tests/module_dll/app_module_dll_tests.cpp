@@ -116,6 +116,8 @@ bool test_util::resident(const std::filesystem::path& file)
 {
 	std::error_code ec;
 	const std::filesystem::path path = std::filesystem::canonical(file, ec);
+	// dlopen("") is the main program: a file that is not there is never resident.
+	if (ec || path.empty()) return false;
 #if defined(_WIN32)
 	return ::GetModuleHandleW(path.c_str()) != nullptr;
 #else
