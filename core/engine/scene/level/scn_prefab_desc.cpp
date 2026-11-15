@@ -8,6 +8,7 @@
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>
@@ -103,7 +104,10 @@ namespace scn {
 		prefab_comp_node parse_component(desc::desc_system& desc_system, const desc::desc_base& owner, const json::value& val,
 			std::string_view explicit_type, std::string_view json_path = {})
 		{
-			if (val.is_string()) {
+			// A component written as one reference, in either form a file writes it: an object that is {guid, path} is that
+			// reference, not a component with the overrides "guid" and "path" (#920). Under the key of a registered type
+			// an object stays that type's component: its fields may well be called "path".
+			if (val.is_string() || (!desc_system.is_registered(explicit_type) && res::reference_from_json(val))) {
 				return prefab_comp_node{
 					.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, val, json_path)
 				};
@@ -240,8 +244,9 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 void scn::prefab_desc::serialize(json::object& data) const
 {
 	auto serialize_comp = [] (const prefab_comp_node& cnode) -> json::value {
+		// A refused reference has no tag of its own (#697): the file keeps the reference it had (#952).
 		if (cnode.overrides.empty() && cnode.type_name.empty() && cnode.parent_desc.is_valid()) {
-			return json::value_from(cnode.parent_desc.get_tag());
+			return json::value_from(::res::refused_tag(cnode.parent_desc));
 		}
 
 		json::object out;
@@ -249,7 +254,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 			out["__type"] = cnode.type_name;
 		}
 		if (cnode.parent_desc.is_valid()) {
-			out["__parent"] = json::value_from(cnode.parent_desc.get_tag());
+			out["__parent"] = json::value_from(::res::refused_tag(cnode.parent_desc));
 		}
 		for (const auto& kv : cnode.overrides) {
 			out[kv.key()] = kv.value();
@@ -687,7 +692,11 @@ namespace {
 			}
 			return;
 		}
-		if (record.path.empty() && record.value.is_string()) {
+		// The component's type decides, not the record's key: a typed component may well have a field called "path".
+		const prefab_comp_node& held = it->second;
+		const bool has_fields = !held.type_name.empty() && (desc_system.is_registered(held.type_name) || held.parent_desc.is_valid());
+		const bool whole_reference = record.value.is_string() || (!has_fields && res::reference_from_json(record.value));
+		if (record.path.empty() && whole_reference) {
 			// a plain reference to a desc replaces the component whole
 			it->second = scn::parse_component(desc_system, owner, record.value, record.component);
 			return;
@@ -759,6 +768,13 @@ namespace {
 		}
 	}
 
+	// Stands for the file records are written in: get_field_desc reads no more of an owner than its tag.
+	class written_in_file final : public scn::prefab_desc
+	{
+	public:
+		explicit written_in_file(const res::tag& file) { set_tag(file); }
+	};
+
 	// What `node` stands for when it is more than its own fields: the prefab it references (itself expanded)
 	// plus the node's own extra components and children, then the node's override records. False for a plain
 	// node without records. `source` is the referenced prefab, empty when there is none.
@@ -772,6 +788,9 @@ namespace {
 	{
 		// Taken before this call opens anything: `node` is content of a file that is inside this much.
 		const std::size_t depth = open.size() + made.chain.size();
+		// That file, the last one open (none for a node handed in alone): its records are written there (#952).
+		const bool file_known = !made.chain.empty() || !open.empty();
+		const res::tag written_in = !made.chain.empty() ? made.chain.back() : (file_known ? open.back() : res::tag{});
 		std::optional<prefab_ref> ref = find_prefab_ref(assembler, node);
 		std::optional<std::string> ignored;
 		if (ref) {
@@ -787,10 +806,12 @@ namespace {
 		}
 		if (!ref && !ignored && node.overrides.empty()) return false;
 
-		scn::prefab_desc fallback_owner;
-		const desc::desc_base* owner = &fallback_owner;
+		// The records may instantiate the prefab `node` instantiates: only the file they are written in refers to itself.
+		const written_in_file file_owner(written_in);
+		const desc::desc_base* owner = &file_owner;
+		// No file known: the instance's prefab, as before; there a record that instantiates it again is refused (#952).
+		if (ref && !file_known) owner = ref->prefab.get();
 		if (ref) {
-			owner = ref->prefab.get();
 			source = ref->prefab->get_tag();
 			made.chain.push_back(ref->prefab->get_tag());
 			if (!materialize(assembler, ref->prefab->get_root(), out, source, open, roots, made, {})) {

@@ -8,6 +8,7 @@
 #include <format>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace fs = std::filesystem;
 namespace json = boost::json;
@@ -81,6 +82,22 @@ std::string prj::migration::plan_text(const migration_plan& plan)
 			text += std::format("  - warning: {} {} -> {}: {}\n", warning.type, warning.from_version, warning.from_version + 1, warning.message);
 		}
 	}
+	const bool renews = std::ranges::find(plan.project_steps, "assets.ids_below", &planned_project_step::id)
+		!= plan.project_steps.end();
+	bool copies = false;
+	for (const scanned_file& file : plan.scan.files) {
+		if (!renews || file.id_held_below.empty()) continue;
+		if (!std::exchange(copies, true)) text += "New IDs (the ID belongs to a file of a layer below the project):\n";
+		text += std::format("- {} ({}): ID of {}\n", file.path, file.id_held_below_meta, file.id_held_below);
+	}
+	bool to_copies = false;
+	for (const scanned_file& file : plan.scan.files) {
+		if (!renews || file.references_to_copies.empty()) continue;
+		if (!std::exchange(to_copies, true)) text += "References turned into {guid, path} with a new ID of a copy:\n";
+		for (const std::string& reference : file.references_to_copies) {
+			text += std::format("- {}: {}\n", file.path, reference);
+		}
+	}
 	const std::vector<skipped_file> skipped = skipped_by(plan);
 	if (!skipped.empty()) {
 		text += "Not migrated:\n";
@@ -98,7 +115,8 @@ int prj::migration::run_migrate(const migrate_command& command, const command_co
 	}
 	// Before anything else, a dry run too: the project is partly migrated until that one is rolled back (EPIC-58 5).
 	if (const std::vector<std::string> unfinished = unfinished_migrations(context.root); !unfinished.empty()) {
-		print_error(context, std::format("migration {} did not finish: run --migrate-rollback {} first", unfinished.front(), unfinished.front()));
+		print_error(context, std::format("migration {} did not finish: run --migrate-rollback {} first", journal_path_text(unfinished.front()),
+			journal_path_text(unfinished.front())));
 		return k_exit_refused;
 	}
 
@@ -168,9 +186,9 @@ int prj::migration::run_migrate_rollback(std::string_view id, const command_cont
 	rollback.write = context.write;
 	rollback.wrote = &wrote;
 	if (const std::optional<std::string> error = rollback_migration(context.root, id, rollback)) {
-		print_error(context, std::format("rollback of {}: {}", id, *error));
+		print_error(context, std::format("rollback of {}: {}", journal_path_text(id), *error));
 		return rollback_exit_code(error, wrote);
 	}
-	print(context, std::format("migration {} rolled back", id));
+	print(context, std::format("migration {} rolled back", journal_path_text(id)));
 	return k_exit_done;
 }

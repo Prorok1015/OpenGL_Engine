@@ -15,6 +15,12 @@ namespace edt
 	inline const scene_document& scene_of(const document_manager& documents) { return dynamic_cast<const scene_document&>(documents.scene()); }
 	// Null when no preview is open (or it is not a prefab).
 	inline prefab_document* prefab_of(document_manager& documents) { return dynamic_cast<prefab_document*>(documents.preview()); }
+	// The open prefab document when it has unapplied edits, else null (what quit, New, Open and a module reload must not lose).
+	inline prefab_document* dirty_prefab_of(document_manager& documents)
+	{
+		prefab_document* prefab = prefab_of(documents);
+		return prefab && prefab->is_open() && prefab->is_dirty() ? prefab : nullptr;
+	}
 	// By the id of the built-in prefab preview (register_builtin_asset_kinds), not by suffix: a module's preview for a longer
 	// suffix (".ui.prefab.desc") must not hand the prefab editor a document that is not a prefab_document.
 	inline prefab_document& open_prefab(document_manager& documents, const res::tag& prefab_tag)

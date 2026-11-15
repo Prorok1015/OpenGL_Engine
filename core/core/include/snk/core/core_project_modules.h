@@ -39,6 +39,11 @@ namespace core
 		// The engine's layout key (gs::engine_module_layout_key, #614): a module whose snk_module_layout_key differs is
 		// refused before it is created, and a reload to it before the running module goes. 0: not checked.
 		std::uint64_t layout_key = 0;
+		// Whether the library `copy` (the copy about to be loaded of module `name`, runtime or editor, from the
+		// project's build output) may be loaded: the project's own code runs in the host (#921). Asked by load_all,
+		// load_editor_modules, load_waiting, reload and reload_editor_module after the copy is made and before it is
+		// loaded. Not set: none is loaded. Compiled-in modules are not asked.
+		std::function<bool(std::string_view name, const std::filesystem::path& copy)> trust_library;
 	};
 
 	struct project_modules_report
@@ -49,6 +54,8 @@ namespace core
 		// Found but not loaded: the source could not be opened or copied, the entry or the name did not match, or the
 		// module failed to register or initialize. Each is logged with the reason.
 		std::vector<std::string> refused;
+		// Found and copied, but trust_library said no: not loaded, its copy removed. load_waiting() asks again.
+		std::vector<std::string> untrusted;
 	};
 
 	enum class reload_status
@@ -109,6 +116,10 @@ namespace core
 		// Without a prj::project_context in `data` nothing is loaded. A module that is refused is unloaded and its copy
 		// removed; the host keeps running without it. Never throws for a module.
 		project_modules_report load_all();
+		// Loads the runtime modules, then (with_editor_modules) the editor modules, that load_all /
+		// load_editor_modules reported untrusted, asking trust_library again (after the person trusted the project).
+		// Same rules as load_all.
+		project_modules_report load_waiting();
 
 		// Takes the new build of the runtime module `name`: the copy is loaded next to the running module and checked
 		// (entry, name) before anything is unloaded; then before_swap, the running module goes, the new one is loaded,
@@ -159,7 +170,8 @@ namespace core
 		bool has_editor_modules() const { return !m_editor_loaded.empty(); }
 		// `name` is a module of kind "editor" (loaded, or named so by the manifest).
 		bool is_editor_module(const std::string& name) const;
-		// The runtime modules the project requires (not optional) that `report` did not load: missing or refused.
+		// The runtime modules the project requires (not optional) that `report` did not load: missing, refused or
+		// untrusted.
 		std::vector<std::string> failed_required(const project_modules_report& report) const;
 
 	private:
@@ -204,6 +216,10 @@ namespace core
 			const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
 			const std::optional<loaded_copy>& copy);
 		void remove_unused_copies() const;
+		// One runtime module of load_all / load_waiting, into `report`.
+		void load_runtime_module(const std::string& name, project_modules_report& report);
+		// load_editor_modules for the editor modules `wanted` accepts (all when it is empty).
+		project_modules_report load_editor(const std::function<bool(const std::string&)>& wanted);
 
 		app::modules::module_loader& m_loader;
 		ds::app_data_storage& m_data;
@@ -213,6 +229,9 @@ namespace core
 		std::map<std::string, rejected_build> m_rejected;
 		// Editor modules in the order they were loaded.
 		std::vector<std::string> m_editor_loaded;
+		// Modules trust_library refused, for load_waiting: runtime ones in load order, then editor ones.
+		std::vector<std::string> m_untrusted_runtime;
+		std::vector<std::string> m_untrusted_editor;
 		// A reload runs: one asked for from inside it (a hook, the module's own code) is refused.
 		bool m_reloading = false;
 	};
@@ -220,4 +239,10 @@ namespace core
 	// project_module_host::load_all with a host of its own (no reload afterwards).
 	SNK_API project_modules_report load_project_modules(app::modules::module_loader& loader, ds::app_data_storage& data,
 		const project_modules_options& options);
+
+	// The SHA-256 of the libraries in `folder` that a module's copy takes along and the loader may load (#921): every
+	// file the copy keeps beside the module, symbols left out, by its sorted name and the SHA-256 of its bytes. Of
+	// build/bin it is what the copies of its modules get; of a copy's folder, what that copy loads. Nullopt: the
+	// folder or one of them cannot be read.
+	SNK_API std::optional<std::string> module_library_set_digest(const std::filesystem::path& folder);
 }

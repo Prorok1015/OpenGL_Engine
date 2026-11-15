@@ -890,4 +890,59 @@ BOOST_AUTO_TEST_CASE(the_owner_waits_for_a_worker_that_destroys_its_dropped_call
 	}
 }
 
+// #941: a wait given up on a later dependency (here: the node itself, a cycle) takes back the edge it added to an earlier
+// one that is still loading; else both blocks stay in the graph until the loads stop.
+BOOST_AUTO_TEST_CASE(a_wait_that_fails_on_a_cycle_takes_back_its_earlier_edges)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag held{ "gate://held.node" };
+	gate.files[held] = test_util::to_bytes("held");
+	gate.gate = true;
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	const res::tag self = tag_of("self.node");
+	put("self.node", "self\n" + held.string() + "\n" + self.string());
+	{
+		const auto loading = rs->require<base_node>(self);
+		pump();
+		BOOST_TEST(loading.has_error());
+		BOOST_TEST(rs->wait_graph_nodes() == 0u, "the edge to the held dependency went with the wait");
+	}
+	gate.release();
+	pump();
+	BOOST_TEST(rs->wait_graph_nodes() == 0u);
+}
+
+// #941: the same for a chain that would grow deeper than k_max_dependency_depth (32 edges).
+BOOST_AUTO_TEST_CASE(a_wait_that_fails_on_a_too_deep_chain_takes_back_its_earlier_edges)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag held{ "gate://held.node" };
+	gate.files[held] = test_util::to_bytes("held");
+	gate.gate = true;
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	// b0 -> b1 -> ... -> b31 -> held: 32 edges, all waiting for the gate.
+	constexpr int k_chain = 32;
+	for (int i = 0; i < k_chain; ++i) {
+		const std::string next = i + 1 < k_chain ? tag_of("b" + std::to_string(i + 1) + ".node").string() : held.string();
+		put("b" + std::to_string(i) + ".node", "b" + std::to_string(i) + "\n" + next);
+	}
+	const auto chain = rs->require<base_node>(tag_of("b0.node"));
+	pump();
+	BOOST_REQUIRE(rs->wait_graph_nodes() == static_cast<std::size_t>(k_chain + 1));
+
+	// top -> held is added first, then top -> b0 would make 33 edges.
+	put("top.node", "top\n" + held.string() + "\n" + tag_of("b0.node").string());
+	{
+		const auto top = rs->require<base_node>(tag_of("top.node"));
+		pump();
+		BOOST_TEST(top.has_error());
+		BOOST_TEST(top.error_text().find("deeper than") != std::string::npos);
+		BOOST_TEST(rs->wait_graph_nodes() == static_cast<std::size_t>(k_chain + 1), "top and its edge to held are gone");
+	}
+	gate.release();
+	pump();
+	BOOST_TEST(chain.is_ready());
+	BOOST_TEST(rs->wait_graph_nodes() == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

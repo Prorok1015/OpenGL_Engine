@@ -193,7 +193,7 @@ namespace {
 		{
 			if (component.parent_desc.is_valid() && component.parent_desc.has_error()) {
 				add(edt::problem_severity::error, "missing_resource", std::format("component '{}': its __parent '{}' did not load", key,
-					component.parent_desc.get_tag().view()), path, json_path + "/__parent");
+					res::refused_tag(component.parent_desc).view()), path, json_path + "/__parent");
 				if (component.type_name.empty()) return;
 			}
 			// `"key": "<tag>"` names no type: it is the type of the desc it refers to, as the assembler spawns it.

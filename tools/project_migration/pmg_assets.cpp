@@ -52,6 +52,7 @@ void prj::migration::project_assets::rebuild()
 	m_problems.clear();
 	m_held_ids.clear();
 	m_holders.clear();
+	m_held_below.clear();
 	m_read_only_resources.clear();
 
 	// Lowest first, as res:// stacks them: the read-only layers, then the content roots, the first of project.snkproj
@@ -124,6 +125,7 @@ void prj::migration::project_assets::rebuild()
 		indexed_asset asset = entry_of(files[i]);
 		if (const std::optional<std::size_t> meta = pairing.meta_of[i]) {
 			asset.has_meta = true;
+			if (!read_only[files[*meta].layer]) asset.meta_path = entry_of(files[*meta]).path;
 			const res::asset_meta_file read = res::read_asset_meta_file(layers[files[*meta].layer], files[*meta].relative);
 			if (read.meta) {
 				asset.id = read.meta->guid;
@@ -146,6 +148,7 @@ void prj::migration::project_assets::rebuild()
 
 	for (auto& [id, held] : holders) {
 		m_held_ids.emplace(res::asset_name_key(held.res_path, res::asset_names_case_insensitive), id);
+		if (read_only[held.layer]) m_held_below.insert(id);
 		m_holders.emplace(id, std::move(held.res_path));
 	}
 }

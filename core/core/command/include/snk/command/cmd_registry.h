@@ -68,8 +68,12 @@ namespace cmd
 		//   `value["ticket"]`; without one (headless) it is `denied`. After a person approved the ticket, the same call
 		//   (same command, the same arguments, the same agent session) with `call::confirmation` set to it runs once;
 		//   any other call with it, a second use, or one before the approval is `denied`. The gate is asked again on
-		//   that call, so a policy that turned to deny meanwhile wins.
+		//   that call, so a policy that turned to deny meanwhile wins. A command sees call::confirmation only on a call
+		//   that spent a ticket a person approved for it: the policy allowing a call that names another ticket (one
+		//   still waiting, one declined) hands the command the call without it (#931).
 		void set_policy_gate(std::shared_ptr<policy_gate> gate);
+		// The gate set with set_policy_gate; null without one.
+		policy_gate* gate() const noexcept { return m_gate.get(); }
 
 		// A rule on the arguments of every call from an agent, asked after the policy gate and before the schema:
 		// a result refuses the call, nullopt lets it go on. Unlike the gate, no policy lifts it (#681). null removes it.
@@ -126,8 +130,8 @@ namespace cmd
 		};
 
 		// Main thread only, like everything of the registry (m_tickets, the gate).
-		// nullopt: the call may go on.
-		std::optional<result> apply_policy(const command_desc& command, const call& request);
+		// nullopt: the call may go on; `confirmed` then tells whether it spent a ticket a person approved for it.
+		std::optional<result> apply_policy(const command_desc& command, const call& request, bool& confirmed);
 		void drop_expired_tickets();
 		std::chrono::steady_clock::time_point now() const;
 

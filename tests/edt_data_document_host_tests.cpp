@@ -738,6 +738,8 @@ class window_panel final : public edt::panel_base
 {
 public:
 	window_panel(std::string_view id, std::string_view title) : panel_base(id, title) {}
+	// The prefab editor registers under one title and shows another one (its document, a [*]) after that.
+	void show_title(std::string title) { m_title = std::move(title); }
 
 protected:
 	void on_render() override {}
@@ -783,6 +785,60 @@ BOOST_AUTO_TEST_CASE(ThePrefabPreviewWindowGivesItsDocument_TheViewportGivesTheS
 	BOOST_REQUIRE(documents.active() == &data);
 
 	ImGui::SetWindowFocus("Prefab Editor");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == preview);
+
+	ImGui::SetWindowFocus("Viewport");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == &documents.scene());
+
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == &data);
+}
+
+BOOST_AUTO_TEST_CASE(ThePrefabWindowWithItsDocumentAndMarkInTheTitle_StillGivesItsDocument)
+{
+	imgui_context imgui;
+	edt::document& data = open_config();
+	edt::panel_base* panel = context->panels().find(edt::data_document_panel_id(data.id()));
+	BOOST_REQUIRE(panel != nullptr);
+	edt::document_manager& documents = context->documents();
+
+	edt::asset_preview_desc kind;
+	kind.id = "test.preview";
+	kind.suffix = ".preview";
+	kind.make_preview = [](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> { return std::make_unique<fake_preview>(); };
+	const edt::registration kind_registration = context->asset_kinds().add_preview(std::move(kind));
+	edt::previewable_document* preview = documents.open_preview("test.preview", res::tag::make("a.preview"));
+	BOOST_REQUIRE(preview != nullptr);
+	auto prefab_window = std::make_shared<window_panel>("prefab_editor", "Prefab Editor");
+	const edt::registration prefab_registration = context->panels().add({
+		.id = "prefab_editor", .title = "Prefab Editor", .slot = edt::dock_slot::floating, .open_by_default = true,
+		.show_in_view_menu = false, .panel = prefab_window });
+	prefab_window->show_title("Prefab: arm [*]###prefab_editor");
+
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		panel->render();
+		prefab_window->render();
+		if (ImGui::Begin("Viewport")) {
+		}
+		ImGui::End();
+		host->follow_focus();
+		ImGui::EndFrame();
+	};
+	frame();
+	frame();
+	ImGui::SetWindowFocus(panel->get_title().c_str());
+	frame();
+	frame();
+	BOOST_REQUIRE(documents.active() == &data);
+
+	ImGui::SetWindowFocus("###prefab_editor");
 	frame();
 	frame();
 	BOOST_TEST(documents.active() == preview);
