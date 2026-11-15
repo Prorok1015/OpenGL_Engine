@@ -142,6 +142,10 @@ namespace res
 		// The folders a table mount of `protocol` serves, lowest priority first; empty when it is not mounted (code://
 		// is mounted only when the project has a code/ folder).
 		std::vector<std::filesystem::path> mount_roots(std::string_view protocol) const;
+		// A file the engine loads by a fixed path (its UI font, the shaders of its passes): engine://`relative` when
+		// engine:// is mounted, so a project file at the same res:// path never stands in for it (#929); res://`relative`
+		// without engine://, where res:// has no engine layer for a project to override.
+		tag engine_file(std::string_view relative) const;
 
 		// No project open: res:// over resource/base_path (if set) and resource/path, memory:// next to resource/path,
 		// engine:// on resource/base_path (if set).

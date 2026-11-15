@@ -23,11 +23,11 @@ std::vector<std::unique_ptr<render_pass_interface>> scene_passes()
 {
 	std::vector<std::unique_ptr<render_pass_interface>> passes;
 	passes.push_back(std::make_unique<frame_upload_pass>());
-	passes.push_back(std::make_unique<z_prepass>());
+	passes.push_back(std::make_unique<z_prepass>(res::tag::make("shaders/z_prepass.vert"), res::tag::make("shaders/z_prepass.frag")));
 	passes.push_back(std::make_unique<opaque_pass>());
 	passes.push_back(std::make_unique<skybox_pass>());
 	passes.push_back(std::make_unique<transparent_pass>());
-	passes.push_back(std::make_unique<composition_pass>());
+	passes.push_back(std::make_unique<composition_pass>(res::tag::make("shaders/composition.vert"), res::tag::make("shaders/composition.frag")));
 	return passes;
 }
 

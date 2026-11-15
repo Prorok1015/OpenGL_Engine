@@ -36,6 +36,7 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -114,7 +115,8 @@ inline void mount_repo_res(test_util::ram_resolver& ram)
 
 struct null_engine_fixture
 {
-	explicit null_engine_fixture(bool validate = true)
+	// `before_render` runs once res:// and edt:// are mounted, before render_init makes the passes.
+	explicit null_engine_fixture(bool validate = true, const std::function<void(res::resource_system&)>& before_render = {})
 	{
 		const phase_timer whole("fixture setup");
 		fs::create_directories("./res"); // resource_system's vfs root
@@ -129,6 +131,9 @@ struct null_engine_fixture
 			const phase_timer mount("mount res:// and edt://");
 			mount_repo_res(rs.registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol()));
 			mount_dir(rs.registrate_resolver<test_util::ram_resolver>("edt"), SNK_EDITOR_DATA_DIR, "edt");
+		}
+		if (before_render) {
+			before_render(rs);
 		}
 
 		auto& descs = storage.construct<desc::desc_system>(std::ref(rs));

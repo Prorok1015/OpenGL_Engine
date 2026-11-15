@@ -68,6 +68,9 @@ void core::res::resource_init(ds::app_data_storage& data)
 			throw prj::project_error(std::format("project '{}': the engine resources '{}' (resource/base_path) are not a directory",
 				project.data.name, engine_base.string()));
 		}
+		if (engine_base.empty()) {
+			egLOG_WARN("resource", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted, so the UI font and the shaders of the render passes are read from the project's res://");
+		}
 
 		// The directories may have changed since the project was opened: nothing outside it gets mounted. Checked
 		// before the writable folders are created (a symlinked .cache must not get folders made through it) and after.
