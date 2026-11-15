@@ -1,4 +1,5 @@
 #include "edt_editor_system.h"
+#include "edt_agent_log_filter.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
@@ -6,6 +7,7 @@
 #include "edt_asset_problems.h"
 #include "edt_asset_usages.h"
 #include "edt_begin_then_poll.h"
+#include <memory>
 #include <algorithm>
 #include <chrono>
 #include <snk/editor/edt_editor_context.h>
@@ -35,6 +37,10 @@
 #include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
 #include "edt_process_decoder.h"
+#if SNK_HAS_ASSIMP
+#include "edt_decoded_model_adapter.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#endif
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
@@ -70,12 +76,9 @@
 #include "edt_project_trust_service.h"
 #include "edt_agent_policy.h"
 #include "edt_settings.h"
-#include "edt_play_commands.h"
-#include "edt_runtime_commands.h"
-#include "edt_bus_commands.h"
+#include "edt_play_component.h"
 #include "edt_play_session.h"
 #include "edt_editor_mode.h"
-#include "edt_editor_mode_commands.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
@@ -339,6 +342,18 @@ edt::editor_system::~editor_system()
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
 	m_session_connections.clear();
+	if (m_log_filter) {
+		// They name this system: nothing of it may be asked once it is gone, and without them an agent would read the
+		// whole journal, so the registry's agents go first (m_agent_server above).
+		m_log_filter->visible = [](std::string_view, const cmd::origin& from) { return from.kind == cmd::origin_kind::ui; };
+		m_log_filter->redact = [](std::string_view text, const cmd::origin& from) {
+			return from.kind == cmd::origin_kind::ui ? std::string(text) : std::string{};
+		};
+	}
+#if SNK_HAS_ASSIMP
+	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
+	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
+#endif
 	m_agent_access.reset();
 	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
 	// The layer may outlive this system: no game layout drawn through it any more.
@@ -348,15 +363,12 @@ edt::editor_system::~editor_system()
 		editor_layer->set_modal_probe(nullptr);
 		editor_layer->set_frame_hook(nullptr);
 	}
-	m_mode_changed.disconnect();
-	m_modes.reset();
-	if (m_play) {
-		// Stop brings the level back and reports through the context: only while the context is there.
-		if (m_context_alive.lock()) {
-			m_play.reset();
-		} else {
-			m_play->abandon();
-		}
+	if (m_play_component) {
+		// Callbacks during Stop see no session, as with the owning pointer before; the abandoned one stays reachable.
+		m_play = nullptr;
+		m_modes = nullptr;
+		m_play_component->shutdown(m_context_alive.lock() != nullptr);
+		m_play = m_play_component->play();
 	}
 	// The layer may outlive this system; its menu bar must not reach live mode any more.
 	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
@@ -405,8 +417,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_services.base_sfactory  = &data.require<ecs::system_factory>();
 	m_services.base_assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
+	// Filled in below, once the agent policy exists; job.*, dialog.list and problems.list ask it on every call (#935).
+	const cmd::log_read_filter* agent_filter = data.has_value<cmd::log_read_filter>() ? &data.require<cmd::log_read_filter>() : nullptr;
 	m_context = &data.construct<edt::editor_context>(m_res, m_rnd, m_gui, m_services,
-		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
+		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state, agent_filter);
 	m_context->adopt(register_state_commands(m_context->actions().commands(), state_command_sources{
 		m_context->documents(), m_context->selection(), m_services, m_context->asset_kinds(),
 		[&res = m_res] { return res.get_resource_layers(); } }));
@@ -423,15 +437,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			edt::decode_runner_config decoder_config;
 			decoder_config.memory_limit_bytes = edt::decoder_memory_limit(static_cast<std::int64_t>(*cfg_import_decoder_memory_mb), memory_warning);
 			if (!memory_warning.empty()) egLOG_WARN("Editor/Import", "{}", memory_warning);
-			m_process_decoder = std::make_unique<edt::process_decoder>(m_res, std::move(decoder_config));
+			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config));
 		}
+		// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
+		// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
+		if (const std::string why = m_process_decoder->unavailable_reason(); !why.empty()) {
+			egLOG_WARN("Editor/Import", "{}: .glb/.gltf/.obj/.fbx models will not load", why);
+		}
+		m_res.registrate_adapter<edt::decoded_model_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(m_res),
+			edt::decoded_model_adapter::steps_of(m_process_decoder));
+		m_model_adapter_registered = true;
+		m_res.warn_on_sync_require(scn::model_importer_adapter::INFO.extensions);
 		import_options.import = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->import(source, task);
 		};
 		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->scan(source, task);
 		};
-		import_options.unavailable_reason = [decoder = m_process_decoder.get()] { return decoder->unavailable_reason(); };
+		import_options.unavailable_reason = [decoder = m_process_decoder.get()] {
+			const std::string why = decoder->unavailable_reason();
+			return why.empty() ? why : "model import for agents is not available: " + why;
+		};
 #endif
 		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
 		import_options.resources_path = [this] { return m_res.get_resources_path(); };
@@ -559,7 +585,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	});
 	m_data_documents->set_asset_source(asset_catalog);
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
-		if (refused_during_play(m_play.get(), m_context->dialogs(), "Stop Play to add an asset to the scene.")) return;
+		if (refused_during_play(m_play, m_context->dialogs(), "Stop Play to add an asset to the scene.")) return;
 		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
 		m_pending_desc_handle = m_services.resources()->require<desc::desc_base>(tag);
 		m_pending_desc_tag = tag;
@@ -802,8 +828,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(action));
 	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
+	// #968: until the asset index is complete, an agent's guid is answered `busy` rather than judged against it.
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
-			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
+			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); },
+				[this] { return asset_index_wait(m_asset_index.get()); } })) {
 		m_registrations.push_back(std::move(command));
 	}
 	m_agent_sessions = std::make_unique<agent_sessions>(m_context->documents());
@@ -822,6 +850,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		desc_files.layers = std::move(layout.layers);
 		desc_files.open_level_files = std::move(layout.open_level_files);
 		desc_files.write_blocker = std::move(layout.write_blocker);
+		desc_files.asset_index_wait = std::move(layout.asset_index_wait);
 		desc_files.events = &m_context->events();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
@@ -833,6 +862,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// then attaches the level and loads it again from disk.
 	{
 		migration_deps migration{ m_context->jobs() };
+		migration.log_filter = data.has_value<cmd::log_read_filter>() ? &data.require<cmd::log_read_filter>() : nullptr;
 		migration.project_root = [&data]() -> std::optional<std::filesystem::path> {
 			if (!data.has_value<prj::project_context>()) return std::nullopt;
 			return data.require<prj::project_context>().root;
@@ -1338,6 +1368,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_agent_argument_checks = &commands;
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
 			approved_snapshot_for(user_dir / "settings", options.project_dir));
+		// What log.read gives anyone but the person at the editor (#935). The filter is the engine's, kept in the storage.
+		ASSERT_MSG(commands.find("log.read") == nullptr || data.has_value<cmd::log_read_filter>(),
+			"log.read is registered without its filter: an agent would read the whole journal");
+		if (data.has_value<cmd::log_read_filter>()) {
+			m_log_filter = &data.require<cmd::log_read_filter>();
+			install_agent_log_filter(*m_log_filter, [this, &commands] {
+				return m_agent_access != nullptr && agent_build_output_allowed(m_agent_access->policy(), commands);
+			}, agent_log_roots_of(options.project_dir));
+		}
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->set_policy_file(project_policy);
 		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
@@ -1378,6 +1417,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
 		options.jobs = &m_context->jobs();
 		options.events = &events;
+		ASSERT_MSG(m_log_filter != nullptr || commands.find("log.read") == nullptr,
+			"the MCP bridge is built without the log filter: an agent would read the texts of its jobs as they are");
+		options.log_filter = m_log_filter;
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
 		// Every open document, not only the scene: a modified preview is dropped too.
@@ -1664,140 +1706,34 @@ void edt::editor_system::stop_live_build()
 
 void edt::editor_system::create_play_session(ds::app_data_storage& data)
 {
-	play_session_options options;
-	options.input = m_input_router;
-	// user:// is the project's test profile; Play gets a fresh one of its own every start.
-	if (const auto user_roots = m_res.mount_roots(res::tag::user); !user_roots.empty() && data.has_value<prj::project_context>()) {
-		options.profile_resources = &m_res;
-		options.play_profile = data.require<prj::project_context>().play_profile_dir();
-		options.editor_profile = user_roots;
-	}
-	if (data.has_value<prj::project_context>()) options.project_root = data.require<prj::project_context>().root;
-	options.report_full_snapshot = cfg_hot_reload_dump_snapshot;
-	// The problems list, not a dialog: live mode reloads on every build, and a dialog each time would be in the way.
-	// Never from inside the swap: the host refuses a revert while a reload runs, so it waits for the next UI frame.
-	options.revert_module = [this, &data](const std::string& module) {
-		editor_layer->register_implicit("edt/revert_game_module", [this, &data, module] {
-			if (!m_play) return false;
-			core::project_module_host* host = data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
-			m_play->run_revert(
-				[&] {
-					return host ? host->revert(module, m_swap_gate.hooks())
-						: core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
-				},
-				[&] {
-					if (host) host->forget_revert(module);
-				});
-			return false;
-		});
-	};
-	options.notify = [this](const std::string& message) {
-		if (message.empty()) {
-			m_context->problems().clear("hot_reload");
-			return;
-		}
-		problem item;
-		item.severity = problem_severity::warning;
-		item.message = message;
-		item.notes = { "details: .cache/hot_reload/last_play_snapshot.json" };
-		m_context->problems().set("hot_reload", { std::move(item) });
-	};
-	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
-	// The document changes once these land: Play would be built from the old one and the new one land under it.
-	options.start_blocker = [this] {
-		if (auto migrating = migration_blocker()) return migrating;
-		return load_in_progress();
-	};
-	options.each_frame = [this](const std::string& id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
-	options.preflight = [this] {
-		play_preflight_services services;
-		const ecs::system_factory* factory = m_services.sfactory();
-		services.systems = factory ? &factory->registry() : nullptr;
-		services.descs = m_services.descs();
-		services.resources = m_services.resources();
-		services.assembler = m_services.assembler();
-		auto found = run_play_preflight(m_state, services);
-		m_play_preflight.publish(m_context->problems(), found);
-		return found;
-	};
-	options.forget_runtime_entities = [this] {
-		if (m_game_view_panel) m_game_view_panel->forget_runtime_entities();
-		if (m_viewport_panel) m_viewport_panel->forget_runtime_entities();
-	};
-	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
-	if (m_game_view_panel) {
-		m_game_view_panel->set_notice([this] {
-			return m_play && m_play->reloading() ? std::format("Reloading... ({} resources)", m_play->reloading_resources()) : std::string{};
-		});
-	}
-	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this](const core::reload_report& report) {
-		if (m_play) m_play->after_module_swap(report);
-		if (m_modes) m_modes->after_module_swap();
-	});
-
-	const auto locked = [this] { return m_state.edits_locked(); };
-	m_hierarchy_panel->set_edits_locked(locked);
-	m_inspector_panel->set_edits_locked(locked);
-	m_viewport_panel->set_edits_locked(locked);
-
-	// The Play menu and the agent's play.* (US-63-C, #491). The lambdas check m_play: ~editor_system lets go of it
-	// before m_registrations goes.
-	for (auto& command : register_play_commands(m_context->actions(),
-			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); },
-				.dialogs = &m_context->dialogs(), .show_problems = [this] {
-					m_context->panels().set_open(m_problems_panel->get_id(), true);
-					ImGui::SetWindowFocus(m_problems_panel->get_title().c_str());
-				} })) {
-		m_registrations.push_back(std::move(command));
-	}
-	// runtime.query / runtime.get (#552): the live entities of Play, read-only.
-	for (auto& command : register_runtime_commands(m_context->actions().commands(),
-			{ .play = [this] { return m_play.get(); }, .play_set = [this]() -> scn::context_set* {
-				const auto manager = m_services.ctx_manager.lock();
-				return manager ? manager->find_set(k_play_set) : nullptr;
-			} })) {
-		m_registrations.push_back(std::move(command));
-	}
-	// world.events / input.actions (#605): the bus journal and the actions of Play, read-only.
-	for (auto& command : register_bus_commands(m_context->actions().commands(),
-			{ .play = [this] { return m_play.get(); }, .play_set = [this]() -> scn::context_set* {
-				const auto manager = m_services.ctx_manager.lock();
-				return manager ? manager->find_set(k_play_set) : nullptr;
-			}, .input = [this]() -> const inp::input_router* { return m_input_router; } })) {
-		m_registrations.push_back(std::move(command));
-	}
-	// app.advance / app.resume step the editor's whole frame loop: an agent gets them only during Play.
-	if (data.has_value<app::frame_command_registrations>() && data.has_value<app::frame_control>()) {
-		play_frame_commands frame_commands = register_play_frame_commands(data.require<app::frame_command_registrations>(),
-			m_context->actions().commands(), data.require<app::frame_control>(), [this] { return m_play && m_play->active(); },
-			m_context->events());
-		m_registrations.push_back(std::move(frame_commands.commands.advance));
-		m_registrations.push_back(std::move(frame_commands.commands.resume));
-		m_play_hold_release = std::move(frame_commands.release_on_stop);
-	}
-
-	// Game mode (#294): F11 / View > Game Mode / editor.mode.toggle. The layer draws the Game view full-window instead
-	// of the dockspace; the docked panel keeps its open state, so editor mode is drawn exactly as without it.
-	// Headless (set by init before this): no layout, so a Stop leaves the mode alone.
-	m_modes = std::make_unique<editor_mode_controller>(*m_play, m_context->events(), !m_context->actions().commands().headless());
-	const auto agent_mode_of = [this](std::string_view command_id) {
-		// No agent server: no agent can call at all.
-		if (!m_agent_access) return cmd::policy_mode::allow;
-		const cmd::command_desc* command = m_context->actions().find(command_id);
-		return command ? m_agent_access->policy().effective(*command).mode : cmd::policy_mode::deny;
-	};
-	for (auto& command : register_editor_mode_commands(m_context->actions(), { .modes = [this] { return m_modes.get(); },
-			.play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); },
-			.agent_mode_of = agent_mode_of })) {
-		m_registrations.push_back(std::move(command));
-	}
-	editor_layer->set_game_layout([this] { return m_modes && m_modes->mode() == editor_mode::game; },
-		[this] {
-			m_viewport_panel->suspend_camera();
-			m_game_view_panel->render_fullscreen();
+	m_play_component = std::make_unique<play_component>(play_component::ports{
+		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .resources = m_res,
+		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_hierarchy_panel,
+		.inspector = *m_inspector_panel, .viewport = *m_viewport_panel, .game_view = *m_game_view_panel,
+		.problems = *m_problems_panel, .preflight = m_play_preflight,
+		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
+		.module_host = [&data]() -> core::project_module_host* {
+			return data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
 		},
-		is_game_mode_shortcut,
-		[this] { m_game_view_panel->bind_fullscreen_input(); });
+		.frame_commands = data.has_value<app::frame_command_registrations>() && data.has_value<app::frame_control>()
+			? &data.require<app::frame_command_registrations>() : nullptr,
+		.frame_control = data.has_value<app::frame_command_registrations>() && data.has_value<app::frame_control>()
+			? &data.require<app::frame_control>() : nullptr,
+		.report_full_snapshot = cfg_hot_reload_dump_snapshot,
+		.start_blocker = [this] {
+			if (auto migrating = migration_blocker()) return migrating;
+			return load_in_progress();
+		},
+		.person_is_editing = [this] { return person_is_editing(); },
+		.agent_mode_of = [this](std::string_view command_id) {
+			// No agent server: no agent can call at all.
+			if (!m_agent_access) return cmd::policy_mode::allow;
+			const cmd::command_desc* command = m_context->actions().find(command_id);
+			return command ? m_agent_access->policy().effective(*command).mode : cmd::policy_mode::deny;
+		} });
+	m_play_component->install(m_registrations);
+	m_play = m_play_component->play();
+	m_modes = m_play_component->modes();
 	// The start level of --game (#518). Also off once its load's implicit callback is gone, so the screen never outlives it.
 	editor_layer->set_loading_screen(
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
@@ -1818,9 +1754,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (problems.empty()) m_context->problems().clear("input");
 		else m_context->problems().set("input", std::move(problems));
 	});
-	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
-		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
-	});
 	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
 	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
@@ -1839,7 +1772,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	editor_layer->set_menu_bar_status([this] {
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		draw_agent_status();
-		draw_play_status();
+		m_play_component->draw_status();
 		draw_save_notice();
 		if (const auto trust = m_trust.lock()) {
 			if (const auto held = held_modules_status(trust->held_modules())) {
@@ -2044,15 +1977,6 @@ void edt::editor_system::draw_agent_status()
 	}
 }
 
-void edt::editor_system::draw_play_status()
-{
-	// Stopped: nothing at all, so the menu bar is what it is without Play.
-	if (!m_play || !m_play->active()) return;
-	const bool paused = m_play->state() == play_state::paused;
-	ImGui::TextColored(paused ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f) : ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
-		paused ? "Play: paused" : "Play: playing");
-}
-
 void edt::editor_system::draw_save_notice()
 {
 	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
@@ -2235,7 +2159,7 @@ bool edt::editor_system::poll_import_pipeline()
 			m_export_dialog_active = false;
 			auto exported_tag = m_export_dialog->get_exported_tag();
 			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()
-				&& !refused_during_play(m_play.get(), m_context->dialogs(), "The asset is exported; stop Play to add it to the scene.")) {
+				&& !refused_during_play(m_play, m_context->dialogs(), "The asset is exported; stop Play to add it to the scene.")) {
 				std::string name_str = std::string(exported_tag.pure_name());
 				m_pending_desc_handle = m_services.resources()->require<desc::desc_base>(exported_tag);
 				m_pending_desc_tag = exported_tag;
@@ -2263,7 +2187,7 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 		m_context->dialogs().message(message_level::info, "An import asked for by an agent is running: wait for it, or cancel it in the job list.");
 		return;
 	}
-	if (refused_during_play(m_play.get(), m_context->dialogs(), "Stop Play to import.")) return;
+	if (refused_during_play(m_play, m_context->dialogs(), "Stop Play to import.")) return;
 
 	m_importing = true;
 	m_import_finished = false;
@@ -2776,6 +2700,8 @@ edt::desc_file_layout edt::editor_system::desc_layout()
 		return open;
 	};
 	layout.write_blocker = [this] { return project_write_blocker(); };
+	// Read when asked: the asset database and its link exist only while a project is open.
+	layout.asset_index_wait = [this] { return asset_index_wait(m_asset_index.get()); };
 	return layout;
 }
 

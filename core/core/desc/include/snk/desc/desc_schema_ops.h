@@ -37,6 +37,10 @@ namespace desc
 		virtual std::optional<std::uint32_t> find(std::uint32_t saved) const = 0;
 	};
 
+	// +1 on any change to the virtual functions of entity_remap: the module layout key mixes it in, tools/ci/vtable_pins.json
+	// pins them (#922).
+	inline constexpr std::uint32_t entity_remap_abi_revision = 1;
+
 	struct read_context
 	{
 		desc_system* system = nullptr;

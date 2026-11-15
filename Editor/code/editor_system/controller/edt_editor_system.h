@@ -6,6 +6,7 @@
 #include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
 #include "edt_project_trust_service.h"
+#include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_types.h>
 #include <chrono>
 #include <cstdint>
@@ -67,6 +68,7 @@ namespace edt {
 	class migration_notice_model;
 	struct journal_offer;
 	class live_mode;
+	class play_component;
 	class editor_context;
 	class editor_layer;
 	class data_document_host;
@@ -104,7 +106,7 @@ namespace edt {
 
 		// Created in init() and owned by the app_data_storage; null before init().
 		editor_context* context() const { return m_context; }
-		play_session* play() const { return m_play.get(); }
+		play_session* play() const { return m_play; }
 
 		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
 		// would assert in the desc adapter.
@@ -170,7 +172,9 @@ namespace edt {
 #if SNK_HAS_ASSIMP
 		std::unique_ptr<edt::model_importer> m_model_importer;
 		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
-		std::unique_ptr<edt::process_decoder> m_process_decoder;
+		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
+		std::shared_ptr<edt::process_decoder> m_process_decoder;
+		bool m_model_adapter_registered = false;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
@@ -209,7 +213,6 @@ namespace edt {
 		void apply_live_consent(ds::app_data_storage& data);
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
-		void draw_play_status();
 		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
 		void draw_save_notice();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
@@ -389,15 +392,13 @@ namespace edt {
 		edt::trusted_followups m_trust_followups;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
-		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
-		// while the context it reports to is still there.
-		std::unique_ptr<edt::play_session> m_play;
-		// Releases app.advance's time hold when Play stops (register_play_frame_commands).
-		connection m_play_hold_release;
-		// Editor or game layout (#294); reset in the destructor before the Play session it pauses and starts.
-		std::unique_ptr<edt::editor_mode_controller> m_modes;
-		// Gives the Scene view's camera its size back when the editor layout returns.
-		connection m_mode_changed;
+		// Play of the scene document and the editor/game mode (#1004); its commands are in m_registrations, removed before it.
+		// Stopped in the destructor while the context it reports to is still there.
+		std::unique_ptr<edt::play_component> m_play_component;
+		// The component's session and mode controller, for the areas that ask whether Play runs; null before the component.
+		// Valid only while m_play_component lives: no member destroyed after it may use them.
+		edt::play_session* m_play = nullptr;
+		edt::editor_mode_controller* m_modes = nullptr;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
@@ -412,6 +413,8 @@ namespace edt {
 		std::unique_ptr<agent_access> m_agent_access;
 		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
 		cmd::command_registry* m_agent_argument_checks = nullptr;
+		// The engine's filter of log.read, filled in by this system and emptied when it goes.
+		cmd::log_read_filter* m_log_filter = nullptr;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		std::filesystem::path m_agent_server_settings_file;

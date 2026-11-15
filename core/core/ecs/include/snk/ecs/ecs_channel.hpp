@@ -202,6 +202,11 @@ struct channel_participant
 
 namespace detail {
 
+// +1 on any change to the virtual functions of channel_slot or channel_type: the module layout key mixes them in,
+// tools/ci/vtable_pins.json pins them (#922).
+inline constexpr std::uint32_t channel_slot_abi_revision = 1;
+inline constexpr std::uint32_t channel_type_abi_revision = 1;
+
 // Per set and message type: what is not owned by a context (external posts) plus the exchange.
 class channel_slot
 {

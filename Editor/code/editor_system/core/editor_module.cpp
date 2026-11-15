@@ -11,9 +11,6 @@
 #include <snk/common/fs_paths.h>
 #include <snk/config/cfg_variables.h>
 #include <filesystem>
-#if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
-#endif
 #include <snk/desc/desc_system.h>
 #include <snk/project/prj_project.h>
 
@@ -71,10 +68,8 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 		data.require<gs::input_actions>().set_user_folder(user_data_path / "settings" / "input_bindings");
 	}
 
-#if SNK_HAS_ASSIMP
-	auto& desc_system = data.require<desc::desc_system>();
-	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(res));
-#else
+	// With assimp, editor_system::init registers the adapter of .glb/.gltf/.obj/.fbx: through the decoder process (#925).
+#if !SNK_HAS_ASSIMP
 	egLOG_WARN("Editor/Import", "built without assimp (SNK_WITH_ASSIMP=OFF): .glb/.gltf/.obj/.fbx models cannot be loaded or imported");
 #endif
 
@@ -96,7 +91,4 @@ void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
 	editor_term(data);
-#if SNK_HAS_ASSIMP
-	data.require<res::resource_system>().unregistrate_adapter(scn::model_importer_adapter::INFO);
-#endif
 }
