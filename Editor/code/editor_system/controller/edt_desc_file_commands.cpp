@@ -1,4 +1,5 @@
 #include "edt_desc_file_commands.h"
+#include "edt_forge_types.h"
 #include "edt_code_commands.h"
 #include "edt_file_menu.h"
 #include "edt_reference.h"
@@ -441,7 +442,10 @@ namespace {
 
 		std::optional<std::string> describe_write(const cmd::call& call) const
 		{
-			const auto refused = [](const std::string& why) { return std::optional<std::string>("This request will be refused: " + why); };
+			// A reason may quote the file or the agent's desc: it stays one line of the question (#943).
+			const auto refused = [](const std::string& why) {
+				return std::optional<std::string>("This request will be refused: " + edt::forge::escaped_text(why, 1024));
+			};
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
 			if (std::optional<std::string> why = m_files.write_blocked()) return refused(*why);
@@ -462,7 +466,8 @@ namespace {
 			const std::string type = type_of_text(text_of(current.bytes));
 			std::string text = std::format("Replace the desc file\n  res://{}\n  type {}, {} bytes now, {} bytes after\nThe old content is not kept. "
 				"If the open level uses this file, the change is applied to it at once (hot reload) and cannot be undone with undo.",
-				path.relative, type.empty() ? "?" : type, current.bytes.size(), ready.bytes.size());
+				edt::forge::escaped_text(path.relative, 1024), type.empty() ? "?" : edt::forge::escaped_text(type, 128), current.bytes.size(),
+				ready.bytes.size());
 			// An approved busy call is retried until the index is ready, so the person approves the write itself (#968).
 			if (!ready.busy.empty()) text += k_waits_for_index;
 			return text;

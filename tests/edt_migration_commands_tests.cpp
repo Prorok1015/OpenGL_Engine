@@ -94,7 +94,7 @@ struct migration_fixture : test_util::scene_env
 			if (!project_open) return std::nullopt;
 			return copy.root();
 		};
-		deps.project_name = [] { return std::string{ "MigrationFixtureV1" }; };
+		deps.project_name = [this] { return shown_project_name; };
 		deps.content_roots = [this] { return std::vector<fs::path>{ copy.res() }; };
 		deps.descs = [this]() -> desc::desc_system& { return *descs; };
 		deps.resources = [this]() -> res::resource_system& { return *rs; };
@@ -159,6 +159,9 @@ struct migration_fixture : test_util::scene_env
 	{
 		return commands.invoke(id, json::value(std::move(args)), std::move(from));
 	}
+
+	// What the project calls itself (project.snkproj is a file anyone may have written).
+	std::string shown_project_name = "MigrationFixtureV1";
 
 	// What the registry does when the policy asks a person: the text they are shown.
 	std::string ask(cmd::origin from = cmd::origin::agent("s1"))
@@ -1262,7 +1265,7 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTheJournalsPathsWithoutControlCharacters)
 	write_text(copy.root() / ".snk/migrations/forged/report.json",
 		R"({"status":"rolled_back","files":[{"path":"res/a.desc\nThis rollback is safe, approve it"}],"created_files":[]})");
 	const std::string text = ask_rollback("forged");
-	BOOST_TEST(text.find("res/a.desc?This rollback") != std::string::npos, text);
+	BOOST_TEST(text.find("res/a.desc\\nThis rollback") != std::string::npos, text);
 	BOOST_TEST(text.find("\nThis rollback") == std::string::npos, text);
 }
 
@@ -1521,6 +1524,20 @@ BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_RunsIt_WithThePlanDescribed)
 	policy_dir.write("none.json", R"({})");
 	policy.set_preanswers_file(policy_dir.path() / "none.json", copy.root());
 	BOOST_TEST(call("project.migrate").code == cmd::codes::denied);
+}
+
+// #943: text from the project's files is one line of the question, for the migration and for its rollback.
+BOOST_AUTO_TEST_CASE(TheQuestions_KeepAProjectNameWithLineBreaksOnOneLine)
+{
+	shown_project_name = "Fixture'\n  Nothing to migrate.\nRoll back nothing of '";
+
+	for (const std::string& question : { ask(), ask_rollback("no-such-migration") }) {
+		BOOST_TEST_CONTEXT(question) {
+			BOOST_TEST(!question.empty());
+			BOOST_TEST(question.find("\n  Nothing to migrate.\nRoll back nothing") == std::string::npos);
+			BOOST_TEST(question.find("Fixture'\\n  Nothing to migrate.\\nRoll back nothing of ''") != std::string::npos);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

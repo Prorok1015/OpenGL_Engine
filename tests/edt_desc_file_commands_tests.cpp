@@ -352,6 +352,19 @@ BOOST_AUTO_TEST_CASE(TheVersionIsCheckedAgainAtTheWrite_AfterThePersonSawTheQues
 	BOOST_TEST(read_file(res_root / "materials" / "q.mat.desc") == behind);
 }
 
+// #943: the type shown is the one the file on disk names, which anyone may have written: it stays on its line.
+BOOST_AUTO_TEST_CASE(TheQuestion_KeepsATypeFromTheFileOnOneLine)
+{
+	dir.write("res/materials/forged.mat.desc", R"({"__type":"material_desc\nThe old content is kept in a backup.","queue":"opaque"})");
+	const cmd::call request = call_of(write_args("materials/forged.mat.desc", version_of("materials/forged.mat.desc"), R"({"__type":"material_desc","queue":"opaque"})"));
+
+	const std::optional<std::string> question = commands.find("desc.write")->describe(request);
+
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->find("\nThe old content is kept in a backup.") == std::string::npos);
+	BOOST_TEST(question->find("material_desc\\nThe old content is kept in a backup.") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(TheQuestion_NamesTheFileTheSizesAndTheHotReload)
 {
 	make_material("materials/d.mat.desc");

@@ -10,6 +10,7 @@
 #include <snk/resource/res_file_change.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -149,7 +150,7 @@ BOOST_AUTO_TEST_CASE(the_snapshot_answers_for_the_file_problems_names_the_origin
 	make_system();
 	assets->rebuild();
 	pump();
-	std::size_t warnings = 0;
+	std::atomic<std::size_t> warnings = 0;
 	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level,
 		std::string_view message) {
 		if (category == "assets" && level == engine::log_level::warn && message.find("a_copy.txt") != std::string_view::npos) {
@@ -168,10 +169,10 @@ BOOST_AUTO_TEST_CASE(the_snapshot_answers_for_the_file_problems_names_the_origin
 	BOOST_REQUIRE(original);
 	BOOST_REQUIRE(copy);
 	BOOST_TEST(edt::holds_id_before(*original, *copy));
-	BOOST_TEST(warnings == 1u);
+	BOOST_TEST(warnings.load() == 1u);
 	// Nothing changed: the same answers, and the copy is not warned about again.
 	BOOST_TEST(!snapshot.refresh(*assets));
-	BOOST_TEST(warnings == 1u);
+	BOOST_TEST(warnings.load() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(the_lower_layer_keeps_an_id_even_when_its_file_is_newer)
@@ -441,8 +442,8 @@ BOOST_AUTO_TEST_CASE(batch_by_batch_answers_as_a_fresh_snapshot_after_every_kind
 	const res::asset_id c = *res::asset_id_from_text(k_guid_c);
 	const std::vector<res::asset_id> ids{ a, b, c };
 	// The fresh snapshots warn of their own: only what the batch-by-batch one says is counted.
-	std::size_t copy_warnings = 0;
-	bool counting = true;
+	std::atomic<std::size_t> copy_warnings = 0;
+	std::atomic<bool> counting = true;
 	const engine::log_sink_handle sink = engine::add_log_sink([&copy_warnings, &counting](std::string_view category,
 		engine::log_level level, std::string_view message) {
 		if (counting && category == "assets" && level == engine::log_level::warn
@@ -486,7 +487,7 @@ BOOST_AUTO_TEST_CASE(batch_by_batch_answers_as_a_fresh_snapshot_after_every_kind
 	fs::last_write_time(content / "d.txt.resource", fs::file_time_type::clock::now() - std::chrono::hours(1));
 	BOOST_TEST(!snapshot.apply_batch(*assets, apply({ change("d.txt", res::change_kind::created),
 		change("d.txt.resource", res::change_kind::created) })));
-	BOOST_TEST(copy_warnings == 1u);
+	BOOST_TEST(copy_warnings.load() == 1u);
 	check({});
 
 	fs::remove(content / "c.txt");
@@ -528,7 +529,7 @@ BOOST_AUTO_TEST_CASE(batch_by_batch_answers_as_a_fresh_snapshot_after_every_kind
 	BOOST_TEST(!snapshot.path_of(a));
 	check({ res::tag{ "res://moved/a.txt" } });
 
-	BOOST_TEST(copy_warnings == 1u);
+	BOOST_TEST(copy_warnings.load() == 1u);
 	BOOST_TEST(snapshot.full_refreshes() == 1u);
 }
 
