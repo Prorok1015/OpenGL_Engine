@@ -59,7 +59,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/game_build"
 	"${CMAKE_CURRENT_SOURCE_DIR}/vcs"
 	"${CMAKE_CURRENT_SOURCE_DIR}/forge"
+	"${CMAKE_CURRENT_SOURCE_DIR}/prefab"
 	"${CMAKE_CURRENT_SOURCE_DIR}/play"
+	"${CMAKE_CURRENT_SOURCE_DIR}/mesh"
 )
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface

@@ -1,6 +1,8 @@
 #include "edt_process_decoder.h"
 #include "edt_tag_text.h"
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/platform/plt_process.h>
 #include <boost/json/parse_options.hpp>
 #include <boost/json/stream_parser.hpp>
@@ -465,9 +467,8 @@ std::string edt::process_decoder::unavailable_reason() const
 {
 	std::error_code ec;
 	if (fs::is_regular_file(m_config.decoder, ec)) return {};
-	const auto name = m_config.decoder.u8string();
 	return std::format("the model decoder '{}' was not found next to the editor (reinstall the editor)",
-		std::string(name.begin(), name.end()));
+		text_escape::escaped_text(fs_paths::generic_utf8_of(m_config.decoder), 1024));
 }
 
 edt::decode_outcome edt::process_decoder::run(const decode_request& request, const import_source& source, ds::task_context* task) const

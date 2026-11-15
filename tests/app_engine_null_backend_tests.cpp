@@ -112,7 +112,7 @@ BOOST_AUTO_TEST_CASE(SmokeLevelDrawsOnlyThroughBoundPipelines)
 BOOST_AUTO_TEST_CASE(EveryFrameStartsFromAnInvalidatedStateCache)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 
 	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
 

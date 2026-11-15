@@ -134,13 +134,13 @@ edt::prefab_editor_context {
 - Новый `Editor/code/editor_system/controller/edt_prefab_editor_context.h/.cpp`
 - Новый `Editor/code/editor_system/panels/edt_prefab_editor_panel.h/.cpp`
 - Новый `Editor/data/templates/prefab_preview.desc` (изначально `Editor/res/templates/`, перенесён в EPIC-36)
-- `Editor/code/editor_system/controller/edt_editor_system.h/.cpp` — `open_prefab_for_edit`, `close_prefab_editor`
+- `Editor/code/editor_system/prefab/edt_prefab_editor_component.h/.cpp` — `open`, `close` (после #1004; раньше `editor_system::open_prefab_for_edit`, `close_prefab_editor`)
 - `Editor/code/editor_system/panels/edt_asset_browser_panel.h/.cpp` — double-click callback
 - `Editor/code/editor_system/controller/edt_init_helpers.cpp` — wiring
 
 **Поведение:**
 
-Двойной клик на `.prefab.desc` в Asset Browser → `editor_system::open_prefab_for_edit(tag)`:
+Двойной клик на `.prefab.desc` в Asset Browser → `prefab_editor_component::open(tag)`:
 - Загружает prefab через `res::resource_system`
 - Инъектирует transient world `__prefab_preview` в текущий level (НЕ в shared_state)
 - Собирает preview scene из `prefab_preview.desc` (свет) + программная камера с per-camera RT
@@ -241,7 +241,7 @@ JSON формат инстанса с override'ами:
   [Add Override...]   [Revert All]
 ```
 
-- **[Edit Prefab]** → `editor_system::open_prefab_for_edit(source_tag)` (US-25-1)
+- **[Edit Prefab]** → `prefab_editor_component::open(source_tag)` (US-25-1)
 - **[Revert]** одного поля — удаляет `prefab_override_entry`, `serialize_and_push`
 - **[Add Override...]** — дерево узлов prefab'а для выбора компонента
 - Override поля, совпадающие с source значением, подсвечиваются серым

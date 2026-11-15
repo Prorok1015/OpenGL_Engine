@@ -129,12 +129,12 @@ void engine::render::render_init(ds::app_data_storage& data)
 	data.construct<rnd::frame_context>();
 	register_render_descs(desc_sys);
 	render_system.add_render_pass(std::make_shared<rnd::frame_upload_pass>());
-	render_system.add_render_pass(std::make_shared<rnd::z_prepass>());
+	render_system.add_render_pass(std::make_shared<rnd::z_prepass>(res_sys.engine_file("shaders/z_prepass.vert"), res_sys.engine_file("shaders/z_prepass.frag")));
 	render_system.add_render_pass(std::make_shared<rnd::opaque_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::skybox_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::transparent_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::debug_pass>(res_sys));
-	render_system.add_render_pass(std::make_shared<rnd::composition_pass>());
+	render_system.add_render_pass(std::make_shared<rnd::composition_pass>(res_sys.engine_file("shaders/composition.vert"), res_sys.engine_file("shaders/composition.frag")));
 	render_system.set_material_compiler(std::make_shared<rnd::default_material_compiler>());
 	// Views are named by their owners (the editor registers "scene" and "game"); the command is there for the
 	// game without an editor too.
