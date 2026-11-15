@@ -58,12 +58,13 @@ namespace edt::mesh
 			return glm::normalize(glm::cross(n, axis));
 		}
 
+		// The boundary counts as inside: a vertex on the diagonal of an ear means the ear would cover ground outside the polygon.
 		bool inside_triangle(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b, const glm::vec2& c)
 		{
 			const auto side = [](const glm::vec2& p0, const glm::vec2& p1, const glm::vec2& q) {
 				return (p1.x - p0.x) * (q.y - p0.y) - (p1.y - p0.y) * (q.x - p0.x);
 			};
-			return side(a, b, p) > 1e-9f && side(b, c, p) > 1e-9f && side(c, a, p) > 1e-9f;
+			return side(a, b, p) >= -1e-9f && side(b, c, p) >= -1e-9f && side(c, a, p) >= -1e-9f;
 		}
 
 		// Cost of the concave path is cubic in the corner count; a bigger concave face is reported, not triangulated.

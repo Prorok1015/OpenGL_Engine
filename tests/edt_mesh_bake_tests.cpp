@@ -274,7 +274,7 @@ BOOST_AUTO_TEST_CASE(AConcaveFace_IsTriangulatedWithoutLosingItsArea)
 	const baked_mesh baked = bake(mesh);
 	const std::vector<baked_vertex> vertices = read_vertices(baked.geometry);
 
-	// The diagonal that cuts the reflex corner passes through the other vertex: the triangle of zero area that leaves is dropped.
+	// The first ear candidate has the reflex corner on its diagonal: cutting it would cover ground outside the face.
 	BOOST_REQUIRE(baked.geometry.indices.size() % 3 == 0);
 	BOOST_REQUIRE(baked.geometry.indices.size() >= 9u);
 	BOOST_REQUIRE(baked.geometry.indices.size() <= 12u);
