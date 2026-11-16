@@ -19,6 +19,7 @@ namespace edt
 {
 	class agent_access;
 	class agent_server;
+	class agent_sessions;
 	class editor_context;
 	class editor_layer;
 	class vcs_component;
@@ -53,8 +54,6 @@ namespace edt
 			std::function<bool()> any_unsaved = {};
 			std::function<void()> discard_changes = {};
 			std::function<void()> request_stop = {};
-			// An MCP session ended: whoever keeps something per session drops it (the agent sessions of the scene edits).
-			std::function<void(const std::string& session)> session_closed = {};
 		};
 
 		explicit agent_component(ports from);
@@ -95,6 +94,10 @@ namespace edt
 		// The engine's filter of log.read, filled in here and emptied when the component goes.
 		cmd::log_read_filter* m_log_filter = nullptr;
 		std::unique_ptr<agent_access> m_access;
+		// agent.session.* (A5, #291): the scene edits an agent groups into a session; ends with the MCP session.
+		std::unique_ptr<agent_sessions> m_sessions;
+		// Its commands: dropped before m_sessions, which they call.
+		std::vector<registration> m_session_commands;
 		// Listeners of editor_events::agent_session_closed; dropped before the access they reach.
 		std::vector<connection> m_connections;
 		// The MCP server (HTTP and/or stdio). After the access it asks, so it is destroyed first.

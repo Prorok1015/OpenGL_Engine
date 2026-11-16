@@ -5,6 +5,7 @@
 #include "edt_agent_policy.h"
 #include "edt_agent_server.h"
 #include "edt_agent_server_settings.h"
+#include "edt_agent_sessions.h"
 #include "edt_data_protocol.h"
 #include "edt_editor_layer.h"
 #include "edt_path_text.h"
@@ -14,6 +15,8 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
@@ -90,6 +93,8 @@ void edt::agent_component::build()
 	m_argument_checks = &commands;
 	m_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
 		approved_snapshot_for(user_dir / "settings", options.project_dir));
+	m_sessions = std::make_unique<agent_sessions>(m_ports.context.documents());
+	m_session_commands = m_sessions->register_commands(m_ports.context.actions().commands());
 	// What log.read gives anyone but the person at the editor (#935). The filter is the engine's, kept in the storage.
 	ASSERT_MSG(commands.find("log.read") == nullptr || m_ports.log_filter != nullptr,
 		"log.read is registered without its filter: an agent would read the whole journal");
@@ -130,7 +135,7 @@ void edt::agent_component::build()
 		if (m_access) m_access->confirmations().drop_session(session);
 	}));
 	m_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
-		if (m_ports.session_closed) m_ports.session_closed(session);
+		if (m_sessions) m_sessions->session_closed(session);
 	}));
 	options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
 	options.jobs = &m_ports.context.jobs();
@@ -184,6 +189,8 @@ void edt::agent_component::shutdown()
 	}
 	// The default policy values (push to agent/*, origin, flags off), as before when the access was empty: a closure that names no member.
 	m_ports.vcs.follow_agent_policy({}, [] { return vcs_policy{}; });
+	m_session_commands.clear();
+	m_sessions.reset();
 	m_access.reset();
 	if (m_argument_checks) {
 		m_argument_checks->set_agent_argument_check(nullptr);
