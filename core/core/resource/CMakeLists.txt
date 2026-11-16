@@ -11,9 +11,3 @@ target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::engine_lo
 # PUBLIC: res_vfs_resolver.h names the no-follow file primitives of platform::beneath (#414, #484, #523).
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::platform)
 
-#assimp
-# ASSIMP_* / BUILD_SHARED_LIBS options live in cmake/ThirdParty.cmake (EPIC-41 US-41-1).
-# Nothing in resource_system includes assimp: this only brings the `assimp` target in for scene and the editor.
-if(SNK_WITH_ASSIMP)
-	add_subdirectory(${THIRD_PARTY_PATH}/assimp assimp)
-endif()

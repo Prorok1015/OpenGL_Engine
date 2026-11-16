@@ -252,7 +252,7 @@ BOOST_AUTO_TEST_CASE(AModelOfLines_IsImportedAndExportedInJsonArrays)
 	std::mutex said_mutex;
 	std::vector<std::string> warned;
 	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
-		if (category != "edt/import" || level != engine::log_level::warn) return;
+		if (category != "import" || level != engine::log_level::warn) return;
 		std::lock_guard lock(said_mutex);
 		warned.emplace_back(message);
 	});

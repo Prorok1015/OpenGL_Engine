@@ -4,10 +4,6 @@ add_library(${PROJECT_NAME} STATIC)
 add_library(snk::scene ALIAS ${PROJECT_NAME})
 
 file(GLOB_RECURSE SE_SCENE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-if(NOT SNK_WITH_ASSIMP)
-	# The model importer is the only assimp user in scene; without assimp there is no adapter for glb/gltf/obj/fbx.
-	list(FILTER SE_SCENE_SOURCES EXCLUDE REGEX "/adapters/scn_(model_importer_adapter|assimp_resource_system_wrapper)\\.cpp$")
-endif()
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SCENE_SOURCES})
 if(MSVC)
 	# The component schemas of the snapshot catalog (scn_engine_components*.cpp) instantiate a binding per described
@@ -23,9 +19,4 @@ snk_component_headers(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PUBLIC snk::render PRIVATE snk::resource_system PRIVATE snk::input_system PRIVATE snk::window PRIVATE snk::ecs PRIVATE snk::engine_logger)
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::desc_system)
 # scene/hot_reload (scn_context_manager.cpp) and the project's start level (scn_start_level.cpp, #591).
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::config_system PRIVATE snk::project)
-
-#temporary rilation. it will move to "import_component" in the future
-if(SNK_WITH_ASSIMP)
-	target_link_libraries(${PROJECT_NAME} PRIVATE assimp)
-endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::config_system PRIVATE snk::project)

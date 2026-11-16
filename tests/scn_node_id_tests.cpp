@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/level/scn_node_index.h>
@@ -84,7 +84,7 @@ struct node_id_fixture : test_util::scene_env
 #if SNK_HAS_ASSIMP
 	node_id_fixture()
 	{
-		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
+		rs->registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(*descs), std::ref(*rs));
 	}
 #endif
 
