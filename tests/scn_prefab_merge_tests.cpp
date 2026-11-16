@@ -618,6 +618,45 @@ BOOST_AUTO_TEST_CASE(StaleRecords_ARecordHandedToANestedInstanceIsJudgedThere)
 	BOOST_TEST((stale[0].why == scn::stale_override::reason::node_gone));
 }
 
+BOOST_AUTO_TEST_CASE(StaleRecords_SeveralRecordsHandedToOneNestedInstance_AreEachReportedUnderTheirOwnNumber)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	put("mid.prefab.desc", R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000b1","name":"holder","components":{"base":"memory://t/base.prefab.desc"}}]})");
+	auto outer = parse(R"({"__type":"prefab_desc","__version":3,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/mid.prefab.desc"}},
+		"overrides":[
+			{"target":["00000000000000b1","00000000000000ee"],"component":"stat","path":"/hp","value":1},
+			{"target":["00000000000000b1","00000000000000a1"],"component":"stat","path":"/hp","value":2},
+			{"target":["00000000000000b1"],"op":"remove","component":"nope"},
+			{"target":["00000000000000b1","00000000000000ff"],"component":"stat","path":"/hp","value":3}]})");
+
+	const auto stale = scn::find_stale_records(*assembler, outer.get_root());
+
+	BOOST_REQUIRE_EQUAL(stale.size(), 3u);
+	BOOST_TEST(stale[0].index == 0u);
+	BOOST_TEST(stale[1].index == 2u);
+	BOOST_TEST(stale[2].index == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(StaleRecords_APrefabThatInstantiatesItself_StillReturns)
+{
+	// The loader already refuses the reference of a prefab to itself (APrefabThatRefersToItself_ReportsACycle...), so the
+	// recursion stops there too; this pins that records reaching down through such a prefab do not hang the search.
+	put("cycle.prefab.desc", R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"self","components":{"again":"memory://t/cycle.prefab.desc"}}]})");
+	// records that reach down through the cycle, several to the same level
+	auto outer = parse(R"({"__type":"prefab_desc","__version":3,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/cycle.prefab.desc"}},
+		"overrides":[
+			{"target":["00000000000000c1","00000000000000c1","00000000000000c1","00000000000000ff"],"component":"stat","path":"/hp","value":1},
+			{"target":["00000000000000c1","00000000000000c1","00000000000000c1","00000000000000fe"],"component":"stat","path":"/hp","value":2}]})");
+
+	const auto stale = scn::find_stale_records(*assembler, outer.get_root());
+
+	BOOST_TEST(stale.size() <= 2u); // the cycle is refused as in a spawn; what matters is that this returns
+}
+
 BOOST_AUTO_TEST_CASE(StaleRecords_PruneRemovesOnlyThem_AndTheRestStillApplies)
 {
 	put("base.prefab.desc", BASE_PREFAB);
