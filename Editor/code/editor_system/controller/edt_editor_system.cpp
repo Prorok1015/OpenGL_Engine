@@ -56,6 +56,7 @@
 #include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
+#include "edt_mesh_shape_commands.h"
 #include "edt_migration_commands.h"
 #include "edt_migration_window_model.h"
 #include "edt_migration_panel.h"
@@ -787,6 +788,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
 		}
+	}
+	// #746: parametric shapes (shape.create, shape.rebuild) as .poly.desc + .geom.desc files of res/.
+	for (auto& command : mesh::register_shape_commands(m_context->actions().commands(), { m_res, desc_system, desc_layout(), &m_context->events() })) {
+		m_registrations.push_back(std::move(command));
 	}
 	// EPIC-58 S7 (#759): project.migration_plan and project.migrate (in place, on the main thread). Refused while Play, a load,
 	// a build or a module reload, an import, the export dialog or a git write runs (busy), and with an uncommitted edit or

@@ -1,7 +1,6 @@
 #include "edt_mesh_base_shapes.h"
+#include "edt_mesh_shape_asset.h"
 #include <snk/common/engine_assert.h>
-#include <snk/desc/desc_pretty_json.h>
-#include <boost/json.hpp>
 #include <array>
 
 namespace edt::mesh
@@ -52,20 +51,7 @@ namespace edt::mesh
 
 	std::string base_shape_file_text(const base_shape& shape)
 	{
-		json::object body;
-		bake_of(shape).geometry.serialize(body);
-
-		// The form of a repository desc (DescRepoRoundtripTests, desc_resave --check): the version right after the type, the
-		// file's own `bounds` kept, no `__parent`, the text of res::pretty_json_bytes.
-		json::object file;
-		for (auto& member : body) {
-			file.insert_or_assign(member.key(), std::move(member.value()));
-			if (member.key() == "__type") {
-				file.insert_or_assign("__version", base_shape_file_version);
-			}
-		}
-		const std::vector<std::byte> bytes = desc::pretty_json_bytes(json::value(std::move(file)));
-		return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		return geometry_file_text(bake_of(shape).geometry);
 	}
 
 	material_range base_shape_range(const base_shape& shape)

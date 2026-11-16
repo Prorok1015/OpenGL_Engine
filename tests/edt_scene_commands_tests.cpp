@@ -147,7 +147,7 @@ struct commands_fixture : test_util::scene_env
 };
 
 const std::vector<const char*> all_commands = { "scene.node.create", "scene.node.delete", "scene.node.duplicate",
-	"scene.node.reparent", "scene.node.rename", "component.add", "component.remove", "component.set", "transform.set" };
+	"scene.node.reparent", "scene.node.rename", "component.add", "component.remove", "component.set", "transform.set", "shape.add_base" };
 
 }
 
@@ -601,6 +601,40 @@ BOOST_AUTO_TEST_CASE(a_create_with_one_bad_component_creates_nothing)
 	BOOST_TEST(created.code == cmd::codes::invalid_args);
 	BOOST_TEST(root().children.size() == 3u);
 	BOOST_TEST(!scene.history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(shape_add_base_creates_a_node_with_the_mesh_of_a_ready_made_shape_and_its_scale)
+{
+	const auto created = call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"box","scale":[2.0,3.0,4.0]})");
+	BOOST_REQUIRE_MESSAGE(created.ok, created.error);
+	const auto& path = created.value.at("ref").as_object().at("path").as_array();
+	BOOST_REQUIRE(path.size() == 1u);
+	const prefab_node* node = child(root(), *desc::parse_node_id(std::string_view(path[0].as_string())));
+	BOOST_REQUIRE(node != nullptr);
+	BOOST_TEST(node->name == "box");
+	BOOST_TEST(node->has_transform);
+	BOOST_TEST(node->scale == glm::vec3(2.f, 3.f, 4.f));
+	const json::object& mesh = node->components.at("mesh").overrides;
+	BOOST_TEST(node->components.at("mesh").type_name == "mesh_node_desc");
+	BOOST_TEST(std::string(mesh.at("geometry").as_string()) == "res://shapes/box.geom.desc");
+	BOOST_TEST(mesh.at("vx_begin").to_number<int>() == 0);
+	BOOST_TEST(mesh.at("vx_end").to_number<int>() == 24);
+	BOOST_TEST(mesh.at("ind_end").to_number<int>() == 36);
+	BOOST_TEST(last_record().label == "Add shape");
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(root().children.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(shape_add_base_refuses_an_unknown_shape_a_bad_scale_and_a_bad_parent_and_changes_nothing)
+{
+	const auto before = scene.generation();
+	const auto unknown = call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"torus"})");
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_TEST(unknown.error.find("capsule_m") != std::string::npos);
+	BOOST_TEST(call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"box","scale":[1.0,2.0]})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("shape.add_base", R"({"parent":)" + ref({ "00000000000000ff" }) + R"(,"shape":"box"})").code == cmd::codes::not_found);
+	BOOST_TEST(scene.generation() == before);
+	BOOST_TEST(root().children.size() == 3u);
 }
 
 BOOST_AUTO_TEST_CASE(copies_get_free_names_and_moves_stay_in_their_world)

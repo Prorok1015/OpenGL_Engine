@@ -1,4 +1,5 @@
 #include "edt_scene_commands.h"
+#include "edt_mesh_base_shapes.h"
 #include "edt_override_edit.h"
 #include "edt_reference.h"
 #include "edt_scene_document.h"
@@ -601,47 +602,93 @@ namespace {
 
 	// ---- scene.node.* -----------------------------------------------------------------------------------------
 
+	using changing_fn = std::function<void()>;
+
+	// The node scene.node.create and shape.add_base make: `scale` (when given) is the node's own transform.
+	cmd::result create_node(context& ctx, const cmd::call& call, edt::scene_document& scene, const json::object& args, json::object& out,
+		const changing_fn& changing, const std::optional<glm::vec3>& scale)
+	{
+		mutable_location parent;
+		cmd::result error;
+		if (!ctx.locate(scene, args.at("parent"), parent, error)) return error;
+		if (auto bad = context::own_node(parent)) return *bad;
+
+		prefab_node node;
+		node.node_id = desc::new_node_id();
+		const json::value* name = args.if_contains("name");
+		node.name = name ? std::string(name->as_string()) : std::string("Entity");
+		if (auto bad = check_name(node.name)) return *bad;
+		if (scale) {
+			node.scale = *scale;
+			node.has_transform = true;
+		}
+		reference_scope scope = ctx.references_for(call);
+		if (const json::value* components = args.if_contains("components")) {
+			for (const auto& [key, spec] : components->as_object()) {
+				if (auto bad = check_component_key(key)) return *bad;
+				const json::object* object = spec.if_object();
+				const json::value* type = object ? object->if_contains("type") : nullptr;
+				const json::value* fields = object ? object->if_contains("fields") : nullptr;
+				if (!type || !type->is_string() || (fields && !fields->is_object())) {
+					return failure(cmd::codes::invalid_args, std::format("component '{}' is {{type: string, fields?: object}}", std::string_view(key)));
+				}
+				scn::prefab_desc::prefab_comp_node component;
+				if (auto bad = ctx.make_component(std::string(type->as_string()),
+						fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), scope, component)) {
+					return *bad;
+				}
+				node.components[std::string(key)] = std::move(component);
+			}
+		}
+		if (auto busy = held_back(scope)) return *busy;
+
+		const std::uint64_t id = node.node_id;
+		changing();
+		auto& children = parent.owner->children;
+		children.insert(children.begin() + static_cast<std::ptrdiff_t>(index_arg(args, children.size())), std::move(node));
+		std::vector<std::uint64_t> path = parent.path;
+		path.push_back(id);
+		out["ref"] = ref_json(parent.world_name, path);
+		return cmd::result::success();
+	}
+
 	cmd::result node_create(context& ctx, const cmd::call& call)
 	{
 		return ctx.run(call, "Create node", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
-			mutable_location parent;
-			cmd::result error;
-			if (!ctx.locate(scene, args.at("parent"), parent, error)) return error;
-			if (auto bad = context::own_node(parent)) return *bad;
+			return create_node(ctx, call, scene, args, out, changing, std::nullopt);
+		});
+	}
 
-			prefab_node node;
-			node.node_id = desc::new_node_id();
-			const json::value* name = args.if_contains("name");
-			node.name = name ? std::string(name->as_string()) : std::string("Entity");
-			if (auto bad = check_name(node.name)) return *bad;
-			reference_scope scope = ctx.references_for(call);
-			if (const json::value* components = args.if_contains("components")) {
-				for (const auto& [key, spec] : components->as_object()) {
-					if (auto bad = check_component_key(key)) return *bad;
-					const json::object* object = spec.if_object();
-					const json::value* type = object ? object->if_contains("type") : nullptr;
-					const json::value* fields = object ? object->if_contains("fields") : nullptr;
-					if (!type || !type->is_string() || (fields && !fields->is_object())) {
-						return failure(cmd::codes::invalid_args, std::format("component '{}' is {{type: string, fields?: object}}", std::string_view(key)));
-					}
-					scn::prefab_desc::prefab_comp_node component;
-					if (auto bad = ctx.make_component(std::string(type->as_string()),
-							fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), scope, component)) {
-						return *bad;
-					}
-					node.components[std::string(key)] = std::move(component);
+	// A node with a mesh of one of the ready-made shapes (#746): the same creation as scene.node.create, with the mesh node's range
+	// and the scale of the node filled in.
+	cmd::result shape_add_base(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Add shape", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			const std::string shape_name(args.at("shape").as_string());
+			const edt::mesh::base_shape* shape = edt::mesh::find_base_shape(shape_name);
+			if (!shape) {
+				std::string known;
+				for (const edt::mesh::base_shape& each : edt::mesh::base_shapes()) {
+					known += (known.empty() ? "" : ", ") + std::string(each.name);
 				}
+				return failure(cmd::codes::invalid_args, std::format("no base shape '{}': {}", shape_name.substr(0, 64), known));
 			}
-			if (auto busy = held_back(scope)) return *busy;
+			std::optional<glm::vec3> scale;
+			if (const json::value* given = args.if_contains("scale")) {
+				scale = vec3_of(given);
+				if (!scale) return failure(cmd::codes::invalid_args, "scale is [x, y, z]");
+			}
+			const edt::mesh::material_range range = edt::mesh::base_shape_range(*shape);
+			json::object fields{ { "geometry", edt::mesh::base_shape_path(*shape) }, { "vx_begin", std::uint64_t{ range.vx_begin } }, { "vx_end", std::uint64_t{ range.vx_end } },
+				{ "ind_begin", std::uint64_t{ range.ind_begin } }, { "ind_end", std::uint64_t{ range.ind_end } } };
+			if (const json::value* material = args.if_contains("material")) fields["material"] = *material;
 
-			const std::uint64_t id = node.node_id;
-			changing();
-			auto& children = parent.owner->children;
-			children.insert(children.begin() + static_cast<std::ptrdiff_t>(index_arg(args, children.size())), std::move(node));
-			std::vector<std::uint64_t> path = parent.path;
-			path.push_back(id);
-			out["ref"] = ref_json(parent.world_name, path);
-			return cmd::result::success();
+			json::object made;
+			made["parent"] = args.at("parent");
+			made["name"] = args.if_contains("name") ? args.at("name") : json::value(shape_name);
+			if (const json::value* index = args.if_contains("index")) made["index"] = *index;
+			made["components"] = json::object{ { "mesh", json::object{ { "type", "mesh_node_desc" }, { "fields", std::move(fields) } } } };
+			return create_node(ctx, call, scene, made, out, changing, scale);
 		});
 	}
 
@@ -1092,6 +1139,11 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 			"components":{"type":"object","description":"{key: {type: desc type, fields?: object}}"})",
 			R"("parent")"),
 		ref_result, &node_create);
+	add("shape.add_base", "Create a node under `parent` with a mesh of a ready-made unit shape (box, plane, sphere, cylinder, capsule_s, capsule_m, capsule_l: "
+			"res://shapes/<shape>.geom.desc) and `scale` as its size; the same creation as scene.node.create",
+		args_with(std::string(R"("parent":@REF@,"shape":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"scale":{"type":"array","items":{"type":"number"}},)")
+			+ std::string(R"("material":{"type":"string","description":"a material desc tag, res://..."},)") + std::string(index_arg_schema), R"("parent","shape")"),
+		ref_result, &shape_add_base);
 	add("scene.node.delete", "Delete a node with everything under it", args_with(R"("ref":@REF@)", R"("ref")"), generation_result, &node_delete);
 	add("scene.node.duplicate", "Copy a node with everything under it right after it; the copy gets new ids",
 		args_with(R"("ref":@REF@)", R"("ref")"), ref_result, &node_duplicate);

@@ -301,6 +301,21 @@ namespace edt::mesh
 		out.generator = std::move(generator);
 	}
 
+	json::object shape_params_to_json(const shape_params& params)
+	{
+		return params_to_json(params);
+	}
+
+	std::optional<shape_params> shape_params_from_json(std::string_view kind, const json::object& params, std::string& error)
+	{
+		try {
+			return params_from_json(kind, params, "params");
+		} catch (const std::exception& failure) {
+			error = failure.what();
+			return std::nullopt;
+		}
+	}
+
 	json::object poly_mesh_to_json(const poly_mesh_desc& source)
 	{
 		json::object out;
