@@ -491,7 +491,7 @@ BOOST_AUTO_TEST_CASE(RunHelper_Talks)
 	std::_Exit(7);
 }
 
-// Does nothing in a normal run; with --plt-late-marker it says "grandchild ready" and writes the marker 3 s later.
+// Does nothing in a normal run; with --plt-late-marker it says "grandchild ready" and writes the marker 2 s later.
 BOOST_AUTO_TEST_CASE(RunHelper_WritesTheMarkerLate)
 {
 	const std::string marker = argument_after(k_late_marker_flag);
@@ -499,7 +499,7 @@ BOOST_AUTO_TEST_CASE(RunHelper_WritesTheMarkerLate)
 		return;
 	}
 	print_line(stdout, "grandchild ready");
-	std::this_thread::sleep_for(std::chrono::seconds{ 3 });
+	std::this_thread::sleep_for(std::chrono::seconds{ 2 });
 	write_marker(path_of_utf8(marker), "late");
 }
 
@@ -711,8 +711,8 @@ BOOST_AUTO_TEST_CASE(RunProcess_StopEndsTheWholeProcessTree)
 	BOOST_TEST(grandchild_ready);
 	BOOST_TEST(result.cancelled);
 	BOOST_TEST(!result);
-	// A grandchild that survived writes its marker 3 s after it was ready.
-	std::this_thread::sleep_for(std::chrono::seconds{ 6 });
+	// A grandchild that survived writes its marker 2 s after it was ready; the stop reaches it well before (#977).
+	std::this_thread::sleep_for(std::chrono::milliseconds{ 3500 });
 	BOOST_TEST(!fs::exists(marker));
 }
 
