@@ -13,6 +13,9 @@ namespace {
 
 constexpr std::size_t k_max_items = 1u << 20;
 constexpr std::size_t k_max_name_bytes = 1024;
+// mdl::k_max_missing_textures and k_max_missing_texture_name_bytes: an answer listing more is not the importer's.
+constexpr std::size_t k_max_missing_textures = 256;
+constexpr std::size_t k_max_missing_not_listed = 1u << 20;
 
 std::optional<std::uint64_t> u64_from(const json::value* value)
 {
@@ -259,6 +262,7 @@ json::object edt::to_json(const import_intermediate& imported)
 	out["prefab_json"] = imported.prefab_json;
 	out["skin_weights"] = std::move(weights);
 	out["missing_textures"] = strings_to(imported.missing_textures);
+	out["missing_textures_not_listed"] = imported.missing_textures_not_listed;
 	out["error"] = imported.error;
 	return out;
 }
@@ -295,8 +299,19 @@ std::optional<edt::import_intermediate> edt::import_intermediate_from_json(const
 	// Names as the model wrote them, shown to the person: only what the import says it could not load.
 	if (const json::value* missing = object.if_contains("missing_textures")) {
 		const auto names = strings_from(missing);
-		if (!names) return std::nullopt;
+		if (!names || names->size() > k_max_missing_textures) return std::nullopt;
+		for (const std::string& name : *names) {
+			if (!fits_name(name, 1)) return std::nullopt;
+		}
 		out.missing_textures = *names;
+	}
+	if (const json::value* not_listed = object.if_contains("missing_textures_not_listed")) {
+		std::uint64_t count = 0;
+		if (not_listed->is_uint64()) count = not_listed->as_uint64();
+		else if (not_listed->is_int64() && not_listed->as_int64() >= 0) count = static_cast<std::uint64_t>(not_listed->as_int64());
+		else return std::nullopt;
+		if (count > k_max_missing_not_listed) return std::nullopt;
+		out.missing_textures_not_listed = static_cast<std::size_t>(count);
 	}
 	for (const json::value& row : weights->as_array()) {
 		if (!row.is_array() || row.as_array().size() > k_max_items) return std::nullopt;

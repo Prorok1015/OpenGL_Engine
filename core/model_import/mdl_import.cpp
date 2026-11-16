@@ -315,9 +315,25 @@ private:
 	// Once per name: a glTF material names one texture as diffuse and as base color.
 	void missing_texture(std::string_view name, std::string_view why)
 	{
-		if (std::find(m_out.missing_textures.begin(), m_out.missing_textures.end(), name) != m_out.missing_textures.end()) return;
-		egLOG_WARN(k_log, "model '{}': texture '{}' {}: no sampler for it", m_options.display_name, name, why);
-		m_out.missing_textures.emplace_back(name);
+		std::string listed = cut_on_code_point(name, mdl::k_max_missing_texture_name_bytes);
+		if (!m_missing_seen.insert(listed).second) return;
+		if (m_out.missing_textures.size() >= mdl::k_max_missing_textures) {
+			if (m_out.missing_textures_not_listed++ == 0) {
+				egLOG_WARN(k_log, "model '{}': more than {} textures were not loaded: the rest is not listed",
+					m_options.display_name, mdl::k_max_missing_textures);
+			}
+			return;
+		}
+		egLOG_WARN(k_log, "model '{}': texture '{}' {}: no sampler for it", m_options.display_name, listed, why);
+		m_out.missing_textures.push_back(std::move(listed));
+	}
+
+	static std::string cut_on_code_point(std::string_view text, std::size_t max_bytes)
+	{
+		if (text.size() <= max_bytes) return std::string(text);
+		std::size_t cut = max_bytes;
+		while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+		return std::string(text.substr(0, cut));
 	}
 
 	json::value embedded_texture(const aiTexture& texture)
@@ -744,6 +760,7 @@ private:
 	std::unordered_map<std::string, int> m_bone_index;
 	std::unordered_set<std::string> m_animated;
 	std::unordered_set<res::tag> m_referred;
+	std::unordered_set<std::string> m_missing_seen;
 };
 
 }

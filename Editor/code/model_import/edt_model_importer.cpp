@@ -290,6 +290,7 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	}
 	im.skin_weights = std::move(imported.skin_weights);
 	im.missing_textures = std::move(imported.missing_textures);
+	im.missing_textures_not_listed = imported.missing_textures_not_listed;
 
 	egLOG("edt/import", "Background import done: '{}' → {} memory resources", display_name_of(abs_path), im.all_tags.size());
 	for (const auto& t : im.all_tags) {

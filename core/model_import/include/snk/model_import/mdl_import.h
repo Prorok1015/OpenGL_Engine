@@ -15,6 +15,11 @@
 // editor's import (in the decoder process) both call it, each with its own files, its own place to write and its names.
 namespace mdl
 {
+	// A model can name any number of textures it does not ship: the import lists this many, and cuts each name to
+	// this many bytes (on a code point), so the answer of the decoder stays small (edt_decode_codec takes the same limits).
+	inline constexpr std::size_t k_max_missing_textures = 256;
+	inline constexpr std::size_t k_max_missing_texture_name_bytes = 1024;
+
 	// A file the model names, opened for assimp.
 	struct opened_file
 	{
@@ -112,8 +117,10 @@ namespace mdl
 		std::vector<res::tag> tags;
 		// result[vertex] = [bone indices..., weights as uint32...] (what skin_weights_desc holds).
 		std::vector<std::vector<std::uint32_t>> skin_weights;
-		// External textures as the model names them that were not loaded: the material has no sampler for them.
+		// External textures as the model names them that were not loaded: the material has no sampler for them. At most
+		// k_max_missing_textures, each cut to k_max_missing_texture_name_bytes; the rest only counted.
 		std::vector<std::string> missing_textures;
+		std::size_t missing_textures_not_listed = 0;
 		failure failed = failure::none;
 		// Empty: the import succeeded.
 		std::string error;
