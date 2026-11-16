@@ -296,9 +296,9 @@ private:
 		if (json::value* components = root.if_contains("components"); components && components->is_object()) {
 			components->as_object()[key] = std::move(component);
 		} else {
-			json::object components;
-			components[key] = std::move(component);
-			root["components"] = std::move(components);
+			json::object created;
+			created[key] = std::move(component);
+			root["components"] = std::move(created);
 		}
 	}
 
