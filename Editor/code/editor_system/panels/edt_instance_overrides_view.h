@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_override_edit.h"
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <functional>
 #include <string>
@@ -19,8 +20,8 @@ namespace edt
 
 	// What the Inspector shows of an instance node (a node that instantiates a prefab, or has override records): the prefab it
 	// instantiates with "Edit Prefab", and its override records (#149), each with "Revert" (the field is the prefab's again).
-	// A record in `stale` (find_stale_records of `node`; null: none known) is greyed with the reason and says "Remove"; "Clear stale
+	// A record in `stale` (view_cache::stale of `node`: a node, component or field the prefab no longer has; null: none known) is greyed with the reason and says "Remove"; "Clear stale
 	// overrides" drops them all. "Revert All" drops every record. Returns true when `node.overrides` changed; the caller commits.
-	bool draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<scn::stale_override>* stale,
+	bool draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<override_edit::stale_record>* stale,
 		const instance_overrides_hooks& hooks);
 }

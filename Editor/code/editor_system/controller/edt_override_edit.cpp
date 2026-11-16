@@ -1,4 +1,6 @@
 #include "edt_override_edit.h"
+#include <format>
+#include <snk/desc/desc_schema_ops.h>
 #include "edt_reference.h"
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/common/logger/engine_log.h>
@@ -394,13 +396,40 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	return value;
 }
 
-std::shared_ptr<const std::vector<scn::stale_override>> edt::override_edit::view_cache::stale(const prefab_node& owner)
+std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::override_edit::view_cache::stale(const prefab_node& owner)
 {
 	sync_generation();
 	for (const auto& e : m_stale) {
 		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id) return e.value;
 	}
-	auto value = std::make_shared<const std::vector<scn::stale_override>>(scn::find_stale_records(*m_services.assembler(), owner));
+	std::vector<stale_record> found;
+	std::vector<bool> known(owner.overrides.size(), false);
+	for (const scn::stale_override& entry : scn::find_stale_records(*m_services.assembler(), owner)) {
+		found.push_back({ entry.index, entry.what });
+		if (entry.index < known.size()) known[entry.index] = true;
+	}
+	if (const desc::desc_system* descs = m_services.descs()) {
+		for (std::size_t i = 0; i < owner.overrides.size(); ++i) {
+			const scn::override_record& record = owner.overrides[i];
+			if (known[i] || record.op != scn::override_op::set || record.path.empty()
+				|| record.component.empty() || record.component == scn::transform_pseudo_component) continue;
+			const auto composed = base(owner, record.target);
+			if (!composed->has_value()) continue;
+			const auto comp = (*composed)->components.find(record.component);
+			if (comp == (*composed)->components.end()) continue;
+			std::string type = comp->second.type_name;
+			if (type.empty() && comp->second.parent_desc.is_valid() && comp->second.parent_desc.is_ready()) {
+				type = std::string(comp->second.parent_desc->get_type());
+			}
+			const desc::type_schema* schema = type.empty() ? nullptr : descs->find_schema(type);
+			if (!schema || schema->fields.empty()) continue;
+			if (desc::validate_override(*schema, desc::json_change{ record.path, record.value }, &descs->schemas()) == desc::override_status::stale) {
+				found.push_back({ i, std::format("field {} is not in component '{}' any more", record.path, record.component) });
+			}
+		}
+	}
+	std::ranges::sort(found, {}, &stale_record::index);
+	auto value = std::make_shared<const std::vector<stale_record>>(std::move(found));
 	m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, value });
 	return value;
 }

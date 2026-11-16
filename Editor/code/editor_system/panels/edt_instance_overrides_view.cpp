@@ -55,7 +55,7 @@ std::string edt::describe_override_record(const scn::override_record& record)
 	return std::format("{}{} {} = {}", prefix, record.component, record.path.empty() ? std::string{ "(whole)" } : record.path, value_text(record.value));
 }
 
-bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<scn::stale_override>* stale,
+bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<override_edit::stale_record>* stale,
 	const instance_overrides_hooks& hooks)
 {
 	const scn::prefab_desc* prefab = override_edit::referenced_prefab(node);
@@ -76,9 +76,9 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 		return false;
 	}
 
-	std::vector<const scn::stale_override*> stale_at(node.overrides.size(), nullptr);
+	std::vector<const override_edit::stale_record*> stale_at(node.overrides.size(), nullptr);
 	if (stale) {
-		for (const scn::stale_override& entry : *stale) {
+		for (const override_edit::stale_record& entry : *stale) {
 			if (entry.index < stale_at.size()) stale_at[entry.index] = &entry;
 		}
 	}
@@ -90,7 +90,7 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 	std::optional<std::size_t> remove_index;
 	for (std::size_t i = 0; i < node.overrides.size(); ++i) {
 		ImGui::PushID(static_cast<int>(i));
-		const scn::stale_override* gone = stale_at[i];
+		const override_edit::stale_record* gone = stale_at[i];
 		const std::string text = edt::describe_override_record(node.overrides[i]);
 		if (gone) {
 			ImGui::TextDisabled("%s", text.c_str());
