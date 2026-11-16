@@ -3,7 +3,9 @@
 #include "edt_decoder_sandbox.h"
 #include "edt_model_file_access.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#if SNK_HAS_ASSIMP
 #include <snk/model_import/mdl_import.h>
+#endif
 #include <boost/json/object.hpp>
 #include <chrono>
 #include <cstddef>
@@ -54,6 +56,7 @@ namespace edt {
 	// that failed while a side file was missing is not an error: the editor hands the file over and asks again.
 	scan_requests list_model_requests(const import_source& source, ds::task_context* ctx = nullptr);
 
+#if SNK_HAS_ASSIMP
 	// mdl::import_model (assimp) of `source` into `sink`, under memory://<memory_folder>: textures, materials and the
 	// geometry as it goes, the prefab last. `stamp` (empty: none) is given the prefab's JSON before it is stored, so the
 	// desc system that will read it stamps its versions; the decoder process has none and stores it unstamped, the editor
@@ -63,5 +66,6 @@ namespace edt {
 	// that list fails the import; with `source.provided` set, a side file it was not given does.
 	import_intermediate import_model_into(const import_source& source, mdl::import_sink& sink, ds::task_context* ctx = nullptr,
 		const std::function<void(boost::json::object&)>& stamp = {});
+#endif
 
 } // namespace edt
