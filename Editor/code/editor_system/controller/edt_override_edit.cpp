@@ -8,6 +8,7 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_override_record.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_scene_document.h"
@@ -372,15 +373,35 @@ void edt::override_edit::view_cache::sync_generation()
 	m_generation = m_state.desc_generation;
 }
 
+std::shared_ptr<const void> edt::override_edit::view_cache::source_of(const prefab_node& owner) const
+{
+	const scn::prefab_desc* prefab = referenced_prefab(owner);
+	res::resource_system* resources = m_services.resources();
+	if (!prefab || !resources) return {};
+	return resources->require<scn::prefab_desc>(prefab->get_tag()).get_control_block();
+}
+
+template<typename T>
+const edt::override_edit::view_cache::entry<T>* edt::override_edit::view_cache::find_entry(std::vector<entry<T>>& entries, int world,
+	uint64_t owner_id, std::span<const uint64_t> target, const std::shared_ptr<const void>& source)
+{
+	for (auto it = entries.begin(); it != entries.end(); ++it) {
+		if (it->world != world || it->owner_id != owner_id || !std::ranges::equal(it->target, target)) continue;
+		if (it->source == source) return &*it;
+		entries.erase(it);
+		break;
+	}
+	return nullptr;
+}
+
 std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::override_edit::view_cache::base(
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
 	sync_generation();
-	for (const auto& e : m_bases) {
-		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
-	}
+	const auto source = source_of(owner);
+	if (const auto* found = find_entry(m_bases, m_state.active_world_idx, owner.node_id, target, source)) return found->value;
 	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(*m_services.assembler(), owner, target, active_file()));
-	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value, source });
 	return value;
 }
 
@@ -388,24 +409,22 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
 	sync_generation();
-	for (const auto& e : m_children) {
-		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
-	}
+	const auto source = source_of(owner);
+	if (const auto* found = find_entry(m_children, m_state.active_world_idx, owner.node_id, target, source)) return found->value;
 	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target, active_file()));
-	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value, source });
 	return value;
 }
 
 std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::override_edit::view_cache::stale(const prefab_node& owner)
 {
 	sync_generation();
-	for (const auto& e : m_stale) {
-		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id) return e.value;
-	}
+	const auto source = source_of(owner);
+	if (const auto* found = find_entry(m_stale, m_state.active_world_idx, owner.node_id, {}, source)) return found->value;
 	std::vector<stale_record> found;
 	if (!referenced_prefab(owner)) {
 		auto none = std::make_shared<const std::vector<stale_record>>();
-		m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, none });
+		m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, none, source });
 		return none;
 	}
 	std::vector<bool> known(owner.overrides.size(), false);
@@ -437,7 +456,7 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 	}
 	std::ranges::sort(found, {}, &stale_record::index);
 	auto value = std::make_shared<const std::vector<stale_record>>(std::move(found));
-	m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, value });
+	m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, value, source });
 	return value;
 }
 

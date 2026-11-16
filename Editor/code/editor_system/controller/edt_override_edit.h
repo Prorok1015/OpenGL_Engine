@@ -74,7 +74,16 @@ namespace edt::override_edit
 			uint64_t owner_id;
 			std::vector<uint64_t> target;
 			std::shared_ptr<const T> value;
+			// What the owner's prefab was when the value was made (source_of): another one, and the value is made again.
+			std::shared_ptr<const void> source;
 		};
+
+		// The block the resource system holds for the prefab `owner` instantiates now: a changed prefab file is another block, while
+		// the handle the owner's component keeps stays the old one. Null when the owner instantiates nothing.
+		std::shared_ptr<const void> source_of(const prefab_node& owner) const;
+		template<typename T>
+		static const entry<T>* find_entry(std::vector<entry<T>>& entries, int world, uint64_t owner_id, std::span<const uint64_t> target,
+			const std::shared_ptr<const void>& source);
 
 		void sync_generation();
 		// The owners are nodes of the active world: its file is theirs (#993).

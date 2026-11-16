@@ -708,6 +708,22 @@ BOOST_AUTO_TEST_CASE(a_node_that_instantiates_no_prefab_has_no_stale_records)
 	BOOST_TEST(cache.stale(*child(root(), 0xa4))->empty());
 }
 
+BOOST_AUTO_TEST_CASE(a_record_turns_stale_when_the_prefab_file_changes_under_an_unchanged_level)
+{
+	auto& inst = const_cast<prefab_node&>(*child(root(), 0xe1));
+	inst.overrides.push_back(scn::override_record{ .target = { 0xc1 }, .component = "camera_desc", .path = "/fov", .value = 55 });
+	edt::override_edit::view_cache cache(services, scene);
+	BOOST_REQUIRE(cache.stale(inst)->empty());
+
+	rs->store(rig, test_util::to_bytes(R"({"__type":"prefab_desc","__version":4,"children":[]})"));
+	rs->signal_changed(rig);
+	pump();
+
+	const auto stale = cache.stale(inst);
+	BOOST_REQUIRE(stale->size() == 1u);
+	BOOST_TEST(stale->front().index == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(a_script_is_not_held_back_by_a_gesture)
 {
 	gesture = true;
