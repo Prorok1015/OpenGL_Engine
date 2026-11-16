@@ -560,9 +560,12 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	}
 
 	PROCESS_INFORMATION process{};
+	// A confined child gets no console at all: an AppContainer process that attaches one ends with STATUS_DLL_INIT_FAILED
+	// before its main (#1054: even cmd.exe, whatever the mitigations); its stdio are the pipes either way.
+	const DWORD console = confinement != nullptr ? DETACHED_PROCESS : CREATE_NO_WINDOW;
 	const auto start = [&] {
 		return CreateProcessW(resolved.c_str(), command_line.data(), nullptr, nullptr, TRUE,
-			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
+			CREATE_SUSPENDED | console | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
 				| static_cast<DWORD>(options.low_priority ? BELOW_NORMAL_PRIORITY_CLASS : 0),
 			options.environment ? environment.data() : nullptr,
 			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process);
