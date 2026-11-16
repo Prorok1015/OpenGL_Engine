@@ -55,7 +55,8 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - **Frozen by size (#922):** engine components, the ctx types and events a module reads (`scn::delta_time`, `inp::action_state`, `inp::action_event`...), channel types and structs passed by value are in the key too: a new field changes the key. Element types of public containers inside listed structs are in the key as well (a container's size does not show its element's). A new engine component = register it and add it to `scn_engine_component_list.h` (the `EngineComponentCatalog` test fails otherwise)
 - **Accessors are exports (#922 PR 3):** an accessor of an engine service is an exported function, not inline; inline/template code in `scn_scene_layer.h`, `gs_input_actions.h`, `ds_store.hpp` touches no `m_` member (`AbiInlineBoundaryTests`)
 - **Why:** a `game.dll` allocates those types itself; the host refuses a module with another layout key (#614), but modules older than 3.6 carry no key
-- **Ref:** `docs/roadmap/design/MODULE_LAYER.md` (Ключ раскладки модуля), comment above `SNK_MODULE_API_VERSION`
+- **Record every ABI change in its own file (#1056):** `docs/abi/changes/<issue>.md` (format: its `README.md`), never a line above `SNK_MODULE_API_VERSION` or next to `layout_revision`; a new `layout_revision` is named in it as `layout_revision <N>`. `tools/ci/check_abi_changes.py` in the CI job Plan fails a change of `layout_revision`, an API version, the pins or a new `SNK_API` line in an `include/` header that adds none. The history up to #1056 is `docs/abi/HISTORY.md`
+- **Ref:** `docs/roadmap/design/MODULE_LAYER.md` (Ключ раскладки модуля), the rule above `SNK_MODULE_API_VERSION`, `docs/abi/`
 
 ### Never bypass resource cache
 - **Use:** get `res::resource_system&` by injection (constructor parameter / `app_data_storage` in composition code), then `.require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
