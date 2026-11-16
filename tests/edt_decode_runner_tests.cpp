@@ -337,6 +337,82 @@ BOOST_AUTO_TEST_CASE(AChildWithASecondThreadBeforeItsSandbox_RefusesToRun_EvenIn
 	BOOST_CHECK_EQUAL(threaded.exit_code, edt::k_decoder_sandbox_exit_code);
 	BOOST_CHECK_MESSAGE(threaded.err.find("threads") != std::string::npos, threaded.err);
 }
+
+namespace {
+
+// #1082: one call the sandbox must refuse, run by the child once it is sandboxed.
+probe_result run_call(const fs::path& scratch, const char* sandbox, const char* call, const fs::path& path = {})
+{
+	std::vector<std::string> arguments{ "--sandbox", sandbox, "--self-test-call", call };
+	if (!path.empty()) arguments.insert(arguments.end(), { "--self-test-path", path.string() });
+	return run_probe(scratch, std::move(arguments));
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotWriteOutsideItsFolder)
+{
+	if (test_util::skipped_without_landlock()) return;
+	const fs::path scratch = dir.path() / "scratch";
+	const fs::path outside = dir.path() / "written_outside.txt";
+	const auto refused = run_call(scratch, "required", "write", outside);
+	BOOST_CHECK_MESSAGE(refused.exit_code == 0, "write outside: " << refused.exit_code << " " << refused.err);
+	BOOST_CHECK(!fs::exists(outside));
+	// The probe itself works: its own folder takes the file.
+	const auto written = run_call(scratch, "required", "write", scratch / "written_inside.txt");
+	BOOST_CHECK_MESSAGE(written.exit_code == 5, "write inside: " << written.exit_code << " " << written.err);
+}
+
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotTruncateOrChmodAFileOutsideItsFolder)
+{
+	if (test_util::skipped_without_landlock()) return;
+	const fs::path scratch = dir.path() / "scratch";
+	// The probes work where nothing stops them; they are tried on a file of their own, not on the one guarded below.
+	const fs::path control = dir.write("control.txt", "x");
+	const auto truncated = run_call(scratch, "off", "truncate", control);
+	BOOST_CHECK_MESSAGE(truncated.exit_code == 5, "truncate, off: " << truncated.exit_code << " " << truncated.err);
+	const auto chmodded = run_call(scratch, "off", "chmod", control);
+	BOOST_CHECK_MESSAGE(chmodded.exit_code == 5, "chmod, off: " << chmodded.exit_code << " " << chmodded.err);
+
+	const fs::path victim = dir.write("victim.txt", "keep me");
+	const fs::perms before = fs::status(victim).permissions();
+	// Landlock refuses a truncate from ABI 3; the filter refuses truncate(2) whatever the ABI.
+	if (test_util::k_decoder_has_syscall_filter || test_util::landlock_abi() >= 3) {
+		const auto refused = run_call(scratch, "required", "truncate", victim);
+		BOOST_CHECK_MESSAGE(refused.exit_code == 0, "truncate: " << refused.exit_code << " " << refused.err);
+		BOOST_CHECK_EQUAL(fs::file_size(victim), 7u);
+	}
+	// Landlock does not cover chmod: only the filter refuses it.
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("chmod skipped: a sanitizer build has no system call filter");
+		return;
+	}
+	const auto refused = run_call(scratch, "required", "chmod", victim);
+	BOOST_CHECK_MESSAGE(refused.exit_code == 0, "chmod: " << refused.exit_code << " " << refused.err);
+	BOOST_CHECK((fs::status(victim).permissions() == before));
+}
+
+// io_uring, ptrace and a new process are refused by the filter alone (Landlock has no say in them).
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotUseIoUring_PtraceOrStartAProcess)
+{
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("skipped: a sanitizer build has no system call filter");
+		return;
+	}
+	const fs::path scratch = dir.path() / "scratch";
+	for (const char* call : { "io_uring", "ptrace", "fork" }) {
+		BOOST_TEST_CONTEXT(call) {
+			const auto unsandboxed = run_call(scratch, "off", call);
+			if (unsandboxed.exit_code != 5) {
+				// The system already refuses it (io_uring off by sysctl, a container profile): nothing left to show.
+				BOOST_TEST_MESSAGE(call << " is refused without the sandbox too (" << unsandboxed.exit_code << ")");
+				continue;
+			}
+			const auto sandboxed = run_call(scratch, "best_effort", call);
+			BOOST_CHECK_MESSAGE(sandboxed.exit_code == 0, call << ": " << sandboxed.exit_code << " " << sandboxed.err);
+		}
+	}
+}
 #endif
 
 // The editor learns how the child is sandboxed from its first stderr line, written before it read the request.
