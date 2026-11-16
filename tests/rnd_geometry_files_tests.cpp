@@ -287,7 +287,7 @@ BOOST_AUTO_TEST_CASE(AGenericStoreOfAGeometry_IsRefused_AndWritesNothing)
 
 BOOST_AUTO_TEST_CASE(AGeometryWrittenAgain_IsDrawnByTheGeomManager_WithoutASignalOfTheCaller)
 {
-	const res::tag tag{ "geomfiles://a/redrawn.geom.desc" };
+	const res::tag tag{ "memory://geometry_files/redrawn.geom.desc" };
 	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, triangles(1)).empty());
 	rnd::geom_manager geometry(storage.require<rnd::render_system>().get_driver(), root());
 	const auto frame = [&] {
