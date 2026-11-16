@@ -64,7 +64,7 @@ namespace edt {
 	class play_component;
 	class editor_context;
 	class editor_layer;
-	class data_document_host;
+	class asset_open_component;
 	class model_importer;
 	class process_decoder;
 	class asset_exporter;
@@ -262,12 +262,8 @@ namespace edt {
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
 		std::unique_ptr<prefab_editor_component> m_prefab;
 
-		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
-		desc_file_layout desc_layout();
-		// The kinds of the asset registry first (a module's `.desc` kind, the prefab editor), then any `.desc` as a data
-		// document. `quiet`: a problem or a link, not a double click: a file that is no data document is a log line, no window.
-		bool open_asset(const res::tag& tag, bool quiet);
-		std::unique_ptr<data_document_host> m_data_documents;
+		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
+		std::unique_ptr<asset_open_component> m_asset_open;
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;
@@ -321,11 +317,6 @@ namespace edt {
 		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
 		bool poll_level_load(bool* loaded = nullptr);
 
-		// Async asset drop / export auto-add (US-24-5)
-		res::res_handle<desc::desc_base> m_pending_desc_handle;
-		res::tag m_pending_desc_tag;
-		std::string m_pending_desc_key;
-		bool poll_pending_desc();
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
 
