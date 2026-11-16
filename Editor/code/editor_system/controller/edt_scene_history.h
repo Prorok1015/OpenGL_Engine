@@ -1,5 +1,5 @@
 #pragma once
-#include <snk/editor/edt_document_history.h>
+#include "edt_document_history.h"
 #include <snk/scene/level/scn_world_desc.h>
 #include <cstddef>
 #include <cstdint>

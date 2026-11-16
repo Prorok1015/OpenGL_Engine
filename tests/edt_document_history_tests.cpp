@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include <snk/editor/edt_document_history.h>
+#include "edt_document_history.h"
 #include "edt_scene_document.h"
 #include "edt_scene_history.h"
 #include <snk/command/cmd_types.h>
