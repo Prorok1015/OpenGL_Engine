@@ -26,10 +26,15 @@ namespace {
 // Where the window layout (ImGui's ini) is loaded from and saved to; empty: it is not kept on disk, so a process writes no
 // file into the folder it was started from (#713). The editor sets a default in the user's folder (editor::apply_default_settings).
 CFG_VAR_DEF_PATH(cfg_gui_layout_file, "gui/layout_file", "");
-// The theme preset of the UI (#1109): a gui.theme desc. classic until the default changes to dark_neutral.
-CFG_VAR_DEF_STRING(cfg_gui_theme, "gui/theme", "engine://themes/classic.desc");
+// The theme preset of the UI (#1109): a gui.theme desc. Empty: dark_neutral, or the theme the editor's user picked.
+CFG_VAR_DEF_STRING(cfg_gui_theme, "gui/theme", "");
 
 constexpr std::string_view theme_type = "gui.theme";
+}
+
+bool engine::gui::theme_set_by_config()
+{
+	return !cfg_gui_theme->empty();
 }
 
 void engine::gui::register_gui_descs(desc::desc_system& descs)
@@ -107,9 +112,11 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 		auto& resources = data.require<res::resource_system>();
 		auto& themes = data.construct<::gui::theme_service>(resources, resources.engine_file("themes/classic.desc"),
 			[gl_backend_ptr](::gui::theme_service::theme theme) {
-				gl_backend_ptr->set_theme(theme.style, std::move(theme.text_font), std::move(theme.icon_font));
+				gl_backend_ptr->set_theme(theme.style, std::move(theme.text_font), std::move(theme.fallback_font),
+					std::move(theme.icon_font), theme.fonts_changed);
 			});
-		themes.select(res::tag{ *cfg_gui_theme });
+		themes.select(theme_set_by_config() ? res::tag{ *cfg_gui_theme }
+			: resources.engine_file("themes/dark_neutral.desc"));
 		gui_sys.push_layer(std::make_shared<::gui::theme_service::layer>(themes));
 	}
 }

@@ -109,41 +109,69 @@ std::optional<gui::theme_style> gui::theme_style_of(const theme_desc& preset, st
 }
 
 gui::theme_service::theme_service(res::resource_system& resources, res::tag fallback, apply_function apply,
-	std::vector<std::string> protocols)
+	std::vector<std::string> preset_sources, std::vector<std::string> font_sources)
 	: m_resources(resources)
 	, m_fallback(std::move(fallback))
 	, m_ui_font(resources.engine_file("fonts/NotoSans-Regular.ttf"))
 	, m_icon_font(resources.engine_file("fonts/lucide-icons.ttf"))
 	, m_apply(std::move(apply))
-	, m_protocols(std::move(protocols))
+	, m_preset_sources(std::move(preset_sources))
+	, m_font_sources(std::move(font_sources))
 {
+}
+
+void gui::theme_service::set_sources(std::vector<std::string> preset_sources, std::vector<std::string> font_sources)
+{
+	m_preset_sources = std::move(preset_sources);
+	m_font_sources = std::move(font_sources);
 }
 
 void gui::theme_service::select(res::tag preset)
 {
 	m_selected = std::move(preset);
-	m_text_font = {};
-	m_icons = {};
-	m_preset = {};
+	drop_loads();
 	m_stage = stage::preset;
-	if (!readable(m_selected)) {
-		std::string protocols;
-		for (const std::string& protocol : m_protocols) {
-			protocols += std::format("{}{}://", protocols.empty() ? "" : ", ", protocol);
-		}
-		give_up(std::format("themes are read only from {}", protocols));
+	if (!readable(m_selected, m_preset_sources)) {
+		give_up(std::format("themes are read only from {}", sources_text(m_preset_sources)));
 		return;
 	}
 	m_preset = m_resources.require<theme_desc>(m_selected);
 }
 
-bool gui::theme_service::readable(const res::tag& tag) const
+void gui::theme_service::preview(const theme_desc& preset)
+{
+	drop_loads();
+	std::string problem;
+	if (!start(preset, problem)) {
+		egLOG_WARN("gui", "theme preview not shown: {}", problem);
+		m_stage = stage::idle;
+	}
+}
+
+void gui::theme_service::drop_loads()
+{
+	m_preset = {};
+	m_text_font = {};
+	m_fallback_font = {};
+	m_icons = {};
+}
+
+std::string gui::theme_service::sources_text(const std::vector<std::string>& sources)
+{
+	std::string text;
+	for (const std::string& source : sources) {
+		text += std::format("{}{}", text.empty() ? "" : ", ", source);
+	}
+	return text.empty() ? std::string{ "nowhere" } : text;
+}
+
+bool gui::theme_service::readable(const res::tag& tag, const std::vector<std::string>& sources) const
 {
 	if (tag == m_fallback || tag == m_ui_font || tag == m_icon_font) {
 		return true;
 	}
-	const std::string_view protocol = tag.protocol();
-	return std::ranges::any_of(m_protocols, [&](const std::string& p) { return p == protocol; });
+	const std::string_view text = tag.view();
+	return std::ranges::any_of(sources, [&](const std::string& prefix) { return text.starts_with(prefix); });
 }
 
 void gui::theme_service::poll()
@@ -166,24 +194,40 @@ void gui::theme_service::poll_preset()
 	if (!preset) {
 		return;
 	}
+	m_preset = {};
 	std::string problem;
-	const std::optional<theme_style> style = theme_style_of(*preset, problem);
-	if (!style) {
+	if (!start(*preset, problem)) {
 		give_up(problem);
-		return;
+	}
+}
+
+bool gui::theme_service::start(const theme_desc& preset, std::string& problem)
+{
+	const std::optional<theme_style> style = theme_style_of(preset, problem);
+	if (!style) {
+		return false;
 	}
 	m_style = *style;
-	m_wants_icons = preset->icons;
-	m_text_font_tag = preset->font;
-	if (!readable(m_text_font_tag)) {
-		egLOG_WARN("gui", "theme '{}': font '{}' is not read from that protocol, using '{}'", m_selected.view(),
-			m_text_font_tag.view(), m_ui_font.view());
+	m_wants_icons = preset.icons;
+	m_text_font_tag = preset.font;
+	if (!readable(m_text_font_tag, m_font_sources)) {
+		egLOG_WARN("gui", "theme '{}': font '{}' is not read from there ({} only), using '{}'", m_selected.view(),
+			m_text_font_tag.view(), sources_text(m_font_sources), m_ui_font.view());
 		m_text_font_tag = m_ui_font;
 	}
+
+	const font_key key{ m_text_font_tag, m_style.font_px, m_wants_icons };
+	if (m_applied_fonts && *m_applied_fonts == key) {
+		m_stage = stage::idle;
+		m_apply(theme{ m_style, {}, {}, {}, false });
+		return true;
+	}
 	m_text_font = request_font(m_text_font_tag);
+	// Glyphs a font of the person's lacks (Cyrillic, say) come from the UI font, merged after it.
+	m_fallback_font = m_text_font_tag == m_ui_font ? res::res_handle<res::binary_resource>{} : request_font(m_ui_font);
 	m_icons = m_wants_icons ? request_font(m_icon_font) : res::res_handle<res::binary_resource>{};
-	m_preset = {};
 	m_stage = stage::fonts;
+	return true;
 }
 
 void gui::theme_service::poll_fonts()
@@ -191,7 +235,7 @@ void gui::theme_service::poll_fonts()
 	const auto settled = [](const res::res_handle<res::binary_resource>& h) {
 		return !h.is_valid() || h.is_ready() || h.has_error();
 	};
-	if (!settled(m_text_font) || !settled(m_icons)) {
+	if (!settled(m_text_font) || !settled(m_fallback_font) || !settled(m_icons)) {
 		return;
 	}
 
@@ -200,12 +244,13 @@ void gui::theme_service::poll_fonts()
 		return font && ui_font::looks_like_font(font->bytes()) ? font->bytes() : std::vector<std::byte>{};
 	};
 	std::vector<std::byte> text = usable_bytes(m_text_font);
+	std::vector<std::byte> fallback = usable_bytes(m_fallback_font);
 	if (text.empty() && m_text_font_tag != m_ui_font) {
 		egLOG_WARN("gui", "theme '{}': font '{}' is not a usable TTF/OTF, using '{}'", m_selected.view(),
 			m_text_font_tag.view(), m_ui_font.view());
 		m_text_font_tag = m_ui_font;
-		m_text_font = request_font(m_ui_font);
-		return;
+		text = std::move(fallback);
+		fallback.clear();
 	}
 	if (text.empty()) {
 		egLOG_WARN("gui", "theme '{}': the UI font '{}' cannot be used, using the built-in ImGui font",
@@ -216,10 +261,10 @@ void gui::theme_service::poll_fonts()
 		egLOG_WARN("gui", "theme '{}': icon font '{}' cannot be used, the UI shows text placeholders",
 			m_selected.view(), m_icon_font.view());
 	}
-	m_text_font = {};
-	m_icons = {};
+	drop_loads();
 	m_stage = stage::idle;
-	m_apply(theme{ m_style, std::move(text), std::move(icons) });
+	m_applied_fonts = font_key{ m_text_font_tag, m_style.font_px, m_wants_icons };
+	m_apply(theme{ m_style, std::move(text), std::move(fallback), std::move(icons), true });
 }
 
 void gui::theme_service::give_up(std::string_view why)

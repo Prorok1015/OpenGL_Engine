@@ -79,6 +79,8 @@
 #include "edt_agent_server_settings.h"
 #include "edt_agent_component.h"
 #include "edt_agent_ui_component.h"
+#include "../settings/edt_theme_settings_component.h"
+#include <snk/gui/gui_theme_service.h>
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
@@ -773,6 +775,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			.commands = data.require<cmd::command_registry>(), .agent = *m_agent, .headless = headless });
 		m_agent_ui->install(m_registrations);
 	}
+	// After register_data_protocol: the person's choice and presets are in edt://.
+	m_theme_settings = std::make_unique<theme_settings_component>(theme_settings_component::ports{ .context = *m_context,
+		.layer = *editor_layer, .resources = m_res, .descs = desc_system,
+		.themes = data.has_value<::gui::theme_service>() ? &data.require<::gui::theme_service>() : nullptr });
+	m_theme_settings->install(m_registrations);
 }
 
 edt::agent_server* edt::editor_system::agent_server_object()

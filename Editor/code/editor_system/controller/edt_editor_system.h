@@ -53,6 +53,7 @@ namespace edt {
 	class agent_access;
 	class agent_component;
 	class agent_ui_component;
+	class theme_settings_component;
 	class file_menu;
 	class game_build_component;
 	class project_trust_service;
@@ -253,5 +254,7 @@ namespace edt {
 		std::unique_ptr<agent_component> m_agent;
 		// The agents window, its status slot and notice (#449): reads the access of m_agent, so it is destroyed first.
 		std::unique_ptr<agent_ui_component> m_agent_ui;
+		// The editor's theme and the Editor Settings window (#1109).
+		std::unique_ptr<theme_settings_component> m_theme_settings;
 	};
 }
