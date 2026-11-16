@@ -524,7 +524,7 @@ BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesTheLoadedDecoderSandboxSetting_Whe
 
 	BOOST_TEST(call_every_agent_command() > 0u);
 
-	BOOST_TEST(config.value("import/decoder_sandbox") == before);
+	BOOST_TEST(config.value("import/decoder_sandbox").value_or("<not registered>") == *before);
 	for (const std::string& id : agent_visible_ids()) {
 		if (id.find("cfg") == std::string::npos && id.find("config") == std::string::npos && id.find("setting") == std::string::npos) continue;
 		const cmd::command_desc* desc = registry().find(id);
