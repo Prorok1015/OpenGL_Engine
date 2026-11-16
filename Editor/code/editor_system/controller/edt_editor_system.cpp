@@ -44,7 +44,7 @@
 #include "edt_import_component.h"
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
-#include "edt_file_menu.h"
+#include "edt_file_menu_component.h"
 #include "edt_template_ids.h"
 #include "edt_scene_commands.h"
 #include "edt_code_commands.h"
@@ -131,8 +131,6 @@
 #include <utility>
 #include <vector>
 
-// Editor/data (editor_module): the project templates live under it.
-CFG_VAR_EXT_PATH(cfg_edt_data_path);
 // --headless (edt_editor_init.cpp).
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
 // --trust-project (#921), also read by main.cpp: known here before live mode at open is decided.
@@ -175,36 +173,6 @@ namespace {
 		return std::string(text.begin(), text.end());
 	}
 
-	// Switching projects restarts the editor (EPIC-42 #158): the same program and config file, the other project.
-	// Overrides given with --set are not carried over.
-	// --open-migration (#761): the new editor opens the Project Migration window once the project is open.
-	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch,
-		bool open_migration)
-	{
-		const std::filesystem::path program = platform::current_executable();
-		if (program.empty()) {
-			return std::string{ "the editor cannot find its own program file" };
-		}
-		std::vector<std::string> args;
-		if (const auto config = cfg::loaded_config_path(); !config.empty()) {
-			args.insert(args.end(), { "--config", utf8_of(config) });
-		}
-		args.insert(args.end(), { "--project", utf8_of(manifest_file) });
-		if (allow_engine_version_mismatch) {
-			args.push_back("--allow-engine-version-mismatch");
-		}
-		if (open_migration) {
-			args.push_back("--open-migration");
-		}
-		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", utf8_of(manifest_file));
-		auto started = platform::spawn_detached(program, args);
-		if (!started) {
-			egLOG_ERROR("Editor/Project", "the editor was not restarted on '{}': {}", utf8_of(manifest_file), started.error);
-			return started.error;
-		}
-		return std::nullopt;
-	}
-
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
 	// "game" (--game, #294): once the start level has loaded, the Game view fills the window and Play starts; "editor":
@@ -220,26 +188,7 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
 
-	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
-	// one: an agent's save_as onto a file that only a lower layer has would shadow it, and its open of such a level works.
-	// A link or a folder in any layer is unsafe; a layer that is not a folder (a RAM or archive resolver) is asked itself.
-	edt::level_file_state inspect_level_in_layers(const res::resource_system& resources, const std::string& relative)
-	{
-		bool found = false;
-		for (const std::filesystem::path& root : resources.get_resource_layers()) {
-			switch (edt::inspect_level_file(root, relative)) {
-			case edt::level_file_state::unsafe: return edt::level_file_state::unsafe;
-			case edt::level_file_state::file: found = true; break;
-			case edt::level_file_state::missing: break;
-			}
-		}
-		if (found) return edt::level_file_state::file;
-		if (const auto raw = resources.fetch_data(res::tag::make(relative))) {
-			raw->wait();
-			if (raw->is_ready()) return edt::level_file_state::file;
-		}
-		return edt::level_file_state::missing;
-	}
+
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -451,100 +400,21 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.stop_after_level_loaded = m_stop_after_level_loaded };
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
 
-	file_menu_hooks hooks;
-	hooks.has_scene = [this] { return m_state.editor_tag.is_valid(); };
-	hooks.is_dirty = [this] { return m_state.is_dirty(); };
-	hooks.level_path = [this] {
-		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
-	};
-	hooks.new_level = [this] {
-		if (m_play && m_play->active()) m_play->stop();
-		m_level_load->cancel_settle();
-		m_problems->desc().clear(m_context->problems(), "level");
-		m_level_ctrl.new_level();
-	};
-	hooks.quick_save = [this] { return m_state.save().saved; };
-	hooks.save_level_as = [this](const std::string& rel_path) {
-		if (rel_path.find("://") != std::string::npos) {
-			egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
-			return false;
-		}
-		return m_state.save_as(res::tag::make(rel_path)).saved;
-	};
-	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_asset_open->data_documents().dirty().empty() || m_prefab->dirty() != nullptr; };
-	hooks.save_other_documents = [this] {
-		if (!m_prefab->apply_dirty()) return false;
-		return m_asset_open->data_documents().save_all();
-	};
-	hooks.discard_other_documents = [this] {
-		for (const document_id id : m_asset_open->data_documents().dirty()) m_asset_open->data_documents().close(id);
-		if (m_prefab->dirty()) m_prefab->close();
-	};
-	hooks.load_level = [this](const std::filesystem::path& abs_path) {
-		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
-		m_level_load->begin_and_watch(res::tag::make(relative.string()));
-	};
-	// The commands an agent calls name a level by its project path: no file system path in between.
-	hooks.load_level_tag = [this](const std::string& relative) -> std::optional<std::string> {
-		if (!m_level_load->begin_and_watch(res::tag::make(relative))) return "'" + relative + "' is not a level file";
-		return std::nullopt;
-	};
-	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
-	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
-		if (auto migrating = migration_blocker()) return migrating;
-		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
-		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
-		std::optional<std::string> stopped = m_migration ? m_migration->stopped_reason() : std::nullopt;
-		if (m_level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
-		return stopped;
-	};
-	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
-	// its level (#518). A person has no menu or shortcut then.
-	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
-		if (auto migrating = migration_blocker()) return migrating;
-		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
-		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
-		return std::nullopt;
-	};
-#if SNK_HAS_ASSIMP
-	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_import->start_import(abs_path); };
-#endif
-	hooks.agent_import = m_import->agent_import();
-	hooks.exit = m_exit_action;
-	hooks.exit_blocker = [this] { return migration_blocker(); };
-	hooks.resources_path = m_res.get_resources_path();
-	hooks.open_project = start_editor_on;
-	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
-	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
-		// The template ships without .resource sidecars: each new project gets ids of its own (#765).
-		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name,
-			[](const std::filesystem::path& staging) { return edt::give_template_fresh_ids(staging); });
-	};
-	// Next to the open project, else where the editor was started.
-	hooks.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
-		: std::filesystem::current_path();
-	hooks.recent_projects = edt::recent_projects_besides(m_res, data.has_value<prj::project_context>()
-		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().manifest_file } : std::nullopt);
-	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
-	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
-	m_file_menu->register_actions();
+	m_file_menu = std::make_unique<file_menu_component>(file_menu_component::ports{ .context = *m_context, .resources = m_res, .state = m_state,
+		.level_ctrl = m_level_ctrl, .level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open, .problems = *m_problems,
+		.import = *m_import,
+		.project_manifest = data.has_value<prj::project_context>()
+			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().manifest_file } : std::nullopt,
+		.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
+			: std::filesystem::current_path(),
+		.exit = m_exit_action,
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(); },
+		.migration_blocker = [this] { return migration_blocker(); },
+		.migration_stopped_reason = [this]() -> std::optional<std::string> { return m_migration ? m_migration->stopped_reason() : std::nullopt; },
+		.startup_pending = [this] { return m_modes && m_modes->startup_pending(); },
+		.assets = [this] { return m_asset_component.get(); } });
+	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
-	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_asset_component ? m_asset_component->next_undo_label() : std::nullopt; };
-	const auto asset_undo = [this] {
-		if (!m_asset_component) {
-			return false;
-		}
-		const asset_fix_result result = m_asset_component->undo_last();
-		if (!result.ok) {
-			egLOG_ERROR("assets", "{}", result.error);
-		}
-		return result.ok;
-	};
-	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo, [this] { return m_prefab->owns_inspector(); })) {
-		m_registrations.push_back(std::move(action));
-	}
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
 	// #968: until the asset index is complete, an agent's guid is answered `busy` rather than judged against it.
 	for (auto& command : register_scene_commands(m_context->actions().commands(),

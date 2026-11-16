@@ -1,0 +1,197 @@
+#include "edt_file_menu_component.h"
+#include "edt_asset_component.h"
+#include "edt_asset_open_component.h"
+#include "edt_asset_problems.h"
+#include "edt_edit_menu.h"
+#include "edt_file_menu.h"
+#include "edt_import_component.h"
+#include "edt_level_controller.h"
+#include "edt_level_load_component.h"
+#include "edt_main_menu.h"
+#include "edt_path_text.h"
+#include "edt_prefab_editor_component.h"
+#include "edt_problems_component.h"
+#include "edt_recent_projects.h"
+#include "edt_scene_document.h"
+#include "edt_template_ids.h"
+#include <snk/common/logger/engine_log.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_context.h>
+#include <snk/platform/plt_process.h>
+#include <snk/project/prj_create.h>
+#include <snk/resource/res_system.h>
+#include <snk/window/wnd_window_system.h>
+#include <imgui.h>
+#include <utility>
+
+// Editor/data (editor_module): the project templates live under it.
+CFG_VAR_EXT_PATH(cfg_edt_data_path);
+
+namespace
+{
+	// Switching projects restarts the editor (EPIC-42 #158): the same program and config file, the other project.
+	// Overrides given with --set are not carried over.
+	// --open-migration (#761): the new editor opens the Project Migration window once the project is open.
+	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch,
+		bool open_migration)
+	{
+		const std::filesystem::path program = platform::current_executable();
+		if (program.empty()) {
+			return std::string{ "the editor cannot find its own program file" };
+		}
+		std::vector<std::string> args;
+		if (const auto config = cfg::loaded_config_path(); !config.empty()) {
+			args.insert(args.end(), { "--config", edt::utf8_of(config) });
+		}
+		args.insert(args.end(), { "--project", edt::utf8_of(manifest_file) });
+		if (allow_engine_version_mismatch) {
+			args.push_back("--allow-engine-version-mismatch");
+		}
+		if (open_migration) {
+			args.push_back("--open-migration");
+		}
+		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", edt::utf8_of(manifest_file));
+		auto started = platform::spawn_detached(program, args);
+		if (!started) {
+			egLOG_ERROR("Editor/Project", "the editor was not restarted on '{}': {}", edt::utf8_of(manifest_file), started.error);
+			return started.error;
+		}
+		return std::nullopt;
+	}
+
+
+	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
+	// one: an agent's save_as onto a file that only a lower layer has would shadow it, and its open of such a level works.
+	// A link or a folder in any layer is unsafe; a layer that is not a folder (a RAM or archive resolver) is asked itself.
+	edt::level_file_state inspect_level_in_layers(const res::resource_system& resources, const std::string& relative)
+	{
+		bool found = false;
+		for (const std::filesystem::path& root : resources.get_resource_layers()) {
+			switch (edt::inspect_level_file(root, relative)) {
+			case edt::level_file_state::unsafe: return edt::level_file_state::unsafe;
+			case edt::level_file_state::file: found = true; break;
+			case edt::level_file_state::missing: break;
+			}
+		}
+		if (found) return edt::level_file_state::file;
+		if (const auto raw = resources.fetch_data(res::tag::make(relative))) {
+			raw->wait();
+			if (raw->is_ready()) return edt::level_file_state::file;
+		}
+		return edt::level_file_state::missing;
+	}
+}
+
+edt::file_menu_component::file_menu_component(ports from)
+	: m_ports(std::move(from))
+{
+	file_menu_hooks hooks;
+	hooks.has_scene = [this] { return m_ports.state.editor_tag.is_valid(); };
+	hooks.is_dirty = [this] { return m_ports.state.is_dirty(); };
+	hooks.level_path = [this] {
+		return m_ports.state.level_tag.is_valid() ? std::string(m_ports.state.level_tag.relative()) : std::string{};
+	};
+	hooks.new_level = [this] {
+		if (m_ports.stop_play) m_ports.stop_play();
+		m_ports.level_load.cancel_settle();
+		m_ports.problems.desc().clear(m_ports.context.problems(), "level");
+		m_ports.level_ctrl.new_level();
+	};
+	hooks.quick_save = [this] { return m_ports.state.save().saved; };
+	hooks.save_level_as = [this](const std::string& rel_path) {
+		if (rel_path.find("://") != std::string::npos) {
+			egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
+			return false;
+		}
+		return m_ports.state.save_as(res::tag::make(rel_path)).saved;
+	};
+	hooks.discard_changes = [this] { m_ports.state.mark_clean(); };
+	hooks.other_documents_dirty = [this] { return !m_ports.asset_open.data_documents().dirty().empty() || m_ports.prefab.dirty() != nullptr; };
+	hooks.save_other_documents = [this] {
+		if (!m_ports.prefab.apply_dirty()) return false;
+		return m_ports.asset_open.data_documents().save_all();
+	};
+	hooks.discard_other_documents = [this] {
+		for (const document_id id : m_ports.asset_open.data_documents().dirty()) m_ports.asset_open.data_documents().close(id);
+		if (m_ports.prefab.dirty()) m_ports.prefab.close();
+	};
+	hooks.load_level = [this](const std::filesystem::path& abs_path) {
+		const auto relative = abs_path.lexically_relative(m_ports.resources.get_resources_path());
+		m_ports.level_load.begin_and_watch(res::tag::make(relative.string()));
+	};
+	// The commands an agent calls name a level by its project path: no file system path in between.
+	hooks.load_level_tag = [this](const std::string& relative) -> std::optional<std::string> {
+		if (!m_ports.level_load.begin_and_watch(res::tag::make(relative))) return "'" + relative + "' is not a level file";
+		return std::nullopt;
+	};
+	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_ports.resources, relative); };
+	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
+		if (auto migrating = migration_blocker()) return migrating;
+		if (m_ports.level_load.in_progress()) return std::string{ "a level is loading" };
+		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
+		std::optional<std::string> stopped = m_ports.migration_stopped_reason ? m_ports.migration_stopped_reason() : std::nullopt;
+		if (m_ports.level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
+		return stopped;
+	};
+	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
+	// its level (#518). A person has no menu or shortcut then.
+	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
+		if (auto migrating = migration_blocker()) return migrating;
+		if (m_ports.startup_pending && m_ports.startup_pending()) return std::string{ "the start level is loading" };
+		if (m_ports.level_load.in_progress()) return std::string{ "a level is loading" };
+		return std::nullopt;
+	};
+#if SNK_HAS_ASSIMP
+	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_ports.import.start_import(abs_path); };
+#endif
+	hooks.agent_import = m_ports.import.agent_import();
+	hooks.exit = m_ports.exit;
+	hooks.exit_blocker = [this] { return migration_blocker(); };
+	hooks.resources_path = m_ports.resources.get_resources_path();
+	hooks.open_project = start_editor_on;
+	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
+	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
+		// The template ships without .resource sidecars: each new project gets ids of its own (#765).
+		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name,
+			[](const std::filesystem::path& staging) { return give_template_fresh_ids(staging); });
+	};
+	// Next to the open project, else where the editor was started.
+	hooks.projects_path = m_ports.projects_path;
+	hooks.recent_projects = recent_projects_besides(m_ports.resources, m_ports.project_manifest);
+	m_menu = std::make_unique<file_menu>(m_ports.context.dialogs(), m_ports.context.actions(), std::move(hooks));
+}
+
+edt::file_menu_component::~file_menu_component() = default;
+
+std::optional<std::string> edt::file_menu_component::migration_blocker() const
+{
+	return m_ports.migration_blocker ? m_ports.migration_blocker() : std::nullopt;
+}
+
+void edt::file_menu_component::install(std::vector<registration>& out)
+{
+	for (auto& menu : register_builtin_menus(m_ports.context.actions())) out.push_back(std::move(menu));
+	m_menu->register_actions();
+	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_ports.assets && m_ports.assets() ? m_ports.assets()->next_undo_label() : std::nullopt; };
+	const auto asset_undo = [this] {
+		if (!m_ports.assets || !m_ports.assets()) {
+			return false;
+		}
+		const asset_fix_result result = m_ports.assets()->undo_last();
+		if (!result.ok) {
+			egLOG_ERROR("assets", "{}", result.error);
+		}
+		return result.ok;
+	};
+	for (auto& action : register_edit_actions(m_ports.context.actions(), m_ports.context.documents(), m_ports.context.dialogs(), [] { return ImGui::IsAnyItemActive(); },
+			asset_undo_label, asset_undo, [this] { return m_ports.prefab.owns_inspector(); })) {
+		out.push_back(std::move(action));
+	}
+}
+
+void edt::file_menu_component::attach_window_close(wnd::window_system& windows)
+{
+	m_menu->attach_window_close(windows);
+}
