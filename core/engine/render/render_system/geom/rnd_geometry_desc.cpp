@@ -2,6 +2,9 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/common/eng_profiler.h>
+#include <cstddef>
+#include <utility>
+#include <vector>
 
 std::string_view shader_data_type_to_string(rnd::driver::SHADER_DATA_TYPE type)
 {
@@ -75,6 +78,22 @@ namespace rnd::driver {
 
 }
 
+namespace
+{
+	// From a file: a value that is no byte fails the load. It is never cut down to one (256 read as 0) and never
+	// asserted on (#930).
+	std::byte byte_of(const json::value& jv)
+	{
+		if (jv.is_uint64() && jv.as_uint64() <= 255) {
+			return std::byte(jv.as_uint64());
+		}
+		if (jv.is_int64() && jv.as_int64() >= 0 && jv.as_int64() <= 255) {
+			return std::byte(jv.as_int64());
+		}
+		throw res::load_error(res::diagnostic_kind::load, {}, "a byte of geometry data is not an integer from 0 to 255");
+	}
+}
+
 namespace std
 {
 	void tag_invoke(json::value_from_tag, json::value& jv, const std::byte& c)
@@ -85,15 +104,7 @@ namespace std
 
 	std::byte tag_invoke(json::value_to_tag<std::byte>, const json::value& jv)
 	{
-		// From a file: a value that is no byte fails the load. It is never cut down to one (256 read as 0) and never
-		// asserted on (#930).
-		if (jv.is_uint64() && jv.as_uint64() <= 255) {
-			return std::byte(jv.as_uint64());
-		}
-		if (jv.is_int64() && jv.as_int64() >= 0 && jv.as_int64() <= 255) {
-			return std::byte(jv.as_int64());
-		}
-		throw res::load_error(res::diagnostic_kind::load, {}, "a byte of geometry data is not an integer from 0 to 255");
+		return byte_of(jv);
 	}
 }
 
@@ -148,9 +159,16 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 	}
 
 	{
-		auto& json_vertices = resource.at("vertices");
-		if (!json_vertices.as_array().empty())
-			vertices = json::value_to<decltype(vertices)>(json_vertices);
+		// One byte a number: a model's vertices are millions of them, so not value_to element by element (#1022).
+		const json::array& json_vertices = resource.at("vertices").as_array();
+		if (!json_vertices.empty()) {
+			std::vector<std::byte> read;
+			read.reserve(json_vertices.size());
+			for (const json::value& item : json_vertices) {
+				read.push_back(byte_of(item));
+			}
+			vertices = std::move(read);
+		}
 	}
 
 	if (resource.contains("bounds"))
