@@ -60,6 +60,7 @@
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
 #include "edt_migration_commands.h"
+#include "edt_migration_component.h"
 #include "edt_migration_window_model.h"
 #include "edt_migration_panel.h"
 #include "edt_migration_startup.h"
@@ -212,9 +213,6 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
 	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
 	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
-	// --open-migration (#761): once the project is open and the start level settled, the Project Migration window opens
-	// with a fresh plan ("Migrate..." of the engine version question restarts the editor with it). Ignored headless.
-	CFG_VAR_DEF_BOOL(cfg_open_migration, "editor/open_migration", false);
 	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
 	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
@@ -640,7 +638,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (auto migrating = migration_blocker()) return migrating;
 		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
 		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
-		std::optional<std::string> stopped = m_migration_stopped.reason();
+		std::optional<std::string> stopped = m_migration ? m_migration->stopped_reason() : std::nullopt;
 		if (m_level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
 		return stopped;
 	};
@@ -719,26 +717,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_registrations.push_back(std::move(command));
 		}
 	}
-	// EPIC-58 S7 (#759): project.migration_plan and project.migrate (in place, on the main thread). Refused while Play, a load,
-	// a build or a module reload, an import, the export dialog or a git write runs (busy), and with an uncommitted edit or
-	// any dirty document (needs_input). The migration closes every document but the scene, lets go of the level, writes,
-	// then attaches the level and loads it again from disk.
-	{
-		migration_deps migration{ m_context->jobs() };
-		migration.log_filter = data.has_value<cmd::log_read_filter>() ? &data.require<cmd::log_read_filter>() : nullptr;
-		migration.project_root = [&data]() -> std::optional<std::filesystem::path> {
-			if (!data.has_value<prj::project_context>()) return std::nullopt;
-			return data.require<prj::project_context>().root;
-		};
-		migration.project_name = [&data] {
-			return data.has_value<prj::project_context>() ? data.require<prj::project_context>().data.name : std::string{};
-		};
-		migration.content_roots = [&data] {
-			return data.has_value<prj::project_context>() ? data.require<prj::project_context>().content_roots : std::vector<std::filesystem::path>{};
-		};
-		migration.descs = [this]() -> desc::desc_system& { return *m_services.descs(); };
-		migration.resources = [this]() -> res::resource_system& { return *m_services.resources(); };
-		migration.busy_reason = [this]() -> std::optional<std::string> {
+	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration
+	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs (busy), and
+	// with an uncommitted edit or any dirty document (needs_input).
+	m_migration = std::make_unique<migration_component>(migration_component::ports{
+		.context = *m_context, .services = m_services, .resources = m_res, .layer = *editor_layer, .level_ctrl = m_level_ctrl,
+		.state = m_state, .prefab = *m_prefab, .asset_open = *m_asset_open, .level_load = *m_level_load,
+		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
+		.project_held = data.has_value<prj::held_project>(),
+		.headless = headless,
+		.log_filter = data.has_value<cmd::log_read_filter>() ? &data.require<cmd::log_read_filter>() : nullptr,
+		.busy_reason = [this]() -> std::optional<std::string> {
 			if (m_play && m_play->active()) return std::string{ "Play is running: stop it first" };
 			if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
 			if (auto loading = load_in_progress()) return loading;
@@ -753,8 +742,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_importing) return std::string{ "a model import is running" };
 #endif
 			return std::nullopt;
-		};
-		migration.unsaved_reason = [this]() -> std::optional<std::string> {
+		},
+		.unsaved_reason = [this]() -> std::optional<std::string> {
 			if (person_is_editing()) return std::string{ "a person is editing a value (an inspector field or a gizmo drag): commit it first" };
 			if (m_state.is_dirty()) return std::string{ "the level has unsaved changes: save or discard them first" };
 			std::optional<std::string> dirty;
@@ -762,106 +751,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				if (!dirty && open.is_dirty()) dirty = std::format("'{}' has unsaved changes: save or discard them first", open.title());
 			});
 			return dirty;
-		};
-		migration.close_documents_and_detach_level = [this] {
-			m_prefab->close();
-			// Every document but the scene: the prefab editor through its panel, data documents through their host, any other
-			// (a module's, an extension's) through document_manager::close, which announces it to whoever shows it.
-			document_manager& documents = m_context->documents();
-			std::vector<document_id> open_documents;
-			documents.for_each([&documents, &open_documents](document& open) {
-				if (&open != &documents.scene()) open_documents.push_back(open.id());
-			});
-			for (const document_id id : open_documents) {
-				if (m_asset_open->data_documents().owns(id)) m_asset_open->data_documents().close(id);
-				else if (documents.find(id)) documents.close(id);
-			}
-			const res::tag level = current_level_tag();
-			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
-			m_asset_open->drop_pending();
-			if (m_level_load->in_progress()) m_level_load->abandon();
-			// A level a stopped migration left detached stays as it was kept (a second detach would keep the empty worlds).
-			if (!m_level_ctrl.is_detached()) m_level_ctrl.detach_from_game_layer();
-			return level;
-		};
-		migration.pause_watch = [this] { m_level_ctrl.unwatch_level(); };
-		// Through the base system: it reaches the game layer's too.
-		migration.signal_changed = [this](const res::tag& tag) { m_res.signal_changed(tag); };
-		migration.rebuild_assets = [this] {
-			if (m_asset_component) m_asset_component->rebuild();
-		};
-		migration.reopen_level = [this](const res::tag& level, std::function<void(bool)> loaded) -> std::optional<std::string> {
-			// The files are still half migrated (a rollback refused): the level stays detached, as the stopped migration left it.
-			if (std::optional<std::string> stopped = m_migration_stopped.reason()) return stopped;
-			m_level_ctrl.attach_to_game_layer();
-			if (!level.is_valid()) return std::nullopt;
-			if (!m_level_load->begin_and_watch(level, std::move(loaded))) return "'" + std::string(level.view()) + "' did not start loading again";
-			return std::nullopt;
-		};
-		migration.level_load_in_progress = [this] { return m_level_load->in_progress(); };
-		migration.approved_internally = [this](std::string_view ticket) {
+		},
+		.game_layer_generation = [this] { return m_game_layer_generation; },
+		.approved_internally = [this](std::string_view ticket) {
 			return m_agent_access != nullptr && m_agent_access->confirmations().approved_internally(ticket);
-		};
-		migration.code_identity = [this] { return m_game_layer_generation; };
-		migration.level_left_detached = [this](const res::tag& level, std::function<bool()> rolled_back, const std::string& reason) {
-			static_cast<void>(level);
-			m_migration_stopped.hold(std::move(rolled_back),
-				"a migration of the project stopped half way: roll the migration back first (" + reason + ")");
-		};
-		migration.current_level_tag = [this] { return current_level_tag(); };
-		migration.register_implicit = [this](std::string_view id, std::function<bool()> fn) { editor_layer->register_implicit(id, std::move(fn)); };
-		migration.running_changed = [this](bool running) {
-			m_migration_running = running;
-			if (running) ++m_migration_runs;
-		};
-		// The save block of a stopped migration goes with its rollback (its rolled_back() sees the journal too).
-		migration.migration_rolled_back = [this](const std::string&) {
-			static_cast<void>(m_migration_stopped.reason());
-		};
-		migration.show_progress = [](bool open) {
-			constexpr const char* title = "Migrating Project##edt_migrate";
-			ImGui::OpenPopup(title);
-			if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar)) {
-				if (open) {
-					ImGui::Text("Migrating project...");
-				} else {
-					ImGui::CloseCurrentPopup();
-				}
-				ImGui::EndPopup();
-			}
-		};
-		for (auto& command : register_migration_commands(m_context->actions().commands(), std::move(migration))) {
-			m_registrations.push_back(std::move(command));
-		}
-	}
-	// EPIC-58 S8 (#761): Project > Migrate Project... opens the Project Migration window, which runs the two commands above as
-	// a person's calls (origin ui) and takes the migration's answer from job_finished.
-	{
-		migration_window_model::ports ports;
-		ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
-		ports.open_file = [this, &data](const std::string& path) {
-			if (!data.has_value<prj::project_context>()) return;
-			const prj::project_context& project = data.require<prj::project_context>();
-			const std::filesystem::path file = (project.root / fs_paths::path_from_utf8(path)).lexically_normal();
-			for (const std::filesystem::path& content : project.content_roots) {
-				const std::filesystem::path relative = file.lexically_relative(content.lexically_normal());
-				if (relative.empty() || *relative.begin() == std::filesystem::path("..")) continue;
-				if (!m_asset_open->open(res::tag::make(fs_paths::generic_utf8_of(relative)), false)) {
-					egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
-				}
-				return;
-			}
-			egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
-		};
-		ports.listing_of = [&data](const std::string& id) {
-			if (!data.has_value<prj::project_context>()) return rollback_listing{ "no project is open", {}, {} };
-			return rollback_listing_of(data.require<prj::project_context>().root, id);
-		};
-		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));
-		add_panel(m_migration_panel, dock_slot::floating, false);
-		m_registrations.push_back(register_migration_window_action(m_context->actions(),
-			[&data] { return data.has_value<prj::project_context>(); }, [this] { open_migration_window(); }));
-	}
+		},
+		.rebuild_assets = [this] {
+			if (m_asset_component) m_asset_component->rebuild();
+		},
+		.startup_pending = [this] { return m_modes && m_modes->startup_pending(); } });
+	m_migration->install(m_registrations, [&add_panel](const std::shared_ptr<panel_base>& panel) { add_panel(panel, dock_slot::floating, false); });
 	m_file_menu->attach_window_close(wnd_sys);
 
 	game_build_component::ports build_ports{ .context = *m_context, .layer = *editor_layer, .settings_panel = *m_build_settings_panel,
@@ -976,30 +875,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}));
 	}
 
-	// #761: a migration the project was left with is offered for a rollback once the start level settled; headless nobody
-	// is asked (a WARN names the command line), and nothing waits for an answer.
-	if (!project_held && data.has_value<prj::project_context>()) {
-		const std::filesystem::path root = data.require<prj::project_context>().root;
-		migration_startup::ports startup_ports;
-		startup_ports.settled = [this] {
-			return !(m_level_load->in_progress() || m_level_load->settling() || (m_modes && m_modes->startup_pending())
-				|| editor_layer->has_implicit_prefix("edt/load_level"));
-		};
-		startup_ports.unfinished = [root] { return prj::migration::unfinished_migrations(root); };
-		startup_ports.journal_refusal = [root](const std::string& id) -> std::optional<std::string> {
-			rollback_listing listing = rollback_listing_of(root, id);
-			if (listing.refused.empty()) return std::nullopt;
-			return std::move(listing.refused);
-		};
-		startup_ports.warn = [](const std::string& text) { egLOG_WARN("project/migrate", "{}", text); };
-		startup_ports.ask = [this](const journal_offer& offer) { offer_migration_rollback(offer); };
-		startup_ports.start_scan = [this, root] { start_migration_scan(root); };
-		auto startup = std::make_shared<migration_startup>(std::move(startup_ports), headless);
-		// Headless: the WARN only, now in init (no question, no scan). With a person never in init, even with nothing to
-		// wait for: the project's game modules load after it (#428), and the scan's types are theirs.
-		if (headless) static_cast<void>(startup->tick());
-		else editor_layer->register_implicit("edt/migration_journal", [startup] { return startup->tick(); });
-	}
+	m_migration->install_startup();
 
 	// #921: main loads the project's modules after init, so the first frame knows which wait for the person's answer.
 	// Headless nobody is asked: they stay unloaded unless --trust-project was given.
@@ -1017,15 +893,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		});
 	}
 
-	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
-		editor_layer->register_implicit("edt/open_migration", [this] {
-			const bool settling = m_level_load->in_progress() || m_level_load->settling() || (m_modes && m_modes->startup_pending())
-				|| editor_layer->has_implicit_prefix("edt/load_level");
-			if (settling) return true;
-			open_migration_window();
-			return false;
-		});
-	}
+	m_migration->install_open_on_start();
 
 	bool stdio = cfg_mcp_stdio;
 	if (stdio && !data.has_value<platform::protocol_stdout>()) {
@@ -1279,108 +1147,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		}
 		m_live->draw_status();
 	});
-}
-
-void edt::editor_system::open_migration_window()
-{
-	if (m_migration_panel == nullptr) return;
-	m_context->panels().set_open(m_migration_panel->get_id(), true);
-	m_migration_panel->show_and_plan();
-}
-
-void edt::editor_system::open_migration_rollback(const std::string& id)
-{
-	if (m_migration_panel == nullptr) return;
-	m_context->panels().set_open(m_migration_panel->get_id(), true);
-	m_migration_panel->show_rollback_question(id);
-}
-
-void edt::editor_system::offer_migration_rollback(const journal_offer& offer)
-{
-	if (offer.what == journal_offer::kind::inform) {
-		m_context->dialogs().choose(offer.title, offer.text, { std::string("OK") }, [](std::optional<std::size_t>) {});
-		return;
-	}
-	if (offer.what != journal_offer::kind::ask) return;
-	m_context->dialogs().choose(offer.title, offer.text, { std::string(k_journal_offer_roll_back), std::string(k_journal_offer_later) },
-		[this, id = offer.id](std::optional<std::size_t> answer) {
-			if (answer && *answer == 0) open_migration_rollback(id);
-		});
-}
-
-void edt::editor_system::start_migration_scan(const std::filesystem::path& root)
-{
-	const std::filesystem::path settings_file = migration_notice_file(m_res.mount_roots("edt"), default_user_data_dir());
-	const std::filesystem::path settings_dir = settings_file.parent_path();
-	migration_notice_model::ports ports;
-	ports.load = [settings_file]() -> std::optional<std::string> {
-		std::error_code ec;
-		if (!std::filesystem::is_regular_file(settings_file, ec)) return std::nullopt;
-		std::ifstream in(settings_file, std::ios::binary);
-		if (!in) return std::nullopt;
-		return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-	};
-	ports.save = [settings_file](const std::string& text) -> std::optional<std::string> {
-		std::error_code ec;
-		std::filesystem::create_directories(settings_file.parent_path(), ec);
-		return prj::write_text_atomically(settings_file, text);
-	};
-	m_migration_notice = std::make_unique<migration_notice_model>(std::move(ports));
-
-	// The types are read here, on the main thread; the scan reads only files.
-	const migration_notice_model::scan_ticket ticket{ approved_snapshot_for(settings_dir, root).key, m_game_layer_generation, m_migration_runs };
-	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
-	// dropped, never shown.
-	auto work = [root, catalog = prj::migration::type_catalog::from(*m_services.descs()),
-					read_only = prj::migration::read_only_layers(m_res, root)](ds::task_context& task) {
-		prj::migration::scan_options options;
-		options.stop = [&task] { return task.stop.stop_requested(); };
-		options.read_only_layers = read_only;
-		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
-		if (scan.incomplete) throw ds::task_cancelled{};
-		prj::migration::project_step_registry steps;
-		prj::migration::register_project_steps(steps);
-		migration_scan_summary summary = summarize_scan(scan, steps);
-		summary.unfinished = prj::migration::unfinished_migrations(root);
-		return summary;
-	};
-	m_migration_scan_job = m_context->jobs().start(ds::lane::io, ds::task_desc{ "Check the project's format", "project", false }, m_scan_lifetime,
-		std::move(work), [this, ticket](ds::task_result<migration_scan_summary>& result) {
-			if (!result.ok() || result.value == nullptr || m_migration_notice == nullptr) return;
-			// The editor never changes its project; the game layer may have (a module loaded or reloaded meanwhile), and a
-			// migration or rollback that started since changes the files the scan read.
-			const migration_notice_model::scan_ticket now{ ticket.project, m_game_layer_generation, m_migration_runs };
-			if (m_migration_notice->deliver(ticket, now, std::move(*result.value)) && m_migration_notice->visible()) {
-				egLOG_INFO("project/migrate", "{} Project > Migrate Project... shows the plan.", m_migration_notice->text());
-			}
-		});
-	editor_layer->register_implicit("edt/migration_notice", [this] { return draw_migration_notice(); });
-}
-
-bool edt::editor_system::draw_migration_notice()
-{
-	if (m_migration_notice == nullptr) return false;
-	if (m_migration_scan_job != 0 && m_context->jobs().is_running(m_migration_scan_job)) return true;
-	if (m_migration_running) m_migration_notice->hide();
-	if (!m_migration_notice->visible()) return false;
-	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	// Above the agent policy's notice, which takes the corner.
-	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 110.f),
-		ImGuiCond_Always, ImVec2(1.f, 1.f));
-	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
-		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
-	if (ImGui::Begin("Project format##migration_notice", nullptr, flags)) {
-		const std::string text = m_migration_notice->text();
-		ImGui::TextUnformatted(text.c_str());
-		if (ImGui::Button("Open Migration...")) {
-			m_migration_notice->open();
-			open_migration_window();
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Later")) static_cast<void>(m_migration_notice->later());
-	}
-	ImGui::End();
-	return true;
 }
 
 void edt::editor_system::open_agents_panel()
@@ -1804,14 +1570,12 @@ void edt::editor_system::go_to_problem(const std::string& source, const problem&
 
 std::optional<std::string> edt::editor_system::migration_blocker() const
 {
-	if (m_migration_running) return std::string{ "a project migration is running" };
-	return std::nullopt;
+	return m_migration ? m_migration->blocker() : std::nullopt;
 }
 
 std::optional<std::string> edt::editor_system::project_write_blocker()
 {
-	if (auto migrating = migration_blocker()) return migrating;
-	return m_migration_stopped.reason();
+	return m_migration ? m_migration->project_write_blocker() : std::nullopt;
 }
 
 std::optional<std::string> edt::editor_system::load_in_progress() const
