@@ -1382,7 +1382,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatNeverSaidHowItIsSandboxed_CountsAsUnsandboxed_E
 	auto silent = decoder_config();
 	silent.decoder = "/usr/bin/false";
 	std::vector<edt::decoder_sandbox_status> heard;
-	const edt::process_decoder failing(*rs, silent, [&heard](const edt::decoder_sandbox_status& status) { heard.push_back(status); });
+	const edt::process_decoder failing(*rs, *descs, silent, [&heard](const edt::decoder_sandbox_status& status) { heard.push_back(status); });
 	BOOST_CHECK_THROW(failing.import(source, nullptr), std::runtime_error);
 	BOOST_REQUIRE_EQUAL(heard.size(), 1u);
 	BOOST_CHECK(heard.front().reported);
@@ -1394,7 +1394,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatNeverSaidHowItIsSandboxed_CountsAsUnsandboxed_E
 	refusing.sandbox = edt::sandbox_mode::required;
 	refusing.extra_arguments = { "--self-test-pretend-no-landlock" };
 	std::vector<edt::decoder_sandbox_status> refused_heard;
-	const edt::process_decoder refuser(*rs, refusing, [&refused_heard](const edt::decoder_sandbox_status& status) {
+	const edt::process_decoder refuser(*rs, *descs, refusing, [&refused_heard](const edt::decoder_sandbox_status& status) {
 		refused_heard.push_back(status);
 	});
 	BOOST_CHECK_THROW(refuser.import(source, nullptr), std::runtime_error);
