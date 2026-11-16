@@ -1,6 +1,6 @@
 {
     "__type" : "geometry_desc",
-    "__version" : 1,
+    "__version" : 2,
     "layout" : {
         "position" : "vec3",
         "normal" : "vec3",

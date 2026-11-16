@@ -18,7 +18,7 @@ namespace edt::mesh
 	};
 
 	// __version of a geometry_desc file; a test keeps it equal to the engine's.
-	inline constexpr int base_shape_file_version = 1;
+	inline constexpr int base_shape_file_version = 2;
 
 	std::span<const base_shape> base_shapes();
 	const base_shape* find_base_shape(std::string_view name);

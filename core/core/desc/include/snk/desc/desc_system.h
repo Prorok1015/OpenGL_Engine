@@ -244,7 +244,9 @@ namespace desc
 		// and only what differs from the parent, so reading the file on top of the parent gives `desc` back (#812). When no
 		// such form reads back the same, `body` stays whole without "__parent"; when the parent does not load, `body` stays
 		// whole and keeps "__parent" (the file needs it to load). Both are logged. The parent is the one loaded now, also if it
-		// changed after `desc` was read: what `desc` shows is saved. Main thread: the parent is required synchronously.
+		// changed after `desc` was read: what `desc` shows is saved. A parent whose serialize throws: `body` whole, with
+		// "__parent" if that reads back the same, else without it; logged, not thrown. Main thread: the parent is required
+		// synchronously.
 		void reduce_to_parent(const desc::desc_base& desc, json::object& body);
 
 		// resource_system::resolve_reference of the system this one loads through.

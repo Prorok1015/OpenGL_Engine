@@ -449,6 +449,11 @@ std::optional<std::vector<std::byte>> res::desc_binary::encode(std::span<const b
 	std::vector<binary_range>& ranges, std::string& error)
 {
 	ranges.clear();
+	// A file is read at most max_ranges ranges at a time: one with more could never be read back whole.
+	if (chunks.size() > max_ranges) {
+		error = std::format("{} chunks in one file, at most {} are read", chunks.size(), max_ranges);
+		return std::nullopt;
+	}
 	ranges.reserve(chunks.size());
 	std::uint64_t end = header_bytes;
 	for (std::size_t i = 0; i < chunks.size(); ++i) {
@@ -559,8 +564,25 @@ res::desc_binary_data res::desc_binary::read(resource_system& system, const tag&
 	return read_pair(system, desc, *binary, *staged, ranges, verify_hash, max_bytes, false);
 }
 
-res::desc_binary_written res::desc_binary::write_pending(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks)
+bool res::desc_binary::save_lock::guards(const tag& desc) const
 {
+	return m_mutex == save_mutex_of(desc);
+}
+
+namespace
+{
+	void require_guard(const res::desc_binary::save_lock& lock, const res::tag& desc, std::string_view step)
+	{
+		if (!lock.guards(desc)) {
+			throw std::logic_error(std::format("desc_binary::{} of '{}' under the save lock of another desc", step, desc.view()));
+		}
+	}
+}
+
+res::desc_binary_written res::desc_binary::write_pending(resource_system& system, const save_lock& lock, const tag& desc,
+	std::span<const binary_chunk> chunks)
+{
+	require_guard(lock, desc, "write_pending");
 	desc_binary_written out;
 	const auto staged = staged_tag(desc);
 	if (!staged) {
@@ -572,7 +594,6 @@ res::desc_binary_written res::desc_binary::write_pending(resource_system& system
 		out.ranges.clear();
 		return out;
 	}
-	const save_lock lock(desc);
 	if (!system.store_sync(*staged, *file)) {
 		out.ranges.clear();
 		out.error = std::format("'{}' could not be written (see the log)", staged->view());
@@ -582,8 +603,10 @@ res::desc_binary_written res::desc_binary::write_pending(resource_system& system
 	return out;
 }
 
-res::file_operation res::desc_binary::commit_pending(resource_system& system, const tag& desc, const desc_binary_written& written)
+res::file_operation res::desc_binary::commit_pending(resource_system& system, const save_lock& lock, const tag& desc,
+	const desc_binary_written& written)
 {
+	require_guard(lock, desc, "commit_pending");
 	const auto binary = binary_tag(desc);
 	const auto staged = staged_tag(desc);
 	if (!binary || !staged) {
@@ -592,6 +615,23 @@ res::file_operation res::desc_binary::commit_pending(resource_system& system, co
 	if (!written || written.file.empty()) {
 		return file_operation::failure(std::format("'{}': nothing was staged to commit", binary->view()));
 	}
-	const save_lock lock(desc);
 	return detail::desc_binary_access::commit(system, *staged, *binary, written.file);
+}
+
+res::desc_binary_written res::desc_binary::save(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks,
+	const desc_writer& write_desc)
+{
+	const save_lock lock(desc);
+	desc_binary_written out = write_pending(system, lock, desc, chunks);
+	if (!out) {
+		return out;
+	}
+	if (!write_desc || !write_desc(out.ranges)) {
+		out.error = std::format("'{}' was not written: the save stopped before the commit", desc.view());
+		return out;
+	}
+	if (const file_operation committed = commit_pending(system, lock, desc, out); !committed) {
+		out.error = std::format("'{}' was written, its binary file was not committed: {}", desc.view(), committed.error);
+	}
+	return out;
 }

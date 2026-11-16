@@ -18,6 +18,7 @@
 #include <iterator>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -76,7 +77,7 @@ std::vector<std::byte> bytes_of(const std::string& text)
 	return { view.begin(), view.end() };
 }
 
-std::string desc_text(const std::vector<res::binary_range>& ranges)
+std::string desc_text(std::span<const res::binary_range> ranges)
 {
 	boost::json::object desc;
 	desc["vertices"] = res::to_json(ranges[0]);
@@ -128,16 +129,14 @@ struct two_layers
 	fs::path staged() const { return top / "a" / "robot.geom.bin.new"; }
 };
 
-// A whole save under its lock: steps 1 to 3.
+// A whole save: steps 1 to 3 under one lock.
 res::desc_binary_written save(res::resource_system& sys, const res::tag& desc, const std::vector<float>& positions,
 	const std::vector<std::uint32_t>& indices)
 {
-	const res::desc_binary::save_lock lock(desc);
-	auto written = res::desc_binary::write_pending(sys, desc, chunks_of(positions, indices));
+	auto written = res::desc_binary::save(sys, desc, chunks_of(positions, indices), [&](std::span<const res::binary_range> ranges) {
+		return sys.store_sync(desc, bytes_of(desc_text(ranges)));
+	});
 	BOOST_REQUIRE_MESSAGE(written, written.error);
-	BOOST_REQUIRE(sys.store_sync(desc, bytes_of(desc_text(written.ranges))));
-	const auto committed = res::desc_binary::commit_pending(sys, desc, written);
-	BOOST_REQUIRE_MESSAGE(committed, committed.error);
 	return written;
 }
 
@@ -145,7 +144,8 @@ res::desc_binary_written save(res::resource_system& sys, const res::tag& desc, c
 res::desc_binary_written save_cut_before_commit(res::resource_system& sys, const res::tag& desc,
 	const std::vector<float>& positions, const std::vector<std::uint32_t>& indices)
 {
-	auto written = res::desc_binary::write_pending(sys, desc, chunks_of(positions, indices));
+	const res::desc_binary::save_lock lock(desc);
+	auto written = res::desc_binary::write_pending(sys, lock, desc, chunks_of(positions, indices));
 	BOOST_REQUIRE_MESSAGE(written, written.error);
 	BOOST_REQUIRE(sys.store_sync(desc, bytes_of(desc_text(written.ranges))));
 	return written;
@@ -274,11 +274,27 @@ BOOST_AUTO_TEST_CASE(TooManyRangesAreRefused)
 	BOOST_TEST(static_cast<bool>(res::desc_binary::parse("f.bin", file, enough, false)));
 }
 
+BOOST_AUTO_TEST_CASE(TooManyChunks_AreRefusedByEncode_AsTheReadSideRefusesTheirRanges)
+{
+	std::vector<res::binary_range> ranges;
+	std::string error;
+	const std::vector<res::binary_chunk> many(res::desc_binary::max_ranges + 1, res::binary_chunk{ {}, "u8" });
+	BOOST_TEST(!res::desc_binary::encode(many, ranges, error).has_value());
+	BOOST_TEST(error.find(std::format("at most {} are read", res::desc_binary::max_ranges)) != std::string::npos);
+	BOOST_TEST(ranges.empty());
+
+	const std::vector<res::binary_chunk> enough(res::desc_binary::max_ranges, res::binary_chunk{ {}, "u8" });
+	error.clear();
+	BOOST_TEST(res::desc_binary::encode(enough, ranges, error).has_value());
+	BOOST_TEST(ranges.size() == res::desc_binary::max_ranges);
+}
+
 BOOST_FIXTURE_TEST_CASE(WritePendingCommitAndReadRoundTrip, two_layers)
 {
 	res::resource_system sys(tasks, table());
 	const auto chunks = chunks_of(k_positions, k_indices);
-	const auto written = res::desc_binary::write_pending(sys, desc, chunks);
+	const res::desc_binary::save_lock lock(desc);
+	const auto written = res::desc_binary::write_pending(sys, lock, desc, chunks);
 	BOOST_REQUIRE_MESSAGE(written, written.error);
 	BOOST_REQUIRE(written.ranges.size() == 2u);
 	BOOST_TEST(written.ranges[0].offset % res::desc_binary::range_alignment == 0u);
@@ -287,7 +303,7 @@ BOOST_FIXTURE_TEST_CASE(WritePendingCommitAndReadRoundTrip, two_layers)
 	BOOST_TEST(!fs::exists(top / "a" / "robot.geom.bin"));
 
 	BOOST_REQUIRE(sys.store_sync(desc, bytes_of(desc_text(written.ranges))));
-	const auto committed = res::desc_binary::commit_pending(sys, desc, written);
+	const auto committed = res::desc_binary::commit_pending(sys, lock, desc, written);
 	BOOST_REQUIRE_MESSAGE(committed, committed.error);
 	BOOST_TEST(fs::exists(top / "a" / "robot.geom.bin"));
 	BOOST_TEST(!fs::exists(top / "a" / "robot.geom.bin.new"));
@@ -302,6 +318,23 @@ BOOST_FIXTURE_TEST_CASE(WritePendingCommitAndReadRoundTrip, two_layers)
 	BOOST_TEST(res::copy_binary_values(data.ranges[1], indices));
 	BOOST_TEST((positions == k_positions));
 	BOOST_TEST((indices == k_indices));
+}
+
+BOOST_FIXTURE_TEST_CASE(TheStepsOfASaveNeedTheLockOfTheirDesc, two_layers)
+{
+	res::resource_system sys(tasks, table());
+	const res::tag other{ "res://a/other.geom.desc" };
+	const res::desc_binary::save_lock own(desc);
+	const res::desc_binary::save_lock foreign(other);
+	BOOST_TEST(own.guards(desc));
+	BOOST_TEST(!foreign.guards(desc));
+	BOOST_CHECK_THROW(res::desc_binary::write_pending(sys, foreign, desc, chunks_of(k_positions, k_indices)), std::logic_error);
+	BOOST_TEST(!fs::exists(staged()));
+
+	const auto written = res::desc_binary::write_pending(sys, own, desc, chunks_of(k_positions, k_indices));
+	BOOST_REQUIRE_MESSAGE(written, written.error);
+	BOOST_CHECK_THROW(res::desc_binary::commit_pending(sys, foreign, desc, written), std::logic_error);
+	BOOST_TEST(!fs::exists(bin()));
 }
 
 BOOST_AUTO_TEST_CASE(AWrongMagicOrVersionIsRefused)
@@ -448,8 +481,11 @@ BOOST_FIXTURE_TEST_CASE(ASaveCutBeforeTheDescWriteReadsTheOldPair, two_layers)
 {
 	res::resource_system sys(tasks, table());
 	const auto first = save(sys, desc, k_positions, k_indices);
-	const auto second = res::desc_binary::write_pending(sys, desc, chunks_of(k_positions_v2, k_indices_v2));
-	BOOST_REQUIRE_MESSAGE(second, second.error);
+	// The desc writer fails: the save stops after the staged file.
+	const auto second = res::desc_binary::save(sys, desc, chunks_of(k_positions_v2, k_indices_v2),
+		[](std::span<const res::binary_range>) { return false; });
+	BOOST_TEST(!second);
+	BOOST_TEST(fs::exists(staged()));
 
 	const auto data = res::desc_binary::read(sys, desc, first.ranges, false);
 	BOOST_REQUIRE_MESSAGE(data, data.message);
@@ -499,13 +535,14 @@ BOOST_FIXTURE_TEST_CASE(ASaveStartedDuringARecoveryKeepsItsStagedFile, two_layer
 	const auto v3 = save_cut_before_commit(sys, desc, k_positions_v3, k_indices_v3);
 
 	// The recovery's commit of what it verified: refused, nothing touched.
-	const auto late = res::desc_binary::commit_pending(sys, desc, recovery);
+	const res::desc_binary::save_lock lock(desc);
+	const auto late = res::desc_binary::commit_pending(sys, lock, desc, recovery);
 	BOOST_TEST(!late);
 	BOOST_TEST((read_file(staged()) == v3.file));
 	BOOST_TEST((read_file(bin()) == first.file));
 
 	// The save's own commit then succeeds: desc v3 with .bin v3.
-	const auto committed = res::desc_binary::commit_pending(sys, desc, v3);
+	const auto committed = res::desc_binary::commit_pending(sys, lock, desc, v3);
 	BOOST_REQUIRE_MESSAGE(committed, committed.error);
 	BOOST_TEST(!fs::exists(staged()));
 	BOOST_TEST((read_file(bin()) == v3.file));

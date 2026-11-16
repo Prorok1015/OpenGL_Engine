@@ -10,14 +10,20 @@ namespace desc { class desc_system; }
 namespace rnd
 {
 	// On the root, so a layer's require<geometry_desc> gets the block the renderer gets (#1021). A geometry_desc
-	// subtype defined in a game module is not created here.
+	// subtype defined in a game module is not created here. Reads the ranges of the binary file next to the desc
+	// (EPIC-79, #1068) and checks the data before it reaches the GPU.
 	class geometry_desc_adapter : public core::res::adapter_interface
 	{
 	public:
 		static inline auto INFO = ::res::adapter_info::make<rnd::geometry_desc>({ "desc" });
 
+		// Hashes of the binary file checked at every load; over several roots or beside a staged file they always are.
+		// To be decided by measurement (EPIC-79 section 4, PR3a).
+		static constexpr bool verify_hash_on_load = true;
+
 		geometry_desc_adapter(::res::resource_system& res_system, ::desc::desc_system& desc_system);
 
+		// The parent, and the binary file when "vertices" or "indices" is a range: a change of it reloads the geometry.
 		std::vector<::res::res_dep> collect_dependencies(const ::res::tag& tag,
 			const std::vector<std::byte>& raw_data) const override;
 		using core::res::adapter_interface::deserialize;
@@ -30,6 +36,10 @@ namespace rnd
 			const std::shared_ptr<::res::resource_entry>& resource) const override;
 
 	private:
+		// The ranges deserialize recorded: read, checked, copied into the vectors. Throws res::load_error.
+		void load_binary(const ::res::tag& tag, rnd::geometry_desc& geometry) const;
+
+		::res::resource_system& m_resources;
 		core::desc::desc_adapter_t m_descs;
 	};
 }
